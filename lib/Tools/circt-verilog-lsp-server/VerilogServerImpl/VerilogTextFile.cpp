@@ -207,6 +207,25 @@ void VerilogTextFile::getDocumentLinks(
   doc->getDocumentLinks(uri, links);
 }
 
+void VerilogTextFile::getSemanticTokens(const llvm::lsp::URIForFile &uri,
+                                        std::vector<uint32_t> &data) {
+  auto doc = getDocument();
+  std::vector<SemanticToken> tokens;
+  doc->getSemanticTokens(uri, tokens);
+
+  // Encode the tokens
+  SemanticTokensResult result;
+  result.encodeTokens(tokens);
+  data = std::move(result.data);
+}
+
+void VerilogTextFile::getInlayHints(const llvm::lsp::URIForFile &uri,
+                                    const llvm::lsp::Range &range,
+                                    std::vector<llvm::lsp::InlayHint> &hints) {
+  auto doc = getDocument();
+  doc->getInlayHints(uri, range, hints);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;

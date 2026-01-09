@@ -7,6 +7,7 @@ add_circt_library(CIRCTVerilogLspServerImpl
   VerilogDocument.cpp
   VerilogIndex.cpp
   LSPDiagnosticClient.cpp
+  SemanticTokens.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/circt/Tools/circt-verilog-lsp-server
