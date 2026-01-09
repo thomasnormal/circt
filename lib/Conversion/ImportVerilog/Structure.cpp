@@ -1929,7 +1929,21 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
 
   auto symName = fullyQualifiedClassName(*this, cls);
 
-  // Force build of base here.
+  // Create the ClassDeclOp first with empty base/implements attrs.
+  // We need to do this before processing base classes because base class
+  // processing may recursively reference this class (e.g., through method
+  // parameter types), and we need lowering->op to be valid.
+  auto classDeclOp =
+      moore::ClassDeclOp::create(builder, loc, symName, nullptr, nullptr);
+
+  SymbolTable::setSymbolVisibility(classDeclOp,
+                                   SymbolTable::Visibility::Public);
+  orderedRootOps.insert(it, {cls.location, classDeclOp});
+  lowering->op = classDeclOp;
+  symbolTable.insert(classDeclOp);
+
+  // Now process base class after our ClassDeclOp is set up.
+  // This ensures recursive type references find a valid lowering->op.
   if (const auto *maybeBaseClass = cls.getBaseClass())
     if (const auto *baseClass = maybeBaseClass->as_if<slang::ast::ClassType>())
       if (!classes.contains(baseClass) &&
@@ -1939,16 +1953,13 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
         return {};
       }
 
+  // Update the base and implements attributes now that base classes are processed.
   auto [base, impls] = buildBaseAndImplementsAttrs(*this, cls);
-  auto classDeclOp =
-      moore::ClassDeclOp::create(builder, loc, symName, base, impls);
+  if (base)
+    classDeclOp.setBaseAttr(base);
+  if (impls)
+    classDeclOp.setImplementedInterfacesAttr(impls);
 
-  SymbolTable::setSymbolVisibility(classDeclOp,
-                                   SymbolTable::Visibility::Public);
-  orderedRootOps.insert(it, {cls.location, classDeclOp});
-  lowering->op = classDeclOp;
-
-  symbolTable.insert(classDeclOp);
   return lowering.get();
 }
 
