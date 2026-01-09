@@ -10,6 +10,7 @@
 ##===----------------------------------------------------------------------===//
 
 add_circt_dialect_library(CIRCTSim
+  EventQueue.cpp
   SimDialect.cpp
   SimOps.cpp
   SimTypes.cpp
