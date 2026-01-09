@@ -105,6 +105,30 @@ static Value visitClassProperty(Context &context,
   auto builder = context.builder;
 
   auto type = context.convertType(expr.getType());
+  if (!type)
+    return {};
+
+  // Check if this is a static property
+  bool isStatic = expr.lifetime == slang::ast::VariableLifetime::Static;
+
+  if (isStatic) {
+    // Static properties are class-level (not instance-level).
+    // For now, emit a warning and return a dummy read to allow parsing to
+    // continue. Full static property support requires treating them as global
+    // variables with class-qualified names.
+    mlir::emitWarning(loc) << "static class property '" << expr.name
+                           << "' access is not fully supported yet; "
+                           << "treating as uninitialized variable";
+    // Create a temporary variable to allow parsing to continue
+    auto fieldTy = cast<moore::UnpackedType>(type);
+    auto refTy = moore::RefType::get(fieldTy);
+    // Use a VariableOp to represent the static property
+    auto nameAttr = builder.getStringAttr(expr.name);
+    auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
+                                           /*initial=*/Value{});
+    return varOp;
+  }
+
   // Get the scope's implicit this variable
   mlir::Value instRef = context.getImplicitThisRef();
   if (!instRef) {
@@ -991,7 +1015,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       else if (isa<moore::StringType>(lhs.getType()))
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
-      else
+      else if (isa<moore::ClassHandleType>(lhs.getType()) ||
+               isa<moore::ClassHandleType>(rhs.getType())) {
+        // Class handle comparison (e.g., obj == null).
+        // For now, emit a warning and return a constant false/true.
+        // Full class handle comparison support would require a dedicated op.
+        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
+                               << "returning constant result";
+        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, resultTy, 0);
+      } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
@@ -1000,7 +1033,14 @@ struct RvalueExprVisitor : public ExprVisitor {
       else if (isa<moore::StringType>(lhs.getType()))
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
-      else
+      else if (isa<moore::ClassHandleType>(lhs.getType()) ||
+               isa<moore::ClassHandleType>(rhs.getType())) {
+        // Class handle comparison (e.g., obj != null).
+        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
+                               << "returning constant result";
+        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, resultTy, 1);
+      } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
       return createBinary<moore::CaseEqOp>(lhs, rhs);
@@ -1537,6 +1577,28 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto fTy = mlir::Float64Type::get(context.getContext());
     auto attr = mlir::FloatAttr::get(fTy, expr.getValue());
     return moore::ConstantRealOp::create(builder, loc, attr).getResult();
+  }
+
+  /// Handle null literals.
+  Value visit(const slang::ast::NullLiteral &expr) {
+    // Null represents a null class handle (no object).
+    // We represent this as a zero-initialized value of the appropriate type.
+    auto type = context.convertType(*expr.type);
+    if (!type)
+      return {};
+
+    // For class handles, emit a special null constant.
+    // For now, we emit a warning and create a dummy variable since full null
+    // support would require a dedicated NullOp or special handling.
+    mlir::emitWarning(loc) << "null literal support is incomplete; "
+                           << "treating as uninitialized value";
+
+    // Create a variable to represent the null value
+    auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+    auto nameAttr = builder.getStringAttr("null_literal");
+    auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
+                                           /*initial=*/Value{});
+    return varOp;
   }
 
   /// Helper function to convert RValues at creation of a new Struct, Array or
