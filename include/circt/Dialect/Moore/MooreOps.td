@@ -1269,6 +1269,25 @@ def StringCmpOp : MooreOp<"string_cmp", [
   }];
 }
 
+def StringConcatOp : MooreOp<"string_concat", [Pure]> {
+  let summary = "Concatenate strings";
+  let description = [{
+    Concatenates an arbitrary number of strings into one larger string.
+    The strings are concatenated from left to right, with the first
+    operand appearing at the left start of the result string, and the last
+    operand appearing at the right end. Produces an empty string if no inputs
+    are provided.
+
+    Example:
+    ```mlir
+    %result = moore.string_concat (%a, %b, %c) : !moore.string
+    ```
+  }];
+  let arguments = (ins Variadic<StringType>:$inputs);
+  let results = (outs StringType:$result);
+  let assemblyFormat = "` ` `(` $inputs `)` attr-dict `:` type($result)";
+}
+
 class LogicalEqOpBase<string mnemonic> : MooreOp<mnemonic, [
   Pure,
   Commutative,
@@ -3997,6 +4016,75 @@ def ArraySizeOp : ArrayBuiltin<"size"> {
   let arguments = (ins AnyDynamicArrayType:$array);
   let results = (outs TwoValuedI32:$result);
   let assemblyFormat = "$array `:` type($array) attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Queue Builtins
+//===----------------------------------------------------------------------===//
+
+class QueueBuiltin<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"queue." # mnemonic, traits>;
+
+def QueuePushBackOp : QueueBuiltin<"push_back"> {
+  let summary = "Push an element to the back of a queue";
+  let description = [{
+    Appends an element to the back of a queue. This corresponds to the
+    SystemVerilog `.push_back()` built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.push_back %queue, %elem : !moore.ref<!moore.queue<i32, 0>>, i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue, UnpackedType:$element);
+  let assemblyFormat = "$queue `,` $element `:` type($queue) `,` type($element) attr-dict";
+}
+
+def QueuePushFrontOp : QueueBuiltin<"push_front"> {
+  let summary = "Push an element to the front of a queue";
+  let description = [{
+    Prepends an element to the front of a queue. This corresponds to the
+    SystemVerilog `.push_front()` built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.push_front %queue, %elem : !moore.ref<!moore.queue<i32, 0>>, i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue, UnpackedType:$element);
+  let assemblyFormat = "$queue `,` $element `:` type($queue) `,` type($element) attr-dict";
+}
+
+def QueuePopBackOp : QueueBuiltin<"pop_back"> {
+  let summary = "Pop an element from the back of a queue";
+  let description = [{
+    Removes and returns the last element from a queue. This corresponds to the
+    SystemVerilog `.pop_back()` built-in method on queues.
+
+    Example:
+    ```mlir
+    %elem = moore.queue.pop_back %queue : !moore.ref<!moore.queue<i32, 0>> -> i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = "$queue `:` type($queue) `->` type($result) attr-dict";
+}
+
+def QueuePopFrontOp : QueueBuiltin<"pop_front"> {
+  let summary = "Pop an element from the front of a queue";
+  let description = [{
+    Removes and returns the first element from a queue. This corresponds to the
+    SystemVerilog `.pop_front()` built-in method on queues.
+
+    Example:
+    ```mlir
+    %elem = moore.queue.pop_front %queue : !moore.ref<!moore.queue<i32, 0>> -> i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = "$queue `:` type($queue) `->` type($result) attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
