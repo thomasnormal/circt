@@ -32,8 +32,8 @@ func.func @fourstate_constants() -> (!arc.logic<8>, !arc.logic<8>, !arc.logic<8>
 
 // CHECK-LABEL: func.func @fourstate_constant_widths
 func.func @fourstate_constant_widths() -> (!arc.logic<1>, !arc.logic<16>, !arc.logic<64>) {
-  // CHECK: arc.fourstate.constant 1 : !arc.logic<1>
-  %c1 = arc.fourstate.constant 1 : !arc.logic<1>
+  // CHECK: arc.fourstate.constant true : !arc.logic<1>
+  %c1 = arc.fourstate.constant true : !arc.logic<1>
 
   // CHECK: arc.fourstate.constant 1234 : !arc.logic<16>
   %c1234 = arc.fourstate.constant 1234 : !arc.logic<16>
