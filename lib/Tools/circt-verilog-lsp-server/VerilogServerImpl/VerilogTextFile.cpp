@@ -157,6 +157,20 @@ void VerilogTextFile::findReferencesOf(
   doc->findReferencesOf(uri, pos, references);
 }
 
+std::optional<llvm::lsp::Hover>
+VerilogTextFile::getHover(const llvm::lsp::URIForFile &uri,
+                          llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->getHover(uri, pos);
+}
+
+void VerilogTextFile::getDocumentSymbols(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<llvm::lsp::DocumentSymbol> &symbols) {
+  auto doc = getDocument();
+  doc->getDocumentSymbols(uri, symbols);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;

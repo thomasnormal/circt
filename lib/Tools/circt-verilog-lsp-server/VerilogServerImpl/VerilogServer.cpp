@@ -105,3 +105,18 @@ void circt::lsp::VerilogServer::findReferencesOf(
   if (fileIt != impl->files.end())
     fileIt->second->findReferencesOf(uri, pos, references);
 }
+
+std::optional<llvm::lsp::Hover>
+circt::lsp::VerilogServer::getHover(const URIForFile &uri, const Position &pos) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    return fileIt->second->getHover(uri, pos);
+  return std::nullopt;
+}
+
+void circt::lsp::VerilogServer::getDocumentSymbols(
+    const URIForFile &uri, std::vector<llvm::lsp::DocumentSymbol> &symbols) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    fileIt->second->getDocumentSymbols(uri, symbols);
+}
