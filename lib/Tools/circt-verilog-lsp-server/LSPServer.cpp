@@ -99,6 +99,13 @@ struct LSPServer {
   void onRename(const json::Value &params, Callback<WorkspaceEdit> reply);
 
   //===--------------------------------------------------------------------===//
+  // Document Links
+  //===--------------------------------------------------------------------===//
+
+  void onDocumentLink(const DocumentLinkParams &params,
+                      Callback<std::vector<DocumentLink>> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -164,6 +171,10 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"renameProvider",
        llvm::json::Object{
            {"prepareProvider", true},
+       }},
+      {"documentLinkProvider",
+       llvm::json::Object{
+           {"resolveProvider", false},
        }},
   };
 
@@ -341,6 +352,17 @@ void LSPServer::onRename(const json::Value &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Document Links
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onDocumentLink(const DocumentLinkParams &params,
+                               Callback<std::vector<DocumentLink>> reply) {
+  std::vector<DocumentLink> links;
+  server.getDocumentLinks(params.textDocument.uri, links);
+  reply(std::move(links));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -397,6 +419,10 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
                         &LSPServer::onPrepareRename);
   messageHandler.method("textDocument/rename", &lspServer,
                         &LSPServer::onRename);
+
+  // Document Links
+  messageHandler.method("textDocument/documentLink", &lspServer,
+                        &LSPServer::onDocumentLink);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {
