@@ -409,9 +409,7 @@ def RefType : MooreTypeDef<"Ref", [
     related to memory, like alloca/write/read.
   }];
   let parameters = (ins "UnpackedType":$nestedType);
-  let assemblyFormat = [{
-    `<` $nestedType `>`
-  }];
+  let hasCustomAssemblyFormat = 1;
 
   let builders = [
     AttrBuilderWithInferredContext<(ins "UnpackedType":$nestedType), [{
@@ -618,26 +616,20 @@ def VirtualInterfaceType : MooreTypeDef<"VirtualInterface", [],
   let extraClassDeclaration = [{
     /// Get the interface symbol reference without modport.
     mlir::FlatSymbolRefAttr getInterfaceRef() const {
-      if (auto nested = llvm::dyn_cast<mlir::SymbolRefAttr>(getInterface()))
-        return mlir::FlatSymbolRefAttr::get(
-          getContext(), nested.getRootReference());
-      return mlir::FlatSymbolRefAttr::get(getInterface());
+      return mlir::FlatSymbolRefAttr::get(
+        getContext(), getInterface().getRootReference().getValue());
     }
 
     /// Check if this virtual interface has a modport selection.
     bool hasModport() const {
-      if (auto nested = llvm::dyn_cast<mlir::SymbolRefAttr>(getInterface()))
-        return !nested.getNestedReferences().empty();
-      return false;
+      return !getInterface().getNestedReferences().empty();
     }
 
     /// Get the modport name if present, empty string otherwise.
     mlir::StringRef getModportName() const {
-      if (auto nested = llvm::dyn_cast<mlir::SymbolRefAttr>(getInterface())) {
-        auto refs = nested.getNestedReferences();
-        if (!refs.empty())
-          return refs.back().getValue();
-      }
+      auto refs = getInterface().getNestedReferences();
+      if (!refs.empty())
+        return refs.back().getValue();
       return "";
     }
   }];

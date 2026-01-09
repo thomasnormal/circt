@@ -2514,6 +2514,260 @@ def ConstraintBlockOp
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Constraint Expression Operations
+//===----------------------------------------------------------------------===//
+
+def ConstraintExprOp
+    : MooreOp<"constraint.expr", []> {
+  let summary = "A constraint expression";
+  let description = [{
+    Represents a constraint expression that must hold during randomization.
+    The expression evaluates to a boolean condition that constrains the
+    values of random variables.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      %cond = moore.lt %a, %b : i32
+      moore.constraint.expr %cond
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.1 "Constraint expressions".
+  }];
+
+  let arguments = (ins I1:$condition);
+  let results = (outs);
+  let assemblyFormat = [{
+    $condition attr-dict
+  }];
+}
+
+def ConstraintImplicationOp
+    : MooreOp<"constraint.implication", [SingleBlock, NoTerminator]> {
+  let summary = "Constraint implication (expr -> constraint)";
+  let description = [{
+    Represents a constraint implication where if the antecedent expression
+    is true, the constraints in the consequent block must be satisfied.
+    If the antecedent is false, the consequent constraints are ignored.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      moore.constraint.implication %mode_is_fast {
+        // constraints that only apply when mode_is_fast is true
+        moore.constraint.expr %speed_limit
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.6 "Implication constraints".
+  }];
+
+  let arguments = (ins I1:$antecedent);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$consequent);
+  let assemblyFormat = [{
+    $antecedent attr-dict-with-keyword $consequent
+  }];
+}
+
+def ConstraintIfElseOp
+    : MooreOp<"constraint.if_else", [SingleBlock, NoTerminator]> {
+  let summary = "Conditional constraint (if-else)";
+  let description = [{
+    Represents a conditional constraint where different constraints apply
+    based on a condition. If the condition is true, the constraints in
+    the then_region apply; otherwise, the constraints in the else_region
+    (if present) apply.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      moore.constraint.if_else %is_write {
+        // constraints for write mode
+      } else {
+        // constraints for read mode
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.7 "if-else constraints".
+  }];
+
+  let arguments = (ins I1:$condition);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$then_region, AnyRegion:$else_region);
+  let assemblyFormat = [{
+    $condition $then_region (`else` $else_region^)? attr-dict
+  }];
+}
+
+def ConstraintForeachOp
+    : MooreOp<"constraint.foreach", [SingleBlock, NoTerminator]> {
+  let summary = "Foreach constraint over array elements";
+  let description = [{
+    Represents a foreach constraint that iterates over array elements
+    and applies constraints involving each element. The loop variable
+    is passed as a block argument.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      moore.constraint.foreach %array : !moore.uarray<8 x i32> {
+      ^bb0(%i: index, %elem: !moore.i32):
+        // constraints involving %elem
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.8 "foreach constraints".
+  }];
+
+  let arguments = (ins AnyType:$array);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $array `:` type($array) $body attr-dict
+  }];
+}
+
+def ConstraintDistOp
+    : MooreOp<"constraint.dist", []> {
+  let summary = "Distribution constraint";
+  let description = [{
+    Represents a distribution constraint that specifies weighted probability
+    distributions for random variable values.
+
+    The values array contains the distribution points: single values are
+    represented once, ranges as [low, high] pairs. The range_markers array
+    indicates which entries are range starts (1) vs single values (0).
+    The weights array provides the relative probability weight for each entry.
+    The per_range array indicates whether each weight applies per-item (0)
+    or is divided across the range (1 = :/).
+
+    Example:
+    ```mlir
+    // x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }
+    moore.constraint.dist %x, [0, 1, 5, 6], [10, 50, 40], [0, 1, 0] : i8
+    // values: 0, range [1,5], 6
+    // weights: 10, 50, 40
+    // per_range: false, true, false (0=:=, 1=:/)
+    ```
+
+    See IEEE 1800-2017 Section 18.5.4 "Distribution constraints".
+  }];
+
+  let arguments = (ins AnyType:$variable,
+                       DenseI64ArrayAttr:$values,
+                       DenseI64ArrayAttr:$weights,
+                       DenseI64ArrayAttr:$per_range);
+  let results = (outs);
+  let assemblyFormat = [{
+    $variable `,` $values `,` $weights `,` $per_range `:` type($variable) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ConstraintInsideOp
+    : MooreOp<"constraint.inside", []> {
+  let summary = "Inside constraint (set membership)";
+  let description = [{
+    Represents an inside constraint that requires a variable to be
+    a member of a set of values or ranges.
+
+    The ranges array contains pairs of [low, high] values. Single values
+    are represented as [value, value].
+
+    Example:
+    ```mlir
+    // x inside { 1, [3:5], 7 }
+    moore.constraint.inside %x, [[1, 1], [3, 5], [7, 7]] : i8
+    ```
+
+    See IEEE 1800-2017 Section 18.5.3 "Set membership constraints".
+  }];
+
+  let arguments = (ins AnyType:$variable,
+                       DenseI64ArrayAttr:$ranges);
+  let results = (outs);
+  let assemblyFormat = [{
+    $variable `,` $ranges `:` type($variable) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ConstraintSolveBeforeOp
+    : MooreOp<"constraint.solve_before", []> {
+  let summary = "Solve ordering constraint";
+  let description = [{
+    Specifies that certain random variables should be solved before others.
+    This provides guidance to the constraint solver about the order in which
+    to determine variable values.
+
+    Example:
+    ```mlir
+    // solve mode before data, addr
+    moore.constraint.solve_before [@mode], [@data, @addr]
+    ```
+
+    See IEEE 1800-2017 Section 18.5.10 "Constraint ordering".
+  }];
+
+  let arguments = (ins SymbolRefArrayAttr:$before,
+                       SymbolRefArrayAttr:$after);
+  let results = (outs);
+  let assemblyFormat = [{
+    $before `,` $after attr-dict
+  }];
+}
+
+def ConstraintDisableOp
+    : MooreOp<"constraint.disable", []> {
+  let summary = "Disable soft constraint";
+  let description = [{
+    Disables a soft constraint by name. This allows overriding soft constraints
+    defined in base classes or earlier in the constraint block.
+
+    Example:
+    ```mlir
+    moore.constraint.disable @soft_limit
+    ```
+
+    See IEEE 1800-2017 Section 18.5.13 "Soft constraints".
+  }];
+
+  let arguments = (ins SymbolRefAttr:$constraint_name);
+  let results = (outs);
+  let assemblyFormat = [{
+    $constraint_name attr-dict
+  }];
+}
+
+def ConstraintUniqueOp
+    : MooreOp<"constraint.unique", []> {
+  let summary = "Unique constraint for array elements";
+  let description = [{
+    Specifies that all elements of an array must have unique values
+    after randomization.
+
+    Example:
+    ```mlir
+    // unique { arr }
+    moore.constraint.unique %arr : !moore.uarray<8 x i32>
+    ```
+
+    See IEEE 1800-2017 Section 18.5.5 "Uniqueness constraints".
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$variables);
+  let results = (outs);
+  let assemblyFormat = [{
+    $variables `:` type($variables) attr-dict
+  }];
+}
+
 def RandomizeOp
     : MooreOp<"randomize", []> {
   let summary = "Randomize an object";
