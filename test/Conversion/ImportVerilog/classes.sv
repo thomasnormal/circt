@@ -630,3 +630,43 @@ endclass
 class realFunctionClass implements virtualFunctionClass;
 virtual function void subroutine; endfunction
 endclass
+
+/// Check randomization support - rand and randc properties
+
+// CHECK-LABEL: moore.class.classdecl @RandomizableClass {
+// CHECK-NEXT:    moore.class.propertydecl @data : !moore.i32 rand_mode rand
+// CHECK-NEXT:    moore.class.propertydecl @mode : !moore.i8 rand_mode randc
+// CHECK-NEXT:    moore.class.propertydecl @fixed : !moore.i16
+// CHECK: }
+
+class RandomizableClass;
+    rand int data;
+    randc byte mode;
+    shortint fixed;
+endclass
+
+/// Check constraint block support
+
+// CHECK-LABEL: moore.class.classdecl @ConstrainedClass {
+// CHECK-NEXT:    moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK-NEXT:    moore.constraint.block @valid_range {
+// CHECK-NEXT:    }
+// CHECK: }
+
+class ConstrainedClass;
+    rand int x;
+    constraint valid_range { x > 0; x < 100; }
+endclass
+
+/// Check static constraint blocks
+
+// CHECK-LABEL: moore.class.classdecl @StaticConstraintClass {
+// CHECK-NEXT:    moore.class.propertydecl @y : !moore.i32 rand_mode rand
+// CHECK-NEXT:    moore.constraint.block static @static_bound {
+// CHECK-NEXT:    }
+// CHECK: }
+
+class StaticConstraintClass;
+    rand int y;
+    static constraint static_bound { y >= 0; }
+endclass
