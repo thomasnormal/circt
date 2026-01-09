@@ -2418,6 +2418,17 @@ def AtanhBIOp : RealMathFunc<"atanh"> {
 // Classes
 //===----------------------------------------------------------------------===//
 
+// Access visibility for class members (properties and methods)
+// Named "MemberAccess" to avoid conflict with MLIR's Symbol visibility
+def MemberAccessPublic: I32EnumAttrCase<"Public", 0, "public">;
+def MemberAccessProtected: I32EnumAttrCase<"Protected", 1, "protected">;
+def MemberAccessLocal: I32EnumAttrCase<"Local", 2, "local">;
+
+def MemberAccessAttr: I32EnumAttr<"MemberAccess", "Member access visibility",
+            [MemberAccessPublic, MemberAccessProtected, MemberAccessLocal]>{
+  let cppNamespace = "circt::moore";
+}
+
 // Randomization mode for class properties and struct fields
 def RandModeNone: I32EnumAttrCase<"None", 0, "none">;
 def RandModeRand: I32EnumAttrCase<"Rand", 1, "rand">;
@@ -2432,14 +2443,21 @@ def ClassPropertyDeclOp
     : MooreOp<"class.propertydecl", [Symbol, HasParent<"ClassDeclOp">]> {
   let summary = "Declare a class property";
   let description = [{
-  Declares a property within a class declaration. The optional `rand_mode`
-  attribute indicates whether this property participates in randomization:
+  Declares a property within a class declaration. The `member_access` attribute
+  specifies the access level:
+  - `public`: Accessible from anywhere (default)
+  - `protected`: Accessible from this class and derived classes
+  - `local`: Accessible only from within this class
+
+  The optional `rand_mode` attribute indicates whether this property
+  participates in randomization:
   - `none`: Not randomizable (default)
   - `rand`: Standard random variable
   - `randc`: Random-cyclic variable (cycles through all values before repeating)
   }];
 
   let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type,
+                       DefaultValuedAttr<MemberAccessAttr, "MemberAccess::Public">:$member_access,
                        DefaultValuedAttr<RandModeAttr, "RandMode::None">:$rand_mode);
 
   let results = (outs);
@@ -2450,6 +2468,9 @@ def ClassPropertyDeclOp
   let extraClassDeclaration = [{
     ::mlir::Type getPropertyType() { return getTypeAttr().getValue(); }
     bool isRandomizable() { return getRandMode() != RandMode::None; }
+    bool isMemberAccessPublic() { return getMemberAccess() == MemberAccess::Public; }
+    bool isMemberAccessProtected() { return getMemberAccess() == MemberAccess::Protected; }
+    bool isMemberAccessLocal() { return getMemberAccess() == MemberAccess::Local; }
   }];
 }
 
