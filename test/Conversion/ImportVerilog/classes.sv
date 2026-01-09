@@ -670,3 +670,62 @@ class StaticConstraintClass;
     rand int y;
     static constraint static_bound { y >= 0; }
 endclass
+
+//===----------------------------------------------------------------------===//
+// Interface Tests
+//===----------------------------------------------------------------------===//
+
+/// Check basic interface declaration with signals
+
+// CHECK-LABEL: moore.interface @basic_bus {
+// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @data : !moore.l32
+// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
+// CHECK: }
+
+interface basic_bus;
+    logic clk;
+    logic [31:0] data;
+    logic valid;
+endinterface
+
+/// Check interface with modports
+
+// CHECK-LABEL: moore.interface @handshake_bus {
+// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @data : !moore.l8
+// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @ready : !moore.l1
+// CHECK-NEXT:    moore.interface.modport @driver (output @clk, output @data, output @valid, input @ready)
+// CHECK-NEXT:    moore.interface.modport @receiver (input @clk, input @data, input @valid, output @ready)
+// CHECK: }
+
+interface handshake_bus;
+    logic clk;
+    logic [7:0] data;
+    logic valid;
+    logic ready;
+
+    modport driver (output clk, output data, output valid, input ready);
+    modport receiver (input clk, input data, input valid, output ready);
+endinterface
+
+/// Check virtual interface variable type
+
+// CHECK-LABEL: moore.class.classdecl @VifDriver {
+// CHECK-NEXT:    moore.class.propertydecl @vif : !moore.virtual_interface<@handshake_bus::@driver>
+// CHECK: }
+
+class VifDriver;
+    virtual handshake_bus.driver vif;
+endclass
+
+/// Check virtual interface without modport
+
+// CHECK-LABEL: moore.class.classdecl @VifHolder {
+// CHECK-NEXT:    moore.class.propertydecl @bus : !moore.virtual_interface<@basic_bus>
+// CHECK: }
+
+class VifHolder;
+    virtual basic_bus bus;
+endclass
