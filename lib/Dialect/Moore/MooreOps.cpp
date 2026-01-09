@@ -669,10 +669,10 @@ void ConstantOp::build(OpBuilder &builder, OperationState &result, IntType type,
   build(builder, result, type, FVInt(value));
 }
 
-/// This builder allows construction of small signed integers like 0, 1, -1
-/// matching a specified MLIR type. This shouldn't be used for general constant
-/// folding because it only works with values that can be expressed in an
-/// `int64_t`.
+/// This builder allows construction of small integers like 0, 1, -1 matching a
+/// specified MLIR type. This shouldn't be used for general constant folding
+/// because it only works with values that can be expressed in an `int64_t`.
+/// The isSigned parameter defaults to false for safety with small bit widths.
 void ConstantOp::build(OpBuilder &builder, OperationState &result, IntType type,
                        int64_t value, bool isSigned) {
   build(builder, result, type,
