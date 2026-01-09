@@ -1,4 +1,5 @@
 add_circt_unittest(CIRCTSupportTests
+  DiagnosticsTest.cpp
   FVIntTest.cpp
   JSONTest.cpp
   NPNClassTest.cpp
@@ -8,4 +9,5 @@ add_circt_unittest(CIRCTSupportTests
 target_link_libraries(CIRCTSupportTests
   PRIVATE
   CIRCTSupport
+  MLIRIR
 )
