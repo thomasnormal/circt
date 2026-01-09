@@ -440,13 +440,15 @@ public:
   /// Configuration for the process scheduler.
   struct Config {
     /// Maximum number of delta cycles before declaring infinite loop.
-    size_t maxDeltaCycles = 1000;
+    size_t maxDeltaCycles;
 
     /// Maximum number of processes that can be registered.
-    size_t maxProcesses = 10000;
+    size_t maxProcesses;
 
     /// Enable debug output.
-    bool debug = false;
+    bool debug;
+
+    Config() : maxDeltaCycles(1000), maxProcesses(10000), debug(false) {}
   };
 
   ProcessScheduler(Config config = Config());
@@ -686,6 +688,374 @@ private:
   ProcessScheduler &scheduler;
   llvm::DenseMap<ProcessId, llvm::SmallVector<SignalId, 8>> inferredSignals;
   ProcessId currentlyTracking = InvalidProcessId;
+};
+
+//===----------------------------------------------------------------------===//
+// ForkHandle - Handle for managing forked processes
+//===----------------------------------------------------------------------===//
+
+/// Unique identifier for a fork group.
+using ForkId = uint64_t;
+
+/// Invalid fork ID constant.
+constexpr ForkId InvalidForkId = 0;
+
+/// Types of fork join semantics.
+enum class ForkJoinType : uint8_t {
+  /// Wait for all processes (fork...join)
+  Join = 0,
+
+  /// Wait for any one process (fork...join_any)
+  JoinAny = 1,
+
+  /// Don't wait (fork...join_none)
+  JoinNone = 2,
+};
+
+/// Get the name of a fork join type for debugging.
+inline const char *getForkJoinTypeName(ForkJoinType type) {
+  switch (type) {
+  case ForkJoinType::Join:
+    return "join";
+  case ForkJoinType::JoinAny:
+    return "join_any";
+  case ForkJoinType::JoinNone:
+    return "join_none";
+  }
+  return "unknown";
+}
+
+/// Parse a fork join type from a string.
+inline ForkJoinType parseForkJoinType(llvm::StringRef str) {
+  if (str == "join_any")
+    return ForkJoinType::JoinAny;
+  if (str == "join_none")
+    return ForkJoinType::JoinNone;
+  return ForkJoinType::Join;
+}
+
+/// Represents a group of forked processes.
+struct ForkGroup {
+  /// Unique identifier for this fork group.
+  ForkId id;
+
+  /// The type of join semantics.
+  ForkJoinType joinType;
+
+  /// Parent process that created this fork.
+  ProcessId parentProcess;
+
+  /// Child processes in this fork group.
+  llvm::SmallVector<ProcessId, 4> childProcesses;
+
+  /// Number of child processes that have completed.
+  size_t completedCount = 0;
+
+  /// Whether the fork has been joined.
+  bool joined = false;
+
+  ForkGroup(ForkId id, ForkJoinType joinType, ProcessId parent)
+      : id(id), joinType(joinType), parentProcess(parent) {}
+
+  /// Check if the fork is complete based on join type.
+  bool isComplete() const {
+    switch (joinType) {
+    case ForkJoinType::Join:
+      return completedCount >= childProcesses.size();
+    case ForkJoinType::JoinAny:
+      return completedCount >= 1;
+    case ForkJoinType::JoinNone:
+      return true; // Never waits
+    }
+    return true;
+  }
+
+  /// Check if all child processes have completed.
+  bool allComplete() const {
+    return completedCount >= childProcesses.size();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// ForkJoinManager - Manages fork/join process groups
+//===----------------------------------------------------------------------===//
+
+/// Manages fork/join process groups and synchronization.
+class ForkJoinManager {
+public:
+  ForkJoinManager(ProcessScheduler &scheduler) : scheduler(scheduler) {}
+
+  /// Create a new fork group.
+  ForkId createFork(ProcessId parentProcess, ForkJoinType joinType);
+
+  /// Add a child process to a fork group.
+  void addChildToFork(ForkId forkId, ProcessId childProcess);
+
+  /// Mark a child process as completed.
+  void markChildComplete(ProcessId childProcess);
+
+  /// Wait for a fork to complete (join semantics).
+  /// Returns true if fork is already complete, false if waiting.
+  bool join(ForkId forkId);
+
+  /// Wait for any process in a fork to complete (join_any semantics).
+  bool joinAny(ForkId forkId);
+
+  /// Get the fork group for a fork ID.
+  ForkGroup *getForkGroup(ForkId forkId);
+  const ForkGroup *getForkGroup(ForkId forkId) const;
+
+  /// Get the fork group that a child process belongs to.
+  ForkGroup *getForkGroupForChild(ProcessId childProcess);
+
+  /// Wait for all child processes of the current process to complete.
+  bool waitFork(ProcessId parentProcess);
+
+  /// Disable all child processes of a fork group.
+  void disableFork(ForkId forkId);
+
+  /// Disable all child processes of the current process.
+  void disableAllForks(ProcessId parentProcess);
+
+  /// Get all fork groups for a parent process.
+  llvm::SmallVector<ForkId, 4> getForksForParent(ProcessId parentProcess) const;
+
+private:
+  ProcessScheduler &scheduler;
+  llvm::DenseMap<ForkId, std::unique_ptr<ForkGroup>> forkGroups;
+  llvm::DenseMap<ProcessId, ForkId> childToFork;
+  llvm::DenseMap<ProcessId, llvm::SmallVector<ForkId, 4>> parentToForks;
+  ForkId nextForkId = 1;
+
+  ForkId getNextForkId() { return nextForkId++; }
+};
+
+//===----------------------------------------------------------------------===//
+// Semaphore - Counting semaphore for synchronization
+//===----------------------------------------------------------------------===//
+
+/// Unique identifier for a semaphore.
+using SemaphoreId = uint64_t;
+
+/// Invalid semaphore ID constant.
+constexpr SemaphoreId InvalidSemaphoreId = 0;
+
+/// A counting semaphore for process synchronization.
+class Semaphore {
+public:
+  Semaphore(SemaphoreId id, int64_t initialCount)
+      : id(id), keyCount(initialCount) {}
+
+  /// Get the semaphore ID.
+  SemaphoreId getId() const { return id; }
+
+  /// Get the current key count.
+  int64_t getKeyCount() const { return keyCount; }
+
+  /// Try to get keys (non-blocking).
+  bool tryGet(int64_t count = 1) {
+    if (keyCount >= count) {
+      keyCount -= count;
+      return true;
+    }
+    return false;
+  }
+
+  /// Put keys back.
+  void put(int64_t count = 1) { keyCount += count; }
+
+  /// Add a process to the wait queue.
+  void addWaiter(ProcessId id, int64_t requestedKeys) {
+    waitQueue.push_back({id, requestedKeys});
+  }
+
+  /// Check if there are waiting processes.
+  bool hasWaiters() const { return !waitQueue.empty(); }
+
+  /// Try to satisfy the next waiter.
+  /// Returns the process ID if satisfied, InvalidProcessId otherwise.
+  ProcessId trySatisfyNextWaiter() {
+    if (waitQueue.empty())
+      return InvalidProcessId;
+
+    auto &waiter = waitQueue.front();
+    if (keyCount >= waiter.second) {
+      keyCount -= waiter.second;
+      ProcessId id = waiter.first;
+      waitQueue.erase(waitQueue.begin());
+      return id;
+    }
+    return InvalidProcessId;
+  }
+
+private:
+  SemaphoreId id;
+  int64_t keyCount;
+  std::vector<std::pair<ProcessId, int64_t>> waitQueue;
+};
+
+//===----------------------------------------------------------------------===//
+// Mailbox - Inter-process communication channel
+//===----------------------------------------------------------------------===//
+
+/// Unique identifier for a mailbox.
+using MailboxId = uint64_t;
+
+/// Invalid mailbox ID constant.
+constexpr MailboxId InvalidMailboxId = 0;
+
+/// A mailbox for inter-process message passing.
+/// Messages are stored as opaque 64-bit values (handles to actual data).
+class Mailbox {
+public:
+  Mailbox(MailboxId id, int32_t bound = 0) : id(id), boundSize(bound) {}
+
+  /// Get the mailbox ID.
+  MailboxId getId() const { return id; }
+
+  /// Get the current message count.
+  size_t getMessageCount() const { return messages.size(); }
+
+  /// Check if the mailbox is bounded.
+  bool isBounded() const { return boundSize > 0; }
+
+  /// Check if the mailbox is full (for bounded mailboxes).
+  bool isFull() const {
+    return isBounded() && messages.size() >= static_cast<size_t>(boundSize);
+  }
+
+  /// Check if the mailbox is empty.
+  bool isEmpty() const { return messages.empty(); }
+
+  /// Try to put a message (non-blocking).
+  bool tryPut(uint64_t message) {
+    if (isFull())
+      return false;
+    messages.push_back(message);
+    return true;
+  }
+
+  /// Put a message (for unbounded or blocking after space available).
+  void put(uint64_t message) { messages.push_back(message); }
+
+  /// Try to get a message (non-blocking).
+  bool tryGet(uint64_t &message) {
+    if (isEmpty())
+      return false;
+    message = messages.front();
+    messages.erase(messages.begin());
+    return true;
+  }
+
+  /// Peek at the front message without removing.
+  bool tryPeek(uint64_t &message) const {
+    if (isEmpty())
+      return false;
+    message = messages.front();
+    return true;
+  }
+
+  /// Add a process waiting to put.
+  void addPutWaiter(ProcessId id, uint64_t message) {
+    putWaitQueue.push_back({id, message});
+  }
+
+  /// Add a process waiting to get.
+  void addGetWaiter(ProcessId id) { getWaitQueue.push_back(id); }
+
+  /// Try to satisfy a get waiter.
+  ProcessId trySatisfyGetWaiter(uint64_t &message) {
+    if (getWaitQueue.empty() || isEmpty())
+      return InvalidProcessId;
+
+    ProcessId id = getWaitQueue.front();
+    message = messages.front();
+    messages.erase(messages.begin());
+    getWaitQueue.erase(getWaitQueue.begin());
+    return id;
+  }
+
+  /// Try to satisfy a put waiter.
+  ProcessId trySatisfyPutWaiter() {
+    if (putWaitQueue.empty() || isFull())
+      return InvalidProcessId;
+
+    auto waiter = putWaitQueue.front();
+    messages.push_back(waiter.second);
+    putWaitQueue.erase(putWaitQueue.begin());
+    return waiter.first;
+  }
+
+private:
+  MailboxId id;
+  int32_t boundSize;
+  std::vector<uint64_t> messages;
+  std::vector<std::pair<ProcessId, uint64_t>> putWaitQueue;
+  std::vector<ProcessId> getWaitQueue;
+};
+
+//===----------------------------------------------------------------------===//
+// SyncPrimitivesManager - Manages semaphores and mailboxes
+//===----------------------------------------------------------------------===//
+
+/// Manages synchronization primitives (semaphores, mailboxes, events).
+class SyncPrimitivesManager {
+public:
+  SyncPrimitivesManager(ProcessScheduler &scheduler) : scheduler(scheduler) {}
+
+  //===------------------------------------------------------------------===//
+  // Semaphore Management
+  //===------------------------------------------------------------------===//
+
+  /// Create a new semaphore with initial key count.
+  SemaphoreId createSemaphore(int64_t initialCount);
+
+  /// Get keys from a semaphore (blocking).
+  void semaphoreGet(SemaphoreId id, ProcessId caller, int64_t count = 1);
+
+  /// Try to get keys from a semaphore (non-blocking).
+  bool semaphoreTryGet(SemaphoreId id, int64_t count = 1);
+
+  /// Put keys back to a semaphore.
+  void semaphorePut(SemaphoreId id, int64_t count = 1);
+
+  /// Get a semaphore by ID.
+  Semaphore *getSemaphore(SemaphoreId id);
+
+  //===------------------------------------------------------------------===//
+  // Mailbox Management
+  //===------------------------------------------------------------------===//
+
+  /// Create a new mailbox.
+  MailboxId createMailbox(int32_t bound = 0);
+
+  /// Put a message into a mailbox (blocking).
+  void mailboxPut(MailboxId id, ProcessId caller, uint64_t message);
+
+  /// Try to put a message into a mailbox (non-blocking).
+  bool mailboxTryPut(MailboxId id, uint64_t message);
+
+  /// Get a message from a mailbox (blocking).
+  void mailboxGet(MailboxId id, ProcessId caller);
+
+  /// Try to get a message from a mailbox (non-blocking).
+  bool mailboxTryGet(MailboxId id, uint64_t &message);
+
+  /// Peek at a message in a mailbox.
+  bool mailboxPeek(MailboxId id, uint64_t &message);
+
+  /// Get the message count in a mailbox.
+  size_t mailboxNum(MailboxId id);
+
+  /// Get a mailbox by ID.
+  Mailbox *getMailbox(MailboxId id);
+
+private:
+  ProcessScheduler &scheduler;
+  llvm::DenseMap<SemaphoreId, std::unique_ptr<Semaphore>> semaphores;
+  llvm::DenseMap<MailboxId, std::unique_ptr<Mailbox>> mailboxes;
+  SemaphoreId nextSemId = 1;
+  MailboxId nextMailboxId = 1;
 };
 
 } // namespace sim
