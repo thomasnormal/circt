@@ -1501,3 +1501,155 @@ void VerilogDocument::getCodeActions(
     }
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Rename Symbol
+//===----------------------------------------------------------------------===//
+
+std::optional<std::pair<llvm::lsp::Range, std::string>>
+VerilogDocument::prepareRename(const llvm::lsp::URIForFile &uri,
+                               const llvm::lsp::Position &pos) {
+  if (!index)
+    return std::nullopt;
+
+  const auto *slangBufferPointer = getPointerFor(pos);
+  if (!slangBufferPointer)
+    return std::nullopt;
+
+  const auto &intervalMap = index->getIntervalMap();
+  auto it = intervalMap.find(slangBufferPointer);
+
+  // Found no element at the given position.
+  if (!it.valid() || slangBufferPointer < it.start())
+    return std::nullopt;
+
+  auto element = it.value();
+
+  // We can only rename Verilog symbols, not attributes
+  const auto *symbol = dyn_cast<const slang::ast::Symbol *>(element);
+  if (!symbol || symbol->name.empty())
+    return std::nullopt;
+
+  // Check if this is a renameable symbol type
+  switch (symbol->kind) {
+  case slang::ast::SymbolKind::Variable:
+  case slang::ast::SymbolKind::Net:
+  case slang::ast::SymbolKind::Port:
+  case slang::ast::SymbolKind::Parameter:
+  case slang::ast::SymbolKind::Definition:
+  case slang::ast::SymbolKind::Instance:
+  case slang::ast::SymbolKind::Subroutine:
+    break;
+  default:
+    return std::nullopt; // Not a renameable symbol
+  }
+
+  // Calculate the range of the symbol at the cursor
+  const auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+
+  size_t startOffset = it.start() - text.data();
+  size_t endOffset = it.stop() - text.data();
+
+  // Convert offsets to LSP positions
+  int startLine = 0, startChar = 0;
+  int endLine = 0, endChar = 0;
+
+  for (size_t i = 0; i < lineOffsets.size(); ++i) {
+    if (lineOffsets[i] <= startOffset) {
+      startLine = i;
+      startChar = startOffset - lineOffsets[i];
+    }
+    if (lineOffsets[i] <= endOffset) {
+      endLine = i;
+      endChar = endOffset - lineOffsets[i];
+    }
+  }
+
+  llvm::lsp::Range range(llvm::lsp::Position(startLine, startChar),
+                         llvm::lsp::Position(endLine, endChar));
+
+  return std::make_pair(range, std::string(symbol->name));
+}
+
+std::optional<llvm::lsp::WorkspaceEdit>
+VerilogDocument::renameSymbol(const llvm::lsp::URIForFile &uri,
+                              const llvm::lsp::Position &pos,
+                              llvm::StringRef newName) {
+  if (!index)
+    return std::nullopt;
+
+  const auto *slangBufferPointer = getPointerFor(pos);
+  if (!slangBufferPointer)
+    return std::nullopt;
+
+  const auto &intervalMap = index->getIntervalMap();
+  auto it = intervalMap.find(slangBufferPointer);
+
+  // Found no element at the given position.
+  if (!it.valid() || slangBufferPointer < it.start())
+    return std::nullopt;
+
+  auto element = it.value();
+
+  // We can only rename Verilog symbols, not attributes
+  const auto *symbol = dyn_cast<const slang::ast::Symbol *>(element);
+  if (!symbol || symbol->name.empty())
+    return std::nullopt;
+
+  // Validate the new name
+  if (newName.empty())
+    return std::nullopt;
+
+  // Check if new name is a valid identifier
+  if (!std::isalpha(newName[0]) && newName[0] != '_')
+    return std::nullopt;
+  for (char c : newName) {
+    if (!std::isalnum(c) && c != '_' && c != '$')
+      return std::nullopt;
+  }
+
+  llvm::lsp::WorkspaceEdit edit;
+  std::vector<llvm::lsp::TextEdit> textEdits;
+
+  // Get the definition location
+  slang::SourceRange defRange(symbol->location,
+                              symbol->location + symbol->name.size());
+
+  // Add edit for the definition
+  if (defRange.start().buffer() == mainBufferId) {
+    llvm::lsp::TextEdit defEdit;
+    defEdit.range = getLspRange(defRange);
+    defEdit.newText = newName.str();
+    textEdits.push_back(std::move(defEdit));
+  }
+
+  // Add edits for all references
+  auto refIt = index->getReferences().find(symbol);
+  if (refIt != index->getReferences().end()) {
+    for (const auto &refRange : refIt->second) {
+      if (refRange.start().buffer() == mainBufferId) {
+        llvm::lsp::TextEdit refEdit;
+        refEdit.range = getLspRange(refRange);
+        refEdit.newText = newName.str();
+        textEdits.push_back(std::move(refEdit));
+      }
+    }
+  }
+
+  if (textEdits.empty())
+    return std::nullopt;
+
+  // Sort edits by position (descending) to avoid offset issues when applying
+  std::sort(textEdits.begin(), textEdits.end(),
+            [](const llvm::lsp::TextEdit &a, const llvm::lsp::TextEdit &b) {
+              return a.range.start > b.range.start;
+            });
+
+  // Remove duplicates
+  textEdits.erase(std::unique(textEdits.begin(), textEdits.end()),
+                  textEdits.end());
+
+  edit.changes[uri.uri().str()] = std::move(textEdits);
+  return edit;
+}
