@@ -163,3 +163,18 @@ void circt::lsp::VerilogServer::getDocumentLinks(
   if (fileIt != impl->files.end())
     fileIt->second->getDocumentLinks(uri, links);
 }
+
+void circt::lsp::VerilogServer::getSemanticTokens(
+    const URIForFile &uri, std::vector<uint32_t> &data) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    fileIt->second->getSemanticTokens(uri, data);
+}
+
+void circt::lsp::VerilogServer::getInlayHints(
+    const URIForFile &uri, const llvm::lsp::Range &range,
+    std::vector<llvm::lsp::InlayHint> &hints) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    fileIt->second->getInlayHints(uri, range, hints);
+}

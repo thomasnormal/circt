@@ -29,6 +29,7 @@
 #include "llvm/Support/LSP/Protocol.h"
 
 #include "VerilogIndex.h"
+#include "SemanticTokens.h"
 
 namespace circt {
 namespace lsp {
@@ -127,6 +128,23 @@ public:
   /// Return document links for include directives.
   void getDocumentLinks(const llvm::lsp::URIForFile &uri,
                         std::vector<llvm::lsp::DocumentLink> &links);
+
+  //===--------------------------------------------------------------------===//
+  // Semantic Tokens
+  //===--------------------------------------------------------------------===//
+
+  /// Return semantic tokens for the entire document.
+  void getSemanticTokens(const llvm::lsp::URIForFile &uri,
+                         std::vector<SemanticToken> &tokens);
+
+  //===--------------------------------------------------------------------===//
+  // Inlay Hints
+  //===--------------------------------------------------------------------===//
+
+  /// Return inlay hints for the given range.
+  void getInlayHints(const llvm::lsp::URIForFile &uri,
+                     const llvm::lsp::Range &range,
+                     std::vector<llvm::lsp::InlayHint> &hints);
 
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);

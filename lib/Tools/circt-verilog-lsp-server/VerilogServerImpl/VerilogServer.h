@@ -105,6 +105,14 @@ public:
   void getDocumentLinks(const URIForFile &uri,
                         std::vector<llvm::lsp::DocumentLink> &links);
 
+  /// Return semantic tokens for the entire document.
+  void getSemanticTokens(const URIForFile &uri,
+                         std::vector<uint32_t> &data);
+
+  /// Return inlay hints for the given range.
+  void getInlayHints(const URIForFile &uri, const llvm::lsp::Range &range,
+                     std::vector<llvm::lsp::InlayHint> &hints);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;
