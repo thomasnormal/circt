@@ -210,9 +210,10 @@ struct TypeVisitor {
 
   Type visit(const slang::ast::NullType &type) {
     // The null type represents the type of the `null` literal.
-    // We represent it as a class handle with a null symbol reference.
+    // We represent it as a class handle with a special "__null__" symbol.
     // This allows null to be assigned to any class handle.
-    return moore::ClassHandleType::get(context.getContext(), nullptr);
+    auto nullSym = mlir::FlatSymbolRefAttr::get(context.getContext(), "__null__");
+    return moore::ClassHandleType::get(context.getContext(), nullSym);
   }
 
   /// Emit an error for all other types.

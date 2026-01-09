@@ -1582,23 +1582,23 @@ struct RvalueExprVisitor : public ExprVisitor {
   /// Handle null literals.
   Value visit(const slang::ast::NullLiteral &expr) {
     // Null represents a null class handle (no object).
-    // We represent this as a zero-initialized value of the appropriate type.
     auto type = context.convertType(*expr.type);
     if (!type)
       return {};
 
     // For class handles, emit a special null constant.
-    // For now, we emit a warning and create a dummy variable since full null
-    // support would require a dedicated NullOp or special handling.
+    // For now, we emit a warning and create a dummy variable and read from it.
+    // Full null support would require a dedicated NullOp or special handling.
     mlir::emitWarning(loc) << "null literal support is incomplete; "
                            << "treating as uninitialized value";
 
-    // Create a variable to represent the null value
+    // Create a variable to represent the null value, then read from it
     auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
     auto nameAttr = builder.getStringAttr("null_literal");
     auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
                                            /*initial=*/Value{});
-    return varOp;
+    // Read the variable to get an rvalue
+    return moore::ReadOp::create(builder, loc, varOp);
   }
 
   /// Helper function to convert RValues at creation of a new Struct, Array or
@@ -2361,6 +2361,17 @@ static mlir::Value maybeUpcastHandle(Context &context, mlir::Value actualHandle,
   // Fast path: already the expected handle type.
   if (actualHandleTy == expectedHandleTy)
     return actualHandle;
+
+  // Handle null type: a null handle (with special "__null__" symbol) can be
+  // assigned to any class handle type. This allows "return null;" to work for
+  // any class type.
+  if (actualHandleTy.getClassSym() &&
+      actualHandleTy.getClassSym().getRootReference() == "__null__") {
+    // The source is a null handle - just cast it to the expected type.
+    // Use ConversionOp since we don't have a dedicated NullCastOp.
+    return moore::ConversionOp::create(context.builder, loc, expectedHandleTy,
+                                       actualHandle);
+  }
 
   if (!context.isClassDerivedFrom(actualHandleTy, expectedHandleTy)) {
     mlir::emitError(loc)
