@@ -961,4 +961,227 @@ def SimWaitEventOp : SimOp<"wait_event", []> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Sensitivity List and Edge Detection Operations
+//===----------------------------------------------------------------------===//
+
+def SimSensitivityListOp : SimOp<"sensitivity", [Pure]> {
+  let summary = "Define a sensitivity list for process triggering";
+  let description = [{
+    `sim.sensitivity` defines a sensitivity list that specifies when a process
+    should be triggered. This corresponds to the @(...) construct in Verilog.
+
+    The sensitivity list can contain multiple signals with different edge
+    sensitivities. The process is triggered when ANY of the specified
+    conditions is met (OR semantics).
+
+    Edge types:
+    - "posedge": Rising edge (0->1)
+    - "negedge": Falling edge (1->0)
+    - "anyedge": Any value change (default)
+    - "level": Level-sensitive (same as anyedge for simulation)
+
+    Example:
+    ```mlir
+    // Sensitivity to positive clock edge
+    %sens = sim.sensitivity posedge %clk : i1
+
+    // Sensitivity to both edges of reset and clock
+    %sens = sim.sensitivity posedge %clk, negedge %rst : i1, i1
+
+    // Combinational sensitivity (any change)
+    %sens = sim.sensitivity anyedge %a, %b, %c : i8, i8, i8
+    ```
+  }];
+  let arguments = (ins
+    Variadic<HWValueType>:$signals,
+    ArrayAttr:$edges
+  );
+  let results = (outs I1:$triggered);
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def SimEdgeDetectOp : SimOp<"edge_detect", [Pure]> {
+  let summary = "Detect edge transitions on a signal";
+  let description = [{
+    `sim.edge_detect` detects edge transitions on a signal by comparing the
+    current value with the previous value. Returns true if the specified
+    edge type occurred.
+
+    This operation is typically used in conjunction with signal sampling
+    to implement @(posedge clk) style triggers.
+
+    Edge types:
+    - "posedge": Returns true on 0->1 transition
+    - "negedge": Returns true on 1->0 transition
+    - "anyedge": Returns true on any value change
+
+    Example:
+    ```mlir
+    // Detect positive edge
+    %posedge = sim.edge_detect %current, %previous edge "posedge" : i1
+
+    // Detect any change on multi-bit signal
+    %changed = sim.edge_detect %data_new, %data_old edge "anyedge" : i8
+    ```
+  }];
+  let arguments = (ins
+    HWValueType:$current,
+    HWValueType:$previous,
+    DefaultValuedStrAttr<StrAttr, "posedge">:$edge
+  );
+  let results = (outs I1:$detected);
+  let assemblyFormat = [{
+    $current `,` $previous (`edge` $edge^)? attr-dict `:` type($current)
+  }];
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
+def SimSignalRegisterOp : SimOp<"signal_register", []> {
+  let summary = "Register a signal value for edge detection";
+  let description = [{
+    `sim.signal_register` captures the current value of a signal and stores
+    it for later comparison. This is used to track signal history for
+    edge detection.
+
+    The operation maintains state across simulation cycles, providing the
+    previous value of a signal when queried.
+
+    Example:
+    ```mlir
+    // Register clock signal for edge detection
+    %prev_clk = sim.signal_register %clk : i1
+
+    // The previous value can be used with edge_detect
+    %posedge = sim.edge_detect %clk, %prev_clk edge "posedge" : i1
+    ```
+  }];
+  let arguments = (ins HWValueType:$signal);
+  let results = (outs HWValueType:$previous);
+  let assemblyFormat = [{
+    $signal attr-dict `:` type($signal)
+  }];
+}
+
+def SimTriggeredProcessOp : SimOp<"triggered_process", [
+  NoRegionArguments,
+  SimProcessRegion,
+  RecursiveMemoryEffects,
+]> {
+  let summary = "A process triggered by a sensitivity list";
+  let description = [{
+    `sim.triggered_process` defines a process that executes when its
+    sensitivity list is triggered. This is similar to a Verilog
+    `always @(sensitivity_list)` block.
+
+    The sensitivity list specifies which signals and edge types trigger
+    the process. Multiple triggers are OR'ed together - the process
+    executes when any trigger condition is met.
+
+    The body must terminate with either `sim.yield` (for outputs) or
+    `sim.suspend` (for explicit control flow).
+
+    Example:
+    ```mlir
+    // Sequential logic with clock and reset
+    sim.triggered_process @(posedge %clk, negedge %rst_n) -> i32 {
+      %c1 = hw.constant 1 : i32
+      %rst_active = comb.icmp eq %rst_n, %c0_i1 : i1
+      %next = scf.if %rst_active -> i32 {
+        scf.yield %c0_i32 : i32
+      } else {
+        %inc = comb.add %state, %c1 : i32
+        scf.yield %inc : i32
+      }
+      sim.yield %next : i32
+    }
+    ```
+  }];
+  let arguments = (ins
+    Variadic<HWValueType>:$sensitivitySignals,
+    ArrayAttr:$sensitivityEdges
+  );
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def SimPrevValueOp : SimOp<"prev", [Pure]> {
+  let summary = "Get the previous value of a signal";
+  let description = [{
+    `sim.prev` returns the value of a signal from the previous delta cycle
+    or time step. This is useful for implementing sequential logic and
+    edge detection.
+
+    The optional `delta` attribute specifies how many delta cycles back
+    to look. Default is 1 (immediate previous value).
+
+    Example:
+    ```mlir
+    // Get previous clock value for edge detection
+    %prev_clk = sim.prev %clk : i1
+
+    // Get value from 2 deltas ago
+    %old_data = sim.prev %data delta 2 : i32
+    ```
+  }];
+  let arguments = (ins
+    HWValueType:$signal,
+    DefaultValuedAttr<I32Attr, "1">:$delta
+  );
+  let results = (outs HWValueType:$previous);
+  let assemblyFormat = [{
+    $signal (`delta` $delta^)? attr-dict `:` type($signal)
+  }];
+}
+
+def SimDeltaCycleOp : SimOp<"delta_cycle", []> {
+  let summary = "Execute a delta cycle boundary";
+  let description = [{
+    `sim.delta_cycle` marks a delta cycle boundary in simulation. All
+    scheduled updates from the current delta cycle are applied, and
+    triggered processes are re-evaluated.
+
+    This is primarily used for explicit control over simulation
+    scheduling when needed.
+
+    Example:
+    ```mlir
+    // Drive a value and force delta cycle update
+    sim.drive %sig, %val mode "nonblocking" : i32
+    sim.delta_cycle
+    // Now the driven value is visible
+    %updated = sim.sample %sig : i32
+    ```
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def SimIterationLimitOp : SimOp<"iteration_limit", []> {
+  let summary = "Set iteration limit for delta cycle execution";
+  let description = [{
+    `sim.iteration_limit` sets the maximum number of delta cycles that
+    can execute at a single simulation time before the simulator
+    declares an infinite loop. This is a safety mechanism to prevent
+    runaway combinational loops.
+
+    If the limit is reached, simulation will either error out or
+    advance time (depending on implementation).
+
+    Example:
+    ```mlir
+    // Set limit to 1000 delta cycles
+    sim.iteration_limit 1000
+
+    // Set no limit (use with caution)
+    sim.iteration_limit 0
+    ```
+  }];
+  let arguments = (ins I32Attr:$limit);
+  let assemblyFormat = "$limit attr-dict";
+}
+
 #endif // CIRCT_DIALECT_SIM_SIMOPS_TD
