@@ -6,6 +6,7 @@ add_circt_library(CIRCTSupport
   AssertionChecker.cpp
   BackedgeBuilder.cpp
   CoverageDatabase.cpp
+  CoverageReportGenerator.cpp
   CustomDirectiveImpl.cpp
   Debug.cpp
   Diagnostics.cpp
