@@ -1762,6 +1762,8 @@ struct ClassDeclVisitor {
       extraParams.push_back(handleTy);
 
       auto funcTy = getFunctionSignature(context, fn, extraParams);
+      if (!funcTy)
+        return failure();
       moore::ClassMethodDeclOp::create(builder, loc, fn.name, funcTy, nullptr);
       return success();
     }

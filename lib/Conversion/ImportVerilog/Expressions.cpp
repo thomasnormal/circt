@@ -215,6 +215,16 @@ struct ExprVisitor {
     auto derefType = value.getType();
     if (isLvalue)
       derefType = cast<moore::RefType>(derefType).getNestedType();
+
+    // String character access: s[i] returns a byte (8-bit integer)
+    if (isa<moore::StringType>(derefType)) {
+      auto index = context.convertRvalueExpression(expr.selector());
+      if (!index)
+        return {};
+      // String indexing uses getc() method - s[i] is equivalent to s.getc(i)
+      return moore::StringGetCOp::create(builder, loc, value, index);
+    }
+
     if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
              moore::QueueType>(derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
@@ -407,6 +417,10 @@ struct ExprVisitor {
 
   /// Handle concatenations.
   Value visit(const slang::ast::ConcatenationExpression &expr) {
+    // Check if this is a string concatenation by looking at the result type.
+    // SystemVerilog has two kinds of concatenation: bit vector and string.
+    bool isStringConcat = expr.type->isString();
+
     SmallVector<Value> operands;
     for (auto *operand : expr.operands()) {
       // Handle empty replications like `{0{...}}` which may occur within
@@ -417,7 +431,7 @@ struct ExprVisitor {
       auto value = convertLvalueOrRvalueExpression(*operand);
       if (!value)
         return {};
-      if (!isLvalue)
+      if (!isLvalue && !isStringConcat)
         value = context.convertToSimpleBitVector(value);
       if (!value)
         return {};
@@ -425,6 +439,8 @@ struct ExprVisitor {
     }
     if (isLvalue)
       return moore::ConcatRefOp::create(builder, loc, operands);
+    else if (isStringConcat)
+      return moore::StringConcatOp::create(builder, loc, operands);
     else
       return moore::ConcatOp::create(builder, loc, operands);
   }
@@ -1557,6 +1573,96 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (failed(fmtValue))
         return {};
       return fmtValue.value();
+    }
+
+    // $cast(dest, src) is a special case because the first argument is an
+    // output parameter. Slang wraps it in an AssignmentExpression with
+    // EmptyArgument as RHS.
+    // IEEE 1800-2017 Section 8.16: $cast attempts to assign the source
+    // expression to the destination variable. When used as a function,
+    // it returns 1 if the cast is legal and 0 if not.
+    if (!subroutine.name.compare("$cast") && args.size() == 2) {
+      // Unpack the first argument from AssignmentExpression
+      auto *destExpr = args[0];
+      if (const auto *assign =
+              destExpr->as_if<slang::ast::AssignmentExpression>())
+        destExpr = &assign->left();
+
+      // Convert destination as lvalue and source as rvalue
+      Value destLvalue = context.convertLvalueExpression(*destExpr);
+      Value srcRvalue = context.convertRvalueExpression(*args[1]);
+      if (!destLvalue || !srcRvalue)
+        return {};
+
+      // For now, emit a warning that $cast is not fully supported.
+      // $cast is used for runtime type checking and downcasting, which
+      // requires runtime support. We return a constant result for now.
+      mlir::emitWarning(loc)
+          << "$cast is not fully supported; returning constant result";
+
+      // Check if both are class handle types - this is the common case for
+      // dynamic downcasting in OOP
+      auto destRefTy = cast<moore::RefType>(destLvalue.getType());
+      auto destTy = destRefTy.getNestedType();
+      auto srcTy = srcRvalue.getType();
+
+      bool isClassDowncast =
+          isa<moore::ClassHandleType>(destTy) &&
+          isa<moore::ClassHandleType>(srcTy);
+
+      if (isClassDowncast) {
+        // For class downcasting, we can't perform the actual cast at compile
+        // time. Just return 1 to indicate the cast would succeed. The actual
+        // value won't be assigned, which may cause issues but allows parsing
+        // to continue.
+      } else {
+        // For non-class types, try to perform the conversion
+        auto castValue = context.materializeConversion(destTy, srcRvalue,
+                                                       args[1]->type->isSigned(),
+                                                       loc);
+        if (castValue) {
+          // Store the cast value to the destination
+          moore::BlockingAssignOp::create(builder, loc, destLvalue, castValue);
+        }
+      }
+
+      // Return 1 (success) - $cast as a function returns int
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      return moore::ConstantOp::create(builder, loc, intTy, 1);
+    }
+
+    // Handle queue methods that need special treatment (lvalue for queue).
+    // push_back, push_front need queue as lvalue + element as rvalue.
+    // pop_back, pop_front need queue as lvalue, no additional args.
+    bool isQueuePushMethod =
+        (subroutine.name == "push_back" || subroutine.name == "push_front");
+    bool isQueuePopMethod =
+        (subroutine.name == "pop_back" || subroutine.name == "pop_front");
+
+    if (isQueuePushMethod && args.size() == 2) {
+      // First arg is the queue (need lvalue), second is the element
+      Value queueRef = context.convertLvalueExpression(*args[0]);
+      Value element = context.convertRvalueExpression(*args[1]);
+      if (!queueRef || !element)
+        return {};
+      result = context.convertQueueMethodCall(subroutine, loc, queueRef, element);
+      if (failed(result))
+        return {};
+      if (*result)
+        return *result;
+    }
+
+    if (isQueuePopMethod && args.size() == 1) {
+      // Only the queue reference, return element type
+      Value queueRef = context.convertLvalueExpression(*args[0]);
+      if (!queueRef)
+        return {};
+      auto ty = context.convertType(*expr.type);
+      result = context.convertQueueMethodCallNoArg(subroutine, loc, queueRef, ty);
+      if (failed(result))
+        return {};
+      if (*result)
+        return *result;
     }
 
     // Call the conversion function with the appropriate arity. These return one
@@ -2786,6 +2892,48 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                                                      value2);
                 })
           .Default([&]() -> Value { return {}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertQueueMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                                Location loc, Value queueRef, Value element) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("push_back",
+                [&]() -> FailureOr<Value> {
+                  // push_back modifies the queue, so we need a reference
+                  moore::QueuePushBackOp::create(builder, loc, queueRef, element);
+                  // push_back returns void, return a dummy integer value
+                  // since expressions need to return something
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("push_front",
+                [&]() -> FailureOr<Value> {
+                  moore::QueuePushFrontOp::create(builder, loc, queueRef, element);
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Default([&]() -> FailureOr<Value> { return Value{}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertQueueMethodCallNoArg(const slang::ast::SystemSubroutine &subroutine,
+                                     Location loc, Value queueRef,
+                                     Type elementType) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("pop_back",
+                [&]() -> FailureOr<Value> {
+                  return (Value)moore::QueuePopBackOp::create(builder, loc, elementType, queueRef);
+                })
+          .Case("pop_front",
+                [&]() -> FailureOr<Value> {
+                  return (Value)moore::QueuePopFrontOp::create(builder, loc, elementType, queueRef);
+                })
+          .Default([&]() -> FailureOr<Value> { return Value{}; });
   return systemCallRes();
 }
 
