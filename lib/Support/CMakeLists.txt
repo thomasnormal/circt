@@ -6,6 +6,7 @@ add_circt_library(CIRCTSupport
   BackedgeBuilder.cpp
   CustomDirectiveImpl.cpp
   Debug.cpp
+  Diagnostics.cpp
   FVInt.cpp
   FieldRef.cpp
   InstanceGraph.cpp
