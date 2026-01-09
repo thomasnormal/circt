@@ -1,4 +1,5 @@
 add_circt_unittest(CIRCTSupportTests
+  CoverageDatabaseTest.cpp
   DiagnosticsTest.cpp
   FVIntTest.cpp
   JSONTest.cpp
