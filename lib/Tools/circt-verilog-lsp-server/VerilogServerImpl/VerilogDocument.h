@@ -54,6 +54,7 @@ public:
   // Return LSP location from slang location.
   llvm::lsp::Location getLspLocation(slang::SourceLocation loc) const;
   llvm::lsp::Location getLspLocation(slang::SourceRange range) const;
+  llvm::lsp::Range getLspRange(slang::SourceRange range) const;
 
   slang::BufferID getMainBufferID() const { return mainBufferId; }
 
@@ -68,6 +69,22 @@ public:
   void findReferencesOf(const llvm::lsp::URIForFile &uri,
                         const llvm::lsp::Position &pos,
                         std::vector<llvm::lsp::Location> &references);
+
+  //===--------------------------------------------------------------------===//
+  // Hover Information
+  //===--------------------------------------------------------------------===//
+
+  /// Return hover information for the object at the given position.
+  std::optional<llvm::lsp::Hover> getHover(const llvm::lsp::URIForFile &uri,
+                                           const llvm::lsp::Position &pos);
+
+  //===--------------------------------------------------------------------===//
+  // Document Symbols
+  //===--------------------------------------------------------------------===//
+
+  /// Return document symbols for this document.
+  void getDocumentSymbols(const llvm::lsp::URIForFile &uri,
+                          std::vector<llvm::lsp::DocumentSymbol> &symbols);
 
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);

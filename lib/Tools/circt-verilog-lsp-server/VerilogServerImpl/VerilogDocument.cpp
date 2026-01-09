@@ -32,6 +32,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "slang/ast/ASTVisitor.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
 
@@ -425,4 +433,509 @@ void VerilogDocument::findReferencesOf(
     return;
   for (auto referenceRange : it->second)
     references.push_back(getLspLocation(referenceRange));
+}
+
+//===----------------------------------------------------------------------===//
+// Hover Information
+//===----------------------------------------------------------------------===//
+
+/// Format a type description for hover information.
+static std::string formatTypeDescription(const slang::ast::Type &type) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+
+  if (type.isIntegral()) {
+    if (type.isSigned())
+      os << "signed ";
+    auto width = type.getBitWidth();
+    if (width == 1)
+      os << "logic";
+    else
+      os << "logic [" << (width - 1) << ":0]";
+  } else if (type.isFloating()) {
+    if (type.getBitWidth() == 32)
+      os << "shortreal";
+    else
+      os << "real";
+  } else if (type.isString()) {
+    os << "string";
+  } else if (type.isVoid()) {
+    os << "void";
+  } else {
+    os << type.toString();
+  }
+
+  return result;
+}
+
+/// Format symbol information for hover display.
+static std::string formatSymbolInfo(const slang::ast::Symbol &symbol) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+
+  switch (symbol.kind) {
+  case slang::ast::SymbolKind::Variable:
+  case slang::ast::SymbolKind::Net:
+  case slang::ast::SymbolKind::FormalArgument: {
+    const auto &valueSymbol = symbol.as<slang::ast::ValueSymbol>();
+    os << "```systemverilog\n";
+    os << formatTypeDescription(valueSymbol.getType()) << " " << symbol.name;
+    os << "\n```";
+    break;
+  }
+  case slang::ast::SymbolKind::Port: {
+    const auto &port = symbol.as<slang::ast::PortSymbol>();
+    os << "```systemverilog\n";
+    // Show direction
+    switch (port.direction) {
+    case slang::ast::ArgumentDirection::In:
+      os << "input ";
+      break;
+    case slang::ast::ArgumentDirection::Out:
+      os << "output ";
+      break;
+    case slang::ast::ArgumentDirection::InOut:
+      os << "inout ";
+      break;
+    case slang::ast::ArgumentDirection::Ref:
+      os << "ref ";
+      break;
+    }
+    os << formatTypeDescription(port.getType()) << " " << symbol.name;
+    os << "\n```";
+    break;
+  }
+  case slang::ast::SymbolKind::Parameter:
+  case slang::ast::SymbolKind::EnumValue: {
+    const auto &valueSymbol = symbol.as<slang::ast::ValueSymbol>();
+    os << "```systemverilog\n";
+    os << "parameter " << formatTypeDescription(valueSymbol.getType()) << " "
+       << symbol.name;
+    // Try to get the value
+    auto initExpr = valueSymbol.getInitializer();
+    if (initExpr) {
+      auto cv = initExpr->eval(slang::ast::ASTContext(
+          symbol.getParentScope()->asSymbol(),
+          slang::ast::LookupLocation::max));
+      if (cv)
+        os << " = " << cv.toString();
+    }
+    os << "\n```";
+    break;
+  }
+  case slang::ast::SymbolKind::Instance: {
+    const auto &inst = symbol.as<slang::ast::InstanceSymbol>();
+    os << "```systemverilog\n";
+    os << inst.getDefinition().name << " " << symbol.name;
+    os << "\n```\n\n";
+    // Show ports summary
+    os << "**Ports:**\n";
+    for (const auto *portSym : inst.body.getPortList()) {
+      if (const auto *port = portSym->as_if<slang::ast::PortSymbol>()) {
+        os << "- ";
+        switch (port->direction) {
+        case slang::ast::ArgumentDirection::In:
+          os << "`input` ";
+          break;
+        case slang::ast::ArgumentDirection::Out:
+          os << "`output` ";
+          break;
+        case slang::ast::ArgumentDirection::InOut:
+          os << "`inout` ";
+          break;
+        case slang::ast::ArgumentDirection::Ref:
+          os << "`ref` ";
+          break;
+        }
+        os << "`" << port->name << "`";
+        auto width = port->getType().getBitWidth();
+        if (width > 1)
+          os << " [" << (width - 1) << ":0]";
+        os << "\n";
+      }
+    }
+    break;
+  }
+  case slang::ast::SymbolKind::Definition: {
+    const auto &def = symbol.as<slang::ast::DefinitionSymbol>();
+    os << "```systemverilog\n";
+    os << "module " << symbol.name;
+    os << "\n```";
+    break;
+  }
+  case slang::ast::SymbolKind::Subroutine: {
+    const auto &sub = symbol.as<slang::ast::SubroutineSymbol>();
+    os << "```systemverilog\n";
+    if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+      os << "function ";
+    else
+      os << "task ";
+    os << formatTypeDescription(sub.getReturnType()) << " " << symbol.name;
+    os << "(";
+    bool first = true;
+    for (const auto *arg : sub.getArguments()) {
+      if (!first)
+        os << ", ";
+      first = false;
+      switch (arg->direction) {
+      case slang::ast::ArgumentDirection::In:
+        os << "input ";
+        break;
+      case slang::ast::ArgumentDirection::Out:
+        os << "output ";
+        break;
+      case slang::ast::ArgumentDirection::InOut:
+        os << "inout ";
+        break;
+      case slang::ast::ArgumentDirection::Ref:
+        os << "ref ";
+        break;
+      }
+      os << formatTypeDescription(arg->getType()) << " " << arg->name;
+    }
+    os << ")";
+    os << "\n```";
+    break;
+  }
+  case slang::ast::SymbolKind::Package: {
+    os << "```systemverilog\n";
+    os << "package " << symbol.name;
+    os << "\n```";
+    break;
+  }
+  default:
+    os << "```systemverilog\n";
+    os << symbol.name;
+    os << "\n```";
+    break;
+  }
+
+  return result;
+}
+
+std::optional<llvm::lsp::Hover>
+VerilogDocument::getHover(const llvm::lsp::URIForFile &uri,
+                          const llvm::lsp::Position &pos) {
+  if (!index)
+    return std::nullopt;
+
+  const auto *slangBufferPointer = getPointerFor(pos);
+  if (!slangBufferPointer)
+    return std::nullopt;
+
+  const auto &intervalMap = index->getIntervalMap();
+  auto it = intervalMap.find(slangBufferPointer);
+
+  // Found no element at the given position.
+  if (!it.valid() || slangBufferPointer < it.start())
+    return std::nullopt;
+
+  auto element = it.value();
+
+  // If it's an attribute (e.g., source location comment), return early
+  if (auto attr = dyn_cast<Attribute>(element))
+    return std::nullopt;
+
+  // Get the symbol and format hover information
+  const auto *symbol = cast<const slang::ast::Symbol *>(element);
+  if (!symbol)
+    return std::nullopt;
+
+  // Calculate the range of the symbol for highlighting
+  const auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+
+  // Calculate character positions from pointer offsets
+  size_t startOffset = it.start() - text.data();
+  size_t endOffset = it.stop() - text.data();
+
+  // Convert offsets to LSP positions
+  int startLine = 0, startChar = 0;
+  int endLine = 0, endChar = 0;
+
+  for (size_t i = 0; i < lineOffsets.size(); ++i) {
+    if (lineOffsets[i] <= startOffset) {
+      startLine = i;
+      startChar = startOffset - lineOffsets[i];
+    }
+    if (lineOffsets[i] <= endOffset) {
+      endLine = i;
+      endChar = endOffset - lineOffsets[i];
+    }
+  }
+
+  llvm::lsp::Range range(llvm::lsp::Position(startLine, startChar),
+                         llvm::lsp::Position(endLine, endChar));
+  llvm::lsp::Hover hover(range);
+  hover.contents.kind = llvm::lsp::MarkupKind::Markdown;
+  hover.contents.value = formatSymbolInfo(*symbol);
+
+  return hover;
+}
+
+//===----------------------------------------------------------------------===//
+// Document Symbols
+//===----------------------------------------------------------------------===//
+
+/// Map slang symbol kind to LSP SymbolKind.
+static llvm::lsp::SymbolKind
+mapSymbolKind(slang::ast::SymbolKind slangKind) {
+  using SK = slang::ast::SymbolKind;
+  using LK = llvm::lsp::SymbolKind;
+
+  switch (slangKind) {
+  case SK::Definition:
+  case SK::Instance:
+    return LK::Module;
+  case SK::Package:
+    return LK::Package;
+  case SK::Net:
+  case SK::Variable:
+    return LK::Variable;
+  case SK::Parameter:
+  case SK::EnumValue:
+    return LK::Constant;
+  case SK::Port:
+    return LK::Property;
+  case SK::Subroutine:
+    return LK::Function;
+  case SK::ClassType:
+  case SK::ClassProperty:
+  case SK::ClassMethod:
+    return LK::Class;
+  case SK::InterfacePort:
+    return LK::Interface;
+  case SK::Enum:
+  case SK::TypeAlias:
+    return LK::Enum;
+  case SK::Struct:
+    return LK::Struct;
+  default:
+    return LK::Variable;
+  }
+}
+
+/// Calculate LSP Range from slang source range.
+llvm::lsp::Range VerilogDocument::getLspRange(slang::SourceRange range) const {
+  const auto &sm = getSlangSourceManager();
+  int startLine = sm.getLineNumber(range.start()) - 1;
+  int startCol = sm.getColumnNumber(range.start()) - 1;
+  int endLine = sm.getLineNumber(range.end()) - 1;
+  int endCol = sm.getColumnNumber(range.end()) - 1;
+  return llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                          llvm::lsp::Position(endLine, endCol));
+}
+
+/// Visitor to collect document symbols from the AST.
+namespace {
+class DocumentSymbolVisitor
+    : public slang::ast::ASTVisitor<DocumentSymbolVisitor, true, true> {
+public:
+  DocumentSymbolVisitor(const VerilogDocument &doc, slang::BufferID bufferId,
+                        const slang::SourceManager &sm)
+      : doc(doc), bufferId(bufferId), sm(sm) {}
+
+  std::vector<llvm::lsp::DocumentSymbol> symbols;
+
+  void visit(const slang::ast::InstanceBodySymbol &body) {
+    // Create a module symbol
+    if (body.location.buffer() != bufferId)
+      return;
+
+    auto *syntax = body.getSyntax();
+    if (!syntax)
+      return;
+
+    llvm::lsp::Range fullRange = doc.getLspRange(syntax->sourceRange());
+    int nameLine = sm.getLineNumber(body.location) - 1;
+    int nameCol = sm.getColumnNumber(body.location) - 1;
+    llvm::lsp::Range nameRange(llvm::lsp::Position(nameLine, nameCol),
+                               llvm::lsp::Position(nameLine, nameCol + body.name.size()));
+
+    llvm::lsp::DocumentSymbol moduleSym(body.name, llvm::lsp::SymbolKind::Module,
+                                         fullRange, nameRange);
+    moduleSym.detail = "module";
+
+    // Collect children (ports, signals, etc.)
+    std::vector<llvm::lsp::DocumentSymbol> children;
+
+    // Add ports
+    for (const auto *portSym : body.getPortList()) {
+      if (const auto *port = portSym->as_if<slang::ast::PortSymbol>()) {
+        if (!port->location.valid() || port->location.buffer() != bufferId)
+          continue;
+
+        int pLine = sm.getLineNumber(port->location) - 1;
+        int pCol = sm.getColumnNumber(port->location) - 1;
+        llvm::lsp::Range pRange(llvm::lsp::Position(pLine, pCol),
+                                llvm::lsp::Position(pLine, pCol + port->name.size()));
+
+        llvm::lsp::DocumentSymbol portSymbol(port->name, llvm::lsp::SymbolKind::Property,
+                                              pRange, pRange);
+        std::string detail;
+        switch (port->direction) {
+        case slang::ast::ArgumentDirection::In:
+          detail = "input";
+          break;
+        case slang::ast::ArgumentDirection::Out:
+          detail = "output";
+          break;
+        case slang::ast::ArgumentDirection::InOut:
+          detail = "inout";
+          break;
+        case slang::ast::ArgumentDirection::Ref:
+          detail = "ref";
+          break;
+        }
+        auto width = port->getType().getBitWidth();
+        if (width > 1)
+          detail += " [" + std::to_string(width - 1) + ":0]";
+        portSymbol.detail = detail;
+        children.push_back(std::move(portSymbol));
+      }
+    }
+
+    // Visit members for variables, nets, parameters, etc.
+    for (const auto &member : body.members()) {
+      if (member.location.buffer() != bufferId)
+        continue;
+
+      llvm::lsp::SymbolKind kind = mapSymbolKind(member.kind);
+      std::string detail;
+
+      switch (member.kind) {
+      case slang::ast::SymbolKind::Net: {
+        const auto &net = member.as<slang::ast::NetSymbol>();
+        auto width = net.getType().getBitWidth();
+        detail = "wire";
+        if (width > 1)
+          detail += " [" + std::to_string(width - 1) + ":0]";
+        break;
+      }
+      case slang::ast::SymbolKind::Variable: {
+        const auto &var = member.as<slang::ast::VariableSymbol>();
+        auto width = var.getType().getBitWidth();
+        detail = "logic";
+        if (width > 1)
+          detail += " [" + std::to_string(width - 1) + ":0]";
+        break;
+      }
+      case slang::ast::SymbolKind::Parameter: {
+        const auto &param = member.as<slang::ast::ParameterSymbol>();
+        detail = "parameter";
+        auto initExpr = param.getInitializer();
+        if (initExpr) {
+          auto cv = initExpr->eval(slang::ast::ASTContext(
+              body, slang::ast::LookupLocation::max));
+          if (cv)
+            detail += " = " + std::string(cv.toString());
+        }
+        break;
+      }
+      case slang::ast::SymbolKind::Instance: {
+        const auto &inst = member.as<slang::ast::InstanceSymbol>();
+        detail = std::string(inst.getDefinition().name);
+        break;
+      }
+      case slang::ast::SymbolKind::Subroutine: {
+        const auto &sub = member.as<slang::ast::SubroutineSymbol>();
+        if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+          detail = "function";
+        else
+          detail = "task";
+        break;
+      }
+      default:
+        continue; // Skip other member types
+      }
+
+      if (member.name.empty())
+        continue;
+
+      int mLine = sm.getLineNumber(member.location) - 1;
+      int mCol = sm.getColumnNumber(member.location) - 1;
+      llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),
+                              llvm::lsp::Position(mLine, mCol + member.name.size()));
+
+      llvm::lsp::DocumentSymbol memberSym(member.name, kind, mRange, mRange);
+      memberSym.detail = detail;
+      children.push_back(std::move(memberSym));
+    }
+
+    moduleSym.children = std::move(children);
+    symbols.push_back(std::move(moduleSym));
+  }
+
+  void visit(const slang::ast::PackageSymbol &pkg) {
+    if (pkg.location.buffer() != bufferId)
+      return;
+
+    auto *syntax = pkg.getSyntax();
+    if (!syntax)
+      return;
+
+    llvm::lsp::Range fullRange = doc.getLspRange(syntax->sourceRange());
+    int nameLine = sm.getLineNumber(pkg.location) - 1;
+    int nameCol = sm.getColumnNumber(pkg.location) - 1;
+    llvm::lsp::Range nameRange(llvm::lsp::Position(nameLine, nameCol),
+                               llvm::lsp::Position(nameLine, nameCol + pkg.name.size()));
+
+    llvm::lsp::DocumentSymbol pkgSym(pkg.name, llvm::lsp::SymbolKind::Package,
+                                      fullRange, nameRange);
+    pkgSym.detail = "package";
+
+    // Collect package members
+    std::vector<llvm::lsp::DocumentSymbol> children;
+    for (const auto &member : pkg.members()) {
+      if (member.location.buffer() != bufferId || member.name.empty())
+        continue;
+
+      llvm::lsp::SymbolKind kind = mapSymbolKind(member.kind);
+      int mLine = sm.getLineNumber(member.location) - 1;
+      int mCol = sm.getColumnNumber(member.location) - 1;
+      llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),
+                              llvm::lsp::Position(mLine, mCol + member.name.size()));
+
+      llvm::lsp::DocumentSymbol memberSym(member.name, kind, mRange, mRange);
+      children.push_back(std::move(memberSym));
+    }
+
+    pkgSym.children = std::move(children);
+    symbols.push_back(std::move(pkgSym));
+  }
+
+  template <typename T>
+  void visit(const T &) {}
+
+private:
+  const VerilogDocument &doc;
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+};
+} // namespace
+
+void VerilogDocument::getDocumentSymbols(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<llvm::lsp::DocumentSymbol> &symbols) {
+  if (failed(compilation))
+    return;
+
+  const auto &root = (*compilation)->getRoot();
+  DocumentSymbolVisitor visitor(*this, mainBufferId, getSlangSourceManager());
+
+  // Visit packages
+  for (auto *package : (*compilation)->getPackages()) {
+    if (package->location.buffer() != mainBufferId)
+      continue;
+    visitor.visit(*package);
+  }
+
+  // Visit top instances
+  for (auto *inst : root.topInstances) {
+    if (inst->body.location.buffer() != mainBufferId)
+      continue;
+    visitor.visit(inst->body);
+  }
+
+  symbols = std::move(visitor.symbols);
 }
