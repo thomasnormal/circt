@@ -88,12 +88,6 @@ def FourStateType : ArcTypeDef<"FourState"> {
   let assemblyFormat = "`<` $width `>`";
   let genVerifyDecl = 1;
 
-  let builders = [
-    TypeBuilderWithInferredContext<(ins "unsigned":$width), [{
-      return $_get($_ctxt, width);
-    }]>
-  ];
-
   let extraClassDeclaration = [{
     /// Get the number of logical bits in this type
     unsigned getBitWidth() const { return getWidth(); }

@@ -111,6 +111,6 @@ func.func @replicate_shrinking(%input: !arc.logic<8>) {
 // Test mux condition not 1-bit
 func.func @mux_condition_width(%cond: !arc.logic<2>, %a: !arc.logic<8>, %b: !arc.logic<8>) {
   // expected-error @+1 {{condition must be 1-bit 4-state, got width 2}}
-  %result = arc.fourstate.mux %cond, %a, %b : !arc.logic<8>
+  %result = arc.fourstate.mux %cond, %a, %b : !arc.logic<2>, !arc.logic<8>
   return
 }

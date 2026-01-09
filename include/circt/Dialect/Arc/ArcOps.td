@@ -1220,12 +1220,12 @@ def FourStateEqOp : ArcOp<"fourstate.eq", [Pure, SameTypeOperands]> {
 
     Example:
     ```mlir
-    %result = arc.fourstate.eq %a, %b : !arc.logic<8>
+    %result = arc.fourstate.eq %a, %b : !arc.logic<8> -> !arc.logic<1>
     ```
   }];
   let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
   let results = (outs FourStateType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs))";
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `->` qualified(type($result))";
   let hasFolder = 1;
 
   let builders = [
@@ -1249,12 +1249,12 @@ def FourStateNeOp : ArcOp<"fourstate.ne", [Pure, SameTypeOperands]> {
 
     Example:
     ```mlir
-    %result = arc.fourstate.ne %a, %b : !arc.logic<8>
+    %result = arc.fourstate.ne %a, %b : !arc.logic<8> -> !arc.logic<1>
     ```
   }];
   let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
   let results = (outs FourStateType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs))";
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `->` qualified(type($result))";
   let hasFolder = 1;
 
   let builders = [
@@ -1371,7 +1371,8 @@ def FourStateReplicateOp : ArcOp<"fourstate.replicate", [Pure]> {
 // 4-State Conditional Operations
 //===----------------------------------------------------------------------===//
 
-def FourStateMuxOp : ArcOp<"fourstate.mux", [Pure, SameTypeOperands]> {
+def FourStateMuxOp : ArcOp<"fourstate.mux", [Pure,
+    AllTypesMatch<["true_value", "false_value", "result"]>]> {
   let summary = "4-state multiplexer";
   let description = [{
     Selects between two 4-state values based on a 1-bit 4-state condition:
@@ -1379,16 +1380,18 @@ def FourStateMuxOp : ArcOp<"fourstate.mux", [Pure, SameTypeOperands]> {
     - If condition is 0, returns false_value
     - If condition is X or Z, returns X for bits where true/false differ
 
+    The condition must be a 1-bit 4-state value.
+
     Example:
     ```mlir
-    %result = arc.fourstate.mux %cond, %true_val, %false_val : !arc.logic<8>
+    %result = arc.fourstate.mux %cond, %true_val, %false_val : !arc.logic<1>, !arc.logic<8>
     ```
   }];
   let arguments = (ins FourStateType:$condition, AnyFourState:$true_value, AnyFourState:$false_value);
   let results = (outs AnyFourState:$result);
   let assemblyFormat = [{
     $condition `,` $true_value `,` $false_value attr-dict `:`
-    qualified(type($true_value))
+    qualified(type($condition)) `,` qualified(type($result))
   }];
   let hasVerifier = 1;
   let hasFolder = 1;
