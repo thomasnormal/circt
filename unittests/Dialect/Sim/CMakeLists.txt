@@ -4,5 +4,9 @@ add_circt_unittest(CIRCTSimTests
   ProcessSchedulerTest.cpp
   ForkJoinTest.cpp
   SyncPrimitivesTest.cpp
+  UVMPhaseManagerTest.cpp
+  UVMFactoryTest.cpp
+  TLMPortsTest.cpp
+  SimulationControlTest.cpp
 )
 target_link_libraries(CIRCTSimTests PRIVATE CIRCTSim)
