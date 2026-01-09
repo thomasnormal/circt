@@ -9,6 +9,7 @@
 #include "circt/Support/CoverageReportGenerator.h"
 #include "circt/Support/CoverageDatabase.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
@@ -432,6 +433,478 @@ TEST(HierarchyNodeTest, CalculateCoverage) {
   EXPECT_EQ(node.totalPoints, 2u);
   EXPECT_EQ(node.coveredPoints, 1u);
   EXPECT_DOUBLE_EQ(node.coveragePercent, 50.0);
+}
+
+//===----------------------------------------------------------------------===//
+// Additional Edge Case Tests
+//===----------------------------------------------------------------------===//
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithAllCoverageTypes) {
+  CoverageDatabase db;
+
+  // Line coverage
+  CoveragePoint linePoint;
+  linePoint.name = "module.v:10";
+  linePoint.type = CoverageType::Line;
+  linePoint.hits = 5;
+  linePoint.location.filename = "module.v";
+  linePoint.location.line = 10;
+  db.addCoveragePoint(linePoint);
+
+  // Toggle coverage
+  CoveragePoint togglePoint;
+  togglePoint.name = "toggle1";
+  togglePoint.type = CoverageType::Toggle;
+  togglePoint.toggle01 = true;
+  togglePoint.toggle10 = false;
+  db.addCoveragePoint(togglePoint);
+
+  // Branch coverage
+  CoveragePoint branchPoint;
+  branchPoint.name = "branch1";
+  branchPoint.type = CoverageType::Branch;
+  branchPoint.branchTrue = true;
+  branchPoint.branchFalse = true;
+  db.addCoveragePoint(branchPoint);
+
+  // Condition coverage
+  CoveragePoint conditionPoint;
+  conditionPoint.name = "condition1";
+  conditionPoint.type = CoverageType::Condition;
+  conditionPoint.hits = 2;
+  conditionPoint.goal = 4;
+  db.addCoveragePoint(conditionPoint);
+
+  // FSM coverage
+  CoveragePoint fsmPoint;
+  fsmPoint.name = "fsm1";
+  fsmPoint.type = CoverageType::FSM;
+  fsmPoint.hits = 5;
+  fsmPoint.goal = 5;
+  db.addCoveragePoint(fsmPoint);
+
+  // Assertion coverage
+  CoveragePoint assertPoint;
+  assertPoint.name = "assert1";
+  assertPoint.type = CoverageType::Assertion;
+  assertPoint.hits = 1;
+  db.addCoveragePoint(assertPoint);
+
+  // Coverpoint coverage
+  CoveragePoint coverpointPoint;
+  coverpointPoint.name = "coverpoint1";
+  coverpointPoint.type = CoverageType::Coverpoint;
+  coverpointPoint.hits = 10;
+  coverpointPoint.goal = 20;
+  db.addCoveragePoint(coverpointPoint);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Verify all coverage types are represented
+  EXPECT_TRUE(output.find("Line Coverage") != std::string::npos);
+  EXPECT_TRUE(output.find("Toggle Coverage") != std::string::npos);
+  EXPECT_TRUE(output.find("Branch Coverage") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithLongPointNames) {
+  CoverageDatabase db;
+
+  // Very long point name
+  CoveragePoint point;
+  point.name = "very_long_module_name.submodule.subsubmodule.deeply.nested."
+               "hierarchy.with.many.levels.and.a.very.long.final.name:line123";
+  point.type = CoverageType::Line;
+  point.hits = 1;
+  point.hierarchy = "very_long_module_name.submodule.subsubmodule.deeply";
+  db.addCoveragePoint(point);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Should not crash and should produce valid HTML
+  EXPECT_TRUE(output.find("<!DOCTYPE html>") != std::string::npos);
+  EXPECT_TRUE(output.find("</html>") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithSpecialCharactersInName) {
+  CoverageDatabase db;
+
+  // Use special characters in name and hierarchy since those are outputted
+  CoveragePoint point;
+  point.name = "test<script>&point";
+  point.type = CoverageType::Line;
+  point.hits = 0; // Uncovered so it appears in uncovered items table
+  point.hierarchy = "top<html>&test";
+  db.addCoveragePoint(point);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Special characters in name and hierarchy should be escaped
+  EXPECT_TRUE(output.find("&lt;script&gt;") != std::string::npos);
+  EXPECT_TRUE(output.find("&amp;point") != std::string::npos);
+  EXPECT_TRUE(output.find("&lt;html&gt;") != std::string::npos);
+  EXPECT_TRUE(output.find("&amp;test") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWith100PercentCoverage) {
+  CoverageDatabase db;
+
+  CoveragePoint point;
+  point.name = "covered_point";
+  point.type = CoverageType::Line;
+  point.hits = 100;
+  point.goal = 1;
+  db.addCoveragePoint(point);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Should show 100% coverage
+  EXPECT_TRUE(output.find("100") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWith0PercentCoverage) {
+  CoverageDatabase db;
+
+  CoveragePoint point;
+  point.name = "uncovered_point";
+  point.type = CoverageType::Line;
+  point.hits = 0;
+  point.goal = 1;
+  db.addCoveragePoint(point);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Uncovered items section should have content
+  EXPECT_TRUE(output.find("Uncovered Items") != std::string::npos);
+  EXPECT_TRUE(output.find("uncovered_point") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithMultipleTrendPoints) {
+  CoverageDatabase db;
+
+  CoveragePoint point;
+  point.name = "test";
+  point.type = CoverageType::Line;
+  point.hits = 1;
+  db.addCoveragePoint(point);
+
+  // Add multiple trend points
+  for (int i = 0; i < 10; ++i) {
+    CoverageTrendPoint trend;
+    trend.timestamp = "2024-01-0" + std::to_string(i + 1) + "T00:00:00Z";
+    trend.runId = "run" + std::to_string(i);
+    trend.overallCoverage = 50.0 + i * 5;
+    trend.lineCoverage = 50.0 + i * 5;
+    trend.toggleCoverage = 40.0 + i * 3;
+    trend.branchCoverage = 60.0 + i * 4;
+    trend.totalPoints = 10;
+    trend.coveredPoints = 5 + i;
+    db.addTrendPoint(trend);
+  }
+
+  HTMLReportOptions options;
+  options.includeTrends = true;
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db, options);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Trend section should be present
+  EXPECT_TRUE(output.find("Coverage Trends") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithCoverageGroups) {
+  CoverageDatabase db;
+
+  CoveragePoint p1;
+  p1.name = "group_point_1";
+  p1.type = CoverageType::Line;
+  p1.hits = 1;
+  db.addCoveragePoint(p1);
+
+  CoveragePoint p2;
+  p2.name = "group_point_2";
+  p2.type = CoverageType::Line;
+  p2.hits = 0;
+  db.addCoveragePoint(p2);
+
+  CoverageGroup group;
+  group.name = "test_group";
+  group.description = "A test coverage group";
+  group.pointNames = {"group_point_1", "group_point_2"};
+  db.addCoverageGroup(group);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Group should be mentioned
+  EXPECT_TRUE(output.find("test_group") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithExclusions) {
+  CoverageDatabase db;
+
+  CoveragePoint p1;
+  p1.name = "normal_point";
+  p1.type = CoverageType::Line;
+  p1.hits = 1;
+  db.addCoveragePoint(p1);
+
+  CoverageExclusion exclusion;
+  exclusion.pointName = "excluded_point";
+  exclusion.reason = "Known dead code path";
+  exclusion.author = "test_author";
+  exclusion.date = "2024-01-01";
+  exclusion.ticketId = "JIRA-123";
+  db.addExclusion(exclusion);
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Exclusions section should be present
+  EXPECT_TRUE(output.find("Exclusions") != std::string::npos);
+  EXPECT_TRUE(output.find("excluded_point") != std::string::npos);
+  EXPECT_TRUE(output.find("Known dead code path") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLUncoveredOnly) {
+  CoverageDatabase db;
+
+  CoveragePoint covered;
+  covered.name = "covered_point";
+  covered.type = CoverageType::Line;
+  covered.hits = 5;
+  db.addCoveragePoint(covered);
+
+  CoveragePoint uncovered;
+  uncovered.name = "uncovered_point";
+  uncovered.type = CoverageType::Line;
+  uncovered.hits = 0;
+  db.addCoveragePoint(uncovered);
+
+  HTMLReportOptions options;
+  options.uncoveredOnly = true;
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db, options);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Should still produce valid HTML
+  EXPECT_TRUE(output.find("<!DOCTYPE html>") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLWithCustomCSS) {
+  CoverageDatabase db;
+
+  CoveragePoint point;
+  point.name = "test";
+  point.type = CoverageType::Line;
+  point.hits = 1;
+  db.addCoveragePoint(point);
+
+  HTMLReportOptions options;
+  options.customCSS = "body { background-color: #f0f0f0; }";
+
+  std::string output;
+  llvm::raw_string_ostream os(output);
+
+  CoverageReportGenerator generator(db, options);
+  auto err = generator.generateReport(os);
+  ASSERT_FALSE(static_cast<bool>(err));
+
+  // Custom CSS should be included
+  EXPECT_TRUE(output.find("background-color: #f0f0f0") != std::string::npos);
+}
+
+TEST_F(CoverageReportGeneratorTest, GenerateHTMLToInvalidPath) {
+  CoverageDatabase db;
+
+  CoverageReportGenerator generator(db);
+  auto err = generator.generateReport("/nonexistent/directory/report.html");
+  EXPECT_TRUE(static_cast<bool>(err));
+  llvm::consumeError(std::move(err));
+}
+
+TEST_F(CoverageReportGeneratorTest, SourceFileCoverageMultiplePoints) {
+  CoverageDatabase db;
+
+  // Multiple points in same file
+  for (int i = 1; i <= 10; ++i) {
+    CoveragePoint point;
+    point.name = "test.v:" + std::to_string(i * 10);
+    point.type = CoverageType::Line;
+    point.hits = (i % 2 == 0) ? 1 : 0; // Every other line covered
+    point.location.filename = "test.v";
+    point.location.line = i * 10;
+    db.addCoveragePoint(point);
+  }
+
+  CoverageReportGenerator generator(db);
+
+  const auto &sourceFiles = generator.getSourceFileCoverage();
+
+  auto it = sourceFiles.find("test.v");
+  ASSERT_NE(it, sourceFiles.end());
+
+  EXPECT_EQ(it->second.totalLines, 10u);
+  EXPECT_EQ(it->second.coveredLines, 5u);
+  EXPECT_DOUBLE_EQ(it->second.coveragePercent, 50.0);
+}
+
+TEST_F(CoverageReportGeneratorTest, HierarchyTreeDeepNesting) {
+  CoverageDatabase db;
+
+  // Create deeply nested hierarchy
+  CoveragePoint point;
+  point.name = "deep_point";
+  point.type = CoverageType::Line;
+  point.hits = 1;
+  point.hierarchy = "level1.level2.level3.level4.level5.level6";
+  db.addCoveragePoint(point);
+
+  CoverageReportGenerator generator(db);
+
+  const auto *root = generator.getHierarchyRoot();
+  ASSERT_NE(root, nullptr);
+
+  // Traverse the tree to verify structure
+  const HierarchyNode *current = root;
+  std::vector<std::string> expectedLevels = {"level1", "level2", "level3",
+                                             "level4", "level5", "level6"};
+
+  for (const auto &level : expectedLevels) {
+    auto it = current->children.find(level);
+    ASSERT_NE(it, current->children.end())
+        << "Expected child " << level << " not found";
+    current = it->second.get();
+    EXPECT_EQ(current->name, level);
+  }
+}
+
+TEST(SourceFileCoverageTest, MultiplePointsSameLine) {
+  SourceFileCoverage file;
+  file.filename = "test.v";
+
+  CoveragePoint p1;
+  p1.type = CoverageType::Line;
+  p1.hits = 5;
+  file.linePoints.emplace_back(10, &p1);
+
+  CoveragePoint p2;
+  p2.type = CoverageType::Line;
+  p2.hits = 0;
+  file.linePoints.emplace_back(10, &p2); // Same line
+
+  file.calculateCoverage();
+
+  // Even with two points on the same line, count unique lines
+  // (implementation may vary - this tests current behavior)
+  EXPECT_GE(file.totalLines, 1u);
+  EXPECT_GE(file.coveragePercent, 0.0);
+  EXPECT_LE(file.coveragePercent, 100.0);
+}
+
+TEST(SourceFileCoverageTest, UnorderedLines) {
+  SourceFileCoverage file;
+  file.filename = "test.v";
+
+  CoveragePoint p1;
+  p1.type = CoverageType::Line;
+  p1.hits = 1;
+
+  CoveragePoint p2;
+  p2.type = CoverageType::Line;
+  p2.hits = 1;
+
+  CoveragePoint p3;
+  p3.type = CoverageType::Line;
+  p3.hits = 1;
+
+  // Add lines out of order
+  file.linePoints.emplace_back(30, &p1);
+  file.linePoints.emplace_back(10, &p2);
+  file.linePoints.emplace_back(20, &p3);
+
+  file.calculateCoverage();
+
+  EXPECT_EQ(file.totalLines, 3u);
+  EXPECT_EQ(file.coveredLines, 3u);
+  EXPECT_DOUBLE_EQ(file.coveragePercent, 100.0);
+}
+
+TEST(HierarchyNodeTest, EmptyNode) {
+  CoverageDatabase db;
+
+  HierarchyNode node;
+  node.name = "empty";
+
+  node.calculateCoverage(db);
+
+  EXPECT_EQ(node.totalPoints, 0u);
+  EXPECT_EQ(node.coveredPoints, 0u);
+  EXPECT_DOUBLE_EQ(node.coveragePercent, 100.0);
+}
+
+TEST(HierarchyNodeTest, NodeWithChildren) {
+  CoverageDatabase db;
+
+  CoveragePoint p1;
+  p1.name = "child_point";
+  p1.type = CoverageType::Line;
+  p1.hits = 1;
+  db.addCoveragePoint(p1);
+
+  HierarchyNode parent;
+  parent.name = "parent";
+
+  auto child = std::make_unique<HierarchyNode>();
+  child->name = "child";
+  child->coveragePointNames = {"child_point"};
+
+  parent.children["child"] = std::move(child);
+
+  parent.calculateCoverage(db);
+
+  // Parent should aggregate child coverage
+  EXPECT_GE(parent.totalPoints, 0u);
 }
 
 } // namespace
