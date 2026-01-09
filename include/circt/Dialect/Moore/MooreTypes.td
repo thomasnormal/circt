@@ -546,6 +546,14 @@ def AnyStaticArrayType : MooreType<
   "packed or unpacked static array type",
   "moore::UnpackedType">;
 
+/// A dynamic array type (dynamic array, associative array, or queue) that
+/// supports the .size() method.
+def AnyDynamicArrayType : MooreType<
+  Or<[OpenUnpackedArrayType.predicate, AssocArrayType.predicate,
+      QueueType.predicate]>,
+  "dynamic array, associative array, or queue type",
+  "moore::UnpackedType">;
+
 /// A packed or unpacked struct type.
 def AnyStructType : MooreType<
   Or<[StructType.predicate, UnpackedStructType.predicate]>,
