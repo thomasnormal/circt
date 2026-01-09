@@ -105,6 +105,21 @@ public:
                       const std::vector<llvm::lsp::Diagnostic> &diagnostics,
                       std::vector<llvm::lsp::CodeAction> &codeActions);
 
+  //===--------------------------------------------------------------------===//
+  // Rename Symbol
+  //===--------------------------------------------------------------------===//
+
+  /// Prepare a rename operation at the given position.
+  /// Returns the range of the symbol being renamed and its current name.
+  std::optional<std::pair<llvm::lsp::Range, std::string>>
+  prepareRename(const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos);
+
+  /// Perform a rename operation.
+  /// Returns a workspace edit with all the changes needed.
+  std::optional<llvm::lsp::WorkspaceEdit>
+  renameSymbol(const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos,
+               llvm::StringRef newName);
+
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 

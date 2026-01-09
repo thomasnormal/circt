@@ -90,6 +90,17 @@ public:
                       const std::vector<llvm::lsp::Diagnostic> &diagnostics,
                       std::vector<llvm::lsp::CodeAction> &codeActions);
 
+  /// Prepare a rename operation at the given position.
+  /// Thread-safe; acquires docMutex.
+  std::optional<std::pair<llvm::lsp::Range, std::string>>
+  prepareRename(const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos);
+
+  /// Perform a rename operation.
+  /// Thread-safe; acquires docMutex.
+  std::optional<llvm::lsp::WorkspaceEdit>
+  renameSymbol(const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos,
+               llvm::StringRef newName);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

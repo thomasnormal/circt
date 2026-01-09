@@ -92,6 +92,15 @@ public:
                       const std::vector<llvm::lsp::Diagnostic> &diagnostics,
                       std::vector<llvm::lsp::CodeAction> &codeActions);
 
+  /// Prepare a rename operation at the given position.
+  std::optional<std::pair<llvm::lsp::Range, std::string>>
+  prepareRename(const URIForFile &uri, const llvm::lsp::Position &pos);
+
+  /// Perform a rename operation.
+  std::optional<llvm::lsp::WorkspaceEdit>
+  renameSymbol(const URIForFile &uri, const llvm::lsp::Position &pos,
+               llvm::StringRef newName);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;
