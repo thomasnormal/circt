@@ -1,0 +1,47 @@
+// RUN: circt-debug --top test -x %s --batch 2>&1 | FileCheck %s
+
+// Test breakpoint functionality
+
+// Set multiple breakpoints
+break -cycle 5
+// CHECK: Breakpoint 1 set: at cycle 5
+
+break -cycle 10
+// CHECK: Breakpoint 2 set: at cycle 10
+
+break -sig counter
+// CHECK: Breakpoint 3 set: on signal counter
+
+// List breakpoints
+info breakpoints
+// CHECK: 1: at cycle 5
+// CHECK: 2: at cycle 10
+// CHECK: 3: on signal counter
+
+// Disable a breakpoint
+disable 2
+// CHECK: Breakpoint 2 disabled.
+
+info breakpoints
+// CHECK: 2: at cycle 10 [disabled]
+
+// Enable it again
+enable 2
+// CHECK: Breakpoint 2 enabled.
+
+// Run to first breakpoint
+continue
+// CHECK: Stopped: breakpoint
+// CHECK: Cycle: 5
+// CHECK: Breakpoint 1: at cycle 5
+
+// Delete first breakpoint
+delete 1
+// CHECK: Breakpoint 1 deleted.
+
+// Continue to next
+continue
+// CHECK: Stopped: breakpoint
+// CHECK: Cycle: 10
+
+quit
