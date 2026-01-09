@@ -692,6 +692,52 @@ LogicalResult ExecuteOp::verifyRegions() {
 // FourStateConstantOp
 //===----------------------------------------------------------------------===//
 
+void FourStateConstantOp::print(OpAsmPrinter &p) {
+  APInt value = getValue();
+  // Print as decimal, handling special cases
+  if (value.getBitWidth() == 1) {
+    // For 1-bit values, print true/false
+    p << " " << (value.isZero() ? "false" : "true");
+  } else {
+    // Print unsigned decimal representation
+    llvm::SmallString<32> str;
+    value.toStringUnsigned(str);
+    p << " " << str;
+  }
+  p.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
+  p << " : ";
+  p.printType(getResult().getType());
+}
+
+ParseResult FourStateConstantOp::parse(OpAsmParser &parser,
+                                       OperationState &result) {
+  APInt value;
+  Type resultType;
+
+  // Parse format: <value> : <type>
+  // Example: 42 : !arc.logic<8>
+  if (parser.parseInteger(value) ||
+      parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(resultType))
+    return failure();
+
+  // Get the FourStateType width
+  auto fourStateType = llvm::dyn_cast<FourStateType>(resultType);
+  if (!fourStateType)
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected !arc.logic type");
+
+  // Resize the value to match the type width
+  unsigned width = fourStateType.getWidth();
+  if (value.getBitWidth() != width)
+    value = value.zextOrTrunc(width);
+
+  auto intType = IntegerType::get(parser.getContext(), width);
+  result.addAttribute("value", IntegerAttr::get(intType, value));
+  result.addTypes(resultType);
+  return success();
+}
+
 LogicalResult FourStateConstantOp::verify() {
   auto resultType = llvm::cast<FourStateType>(getResult().getType());
   auto valueWidth = getValue().getBitWidth();

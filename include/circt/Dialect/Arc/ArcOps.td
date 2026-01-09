@@ -977,9 +977,21 @@ def FourStateConstantOp : ArcOp<"fourstate.constant", [Pure]> {
   }];
   let arguments = (ins APIntAttr:$value);
   let results = (outs AnyFourState:$result);
-  let assemblyFormat = "$value attr-dict `:` qualified(type($result))";
+  let hasCustomAssemblyFormat = 1;
   let hasFolder = 1;
   let hasVerifier = 1;
+
+  let builders = [
+    OpBuilder<(ins "const APInt &":$value), [{
+      auto type = FourStateType::get($_builder.getContext(), value.getBitWidth());
+      build($_builder, $_state, type, $_builder.getIntegerAttr(
+        $_builder.getIntegerType(value.getBitWidth()), value));
+    }]>,
+    OpBuilder<(ins "FourStateType":$type, "int64_t":$value), [{
+      build($_builder, $_state, type, $_builder.getIntegerAttr(
+        $_builder.getIntegerType(type.getWidth()), value));
+    }]>
+  ];
 }
 
 def FourStateXOp : ArcOp<"fourstate.x", [Pure]> {
