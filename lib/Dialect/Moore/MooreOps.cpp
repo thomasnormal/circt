@@ -1453,13 +1453,15 @@ LogicalResult ClassDeclOp::verify() {
   auto &block = body.front();
   for (mlir::Operation &op : block) {
 
-    // allow only property and method decls and terminator
+    // allow property decls, method decls, and constraint blocks
     if (llvm::isa<circt::moore::ClassPropertyDeclOp,
-                  circt::moore::ClassMethodDeclOp>(&op))
+                  circt::moore::ClassMethodDeclOp,
+                  circt::moore::ConstraintBlockOp>(&op))
       continue;
 
     return emitOpError()
-           << "body may only contain 'moore.class.propertydecl' operations";
+           << "body may only contain 'moore.class.propertydecl', "
+              "'moore.class.methoddecl', or 'moore.constraint.block' operations";
   }
   return mlir::success();
 }
@@ -1795,11 +1797,9 @@ VirtualInterfaceGetOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto *modportSymbol = ifaceOp.lookupSymbol(modportName);
   if (!modportSymbol)
     return emitOpError("references unknown modport @")
-           << modportName.getValue() << " in interface @"
-           << ifaceOp.getSymName();
+           << modportName << " in interface @" << ifaceOp.getSymName();
   if (!isa<ModportDeclOp>(modportSymbol))
-    return emitOpError("@")
-           << modportName.getValue() << " is not a modport declaration";
+    return emitOpError("@") << modportName << " is not a modport declaration";
 
   return success();
 }
@@ -1831,10 +1831,9 @@ LogicalResult VirtualInterfaceSignalRefOp::verifySymbolUses(
   auto *signalSymbol = ifaceOp.lookupSymbol(signalName);
   if (!signalSymbol)
     return emitOpError("references unknown signal @")
-           << signalName.getValue() << " in interface @" << ifaceOp.getSymName();
+           << signalName << " in interface @" << ifaceOp.getSymName();
   if (!isa<InterfaceSignalDeclOp>(signalSymbol))
-    return emitOpError("@")
-           << signalName.getValue() << " is not a signal declaration";
+    return emitOpError("@") << signalName << " is not a signal declaration";
 
   return success();
 }
@@ -1849,16 +1848,23 @@ static ParseResult parseModportPorts(OpAsmParser &parser,
 
   SmallVector<Attribute, 8> ports;
   auto parseElement = [&]() -> ParseResult {
-    auto direction = ModportDirAttr::parse(parser, {});
-    if (!direction)
+    // Parse direction keyword
+    StringRef dirStr;
+    if (parser.parseKeyword(&dirStr))
       return failure();
+    auto dir = symbolizeModportDir(dirStr);
+    if (!dir) {
+      parser.emitError(parser.getCurrentLocation())
+          << "expected modport direction (input, output, inout, or ref)";
+      return failure();
+    }
 
     FlatSymbolRefAttr signal;
     if (parser.parseAttribute(signal))
       return failure();
 
     ports.push_back(ModportPortAttr::get(
-        context, cast<ModportDirAttr>(direction), signal));
+        context, ModportDirAttr::get(context, *dir), signal));
     return success();
   };
   if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Paren,
@@ -1879,6 +1885,49 @@ static void printModportPorts(OpAsmPrinter &p, Operation *,
     p.printSymbolName(port.getSignal().getRootReference().getValue());
   });
   p << ')';
+}
+
+//===----------------------------------------------------------------------===//
+// Constraint Operations
+//===----------------------------------------------------------------------===//
+
+LogicalResult ConstraintDistOp::verify() {
+  // Verify that the number of weights matches the per_range array
+  auto weights = getWeights();
+  auto perRange = getPerRange();
+
+  if (weights.size() != perRange.size())
+    return emitOpError() << "weights array size (" << weights.size()
+                         << ") must match per_range array size ("
+                         << perRange.size() << ")";
+
+  // Verify that all per_range values are 0 or 1
+  for (size_t i = 0; i < perRange.size(); ++i) {
+    if (perRange[i] != 0 && perRange[i] != 1)
+      return emitOpError() << "per_range[" << i
+                           << "] must be 0 (:=) or 1 (:/); got " << perRange[i];
+  }
+
+  return success();
+}
+
+LogicalResult ConstraintInsideOp::verify() {
+  // Verify that ranges array has even number of elements (pairs of low, high)
+  auto ranges = getRanges();
+  if (ranges.size() % 2 != 0)
+    return emitOpError()
+           << "ranges array must have even number of elements (pairs of "
+              "[low, high]); got "
+           << ranges.size() << " elements";
+
+  // Verify that low <= high for each pair
+  for (size_t i = 0; i < ranges.size(); i += 2) {
+    if (ranges[i] > ranges[i + 1])
+      return emitOpError() << "range at index " << (i / 2) << " has low ("
+                           << ranges[i] << ") > high (" << ranges[i + 1] << ")";
+  }
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

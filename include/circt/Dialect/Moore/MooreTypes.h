@@ -44,6 +44,7 @@ class UnpackedStructType;
 class UnpackedUnionType;
 class VoidType;
 class ClassHandleType;
+class VirtualInterfaceType;
 
 /// The number of values each bit of a type can assume.
 enum class Domain {
@@ -104,7 +105,7 @@ public:
     return llvm::isa<PackedType, StringType, ChandleType, EventType, RealType,
                      UnpackedArrayType, OpenUnpackedArrayType, AssocArrayType,
                      QueueType, UnpackedStructType, UnpackedUnionType,
-                     ClassHandleType>(type);
+                     ClassHandleType, VirtualInterfaceType>(type);
   }
 
   /// Get the value domain of this type.

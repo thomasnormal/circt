@@ -356,6 +356,27 @@ std::optional<uint32_t> RefType::getFieldIndex(StringAttr nameField) {
       .Default([](auto) { return std::nullopt; });
 }
 
+Type RefType::parse(AsmParser &parser) {
+  Type nestedType;
+  if (parser.parseLess() || parser.parseType(nestedType) ||
+      parser.parseGreater())
+    return {};
+
+  auto unpackedType = llvm::dyn_cast<UnpackedType>(nestedType);
+  if (!unpackedType) {
+    parser.emitError(parser.getCurrentLocation(),
+                     "expected unpacked type inside ref<...>");
+    return {};
+  }
+  return RefType::get(unpackedType);
+}
+
+void RefType::print(AsmPrinter &printer) const {
+  printer << "<";
+  printer.printType(getNestedType());
+  printer << ">";
+}
+
 //===----------------------------------------------------------------------===//
 // Generated logic
 //===----------------------------------------------------------------------===//
