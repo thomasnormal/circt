@@ -77,6 +77,13 @@ struct LSPServer {
                         Callback<std::vector<DocumentSymbol>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Auto-Completion
+  //===--------------------------------------------------------------------===//
+
+  void onCompletion(const CompletionParams &params,
+                    Callback<CompletionList> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -133,6 +140,11 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"referencesProvider", true},
       {"hoverProvider", true},
       {"documentSymbolProvider", true},
+      {"completionProvider",
+       llvm::json::Object{
+           {"triggerCharacters", llvm::json::Array{"."}},
+           {"resolveProvider", false},
+       }},
   };
 
   json::Object result{
@@ -230,6 +242,17 @@ void LSPServer::onDocumentSymbol(const DocumentSymbolParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Auto-Completion
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onCompletion(const CompletionParams &params,
+                             Callback<CompletionList> reply) {
+  CompletionList completions;
+  server.getCompletions(params.textDocument.uri, params.position, completions);
+  reply(std::move(completions));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -272,6 +295,10 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Document Symbols
   messageHandler.method("textDocument/documentSymbol", &lspServer,
                         &LSPServer::onDocumentSymbol);
+
+  // Auto-Completion
+  messageHandler.method("textDocument/completion", &lspServer,
+                        &LSPServer::onCompletion);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

@@ -77,6 +77,12 @@ public:
   void getDocumentSymbols(const llvm::lsp::URIForFile &uri,
                           std::vector<llvm::lsp::DocumentSymbol> &symbols);
 
+  /// Return completion items for the given position.
+  /// Thread-safe; acquires docMutex.
+  void getCompletions(const llvm::lsp::URIForFile &uri,
+                      llvm::lsp::Position pos,
+                      llvm::lsp::CompletionList &completions);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

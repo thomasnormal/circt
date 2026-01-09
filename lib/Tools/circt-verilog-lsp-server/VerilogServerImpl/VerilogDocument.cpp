@@ -939,3 +939,421 @@ void VerilogDocument::getDocumentSymbols(
 
   symbols = std::move(visitor.symbols);
 }
+
+//===----------------------------------------------------------------------===//
+// Auto-Completion
+//===----------------------------------------------------------------------===//
+
+/// Map slang symbol kind to LSP CompletionItemKind.
+static llvm::lsp::CompletionItemKind
+mapToCompletionKind(slang::ast::SymbolKind slangKind) {
+  using SK = slang::ast::SymbolKind;
+  using CK = llvm::lsp::CompletionItemKind;
+
+  switch (slangKind) {
+  case SK::Definition:
+    return CK::Module;
+  case SK::Instance:
+    return CK::Module;
+  case SK::Package:
+    return CK::Module;
+  case SK::Net:
+  case SK::Variable:
+    return CK::Variable;
+  case SK::Parameter:
+    return CK::Constant;
+  case SK::Port:
+    return CK::Field;
+  case SK::Subroutine:
+    return CK::Function;
+  case SK::ClassType:
+  case SK::ClassProperty:
+  case SK::ClassMethod:
+    return CK::Class;
+  case SK::InterfacePort:
+    return CK::Interface;
+  case SK::Enum:
+  case SK::TypeAlias:
+    return CK::Enum;
+  case SK::EnumValue:
+    return CK::EnumMember;
+  case SK::Struct:
+    return CK::Struct;
+  default:
+    return CK::Variable;
+  }
+}
+
+/// Get a human-readable detail string for a symbol.
+static std::string getCompletionDetail(const slang::ast::Symbol &symbol) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+
+  switch (symbol.kind) {
+  case slang::ast::SymbolKind::Variable:
+  case slang::ast::SymbolKind::Net: {
+    const auto &valueSymbol = symbol.as<slang::ast::ValueSymbol>();
+    os << formatTypeDescription(valueSymbol.getType());
+    break;
+  }
+  case slang::ast::SymbolKind::Port: {
+    const auto &port = symbol.as<slang::ast::PortSymbol>();
+    switch (port.direction) {
+    case slang::ast::ArgumentDirection::In:
+      os << "input ";
+      break;
+    case slang::ast::ArgumentDirection::Out:
+      os << "output ";
+      break;
+    case slang::ast::ArgumentDirection::InOut:
+      os << "inout ";
+      break;
+    case slang::ast::ArgumentDirection::Ref:
+      os << "ref ";
+      break;
+    }
+    os << formatTypeDescription(port.getType());
+    break;
+  }
+  case slang::ast::SymbolKind::Parameter: {
+    const auto &param = symbol.as<slang::ast::ParameterSymbol>();
+    os << "parameter " << formatTypeDescription(param.getType());
+    auto initExpr = param.getInitializer();
+    if (initExpr) {
+      auto cv = initExpr->eval(slang::ast::ASTContext(
+          symbol.getParentScope()->asSymbol(), slang::ast::LookupLocation::max));
+      if (cv)
+        os << " = " << cv.toString();
+    }
+    break;
+  }
+  case slang::ast::SymbolKind::Definition: {
+    os << "module";
+    break;
+  }
+  case slang::ast::SymbolKind::Instance: {
+    const auto &inst = symbol.as<slang::ast::InstanceSymbol>();
+    os << inst.getDefinition().name << " instance";
+    break;
+  }
+  case slang::ast::SymbolKind::Subroutine: {
+    const auto &sub = symbol.as<slang::ast::SubroutineSymbol>();
+    if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+      os << "function";
+    else
+      os << "task";
+    break;
+  }
+  case slang::ast::SymbolKind::Package: {
+    os << "package";
+    break;
+  }
+  default:
+    break;
+  }
+
+  return result;
+}
+
+/// Verilog/SystemVerilog keywords for completion.
+static const char *const verilogKeywords[] = {
+    // Module/interface keywords
+    "module",
+    "endmodule",
+    "interface",
+    "endinterface",
+    "program",
+    "endprogram",
+    "package",
+    "endpackage",
+    // Port/signal keywords
+    "input",
+    "output",
+    "inout",
+    "wire",
+    "reg",
+    "logic",
+    "integer",
+    "real",
+    "time",
+    // Parameter keywords
+    "parameter",
+    "localparam",
+    // Type keywords
+    "signed",
+    "unsigned",
+    "bit",
+    "byte",
+    "shortint",
+    "int",
+    "longint",
+    "shortreal",
+    "string",
+    "void",
+    // Behavioral keywords
+    "always",
+    "always_comb",
+    "always_ff",
+    "always_latch",
+    "initial",
+    "final",
+    "assign",
+    // Control flow
+    "if",
+    "else",
+    "case",
+    "casex",
+    "casez",
+    "default",
+    "endcase",
+    "for",
+    "while",
+    "do",
+    "foreach",
+    "repeat",
+    "forever",
+    "begin",
+    "end",
+    "fork",
+    "join",
+    "join_any",
+    "join_none",
+    // Task/function
+    "function",
+    "endfunction",
+    "task",
+    "endtask",
+    "return",
+    // Class/OOP
+    "class",
+    "endclass",
+    "extends",
+    "implements",
+    "virtual",
+    "static",
+    "protected",
+    "local",
+    "new",
+    "this",
+    "super",
+    // Generate
+    "generate",
+    "endgenerate",
+    "genvar",
+    // Timing
+    "posedge",
+    "negedge",
+    "edge",
+    // Assertions
+    "assert",
+    "assume",
+    "cover",
+    "property",
+    "sequence",
+    // Miscellaneous
+    "typedef",
+    "enum",
+    "struct",
+    "union",
+    "const",
+    "automatic",
+    "import",
+    "export",
+    nullptr};
+
+/// Collect symbols visible at the given scope.
+namespace {
+class CompletionCollector
+    : public slang::ast::ASTVisitor<CompletionCollector, true, true> {
+public:
+  CompletionCollector(llvm::lsp::CompletionList &completions,
+                      llvm::StringRef prefix, slang::BufferID bufferId)
+      : completions(completions), prefix(prefix), bufferId(bufferId) {}
+
+  llvm::lsp::CompletionList &completions;
+  llvm::StringRef prefix;
+  slang::BufferID bufferId;
+
+  void addSymbol(const slang::ast::Symbol &symbol) {
+    if (symbol.name.empty())
+      return;
+
+    // Filter by prefix if provided
+    if (!prefix.empty() &&
+        !llvm::StringRef(symbol.name).starts_with_insensitive(prefix))
+      return;
+
+    llvm::lsp::CompletionItem item;
+    item.label = std::string(symbol.name);
+    item.kind = mapToCompletionKind(symbol.kind);
+    item.detail = getCompletionDetail(symbol);
+    item.insertText = std::string(symbol.name);
+    item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
+
+    completions.items.push_back(std::move(item));
+  }
+
+  void visit(const slang::ast::InstanceBodySymbol &body) {
+    // Add ports
+    for (const auto *portSym : body.getPortList()) {
+      addSymbol(*portSym);
+    }
+
+    // Add members
+    for (const auto &member : body.members()) {
+      switch (member.kind) {
+      case slang::ast::SymbolKind::Net:
+      case slang::ast::SymbolKind::Variable:
+      case slang::ast::SymbolKind::Parameter:
+      case slang::ast::SymbolKind::Instance:
+      case slang::ast::SymbolKind::Subroutine:
+        addSymbol(member);
+        break;
+      default:
+        break;
+      }
+    }
+
+    visitDefault(body);
+  }
+
+  void visit(const slang::ast::PackageSymbol &pkg) {
+    for (const auto &member : pkg.members()) {
+      addSymbol(member);
+    }
+  }
+
+  template <typename T>
+  void visit(const T &node) {
+    visitDefault(node);
+  }
+};
+} // namespace
+
+void VerilogDocument::getCompletions(const llvm::lsp::URIForFile &uri,
+                                     const llvm::lsp::Position &pos,
+                                     llvm::lsp::CompletionList &completions) {
+  completions.isIncomplete = false;
+
+  // Get the text at the current position to determine prefix
+  auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+  auto offsetOpt = lspPositionToOffset(pos);
+  if (!offsetOpt)
+    return;
+
+  uint32_t offset = *offsetOpt;
+
+  // Find the start of the current identifier (prefix)
+  uint32_t prefixStart = offset;
+  while (prefixStart > 0 &&
+         (std::isalnum(text[prefixStart - 1]) || text[prefixStart - 1] == '_'))
+    --prefixStart;
+
+  llvm::StringRef prefix(text.data() + prefixStart, offset - prefixStart);
+
+  // Add keyword completions
+  for (const char *const *kw = verilogKeywords; *kw; ++kw) {
+    llvm::StringRef keyword(*kw);
+    if (prefix.empty() || keyword.starts_with_insensitive(prefix)) {
+      llvm::lsp::CompletionItem item;
+      item.label = keyword.str();
+      item.kind = llvm::lsp::CompletionItemKind::Keyword;
+      item.insertText = keyword.str();
+      item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
+      completions.items.push_back(std::move(item));
+    }
+  }
+
+  // Add snippet completions
+  if (prefix.empty() || llvm::StringRef("module").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem moduleSnippet;
+    moduleSnippet.label = "module (snippet)";
+    moduleSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    moduleSnippet.detail = "Module template";
+    moduleSnippet.insertText =
+        "module ${1:module_name} (\n"
+        "  input ${2:clk},\n"
+        "  input ${3:rst},\n"
+        "  ${4:// ports}\n"
+        ");\n"
+        "  ${0:// body}\n"
+        "endmodule";
+    moduleSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(moduleSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("always_ff").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem alwaysFFSnippet;
+    alwaysFFSnippet.label = "always_ff (snippet)";
+    alwaysFFSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    alwaysFFSnippet.detail = "Sequential always block";
+    alwaysFFSnippet.insertText =
+        "always_ff @(posedge ${1:clk} or negedge ${2:rst_n}) begin\n"
+        "  if (!${2:rst_n}) begin\n"
+        "    ${3:// reset}\n"
+        "  end else begin\n"
+        "    ${0:// logic}\n"
+        "  end\n"
+        "end";
+    alwaysFFSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(alwaysFFSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("always_comb").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem alwaysCombSnippet;
+    alwaysCombSnippet.label = "always_comb (snippet)";
+    alwaysCombSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    alwaysCombSnippet.detail = "Combinational always block";
+    alwaysCombSnippet.insertText = "always_comb begin\n"
+                                   "  ${0:// logic}\n"
+                                   "end";
+    alwaysCombSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(alwaysCombSnippet));
+  }
+
+  // Add symbols from compilation
+  if (succeeded(compilation)) {
+    const auto &root = (*compilation)->getRoot();
+    CompletionCollector collector(completions, prefix, mainBufferId);
+
+    // Collect from packages
+    for (auto *package : (*compilation)->getPackages()) {
+      collector.visit(*package);
+    }
+
+    // Collect from modules
+    for (auto *inst : root.topInstances) {
+      collector.visit(inst->body);
+    }
+
+    // Add module names for instantiation
+    for (const auto &def : (*compilation)->getDefinitions()) {
+      if (prefix.empty() ||
+          llvm::StringRef(def.name).starts_with_insensitive(prefix)) {
+        llvm::lsp::CompletionItem item;
+        item.label = std::string(def.name);
+        item.kind = llvm::lsp::CompletionItemKind::Module;
+        item.detail = "module definition";
+        item.insertText = std::string(def.name);
+        item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
+        completions.items.push_back(std::move(item));
+
+        // Also add an instantiation snippet
+        llvm::lsp::CompletionItem instSnippet;
+        instSnippet.label = std::string(def.name) + " (instantiate)";
+        instSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+        instSnippet.detail = "Module instantiation";
+
+        std::string snippet = std::string(def.name) + " ${1:inst_name} (\n";
+        snippet += "  ${0:// connections}\n";
+        snippet += ");";
+        instSnippet.insertText = snippet;
+        instSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+        completions.items.push_back(std::move(instSnippet));
+      }
+    }
+  }
+}
