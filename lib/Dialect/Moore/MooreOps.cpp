@@ -1749,6 +1749,139 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
+// InterfaceInstanceOp
+//===----------------------------------------------------------------------===//
+
+void InterfaceInstanceOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
+  setNameFn(getResult(), getName());
+}
+
+LogicalResult
+InterfaceInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto *symbol =
+      symbolTable.lookupNearestSymbolFrom(*this, getInterfaceNameAttr());
+  if (!symbol)
+    return emitOpError("references unknown interface @") << getInterfaceName();
+  if (!isa<InterfaceDeclOp>(symbol))
+    return emitOpError("must reference a 'moore.interface', but @")
+           << getInterfaceName() << " is a " << symbol->getName();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceGetOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+VirtualInterfaceGetOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the modport within the interface
+  auto modportName = getModport();
+  auto *modportSymbol = ifaceOp.lookupSymbol(modportName);
+  if (!modportSymbol)
+    return emitOpError("references unknown modport @")
+           << modportName.getValue() << " in interface @"
+           << ifaceOp.getSymName();
+  if (!isa<ModportDeclOp>(modportSymbol))
+    return emitOpError("@")
+           << modportName.getValue() << " is not a modport declaration";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceSignalRefOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult VirtualInterfaceSignalRefOp::verifySymbolUses(
+    SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the signal within the interface
+  auto signalName = getSignal();
+  auto *signalSymbol = ifaceOp.lookupSymbol(signalName);
+  if (!signalSymbol)
+    return emitOpError("references unknown signal @")
+           << signalName.getValue() << " in interface @" << ifaceOp.getSymName();
+  if (!isa<InterfaceSignalDeclOp>(signalSymbol))
+    return emitOpError("@")
+           << signalName.getValue() << " is not a signal declaration";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// ModportDeclOp custom parser/printer
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseModportPorts(OpAsmParser &parser,
+                                     ArrayAttr &portsAttr) {
+  auto *context = parser.getBuilder().getContext();
+
+  SmallVector<Attribute, 8> ports;
+  auto parseElement = [&]() -> ParseResult {
+    auto direction = ModportDirAttr::parse(parser, {});
+    if (!direction)
+      return failure();
+
+    FlatSymbolRefAttr signal;
+    if (parser.parseAttribute(signal))
+      return failure();
+
+    ports.push_back(ModportPortAttr::get(
+        context, cast<ModportDirAttr>(direction), signal));
+    return success();
+  };
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Paren,
+                                     parseElement))
+    return failure();
+
+  portsAttr = ArrayAttr::get(context, ports);
+  return success();
+}
+
+static void printModportPorts(OpAsmPrinter &p, Operation *,
+                              ArrayAttr portsAttr) {
+  p << "(";
+  llvm::interleaveComma(portsAttr, p, [&](Attribute attr) {
+    auto port = cast<ModportPortAttr>(attr);
+    p << stringifyEnum(port.getDirection().getValue());
+    p << ' ';
+    p.printSymbolName(port.getSignal().getRootReference().getValue());
+  });
+  p << ')';
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen generated logic.
 //===----------------------------------------------------------------------===//
 
