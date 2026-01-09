@@ -3,6 +3,7 @@ set_source_files_properties("${VERSION_CPP}" PROPERTIES GENERATED TRUE)
 
 add_circt_library(CIRCTSupport
   APInt.cpp
+  AssertionChecker.cpp
   BackedgeBuilder.cpp
   CoverageDatabase.cpp
   CustomDirectiveImpl.cpp
