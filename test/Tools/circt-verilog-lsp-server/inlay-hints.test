@@ -1,0 +1,43 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test inlay hints functionality for Verilog/SystemVerilog.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// CHECK:       "id": 0,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "inlayHintProvider": true
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///hints.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module adder #(parameter WIDTH = 32) (\n  input  logic [WIDTH-1:0] a,\n  input  logic [WIDTH-1:0] b,\n  output logic [WIDTH-1:0] sum\n);\n  logic [WIDTH:0] carry;\n  assign {carry, sum} = a + b;\nendmodule\n\nmodule top;\n  logic [31:0] x, y, z;\n  adder my_adder (.a(x), .b(y), .sum(z));\nendmodule"
+}}}
+// -----
+// Request inlay hints for lines 0-15
+{"jsonrpc":"2.0","id":1,"method":"textDocument/inlayHint","params":{
+  "textDocument":{"uri":"test:///hints.sv"},
+  "range":{"start":{"line":0,"character":0},"end":{"line":15,"character":0}}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         {
+// CHECK:           "kind": 1
+// CHECK:           "label":
+// CHECK:           "position":
+// CHECK:         }
+// -----
+// Request inlay hints for a specific range (just the top module)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{
+  "textDocument":{"uri":"test:///hints.sv"},
+  "range":{"start":{"line":9,"character":0},"end":{"line":12,"character":0}}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result":
+// -----
+{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
