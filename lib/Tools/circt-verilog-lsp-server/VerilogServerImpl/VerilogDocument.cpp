@@ -1810,3 +1810,311 @@ void VerilogDocument::getDocumentLinks(
     }
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Semantic Tokens
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Map slang symbol kind to semantic token type.
+SemanticTokenType mapToSemanticTokenType(slang::ast::SymbolKind kind) {
+  using SK = slang::ast::SymbolKind;
+  switch (kind) {
+  case SK::Package:
+    return SemanticTokenType::Namespace;
+  case SK::Definition:
+    return SemanticTokenType::Module;
+  case SK::Instance:
+    return SemanticTokenType::Instance;
+  case SK::Net:
+    return SemanticTokenType::Net;
+  case SK::Variable:
+    return SemanticTokenType::Variable;
+  case SK::Parameter:
+    return SemanticTokenType::Parameter;
+  case SK::Port:
+    return SemanticTokenType::Port;
+  case SK::Subroutine:
+    return SemanticTokenType::Function;
+  case SK::ClassType:
+    return SemanticTokenType::Class;
+  case SK::InterfacePort:
+    return SemanticTokenType::Interface;
+  case SK::Enum:
+  case SK::TypeAlias:
+    return SemanticTokenType::Enum;
+  case SK::EnumValue:
+    return SemanticTokenType::EnumMember;
+  case SK::Struct:
+    return SemanticTokenType::Struct;
+  default:
+    return SemanticTokenType::Variable;
+  }
+}
+
+/// Visitor to collect semantic tokens from the AST.
+class SemanticTokenVisitor
+    : public slang::ast::ASTVisitor<SemanticTokenVisitor, true, true> {
+public:
+  SemanticTokenVisitor(std::vector<SemanticToken> &tokens,
+                       slang::BufferID bufferId,
+                       const slang::SourceManager &sm,
+                       const std::vector<uint32_t> &lineOffsets)
+      : tokens(tokens), bufferId(bufferId), sm(sm), lineOffsets(lineOffsets) {}
+
+  std::vector<SemanticToken> &tokens;
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+  const std::vector<uint32_t> &lineOffsets;
+
+  void addToken(slang::SourceLocation loc, size_t length,
+                SemanticTokenType type, uint32_t modifiers = 0) {
+    if (!loc.valid() || loc.buffer() != bufferId || length == 0)
+      return;
+
+    uint32_t line = sm.getLineNumber(loc) - 1;
+    uint32_t col = sm.getColumnNumber(loc) - 1;
+
+    tokens.emplace_back(line, col, static_cast<uint32_t>(length),
+                        type, modifiers);
+  }
+
+  void handle(const slang::ast::InstanceBodySymbol &body) {
+    // Add token for the module/interface name
+    if (body.location.valid() && body.location.buffer() == bufferId &&
+        !body.name.empty()) {
+      addToken(body.location, body.name.size(), SemanticTokenType::Module,
+               static_cast<uint32_t>(SemanticTokenModifier::Definition));
+    }
+
+    // Process ports
+    for (const auto *portSym : body.getPortList()) {
+      if (const auto *port = portSym->as_if<slang::ast::PortSymbol>()) {
+        if (port->location.valid() && port->location.buffer() == bufferId &&
+            !port->name.empty()) {
+          addToken(port->location, port->name.size(), SemanticTokenType::Port,
+                   static_cast<uint32_t>(SemanticTokenModifier::Declaration));
+        }
+      }
+    }
+
+    // Process members
+    for (const auto &member : body.members()) {
+      if (!member.location.valid() || member.location.buffer() != bufferId ||
+          member.name.empty())
+        continue;
+
+      SemanticTokenType type = mapToSemanticTokenType(member.kind);
+      uint32_t modifiers = static_cast<uint32_t>(SemanticTokenModifier::Declaration);
+
+      // Add readonly modifier for parameters
+      if (member.kind == slang::ast::SymbolKind::Parameter)
+        modifiers |= static_cast<uint32_t>(SemanticTokenModifier::Readonly);
+
+      addToken(member.location, member.name.size(), type, modifiers);
+    }
+
+    visitDefault(body);
+  }
+
+  void handle(const slang::ast::PackageSymbol &pkg) {
+    if (pkg.location.valid() && pkg.location.buffer() == bufferId &&
+        !pkg.name.empty()) {
+      addToken(pkg.location, pkg.name.size(), SemanticTokenType::Namespace,
+               static_cast<uint32_t>(SemanticTokenModifier::Definition));
+    }
+
+    // Process package members
+    for (const auto &member : pkg.members()) {
+      if (!member.location.valid() || member.location.buffer() != bufferId ||
+          member.name.empty())
+        continue;
+
+      SemanticTokenType type = mapToSemanticTokenType(member.kind);
+      uint32_t modifiers = static_cast<uint32_t>(SemanticTokenModifier::Declaration);
+
+      addToken(member.location, member.name.size(), type, modifiers);
+    }
+  }
+
+  void handle(const slang::ast::NamedValueExpression &expr) {
+    // Token for symbol references
+    if (expr.sourceRange.start().buffer() == bufferId) {
+      SemanticTokenType type = mapToSemanticTokenType(expr.symbol.kind);
+      uint32_t length = std::max(1, static_cast<int>(expr.symbol.name.size()));
+      addToken(expr.sourceRange.start(), length, type, 0);
+    }
+    visitDefault(expr);
+  }
+
+  template <typename T>
+  void handle(const T &node) {
+    visitDefault(node);
+  }
+};
+
+} // namespace
+
+void VerilogDocument::getSemanticTokens(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<SemanticToken> &tokens) {
+  if (failed(compilation))
+    return;
+
+  SemanticTokenVisitor visitor(tokens, mainBufferId, getSlangSourceManager(),
+                               lineOffsets);
+
+  // Visit packages
+  for (auto *package : (*compilation)->getPackages()) {
+    if (package->location.buffer() == mainBufferId)
+      visitor.handle(*package);
+  }
+
+  // Visit top instances
+  for (auto *inst : (*compilation)->getRoot().topInstances) {
+    if (inst->body.location.buffer() == mainBufferId)
+      inst->body.visit(visitor);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Inlay Hints
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Visitor to collect inlay hints from the AST.
+class InlayHintVisitor
+    : public slang::ast::ASTVisitor<InlayHintVisitor, true, true> {
+public:
+  InlayHintVisitor(std::vector<llvm::lsp::InlayHint> &hints,
+                   slang::BufferID bufferId,
+                   const slang::SourceManager &sm,
+                   const llvm::lsp::Range &range)
+      : hints(hints), bufferId(bufferId), sm(sm), range(range) {}
+
+  std::vector<llvm::lsp::InlayHint> &hints;
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+  const llvm::lsp::Range &range;
+
+  bool isInRange(slang::SourceLocation loc) const {
+    if (!loc.valid() || loc.buffer() != bufferId)
+      return false;
+
+    int line = sm.getLineNumber(loc) - 1;
+    int col = sm.getColumnNumber(loc) - 1;
+
+    if (line < range.start.line || line > range.end.line)
+      return false;
+    if (line == range.start.line && col < range.start.character)
+      return false;
+    if (line == range.end.line && col > range.end.character)
+      return false;
+
+    return true;
+  }
+
+  llvm::lsp::Position getPosition(slang::SourceLocation loc) const {
+    return llvm::lsp::Position(sm.getLineNumber(loc) - 1,
+                                sm.getColumnNumber(loc) - 1);
+  }
+
+  void handle(const slang::ast::InstanceBodySymbol &body) {
+    // Add width hints for variables/nets
+    for (const auto &member : body.members()) {
+      if (!isInRange(member.location))
+        continue;
+
+      if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
+        if (var->getType().isIntegral()) {
+          auto width = var->getType().getBitWidth();
+          if (width > 1) {
+            // Add hint showing the width after the variable name
+            auto pos = getPosition(member.location);
+            pos.character += member.name.size();
+
+            llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Type, pos);
+            hint.label = ": " + std::to_string(width) + "-bit";
+            hint.paddingLeft = true;
+            hints.push_back(std::move(hint));
+          }
+        }
+      } else if (auto *net = member.as_if<slang::ast::NetSymbol>()) {
+        if (net->getType().isIntegral()) {
+          auto width = net->getType().getBitWidth();
+          if (width > 1) {
+            auto pos = getPosition(member.location);
+            pos.character += member.name.size();
+
+            llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Type, pos);
+            hint.label = ": " + std::to_string(width) + "-bit";
+            hint.paddingLeft = true;
+            hints.push_back(std::move(hint));
+          }
+        }
+      } else if (auto *param = member.as_if<slang::ast::ParameterSymbol>()) {
+        // Show parameter values
+        auto initExpr = param->getInitializer();
+        if (initExpr) {
+          auto cv = initExpr->eval(slang::ast::ASTContext(
+              body, slang::ast::LookupLocation::max));
+          if (cv) {
+            auto pos = getPosition(member.location);
+            pos.character += member.name.size();
+
+            llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Type, pos);
+            hint.label = " = " + std::string(cv.toString());
+            hint.paddingLeft = true;
+            hints.push_back(std::move(hint));
+          }
+        }
+      }
+    }
+
+    visitDefault(body);
+  }
+
+  void handle(const slang::ast::InstanceSymbol &inst) {
+    // Add hints for port connections in module instantiation
+    if (!isInRange(inst.location))
+      return;
+
+    // Show the module type being instantiated
+    {
+      auto pos = getPosition(inst.location);
+      pos.character += inst.name.size();
+
+      llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Type, pos);
+      hint.label = " /* " + std::string(inst.getDefinition().name) + " */";
+      hint.paddingLeft = true;
+      hints.push_back(std::move(hint));
+    }
+
+    visitDefault(inst);
+  }
+
+  template <typename T>
+  void handle(const T &node) {
+    visitDefault(node);
+  }
+};
+
+} // namespace
+
+void VerilogDocument::getInlayHints(
+    const llvm::lsp::URIForFile &uri,
+    const llvm::lsp::Range &range,
+    std::vector<llvm::lsp::InlayHint> &hints) {
+  if (failed(compilation))
+    return;
+
+  InlayHintVisitor visitor(hints, mainBufferId, getSlangSourceManager(), range);
+
+  // Visit top instances
+  for (auto *inst : (*compilation)->getRoot().topInstances) {
+    if (inst->body.location.buffer() == mainBufferId)
+      inst->body.visit(visitor);
+  }
+}

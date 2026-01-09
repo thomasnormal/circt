@@ -106,6 +106,17 @@ public:
   void getDocumentLinks(const llvm::lsp::URIForFile &uri,
                         std::vector<llvm::lsp::DocumentLink> &links);
 
+  /// Return semantic tokens for the entire document.
+  /// Thread-safe; acquires docMutex.
+  void getSemanticTokens(const llvm::lsp::URIForFile &uri,
+                         std::vector<uint32_t> &data);
+
+  /// Return inlay hints for the given range.
+  /// Thread-safe; acquires docMutex.
+  void getInlayHints(const llvm::lsp::URIForFile &uri,
+                     const llvm::lsp::Range &range,
+                     std::vector<llvm::lsp::InlayHint> &hints);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

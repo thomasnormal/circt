@@ -8,6 +8,7 @@
 
 #include "LSPServer.h"
 #include "Utils/PendingChanges.h"
+#include "VerilogServerImpl/SemanticTokens.h"
 #include "VerilogServerImpl/VerilogServer.h"
 #include "circt/Tools/circt-verilog-lsp-server/CirctVerilogLspServerMain.h"
 #include "llvm/Support/JSON.h"
@@ -106,6 +107,20 @@ struct LSPServer {
                       Callback<std::vector<DocumentLink>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Semantic Tokens
+  //===--------------------------------------------------------------------===//
+
+  void onSemanticTokensFull(const json::Value &params,
+                            Callback<json::Value> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Inlay Hints
+  //===--------------------------------------------------------------------===//
+
+  void onInlayHints(const InlayHintsParams &params,
+                    Callback<std::vector<InlayHint>> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -176,6 +191,8 @@ void LSPServer::onInitialize(const InitializeParams &params,
        llvm::json::Object{
            {"resolveProvider", false},
        }},
+      {"semanticTokensProvider", circt::lsp::getSemanticTokensOptions()},
+      {"inlayHintProvider", true},
   };
 
   json::Object result{
@@ -363,6 +380,45 @@ void LSPServer::onDocumentLink(const DocumentLinkParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Semantic Tokens
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onSemanticTokensFull(const json::Value &params,
+                                     Callback<json::Value> reply) {
+  circt::lsp::SemanticTokensParams stParams;
+  json::Path::Root root;
+  if (!circt::lsp::fromJSON(params, stParams, json::Path(root))) {
+    reply(make_error<LSPError>("invalid semantic tokens params",
+                                ErrorCode::InvalidParams));
+    return;
+  }
+
+  auto uriOrErr = URIForFile::fromURI(stParams.textDocumentUri);
+  if (!uriOrErr) {
+    reply(make_error<LSPError>("invalid URI", ErrorCode::InvalidParams));
+    return;
+  }
+
+  std::vector<uint32_t> data;
+  server.getSemanticTokens(*uriOrErr, data);
+
+  circt::lsp::SemanticTokensResult result;
+  result.data = std::move(data);
+  reply(circt::lsp::toJSON(result));
+}
+
+//===----------------------------------------------------------------------===//
+// Inlay Hints
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onInlayHints(const InlayHintsParams &params,
+                             Callback<std::vector<InlayHint>> reply) {
+  std::vector<InlayHint> hints;
+  server.getInlayHints(params.textDocument.uri, params.range, hints);
+  reply(std::move(hints));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -423,6 +479,14 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Document Links
   messageHandler.method("textDocument/documentLink", &lspServer,
                         &LSPServer::onDocumentLink);
+
+  // Semantic Tokens
+  messageHandler.method("textDocument/semanticTokens/full", &lspServer,
+                        &LSPServer::onSemanticTokensFull);
+
+  // Inlay Hints
+  messageHandler.method("textDocument/inlayHint", &lspServer,
+                        &LSPServer::onInlayHints);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {
