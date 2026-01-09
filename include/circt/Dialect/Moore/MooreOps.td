@@ -3773,6 +3773,190 @@ def UVMReportOp : UVMOp<"report"> {
 }
 
 //===----------------------------------------------------------------------===//
+// UVM Base Class Operations
+//===----------------------------------------------------------------------===//
+
+def UVMClassDeclOp : UVMOp<"class.decl", [
+  Symbol,
+  SymbolTable,
+  IsolatedFromAbove,
+  NoTerminator,
+  SingleBlock
+]> {
+  let summary = "Declare a UVM class extending a base class";
+  let description = [{
+    Declares a class that extends one of the UVM base classes. This operation
+    captures the UVM hierarchy relationship and enables proper phase method
+    resolution and factory registration.
+
+    Example:
+    ```mlir
+    moore.uvm.class.decl @my_driver extends uvm_driver {
+      moore.class.propertydecl @req : !moore.class<@my_item>
+      moore.uvm.phase_method build { ... }
+    }
+    ```
+
+    See UVM 1.2 Reference Manual Chapter 5 "UVM Class Reference".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    UVMBaseClassAttr:$base_class,
+    OptionalAttr<SymbolRefAttr>:$parent_class
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $sym_name `extends` $base_class (`from` $parent_class^)?
+    attr-dict-with-keyword $body
+  }];
+}
+
+def UVMTLMPortDeclOp : UVMOp<"tlm.port_decl", [
+  Symbol,
+  HasParent<"UVMClassDeclOp, ClassDeclOp">
+]> {
+  let summary = "Declare a TLM port in a UVM component";
+  let description = [{
+    Declares a TLM port within a UVM component. TLM ports provide
+    transaction-level communication between components.
+
+    Example:
+    ```mlir
+    moore.uvm.tlm.port_decl @seq_item_port put : !moore.class<@my_item>
+    moore.uvm.tlm.port_decl @analysis_port analysis : !moore.class<@my_item>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.2 "TLM Ports".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    TLMPortKindAttr:$port_kind,
+    TypeAttr:$transaction_type
+  );
+  let assemblyFormat = [{
+    $sym_name $port_kind `:` $transaction_type attr-dict
+  }];
+}
+
+def UVMTLMPortConnectOp : UVMOp<"tlm.connect"> {
+  let summary = "Connect two TLM ports";
+  let description = [{
+    Connects two TLM ports together. This is typically done in the
+    connect_phase of a UVM component.
+
+    Example:
+    ```mlir
+    moore.uvm.tlm.connect %driver.seq_item_port, %sequencer.seq_item_export
+      : !moore.class<@driver_type>, !moore.class<@sequencer_type>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.2.2 "Port Connections".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$target
+  );
+  let assemblyFormat = [{
+    $port `,` $target `:` type($port) `,` type($target) attr-dict
+  }];
+}
+
+def UVMAnalysisPortConnectOp : UVMOp<"analysis.connect"> {
+  let summary = "Connect an analysis port to a subscriber";
+  let description = [{
+    Connects an analysis port to a subscriber's analysis export.
+    Analysis ports broadcast transactions to all connected subscribers.
+
+    Example:
+    ```mlir
+    moore.uvm.analysis.connect %monitor.ap, %scoreboard.analysis_export
+      : !moore.class<@monitor_type>, !moore.class<@scoreboard_type>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.3 "Analysis Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$subscriber
+  );
+  let assemblyFormat = [{
+    $port `,` $subscriber `:` type($port) `,` type($subscriber) attr-dict
+  }];
+}
+
+def UVMGetParentOp : UVMOp<"get_parent"> {
+  let summary = "Get parent component in UVM hierarchy";
+  let description = [{
+    Returns the parent component of a UVM component. This is essential
+    for navigating the component hierarchy.
+
+    Example:
+    ```mlir
+    %parent = moore.uvm.get_parent %this : !moore.class<@my_component>
+      -> !moore.class<@uvm_component>
+    ```
+
+    See UVM 1.2 Reference Manual Section 13.1.3 "Hierarchy Information".
+  }];
+
+  let arguments = (ins ClassHandleType:$component);
+  let results = (outs ClassHandleType:$parent);
+  let assemblyFormat = [{
+    $component `:` type($component) attr-dict `->` type($parent)
+  }];
+}
+
+def UVMGetFullNameOp : UVMOp<"get_full_name"> {
+  let summary = "Get full hierarchical name of a component";
+  let description = [{
+    Returns the full hierarchical name of a UVM component as a string.
+    This includes all ancestor component names separated by dots.
+
+    Example:
+    ```mlir
+    %name = moore.uvm.get_full_name %this : !moore.class<@my_component>
+    ```
+
+    See UVM 1.2 Reference Manual Section 13.1.3 "Hierarchy Information".
+  }];
+
+  let arguments = (ins ClassHandleType:$component);
+  let results = (outs StringType:$name);
+  let assemblyFormat = [{
+    $component `:` type($component) attr-dict
+  }];
+}
+
+def UVMFindByNameOp : UVMOp<"find_by_name"> {
+  let summary = "Find a component by hierarchical path";
+  let description = [{
+    Searches for a component by its hierarchical path name.
+    Returns null if no matching component is found.
+
+    Example:
+    ```mlir
+    %comp = moore.uvm.find_by_name "env.agent.driver", %root
+      : !moore.class<@uvm_component> -> !moore.class<@my_driver>
+    ```
+
+    See UVM 1.2 Reference Manual Section 13.1.3.3 "find".
+  }];
+
+  let arguments = (ins
+    StrAttr:$path,
+    Optional<ClassHandleType>:$context
+  );
+  let results = (outs ClassHandleType:$component);
+  let assemblyFormat = [{
+    $path (`,` $context^ `:` type($context))? attr-dict `->` type($component)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//
 
