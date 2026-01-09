@@ -204,6 +204,57 @@ VerilogDocument::VerilogDocument(
   index = std::make_unique<VerilogIndex>(mainBufferId, driver.sourceManager);
   // Populate the index.
   index->initialize(**compilation);
+
+  // Scan for include directives
+  scanIncludeDirectives();
+}
+
+/// Scan the source text for `include directives and register them with the index.
+void VerilogDocument::scanIncludeDirectives() {
+  if (!index)
+    return;
+
+  auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+
+  // Scan for `include directives
+  size_t pos = 0;
+  while ((pos = text.find("`include", pos)) != std::string_view::npos) {
+    size_t directiveStart = pos;
+    pos += 8; // Skip "`include"
+
+    // Skip whitespace
+    while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t'))
+      ++pos;
+
+    if (pos >= text.size())
+      break;
+
+    // Check for quoted filename
+    char quote = text[pos];
+    if (quote != '"' && quote != '<') {
+      continue;
+    }
+    char endQuote = (quote == '<') ? '>' : '"';
+    ++pos;
+
+    size_t fileStart = pos;
+    while (pos < text.size() && text[pos] != endQuote && text[pos] != '\n')
+      ++pos;
+
+    if (pos >= text.size() || text[pos] != endQuote)
+      continue;
+
+    size_t fileEnd = pos;
+    ++pos; // Skip closing quote
+
+    // Extract the filename
+    std::string filename(text.substr(fileStart, fileEnd - fileStart));
+
+    // Register the include directive
+    index->insertInclude(static_cast<uint32_t>(fileStart),
+                         static_cast<uint32_t>(fileEnd), filename);
+  }
 }
 
 llvm::lsp::Location
@@ -371,6 +422,48 @@ void VerilogDocument::getLocationsOf(
 
   if (!index)
     return;
+
+  // First, check if the cursor is on an include directive
+  auto offsetOpt = lspPositionToOffset(defPos);
+  if (offsetOpt) {
+    uint32_t offset = *offsetOpt;
+    const auto &includeMap = index->getIncludes();
+    for (const auto &[range, path] : includeMap) {
+      if (offset >= range.first && offset < range.second) {
+        // The cursor is on an include directive
+        llvm::SmallString<256> absPath(path);
+        if (!llvm::sys::path::is_absolute(absPath)) {
+          // Try to resolve relative to the document's directory
+          llvm::SmallString<256> docDir(uri.file());
+          llvm::sys::path::remove_filename(docDir);
+          llvm::sys::path::append(docDir, path);
+          if (llvm::sys::fs::exists(docDir))
+            absPath = docDir;
+          else {
+            // Try libDirs
+            for (const auto &libDir : globalContext.options.libDirs) {
+              llvm::SmallString<256> libPath(libDir);
+              llvm::sys::path::append(libPath, path);
+              if (llvm::sys::fs::exists(libPath)) {
+                absPath = libPath;
+                break;
+              }
+            }
+          }
+        }
+
+        if (llvm::sys::fs::exists(absPath)) {
+          auto uriOrErr = llvm::lsp::URIForFile::fromFile(absPath);
+          if (uriOrErr) {
+            // Point to the beginning of the included file
+            locations.emplace_back(*uriOrErr,
+                                   llvm::lsp::Range(llvm::lsp::Position(0, 0)));
+            return;
+          }
+        }
+      }
+    }
+  }
 
   const auto &intervalMap = index->getIntervalMap();
   auto it = intervalMap.find(slangBufferPointer);
