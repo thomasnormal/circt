@@ -101,6 +101,10 @@ public:
   renameSymbol(const URIForFile &uri, const llvm::lsp::Position &pos,
                llvm::StringRef newName);
 
+  /// Return document links for include directives.
+  void getDocumentLinks(const URIForFile &uri,
+                        std::vector<llvm::lsp::DocumentLink> &links);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;
