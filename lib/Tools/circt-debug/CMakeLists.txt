@@ -1,4 +1,4 @@
-add_circt_library(CIRCTDebug
+add_circt_library(CIRCTDebugTool
   Debug.cpp
   DebugSession.cpp
   VCDWriter.cpp
