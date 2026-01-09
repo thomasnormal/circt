@@ -1,0 +1,221 @@
+# Example GitHub Actions workflow for CIRCT-based Verilog/SystemVerilog builds
+# This workflow demonstrates compilation checking, elaboration, and simulation setup
+#
+# Features:
+# - Syntax checking with circt-verilog
+# - Elaboration verification
+# - Integration with other simulators
+# - Artifact generation for downstream jobs
+
+name: Verilog Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      top_module:
+        description: 'Top-level module to elaborate'
+        required: false
+        default: ''
+
+jobs:
+  syntax-check:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache CIRCT
+        uses: actions/cache@v4
+        with:
+          path: ~/.circt
+          key: circt-${{ runner.os }}-syntax
+
+      - name: Setup CIRCT
+        run: |
+          # Setup CIRCT tools
+          echo "$HOME/.circt/bin" >> $GITHUB_PATH
+
+      - name: Parse project configuration
+        id: config
+        run: |
+          # Extract configuration from circt-project.yaml
+          if [ -f circt-project.yaml ]; then
+            TOP=$(grep -E "^\s*top:" circt-project.yaml | head -1 | sed 's/.*top:\s*"\?\([^"]*\)"\?.*/\1/')
+            echo "top_module=${TOP:-top}" >> $GITHUB_OUTPUT
+          else
+            echo "top_module=top" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run syntax check
+        run: |
+          mkdir -p reports
+
+          # Use circt-verilog for syntax checking
+          # This will use the project configuration automatically
+          circt-verilog \
+            --parse-only \
+            --diagnostics-format=sarif \
+            --output=reports/syntax.sarif \
+            . 2>&1 | tee reports/syntax.log
+
+      - name: Upload syntax results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: syntax-results
+          path: reports/
+
+  elaborate:
+    name: Elaborate Design
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup CIRCT
+        run: |
+          echo "$HOME/.circt/bin" >> $GITHUB_PATH
+
+      - name: Get top module
+        id: config
+        run: |
+          TOP="${{ github.event.inputs.top_module }}"
+          if [ -z "$TOP" ] && [ -f circt-project.yaml ]; then
+            TOP=$(grep -E "^\s*top:" circt-project.yaml | head -1 | sed 's/.*top:\s*"\?\([^"]*\)"\?.*/\1/')
+          fi
+          echo "top_module=${TOP:-top}" >> $GITHUB_OUTPUT
+
+      - name: Elaborate design
+        run: |
+          mkdir -p reports build
+
+          # Run elaboration with CIRCT
+          circt-verilog \
+            --top=${{ steps.config.outputs.top_module }} \
+            --elaborate \
+            --output-mlir=build/design.mlir \
+            --diagnostics-format=json \
+            . 2>&1 | tee reports/elaborate.log
+
+      - name: Generate elaboration report
+        if: always()
+        run: |
+          # Create a summary of the elaboration
+          echo "## Elaboration Summary" > reports/summary.md
+          echo "" >> reports/summary.md
+          echo "**Top Module:** ${{ steps.config.outputs.top_module }}" >> reports/summary.md
+          echo "" >> reports/summary.md
+
+          if [ -f build/design.mlir ]; then
+            echo "**Status:** Success" >> reports/summary.md
+            echo "" >> reports/summary.md
+            echo "### Module Hierarchy" >> reports/summary.md
+            grep -E "^  hw.module" build/design.mlir | head -20 >> reports/summary.md || true
+          else
+            echo "**Status:** Failed" >> reports/summary.md
+          fi
+
+      - name: Upload elaboration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: elaboration-results
+          path: |
+            reports/
+            build/*.mlir
+
+  integration-simulation:
+    name: Simulation Integration
+    runs-on: ubuntu-latest
+    needs: elaborate
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download elaboration results
+        uses: actions/download-artifact@v4
+        with:
+          name: elaboration-results
+          path: results/
+
+      - name: Setup simulation environment
+        run: |
+          # Install simulation tools (Verilator, iverilog, etc.)
+          sudo apt-get update
+          sudo apt-get install -y verilator iverilog
+
+      - name: Convert to simulation-ready format
+        run: |
+          mkdir -p sim
+
+          # If using CIRCT flow, convert MLIR to Verilog
+          # circt-translate --export-verilog results/build/design.mlir -o sim/design.v
+
+          # For now, use source files directly
+          find rtl -name "*.sv" -o -name "*.v" | xargs cat > sim/all_sources.v 2>/dev/null || true
+
+      - name: Run Verilator lint
+        if: always()
+        run: |
+          verilator --lint-only \
+            -Wall \
+            --top-module top \
+            sim/all_sources.v 2>&1 | tee reports/verilator-lint.log || true
+
+      - name: Upload simulation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-results
+          path: |
+            sim/
+            reports/
+
+  report-summary:
+    name: Generate Summary
+    runs-on: ubuntu-latest
+    needs: [syntax-check, elaborate]
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Generate PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let comment = '## Build Results Summary\n\n';
+
+            // Check for syntax results
+            const syntaxPassed = fs.existsSync('artifacts/syntax-results/syntax.sarif');
+            comment += `| Check | Status |\n`;
+            comment += `|-------|--------|\n`;
+            comment += `| Syntax | ${syntaxPassed ? ':white_check_mark: Passed' : ':x: Failed'} |\n`;
+
+            // Check for elaboration results
+            const elaborationPassed = fs.existsSync('artifacts/elaboration-results/build/design.mlir');
+            comment += `| Elaboration | ${elaborationPassed ? ':white_check_mark: Passed' : ':x: Failed'} |\n`;
+
+            // Post comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
