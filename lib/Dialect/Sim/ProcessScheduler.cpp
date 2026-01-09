@@ -14,6 +14,7 @@
 
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 
@@ -588,4 +589,338 @@ void CombProcessManager::endTracking(ProcessId id) {
 
   finalizeSensitivity(id);
   currentlyTracking = InvalidProcessId;
+}
+
+//===----------------------------------------------------------------------===//
+// ForkJoinManager Implementation
+//===----------------------------------------------------------------------===//
+
+ForkId ForkJoinManager::createFork(ProcessId parentProcess,
+                                   ForkJoinType joinType) {
+  ForkId id = getNextForkId();
+  auto forkGroup = std::make_unique<ForkGroup>(id, joinType, parentProcess);
+  forkGroups[id] = std::move(forkGroup);
+
+  // Track parent to fork relationship
+  parentToForks[parentProcess].push_back(id);
+
+  LLVM_DEBUG(llvm::dbgs() << "Created fork group " << id << " for parent "
+                          << parentProcess << " with join type "
+                          << getForkJoinTypeName(joinType) << "\n");
+
+  return id;
+}
+
+void ForkJoinManager::addChildToFork(ForkId forkId, ProcessId childProcess) {
+  auto it = forkGroups.find(forkId);
+  if (it == forkGroups.end()) {
+    LLVM_DEBUG(llvm::dbgs() << "Warning: addChildToFork called with invalid "
+                               "fork ID " << forkId << "\n");
+    return;
+  }
+
+  it->second->childProcesses.push_back(childProcess);
+  childToFork[childProcess] = forkId;
+
+  LLVM_DEBUG(llvm::dbgs() << "Added child process " << childProcess
+                          << " to fork group " << forkId << "\n");
+}
+
+void ForkJoinManager::markChildComplete(ProcessId childProcess) {
+  auto it = childToFork.find(childProcess);
+  if (it == childToFork.end()) {
+    LLVM_DEBUG(llvm::dbgs() << "Warning: markChildComplete called for process "
+                            << childProcess << " not in any fork group\n");
+    return;
+  }
+
+  ForkId forkId = it->second;
+  auto groupIt = forkGroups.find(forkId);
+  if (groupIt == forkGroups.end())
+    return;
+
+  ForkGroup *group = groupIt->second.get();
+  ++group->completedCount;
+
+  LLVM_DEBUG(llvm::dbgs() << "Child process " << childProcess
+                          << " completed in fork group " << forkId
+                          << " (" << group->completedCount << "/"
+                          << group->childProcesses.size() << ")\n");
+
+  // Check if the fork is now complete and should resume parent
+  if (group->isComplete() && !group->joined) {
+    group->joined = true;
+    // Resume the parent process if it was waiting
+    Process *parent = scheduler.getProcess(group->parentProcess);
+    if (parent && parent->getState() == ProcessState::Waiting) {
+      scheduler.resumeProcess(group->parentProcess);
+      LLVM_DEBUG(llvm::dbgs() << "Resuming parent process "
+                              << group->parentProcess << " after fork complete\n");
+    }
+  }
+}
+
+bool ForkJoinManager::join(ForkId forkId) {
+  auto it = forkGroups.find(forkId);
+  if (it == forkGroups.end())
+    return true; // Invalid fork, treat as complete
+
+  ForkGroup *group = it->second.get();
+
+  if (group->isComplete()) {
+    group->joined = true;
+    return true;
+  }
+
+  // Not complete, caller should wait
+  return false;
+}
+
+bool ForkJoinManager::joinAny(ForkId forkId) {
+  auto it = forkGroups.find(forkId);
+  if (it == forkGroups.end())
+    return true;
+
+  ForkGroup *group = it->second.get();
+  return group->completedCount >= 1;
+}
+
+ForkGroup *ForkJoinManager::getForkGroup(ForkId forkId) {
+  auto it = forkGroups.find(forkId);
+  return it != forkGroups.end() ? it->second.get() : nullptr;
+}
+
+const ForkGroup *ForkJoinManager::getForkGroup(ForkId forkId) const {
+  auto it = forkGroups.find(forkId);
+  return it != forkGroups.end() ? it->second.get() : nullptr;
+}
+
+ForkGroup *ForkJoinManager::getForkGroupForChild(ProcessId childProcess) {
+  auto it = childToFork.find(childProcess);
+  if (it == childToFork.end())
+    return nullptr;
+  return getForkGroup(it->second);
+}
+
+bool ForkJoinManager::waitFork(ProcessId parentProcess) {
+  auto it = parentToForks.find(parentProcess);
+  if (it == parentToForks.end())
+    return true; // No forks, nothing to wait for
+
+  // Check if all forks with join_none are complete
+  for (ForkId forkId : it->second) {
+    ForkGroup *group = getForkGroup(forkId);
+    if (!group)
+      continue;
+
+    // Only wait for join_none forks (join and join_any already waited)
+    if (group->joinType == ForkJoinType::JoinNone && !group->allComplete()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void ForkJoinManager::disableFork(ForkId forkId) {
+  ForkGroup *group = getForkGroup(forkId);
+  if (!group)
+    return;
+
+  LLVM_DEBUG(llvm::dbgs() << "Disabling fork group " << forkId << " with "
+                          << group->childProcesses.size() << " children\n");
+
+  // Terminate all child processes
+  for (ProcessId childId : group->childProcesses) {
+    scheduler.terminateProcess(childId);
+  }
+
+  group->joined = true;
+}
+
+void ForkJoinManager::disableAllForks(ProcessId parentProcess) {
+  auto it = parentToForks.find(parentProcess);
+  if (it == parentToForks.end())
+    return;
+
+  LLVM_DEBUG(llvm::dbgs() << "Disabling all forks for parent process "
+                          << parentProcess << "\n");
+
+  for (ForkId forkId : it->second) {
+    disableFork(forkId);
+  }
+}
+
+llvm::SmallVector<ForkId, 4>
+ForkJoinManager::getForksForParent(ProcessId parentProcess) const {
+  auto it = parentToForks.find(parentProcess);
+  if (it == parentToForks.end())
+    return {};
+  return it->second;
+}
+
+//===----------------------------------------------------------------------===//
+// SyncPrimitivesManager Implementation
+//===----------------------------------------------------------------------===//
+
+SemaphoreId SyncPrimitivesManager::createSemaphore(int64_t initialCount) {
+  SemaphoreId id = nextSemId++;
+  semaphores[id] = std::make_unique<Semaphore>(id, initialCount);
+
+  LLVM_DEBUG(llvm::dbgs() << "Created semaphore " << id
+                          << " with initial count " << initialCount << "\n");
+
+  return id;
+}
+
+void SyncPrimitivesManager::semaphoreGet(SemaphoreId id, ProcessId caller,
+                                         int64_t count) {
+  Semaphore *sem = getSemaphore(id);
+  if (!sem)
+    return;
+
+  if (!sem->tryGet(count)) {
+    // Block the caller
+    sem->addWaiter(caller, count);
+    Process *proc = scheduler.getProcess(caller);
+    if (proc) {
+      proc->setState(ProcessState::Waiting);
+    }
+    LLVM_DEBUG(llvm::dbgs() << "Process " << caller
+                            << " waiting on semaphore " << id << "\n");
+  } else {
+    LLVM_DEBUG(llvm::dbgs() << "Process " << caller
+                            << " acquired " << count << " keys from semaphore "
+                            << id << "\n");
+  }
+}
+
+bool SyncPrimitivesManager::semaphoreTryGet(SemaphoreId id, int64_t count) {
+  Semaphore *sem = getSemaphore(id);
+  if (!sem)
+    return false;
+  return sem->tryGet(count);
+}
+
+void SyncPrimitivesManager::semaphorePut(SemaphoreId id, int64_t count) {
+  Semaphore *sem = getSemaphore(id);
+  if (!sem)
+    return;
+
+  sem->put(count);
+  LLVM_DEBUG(llvm::dbgs() << "Released " << count << " keys to semaphore "
+                          << id << "\n");
+
+  // Try to satisfy waiting processes
+  while (ProcessId waiterId = sem->trySatisfyNextWaiter()) {
+    scheduler.resumeProcess(waiterId);
+    LLVM_DEBUG(llvm::dbgs() << "Resuming process " << waiterId
+                            << " from semaphore wait\n");
+  }
+}
+
+Semaphore *SyncPrimitivesManager::getSemaphore(SemaphoreId id) {
+  auto it = semaphores.find(id);
+  return it != semaphores.end() ? it->second.get() : nullptr;
+}
+
+MailboxId SyncPrimitivesManager::createMailbox(int32_t bound) {
+  MailboxId id = nextMailboxId++;
+  mailboxes[id] = std::make_unique<Mailbox>(id, bound);
+
+  LLVM_DEBUG(llvm::dbgs() << "Created mailbox " << id
+                          << (bound > 0 ? " bounded to " + std::to_string(bound)
+                                        : " unbounded")
+                          << "\n");
+
+  return id;
+}
+
+void SyncPrimitivesManager::mailboxPut(MailboxId id, ProcessId caller,
+                                       uint64_t message) {
+  Mailbox *mbox = getMailbox(id);
+  if (!mbox)
+    return;
+
+  if (mbox->isFull()) {
+    // Block the caller
+    mbox->addPutWaiter(caller, message);
+    Process *proc = scheduler.getProcess(caller);
+    if (proc) {
+      proc->setState(ProcessState::Waiting);
+    }
+    LLVM_DEBUG(llvm::dbgs() << "Process " << caller
+                            << " waiting to put to mailbox " << id << "\n");
+  } else {
+    mbox->put(message);
+    LLVM_DEBUG(llvm::dbgs() << "Message put to mailbox " << id << "\n");
+
+    // Try to satisfy a get waiter
+    uint64_t msg;
+    if (ProcessId waiterId = mbox->trySatisfyGetWaiter(msg)) {
+      scheduler.resumeProcess(waiterId);
+      LLVM_DEBUG(llvm::dbgs() << "Resuming process " << waiterId
+                              << " from mailbox get wait\n");
+    }
+  }
+}
+
+bool SyncPrimitivesManager::mailboxTryPut(MailboxId id, uint64_t message) {
+  Mailbox *mbox = getMailbox(id);
+  if (!mbox)
+    return false;
+  return mbox->tryPut(message);
+}
+
+void SyncPrimitivesManager::mailboxGet(MailboxId id, ProcessId caller) {
+  Mailbox *mbox = getMailbox(id);
+  if (!mbox)
+    return;
+
+  uint64_t message;
+  if (!mbox->tryGet(message)) {
+    // Block the caller
+    mbox->addGetWaiter(caller);
+    Process *proc = scheduler.getProcess(caller);
+    if (proc) {
+      proc->setState(ProcessState::Waiting);
+    }
+    LLVM_DEBUG(llvm::dbgs() << "Process " << caller
+                            << " waiting to get from mailbox " << id << "\n");
+  } else {
+    LLVM_DEBUG(llvm::dbgs() << "Message retrieved from mailbox " << id << "\n");
+
+    // Try to satisfy a put waiter
+    if (ProcessId waiterId = mbox->trySatisfyPutWaiter()) {
+      scheduler.resumeProcess(waiterId);
+      LLVM_DEBUG(llvm::dbgs() << "Resuming process " << waiterId
+                              << " from mailbox put wait\n");
+    }
+  }
+}
+
+bool SyncPrimitivesManager::mailboxTryGet(MailboxId id, uint64_t &message) {
+  Mailbox *mbox = getMailbox(id);
+  if (!mbox)
+    return false;
+  return mbox->tryGet(message);
+}
+
+bool SyncPrimitivesManager::mailboxPeek(MailboxId id, uint64_t &message) {
+  Mailbox *mbox = getMailbox(id);
+  if (!mbox)
+    return false;
+  return mbox->tryPeek(message);
+}
+
+size_t SyncPrimitivesManager::mailboxNum(MailboxId id) {
+  Mailbox *mbox = getMailbox(id);
+  if (!mbox)
+    return 0;
+  return mbox->getMessageCount();
+}
+
+Mailbox *SyncPrimitivesManager::getMailbox(MailboxId id) {
+  auto it = mailboxes.find(id);
+  return it != mailboxes.end() ? it->second.get() : nullptr;
 }
