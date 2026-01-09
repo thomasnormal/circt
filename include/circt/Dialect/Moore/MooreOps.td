@@ -3086,6 +3086,693 @@ def VirtualInterfaceSignalRefOp : MooreOp<"virtual_interface.signal_ref", [
 }
 
 //===----------------------------------------------------------------------===//
+// UVM Factory Support
+//===----------------------------------------------------------------------===//
+
+// Base class for UVM operations
+class UVMOp<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"uvm." # mnemonic, traits>;
+
+// UVM Component/Object type kind
+def UVMObjectKind: I32EnumAttrCase<"Object", 0, "object">;
+def UVMComponentKind: I32EnumAttrCase<"Component", 1, "component">;
+
+def UVMTypeKindAttr: I32EnumAttr<"UVMTypeKind", "UVM type kind",
+            [UVMObjectKind, UVMComponentKind]>{
+  let cppNamespace = "circt::moore";
+}
+
+def UVMTypeRegistrationOp : UVMOp<"type_register", [
+  Symbol,
+  IsolatedFromAbove,
+  NoTerminator,
+  SingleBlock
+]> {
+  let summary = "Register a class type with the UVM factory";
+  let description = [{
+    Registers a class type with the UVM factory system. This is equivalent
+    to the `uvm_component_utils or `uvm_object_utils macros in SystemVerilog.
+
+    The factory registration enables dynamic object creation through
+    type names and supports type overrides for verification reuse.
+
+    Example:
+    ```mlir
+    moore.uvm.type_register @MyComponent component {
+      // Optional: field registration for automation
+      moore.uvm.field_int @addr, UVM_DEFAULT
+      moore.uvm.field_object @child, UVM_DEFAULT
+    }
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.2 "Factory Registration".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    SymbolRefAttr:$class_type,
+    UVMTypeKindAttr:$kind
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $sym_name $class_type $kind attr-dict-with-keyword $body
+  }];
+}
+
+def UVMFieldIntOp : UVMOp<"field_int", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register an integer field for UVM automation";
+  let description = [{
+    Registers an integer field for UVM automation. This enables automatic
+    field operations like copy, compare, pack, unpack, print, and record.
+
+    Example:
+    ```mlir
+    moore.uvm.field_int @addr, UVM_DEFAULT
+    moore.uvm.field_int @data, UVM_NOPRINT | UVM_NOCOPY
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3 "Field Macros".
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMFieldObjectOp : UVMOp<"field_object", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register an object field for UVM automation";
+  let description = [{
+    Registers an object (class handle) field for UVM automation.
+
+    Example:
+    ```mlir
+    moore.uvm.field_object @child, UVM_DEFAULT
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMFieldStringOp : UVMOp<"field_string", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register a string field for UVM automation";
+  let description = [{
+    Registers a string field for UVM automation.
+
+    Example:
+    ```mlir
+    moore.uvm.field_string @name, UVM_DEFAULT
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMFieldArrayIntOp : UVMOp<"field_array_int", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register an integer array field for UVM automation";
+  let description = [{
+    Registers an integer array field for UVM automation.
+
+    Example:
+    ```mlir
+    moore.uvm.field_array_int @data_array, UVM_DEFAULT
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMObjectCreateOp : UVMOp<"create_object", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Create an object via the UVM factory";
+  let description = [{
+    Creates an object using the UVM factory. This is equivalent to
+    factory.create_object_by_type() or type::type_id::create() in
+    SystemVerilog UVM code.
+
+    The factory lookup allows type overrides to substitute derived types
+    at runtime without changing the calling code.
+
+    Example:
+    ```mlir
+    %obj = moore.uvm.create_object "my_transaction" : !moore.class<@my_transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3 "Factory Methods".
+  }];
+
+  let arguments = (ins
+    StrAttr:$type_name,
+    OptionalAttr<StrAttr>:$inst_name,
+    Optional<ClassHandleType>:$parent
+  );
+  let results = (outs ClassHandleType:$result);
+  let assemblyFormat = [{
+    $type_name (`,` $inst_name^)? (`parent` $parent^ `:` type($parent))?
+    attr-dict `:` type($result)
+  }];
+}
+
+def UVMComponentCreateOp : UVMOp<"create_component", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Create a component via the UVM factory";
+  let description = [{
+    Creates a component using the UVM factory. This is equivalent to
+    factory.create_component_by_type() or type::type_id::create() in
+    SystemVerilog UVM code.
+
+    Components require a name and parent for the UVM hierarchy.
+
+    Example:
+    ```mlir
+    %comp = moore.uvm.create_component "my_driver", "drv0", %parent :
+      !moore.class<@my_driver>
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3 "Factory Methods".
+  }];
+
+  let arguments = (ins
+    StrAttr:$type_name,
+    StrAttr:$inst_name,
+    ClassHandleType:$parent
+  );
+  let results = (outs ClassHandleType:$result);
+  let assemblyFormat = [{
+    $type_name `,` $inst_name `,` $parent `:` type($parent) attr-dict `->` type($result)
+  }];
+}
+
+def UVMTypeOverrideOp : UVMOp<"type_override"> {
+  let summary = "Override a type in the UVM factory";
+  let description = [{
+    Registers a type override in the UVM factory. When the original type
+    is requested through create_object or create_component, the override
+    type will be created instead.
+
+    Example:
+    ```mlir
+    moore.uvm.type_override "base_driver", "extended_driver"
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3.2 "Type Overrides".
+  }];
+
+  let arguments = (ins
+    StrAttr:$original_type,
+    StrAttr:$override_type,
+    UnitAttr:$replace
+  );
+  let assemblyFormat = [{
+    $original_type `->` $override_type (`replace` $replace^)? attr-dict
+  }];
+}
+
+def UVMInstanceOverrideOp : UVMOp<"instance_override"> {
+  let summary = "Override a type for a specific instance path";
+  let description = [{
+    Registers an instance-specific type override in the UVM factory.
+    Only instances matching the given path will use the override type.
+
+    Example:
+    ```mlir
+    moore.uvm.instance_override "base_driver", "debug_driver", "env.agent.driver"
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3.2 "Instance Overrides".
+  }];
+
+  let arguments = (ins
+    StrAttr:$original_type,
+    StrAttr:$override_type,
+    StrAttr:$inst_path
+  );
+  let assemblyFormat = [{
+    $original_type `->` $override_type `at` $inst_path attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Phase Support
+//===----------------------------------------------------------------------===//
+
+// UVM phase enumeration
+def UVMBuildPhase: I32EnumAttrCase<"Build", 0, "build">;
+def UVMConnectPhase: I32EnumAttrCase<"Connect", 1, "connect">;
+def UVMEndOfElaborationPhase: I32EnumAttrCase<"EndOfElaboration", 2, "end_of_elaboration">;
+def UVMStartOfSimulationPhase: I32EnumAttrCase<"StartOfSimulation", 3, "start_of_simulation">;
+def UVMRunPhase: I32EnumAttrCase<"Run", 4, "run">;
+def UVMExtractPhase: I32EnumAttrCase<"Extract", 5, "extract">;
+def UVMCheckPhase: I32EnumAttrCase<"Check", 6, "check">;
+def UVMReportPhase: I32EnumAttrCase<"Report", 7, "report">;
+def UVMFinalPhase: I32EnumAttrCase<"Final", 8, "final">;
+// Run-time sub-phases
+def UVMPreResetPhase: I32EnumAttrCase<"PreReset", 9, "pre_reset">;
+def UVMResetPhase: I32EnumAttrCase<"Reset", 10, "reset">;
+def UVMPostResetPhase: I32EnumAttrCase<"PostReset", 11, "post_reset">;
+def UVMPreConfigurePhase: I32EnumAttrCase<"PreConfigure", 12, "pre_configure">;
+def UVMConfigurePhase: I32EnumAttrCase<"Configure", 13, "configure">;
+def UVMPostConfigurePhase: I32EnumAttrCase<"PostConfigure", 14, "post_configure">;
+def UVMPreMainPhase: I32EnumAttrCase<"PreMain", 15, "pre_main">;
+def UVMMainPhase: I32EnumAttrCase<"Main", 16, "main">;
+def UVMPostMainPhase: I32EnumAttrCase<"PostMain", 17, "post_main">;
+def UVMPreShutdownPhase: I32EnumAttrCase<"PreShutdown", 18, "pre_shutdown">;
+def UVMShutdownPhase: I32EnumAttrCase<"Shutdown", 19, "shutdown">;
+def UVMPostShutdownPhase: I32EnumAttrCase<"PostShutdown", 20, "post_shutdown">;
+
+def UVMPhaseAttr: I32EnumAttr<"UVMPhase", "UVM phase",
+            [UVMBuildPhase, UVMConnectPhase, UVMEndOfElaborationPhase,
+             UVMStartOfSimulationPhase, UVMRunPhase, UVMExtractPhase,
+             UVMCheckPhase, UVMReportPhase, UVMFinalPhase,
+             UVMPreResetPhase, UVMResetPhase, UVMPostResetPhase,
+             UVMPreConfigurePhase, UVMConfigurePhase, UVMPostConfigurePhase,
+             UVMPreMainPhase, UVMMainPhase, UVMPostMainPhase,
+             UVMPreShutdownPhase, UVMShutdownPhase, UVMPostShutdownPhase]>{
+  let cppNamespace = "circt::moore";
+}
+
+def UVMPhaseMethodOp : UVMOp<"phase_method", [
+  HasParent<"ClassDeclOp">,
+  NoTerminator,
+  SingleBlock
+]> {
+  let summary = "Declare a UVM phase method";
+  let description = [{
+    Declares a UVM phase method implementation within a component class.
+    Phase methods are called by the UVM phasing mechanism during simulation.
+
+    Example:
+    ```mlir
+    moore.uvm.phase_method build %phase {
+      // build_phase implementation
+    }
+    ```
+
+    See UVM 1.2 Reference Manual Chapter 9 "Phasing".
+  }];
+
+  let arguments = (ins
+    UVMPhaseAttr:$phase
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $phase attr-dict-with-keyword $body
+  }];
+}
+
+def UVMRaiseObjectionOp : UVMOp<"raise_objection"> {
+  let summary = "Raise an objection to phase advancement";
+  let description = [{
+    Raises an objection to prevent the current phase from ending.
+    The phase will not complete until all objections are dropped.
+
+    Example:
+    ```mlir
+    moore.uvm.raise_objection %phase
+    ```
+
+    See UVM 1.2 Reference Manual Section 9.3 "Objections".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$phase,
+    Optional<TwoValuedI32>:$count
+  );
+  let assemblyFormat = [{
+    $phase (`,` $count^)? `:` type($phase) attr-dict
+  }];
+}
+
+def UVMDropObjectionOp : UVMOp<"drop_objection"> {
+  let summary = "Drop an objection to phase advancement";
+  let description = [{
+    Drops a previously raised objection, potentially allowing the phase
+    to complete if all objections are dropped.
+
+    Example:
+    ```mlir
+    moore.uvm.drop_objection %phase
+    ```
+
+    See UVM 1.2 Reference Manual Section 9.3 "Objections".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$phase,
+    Optional<TwoValuedI32>:$count
+  );
+  let assemblyFormat = [{
+    $phase (`,` $count^)? `:` type($phase) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Configuration Database
+//===----------------------------------------------------------------------===//
+
+def UVMConfigDbSetOp : UVMOp<"config_db.set"> {
+  let summary = "Set a value in the UVM configuration database";
+  let description = [{
+    Sets a value in the UVM configuration database. The value can be
+    retrieved by components matching the instance path using config_db.get.
+
+    Example:
+    ```mlir
+    moore.uvm.config_db.set %null, "*.driver", "vif", %vif : !moore.virtual_interface<@my_if>
+    ```
+
+    See UVM 1.2 Reference Manual Section 7.3 "Configuration Database".
+  }];
+
+  let arguments = (ins
+    Optional<ClassHandleType>:$context,
+    StrAttr:$inst_name,
+    StrAttr:$field_name,
+    AnyType:$value
+  );
+  let assemblyFormat = [{
+    ($context^ `:` type($context) `,`)? $inst_name `,` $field_name `,`
+    $value `:` type($value) attr-dict
+  }];
+}
+
+def UVMConfigDbGetOp : UVMOp<"config_db.get"> {
+  let summary = "Get a value from the UVM configuration database";
+  let description = [{
+    Retrieves a value from the UVM configuration database. Returns true
+    if the value was found, false otherwise.
+
+    Example:
+    ```mlir
+    %found, %vif = moore.uvm.config_db.get %this, "", "vif" :
+      !moore.class<@my_component> -> !moore.virtual_interface<@my_if>
+    ```
+
+    See UVM 1.2 Reference Manual Section 7.3 "Configuration Database".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$context,
+    StrAttr:$inst_name,
+    StrAttr:$field_name
+  );
+  let results = (outs I1:$found, AnyType:$value);
+  let assemblyFormat = [{
+    $context `:` type($context) `,` $inst_name `,` $field_name attr-dict `->` type($value)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Sequence and TLM Support
+//===----------------------------------------------------------------------===//
+
+def UVMSequenceStartOp : UVMOp<"sequence.start"> {
+  let summary = "Start a sequence on a sequencer";
+  let description = [{
+    Starts a UVM sequence on a sequencer. This is equivalent to
+    sequence.start(sequencer) in SystemVerilog.
+
+    The operation is a blocking call that completes when the sequence
+    finishes executing.
+
+    Example:
+    ```mlir
+    moore.uvm.sequence.start %seq, %sqr : !moore.class<@my_sequence>,
+      !moore.class<@my_sequencer>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.4 "Sequence Execution".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$sequence,
+    ClassHandleType:$sequencer,
+    Optional<ClassHandleType>:$parent_sequence
+  );
+  let assemblyFormat = [{
+    $sequence `,` $sequencer (`,` `parent` $parent_sequence^ `:` type($parent_sequence))?
+    `:` type($sequence) `,` type($sequencer) attr-dict
+  }];
+}
+
+def UVMSequenceItemStartOp : UVMOp<"seq_item.start"> {
+  let summary = "Start item phase for a sequence item";
+  let description = [{
+    Begins the start_item phase of sequence item execution.
+    This requests arbitration from the sequencer.
+
+    Example:
+    ```mlir
+    moore.uvm.seq_item.start %item, %sqr : !moore.class<@my_item>,
+      !moore.class<@my_sequencer>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.5 "Sequence Items".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$item,
+    ClassHandleType:$sequencer
+  );
+  let assemblyFormat = [{
+    $item `,` $sequencer `:` type($item) `,` type($sequencer) attr-dict
+  }];
+}
+
+def UVMSequenceItemFinishOp : UVMOp<"seq_item.finish"> {
+  let summary = "Finish item phase for a sequence item";
+  let description = [{
+    Completes the finish_item phase of sequence item execution.
+    This sends the item to the driver and waits for the response.
+
+    Example:
+    ```mlir
+    moore.uvm.seq_item.finish %item, %sqr : !moore.class<@my_item>,
+      !moore.class<@my_sequencer>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.5 "Sequence Items".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$item,
+    ClassHandleType:$sequencer
+  );
+  let assemblyFormat = [{
+    $item `,` $sequencer `:` type($item) `,` type($sequencer) attr-dict
+  }];
+}
+
+def UVMGetResponseOp : UVMOp<"get_response"> {
+  let summary = "Get response from driver";
+  let description = [{
+    Retrieves a response item from the driver. This is used in
+    request-response protocols where the driver sends back a response
+    for each transaction.
+
+    Example:
+    ```mlir
+    %rsp = moore.uvm.get_response %sqr : !moore.class<@my_sequencer>
+      -> !moore.class<@my_response>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.6 "Response Handling".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$sequencer
+  );
+  let results = (outs ClassHandleType:$response);
+  let assemblyFormat = [{
+    $sequencer `:` type($sequencer) attr-dict `->` type($response)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM TLM Port Operations
+//===----------------------------------------------------------------------===//
+
+def UVMTLMPutOp : UVMOp<"tlm.put"> {
+  let summary = "Put a transaction on a TLM port";
+  let description = [{
+    Puts a transaction on a TLM port. This is a blocking operation
+    that waits for the target to accept the transaction.
+
+    Example:
+    ```mlir
+    moore.uvm.tlm.put %port, %txn : !moore.class<@port_type>,
+      !moore.class<@transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.2 "TLM Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$transaction
+  );
+  let assemblyFormat = [{
+    $port `,` $transaction `:` type($port) `,` type($transaction) attr-dict
+  }];
+}
+
+def UVMTLMGetOp : UVMOp<"tlm.get"> {
+  let summary = "Get a transaction from a TLM port";
+  let description = [{
+    Gets a transaction from a TLM port. This is a blocking operation
+    that waits for a transaction to be available.
+
+    Example:
+    ```mlir
+    %txn = moore.uvm.tlm.get %port : !moore.class<@port_type>
+      -> !moore.class<@transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.2 "TLM Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port
+  );
+  let results = (outs ClassHandleType:$transaction);
+  let assemblyFormat = [{
+    $port `:` type($port) attr-dict `->` type($transaction)
+  }];
+}
+
+def UVMTLMTryPutOp : UVMOp<"tlm.try_put"> {
+  let summary = "Try to put a transaction on a TLM port (non-blocking)";
+  let description = [{
+    Attempts to put a transaction on a TLM port without blocking.
+    Returns true if successful, false if the port cannot accept.
+
+    Example:
+    ```mlir
+    %ok = moore.uvm.tlm.try_put %port, %txn : !moore.class<@port_type>,
+      !moore.class<@transaction>
+    ```
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$transaction
+  );
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $port `,` $transaction `:` type($port) `,` type($transaction) attr-dict
+  }];
+}
+
+def UVMTLMTryGetOp : UVMOp<"tlm.try_get"> {
+  let summary = "Try to get a transaction from a TLM port (non-blocking)";
+  let description = [{
+    Attempts to get a transaction from a TLM port without blocking.
+    Returns true if successful, false if no transaction available.
+
+    Example:
+    ```mlir
+    %ok, %txn = moore.uvm.tlm.try_get %port : !moore.class<@port_type>
+      -> !moore.class<@transaction>
+    ```
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port
+  );
+  let results = (outs I1:$success, ClassHandleType:$transaction);
+  let assemblyFormat = [{
+    $port `:` type($port) attr-dict `->` type($transaction)
+  }];
+}
+
+def UVMTLMAnalysisWriteOp : UVMOp<"tlm.analysis_write"> {
+  let summary = "Write to an analysis port (broadcast)";
+  let description = [{
+    Writes a transaction to an analysis port, broadcasting it to all
+    connected subscribers. This is a non-blocking operation.
+
+    Example:
+    ```mlir
+    moore.uvm.tlm.analysis_write %port, %txn : !moore.class<@analysis_port>,
+      !moore.class<@transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.3 "Analysis Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$transaction
+  );
+  let assemblyFormat = [{
+    $port `,` $transaction `:` type($port) `,` type($transaction) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Reporting
+//===----------------------------------------------------------------------===//
+
+// UVM severity levels
+def UVMInfoSeverity: I32EnumAttrCase<"Info", 0, "info">;
+def UVMWarningSeverity: I32EnumAttrCase<"Warning", 1, "warning">;
+def UVMErrorSeverity: I32EnumAttrCase<"Error", 2, "error">;
+def UVMFatalSeverity: I32EnumAttrCase<"Fatal", 3, "fatal">;
+
+def UVMSeverityAttr: I32EnumAttr<"UVMSeverity", "UVM message severity",
+            [UVMInfoSeverity, UVMWarningSeverity, UVMErrorSeverity, UVMFatalSeverity]>{
+  let cppNamespace = "circt::moore";
+}
+
+def UVMReportOp : UVMOp<"report"> {
+  let summary = "Issue a UVM report message";
+  let description = [{
+    Issues a UVM report message with the specified severity, ID, and message.
+    This is equivalent to `uvm_info, `uvm_warning, `uvm_error, and `uvm_fatal.
+
+    Example:
+    ```mlir
+    moore.uvm.report info, "MY_ID", "Transaction completed" : !moore.string
+    ```
+
+    See UVM 1.2 Reference Manual Section 6.2 "Reporting".
+  }];
+
+  let arguments = (ins
+    UVMSeverityAttr:$severity,
+    StrAttr:$id,
+    StringType:$message,
+    I32Attr:$verbosity
+  );
+  let assemblyFormat = [{
+    $severity `,` $id `,` $message `:` type($message) `,` $verbosity attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//
 
