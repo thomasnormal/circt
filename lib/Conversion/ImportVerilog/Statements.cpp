@@ -56,7 +56,8 @@ struct StmtVisitor {
       return failure();
 
     Value initial = moore::ConstantOp::create(
-        builder, loc, cast<moore::IntType>(type), loopDim.range->lower());
+        builder, loc, cast<moore::IntType>(type), loopDim.range->lower(),
+        /*isSigned=*/loopDim.range->lower() < 0);
 
     // Create loop varirable in this dimension
     Value varOp = moore::VariableOp::create(
@@ -70,7 +71,8 @@ struct StmtVisitor {
 
     // When the loop variable is greater than the upper bound, goto exit
     auto upperBound = moore::ConstantOp::create(
-        builder, loc, cast<moore::IntType>(type), loopDim.range->upper());
+        builder, loc, cast<moore::IntType>(type), loopDim.range->upper(),
+        /*isSigned=*/loopDim.range->upper() < 0);
 
     auto var = moore::ReadOp::create(builder, loc, varOp);
     Value cond = moore::SleOp::create(builder, loc, var, upperBound);
