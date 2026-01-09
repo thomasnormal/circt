@@ -1,12 +1,17 @@
 include_directories(${CIRCT_MAIN_SRC_DIR})
 add_circt_unittest(CIRCTSimTests
+  DesignPartitionerTest.cpp
   EventQueueTest.cpp
-  ProcessSchedulerTest.cpp
   ForkJoinTest.cpp
-  SyncPrimitivesTest.cpp
-  UVMPhaseManagerTest.cpp
-  UVMFactoryTest.cpp
-  TLMPortsTest.cpp
+  IncrementalCompilerTest.cpp
+  MemoryOptimizationTest.cpp
+  ParallelSchedulerTest.cpp
+  PerformanceProfilerTest.cpp
+  ProcessSchedulerTest.cpp
   SimulationControlTest.cpp
+  SyncPrimitivesTest.cpp
+  TLMPortsTest.cpp
+  UVMFactoryTest.cpp
+  UVMPhaseManagerTest.cpp
 )
 target_link_libraries(CIRCTSimTests PRIVATE CIRCTSim)
