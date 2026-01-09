@@ -2418,22 +2418,38 @@ def AtanhBIOp : RealMathFunc<"atanh"> {
 // Classes
 //===----------------------------------------------------------------------===//
 
+// Randomization mode for class properties and struct fields
+def RandModeNone: I32EnumAttrCase<"None", 0, "none">;
+def RandModeRand: I32EnumAttrCase<"Rand", 1, "rand">;
+def RandModeRandC: I32EnumAttrCase<"RandC", 2, "randc">;
+
+def RandModeAttr: I32EnumAttr<"RandMode", "Randomization mode",
+            [RandModeNone, RandModeRand, RandModeRandC]>{
+  let cppNamespace = "circt::moore";
+}
+
 def ClassPropertyDeclOp
     : MooreOp<"class.propertydecl", [Symbol, HasParent<"ClassDeclOp">]> {
   let summary = "Declare a class property";
   let description = [{
-  Declares a property within a class declaration.
+  Declares a property within a class declaration. The optional `rand_mode`
+  attribute indicates whether this property participates in randomization:
+  - `none`: Not randomizable (default)
+  - `rand`: Standard random variable
+  - `randc`: Random-cyclic variable (cycles through all values before repeating)
   }];
 
-  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type);
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type,
+                       DefaultValuedAttr<RandModeAttr, "RandMode::None">:$rand_mode);
 
   let results = (outs);
   let assemblyFormat = [{
-     $sym_name `:` $type  attr-dict
+     $sym_name `:` $type (`rand_mode` $rand_mode^)? attr-dict
   }];
 
   let extraClassDeclaration = [{
     ::mlir::Type getPropertyType() { return getTypeAttr().getValue(); }
+    bool isRandomizable() { return getRandMode() != RandMode::None; }
   }];
 }
 
@@ -2466,6 +2482,61 @@ def ClassDeclOp
     attr-dict-with-keyword $body
   }];
   let hasVerifier = 1;
+}
+
+def ConstraintBlockOp
+    : MooreOp<"constraint.block", [Symbol, HasParent<"ClassDeclOp">,
+    NoTerminator, SingleBlock]> {
+  let summary = "Define a constraint block";
+  let description = [{
+    Represents a named constraint block within a class. Constraint blocks
+    define relationships between randomizable variables that must be satisfied
+    during randomization.
+
+    Example:
+    ```mlir
+    moore.constraint.block @valid_range {
+      // constraint expressions go here
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5 "Constraint blocks".
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       UnitAttr:$is_static,
+                       UnitAttr:$is_pure);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    (`static` $is_static^)? (`pure` $is_pure^)? $sym_name
+    attr-dict-with-keyword $body
+  }];
+}
+
+def RandomizeOp
+    : MooreOp<"randomize", []> {
+  let summary = "Randomize an object";
+  let description = [{
+    Invokes the randomize() method on a class object. This operation
+    assigns random values to all `rand` and `randc` properties while
+    satisfying all active constraints.
+
+    The result is a 1-bit value indicating success (1) or failure (0).
+
+    Example:
+    ```mlir
+    %success = moore.randomize %obj : !moore.class.object<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 18.6 "Randomization methods".
+  }];
+
+  let arguments = (ins ClassHandleType:$object);
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $object `:` type($object) attr-dict
+  }];
 }
 
 def ClassNewOp
