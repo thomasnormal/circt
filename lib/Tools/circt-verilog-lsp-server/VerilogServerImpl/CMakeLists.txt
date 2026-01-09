@@ -19,6 +19,7 @@ add_circt_library(CIRCTVerilogLspServerImpl
   MLIRIR
   MLIRLspServerSupportLib
   CIRCTVerilogLspServerUtils
+  CIRCTLinting
   PRIVATE
   slang_slang
 )

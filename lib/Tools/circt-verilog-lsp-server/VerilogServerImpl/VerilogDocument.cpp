@@ -57,11 +57,108 @@
 #include "LSPDiagnosticClient.h"
 #include "VerilogDocument.h"
 #include "VerilogServerContext.h"
+#include "circt/Analysis/Linting/LintConfig.h"
+#include "circt/Analysis/Linting/LintRules.h"
 #include "circt/Tools/circt-verilog-lsp-server/CirctVerilogLspServerMain.h"
 
 using namespace circt::lsp;
 using namespace llvm;
 using namespace llvm::lsp;
+
+namespace {
+
+/// Convert a lint severity to LSP DiagnosticSeverity.
+llvm::lsp::DiagnosticSeverity
+lintSeverityToLSP(circt::lint::LintSeverity severity) {
+  switch (severity) {
+  case circt::lint::LintSeverity::Error:
+    return llvm::lsp::DiagnosticSeverity::Error;
+  case circt::lint::LintSeverity::Warning:
+    return llvm::lsp::DiagnosticSeverity::Warning;
+  case circt::lint::LintSeverity::Hint:
+    return llvm::lsp::DiagnosticSeverity::Hint;
+  case circt::lint::LintSeverity::Ignore:
+    return llvm::lsp::DiagnosticSeverity::Information;
+  }
+  return llvm::lsp::DiagnosticSeverity::Warning;
+}
+
+/// Run lint checks on a compilation and add results to diagnostics.
+void runLintChecks(const slang::ast::Compilation &compilation,
+                   const VerilogDocument &doc, slang::BufferID mainBufferId,
+                   std::vector<llvm::lsp::Diagnostic> &diagnostics) {
+  // Create default lint configuration
+  auto lintConfig = circt::lint::LintConfig::createDefault();
+
+  // Create the lint runner
+  circt::lint::LintRunner runner(*lintConfig);
+
+  // Run all enabled lint rules
+  auto results = runner.run(compilation);
+
+  // Convert lint diagnostics to LSP diagnostics
+  const auto &sm = doc.getSlangSourceManager();
+  for (const auto &lintDiag : results.diagnostics) {
+    // Skip if the diagnostic is not in the main buffer
+    if (!lintDiag.location.valid() ||
+        lintDiag.location.buffer() != mainBufferId)
+      continue;
+
+    llvm::lsp::Diagnostic lspDiag;
+    lspDiag.message = lintDiag.message;
+    lspDiag.severity = lintSeverityToLSP(lintDiag.severity);
+    lspDiag.source = "circt-lint";
+
+    // Set the code if available
+    if (lintDiag.code)
+      lspDiag.code = *lintDiag.code;
+
+    // Convert location
+    int line = sm.getLineNumber(lintDiag.location) - 1;
+    int col = sm.getColumnNumber(lintDiag.location) - 1;
+
+    if (lintDiag.range) {
+      int endLine = sm.getLineNumber(lintDiag.range->end()) - 1;
+      int endCol = sm.getColumnNumber(lintDiag.range->end()) - 1;
+      lspDiag.range = llvm::lsp::Range(llvm::lsp::Position(line, col),
+                                        llvm::lsp::Position(endLine, endCol));
+    } else {
+      // Single character range
+      lspDiag.range = llvm::lsp::Range(llvm::lsp::Position(line, col),
+                                        llvm::lsp::Position(line, col + 1));
+    }
+
+    // Add related locations
+    for (const auto &[relatedLoc, relatedMsg] : lintDiag.relatedLocations) {
+      if (!relatedLoc.valid())
+        continue;
+
+      int relLine = sm.getLineNumber(relatedLoc) - 1;
+      int relCol = sm.getColumnNumber(relatedLoc) - 1;
+
+      llvm::lsp::DiagnosticRelatedInformation relatedInfo;
+      relatedInfo.message = relatedMsg;
+      relatedInfo.location.range =
+          llvm::lsp::Range(llvm::lsp::Position(relLine, relCol),
+                           llvm::lsp::Position(relLine, relCol + 1));
+
+      // Try to get the URI for the file
+      auto fileName = sm.getRawFileName(relatedLoc.buffer());
+      if (!fileName.empty()) {
+        llvm::SmallString<256> absPath(fileName);
+        llvm::sys::fs::make_absolute(absPath);
+        if (auto uri = llvm::lsp::URIForFile::fromFile(absPath))
+          relatedInfo.location.uri = *uri;
+      }
+
+      lspDiag.relatedInformation.push_back(std::move(relatedInfo));
+    }
+
+    diagnostics.push_back(std::move(lspDiag));
+  }
+}
+
+} // namespace
 
 static inline void setTopModules(slang::driver::Driver &driver) {
   // Parse the main buffer
@@ -198,6 +295,9 @@ VerilogDocument::VerilogDocument(
 
   for (auto &diag : (*compilation)->getAllDiagnostics())
     driver.diagEngine.issue(diag);
+
+  // Run lint checks and add any additional diagnostics
+  runLintChecks(**compilation, *this, mainBufferId, diagnostics);
 
   computeLineOffsets(driver.sourceManager.getSourceText(mainBufferId));
 
