@@ -5,6 +5,7 @@ add_circt_unittest(CIRCTSupportTests
   NPNClassTest.cpp
   PrettyPrinterTest.cpp
   ProjectConfigTest.cpp
+  TestReportingTest.cpp
 )
 
 target_link_libraries(CIRCTSupportTests
