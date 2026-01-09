@@ -20,6 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Support/CoverageDatabase.h"
+#include "circt/Support/CoverageReportGenerator.h"
 #include "circt/Support/Version.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
@@ -102,6 +103,26 @@ static cl::opt<bool> showTrends("show-trends",
                                 cl::desc("Include trend data in report"),
                                 cl::cat(mainCategory));
 
+static cl::opt<std::string>
+    sourceBasePath("source-path",
+                   cl::desc("Base path for resolving source file locations"),
+                   cl::value_desc("path"), cl::cat(mainCategory));
+
+static cl::opt<std::string>
+    reportTitle("title", cl::desc("Custom title for HTML report"),
+                cl::value_desc("title"), cl::init("CIRCT Coverage Report"),
+                cl::cat(mainCategory));
+
+static cl::opt<bool>
+    noSourceAnnotations("no-source-annotations",
+                        cl::desc("Disable source file annotations in HTML"),
+                        cl::cat(mainCategory));
+
+static cl::opt<bool>
+    incrementalMerge("incremental",
+                     cl::desc("Incremental merge (add to first file)"),
+                     cl::cat(mainCategory));
+
 //===----------------------------------------------------------------------===//
 // Helper Functions
 //===----------------------------------------------------------------------===//
@@ -166,6 +187,64 @@ static std::string progressBar(double percent, int width = 20) {
 //===----------------------------------------------------------------------===//
 
 static int runMerge() {
+  // For incremental merge, we only need 1 input file (the new coverage)
+  // and the output file should be an existing database to merge into.
+  if (incrementalMerge) {
+    if (inputFiles.empty()) {
+      llvm::errs() << "Error: incremental merge requires at least 1 input file\n";
+      return 1;
+    }
+
+    // Load existing database if output file exists
+    CoverageDatabase merged;
+    if (outputFile != "-" && llvm::sys::fs::exists(outputFile)) {
+      auto existingOrErr = loadDatabase(outputFile);
+      if (!existingOrErr) {
+        llvm::errs() << "Error loading existing database " << outputFile << ": "
+                     << llvm::toString(existingOrErr.takeError()) << "\n";
+        return 1;
+      }
+      merged = std::move(*existingOrErr);
+      if (verbose)
+        llvm::outs() << "Loaded existing database " << outputFile << " with "
+                     << merged.getTotalPointCount() << " coverage points\n";
+    }
+
+    // Merge all input files
+    for (size_t i = 0; i < inputFiles.size(); ++i) {
+      auto otherOrErr = loadDatabase(inputFiles[i]);
+      if (!otherOrErr) {
+        llvm::errs() << "Error loading " << inputFiles[i] << ": "
+                     << llvm::toString(otherOrErr.takeError()) << "\n";
+        return 1;
+      }
+
+      if (verbose)
+        llvm::outs() << "Merging " << inputFiles[i] << " with "
+                     << otherOrErr->getTotalPointCount() << " coverage points\n";
+
+      merged.merge(*otherOrErr);
+    }
+
+    // Save the merged database
+    if (auto err = saveDatabase(merged, outputFile, format)) {
+      llvm::errs() << "Error writing output: " << llvm::toString(std::move(err))
+                   << "\n";
+      return 1;
+    }
+
+    llvm::outs() << "Incrementally merged " << inputFiles.size()
+                 << " database(s) into " << outputFile << "\n";
+    llvm::outs() << "Total coverage points: " << merged.getTotalPointCount()
+                 << "\n";
+    llvm::outs() << "Overall coverage: ";
+    printCoveragePercent(llvm::outs(), merged.getOverallCoverage());
+    llvm::outs() << "\n";
+
+    return 0;
+  }
+
+  // Standard merge requires at least 2 input files
   if (inputFiles.size() < 2) {
     llvm::errs() << "Error: merge command requires at least 2 input files\n";
     return 1;
@@ -351,357 +430,6 @@ static void generateTextReport(const CoverageDatabase &db,
 }
 
 //===----------------------------------------------------------------------===//
-// Report Command - HTML Format
-//===----------------------------------------------------------------------===//
-
-static void generateHTMLReport(const CoverageDatabase &db,
-                               llvm::raw_ostream &os) {
-  // HTML header and styles
-  os << R"(<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CIRCT Coverage Report</title>
-  <style>
-    :root {
-      --bg-color: #f5f5f5;
-      --card-bg: white;
-      --text-color: #333;
-      --border-color: #ddd;
-      --green: #28a745;
-      --yellow: #ffc107;
-      --red: #dc3545;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-      background: var(--bg-color);
-      color: var(--text-color);
-      margin: 0;
-      padding: 20px;
-    }
-    .container { max-width: 1200px; margin: 0 auto; }
-    .card {
-      background: var(--card-bg);
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      margin-bottom: 20px;
-      padding: 20px;
-    }
-    .card h2 {
-      margin-top: 0;
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--border-color);
-    }
-    .summary-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 20px;
-    }
-    .metric {
-      text-align: center;
-      padding: 20px;
-    }
-    .metric-value {
-      font-size: 36px;
-      font-weight: bold;
-    }
-    .metric-label { color: #666; margin-top: 5px; }
-    .progress-bar {
-      height: 24px;
-      background: #e9ecef;
-      border-radius: 4px;
-      overflow: hidden;
-      margin: 10px 0;
-    }
-    .progress-fill {
-      height: 100%;
-      transition: width 0.3s ease;
-    }
-    .green { background: var(--green); color: white; }
-    .yellow { background: var(--yellow); color: black; }
-    .red { background: var(--red); color: white; }
-    .coverage-row {
-      display: flex;
-      align-items: center;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--border-color);
-    }
-    .coverage-row:last-child { border-bottom: none; }
-    .coverage-name { flex: 1; }
-    .coverage-percent { width: 80px; text-align: right; font-weight: bold; }
-    .coverage-bar { width: 200px; margin-left: 20px; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    th, td {
-      text-align: left;
-      padding: 12px;
-      border-bottom: 1px solid var(--border-color);
-    }
-    th { background: #f8f9fa; font-weight: 600; }
-    .uncovered { background: #fff3cd; }
-    .covered { background: #d4edda; }
-    .excluded { background: #e2e3e5; }
-    .collapsible {
-      cursor: pointer;
-      user-select: none;
-    }
-    .collapsible:before {
-      content: '\25B6';
-      display: inline-block;
-      margin-right: 8px;
-      transition: transform 0.2s;
-    }
-    .collapsible.active:before { transform: rotate(90deg); }
-    .content { display: none; padding-left: 20px; }
-    .content.show { display: block; }
-    .trend-chart {
-      height: 200px;
-      display: flex;
-      align-items: flex-end;
-      gap: 4px;
-      padding: 20px 0;
-    }
-    .trend-bar {
-      flex: 1;
-      background: var(--green);
-      min-height: 10px;
-      border-radius: 4px 4px 0 0;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>CIRCT Coverage Report</h1>
-)";
-
-  // Helper to get color class
-  auto getColorClass = [](double percent) -> const char * {
-    if (percent >= 90.0)
-      return "green";
-    if (percent >= 70.0)
-      return "yellow";
-    return "red";
-  };
-
-  // Summary card
-  double overall = db.getOverallCoverage();
-  os << R"(
-    <div class="card">
-      <h2>Summary</h2>
-      <div class="summary-grid">
-        <div class="metric">
-          <div class="metric-value )" << getColorClass(overall) << R"(">)"
-     << llvm::format("%.1f%%", overall) << R"(</div>
-          <div class="metric-label">Overall Coverage</div>
-        </div>
-        <div class="metric">
-          <div class="metric-value">)" << db.getTotalPointCount() << R"(</div>
-          <div class="metric-label">Total Points</div>
-        </div>
-        <div class="metric">
-          <div class="metric-value">)" << db.getCoveredPointCount() << R"(</div>
-          <div class="metric-label">Covered Points</div>
-        </div>
-        <div class="metric">
-          <div class="metric-value">)" << db.getExclusions().size() << R"(</div>
-          <div class="metric-label">Exclusions</div>
-        </div>
-      </div>
-    </div>
-)";
-
-  // Coverage by type
-  os << R"(
-    <div class="card">
-      <h2>Coverage by Type</h2>
-)";
-
-  auto printTypeRow = [&](CoverageType type, const char *name) {
-    size_t total = db.getTotalPointCountByType(type);
-    if (total > 0) {
-      double percent = db.getCoverageByType(type);
-      size_t covered = db.getCoveredPointCountByType(type);
-      os << R"(      <div class="coverage-row">
-        <div class="coverage-name">)" << name << R"( <small>()"
-         << covered << "/" << total << R"()</small></div>
-        <div class="coverage-percent )" << getColorClass(percent) << R"(">)"
-         << llvm::format("%.1f%%", percent) << R"(</div>
-        <div class="coverage-bar">
-          <div class="progress-bar">
-            <div class="progress-fill )" << getColorClass(percent)
-         << R"(" style="width: )" << percent << R"(%"></div>
-          </div>
-        </div>
-      </div>
-)";
-    }
-  };
-
-  printTypeRow(CoverageType::Line, "Line Coverage");
-  printTypeRow(CoverageType::Toggle, "Toggle Coverage");
-  printTypeRow(CoverageType::Branch, "Branch Coverage");
-  printTypeRow(CoverageType::Condition, "Condition Coverage");
-  printTypeRow(CoverageType::FSM, "FSM Coverage");
-  printTypeRow(CoverageType::Assertion, "Assertion Coverage");
-  printTypeRow(CoverageType::Coverpoint, "Coverpoint Coverage");
-
-  os << "    </div>\n";
-
-  // Coverage groups
-  const auto &groups = db.getCoverageGroups();
-  if (!groups.empty()) {
-    os << R"(
-    <div class="card">
-      <h2>Coverage Groups</h2>
-)";
-    for (const auto &kv : groups) {
-      const auto &group = kv.second;
-      double percent = group.getCoveragePercent(db.getCoveragePoints());
-      os << R"(      <div class="coverage-row">
-        <div class="coverage-name">)" << group.name;
-      if (!group.description.empty())
-        os << R"( <small>)" << group.description << "</small>";
-      os << R"(</div>
-        <div class="coverage-percent )" << getColorClass(percent) << R"(">)"
-         << llvm::format("%.1f%%", percent) << R"(</div>
-        <div class="coverage-bar">
-          <div class="progress-bar">
-            <div class="progress-fill )" << getColorClass(percent)
-         << R"(" style="width: )" << percent << R"(%"></div>
-          </div>
-        </div>
-      </div>
-)";
-    }
-    os << "    </div>\n";
-  }
-
-  // Uncovered points
-  os << R"(
-    <div class="card">
-      <h2>Coverage Details</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Location</th>
-            <th>Hierarchy</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-)";
-
-  for (const auto &kv : db.getCoveragePoints()) {
-    const auto &point = kv.second;
-    if (!hierarchyFilter.empty() &&
-        !llvm::StringRef(point.hierarchy).starts_with(hierarchyFilter))
-      continue;
-    if (uncoveredOnly && (point.isCovered() || db.isExcluded(point.name)))
-      continue;
-
-    const char *rowClass = "uncovered";
-    const char *status = "Uncovered";
-    if (db.isExcluded(point.name)) {
-      rowClass = "excluded";
-      status = "Excluded";
-    } else if (point.isCovered()) {
-      rowClass = "covered";
-      status = "Covered";
-    }
-
-    os << R"(          <tr class=")" << rowClass << R"(">
-            <td>)" << point.name << R"(</td>
-            <td>)" << getCoverageTypeName(point.type) << R"(</td>
-            <td>)";
-    if (!point.location.filename.empty()) {
-      os << point.location.filename << ":" << point.location.line;
-    }
-    os << R"(</td>
-            <td>)" << point.hierarchy << R"(</td>
-            <td>)" << status << R"(</td>
-          </tr>
-)";
-  }
-
-  os << R"(        </tbody>
-      </table>
-    </div>
-)";
-
-  // Trend chart
-  const auto &trends = db.getTrends();
-  if (!trends.empty()) {
-    os << R"(
-    <div class="card">
-      <h2>Coverage Trends</h2>
-      <div class="trend-chart">
-)";
-    for (const auto &trend : trends) {
-      os << R"(        <div class="trend-bar" style="height: )"
-         << trend.overallCoverage << R"(%" title=")"
-         << trend.timestamp << ": " << llvm::format("%.1f%%", trend.overallCoverage)
-         << R"("></div>
-)";
-    }
-    os << R"(      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Timestamp</th>
-            <th>Run ID</th>
-            <th>Line</th>
-            <th>Toggle</th>
-            <th>Branch</th>
-            <th>Overall</th>
-          </tr>
-        </thead>
-        <tbody>
-)";
-    for (const auto &trend : trends) {
-      os << R"(          <tr>
-            <td>)" << trend.timestamp << R"(</td>
-            <td>)" << trend.runId << R"(</td>
-            <td>)" << llvm::format("%.1f%%", trend.lineCoverage) << R"(</td>
-            <td>)" << llvm::format("%.1f%%", trend.toggleCoverage) << R"(</td>
-            <td>)" << llvm::format("%.1f%%", trend.branchCoverage) << R"(</td>
-            <td class=")" << getColorClass(trend.overallCoverage) << R"(">)"
-         << llvm::format("%.1f%%", trend.overallCoverage) << R"(</td>
-          </tr>
-)";
-    }
-    os << R"(        </tbody>
-      </table>
-    </div>
-)";
-  }
-
-  // Footer
-  os << R"(
-    <div class="card" style="text-align: center; color: #666;">
-      Generated by circt-cov ()" << getCirctVersion() << R"()
-    </div>
-  </div>
-  <script>
-    // Collapsible sections
-    document.querySelectorAll('.collapsible').forEach(function(element) {
-      element.addEventListener('click', function() {
-        this.classList.toggle('active');
-        var content = this.nextElementSibling;
-        content.classList.toggle('show');
-      });
-    });
-  </script>
-</body>
-</html>
-)";
-}
-
-//===----------------------------------------------------------------------===//
 // Report Command
 //===----------------------------------------------------------------------===//
 
@@ -739,7 +467,21 @@ static int runReport() {
   llvm::raw_ostream &os = (outputFile == "-") ? llvm::outs() : fileOs;
 
   if (format == "html") {
-    generateHTMLReport(db, os);
+    // Use the enhanced HTML report generator
+    HTMLReportOptions htmlOptions;
+    htmlOptions.title = reportTitle;
+    htmlOptions.includeSourceAnnotations = !noSourceAnnotations;
+    htmlOptions.includeTrends = showTrends || !db.getTrends().empty();
+    htmlOptions.uncoveredOnly = uncoveredOnly;
+    htmlOptions.hierarchyFilter = hierarchyFilter;
+    htmlOptions.sourceBasePath = sourceBasePath;
+
+    CoverageReportGenerator generator(db, htmlOptions);
+    if (auto err = generator.generateReport(os)) {
+      llvm::errs() << "Error generating HTML report: "
+                   << llvm::toString(std::move(err)) << "\n";
+      return 1;
+    }
   } else if (format == "json") {
     os << db.toJSON();
   } else {
