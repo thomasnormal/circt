@@ -19,7 +19,7 @@ using namespace mlir;
 // ToggleCoverageOp
 //===----------------------------------------------------------------------===//
 
-unsigned ToggleCoverageOp::getSignalWidth() const {
+unsigned ToggleCoverageOp::getSignalWidth() {
   Type signalType = getSignal().getType();
   if (auto intType = dyn_cast<IntegerType>(signalType))
     return intType.getWidth();
