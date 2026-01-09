@@ -199,4 +199,86 @@ func.func @test_randomize() {
     return
   }
 
+//===----------------------------------------------------------------------===//
+// Interface and Virtual Interface Tests
+//===----------------------------------------------------------------------===//
+
+// Test basic interface declaration with signals
+// CHECK-LABEL: moore.interface @my_bus {
+// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @data : !moore.l32
+// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @ready : !moore.l1
+// CHECK:       }
+moore.interface @my_bus {
+  moore.interface.signal @clk : !moore.l1
+  moore.interface.signal @data : !moore.l32
+  moore.interface.signal @valid : !moore.l1
+  moore.interface.signal @ready : !moore.l1
+}
+
+// Test interface with modports
+// CHECK-LABEL: moore.interface @handshake_if {
+// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @data : !moore.l8
+// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @ready : !moore.l1
+// CHECK-NEXT:    moore.interface.modport @driver (output @clk, output @data, output @valid, input @ready)
+// CHECK-NEXT:    moore.interface.modport @monitor (input @clk, input @data, input @valid, input @ready)
+// CHECK:       }
+moore.interface @handshake_if {
+  moore.interface.signal @clk : !moore.l1
+  moore.interface.signal @data : !moore.l8
+  moore.interface.signal @valid : !moore.l1
+  moore.interface.signal @ready : !moore.l1
+  moore.interface.modport @driver (output @clk, output @data, output @valid, input @ready)
+  moore.interface.modport @monitor (input @clk, input @data, input @valid, input @ready)
+}
+
+// Test interface instance and virtual interface type
+// CHECK-LABEL: moore.module @test_interface_instance
+// CHECK:         %[[INST:.*]] = moore.interface.instance @handshake_if : !moore.ref<!moore.virtual_interface<@handshake_if>>
+moore.module @test_interface_instance() {
+  %bus = moore.interface.instance @handshake_if : !moore.ref<!moore.virtual_interface<@handshake_if>>
+  moore.output
+}
+
+// Test virtual interface get modport
+// CHECK-LABEL: func.func @test_vif_modport
+// CHECK-SAME:    (%[[VIF:.*]]: !moore.virtual_interface<@handshake_if>)
+// CHECK:         %[[DRIVER:.*]] = moore.virtual_interface.get %[[VIF]] @driver : !moore.virtual_interface<@handshake_if> -> !moore.virtual_interface<@handshake_if::@driver>
+func.func @test_vif_modport(%vif: !moore.virtual_interface<@handshake_if>) {
+  %driver = moore.virtual_interface.get %vif @driver : !moore.virtual_interface<@handshake_if> -> !moore.virtual_interface<@handshake_if::@driver>
+  return
+}
+
+// Test virtual interface signal reference
+// CHECK-LABEL: func.func @test_vif_signal_ref
+// CHECK-SAME:    (%[[VIF:.*]]: !moore.virtual_interface<@handshake_if>)
+// CHECK:         %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[VIF]][@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<!moore.l8>
+// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : <l8>
+func.func @test_vif_signal_ref(%vif: !moore.virtual_interface<@handshake_if>) {
+  %data_ref = moore.virtual_interface.signal_ref %vif[@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<!moore.l8>
+  %data = moore.read %data_ref : <l8>
+  return
+}
+
+// Test virtual interface in class property (UVM driver pattern)
+// CHECK-LABEL: moore.class.classdecl @MyDriver {
+// CHECK-NEXT:    moore.class.propertydecl @vif : !moore.virtual_interface<@handshake_if::@driver>
+// CHECK:       }
+moore.class.classdecl @MyDriver {
+  moore.class.propertydecl @vif : !moore.virtual_interface<@handshake_if::@driver>
+}
+
+// Test interface with inout and ref modport directions
+// CHECK-LABEL: moore.interface @bidir_if {
+// CHECK-NEXT:    moore.interface.signal @bidir : !moore.l16
+// CHECK-NEXT:    moore.interface.modport @port (inout @bidir)
+// CHECK:       }
+moore.interface @bidir_if {
+  moore.interface.signal @bidir : !moore.l16
+  moore.interface.modport @port (inout @bidir)
+}
+
 }

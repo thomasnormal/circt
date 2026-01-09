@@ -581,4 +581,69 @@ def AnyUnionRefType : SpecificRefType<AnyUnionType>;
 
 /// Class references.
 def ClassHandleRefType : SpecificRefType<ClassHandleType>;
+
+//===----------------------------------------------------------------------===//
+// Virtual Interface Type
+//===----------------------------------------------------------------------===//
+
+def VirtualInterfaceType : MooreTypeDef<"VirtualInterface", [],
+    "moore::UnpackedType"> {
+  let mnemonic = "virtual_interface";
+  let summary = "a virtual interface type";
+  let description = [{
+    The `!moore.virtual_interface<@I>` type represents a virtual interface
+    variable that can hold a reference to an interface instance. Virtual
+    interfaces are essential for UVM testbenches as they allow dynamic binding
+    of interface instances to verification components.
+
+    Unlike regular interface instances which are static, virtual interfaces
+    can be assigned at runtime and passed as arguments to classes and tasks.
+
+    Example:
+    ```mlir
+    // A virtual interface pointing to interface @my_bus
+    !moore.virtual_interface<@my_bus>
+
+    // A virtual interface with modport selection
+    !moore.virtual_interface<@my_bus::@driver>
+    ```
+
+    See IEEE 1800-2017 Section 25.9 "Virtual interfaces".
+  }];
+  let parameters = (ins
+    "::mlir::SymbolRefAttr":$interface
+  );
+  let assemblyFormat = "`<` $interface `>`";
+
+  let extraClassDeclaration = [{
+    /// Get the interface symbol reference without modport.
+    mlir::FlatSymbolRefAttr getInterfaceRef() const {
+      if (auto nested = llvm::dyn_cast<mlir::SymbolRefAttr>(getInterface()))
+        return mlir::FlatSymbolRefAttr::get(
+          getContext(), nested.getRootReference());
+      return mlir::FlatSymbolRefAttr::get(getInterface());
+    }
+
+    /// Check if this virtual interface has a modport selection.
+    bool hasModport() const {
+      if (auto nested = llvm::dyn_cast<mlir::SymbolRefAttr>(getInterface()))
+        return !nested.getNestedReferences().empty();
+      return false;
+    }
+
+    /// Get the modport name if present, empty string otherwise.
+    mlir::StringRef getModportName() const {
+      if (auto nested = llvm::dyn_cast<mlir::SymbolRefAttr>(getInterface())) {
+        auto refs = nested.getNestedReferences();
+        if (!refs.empty())
+          return refs.back().getValue();
+      }
+      return "";
+    }
+  }];
+}
+
+/// Virtual interface references.
+def VirtualInterfaceRefType : SpecificRefType<VirtualInterfaceType>;
+
 #endif // CIRCT_DIALECT_MOORE_MOORETYPES

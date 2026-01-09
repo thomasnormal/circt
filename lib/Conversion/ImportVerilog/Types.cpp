@@ -186,6 +186,28 @@ struct TypeVisitor {
     return moore::IntType::getInt(context.getContext(), 1);
   }
 
+  Type visit(const slang::ast::VirtualInterfaceType &type) {
+    // Get the interface name from the instance
+    auto &iface = type.iface;
+    auto ifaceName = iface.body.getDefinition().name;
+
+    // Build the symbol reference
+    mlir::SymbolRefAttr symRef;
+    if (type.modport) {
+      // Virtual interface with modport: @interface::@modport
+      symRef = mlir::SymbolRefAttr::get(
+          context.getContext(),
+          ifaceName,
+          {mlir::FlatSymbolRefAttr::get(context.getContext(),
+                                        type.modport->name)});
+    } else {
+      // Virtual interface without modport: @interface
+      symRef = mlir::FlatSymbolRefAttr::get(context.getContext(), ifaceName);
+    }
+
+    return moore::VirtualInterfaceType::get(context.getContext(), symRef);
+  }
+
   /// Emit an error for all other types.
   template <typename T>
   Type visit(T &&node) {
