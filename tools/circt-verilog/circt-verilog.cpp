@@ -24,6 +24,7 @@
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Sim/SimDialect.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
+#include "circt/Support/Diagnostics.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/Version.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -256,6 +257,21 @@ struct CLOptions {
       cl::desc("One or more paths in which to suppress warnings"),
       cl::value_desc("filename"), cl::cat(cat)};
 
+  cl::opt<std::string> diagnosticFormat{
+      "diagnostic-format",
+      cl::desc("Output format for diagnostics (terminal, plain, json, sarif)"),
+      cl::value_desc("format"), cl::init("terminal"), cl::cat(cat)};
+
+  cl::opt<bool> noColor{
+      "no-color",
+      cl::desc("Disable colored output in diagnostics"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<std::string> diagnosticOutput{
+      "diagnostic-output",
+      cl::desc("Output file for diagnostics (default: stderr)"),
+      cl::value_desc("filename"), cl::init(""), cl::cat(cat)};
+
   //===--------------------------------------------------------------------===//
   // File lists
   //===--------------------------------------------------------------------===//
@@ -477,6 +493,51 @@ static LogicalResult execute(MLIRContext *context) {
     (void)executeWithSources(context, sourceMgr);
     return handler.verify();
   }
+
+  // Check if the user requested a specific diagnostic format.
+  auto diagFormat = parseDiagnosticOutputFormat(opts.diagnosticFormat);
+  if (!diagFormat) {
+    WithColor::error() << "invalid diagnostic format: " << opts.diagnosticFormat
+                       << "\n";
+    return failure();
+  }
+
+  // Use rich diagnostic output if a specific format was requested.
+  if (*diagFormat != DiagnosticOutputFormat::Terminal || opts.noColor ||
+      !opts.diagnosticOutput.empty()) {
+    // Open diagnostic output file if specified.
+    std::unique_ptr<llvm::ToolOutputFile> diagFile;
+    llvm::raw_ostream *diagOS = &llvm::errs();
+    if (!opts.diagnosticOutput.empty()) {
+      std::string errorMessage;
+      diagFile = openOutputFile(opts.diagnosticOutput, &errorMessage);
+      if (!diagFile) {
+        WithColor::error() << errorMessage << "\n";
+        return failure();
+      }
+      diagOS = &diagFile->os();
+    }
+
+    // Create the diagnostic printer.
+    DiagnosticPrinter printer(*diagOS, *diagFormat, &sourceMgr);
+    printer.setUseColors(!opts.noColor);
+
+    // Create the rich diagnostic handler.
+    RichDiagnosticHandler handler(context, printer);
+
+    auto result = executeWithSources(context, sourceMgr);
+
+    // Flush the diagnostic output.
+    printer.flush();
+
+    // Keep the diagnostic output file if we created one.
+    if (diagFile)
+      diagFile->keep();
+
+    return result;
+  }
+
+  // Fall back to the standard MLIR diagnostic handler.
   SourceMgrDiagnosticHandler handler(sourceMgr, context);
   return executeWithSources(context, sourceMgr);
 }
