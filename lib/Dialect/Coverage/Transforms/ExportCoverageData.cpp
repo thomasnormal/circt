@@ -12,6 +12,7 @@
 
 #include "circt/Dialect/Coverage/CoverageOps.h"
 #include "circt/Dialect/Coverage/CoveragePasses.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/JSON.h"
@@ -41,12 +42,12 @@ struct ExportCoverageDataPass
     std::vector<ToggleCoverageOp> toggleCoverageOps;
     std::vector<BranchCoverageOp> branchCoverageOps;
 
-    moduleOp.walk([&](Operation *op) {
-      if (auto lineOp = dyn_cast<LineCoverageOp>(op))
+    moduleOp.walk([&](mlir::Operation *op) {
+      if (auto lineOp = llvm::dyn_cast<LineCoverageOp>(op))
         lineCoverageOps.push_back(lineOp);
-      else if (auto toggleOp = dyn_cast<ToggleCoverageOp>(op))
+      else if (auto toggleOp = llvm::dyn_cast<ToggleCoverageOp>(op))
         toggleCoverageOps.push_back(toggleOp);
-      else if (auto branchOp = dyn_cast<BranchCoverageOp>(op))
+      else if (auto branchOp = llvm::dyn_cast<BranchCoverageOp>(op))
         branchCoverageOps.push_back(branchOp);
     });
 
@@ -57,9 +58,9 @@ struct ExportCoverageDataPass
     }
   }
 
-  void exportJSON(const std::vector<LineCoverageOp> &lineCoverageOps,
-                  const std::vector<ToggleCoverageOp> &toggleCoverageOps,
-                  const std::vector<BranchCoverageOp> &branchCoverageOps) {
+  void exportJSON(std::vector<LineCoverageOp> &lineCoverageOps,
+                  std::vector<ToggleCoverageOp> &toggleCoverageOps,
+                  std::vector<BranchCoverageOp> &branchCoverageOps) {
     llvm::json::Object root;
 
     // Export line coverage points
@@ -130,9 +131,9 @@ struct ExportCoverageDataPass
     os << llvm::json::Value(std::move(root));
   }
 
-  void exportBinary(const std::vector<LineCoverageOp> &lineCoverageOps,
-                    const std::vector<ToggleCoverageOp> &toggleCoverageOps,
-                    const std::vector<BranchCoverageOp> &branchCoverageOps) {
+  void exportBinary(std::vector<LineCoverageOp> &lineCoverageOps,
+                    std::vector<ToggleCoverageOp> &toggleCoverageOps,
+                    std::vector<BranchCoverageOp> &branchCoverageOps) {
     // Binary format:
     // Header:
     //   4 bytes: magic "CCOV"
@@ -164,7 +165,7 @@ struct ExportCoverageDataPass
     os.write(reinterpret_cast<const char *>(&numBranch), sizeof(numBranch));
 
     // Write line coverage data
-    for (const auto &op : lineCoverageOps) {
+    for (auto &op : lineCoverageOps) {
       uint32_t line = op.getLine();
       os.write(reinterpret_cast<const char *>(&line), sizeof(line));
       auto filename = op.getFilename();
@@ -175,7 +176,7 @@ struct ExportCoverageDataPass
     }
 
     // Write toggle coverage data
-    for (const auto &op : toggleCoverageOps) {
+    for (auto &op : toggleCoverageOps) {
       uint32_t width = op.getSignalWidth();
       os.write(reinterpret_cast<const char *>(&width), sizeof(width));
       auto name = op.getName();
@@ -185,7 +186,7 @@ struct ExportCoverageDataPass
     }
 
     // Write branch coverage data
-    for (const auto &op : branchCoverageOps) {
+    for (auto &op : branchCoverageOps) {
       uint32_t trueId = op.getTrueId();
       uint32_t falseId = op.getFalseId();
       os.write(reinterpret_cast<const char *>(&trueId), sizeof(trueId));
