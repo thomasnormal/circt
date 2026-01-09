@@ -1,0 +1,234 @@
+{
+  "name": "circt-verilog",
+  "displayName": "CIRCT Verilog",
+  "description": "Verilog/SystemVerilog language support powered by CIRCT",
+  "version": "0.1.0",
+  "publisher": "llvm",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/llvm/circt"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "verilog",
+    "systemverilog",
+    "hdl",
+    "rtl",
+    "fpga",
+    "asic"
+  ],
+  "activationEvents": [
+    "onLanguage:verilog",
+    "onLanguage:systemverilog"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "verilog",
+        "aliases": ["Verilog", "verilog"],
+        "extensions": [".v", ".vh"],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "systemverilog",
+        "aliases": ["SystemVerilog", "systemverilog", "SV"],
+        "extensions": [".sv", ".svh"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "verilog",
+        "scopeName": "source.verilog",
+        "path": "./syntaxes/verilog.tmLanguage.json"
+      },
+      {
+        "language": "systemverilog",
+        "scopeName": "source.systemverilog",
+        "path": "./syntaxes/systemverilog.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "CIRCT Verilog",
+      "properties": {
+        "circtVerilog.server.path": {
+          "type": "string",
+          "default": "circt-verilog-lsp-server",
+          "description": "Path to the circt-verilog-lsp-server executable"
+        },
+        "circtVerilog.server.arguments": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional arguments to pass to the language server"
+        },
+        "circtVerilog.server.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the language server"
+        },
+        "circtVerilog.server.trace": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace communication with the language server"
+        },
+        "circtVerilog.lint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable linting"
+        },
+        "circtVerilog.lint.configFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to lint configuration file"
+        },
+        "circtVerilog.project.configFile": {
+          "type": "string",
+          "default": "circt-project.yaml",
+          "description": "Project configuration file name"
+        },
+        "circtVerilog.includeDirs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional include directories"
+        },
+        "circtVerilog.defines": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Preprocessor defines (e.g., SYNTHESIS, DEBUG=1)"
+        },
+        "circtVerilog.libraryDirs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Library directories for module resolution"
+        },
+        "circtVerilog.semanticHighlighting.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic highlighting"
+        },
+        "circtVerilog.inlayHints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inlay hints"
+        },
+        "circtVerilog.inlayHints.parameterValues": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show parameter values at instantiation sites"
+        },
+        "circtVerilog.inlayHints.signalWidths": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inferred signal widths"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "circtVerilog.restartServer",
+        "title": "CIRCT Verilog: Restart Language Server"
+      },
+      {
+        "command": "circtVerilog.showOutput",
+        "title": "CIRCT Verilog: Show Output"
+      },
+      {
+        "command": "circtVerilog.generateProjectConfig",
+        "title": "CIRCT Verilog: Generate Project Configuration"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "circtVerilog.restartServer",
+          "when": "editorLangId == verilog || editorLangId == systemverilog"
+        },
+        {
+          "command": "circtVerilog.generateProjectConfig"
+        }
+      ]
+    },
+    "problemMatchers": [
+      {
+        "name": "circt-verilog",
+        "owner": "circt-verilog",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.+):(\\d+):(\\d+): (error|warning|note): (.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "circt-lint",
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "The lint target to run"
+          },
+          "configFile": {
+            "type": "string",
+            "description": "Path to lint configuration file"
+          }
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "systemverilog",
+        "path": "./snippets/systemverilog.json"
+      },
+      {
+        "language": "verilog",
+        "path": "./snippets/verilog.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.50.0",
+    "typescript": "^5.3.0"
+  }
+}
