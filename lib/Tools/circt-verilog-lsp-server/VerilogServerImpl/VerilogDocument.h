@@ -86,6 +86,15 @@ public:
   void getDocumentSymbols(const llvm::lsp::URIForFile &uri,
                           std::vector<llvm::lsp::DocumentSymbol> &symbols);
 
+  //===--------------------------------------------------------------------===//
+  // Auto-Completion
+  //===--------------------------------------------------------------------===//
+
+  /// Return completion items for the given position.
+  void getCompletions(const llvm::lsp::URIForFile &uri,
+                      const llvm::lsp::Position &pos,
+                      llvm::lsp::CompletionList &completions);
+
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 
