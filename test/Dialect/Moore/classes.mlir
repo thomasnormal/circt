@@ -80,6 +80,18 @@ moore.class.classdecl @PropertyCombo {
   moore.class.propertydecl @localAutoI32 : !moore.i32
 }
 
+// Test member visibility
+// CHECK-LABEL:   moore.class.classdecl @PropertyVisibility {
+// CHECK-NEXT:     moore.class.propertydecl @publicProp : !moore.i32
+// CHECK-NEXT:     moore.class.propertydecl @protectedProp : !moore.i32 {member_access = 1
+// CHECK-NEXT:     moore.class.propertydecl @localProp : !moore.i32 {member_access = 2
+// CHECK:   }
+moore.class.classdecl @PropertyVisibility {
+  moore.class.propertydecl @publicProp : !moore.i32
+  moore.class.propertydecl @protectedProp : !moore.i32 {member_access = 1 : i32}
+  moore.class.propertydecl @localProp : !moore.i32 {member_access = 2 : i32}
+}
+
 // Test randomization support
 // CHECK-LABEL:   moore.class.classdecl @Randomizable {
 // CHECK-NEXT:     moore.class.propertydecl @data : !moore.i32 rand_mode rand

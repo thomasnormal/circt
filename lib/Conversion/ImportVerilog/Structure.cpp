@@ -1082,8 +1082,7 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       auto type = convertType(var->getType());
       if (!type)
         return failure();
-      moore::InterfaceSignalDeclOp::create(builder, loc, var->name,
-                                           mlir::TypeAttr::get(type));
+      moore::InterfaceSignalDeclOp::create(builder, loc, var->name, type);
       continue;
     }
 
@@ -1091,8 +1090,7 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       auto type = convertType(net->getType());
       if (!type)
         return failure();
-      moore::InterfaceSignalDeclOp::create(builder, loc, net->name,
-                                           mlir::TypeAttr::get(type));
+      moore::InterfaceSignalDeclOp::create(builder, loc, net->name, type);
       continue;
     }
 
@@ -1666,9 +1664,33 @@ struct ClassDeclVisitor {
     Block *body = &classLowering.op.getBody().emplaceBlock();
     builder.setInsertionPointToEnd(body);
 
-    for (const auto &mem : classAST.members())
-      if (failed(mem.visit(*this)))
-        return failure();
+    // Two-pass conversion: properties first, then methods.
+    // This ensures properties are declared before method bodies are converted,
+    // since method bodies may reference properties.
+
+    // Pass 1: Convert properties, parameters, type aliases, and constraints
+    for (const auto &mem : classAST.members()) {
+      if (mem.kind == slang::ast::SymbolKind::ClassProperty ||
+          mem.kind == slang::ast::SymbolKind::Parameter ||
+          mem.kind == slang::ast::SymbolKind::TypeAlias ||
+          mem.kind == slang::ast::SymbolKind::TypeParameter ||
+          mem.kind == slang::ast::SymbolKind::ConstraintBlock) {
+        if (failed(mem.visit(*this)))
+          return failure();
+      }
+    }
+
+    // Pass 2: Convert methods and other members
+    for (const auto &mem : classAST.members()) {
+      if (mem.kind != slang::ast::SymbolKind::ClassProperty &&
+          mem.kind != slang::ast::SymbolKind::Parameter &&
+          mem.kind != slang::ast::SymbolKind::TypeAlias &&
+          mem.kind != slang::ast::SymbolKind::TypeParameter &&
+          mem.kind != slang::ast::SymbolKind::ConstraintBlock) {
+        if (failed(mem.visit(*this)))
+          return failure();
+      }
+    }
 
     return success();
   }
@@ -1679,6 +1701,20 @@ struct ClassDeclVisitor {
     auto ty = context.convertType(prop.getType());
     if (!ty)
       return failure();
+
+    // Convert slang's Visibility to Moore's MemberAccess
+    moore::MemberAccess memberAccess;
+    switch (prop.visibility) {
+    case slang::ast::Visibility::Public:
+      memberAccess = moore::MemberAccess::Public;
+      break;
+    case slang::ast::Visibility::Protected:
+      memberAccess = moore::MemberAccess::Protected;
+      break;
+    case slang::ast::Visibility::Local:
+      memberAccess = moore::MemberAccess::Local;
+      break;
+    }
 
     // Convert slang's RandMode to Moore's RandMode
     moore::RandMode randMode;
@@ -1694,7 +1730,8 @@ struct ClassDeclVisitor {
       break;
     }
 
-    moore::ClassPropertyDeclOp::create(builder, loc, prop.name, ty, randMode);
+    moore::ClassPropertyDeclOp::create(builder, loc, prop.name, ty, memberAccess,
+                                       randMode);
     return success();
   }
 
@@ -1832,9 +1869,7 @@ struct ClassDeclVisitor {
 
     // Create the constraint block operation
     auto constraintOp = moore::ConstraintBlockOp::create(
-        builder, loc, constraint.name,
-        isStatic ? builder.getUnitAttr() : nullptr,
-        isPure ? builder.getUnitAttr() : nullptr);
+        builder, loc, constraint.name, isStatic, isPure);
 
     // For now, leave the body empty. Full constraint expression parsing
     // will be added in a future patch.
