@@ -4,7 +4,7 @@ add_circt_unittest(CIRCTDebugTests
 
 target_link_libraries(CIRCTDebugTests
   PRIVATE
-  CIRCTDebug
+  CIRCTDebugTool
   CIRCTSupport
   MLIRIR
   MLIRSupport
