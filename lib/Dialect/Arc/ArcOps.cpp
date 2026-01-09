@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Dialect/Arc/ArcOps.h"
+#include "circt/Dialect/Arc/ArcTypes.h"
 #include "circt/Dialect/HW/HWOpInterfaces.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -15,6 +16,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -680,6 +682,410 @@ LogicalResult SimStepOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 LogicalResult ExecuteOp::verifyRegions() {
   return verifyTypeListEquivalence(*this, getInputs().getTypes(),
                                    getBody().getArgumentTypes(), "input");
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Logic Operations
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// FourStateConstantOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FourStateConstantOp::verify() {
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+  auto valueWidth = getValue().getValue().getBitWidth();
+  if (valueWidth != resultType.getWidth())
+    return emitOpError("constant width ")
+           << valueWidth << " does not match result type width "
+           << resultType.getWidth();
+  return success();
+}
+
+OpFoldResult FourStateConstantOp::fold(FoldAdaptor adaptor) {
+  // Constants are already canonical
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateXOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateXOp::fold(FoldAdaptor adaptor) {
+  // X values are already canonical
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateZOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateZOp::fold(FoldAdaptor adaptor) {
+  // Z values are already canonical
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ToFourStateOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ToFourStateOp::verify() {
+  auto inputType = llvm::cast<IntegerType>(getInput().getType());
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+  if (inputType.getWidth() != resultType.getWidth())
+    return emitOpError("input width ")
+           << inputType.getWidth() << " does not match result width "
+           << resultType.getWidth();
+  return success();
+}
+
+OpFoldResult ToFourStateOp::fold(FoldAdaptor adaptor) {
+  // If the input is a constant, we could fold but we keep the op for now
+  // to maintain type safety
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FromFourStateOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FromFourStateOp::verify() {
+  auto inputType = llvm::cast<FourStateType>(getInput().getType());
+  auto resultType = llvm::cast<IntegerType>(getResult().getType());
+  if (inputType.getWidth() != resultType.getWidth())
+    return emitOpError("input width ")
+           << inputType.getWidth() << " does not match result width "
+           << resultType.getWidth();
+  return success();
+}
+
+OpFoldResult FromFourStateOp::fold(FoldAdaptor adaptor) {
+  // If the input comes from ToFourStateOp, fold to the original value
+  if (auto toFourState = getInput().getDefiningOp<ToFourStateOp>())
+    return toFourState.getInput();
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// IsXOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult IsXOp::fold(FoldAdaptor adaptor) {
+  // If the input comes from ToFourStateOp or FourStateConstantOp, it has no X
+  if (getInput().getDefiningOp<ToFourStateOp>() ||
+      getInput().getDefiningOp<FourStateConstantOp>()) {
+    return IntegerAttr::get(IntegerType::get(getContext(), 1), 0);
+  }
+  // If the input comes from FourStateXOp or FourStateZOp, it's all X/Z
+  if (getInput().getDefiningOp<FourStateXOp>() ||
+      getInput().getDefiningOp<FourStateZOp>()) {
+    return IntegerAttr::get(IntegerType::get(getContext(), 1), 1);
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateAndOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateAndOp::fold(FoldAdaptor adaptor) {
+  // a & a = a
+  if (getLhs() == getRhs())
+    return getLhs();
+
+  // 0 & x = 0 (for constant 0)
+  if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getLhs();
+  }
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getRhs();
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateOrOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateOrOp::fold(FoldAdaptor adaptor) {
+  // a | a = a
+  if (getLhs() == getRhs())
+    return getLhs();
+
+  // all-ones | x = all-ones (for constant all-ones)
+  if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isAllOnes())
+      return getLhs();
+  }
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isAllOnes())
+      return getRhs();
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateXorOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateXorOp::fold(FoldAdaptor adaptor) {
+  // a ^ 0 = a
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getLhs();
+  }
+  if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getRhs();
+  }
+
+  // Note: We do NOT fold a ^ a = 0 because in 4-state logic, X ^ X = X, not 0
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateNotOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateNotOp::fold(FoldAdaptor adaptor) {
+  // ~~a = a
+  if (auto notOp = getInput().getDefiningOp<FourStateNotOp>())
+    return notOp.getInput();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateAddOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateAddOp::fold(FoldAdaptor adaptor) {
+  // a + 0 = a
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getLhs();
+  }
+  if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getRhs();
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateSubOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateSubOp::fold(FoldAdaptor adaptor) {
+  // a - 0 = a
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getLhs();
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateMulOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateMulOp::fold(FoldAdaptor adaptor) {
+  // a * 0 = 0 (even if a has X bits, per SystemVerilog semantics)
+  if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getLhs();
+  }
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isZero())
+      return getRhs();
+  }
+
+  // a * 1 = a
+  if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isOne())
+      return getRhs();
+  }
+  if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isOne())
+      return getLhs();
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateEqOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateEqOp::fold(FoldAdaptor adaptor) {
+  // a == a returns 1 only if a has no X/Z (we can't statically determine this
+  // in general, so we only fold for known non-X sources)
+  if (getLhs() == getRhs()) {
+    if (getLhs().getDefiningOp<ToFourStateOp>() ||
+        getLhs().getDefiningOp<FourStateConstantOp>()) {
+      // No X/Z possible, so a == a is true
+      // Return type is !arc.logic<1>, but we can't easily create that here
+      // without a builder, so just return {}
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateNeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateNeOp::fold(FoldAdaptor adaptor) {
+  // a != a returns 0 only if a has no X/Z
+  if (getLhs() == getRhs()) {
+    if (getLhs().getDefiningOp<ToFourStateOp>() ||
+        getLhs().getDefiningOp<FourStateConstantOp>()) {
+      // No X/Z possible, so a != a is false
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateCaseEqOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateCaseEqOp::fold(FoldAdaptor adaptor) {
+  // a === a is always true (even for X/Z)
+  if (getLhs() == getRhs())
+    return IntegerAttr::get(IntegerType::get(getContext(), 1), 1);
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateCaseNeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult FourStateCaseNeOp::fold(FoldAdaptor adaptor) {
+  // a !== a is always false (even for X/Z)
+  if (getLhs() == getRhs())
+    return IntegerAttr::get(IntegerType::get(getContext(), 1), 0);
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateConcatOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FourStateConcatOp::verify() {
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+  unsigned totalWidth = 0;
+  for (auto input : getInputs()) {
+    auto inputType = llvm::cast<FourStateType>(input.getType());
+    totalWidth += inputType.getWidth();
+  }
+  if (totalWidth != resultType.getWidth())
+    return emitOpError("concatenated input widths ")
+           << totalWidth << " do not match result width "
+           << resultType.getWidth();
+  return success();
+}
+
+OpFoldResult FourStateConcatOp::fold(FoldAdaptor adaptor) {
+  // Single input concat is identity
+  if (getInputs().size() == 1)
+    return getInputs()[0];
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateExtractOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FourStateExtractOp::verify() {
+  auto inputType = llvm::cast<FourStateType>(getInput().getType());
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+  unsigned lowBit = getLowBit();
+  unsigned resultWidth = resultType.getWidth();
+
+  if (lowBit + resultWidth > inputType.getWidth())
+    return emitOpError("extract range [")
+           << lowBit << ", " << (lowBit + resultWidth)
+           << ") exceeds input width " << inputType.getWidth();
+  return success();
+}
+
+OpFoldResult FourStateExtractOp::fold(FoldAdaptor adaptor) {
+  // Extract of full width is identity
+  auto inputType = llvm::cast<FourStateType>(getInput().getType());
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+  if (getLowBit() == 0 && inputType.getWidth() == resultType.getWidth())
+    return getInput();
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateReplicateOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FourStateReplicateOp::verify() {
+  auto inputType = llvm::cast<FourStateType>(getInput().getType());
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+
+  if (resultType.getWidth() % inputType.getWidth() != 0)
+    return emitOpError("result width ")
+           << resultType.getWidth() << " must be a multiple of input width "
+           << inputType.getWidth();
+
+  if (resultType.getWidth() < inputType.getWidth())
+    return emitOpError("result width must be >= input width");
+
+  return success();
+}
+
+OpFoldResult FourStateReplicateOp::fold(FoldAdaptor adaptor) {
+  // Replicate 1x is identity
+  auto inputType = llvm::cast<FourStateType>(getInput().getType());
+  auto resultType = llvm::cast<FourStateType>(getResult().getType());
+  if (inputType.getWidth() == resultType.getWidth())
+    return getInput();
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// FourStateMuxOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FourStateMuxOp::verify() {
+  auto condType = llvm::cast<FourStateType>(getCondition().getType());
+  if (condType.getWidth() != 1)
+    return emitOpError("condition must be 1-bit 4-state, got width ")
+           << condType.getWidth();
+
+  auto trueType = llvm::cast<FourStateType>(getTrueValue().getType());
+  auto falseType = llvm::cast<FourStateType>(getFalseValue().getType());
+  if (trueType != falseType)
+    return emitOpError("true and false value types must match");
+
+  return success();
+}
+
+OpFoldResult FourStateMuxOp::fold(FoldAdaptor adaptor) {
+  // mux(cond, a, a) = a
+  if (getTrueValue() == getFalseValue())
+    return getTrueValue();
+
+  // mux(1, a, b) = a
+  if (auto constOp = getCondition().getDefiningOp<FourStateConstantOp>()) {
+    if (constOp.getValue().getValue().isOne())
+      return getTrueValue();
+    if (constOp.getValue().getValue().isZero())
+      return getFalseValue();
+  }
+
+  return {};
 }
 
 #include "circt/Dialect/Arc/ArcInterfaces.cpp.inc"

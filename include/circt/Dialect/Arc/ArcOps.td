@@ -954,6 +954,450 @@ def VectorizeReturnOp : ArcOp<"vectorize.return", [
   let assemblyFormat = "operands attr-dict `:` qualified(type(operands))";
 }
 
+//===----------------------------------------------------------------------===//
+// 4-State Logic Operations
+//===----------------------------------------------------------------------===//
+// These operations support 4-state (0, 1, X, Z) logic values for proper
+// SystemVerilog simulation semantics. X represents unknown values and
+// Z represents high-impedance states.
+
+//===----------------------------------------------------------------------===//
+// 4-State Constants and Creators
+//===----------------------------------------------------------------------===//
+
+def FourStateConstantOp : ArcOp<"fourstate.constant", [Pure]> {
+  let summary = "Create a 4-state constant value";
+  let description = [{
+    Creates a 4-state logic constant with a known 2-state value (no X or Z bits).
+
+    Example:
+    ```mlir
+    %c = arc.fourstate.constant 42 : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins APIntAttr:$value);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$value attr-dict `:` qualified(type($result))";
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def FourStateXOp : ArcOp<"fourstate.x", [Pure]> {
+  let summary = "Create a 4-state X (unknown) value";
+  let description = [{
+    Creates a 4-state logic value where all bits are X (unknown).
+
+    Example:
+    ```mlir
+    %x = arc.fourstate.x : !arc.logic<8>
+    ```
+  }];
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "attr-dict `:` qualified(type($result))";
+  let hasFolder = 1;
+}
+
+def FourStateZOp : ArcOp<"fourstate.z", [Pure]> {
+  let summary = "Create a 4-state Z (high-impedance) value";
+  let description = [{
+    Creates a 4-state logic value where all bits are Z (high-impedance).
+
+    Example:
+    ```mlir
+    %z = arc.fourstate.z : !arc.logic<8>
+    ```
+  }];
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "attr-dict `:` qualified(type($result))";
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Type Conversion Operations
+//===----------------------------------------------------------------------===//
+
+def ToFourStateOp : ArcOp<"to_fourstate", [Pure]> {
+  let summary = "Convert a 2-state integer to a 4-state logic value";
+  let description = [{
+    Converts a 2-state integer value to a 4-state logic value. The resulting
+    value will have no X or Z bits.
+
+    Example:
+    ```mlir
+    %logic = arc.to_fourstate %int : (i8) -> !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins AnySignlessInteger:$input);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$input attr-dict `:` functional-type($input, $result)";
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def FromFourStateOp : ArcOp<"from_fourstate", [Pure]> {
+  let summary = "Convert a 4-state logic value to a 2-state integer";
+  let description = [{
+    Converts a 4-state logic value to a 2-state integer. X and Z bits are
+    converted to 0 by default. Use arc.is_x to check for X/Z before conversion
+    if needed.
+
+    Example:
+    ```mlir
+    %int = arc.from_fourstate %logic : (!arc.logic<8>) -> i8
+    ```
+  }];
+  let arguments = (ins AnyFourState:$input);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = "$input attr-dict `:` functional-type($input, $result)";
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def IsXOp : ArcOp<"is_x", [Pure]> {
+  let summary = "Check if a 4-state value contains any X or Z bits";
+  let description = [{
+    Returns true (i1 = 1) if the input contains any X or Z bits,
+    false (i1 = 0) otherwise.
+
+    Example:
+    ```mlir
+    %has_x = arc.is_x %logic : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Bitwise Logic Operations
+//===----------------------------------------------------------------------===//
+
+class FourStateBinaryOp<string mnemonic, list<Trait> traits = []> :
+    ArcOp<mnemonic, !listconcat([Pure, SameTypeOperands, SameOperandsAndResultType], traits)> {
+  let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($result))";
+}
+
+class FourStateUnaryOp<string mnemonic, list<Trait> traits = []> :
+    ArcOp<mnemonic, !listconcat([Pure, SameOperandsAndResultType], traits)> {
+  let arguments = (ins AnyFourState:$input);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$input attr-dict `:` qualified(type($result))";
+}
+
+def FourStateAndOp : FourStateBinaryOp<"fourstate.and"> {
+  let summary = "4-state bitwise AND operation";
+  let description = [{
+    Performs bitwise AND with 4-state X propagation rules:
+    - 0 & X = 0 (0 dominates)
+    - 1 & X = X
+    - X & X = X
+    - Z is treated as X for logic operations
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.and %a, %b : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+def FourStateOrOp : FourStateBinaryOp<"fourstate.or"> {
+  let summary = "4-state bitwise OR operation";
+  let description = [{
+    Performs bitwise OR with 4-state X propagation rules:
+    - 1 | X = 1 (1 dominates)
+    - 0 | X = X
+    - X | X = X
+    - Z is treated as X for logic operations
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.or %a, %b : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+def FourStateXorOp : FourStateBinaryOp<"fourstate.xor"> {
+  let summary = "4-state bitwise XOR operation";
+  let description = [{
+    Performs bitwise XOR with 4-state X propagation rules:
+    - 0 ^ X = X
+    - 1 ^ X = X
+    - X ^ X = X (unlike 2-state where X ^ X = 0)
+    - Z is treated as X for logic operations
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.xor %a, %b : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+def FourStateNotOp : FourStateUnaryOp<"fourstate.not"> {
+  let summary = "4-state bitwise NOT operation";
+  let description = [{
+    Performs bitwise NOT with 4-state X propagation:
+    - ~0 = 1
+    - ~1 = 0
+    - ~X = X
+    - ~Z = X
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.not %a : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Arithmetic Operations
+//===----------------------------------------------------------------------===//
+
+def FourStateAddOp : FourStateBinaryOp<"fourstate.add"> {
+  let summary = "4-state addition operation";
+  let description = [{
+    Performs addition with 4-state X propagation. If any input bit is X or Z,
+    the result propagates X according to standard arithmetic rules.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.add %a, %b : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+def FourStateSubOp : FourStateBinaryOp<"fourstate.sub"> {
+  let summary = "4-state subtraction operation";
+  let description = [{
+    Performs subtraction with 4-state X propagation. If any input bit is X or Z,
+    the result propagates X according to standard arithmetic rules.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.sub %a, %b : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+def FourStateMulOp : FourStateBinaryOp<"fourstate.mul"> {
+  let summary = "4-state multiplication operation";
+  let description = [{
+    Performs multiplication with 4-state X propagation. If any input bit is
+    X or Z, the result propagates X according to standard arithmetic rules.
+    Special case: 0 * X = 0 (zero dominates in multiplication).
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.mul %a, %b : !arc.logic<8>
+    ```
+  }];
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Comparison Operations
+//===----------------------------------------------------------------------===//
+
+def FourStateEqOp : ArcOp<"fourstate.eq", [Pure, SameTypeOperands]> {
+  let summary = "4-state logical equality (==)";
+  let description = [{
+    Performs logical equality comparison with X propagation.
+    Returns a 1-bit 4-state result:
+    - Returns 1 if both operands are equal and have no X/Z bits
+    - Returns 0 if operands are known to be different
+    - Returns X if comparison involves any X/Z bits
+
+    This corresponds to SystemVerilog's == operator.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.eq %a, %b : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
+  let results = (outs FourStateType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs))";
+  let hasFolder = 1;
+
+  let builders = [
+    OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
+      auto ty = FourStateType::get($_builder.getContext(), 1);
+      build($_builder, $_state, ty, lhs, rhs);
+    }]>
+  ];
+}
+
+def FourStateNeOp : ArcOp<"fourstate.ne", [Pure, SameTypeOperands]> {
+  let summary = "4-state logical inequality (!=)";
+  let description = [{
+    Performs logical inequality comparison with X propagation.
+    Returns a 1-bit 4-state result:
+    - Returns 1 if operands are known to be different
+    - Returns 0 if both operands are equal and have no X/Z bits
+    - Returns X if comparison involves any X/Z bits
+
+    This corresponds to SystemVerilog's != operator.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.ne %a, %b : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
+  let results = (outs FourStateType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs))";
+  let hasFolder = 1;
+
+  let builders = [
+    OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
+      auto ty = FourStateType::get($_builder.getContext(), 1);
+      build($_builder, $_state, ty, lhs, rhs);
+    }]>
+  ];
+}
+
+def FourStateCaseEqOp : ArcOp<"fourstate.case_eq", [Pure, SameTypeOperands]> {
+  let summary = "4-state case equality (===)";
+  let description = [{
+    Performs case equality comparison (4-way comparison including X and Z).
+    Returns a 1-bit 2-state integer result:
+    - Returns 1 if both operands are bit-for-bit identical (including X/Z)
+    - Returns 0 otherwise
+
+    This corresponds to SystemVerilog's === operator. Unlike logical equality,
+    X matches X and Z matches Z.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.case_eq %a, %b : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs))";
+  let hasFolder = 1;
+}
+
+def FourStateCaseNeOp : ArcOp<"fourstate.case_ne", [Pure, SameTypeOperands]> {
+  let summary = "4-state case inequality (!==)";
+  let description = [{
+    Performs case inequality comparison.
+    Returns a 1-bit 2-state integer result:
+    - Returns 0 if both operands are bit-for-bit identical (including X/Z)
+    - Returns 1 otherwise
+
+    This corresponds to SystemVerilog's !== operator.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.case_ne %a, %b : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$lhs, AnyFourState:$rhs);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` qualified(type($lhs))";
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Bit Manipulation Operations
+//===----------------------------------------------------------------------===//
+
+def FourStateConcatOp : ArcOp<"fourstate.concat", [Pure]> {
+  let summary = "Concatenate 4-state values";
+  let description = [{
+    Concatenates multiple 4-state values into a single wider value.
+    The first operand becomes the most significant bits.
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.concat %high, %low : !arc.logic<4>, !arc.logic<4> -> !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins Variadic<AnyFourState>:$inputs);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$inputs attr-dict `:` qualified(type($inputs)) `->` qualified(type($result))";
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
+def FourStateExtractOp : ArcOp<"fourstate.extract", [Pure]> {
+  let summary = "Extract bits from a 4-state value";
+  let description = [{
+    Extracts a range of bits from a 4-state value. The low_bit parameter
+    specifies the starting bit position (0-indexed from LSB).
+
+    Example:
+    ```mlir
+    // Extract bits [7:4] from a 16-bit value
+    %result = arc.fourstate.extract %input from 4 : !arc.logic<16> -> !arc.logic<4>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$input, I32Attr:$low_bit);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$input `from` $low_bit attr-dict `:` qualified(type($input)) `->` qualified(type($result))";
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
+def FourStateReplicateOp : ArcOp<"fourstate.replicate", [Pure]> {
+  let summary = "Replicate a 4-state value multiple times";
+  let description = [{
+    Creates a wider 4-state value by replicating the input value.
+
+    Example:
+    ```mlir
+    // Replicate 4-bit value 4 times to create 16-bit value
+    %result = arc.fourstate.replicate %input : !arc.logic<4> -> !arc.logic<16>
+    ```
+  }];
+  let arguments = (ins AnyFourState:$input);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = "$input attr-dict `:` functional-type($input, $result)";
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// 4-State Conditional Operations
+//===----------------------------------------------------------------------===//
+
+def FourStateMuxOp : ArcOp<"fourstate.mux", [Pure, SameTypeOperands]> {
+  let summary = "4-state multiplexer";
+  let description = [{
+    Selects between two 4-state values based on a 1-bit 4-state condition:
+    - If condition is 1, returns true_value
+    - If condition is 0, returns false_value
+    - If condition is X or Z, returns X for bits where true/false differ
+
+    Example:
+    ```mlir
+    %result = arc.fourstate.mux %cond, %true_val, %false_val : !arc.logic<8>
+    ```
+  }];
+  let arguments = (ins FourStateType:$condition, AnyFourState:$true_value, AnyFourState:$false_value);
+  let results = (outs AnyFourState:$result);
+  let assemblyFormat = [{
+    $condition `,` $true_value `,` $false_value attr-dict `:`
+    qualified(type($true_value))
+  }];
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Runtime Model
+//===----------------------------------------------------------------------===//
+
 def RuntimeModelOp : ArcOp<"runtime.model", [
   HasParent<"::mlir::ModuleOp">, Pure, Symbol
 ]> {
