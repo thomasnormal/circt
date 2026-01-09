@@ -80,6 +80,52 @@ moore.class.classdecl @PropertyCombo {
   moore.class.propertydecl @localAutoI32 : !moore.i32
 }
 
+// Test randomization support
+// CHECK-LABEL:   moore.class.classdecl @Randomizable {
+// CHECK-NEXT:     moore.class.propertydecl @data : !moore.i32 rand_mode rand
+// CHECK-NEXT:     moore.class.propertydecl @mode : !moore.i8 rand_mode randc
+// CHECK-NEXT:     moore.class.propertydecl @fixed : !moore.i16
+// CHECK-NEXT:     moore.constraint.block @valid_range {
+// CHECK-NEXT:     }
+// CHECK:   }
+moore.class.classdecl @Randomizable {
+  moore.class.propertydecl @data : !moore.i32 rand_mode rand
+  moore.class.propertydecl @mode : !moore.i8 rand_mode randc
+  moore.class.propertydecl @fixed : !moore.i16
+  moore.constraint.block @valid_range {
+  }
+}
+
+// Test static and pure constraint blocks
+// CHECK-LABEL:   moore.class.classdecl @ConstraintVariants {
+// CHECK-NEXT:     moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK-NEXT:     moore.constraint.block @normal {
+// CHECK-NEXT:     }
+// CHECK-NEXT:     moore.constraint.block static @static_c {
+// CHECK-NEXT:     }
+// CHECK-NEXT:     moore.constraint.block pure @pure_c {
+// CHECK-NEXT:     }
+// CHECK:   }
+moore.class.classdecl @ConstraintVariants {
+  moore.class.propertydecl @x : !moore.i32 rand_mode rand
+  moore.constraint.block @normal {
+  }
+  moore.constraint.block static @static_c {
+  }
+  moore.constraint.block pure @pure_c {
+  }
+}
+
+// Test randomize operation
+// CHECK-LABEL: func.func @test_randomize
+// CHECK:   %[[OBJ:.*]] = moore.class.new : !moore.class<@Randomizable>
+// CHECK:   %[[SUCCESS:.*]] = moore.randomize %[[OBJ]] : !moore.class<@Randomizable>
+func.func @test_randomize() {
+  %obj = moore.class.new : !moore.class<@Randomizable>
+  %success = moore.randomize %obj : !moore.class<@Randomizable>
+  return
+}
+
 /// Check that vtables roundtrip
 
 // CHECK-LABEL:  moore.vtable @testClass::@vtable {
