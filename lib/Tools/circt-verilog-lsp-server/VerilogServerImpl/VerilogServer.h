@@ -75,6 +75,14 @@ public:
   void findReferencesOf(const URIForFile &uri, const llvm::lsp::Position &pos,
                         std::vector<llvm::lsp::Location> &references);
 
+  /// Return hover information for the object at the given position.
+  std::optional<llvm::lsp::Hover> getHover(const URIForFile &uri,
+                                           const llvm::lsp::Position &pos);
+
+  /// Return the document symbols for the given document.
+  void getDocumentSymbols(const URIForFile &uri,
+                          std::vector<llvm::lsp::DocumentSymbol> &symbols);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;

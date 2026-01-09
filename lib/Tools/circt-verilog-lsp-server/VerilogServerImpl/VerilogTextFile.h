@@ -67,6 +67,16 @@ public:
                         llvm::lsp::Position pos,
                         std::vector<llvm::lsp::Location> &references);
 
+  /// Return hover information for the object at the given position.
+  /// Thread-safe; acquires docMutex.
+  std::optional<llvm::lsp::Hover> getHover(const llvm::lsp::URIForFile &uri,
+                                           llvm::lsp::Position pos);
+
+  /// Return the document symbols for this file.
+  /// Thread-safe; acquires docMutex.
+  void getDocumentSymbols(const llvm::lsp::URIForFile &uri,
+                          std::vector<llvm::lsp::DocumentSymbol> &symbols);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();
