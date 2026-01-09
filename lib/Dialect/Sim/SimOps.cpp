@@ -524,6 +524,85 @@ OpFoldResult StringLengthOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
+// Event-Driven Simulation Operations (SimIR)
+//===----------------------------------------------------------------------===//
+
+LogicalResult SimSuspendOp::verify() {
+  // Verify that we have either observed values or a delay (or both)
+  if (getObserved().empty() && !getDelayFemtoseconds().has_value()) {
+    // Allow region-only suspends for scheduling region changes
+    if (!getRegion().has_value())
+      return emitOpError(
+          "must specify either observed values, a delay, or a region");
+  }
+
+  // Verify region attribute if present
+  if (auto region = getRegion()) {
+    StringRef regionStr = region.value();
+    if (regionStr != "active" && regionStr != "inactive" && regionStr != "nba" &&
+        regionStr != "reactive" && regionStr != "preponed" &&
+        regionStr != "observed" && regionStr != "postponed") {
+      return emitOpError("invalid scheduling region '")
+             << regionStr
+             << "', expected one of: active, inactive, nba, reactive, "
+                "preponed, observed, postponed";
+    }
+  }
+
+  return success();
+}
+
+LogicalResult SimYieldOp::verify() {
+  // Verify that the parent is a SimCombProcessOp
+  auto parent = (*this)->getParentOp();
+  if (!isa<SimCombProcessOp>(parent)) {
+    return emitOpError("must be directly nested within a 'sim.comb_process'");
+  }
+
+  // Verify result types match the parent process
+  auto combProcess = cast<SimCombProcessOp>(parent);
+  if (getNumOperands() != combProcess.getNumResults()) {
+    return emitOpError("has ")
+           << getNumOperands() << " operands but parent process expects "
+           << combProcess.getNumResults() << " results";
+  }
+
+  for (auto [idx, pair] :
+       llvm::enumerate(llvm::zip(getOperandTypes(), combProcess.getResultTypes()))) {
+    auto [yieldType, processType] = pair;
+    if (yieldType != processType) {
+      return emitOpError("operand type mismatch at index ")
+             << idx << ": expected " << processType << " but got " << yieldType;
+    }
+  }
+
+  return success();
+}
+
+LogicalResult SimDriveOp::verify() {
+  // Verify mode attribute
+  StringRef modeStr = getMode();
+  if (modeStr != "blocking" && modeStr != "nonblocking" &&
+      modeStr != "continuous") {
+    return emitOpError("invalid drive mode '")
+           << modeStr
+           << "', expected one of: blocking, nonblocking, continuous";
+  }
+
+  // Verify strength attribute if present
+  if (auto strength = getStrength()) {
+    StringRef strengthStr = strength.value();
+    if (strengthStr != "strong" && strengthStr != "pull" &&
+        strengthStr != "weak" && strengthStr != "highz") {
+      return emitOpError("invalid signal strength '")
+             << strengthStr << "', expected one of: strong, pull, weak, highz";
+    }
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen generated logic.
 //===----------------------------------------------------------------------===//
 
