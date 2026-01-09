@@ -3223,9 +3223,7 @@ def UVMFieldArrayIntOp : UVMOp<"field_array_int", [HasParent<"UVMTypeRegistratio
   }];
 }
 
-def UVMObjectCreateOp : UVMOp<"create_object", [
-  DeclareOpInterfaceMethods<SymbolUserOpInterface>
-]> {
+def UVMObjectCreateOp : UVMOp<"create_object"> {
   let summary = "Create an object via the UVM factory";
   let description = [{
     Creates an object using the UVM factory. This is equivalent to
@@ -3255,9 +3253,7 @@ def UVMObjectCreateOp : UVMOp<"create_object", [
   }];
 }
 
-def UVMComponentCreateOp : UVMOp<"create_component", [
-  DeclareOpInterfaceMethods<SymbolUserOpInterface>
-]> {
+def UVMComponentCreateOp : UVMOp<"create_component"> {
   let summary = "Create a component via the UVM factory";
   let description = [{
     Creates a component using the UVM factory. This is equivalent to
