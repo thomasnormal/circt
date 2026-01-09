@@ -6,12 +6,12 @@ add_circt_tool(circt-debug
   circt-debug.cpp
 
   DEPENDS
-  CIRCTDebug
+  CIRCTDebugTool
 )
 
 target_link_libraries(circt-debug
   PRIVATE
-  CIRCTDebug
+  CIRCTDebugTool
   CIRCTSupport
   MLIRIR
   MLIRParser
