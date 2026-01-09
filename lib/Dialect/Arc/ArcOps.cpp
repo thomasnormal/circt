@@ -694,7 +694,7 @@ LogicalResult ExecuteOp::verifyRegions() {
 
 LogicalResult FourStateConstantOp::verify() {
   auto resultType = llvm::cast<FourStateType>(getResult().getType());
-  auto valueWidth = getValue().getValue().getBitWidth();
+  auto valueWidth = getValue().getBitWidth();
   if (valueWidth != resultType.getWidth())
     return emitOpError("constant width ")
            << valueWidth << " does not match result type width "
@@ -795,11 +795,11 @@ OpFoldResult FourStateAndOp::fold(FoldAdaptor adaptor) {
 
   // 0 & x = 0 (for constant 0)
   if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getLhs();
   }
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getRhs();
   }
 
@@ -817,11 +817,11 @@ OpFoldResult FourStateOrOp::fold(FoldAdaptor adaptor) {
 
   // all-ones | x = all-ones (for constant all-ones)
   if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isAllOnes())
+    if (constOp.getValue().isAllOnes())
       return getLhs();
   }
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isAllOnes())
+    if (constOp.getValue().isAllOnes())
       return getRhs();
   }
 
@@ -835,11 +835,11 @@ OpFoldResult FourStateOrOp::fold(FoldAdaptor adaptor) {
 OpFoldResult FourStateXorOp::fold(FoldAdaptor adaptor) {
   // a ^ 0 = a
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getLhs();
   }
   if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getRhs();
   }
 
@@ -867,11 +867,11 @@ OpFoldResult FourStateNotOp::fold(FoldAdaptor adaptor) {
 OpFoldResult FourStateAddOp::fold(FoldAdaptor adaptor) {
   // a + 0 = a
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getLhs();
   }
   if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getRhs();
   }
 
@@ -885,7 +885,7 @@ OpFoldResult FourStateAddOp::fold(FoldAdaptor adaptor) {
 OpFoldResult FourStateSubOp::fold(FoldAdaptor adaptor) {
   // a - 0 = a
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getLhs();
   }
 
@@ -899,21 +899,21 @@ OpFoldResult FourStateSubOp::fold(FoldAdaptor adaptor) {
 OpFoldResult FourStateMulOp::fold(FoldAdaptor adaptor) {
   // a * 0 = 0 (even if a has X bits, per SystemVerilog semantics)
   if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getLhs();
   }
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getRhs();
   }
 
   // a * 1 = a
   if (auto constOp = getLhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isOne())
+    if (constOp.getValue().isOne())
       return getRhs();
   }
   if (auto constOp = getRhs().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isOne())
+    if (constOp.getValue().isOne())
       return getLhs();
   }
 
@@ -1079,9 +1079,9 @@ OpFoldResult FourStateMuxOp::fold(FoldAdaptor adaptor) {
 
   // mux(1, a, b) = a
   if (auto constOp = getCondition().getDefiningOp<FourStateConstantOp>()) {
-    if (constOp.getValue().getValue().isOne())
+    if (constOp.getValue().isOne())
       return getTrueValue();
-    if (constOp.getValue().getValue().isZero())
+    if (constOp.getValue().isZero())
       return getFalseValue();
   }
 
