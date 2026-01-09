@@ -171,6 +171,13 @@ void VerilogTextFile::getDocumentSymbols(
   doc->getDocumentSymbols(uri, symbols);
 }
 
+void VerilogTextFile::getCompletions(const llvm::lsp::URIForFile &uri,
+                                     llvm::lsp::Position pos,
+                                     llvm::lsp::CompletionList &completions) {
+  auto doc = getDocument();
+  doc->getCompletions(uri, pos, completions);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;
