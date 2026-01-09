@@ -1,0 +1,145 @@
+# Example GitHub Actions workflow for CIRCT Verilog linting
+# This workflow demonstrates how to integrate circt-lint into a CI/CD pipeline
+# with JUnit XML and SARIF output for GitHub integration.
+#
+# Features:
+# - Automatic linting on push and pull request
+# - JUnit XML test results displayed in GitHub Actions
+# - SARIF results uploaded to GitHub Code Scanning
+# - Caching for faster subsequent runs
+# - Matrix builds for multiple configurations
+
+name: Verilog Lint
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - '**/*.v'
+      - '**/*.sv'
+      - '**/*.svh'
+      - '**/*.vh'
+      - 'circt-project.yaml'
+      - 'lint.yaml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - '**/*.v'
+      - '**/*.sv'
+      - '**/*.svh'
+      - '**/*.vh'
+      - 'circt-project.yaml'
+      - 'lint.yaml'
+
+jobs:
+  lint:
+    name: Lint Verilog/SystemVerilog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better context
+
+      - name: Cache CIRCT installation
+        uses: actions/cache@v4
+        with:
+          path: ~/.circt
+          key: circt-${{ runner.os }}-${{ hashFiles('**/circt-project.yaml') }}
+          restore-keys: |
+            circt-${{ runner.os }}-
+
+      - name: Install CIRCT
+        run: |
+          # Install CIRCT tools
+          # Option 1: Download pre-built release
+          CIRCT_VERSION="1.0.0"  # Update to latest version
+          curl -LO "https://github.com/llvm/circt/releases/download/v${CIRCT_VERSION}/circt-linux-x64.tar.gz"
+          tar -xzf circt-linux-x64.tar.gz -C ~/.circt
+          echo "$HOME/.circt/bin" >> $GITHUB_PATH
+
+          # Option 2: Build from source (if needed)
+          # See build instructions in CIRCT documentation
+
+      - name: Run lint check
+        id: lint
+        run: |
+          # Create output directory
+          mkdir -p reports
+
+          # Run circt-lint with project configuration
+          # The tool will automatically find circt-project.yaml
+          circt-lint \
+            --format=sarif \
+            --output=reports/lint-results.sarif \
+            --junit-xml=reports/lint-results.xml \
+            . || echo "lint_failed=true" >> $GITHUB_OUTPUT
+
+      - name: Upload SARIF results to Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/lint-results.sarif
+          category: verilog-lint
+
+      - name: Publish Test Results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: reports/lint-results.xml
+          check_name: Lint Results
+          comment_mode: always
+          compare_to_earlier_commit: true
+
+      - name: Upload lint reports as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: reports/
+          retention-days: 30
+
+      - name: Fail if lint errors found
+        if: steps.lint.outputs.lint_failed == 'true'
+        run: |
+          echo "Lint errors were found. See the reports above."
+          exit 1
+
+  lint-matrix:
+    # Example of running lint with different configurations
+    name: Lint (${{ matrix.config }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - synthesis
+          - simulation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install CIRCT
+        run: |
+          # Install CIRCT (same as above)
+          echo "$HOME/.circt/bin" >> $GITHUB_PATH
+
+      - name: Run lint for ${{ matrix.config }}
+        run: |
+          mkdir -p reports
+
+          # Run lint with specific target configuration
+          circt-lint \
+            --target=${{ matrix.config }} \
+            --format=sarif \
+            --output=reports/lint-${{ matrix.config }}.sarif \
+            .
+
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/lint-${{ matrix.config }}.sarif
+          category: verilog-lint-${{ matrix.config }}
