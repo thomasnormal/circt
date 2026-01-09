@@ -19,6 +19,7 @@ add_circt_library(CIRCTSupport
   Path.cpp
   PrettyPrinter.cpp
   PrettyPrinterHelpers.cpp
+  ProjectConfig.cpp
   SymCache.cpp
   ValueMapper.cpp
   "${VERSION_CPP}"
