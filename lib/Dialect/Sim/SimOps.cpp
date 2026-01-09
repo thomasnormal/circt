@@ -572,6 +572,261 @@ LogicalResult SimDriveOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// Sensitivity List and Edge Detection Operations
+//===----------------------------------------------------------------------===//
+
+/// Helper function to verify edge type string.
+static LogicalResult verifyEdgeType(Operation *op, StringRef edge) {
+  if (edge != "posedge" && edge != "negedge" && edge != "anyedge" &&
+      edge != "level") {
+    return op->emitOpError("invalid edge type '")
+           << edge << "', expected one of: posedge, negedge, anyedge, level";
+  }
+  return success();
+}
+
+LogicalResult SimSensitivityListOp::verify() {
+  // Verify that the number of edges matches the number of signals
+  auto edges = getEdges();
+  auto signals = getSignals();
+
+  if (edges.size() != signals.size()) {
+    return emitOpError("number of edge types (")
+           << edges.size() << ") must match number of signals ("
+           << signals.size() << ")";
+  }
+
+  // Verify each edge type
+  for (auto edgeAttr : edges) {
+    auto edgeStr = dyn_cast<StringAttr>(edgeAttr);
+    if (!edgeStr)
+      return emitOpError("edge type must be a string attribute");
+    if (failed(verifyEdgeType(*this, edgeStr.getValue())))
+      return failure();
+  }
+
+  return success();
+}
+
+void SimSensitivityListOp::print(OpAsmPrinter &p) {
+  auto edges = getEdges();
+  auto signals = getSignals();
+
+  p << " ";
+  llvm::interleaveComma(llvm::zip(edges, signals), p, [&](auto pair) {
+    auto [edgeAttr, signal] = pair;
+    auto edge = cast<StringAttr>(edgeAttr).getValue();
+    p << edge << " " << signal;
+  });
+
+  p << " : ";
+  llvm::interleaveComma(signals.getTypes(), p);
+  p.printOptionalAttrDict((*this)->getAttrs(), {"edges"});
+}
+
+ParseResult SimSensitivityListOp::parse(OpAsmParser &parser,
+                                        OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> signals;
+  SmallVector<Type, 4> signalTypes;
+  SmallVector<Attribute, 4> edges;
+
+  // Parse edge-signal pairs
+  do {
+    StringRef edge;
+    OpAsmParser::UnresolvedOperand signal;
+
+    if (parser.parseKeyword(&edge) || parser.parseOperand(signal))
+      return failure();
+
+    edges.push_back(StringAttr::get(parser.getContext(), edge));
+    signals.push_back(signal);
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // Parse types
+  if (parser.parseColon())
+    return failure();
+
+  if (parser.parseTypeList(signalTypes))
+    return failure();
+
+  if (signals.size() != signalTypes.size())
+    return parser.emitError(parser.getCurrentLocation(),
+                            "number of types doesn't match number of signals");
+
+  // Resolve operands
+  if (parser.resolveOperands(signals, signalTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+
+  // Add edges attribute
+  result.addAttribute("edges",
+                      ArrayAttr::get(parser.getContext(), edges));
+
+  // Add result type
+  result.addTypes(IntegerType::get(parser.getContext(), 1));
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+LogicalResult SimEdgeDetectOp::verify() {
+  // Verify edge type
+  if (failed(verifyEdgeType(*this, getEdge())))
+    return failure();
+
+  // Verify that current and previous have the same type
+  if (getCurrent().getType() != getPrevious().getType()) {
+    return emitOpError("current and previous must have the same type, got ")
+           << getCurrent().getType() << " and " << getPrevious().getType();
+  }
+
+  return success();
+}
+
+OpFoldResult SimEdgeDetectOp::fold(FoldAdaptor adaptor) {
+  auto current = adaptor.getCurrent();
+  auto previous = adaptor.getPrevious();
+
+  // Can only fold if both are constants
+  auto currInt = dyn_cast_or_null<IntegerAttr>(current);
+  auto prevInt = dyn_cast_or_null<IntegerAttr>(previous);
+  if (!currInt || !prevInt)
+    return {};
+
+  StringRef edge = getEdge();
+  bool currBit = currInt.getValue().getLSBs(1) != 0;
+  bool prevBit = prevInt.getValue().getLSBs(1) != 0;
+
+  bool detected = false;
+  if (edge == "posedge") {
+    detected = !prevBit && currBit;
+  } else if (edge == "negedge") {
+    detected = prevBit && !currBit;
+  } else if (edge == "anyedge" || edge == "level") {
+    detected = currInt.getValue() != prevInt.getValue();
+  }
+
+  return IntegerAttr::get(IntegerType::get(getContext(), 1), detected ? 1 : 0);
+}
+
+LogicalResult SimTriggeredProcessOp::verify() {
+  // Verify that the number of edges matches the number of signals
+  auto edges = getSensitivityEdges();
+  auto signals = getSensitivitySignals();
+
+  if (edges.size() != signals.size()) {
+    return emitOpError("number of edge types (")
+           << edges.size() << ") must match number of sensitivity signals ("
+           << signals.size() << ")";
+  }
+
+  // Verify each edge type
+  for (auto edgeAttr : edges) {
+    auto edgeStr = dyn_cast<StringAttr>(edgeAttr);
+    if (!edgeStr)
+      return emitOpError("edge type must be a string attribute");
+    if (failed(verifyEdgeType(*this, edgeStr.getValue())))
+      return failure();
+  }
+
+  return success();
+}
+
+void SimTriggeredProcessOp::print(OpAsmPrinter &p) {
+  auto edges = getSensitivityEdges();
+  auto signals = getSensitivitySignals();
+
+  p << " @(";
+  llvm::interleaveComma(llvm::zip(edges, signals), p, [&](auto pair) {
+    auto [edgeAttr, signal] = pair;
+    auto edge = cast<StringAttr>(edgeAttr).getValue();
+    p << edge << " " << signal;
+  });
+  p << ")";
+
+  if (!getResults().empty()) {
+    p << " -> ";
+    llvm::interleaveComma(getResultTypes(), p);
+  }
+
+  p.printOptionalAttrDictWithKeyword(
+      (*this)->getAttrs(), {"sensitivityEdges"});
+  p << " ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/true);
+}
+
+ParseResult SimTriggeredProcessOp::parse(OpAsmParser &parser,
+                                         OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> signals;
+  SmallVector<Type, 4> signalTypes;
+  SmallVector<Attribute, 4> edges;
+
+  // Parse @(...) sensitivity list
+  if (parser.parseLParen())
+    return failure();
+
+  // Check for empty sensitivity list
+  if (succeeded(parser.parseOptionalRParen())) {
+    // Empty sensitivity list
+  } else {
+    // Parse edge-signal pairs
+    do {
+      StringRef edge;
+      OpAsmParser::UnresolvedOperand signal;
+
+      if (parser.parseKeyword(&edge) || parser.parseOperand(signal))
+        return failure();
+
+      edges.push_back(StringAttr::get(parser.getContext(), edge));
+      signals.push_back(signal);
+    } while (succeeded(parser.parseOptionalComma()));
+
+    if (parser.parseRParen())
+      return failure();
+  }
+
+  // Parse optional result types
+  SmallVector<Type, 4> resultTypes;
+  if (succeeded(parser.parseOptionalArrow())) {
+    if (parser.parseTypeList(resultTypes))
+      return failure();
+  }
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  // Parse the body region
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}))
+    return failure();
+
+  // Infer signal types from the region's operands if not specified
+  // For now, we'll require explicit parsing or use i1 for all
+  for (size_t i = 0; i < signals.size(); ++i) {
+    signalTypes.push_back(IntegerType::get(parser.getContext(), 1));
+  }
+
+  // Resolve operands
+  if (parser.resolveOperands(signals, signalTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+
+  // Add edges attribute
+  result.addAttribute("sensitivityEdges",
+                      ArrayAttr::get(parser.getContext(), edges));
+
+  // Add result types
+  result.addTypes(resultTypes);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen generated logic.
 //===----------------------------------------------------------------------===//
 
