@@ -10,7 +10,12 @@
 ##===----------------------------------------------------------------------===//
 
 add_circt_dialect_library(CIRCTSim
+  DesignPartitioner.cpp
   EventQueue.cpp
+  IncrementalCompiler.cpp
+  MemoryOptimization.cpp
+  ParallelScheduler.cpp
+  PerformanceProfiler.cpp
   ProcessScheduler.cpp
   SimDialect.cpp
   SimOps.cpp
