@@ -9,6 +9,7 @@
 add_subdirectory(Arc)
 add_subdirectory(Calyx)
 add_subdirectory(Comb)
+add_subdirectory(Coverage)
 add_subdirectory(Datapath)
 add_subdirectory(DC)
 add_subdirectory(Debug)
