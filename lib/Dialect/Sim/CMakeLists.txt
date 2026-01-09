@@ -11,6 +11,7 @@
 
 add_circt_dialect_library(CIRCTSim
   EventQueue.cpp
+  ProcessScheduler.cpp
   SimDialect.cpp
   SimOps.cpp
   SimTypes.cpp
