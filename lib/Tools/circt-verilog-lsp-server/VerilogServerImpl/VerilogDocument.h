@@ -95,6 +95,16 @@ public:
                       const llvm::lsp::Position &pos,
                       llvm::lsp::CompletionList &completions);
 
+  //===--------------------------------------------------------------------===//
+  // Code Actions
+  //===--------------------------------------------------------------------===//
+
+  /// Return code actions for the given range and diagnostics.
+  void getCodeActions(const llvm::lsp::URIForFile &uri,
+                      const llvm::lsp::Range &range,
+                      const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+                      std::vector<llvm::lsp::CodeAction> &codeActions);
+
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 
