@@ -31,7 +31,7 @@ using namespace mlir;
 
 void SVModuleOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                        llvm::StringRef name, hw::ModuleType type) {
-  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+  state.addAttribute(SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getModuleTypeAttrName(state.name), TypeAttr::get(type));
   state.addRegion();
@@ -41,11 +41,11 @@ void SVModuleOp::print(OpAsmPrinter &p) {
   p << " ";
 
   // Print the visibility of the module.
-  StringRef visibilityAttrName = mlir::SymbolTable::getVisibilityAttrName();
+  StringRef visibilityAttrName = SymbolTable::getVisibilityAttrName();
   if (auto visibility = (*this)->getAttrOfType<StringAttr>(visibilityAttrName))
     p << visibility.getValue() << ' ';
 
-  p.printSymbolName(mlir::SymbolTable::getSymbolName(*this).getValue());
+  p.printSymbolName(SymbolTable::getSymbolName(*this).getValue());
   hw::module_like_impl::printModuleSignatureNew(p, getBodyRegion(),
                                                 getModuleType(), {}, {});
   p << " ";
@@ -1749,59 +1749,136 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
-// Covergroups (Functional Coverage)
+// InterfaceInstanceOp
 //===----------------------------------------------------------------------===//
 
-void CoverpointOp::build(OpBuilder &builder, OperationState &state,
-                         StringRef name, Value expr,
-                         std::optional<int64_t> autoBinMax) {
-  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
-                     builder.getStringAttr(name));
-  state.addOperands(expr);
-  if (autoBinMax)
-    state.addAttribute("auto_bin_max",
-                       builder.getI64IntegerAttr(autoBinMax.value()));
-  state.addRegion();
-}
-
-LogicalResult CrossOp::verify() {
-  // Verify that at least two coverpoints are referenced.
-  if (getCoverpoints().size() < 2)
-    return emitOpError("cross coverage requires at least two coverpoints");
-
-  // Verify that all referenced coverpoints exist within the parent covergroup.
-  auto covergroupDecl = cast<CovergroupDeclOp>((*this)->getParentOp());
-  SymbolTable symbolTable(covergroupDecl);
-
-  for (auto coverpointRef : getCoverpoints()) {
-    auto coverpointSymbol = cast<FlatSymbolRefAttr>(coverpointRef);
-    auto *coverpoint = symbolTable.lookup(coverpointSymbol.getValue());
-    if (!coverpoint)
-      return emitOpError("referenced coverpoint '")
-             << coverpointSymbol.getValue() << "' not found in covergroup";
-    if (!isa<CoverpointOp>(coverpoint))
-      return emitOpError("symbol '")
-             << coverpointSymbol.getValue() << "' is not a coverpoint";
-  }
-
-  return success();
+void InterfaceInstanceOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
+  setNameFn(getResult(), getName());
 }
 
 LogicalResult
-CovergroupInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  auto covergroupName = getCovergroupNameAttr();
-  auto *covergroupDecl =
-      symbolTable.lookupNearestSymbolFrom(getOperation(), covergroupName);
+InterfaceInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto *symbol =
+      symbolTable.lookupNearestSymbolFrom(*this, getInterfaceNameAttr());
+  if (!symbol)
+    return emitOpError("references unknown interface @") << getInterfaceName();
+  if (!isa<InterfaceDeclOp>(symbol))
+    return emitOpError("must reference a 'moore.interface', but @")
+           << getInterfaceName() << " is a " << symbol->getName();
+  return success();
+}
 
-  if (!covergroupDecl)
-    return emitOpError("referenced covergroup '")
-           << covergroupName.getValue() << "' not found";
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceGetOp
+//===----------------------------------------------------------------------===//
 
-  if (!isa<CovergroupDeclOp>(covergroupDecl))
-    return emitOpError("symbol '")
-           << covergroupName.getValue() << "' is not a covergroup declaration";
+LogicalResult
+VirtualInterfaceGetOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the modport within the interface
+  auto modportName = getModport();
+  auto *modportSymbol = ifaceOp.lookupSymbol(modportName);
+  if (!modportSymbol)
+    return emitOpError("references unknown modport @")
+           << modportName.getValue() << " in interface @"
+           << ifaceOp.getSymName();
+  if (!isa<ModportDeclOp>(modportSymbol))
+    return emitOpError("@")
+           << modportName.getValue() << " is not a modport declaration";
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceSignalRefOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult VirtualInterfaceSignalRefOp::verifySymbolUses(
+    SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the signal within the interface
+  auto signalName = getSignal();
+  auto *signalSymbol = ifaceOp.lookupSymbol(signalName);
+  if (!signalSymbol)
+    return emitOpError("references unknown signal @")
+           << signalName.getValue() << " in interface @" << ifaceOp.getSymName();
+  if (!isa<InterfaceSignalDeclOp>(signalSymbol))
+    return emitOpError("@")
+           << signalName.getValue() << " is not a signal declaration";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// ModportDeclOp custom parser/printer
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseModportPorts(OpAsmParser &parser,
+                                     ArrayAttr &portsAttr) {
+  auto *context = parser.getBuilder().getContext();
+
+  SmallVector<Attribute, 8> ports;
+  auto parseElement = [&]() -> ParseResult {
+    auto direction = ModportDirAttr::parse(parser, {});
+    if (!direction)
+      return failure();
+
+    FlatSymbolRefAttr signal;
+    if (parser.parseAttribute(signal))
+      return failure();
+
+    ports.push_back(ModportPortAttr::get(
+        context, cast<ModportDirAttr>(direction), signal));
+    return success();
+  };
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Paren,
+                                     parseElement))
+    return failure();
+
+  portsAttr = ArrayAttr::get(context, ports);
+  return success();
+}
+
+static void printModportPorts(OpAsmPrinter &p, Operation *,
+                              ArrayAttr portsAttr) {
+  p << "(";
+  llvm::interleaveComma(portsAttr, p, [&](Attribute attr) {
+    auto port = cast<ModportPortAttr>(attr);
+    p << stringifyEnum(port.getDirection().getValue());
+    p << ' ';
+    p.printSymbolName(port.getSignal().getRootReference().getValue());
+  });
+  p << ')';
 }
 
 //===----------------------------------------------------------------------===//
