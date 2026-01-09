@@ -365,6 +365,11 @@ private:
                       llvm::SmallVectorImpl<Type> &extraParams);
 };
 
+/// Construct a fully qualified class name containing the instance hierarchy
+/// and the class name formatted as H1::H2::@C
+mlir::StringAttr fullyQualifiedClassName(Context &ctx,
+                                         const slang::ast::Type &ty);
+
 } // namespace ImportVerilog
 } // namespace circt
 #endif // CONVERSION_IMPORTVERILOG_IMPORTVERILOGINTERNALS_H
