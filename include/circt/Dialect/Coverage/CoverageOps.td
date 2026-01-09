@@ -53,7 +53,7 @@ def LineCoverageOp : CoverageOp<"line"> {
 
   let extraClassDeclaration = [{
     /// Get a unique identifier for this coverage point
-    std::string getCoveragePointId() const {
+    std::string getCoveragePointId() {
       return (getFilename() + ":" + std::to_string(getLine())).str();
     }
   }];
@@ -93,7 +93,7 @@ def ToggleCoverageOp : CoverageOp<"toggle"> {
 
   let extraClassDeclaration = [{
     /// Get the bit width of the tracked signal
-    unsigned getSignalWidth() const;
+    unsigned getSignalWidth();
   }];
 }
 
