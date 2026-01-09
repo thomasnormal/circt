@@ -120,3 +120,11 @@ void circt::lsp::VerilogServer::getDocumentSymbols(
   if (fileIt != impl->files.end())
     fileIt->second->getDocumentSymbols(uri, symbols);
 }
+
+void circt::lsp::VerilogServer::getCompletions(
+    const URIForFile &uri, const Position &pos,
+    llvm::lsp::CompletionList &completions) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    fileIt->second->getCompletions(uri, pos, completions);
+}

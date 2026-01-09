@@ -83,6 +83,10 @@ public:
   void getDocumentSymbols(const URIForFile &uri,
                           std::vector<llvm::lsp::DocumentSymbol> &symbols);
 
+  /// Return completion items for the given position.
+  void getCompletions(const URIForFile &uri, const llvm::lsp::Position &pos,
+                      llvm::lsp::CompletionList &completions);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;
