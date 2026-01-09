@@ -208,6 +208,13 @@ struct TypeVisitor {
     return moore::VirtualInterfaceType::get(context.getContext(), symRef);
   }
 
+  Type visit(const slang::ast::NullType &type) {
+    // The null type represents the type of the `null` literal.
+    // We represent it as a class handle with a null symbol reference.
+    // This allows null to be assigned to any class handle.
+    return moore::ClassHandleType::get(context.getContext(), nullptr);
+  }
+
   /// Emit an error for all other types.
   template <typename T>
   Type visit(T &&node) {
