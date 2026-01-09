@@ -149,6 +149,9 @@ private:
   std::vector<uint32_t> lineOffsets;
   void computeLineOffsets(std::string_view text);
 
+  /// Scan and index `include directives.
+  void scanIncludeDirectives();
+
   // The URI of the document.
   llvm::lsp::URIForFile uri;
 };

@@ -342,3 +342,8 @@ void VerilogIndex::insertSymbolDefinition(const slang::ast::Symbol *symbol) {
 
   insertSymbol(symbol, range, true);
 }
+
+void VerilogIndex::insertInclude(uint32_t startOffset, uint32_t endOffset,
+                                 llvm::StringRef includedPath) {
+  includes[{startOffset, endOffset}] = includedPath.str();
+}
