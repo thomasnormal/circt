@@ -120,6 +120,14 @@ public:
   renameSymbol(const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos,
                llvm::StringRef newName);
 
+  //===--------------------------------------------------------------------===//
+  // Document Links
+  //===--------------------------------------------------------------------===//
+
+  /// Return document links for include directives.
+  void getDocumentLinks(const llvm::lsp::URIForFile &uri,
+                        std::vector<llvm::lsp::DocumentLink> &links);
+
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 

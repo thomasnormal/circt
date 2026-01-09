@@ -1746,3 +1746,67 @@ VerilogDocument::renameSymbol(const llvm::lsp::URIForFile &uri,
   edit.changes[uri.uri().str()] = std::move(textEdits);
   return edit;
 }
+
+//===----------------------------------------------------------------------===//
+// Document Links
+//===----------------------------------------------------------------------===//
+
+void VerilogDocument::getDocumentLinks(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<llvm::lsp::DocumentLink> &links) {
+  if (!index)
+    return;
+
+  const auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+
+  const auto &includeMap = index->getIncludes();
+  for (const auto &[offsetRange, path] : includeMap) {
+    // Convert offsets to LSP range
+    int startLine = 0, startChar = 0;
+    int endLine = 0, endChar = 0;
+
+    for (size_t i = 0; i < lineOffsets.size(); ++i) {
+      if (lineOffsets[i] <= offsetRange.first) {
+        startLine = i;
+        startChar = offsetRange.first - lineOffsets[i];
+      }
+      if (lineOffsets[i] <= offsetRange.second) {
+        endLine = i;
+        endChar = offsetRange.second - lineOffsets[i];
+      }
+    }
+
+    llvm::lsp::Range range(llvm::lsp::Position(startLine, startChar),
+                           llvm::lsp::Position(endLine, endChar));
+
+    // Resolve the file path
+    llvm::SmallString<256> absPath(path);
+    if (!llvm::sys::path::is_absolute(absPath)) {
+      // Try to resolve relative to the document's directory
+      llvm::SmallString<256> docDir(uri.file());
+      llvm::sys::path::remove_filename(docDir);
+      llvm::sys::path::append(docDir, path);
+      if (llvm::sys::fs::exists(docDir))
+        absPath = docDir;
+      else {
+        // Try libDirs
+        for (const auto &libDir : globalContext.options.libDirs) {
+          llvm::SmallString<256> libPath(libDir);
+          llvm::sys::path::append(libPath, path);
+          if (llvm::sys::fs::exists(libPath)) {
+            absPath = libPath;
+            break;
+          }
+        }
+      }
+    }
+
+    if (llvm::sys::fs::exists(absPath)) {
+      auto uriOrErr = llvm::lsp::URIForFile::fromFile(absPath);
+      if (uriOrErr) {
+        links.emplace_back(range, std::move(*uriOrErr));
+      }
+    }
+  }
+}

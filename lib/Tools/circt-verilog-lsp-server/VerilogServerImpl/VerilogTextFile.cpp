@@ -200,6 +200,13 @@ VerilogTextFile::renameSymbol(const llvm::lsp::URIForFile &uri,
   return doc->renameSymbol(uri, pos, newName);
 }
 
+void VerilogTextFile::getDocumentLinks(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<llvm::lsp::DocumentLink> &links) {
+  auto doc = getDocument();
+  doc->getDocumentLinks(uri, links);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;
