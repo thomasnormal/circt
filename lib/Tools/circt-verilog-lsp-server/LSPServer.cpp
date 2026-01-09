@@ -91,6 +91,14 @@ struct LSPServer {
                     Callback<std::vector<CodeAction>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Rename Symbol
+  //===--------------------------------------------------------------------===//
+
+  void onPrepareRename(const TextDocumentPositionParams &params,
+                       Callback<std::optional<Range>> reply);
+  void onRename(const json::Value &params, Callback<WorkspaceEdit> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -153,6 +161,10 @@ void LSPServer::onInitialize(const InitializeParams &params,
            {"resolveProvider", false},
        }},
       {"codeActionProvider", true},
+      {"renameProvider",
+       llvm::json::Object{
+           {"prepareProvider", true},
+       }},
   };
 
   json::Object result{
@@ -273,6 +285,62 @@ void LSPServer::onCodeAction(const CodeActionParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Rename Symbol
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onPrepareRename(const TextDocumentPositionParams &params,
+                                Callback<std::optional<Range>> reply) {
+  auto result = server.prepareRename(params.textDocument.uri, params.position);
+  if (result)
+    reply(result->first);
+  else
+    reply(std::nullopt);
+}
+
+void LSPServer::onRename(const json::Value &params,
+                         Callback<WorkspaceEdit> reply) {
+  // Parse the rename params manually since we don't have the struct
+  json::Path::Root root;
+  auto *obj = params.getAsObject();
+  if (!obj) {
+    reply(make_error<LSPError>("invalid rename params", ErrorCode::InvalidParams));
+    return;
+  }
+
+  // Parse textDocument
+  TextDocumentIdentifier textDocument;
+  auto *textDocObj = obj->get("textDocument");
+  if (!textDocObj ||
+      !fromJSON(*textDocObj, textDocument, json::Path(root))) {
+    reply(make_error<LSPError>("missing textDocument", ErrorCode::InvalidParams));
+    return;
+  }
+
+  // Parse position
+  Position position;
+  auto *posObj = obj->get("position");
+  if (!posObj || !fromJSON(*posObj, position, json::Path(root))) {
+    reply(make_error<LSPError>("missing position", ErrorCode::InvalidParams));
+    return;
+  }
+
+  // Parse newName
+  auto newNameVal = obj->getString("newName");
+  if (!newNameVal) {
+    reply(make_error<LSPError>("missing newName", ErrorCode::InvalidParams));
+    return;
+  }
+  std::string newName = newNameVal->str();
+
+  auto result = server.renameSymbol(textDocument.uri, position, newName);
+  if (result)
+    reply(std::move(*result));
+  else
+    reply(make_error<LSPError>("cannot rename symbol at this position",
+                                ErrorCode::RequestFailed));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -323,6 +391,12 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Code Actions
   messageHandler.method("textDocument/codeAction", &lspServer,
                         &LSPServer::onCodeAction);
+
+  // Rename Symbol
+  messageHandler.method("textDocument/prepareRename", &lspServer,
+                        &LSPServer::onPrepareRename);
+  messageHandler.method("textDocument/rename", &lspServer,
+                        &LSPServer::onRename);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {
