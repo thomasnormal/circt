@@ -192,8 +192,8 @@ struct ExprVisitor {
     auto derefType = value.getType();
     if (isLvalue)
       derefType = cast<moore::RefType>(derefType).getNestedType();
-    if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType>(
-            derefType)) {
+    if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
+             moore::QueueType>(derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";
       return {};
@@ -201,6 +201,26 @@ struct ExprVisitor {
 
     auto resultType =
         isLvalue ? moore::RefType::get(cast<moore::UnpackedType>(type)) : type;
+
+    // For queue types (and other dynamically-sized types), we use the index
+    // directly without translation since they are 0-based.
+    bool isDynamicType = isa<moore::QueueType>(derefType);
+
+    if (isDynamicType) {
+      // Dynamic types (queues) use the index directly - always use dynamic
+      // extract since we can't statically verify bounds.
+      auto lowBit = context.convertRvalueExpression(expr.selector());
+      if (!lowBit)
+        return {};
+      if (isLvalue)
+        return moore::DynExtractRefOp::create(builder, loc, resultType, value,
+                                              lowBit);
+      else
+        return moore::DynExtractOp::create(builder, loc, resultType, value,
+                                           lowBit);
+    }
+
+    // For fixed-size types, we need to translate the index based on the range.
     auto range = expr.value().type->getFixedRange();
     if (auto *constValue = expr.selector().getConstant();
         constValue && constValue->isInteger()) {
