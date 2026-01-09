@@ -167,6 +167,9 @@ struct TypeVisitor {
   }
 
   Type visit(const slang::ast::ClassType &type) {
+    // Convert the class declaration and populate its body.
+    // convertClassDeclaration handles recursive calls by checking if the
+    // body is already being converted (via ClassDeclVisitor::run's guard).
     if (failed(context.convertClassDeclaration(type)))
       return {};
     auto *lowering = context.declareClass(type);
