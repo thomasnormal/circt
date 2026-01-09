@@ -227,7 +227,7 @@ func.func @fold_mux_same_values(%cond: !arc.logic<1>, %arg0: !arc.logic<8>) -> !
   // mux(cond, a, a) = a
   // CHECK-NOT: arc.fourstate.mux
   // CHECK: return %arg0
-  %result = arc.fourstate.mux %cond, %arg0, %arg0 : !arc.logic<8>
+  %result = arc.fourstate.mux %cond, %arg0, %arg0 : !arc.logic<1>, !arc.logic<8>
   return %result : !arc.logic<8>
 }
 
@@ -237,7 +237,7 @@ func.func @fold_mux_true_condition(%true_val: !arc.logic<8>, %false_val: !arc.lo
   // mux(1, a, b) = a
   // CHECK-NOT: arc.fourstate.mux
   // CHECK: return %arg0
-  %result = arc.fourstate.mux %c1, %true_val, %false_val : !arc.logic<8>
+  %result = arc.fourstate.mux %c1, %true_val, %false_val : !arc.logic<1>, !arc.logic<8>
   return %result : !arc.logic<8>
 }
 
@@ -247,6 +247,6 @@ func.func @fold_mux_false_condition(%true_val: !arc.logic<8>, %false_val: !arc.l
   // mux(0, a, b) = b
   // CHECK-NOT: arc.fourstate.mux
   // CHECK: return %arg1
-  %result = arc.fourstate.mux %c0, %true_val, %false_val : !arc.logic<8>
+  %result = arc.fourstate.mux %c0, %true_val, %false_val : !arc.logic<1>, !arc.logic<8>
   return %result : !arc.logic<8>
 }

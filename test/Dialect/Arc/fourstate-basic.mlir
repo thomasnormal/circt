@@ -140,11 +140,11 @@ func.func @fourstate_arithmetic_ops(%a: !arc.logic<8>, %b: !arc.logic<8>) -> (!a
 
 // CHECK-LABEL: func.func @fourstate_comparison_ops
 func.func @fourstate_comparison_ops(%a: !arc.logic<8>, %b: !arc.logic<8>) -> (!arc.logic<1>, !arc.logic<1>, i1, i1) {
-  // CHECK: arc.fourstate.eq {{%.*}}, {{%.*}} : !arc.logic<8>
-  %eq_result = arc.fourstate.eq %a, %b : !arc.logic<8>
+  // CHECK: arc.fourstate.eq {{%.*}}, {{%.*}} : !arc.logic<8> -> !arc.logic<1>
+  %eq_result = arc.fourstate.eq %a, %b : !arc.logic<8> -> !arc.logic<1>
 
-  // CHECK: arc.fourstate.ne {{%.*}}, {{%.*}} : !arc.logic<8>
-  %ne_result = arc.fourstate.ne %a, %b : !arc.logic<8>
+  // CHECK: arc.fourstate.ne {{%.*}}, {{%.*}} : !arc.logic<8> -> !arc.logic<1>
+  %ne_result = arc.fourstate.ne %a, %b : !arc.logic<8> -> !arc.logic<1>
 
   // CHECK: arc.fourstate.case_eq {{%.*}}, {{%.*}} : !arc.logic<8>
   %case_eq_result = arc.fourstate.case_eq %a, %b : !arc.logic<8>
@@ -201,8 +201,8 @@ func.func @fourstate_replicate(%input: !arc.logic<4>) -> (!arc.logic<8>, !arc.lo
 
 // CHECK-LABEL: func.func @fourstate_mux
 func.func @fourstate_mux(%cond: !arc.logic<1>, %true_val: !arc.logic<8>, %false_val: !arc.logic<8>) -> !arc.logic<8> {
-  // CHECK: arc.fourstate.mux {{%.*}}, {{%.*}}, {{%.*}} : !arc.logic<8>
-  %result = arc.fourstate.mux %cond, %true_val, %false_val : !arc.logic<8>
+  // CHECK: arc.fourstate.mux {{%.*}}, {{%.*}}, {{%.*}} : !arc.logic<1>, !arc.logic<8>
+  %result = arc.fourstate.mux %cond, %true_val, %false_val : !arc.logic<1>, !arc.logic<8>
   return %result : !arc.logic<8>
 }
 
@@ -210,9 +210,9 @@ func.func @fourstate_mux(%cond: !arc.logic<1>, %true_val: !arc.logic<8>, %false_
 func.func @fourstate_mux_chain(%c1: !arc.logic<1>, %c2: !arc.logic<1>, %a: !arc.logic<8>, %b: !arc.logic<8>, %c: !arc.logic<8>) -> !arc.logic<8> {
   // Chained mux (like a priority encoder)
   // CHECK: arc.fourstate.mux
-  %t1 = arc.fourstate.mux %c1, %a, %b : !arc.logic<8>
+  %t1 = arc.fourstate.mux %c1, %a, %b : !arc.logic<1>, !arc.logic<8>
   // CHECK: arc.fourstate.mux
-  %result = arc.fourstate.mux %c2, %t1, %c : !arc.logic<8>
+  %result = arc.fourstate.mux %c2, %t1, %c : !arc.logic<1>, !arc.logic<8>
   return %result : !arc.logic<8>
 }
 
