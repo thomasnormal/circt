@@ -592,4 +592,311 @@ def PauseOp : SimOp<"pause"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Event-Driven Simulation Operations (SimIR)
+//===----------------------------------------------------------------------===//
+
+// Trait for operations that must occur within a simulation process region.
+def SimProcessRegion : NativeOpTrait<"SimProcessRegion"> {
+  let cppNamespace = "::circt::sim";
+}
+
+def SimProcessOp : SimOp<"process", [
+  NoRegionArguments,
+  SimProcessRegion,
+  RecursiveMemoryEffects,
+]> {
+  let summary = "A concurrent process for event-driven simulation";
+  let description = [{
+    `sim.process` defines a concurrent process that executes during simulation.
+    The process runs from the beginning of simulation and can suspend execution
+    using `sim.suspend` operations. When suspended, the process waits for
+    specified events or delays before resuming.
+
+    The process may have results that are yielded when execution suspends or
+    completes. These results represent the outputs of the process and are
+    updated each time the process yields.
+
+    Unlike combinational processes, a `sim.process` maintains state across
+    suspensions and can model sequential behavior with explicit timing.
+
+    Example:
+    ```mlir
+    hw.module @top() {
+      %out = sim.process -> i32 {
+        %c0 = hw.constant 0 : i32
+        sim.suspend yield %c0 : i32, ^loop
+      ^loop:
+        %prev = sim.process.state : i32
+        %c1 = hw.constant 1 : i32
+        %next = comb.add %prev, %c1 : i32
+        sim.suspend delay 10ns yield %next : i32, ^loop
+      }
+    }
+    ```
+  }];
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = [{
+    (`->` type($results)^)?
+    attr-dict-with-keyword $body
+  }];
+}
+
+def SimCombProcessOp : SimOp<"comb_process", [
+  NoRegionArguments,
+  SimProcessRegion,
+  RecursiveMemoryEffects,
+]> {
+  let summary = "A combinational process triggered by value changes";
+  let description = [{
+    `sim.comb_process` defines a combinational process that re-evaluates
+    whenever any of the values used within its body change. This is similar
+    to a Verilog `always @(*)` or `always_comb` block.
+
+    The process executes once at the beginning of simulation to establish
+    initial values, and then re-executes whenever any input signal changes.
+    The body must terminate with a `sim.yield` operation.
+
+    Example:
+    ```mlir
+    hw.module @alu(%a: i32, %b: i32, %op: i2) -> (result: i32) {
+      %result = sim.comb_process -> i32 {
+        %add = comb.add %a, %b : i32
+        %sub = comb.sub %a, %b : i32
+        %and = comb.and %a, %b : i32
+        %or = comb.or %a, %b : i32
+        %sel = hw.array_create %add, %sub, %and, %or : i32
+        %out = hw.array_get %sel[%op] : !hw.array<4xi32>, i2
+        sim.yield %out : i32
+      }
+      hw.output %result : i32
+    }
+    ```
+  }];
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = [{
+    (`->` type($results)^)?
+    attr-dict-with-keyword $body
+  }];
+}
+
+def SimSuspendOp : SimOp<"suspend", [
+  Terminator,
+  AttrSizedOperandSegments,
+]> {
+  let summary = "Suspend process execution until events or delay";
+  let description = [{
+    `sim.suspend` suspends execution of the enclosing simulation process.
+    Execution resumes at the destination block when:
+    - Any of the `observed` values change, OR
+    - The specified `delay` time has elapsed
+
+    The `yield` operands provide the current values for the process results
+    while suspended. The `dest` operands are passed to the destination block.
+
+    The optional `region` attribute specifies the IEEE 1800 scheduling region
+    where resumed execution should occur. Valid values are:
+    - "active" (default): Normal active region execution
+    - "inactive": #0 delay region
+    - "nba": Non-blocking assignment update region
+    - "reactive": Program block execution region
+
+    Example:
+    ```mlir
+    // Wait for clock edge
+    sim.suspend observed(%clk : i1), yield (%val : i32), ^next
+
+    // Wait for 10 nanoseconds
+    sim.suspend delay 10ns, yield (%val : i32), ^next
+
+    // Wait for either value change or timeout
+    sim.suspend observed(%data : i8), delay 100ns, yield (%result : i32), ^next
+
+    // Schedule in NBA region
+    sim.suspend region "nba", yield (%val : i32), ^next
+    ```
+  }];
+  let arguments = (ins
+    Variadic<AnyType>:$yieldOperands,
+    OptionalAttr<I64Attr>:$delayFemtoseconds,
+    Variadic<HWValueType>:$observed,
+    Variadic<AnyType>:$destOperands,
+    OptionalAttr<StrAttr>:$region
+  );
+  let successors = (successor AnySuccessor:$dest);
+  let assemblyFormat = [{
+    (`region` $region^)?
+    (`observed` `(` $observed^ `:` qualified(type($observed)) `)` `,`)?
+    (`delay` $delayFemtoseconds^ `fs` `,`)?
+    `yield` `(` $yieldOperands `:` type($yieldOperands) `)` `,`
+    $dest (`(` $destOperands^ `:` qualified(type($destOperands)) `)`)?
+    attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def SimYieldOp : SimOp<"yield", [
+  Pure,
+  ReturnLike,
+  Terminator,
+]> {
+  let summary = "Yield results from a combinational simulation process";
+  let description = [{
+    `sim.yield` terminates a `sim.comb_process` and yields the result values.
+    This operation is analogous to `llhd.yield` for combinational processes.
+
+    Example:
+    ```mlir
+    sim.comb_process -> i32 {
+      %result = comb.add %a, %b : i32
+      sim.yield %result : i32
+    }
+    ```
+  }];
+  let arguments = (ins Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    ($results^ `:` type($results))?
+    attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def SimDriveOp : SimOp<"drive", []> {
+  let summary = "Drive a value onto a signal with optional delay";
+  let description = [{
+    `sim.drive` schedules a value to be driven onto a signal. The drive can
+    be immediate (combinational) or delayed.
+
+    The `mode` attribute specifies the drive behavior:
+    - "blocking": Immediate assignment, blocks until complete (like Verilog `=`)
+    - "nonblocking": Scheduled for NBA region (like Verilog `<=`)
+    - "continuous": Continuous assignment that persists
+
+    The optional `delay` specifies when the drive takes effect, in femtoseconds.
+    For nonblocking assignments, the delay is relative to the NBA region.
+
+    The optional `strength` attribute models Verilog signal strengths.
+
+    Example:
+    ```mlir
+    // Blocking assignment
+    sim.drive %signal, %value : i32
+
+    // Non-blocking assignment
+    sim.drive %signal, %value mode "nonblocking" : i32
+
+    // Delayed assignment (10ns delay)
+    sim.drive %signal, %value delay 10000000 : i32
+
+    // Continuous assignment with strength
+    sim.drive %signal, %value mode "continuous" strength "strong" : i32
+    ```
+  }];
+  let arguments = (ins
+    AnyType:$signal,
+    AnyType:$value,
+    OptionalAttr<I64Attr>:$delayFemtoseconds,
+    DefaultValuedStrAttr<StrAttr, "blocking">:$mode,
+    OptionalAttr<StrAttr>:$strength
+  );
+  let assemblyFormat = [{
+    $signal `,` $value
+    (`delay` $delayFemtoseconds^)?
+    (`mode` $mode^)?
+    (`strength` $strength^)?
+    attr-dict `:` type($value)
+  }];
+  let hasVerifier = 1;
+}
+
+def SimSampleOp : SimOp<"sample", [Pure]> {
+  let summary = "Sample the current value of a signal";
+  let description = [{
+    `sim.sample` reads the current value of a signal at the current simulation
+    time. This represents a synchronous read of signal state.
+
+    The `region` attribute can specify when sampling occurs according to
+    IEEE 1800 scheduling regions:
+    - "preponed": Sample before any changes in the current time slot
+    - "observed": Sample in the observed region (for assertions)
+    - "postponed": Sample after all updates (for $strobe-like behavior)
+
+    By default, sampling occurs in the active region.
+
+    Example:
+    ```mlir
+    %value = sim.sample %signal : i32
+    %strobed = sim.sample %signal region "postponed" : i32
+    ```
+  }];
+  let arguments = (ins
+    AnyType:$signal,
+    OptionalAttr<StrAttr>:$region
+  );
+  let results = (outs AnyType:$value);
+  let assemblyFormat = [{
+    $signal (`region` $region^)? attr-dict `:` type($value)
+  }];
+}
+
+def SimTimeOp : SimOp<"time", [Pure]> {
+  let summary = "Get the current simulation time";
+  let description = [{
+    `sim.time` returns the current simulation time. The time is returned
+    as an integer value in the specified unit.
+
+    Supported units:
+    - "fs": femtoseconds (10^-15 s)
+    - "ps": picoseconds (10^-12 s)
+    - "ns": nanoseconds (10^-9 s)
+    - "us": microseconds (10^-6 s)
+    - "ms": milliseconds (10^-3 s)
+    - "s": seconds
+
+    Example:
+    ```mlir
+    %time_ns = sim.time unit "ns" : i64
+    %time_fs = sim.time unit "fs" : i64
+    ```
+  }];
+  let arguments = (ins
+    DefaultValuedStrAttr<StrAttr, "ns">:$unit
+  );
+  let results = (outs AnyInteger:$time);
+  let assemblyFormat = [{
+    (`unit` $unit^)? attr-dict `:` type($time)
+  }];
+}
+
+def SimWaitEventOp : SimOp<"wait_event", []> {
+  let summary = "Wait for a specific event condition";
+  let description = [{
+    `sim.wait_event` suspends execution until the specified event condition
+    is met. This is a more specialized form of suspension for common patterns.
+
+    The `edge` attribute specifies edge sensitivity:
+    - "posedge": Rising edge (0->1 transition)
+    - "negedge": Falling edge (1->0 transition)
+    - "anyedge": Any value change
+
+    Example:
+    ```mlir
+    // Wait for positive clock edge
+    sim.wait_event %clk edge "posedge"
+
+    // Wait for any change on data
+    sim.wait_event %data edge "anyedge"
+    ```
+  }];
+  let arguments = (ins
+    I1:$signal,
+    DefaultValuedStrAttr<StrAttr, "posedge">:$edge
+  );
+  let assemblyFormat = [{
+    $signal (`edge` $edge^)? attr-dict
+  }];
+}
+
 #endif // CIRCT_DIALECT_SIM_SIMOPS_TD
