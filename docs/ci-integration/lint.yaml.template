@@ -1,0 +1,199 @@
+# CIRCT Lint Configuration Template
+# Copy this file to your project root and rename to lint.yaml
+# Reference in circt-project.yaml with: lint: config: "lint.yaml"
+
+#===============================================================================
+# Rule Configurations
+#===============================================================================
+# Severity levels: ignore, hint, warning, error
+# Setting to "ignore" or "off" disables the rule entirely
+
+rules:
+  #-----------------------------------------------------------------------------
+  # Structural/Connectivity Rules
+  #-----------------------------------------------------------------------------
+
+  # Unused declarations
+  unused_signal: warning      # Signal declared but never read
+  unused_parameter: warning   # Parameter declared but never used
+  unused_port: warning        # Port declared but not connected
+
+  # Undriven/unread signals
+  undriven_signal: error      # Signal used but never assigned
+  unread_signal: warning      # Signal assigned but never read
+
+  # Multi-driver issues
+  multiple_drivers: error     # Signal driven from multiple sources
+
+  # Port connection issues
+  floating_input: warning     # Input port left unconnected
+  floating_output: hint       # Output port left unconnected
+  port_width_mismatch: error  # Port and signal width don't match
+
+  #-----------------------------------------------------------------------------
+  # Coding Style Rules
+  #-----------------------------------------------------------------------------
+
+  # Assignment type checking
+  blocking_in_sequential: error           # = in always_ff
+  nonblocking_in_combinational: warning   # <= in always_comb
+
+  # Width and type issues
+  implicit_width: hint        # Operations with implicit width extension
+  width_mismatch: warning     # Width mismatch in assignments
+  signed_unsigned_mix: warning # Mixing signed/unsigned without cast
+
+  # Case statement issues
+  missing_default: warning    # Case without default clause
+  incomplete_case: warning    # Case not covering all values
+  overlapping_case: warning   # Overlapping case labels
+  full_case_not_unique: hint  # full_case but not unique
+
+  # Inference issues
+  latch_inference: warning    # Unintentional latch inference
+
+  # Naming convention
+  naming_convention: warning  # Identifier doesn't match pattern
+
+  #-----------------------------------------------------------------------------
+  # Best Practice Rules
+  #-----------------------------------------------------------------------------
+
+  # Code quality
+  magic_numbers: hint         # Literal numbers without named constant
+  deep_nesting: hint          # Too many levels of nesting
+  long_module: hint           # Module exceeds recommended length
+  complex_expression: hint    # Expression complexity warning
+
+  # Synthesis
+  unsynthesizable: error      # Unsynthesizable constructs
+  async_reset_missing: warning # Sequential block without async reset
+
+  # Deprecated/problematic constructs
+  deprecated_syntax: warning  # Use of deprecated language features
+  casex_casez: hint          # casex/casez instead of case with wildcard
+  race_condition: error       # Potential race condition
+
+  # Port/module issues
+  missing_ports: hint         # Module instantiation with implicit ports
+  module_not_found: error     # Referenced module doesn't exist
+
+  #-----------------------------------------------------------------------------
+  # Documentation Rules
+  #-----------------------------------------------------------------------------
+
+  missing_module_doc: hint    # Module without header comment
+  missing_port_doc: ignore    # Port without description (often too noisy)
+
+  #-----------------------------------------------------------------------------
+  # Rule-Specific Options
+  #-----------------------------------------------------------------------------
+
+  # Example of rule with options
+  # long_module:
+  #   severity: hint
+  #   max_lines: 500
+
+  # deep_nesting:
+  #   severity: hint
+  #   max_depth: 5
+
+#===============================================================================
+# Naming Conventions
+#===============================================================================
+# Regular expression patterns for identifier naming
+# Use ^ and $ anchors for full match
+
+naming:
+  # Module names: PascalCase or UPPER_CASE
+  module_pattern: "^[A-Z][a-zA-Z0-9_]*$"
+
+  # Signal/variable names: snake_case
+  signal_pattern: "^[a-z][a-z0-9_]*$"
+
+  # Parameter names: UPPER_CASE
+  parameter_pattern: "^[A-Z][A-Z0-9_]*$"
+
+  # Port names: snake_case with optional direction suffix
+  port_pattern: "^[a-z][a-z0-9_]*(_i|_o|_io)?$"
+
+  # Instance names: snake_case with optional 'u_' prefix
+  instance_pattern: "^(u_)?[a-z][a-z0-9_]*$"
+
+  # Constant/localparam names: UPPER_CASE
+  constant_pattern: "^[A-Z][A-Z0-9_]*$"
+
+  # Enum type names: snake_case with '_t' suffix
+  enum_type_pattern: "^[a-z][a-z0-9_]*_t$"
+
+  # Enum value names: UPPER_CASE
+  enum_value_pattern: "^[A-Z][A-Z0-9_]*$"
+
+  # Interface names: PascalCase with optional '_if' suffix
+  interface_pattern: "^[A-Z][a-zA-Z0-9]*(_if)?$"
+
+  # Clock signals: Contains 'clk' or 'clock'
+  clock_pattern: "^.*cl(oc)?k.*$"
+
+  # Reset signals: Contains 'rst' or 'reset'
+  reset_pattern: "^.*re?s(e)?t.*$"
+
+#===============================================================================
+# File Exclusions
+#===============================================================================
+# Patterns for files/directories to exclude from linting
+# Supports glob patterns with ** for recursive matching
+
+exclude:
+  # Generated code
+  - "generated/**"
+  - "**/generated/**"
+  - "**/*.gen.sv"
+  - "**/*.gen.v"
+
+  # Third-party IP
+  - "third_party/**"
+  - "vendor/**"
+  - "ip/**"
+  - "external/**"
+
+  # Legacy code (excluded from new lint rules)
+  - "**/legacy/**"
+  - "**/deprecated/**"
+
+  # Testbenches (may have different coding standards)
+  # - "tb/**"
+  # - "testbench/**"
+  # - "**/*_tb.sv"
+
+  # Simulation-only files
+  # - "sim/**"
+  # - "**/*_sim.sv"
+
+  # Examples and documentation
+  - "examples/**"
+  - "docs/**"
+
+#===============================================================================
+# File-Specific Overrides
+#===============================================================================
+# Override rules for specific files or patterns
+
+# overrides:
+#   # Relax naming rules for testbenches
+#   - files: ["tb/**", "**/*_tb.sv"]
+#     rules:
+#       naming_convention: ignore
+#       blocking_in_sequential: ignore
+#
+#   # Stricter rules for critical modules
+#   - files: ["rtl/core/**"]
+#     rules:
+#       implicit_width: error
+#       magic_numbers: warning
+#
+#   # Ignore warnings in auto-generated register blocks
+#   - files: ["**/regs_*.sv", "**/csr_*.sv"]
+#     rules:
+#       unused_signal: ignore
+#       long_module: ignore
