@@ -1541,7 +1541,21 @@ struct ClassDeclVisitor {
     if (!ty)
       return failure();
 
-    moore::ClassPropertyDeclOp::create(builder, loc, prop.name, ty);
+    // Convert slang's RandMode to Moore's RandMode
+    moore::RandMode randMode;
+    switch (prop.randMode) {
+    case slang::ast::RandMode::None:
+      randMode = moore::RandMode::None;
+      break;
+    case slang::ast::RandMode::Rand:
+      randMode = moore::RandMode::Rand;
+      break;
+    case slang::ast::RandMode::RandC:
+      randMode = moore::RandMode::RandC;
+      break;
+    }
+
+    moore::ClassPropertyDeclOp::create(builder, loc, prop.name, ty, randMode);
     return success();
   }
 
@@ -1662,6 +1676,31 @@ struct ClassDeclVisitor {
 
   // Empty members: ignore
   LogicalResult visit(const slang::ast::EmptyMemberSymbol &) {
+    return success();
+  }
+
+  // Constraint blocks: convert to moore.constraint.block
+  LogicalResult visit(const slang::ast::ConstraintBlockSymbol &constraint) {
+    auto loc = convertLocation(constraint.location);
+
+    // Check for static and pure flags
+    bool isStatic =
+        (constraint.flags & slang::ast::ConstraintBlockFlags::Static) ==
+        slang::ast::ConstraintBlockFlags::Static;
+    bool isPure =
+        (constraint.flags & slang::ast::ConstraintBlockFlags::Pure) ==
+        slang::ast::ConstraintBlockFlags::Pure;
+
+    // Create the constraint block operation
+    auto constraintOp = moore::ConstraintBlockOp::create(
+        builder, loc, constraint.name,
+        isStatic ? builder.getUnitAttr() : nullptr,
+        isPure ? builder.getUnitAttr() : nullptr);
+
+    // For now, leave the body empty. Full constraint expression parsing
+    // will be added in a future patch.
+    constraintOp.getBody().emplaceBlock();
+
     return success();
   }
 
