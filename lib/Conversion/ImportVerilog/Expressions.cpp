@@ -141,16 +141,39 @@ static Value visitClassProperty(Context &context,
   auto fieldTy = cast<moore::UnpackedType>(type);
   auto fieldRefTy = moore::RefType::get(fieldTy);
 
+  // Get the class that declares this property from slang's AST.
+  // This avoids the need to look up the property in Moore IR, which may not
+  // have been fully populated yet due to circular dependencies between classes.
+  const auto *parentScope = expr.getParentScope();
+  if (!parentScope) {
+    mlir::emitError(loc) << "class property '" << expr.name
+                         << "' has no parent scope";
+    return {};
+  }
+  const auto *declaringClass = parentScope->asSymbol().as_if<slang::ast::ClassType>();
+  if (!declaringClass) {
+    mlir::emitError(loc) << "class property '" << expr.name
+                         << "' is not declared in a class";
+    return {};
+  }
+
+  // Get the class symbol name from the declaring class
+  auto declaringClassSym = fullyQualifiedClassName(context, *declaringClass);
+  auto targetClassHandle = moore::ClassHandleType::get(
+      context.getContext(),
+      mlir::FlatSymbolRefAttr::get(context.getContext(), declaringClassSym));
+
   moore::ClassHandleType classTy =
       cast<moore::ClassHandleType>(instRef.getType());
 
-  auto targetClassHandle =
-      context.getAncestorClassWithProperty(classTy, expr.name, loc);
-  if (!targetClassHandle)
-    return {};
-
-  auto upcastRef = context.materializeConversion(targetClassHandle, instRef,
-                                                 false, instRef.getLoc());
+  // If target class is same as current class, no conversion needed
+  Value upcastRef;
+  if (targetClassHandle.getClassSym() == classTy.getClassSym()) {
+    upcastRef = instRef;
+  } else {
+    upcastRef = context.materializeConversion(targetClassHandle, instRef,
+                                               false, instRef.getLoc());
+  }
   if (!upcastRef)
     return {};
 
@@ -2784,6 +2807,9 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
 
   auto *op = resolve(*this, actualSym);
   auto decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(op);
+  if (!decl)
+    return false;
+
   // Walk up the inheritance chain via ClassDeclOp::$base (SymbolRefAttr).
   while (decl) {
     mlir::SymbolRefAttr curBase = decl.getBaseAttr();

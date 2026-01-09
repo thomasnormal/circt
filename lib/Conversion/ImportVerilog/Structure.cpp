@@ -1597,41 +1597,6 @@ Context::finalizeFunctionBodyCaptures(FunctionLowering &lowering) {
 
 namespace {
 
-/// Construct a fully qualified class name containing the instance hierarchy
-/// and the class name formatted as H1::H2::@C
-mlir::StringAttr fullyQualifiedClassName(Context &ctx,
-                                         const slang::ast::Type &ty) {
-  SmallString<64> name;
-  SmallVector<llvm::StringRef, 8> parts;
-
-  const slang::ast::Scope *scope = ty.getParentScope();
-  while (scope) {
-    const auto &sym = scope->asSymbol();
-    switch (sym.kind) {
-    case slang::ast::SymbolKind::Root:
-      scope = nullptr; // stop at $root
-      continue;
-    case slang::ast::SymbolKind::InstanceBody:
-    case slang::ast::SymbolKind::Instance:
-    case slang::ast::SymbolKind::Package:
-    case slang::ast::SymbolKind::ClassType:
-      if (!sym.name.empty())
-        parts.push_back(sym.name); // keep packages + outer classes
-      break;
-    default:
-      break;
-    }
-    scope = sym.getParentScope();
-  }
-
-  for (auto p : llvm::reverse(parts)) {
-    name += p;
-    name += "::";
-  }
-  name += ty.name; // class’s own name
-  return mlir::StringAttr::get(ctx.getContext(), name);
-}
-
 /// Helper function to construct the classes fully qualified base class name
 /// and the name of all implemented interface classes
 std::pair<mlir::SymbolRefAttr, mlir::ArrayAttr>
@@ -1913,52 +1878,56 @@ private:
 ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
   // Check if there already is a declaration for this class.
   auto &lowering = classes[&cls];
-  if (lowering)
-    return lowering.get();
-  lowering = std::make_unique<ClassLowering>();
-  auto loc = convertLocation(cls.location);
+  bool isNewDecl = !lowering;
+  if (isNewDecl) {
+    lowering = std::make_unique<ClassLowering>();
+    auto loc = convertLocation(cls.location);
 
-  // Pick an insertion point for this function according to the source file
-  // location.
-  OpBuilder::InsertionGuard g(builder);
-  auto it = orderedRootOps.upper_bound(cls.location);
-  if (it == orderedRootOps.end())
-    builder.setInsertionPointToEnd(intoModuleOp.getBody());
-  else
-    builder.setInsertionPoint(it->second);
+    // Pick an insertion point for this function according to the source file
+    // location.
+    OpBuilder::InsertionGuard g(builder);
+    auto it = orderedRootOps.upper_bound(cls.location);
+    if (it == orderedRootOps.end())
+      builder.setInsertionPointToEnd(intoModuleOp.getBody());
+    else
+      builder.setInsertionPoint(it->second);
 
-  auto symName = fullyQualifiedClassName(*this, cls);
+    auto symName = fullyQualifiedClassName(*this, cls);
 
-  // Create the ClassDeclOp first with empty base/implements attrs.
-  // We need to do this before processing base classes because base class
-  // processing may recursively reference this class (e.g., through method
-  // parameter types), and we need lowering->op to be valid.
-  auto classDeclOp =
-      moore::ClassDeclOp::create(builder, loc, symName, nullptr, nullptr);
+    // Create the ClassDeclOp first with empty base/implements attrs.
+    // We need to do this before processing base classes because base class
+    // processing may recursively reference this class (e.g., through method
+    // parameter types), and we need lowering->op to be valid.
+    auto classDeclOp =
+        moore::ClassDeclOp::create(builder, loc, symName, nullptr, nullptr);
 
-  SymbolTable::setSymbolVisibility(classDeclOp,
-                                   SymbolTable::Visibility::Public);
-  orderedRootOps.insert(it, {cls.location, classDeclOp});
-  lowering->op = classDeclOp;
-  symbolTable.insert(classDeclOp);
+    SymbolTable::setSymbolVisibility(classDeclOp,
+                                     SymbolTable::Visibility::Public);
+    orderedRootOps.insert(it, {cls.location, classDeclOp});
+    lowering->op = classDeclOp;
+    symbolTable.insert(classDeclOp);
+  }
 
-  // Now process base class after our ClassDeclOp is set up.
+  // Always ensure base class is converted if present
   // This ensures recursive type references find a valid lowering->op.
   if (const auto *maybeBaseClass = cls.getBaseClass())
     if (const auto *baseClass = maybeBaseClass->as_if<slang::ast::ClassType>())
       if (!classes.contains(baseClass) &&
           failed(convertClassDeclaration(*baseClass))) {
+        auto loc = convertLocation(cls.location);
         mlir::emitError(loc) << "Failed to convert base class "
                              << baseClass->name << " of class " << cls.name;
         return {};
       }
 
-  // Update the base and implements attributes now that base classes are processed.
+  // Always update the base and implements attributes.
+  // This handles the case where the class was forward-declared during type
+  // conversion and the base attributes weren't set.
   auto [base, impls] = buildBaseAndImplementsAttrs(*this, cls);
-  if (base)
-    classDeclOp.setBaseAttr(base);
-  if (impls)
-    classDeclOp.setImplementedInterfacesAttr(impls);
+  if (base && !lowering->op.getBaseAttr())
+    lowering->op.setBaseAttr(base);
+  if (impls && !lowering->op.getImplementedInterfacesAttr())
+    lowering->op.setImplementedInterfacesAttr(impls);
 
   return lowering.get();
 }
@@ -2023,4 +1992,39 @@ Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
     globalVariableWorklist.push_back(&var);
 
   return success();
+}
+
+/// Construct a fully qualified class name containing the instance hierarchy
+/// and the class name formatted as H1::H2::@C
+mlir::StringAttr circt::ImportVerilog::fullyQualifiedClassName(
+    Context &ctx, const slang::ast::Type &ty) {
+  SmallString<64> name;
+  SmallVector<llvm::StringRef, 8> parts;
+
+  const slang::ast::Scope *scope = ty.getParentScope();
+  while (scope) {
+    const auto &sym = scope->asSymbol();
+    switch (sym.kind) {
+    case slang::ast::SymbolKind::Root:
+      scope = nullptr; // stop at $root
+      continue;
+    case slang::ast::SymbolKind::InstanceBody:
+    case slang::ast::SymbolKind::Instance:
+    case slang::ast::SymbolKind::Package:
+    case slang::ast::SymbolKind::ClassType:
+      if (!sym.name.empty())
+        parts.push_back(sym.name); // keep packages + outer classes
+      break;
+    default:
+      break;
+    }
+    scope = sym.getParentScope();
+  }
+
+  for (auto p : llvm::reverse(parts)) {
+    name += p;
+    name += "::";
+  }
+  name += ty.name; // class's own name
+  return mlir::StringAttr::get(ctx.getContext(), name);
 }
