@@ -128,3 +128,12 @@ void circt::lsp::VerilogServer::getCompletions(
   if (fileIt != impl->files.end())
     fileIt->second->getCompletions(uri, pos, completions);
 }
+
+void circt::lsp::VerilogServer::getCodeActions(
+    const URIForFile &uri, const llvm::lsp::Range &range,
+    const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+    std::vector<llvm::lsp::CodeAction> &codeActions) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    fileIt->second->getCodeActions(uri, range, diagnostics, codeActions);
+}

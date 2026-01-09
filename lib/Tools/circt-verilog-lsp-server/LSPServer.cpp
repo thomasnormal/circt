@@ -84,6 +84,13 @@ struct LSPServer {
                     Callback<CompletionList> reply);
 
   //===--------------------------------------------------------------------===//
+  // Code Actions
+  //===--------------------------------------------------------------------===//
+
+  void onCodeAction(const CodeActionParams &params,
+                    Callback<std::vector<CodeAction>> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -145,6 +152,7 @@ void LSPServer::onInitialize(const InitializeParams &params,
            {"triggerCharacters", llvm::json::Array{"."}},
            {"resolveProvider", false},
        }},
+      {"codeActionProvider", true},
   };
 
   json::Object result{
@@ -253,6 +261,18 @@ void LSPServer::onCompletion(const CompletionParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Code Actions
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onCodeAction(const CodeActionParams &params,
+                             Callback<std::vector<CodeAction>> reply) {
+  std::vector<CodeAction> codeActions;
+  server.getCodeActions(params.textDocument.uri, params.range,
+                        params.context.diagnostics, codeActions);
+  reply(std::move(codeActions));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -299,6 +319,10 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Auto-Completion
   messageHandler.method("textDocument/completion", &lspServer,
                         &LSPServer::onCompletion);
+
+  // Code Actions
+  messageHandler.method("textDocument/codeAction", &lspServer,
+                        &LSPServer::onCodeAction);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

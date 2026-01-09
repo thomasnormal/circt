@@ -83,6 +83,13 @@ public:
                       llvm::lsp::Position pos,
                       llvm::lsp::CompletionList &completions);
 
+  /// Return code actions for the given range and diagnostics.
+  /// Thread-safe; acquires docMutex.
+  void getCodeActions(const llvm::lsp::URIForFile &uri,
+                      const llvm::lsp::Range &range,
+                      const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+                      std::vector<llvm::lsp::CodeAction> &codeActions);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

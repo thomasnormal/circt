@@ -87,6 +87,11 @@ public:
   void getCompletions(const URIForFile &uri, const llvm::lsp::Position &pos,
                       llvm::lsp::CompletionList &completions);
 
+  /// Return code actions for the given range and diagnostics.
+  void getCodeActions(const URIForFile &uri, const llvm::lsp::Range &range,
+                      const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+                      std::vector<llvm::lsp::CodeAction> &codeActions);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;
