@@ -9,6 +9,11 @@
 // A converter that can be plugged into a slang `DiagnosticEngine` as a
 // client that will map slang diagnostics to LSP diagnostics.
 //
+// This implementation provides rich diagnostic information including:
+// - Source ranges (not just point locations)
+// - Related diagnostic information for multi-span errors
+// - Source code extraction for better error messages
+//
 //===----------------------------------------------------------------------===//
 
 #include "LSPDiagnosticClient.h"
@@ -36,9 +41,42 @@ void LSPDiagnosticClient::report(const slang::ReportedDiagnostic &slangDiag) {
   // Show only the diagnostics in the current file.
   if (loc.uri != document.getURI())
     return;
-  auto &mlirDiag = diags.emplace_back();
-  mlirDiag.severity = getSeverity(slangDiag.severity);
-  mlirDiag.range = loc.range;
-  mlirDiag.source = "slang";
-  mlirDiag.message = slangDiag.formattedMessage;
+
+  auto &lspDiag = diags.emplace_back();
+  lspDiag.severity = getSeverity(slangDiag.severity);
+  lspDiag.source = "slang";
+  lspDiag.message = slangDiag.formattedMessage;
+
+  // Use the source range if available for better highlighting.
+  // Slang provides ranges for many diagnostics that give context.
+  if (!slangDiag.ranges.empty()) {
+    // Use the first range as the primary diagnostic range
+    auto primaryRange = slangDiag.ranges[0];
+    auto rangeLoc = document.getLspLocation(primaryRange);
+    if (rangeLoc.uri == document.getURI()) {
+      lspDiag.range = rangeLoc.range;
+    } else {
+      lspDiag.range = loc.range;
+    }
+
+    // Add additional ranges as related information
+    if (slangDiag.ranges.size() > 1) {
+      std::vector<llvm::lsp::DiagnosticRelatedInformation> relatedInfo;
+      for (size_t i = 1; i < slangDiag.ranges.size(); ++i) {
+        auto relatedRange = slangDiag.ranges[i];
+        auto relatedLoc = document.getLspLocation(relatedRange);
+        if (relatedLoc.uri.file().empty())
+          continue;
+
+        llvm::lsp::DiagnosticRelatedInformation info;
+        info.location = relatedLoc;
+        info.message = "related location";
+        relatedInfo.push_back(std::move(info));
+      }
+      if (!relatedInfo.empty())
+        lspDiag.relatedInformation = std::move(relatedInfo);
+    }
+  } else {
+    lspDiag.range = loc.range;
+  }
 }
