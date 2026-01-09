@@ -2710,6 +2710,24 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   return moore::StringToLowerOp::create(builder, loc, value);
                 })
+          // Array/queue built-in methods
+          .Case("size",
+                [&]() -> Value {
+                  // size() is a built-in method on dynamic arrays, associative
+                  // arrays, and queues
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::AssocArrayType,
+                          moore::QueueType>(type))
+                    return moore::ArraySizeOp::create(builder, loc, value);
+                  return {};
+                })
+          .Case("num",
+                [&]() -> Value {
+                  // num() is an alias for size() on associative arrays
+                  if (isa<moore::AssocArrayType>(value.getType()))
+                    return moore::ArraySizeOp::create(builder, loc, value);
+                  return {};
+                })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
