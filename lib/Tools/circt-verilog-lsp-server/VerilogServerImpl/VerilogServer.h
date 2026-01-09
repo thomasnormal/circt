@@ -19,6 +19,7 @@
 #define LIB_CIRCT_TOOLS_CIRCT_VERILOG_LSP_SERVER_VERILOGSERVER_H_
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/LSP/Protocol.h"
 
 #include <memory>
@@ -112,6 +113,19 @@ public:
   /// Return inlay hints for the given range.
   void getInlayHints(const URIForFile &uri, const llvm::lsp::Range &range,
                      std::vector<llvm::lsp::InlayHint> &hints);
+
+  /// Initialize workspace from LSP initialize parameters.
+  void initializeWorkspace(const llvm::json::Value &initParams);
+
+  /// Handle workspace folder changes.
+  void workspaceFoldersChanged(llvm::ArrayRef<std::string> added,
+                               llvm::ArrayRef<std::string> removed);
+
+  /// Handle file change notifications (for config file reloading).
+  void onFileChanged(const URIForFile &uri);
+
+  /// Get workspace configuration as JSON for the client.
+  llvm::json::Value getWorkspaceConfiguration() const;
 
 private:
   struct Impl;
