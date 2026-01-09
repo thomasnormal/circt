@@ -101,6 +101,11 @@ public:
   renameSymbol(const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos,
                llvm::StringRef newName);
 
+  /// Return document links for include directives.
+  /// Thread-safe; acquires docMutex.
+  void getDocumentLinks(const llvm::lsp::URIForFile &uri,
+                        std::vector<llvm::lsp::DocumentLink> &links);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

@@ -156,3 +156,10 @@ circt::lsp::VerilogServer::renameSymbol(const URIForFile &uri,
     return fileIt->second->renameSymbol(uri, pos, newName);
   return std::nullopt;
 }
+
+void circt::lsp::VerilogServer::getDocumentLinks(
+    const URIForFile &uri, std::vector<llvm::lsp::DocumentLink> &links) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    fileIt->second->getDocumentLinks(uri, links);
+}
