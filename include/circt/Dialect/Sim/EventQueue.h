@@ -17,8 +17,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <queue>
 #include <vector>
@@ -228,13 +230,15 @@ public:
   /// Configuration for the time wheel.
   struct Config {
     /// Number of slots per wheel level.
-    size_t slotsPerLevel = 256;
+    size_t slotsPerLevel;
 
     /// Time resolution per slot at level 0 (in femtoseconds).
-    uint64_t baseResolution = 1;
+    uint64_t baseResolution;
 
     /// Number of levels in the hierarchy.
-    size_t numLevels = 4;
+    size_t numLevels;
+
+    Config() : slotsPerLevel(256), baseResolution(1), numLevels(4) {}
   };
 
   explicit TimeWheel(Config config = Config());
