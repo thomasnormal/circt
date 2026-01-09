@@ -137,3 +137,22 @@ void circt::lsp::VerilogServer::getCodeActions(
   if (fileIt != impl->files.end())
     fileIt->second->getCodeActions(uri, range, diagnostics, codeActions);
 }
+
+std::optional<std::pair<llvm::lsp::Range, std::string>>
+circt::lsp::VerilogServer::prepareRename(const URIForFile &uri,
+                                          const Position &pos) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    return fileIt->second->prepareRename(uri, pos);
+  return std::nullopt;
+}
+
+std::optional<llvm::lsp::WorkspaceEdit>
+circt::lsp::VerilogServer::renameSymbol(const URIForFile &uri,
+                                         const Position &pos,
+                                         llvm::StringRef newName) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    return fileIt->second->renameSymbol(uri, pos, newName);
+  return std::nullopt;
+}

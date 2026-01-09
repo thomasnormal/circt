@@ -186,6 +186,20 @@ void VerilogTextFile::getCodeActions(
   doc->getCodeActions(uri, range, diagnostics, codeActions);
 }
 
+std::optional<std::pair<llvm::lsp::Range, std::string>>
+VerilogTextFile::prepareRename(const llvm::lsp::URIForFile &uri,
+                               llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->prepareRename(uri, pos);
+}
+
+std::optional<llvm::lsp::WorkspaceEdit>
+VerilogTextFile::renameSymbol(const llvm::lsp::URIForFile &uri,
+                              llvm::lsp::Position pos, llvm::StringRef newName) {
+  auto doc = getDocument();
+  return doc->renameSymbol(uri, pos, newName);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;
