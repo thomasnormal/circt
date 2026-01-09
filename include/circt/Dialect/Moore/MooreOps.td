@@ -3974,6 +3974,32 @@ def UVMFindByNameOp : UVMOp<"find_by_name"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Array Builtins
+//===----------------------------------------------------------------------===//
+
+class ArrayBuiltin<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"array." # mnemonic, traits>;
+
+def ArraySizeOp : ArrayBuiltin<"size"> {
+  let summary = "Get the size of a dynamic array, associative array, or queue";
+  let description = [{
+    Returns the number of elements in the given array. This corresponds to the
+    SystemVerilog `.size()` built-in method on dynamic arrays, associative
+    arrays, and queues.
+
+    For associative arrays, this is equivalent to calling `.num()`.
+
+    Example:
+    ```mlir
+    %size = moore.array.size %queue : !moore.queue<i32, 0> -> i32
+    ```
+  }];
+  let arguments = (ins AnyDynamicArrayType:$array);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$array `:` type($array) attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//
 
