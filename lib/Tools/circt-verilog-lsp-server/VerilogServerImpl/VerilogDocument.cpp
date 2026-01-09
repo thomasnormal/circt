@@ -1357,3 +1357,147 @@ void VerilogDocument::getCompletions(const llvm::lsp::URIForFile &uri,
     }
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Code Actions
+//===----------------------------------------------------------------------===//
+
+/// Check if a diagnostic message indicates an unknown identifier.
+static bool isUnknownIdentifierDiagnostic(llvm::StringRef message) {
+  return message.contains("unknown identifier") ||
+         message.contains("undeclared identifier") ||
+         message.contains("use of undeclared") ||
+         message.contains("undefined") ||
+         message.contains("was not found");
+}
+
+/// Check if a diagnostic message indicates a width mismatch.
+static bool isWidthMismatchDiagnostic(llvm::StringRef message) {
+  return message.contains("width") && (message.contains("mismatch") ||
+                                       message.contains("incompatible"));
+}
+
+/// Check if a diagnostic message indicates an unknown module.
+static bool isUnknownModuleDiagnostic(llvm::StringRef message) {
+  return message.contains("unknown module") ||
+         message.contains("definition of") && message.contains("not found");
+}
+
+/// Generate quick fix code actions based on diagnostics.
+static void generateQuickFixes(
+    const llvm::lsp::URIForFile &uri, const llvm::lsp::Range &range,
+    const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+    std::vector<llvm::lsp::CodeAction> &codeActions) {
+
+  for (const auto &diag : diagnostics) {
+    // Check for unknown identifier - suggest adding wire/logic declaration
+    if (isUnknownIdentifierDiagnostic(diag.message)) {
+      // Extract identifier name from the diagnostic message if possible
+      // For now, provide generic suggestions
+
+      llvm::lsp::CodeAction wireAction;
+      wireAction.title = "Declare as wire";
+      wireAction.kind = llvm::lsp::CodeAction::kQuickFix;
+      wireAction.diagnostics = {diag};
+
+      // The actual text edit would need the identifier name
+      // For now, just provide the action structure
+      llvm::lsp::WorkspaceEdit edit;
+      // Insert "wire <name>;" at the beginning of the module
+      wireAction.edit = edit;
+      codeActions.push_back(std::move(wireAction));
+
+      llvm::lsp::CodeAction logicAction;
+      logicAction.title = "Declare as logic";
+      logicAction.kind = llvm::lsp::CodeAction::kQuickFix;
+      logicAction.diagnostics = {diag};
+      logicAction.edit = llvm::lsp::WorkspaceEdit{};
+      codeActions.push_back(std::move(logicAction));
+    }
+
+    // Check for width mismatch
+    if (isWidthMismatchDiagnostic(diag.message)) {
+      llvm::lsp::CodeAction truncateAction;
+      truncateAction.title = "Add explicit truncation";
+      truncateAction.kind = llvm::lsp::CodeAction::kQuickFix;
+      truncateAction.diagnostics = {diag};
+      truncateAction.edit = llvm::lsp::WorkspaceEdit{};
+      codeActions.push_back(std::move(truncateAction));
+
+      llvm::lsp::CodeAction extendAction;
+      extendAction.title = "Add explicit extension";
+      extendAction.kind = llvm::lsp::CodeAction::kQuickFix;
+      extendAction.diagnostics = {diag};
+      extendAction.edit = llvm::lsp::WorkspaceEdit{};
+      codeActions.push_back(std::move(extendAction));
+    }
+
+    // Check for unknown module
+    if (isUnknownModuleDiagnostic(diag.message)) {
+      llvm::lsp::CodeAction createModuleAction;
+      createModuleAction.title = "Create module stub";
+      createModuleAction.kind = llvm::lsp::CodeAction::kQuickFix;
+      createModuleAction.diagnostics = {diag};
+      createModuleAction.edit = llvm::lsp::WorkspaceEdit{};
+      codeActions.push_back(std::move(createModuleAction));
+    }
+  }
+}
+
+void VerilogDocument::getCodeActions(
+    const llvm::lsp::URIForFile &uri, const llvm::lsp::Range &range,
+    const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+    std::vector<llvm::lsp::CodeAction> &codeActions) {
+
+  // Generate quick fixes based on diagnostics
+  generateQuickFixes(uri, range, diagnostics, codeActions);
+
+  // Add refactoring actions that are always available
+  // Extract selection as new signal
+  llvm::lsp::CodeAction extractSignalAction;
+  extractSignalAction.title = "Extract to signal";
+  extractSignalAction.kind = llvm::lsp::CodeAction::kRefactor;
+  codeActions.push_back(std::move(extractSignalAction));
+
+  // Add module instantiation template action
+  if (succeeded(compilation)) {
+    for (const auto &def : (*compilation)->getDefinitions()) {
+      llvm::lsp::CodeAction instantiateAction;
+      instantiateAction.title = "Insert " + std::string(def.name) + " instance";
+      instantiateAction.kind = llvm::lsp::CodeAction::kRefactor;
+
+      // Build the instantiation template
+      std::string instTemplate = std::string(def.name) + " inst_" +
+                                 std::string(def.name) + " (\n";
+
+      // Get the ports from the definition
+      bool first = true;
+      // Try to get ports from the first instance if available
+      const auto &root = (*compilation)->getRoot();
+      for (auto *inst : root.topInstances) {
+        if (&inst->getDefinition() == &def) {
+          for (const auto *portSym : inst->body.getPortList()) {
+            if (const auto *port = portSym->as_if<slang::ast::PortSymbol>()) {
+              if (!first)
+                instTemplate += ",\n";
+              first = false;
+              instTemplate += "  ." + std::string(port->name) + "()";
+            }
+          }
+          break;
+        }
+      }
+
+      instTemplate += "\n);";
+
+      llvm::lsp::WorkspaceEdit edit;
+      llvm::lsp::TextEdit textEdit;
+      textEdit.range = range;
+      textEdit.newText = instTemplate;
+      edit.changes[uri.uri().str()] = {textEdit};
+      instantiateAction.edit = edit;
+
+      codeActions.push_back(std::move(instantiateAction));
+    }
+  }
+}

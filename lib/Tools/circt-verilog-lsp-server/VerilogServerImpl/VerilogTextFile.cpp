@@ -178,6 +178,14 @@ void VerilogTextFile::getCompletions(const llvm::lsp::URIForFile &uri,
   doc->getCompletions(uri, pos, completions);
 }
 
+void VerilogTextFile::getCodeActions(
+    const llvm::lsp::URIForFile &uri, const llvm::lsp::Range &range,
+    const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+    std::vector<llvm::lsp::CodeAction> &codeActions) {
+  auto doc = getDocument();
+  doc->getCodeActions(uri, range, diagnostics, codeActions);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;
