@@ -126,6 +126,125 @@ func.func @test_randomize() {
   return
 }
 
+//===----------------------------------------------------------------------===//
+// Constraint Expression Operations Tests
+//===----------------------------------------------------------------------===//
+
+// Test constraint expression operations
+// CHECK-LABEL:   moore.class.classdecl @ConstraintExpressions {
+// CHECK-NEXT:     moore.class.propertydecl @a : !moore.i32 rand_mode rand
+// CHECK-NEXT:     moore.class.propertydecl @b : !moore.i32 rand_mode rand
+// CHECK-NEXT:     moore.class.propertydecl @arr : !moore.uarray<8 x i32> rand_mode rand
+// CHECK-NEXT:     moore.constraint.block @solve_before_constraint {
+// CHECK-NEXT:       moore.constraint.solve_before [@a], [@b]
+// CHECK-NEXT:     }
+// CHECK:       }
+moore.class.classdecl @ConstraintExpressions {
+  moore.class.propertydecl @a : !moore.i32 rand_mode rand
+  moore.class.propertydecl @b : !moore.i32 rand_mode rand
+  moore.class.propertydecl @arr : !moore.uarray<8 x i32> rand_mode rand
+  moore.constraint.block @solve_before_constraint {
+    moore.constraint.solve_before [@a], [@b]
+  }
+}
+
+// Test constraint expression with basic expression
+// CHECK-LABEL:   func.func @test_constraint_expr
+func.func @test_constraint_expr(%cond: i1) {
+  // CHECK:       moore.constraint.expr %{{.*}}
+  moore.constraint.expr %cond
+  return
+}
+
+// Test constraint implication
+// CHECK-LABEL:   func.func @test_constraint_implication
+func.func @test_constraint_implication(%antecedent: i1, %cond: i1) {
+  // CHECK:       moore.constraint.implication %{{.*}} {
+  // CHECK-NEXT:    moore.constraint.expr %{{.*}}
+  // CHECK-NEXT:  }
+  moore.constraint.implication %antecedent {
+    moore.constraint.expr %cond
+  }
+  return
+}
+
+// Test constraint if-else
+// CHECK-LABEL:   func.func @test_constraint_if_else
+func.func @test_constraint_if_else(%cond: i1, %then_cond: i1, %else_cond: i1) {
+  // CHECK:       moore.constraint.if_else %{{.*}} {
+  // CHECK-NEXT:    moore.constraint.expr %{{.*}}
+  // CHECK-NEXT:  } else {
+  // CHECK-NEXT:    moore.constraint.expr %{{.*}}
+  // CHECK-NEXT:  }
+  moore.constraint.if_else %cond {
+    moore.constraint.expr %then_cond
+  } else {
+    moore.constraint.expr %else_cond
+  }
+  return
+}
+
+// Test constraint foreach
+// CHECK-LABEL:   func.func @test_constraint_foreach
+func.func @test_constraint_foreach(%array: !moore.uarray<8 x i32>) {
+  // CHECK:       moore.constraint.foreach %{{.*}} : !moore.uarray<8 x i32> {
+  // CHECK-NEXT:  }
+  moore.constraint.foreach %array : !moore.uarray<8 x i32> {
+  }
+  return
+}
+
+// Test constraint unique
+// CHECK-LABEL:   func.func @test_constraint_unique
+func.func @test_constraint_unique(%array: !moore.uarray<8 x i32>) {
+  // CHECK:       moore.constraint.unique %{{.*}} : !moore.uarray<8 x i32>
+  moore.constraint.unique %array : !moore.uarray<8 x i32>
+  return
+}
+
+// Test distribution and inside constraints
+// CHECK-LABEL:   moore.class.classdecl @DistributionConstraints {
+// CHECK-NEXT:     moore.class.propertydecl @x : !moore.i8 rand_mode rand
+// CHECK-NEXT:     moore.constraint.block @dist_constraint {
+// CHECK-NEXT:       moore.constraint.dist %{{.*}}, [0, 1, 5, 6], [10, 50, 40], [0, 1, 0] : !moore.i8
+// CHECK-NEXT:     }
+// CHECK-NEXT:     moore.constraint.block @inside_constraint {
+// CHECK-NEXT:       moore.constraint.inside %{{.*}}, [1, 1, 3, 5, 7, 7] : !moore.i8
+// CHECK-NEXT:     }
+// CHECK:       }
+moore.class.classdecl @DistributionConstraints {
+  moore.class.propertydecl @x : !moore.i8 rand_mode rand
+  moore.constraint.block @dist_constraint {
+  ^bb0(%x: !moore.i8):
+    // x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }
+    // per_range: 0 = := (per item), 1 = :/ (divided across range)
+    moore.constraint.dist %x, [0, 1, 5, 6], [10, 50, 40], [0, 1, 0] : !moore.i8
+  }
+  moore.constraint.block @inside_constraint {
+  ^bb0(%x: !moore.i8):
+    // x inside { 1, [3:5], 7 }
+    moore.constraint.inside %x, [1, 1, 3, 5, 7, 7] : !moore.i8
+  }
+}
+
+// Test constraint disable
+// CHECK-LABEL:   moore.class.classdecl @SoftConstraints {
+// CHECK-NEXT:     moore.class.propertydecl @x : !moore.i8 rand_mode rand
+// CHECK-NEXT:     moore.constraint.block @soft_limit {
+// CHECK-NEXT:     }
+// CHECK-NEXT:     moore.constraint.block @override {
+// CHECK-NEXT:       moore.constraint.disable @soft_limit
+// CHECK-NEXT:     }
+// CHECK:       }
+moore.class.classdecl @SoftConstraints {
+  moore.class.propertydecl @x : !moore.i8 rand_mode rand
+  moore.constraint.block @soft_limit {
+  }
+  moore.constraint.block @override {
+    moore.constraint.disable @soft_limit
+  }
+}
+
 /// Check that vtables roundtrip
 
 // CHECK-LABEL:  moore.vtable @testClass::@vtable {
@@ -256,10 +375,10 @@ func.func @test_vif_modport(%vif: !moore.virtual_interface<@handshake_if>) {
 // CHECK-LABEL: func.func @test_vif_signal_ref
 // CHECK-SAME:    (%[[VIF:.*]]: !moore.virtual_interface<@handshake_if>)
 // CHECK:         %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[VIF]][@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<!moore.l8>
-// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : <l8>
+// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : !moore.ref<!moore.l8>
 func.func @test_vif_signal_ref(%vif: !moore.virtual_interface<@handshake_if>) {
   %data_ref = moore.virtual_interface.signal_ref %vif[@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<!moore.l8>
-  %data = moore.read %data_ref : <l8>
+  %data = moore.read %data_ref : !moore.ref<!moore.l8>
   return
 }
 

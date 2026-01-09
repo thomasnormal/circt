@@ -10,9 +10,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "circt/Dialect/Moore/MooreAttributes.h"
 #include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/Moore/MooreTypes.h"
+// Include enums first (needed by MooreAttributes)
+#include "circt/Dialect/Moore/MooreEnums.h.inc"
+#include "circt/Dialect/Moore/MooreAttributes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
 
