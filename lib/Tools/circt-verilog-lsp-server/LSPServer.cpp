@@ -161,6 +161,9 @@ private:
 
 void LSPServer::onInitialize(const InitializeParams &params,
                              Callback<json::Value> reply) {
+  // Initialize workspace from the params
+  server.initializeWorkspace(toJSON(params));
+
   // Send a response with the capabilities of this server.
   json::Object serverCaps{
       {
@@ -193,6 +196,15 @@ void LSPServer::onInitialize(const InitializeParams &params,
        }},
       {"semanticTokensProvider", circt::lsp::getSemanticTokensOptions()},
       {"inlayHintProvider", true},
+      // Workspace capabilities
+      {"workspace",
+       llvm::json::Object{
+           {"workspaceFolders",
+            llvm::json::Object{
+                {"supported", true},
+                {"changeNotifications", true},
+            }},
+       }},
   };
 
   json::Object result{
