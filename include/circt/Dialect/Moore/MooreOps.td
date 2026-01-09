@@ -2651,6 +2651,187 @@ def VTableEntryOp : MooreOp<"vtable_entry", [
 
 
 //===----------------------------------------------------------------------===//
+// Interfaces and Virtual Interfaces
+//===----------------------------------------------------------------------===//
+
+def InterfaceDeclOp : MooreOp<"interface", [
+  Symbol,
+  SymbolTable,
+  IsolatedFromAbove,
+  NoTerminator,
+  SingleBlock
+]> {
+  let summary = "Interface declaration";
+  let description = [{
+    Declares a SystemVerilog interface. Interfaces are bundles of signals and
+    modports that provide a standardized way to connect modules. They are
+    essential for UVM testbenches where they define the communication protocol
+    between the DUT and verification components.
+
+    Example:
+    ```mlir
+    moore.interface @my_bus {
+      moore.interface.signal @clk : !moore.l1
+      moore.interface.signal @data : !moore.l32
+      moore.interface.signal @valid : !moore.l1
+      moore.interface.modport @driver (output @clk, output @data, output @valid)
+      moore.interface.modport @monitor (input @clk, input @data, input @valid)
+    }
+    ```
+
+    See IEEE 1800-2017 Section 25 "Interfaces".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $sym_name attr-dict-with-keyword $body
+  }];
+}
+
+def InterfaceSignalDeclOp : MooreOp<"interface.signal", [
+  Symbol,
+  HasParent<"InterfaceDeclOp">
+]> {
+  let summary = "Declare a signal within an interface";
+  let description = [{
+    Declares a signal within an interface. Signals define the wires and
+    registers that make up the interface's communication channels.
+
+    Example:
+    ```mlir
+    moore.interface.signal @data : !moore.l32
+    moore.interface.signal @valid : !moore.l1
+    ```
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    TypeAttr:$type
+  );
+  let assemblyFormat = [{
+    $sym_name `:` $type attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    ::mlir::Type getSignalType() { return getTypeAttr().getValue(); }
+  }];
+}
+
+def ModportDeclOp : MooreOp<"interface.modport", [
+  Symbol,
+  HasParent<"InterfaceDeclOp">
+]> {
+  let summary = "Declare a modport within an interface";
+  let description = [{
+    Declares a modport within an interface. Modports define directional views
+    of an interface's signals, specifying which signals are inputs, outputs,
+    or bidirectional from a particular perspective.
+
+    Modports are crucial for UVM as they allow different verification
+    components (drivers, monitors) to have appropriate access to interface
+    signals.
+
+    Example:
+    ```mlir
+    moore.interface.modport @driver (output @clk, output @data, input @ready)
+    moore.interface.modport @monitor (input @clk, input @data, input @ready)
+    ```
+
+    See IEEE 1800-2017 Section 25.4 "Modports".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    ModportPortArrayAttr:$ports
+  );
+  let assemblyFormat = [{
+    $sym_name custom<ModportPorts>($ports) attr-dict
+  }];
+}
+
+def InterfaceInstanceOp : MooreOp<"interface.instance", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Instantiate an interface";
+  let description = [{
+    Creates an instance of an interface. Interface instances are used to
+    connect modules and provide the actual signals that virtual interfaces
+    can reference.
+
+    Example:
+    ```mlir
+    %bus = moore.interface.instance @my_bus : !moore.ref<!moore.virtual_interface<@my_bus>>
+    ```
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    FlatSymbolRefAttr:$interfaceName
+  );
+  let results = (outs VirtualInterfaceRefType:$result);
+  let assemblyFormat = [{
+    custom<ImplicitSSAName>($name) $interfaceName attr-dict `:` type($result)
+  }];
+}
+
+def VirtualInterfaceGetOp : MooreOp<"virtual_interface.get", [
+  Pure,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Get a modport view from a virtual interface";
+  let description = [{
+    Extracts a modport view from a virtual interface. This is used when a
+    UVM component needs to access interface signals through a specific
+    modport perspective.
+
+    Example:
+    ```mlir
+    %driver_view = moore.virtual_interface.get %vif @driver :
+      !moore.virtual_interface<@my_bus> -> !moore.virtual_interface<@my_bus::@driver>
+    ```
+  }];
+
+  let arguments = (ins
+    VirtualInterfaceType:$vif,
+    FlatSymbolRefAttr:$modport
+  );
+  let results = (outs VirtualInterfaceType:$result);
+  let assemblyFormat = [{
+    $vif $modport attr-dict `:` type($vif) `->` type($result)
+  }];
+}
+
+def VirtualInterfaceSignalRefOp : MooreOp<"virtual_interface.signal_ref", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Get a reference to a signal in a virtual interface";
+  let description = [{
+    Returns a reference to a signal within a virtual interface. This allows
+    reading from and writing to interface signals through the virtual
+    interface handle.
+
+    Example:
+    ```mlir
+    %data_ref = moore.virtual_interface.signal_ref %vif @data :
+      !moore.virtual_interface<@my_bus> -> !moore.ref<!moore.l32>
+    ```
+  }];
+
+  let arguments = (ins
+    VirtualInterfaceType:$vif,
+    FlatSymbolRefAttr:$signal
+  );
+  let results = (outs RefType:$result);
+  let assemblyFormat = [{
+    $vif `[` $signal `]` attr-dict `:` type($vif) `->` type($result)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//
 

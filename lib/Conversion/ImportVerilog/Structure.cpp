@@ -9,6 +9,7 @@
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/symbols/ClassSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace circt;
@@ -697,17 +698,35 @@ LogicalResult Context::convertCompilation() {
     }
   }
 
-  // Prime the root definition worklist by adding all the top-level modules.
+  // Prime the root definition worklist by adding all the top-level modules
+  // and interfaces.
   SmallVector<const slang::ast::InstanceSymbol *> topInstances;
-  for (auto *inst : root.topInstances)
-    if (!convertModuleHeader(&inst->body))
-      return failure();
+  for (auto *inst : root.topInstances) {
+    auto kind = inst->body.getDefinition().definitionKind;
+    if (kind == slang::ast::DefinitionKind::Interface) {
+      // Handle interfaces separately
+      if (!convertInterfaceHeader(&inst->body))
+        return failure();
+    } else {
+      // Handle modules and programs
+      if (!convertModuleHeader(&inst->body))
+        return failure();
+    }
+  }
 
   // Convert all the root module definitions.
   while (!moduleWorklist.empty()) {
     auto *module = moduleWorklist.front();
     moduleWorklist.pop();
     if (failed(convertModuleBody(module)))
+      return failure();
+  }
+
+  // Convert all the interface bodies.
+  while (!interfaceWorklist.empty()) {
+    auto *iface = interfaceWorklist.front();
+    interfaceWorklist.pop();
+    if (failed(convertInterfaceBody(iface)))
       return failure();
   }
 
@@ -803,9 +822,8 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
   auto loc = convertLocation(module->location);
   OpBuilder::InsertionGuard g(builder);
 
-  // We only support modules and programs for now. Extension to interfaces
-  // should be trivial though, since they are essentially the same thing with
-  // only minor differences in semantics.
+  // We only support modules and programs for now. Interfaces are handled
+  // separately via convertInterfaceHeader.
   auto kind = module->getDefinition().definitionKind;
   if (kind != slang::ast::DefinitionKind::Module &&
       kind != slang::ast::DefinitionKind::Program) {
@@ -1005,6 +1023,127 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
     if (failed(member.visit(PackageVisitor(*this, loc))))
       return failure();
   }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Interface Conversion
+//===----------------------------------------------------------------------===//
+
+/// Convert an interface declaration header. Creates the moore.interface op
+/// and schedules the body for conversion.
+InterfaceLowering *
+Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
+  auto &slot = interfaces[iface];
+  if (slot)
+    return slot.get();
+
+  slot = std::make_unique<InterfaceLowering>();
+  auto &lowering = *slot;
+
+  auto loc = convertLocation(iface->location);
+  OpBuilder::InsertionGuard g(builder);
+
+  // Pick an insertion point according to the source file location.
+  auto it = orderedRootOps.upper_bound(iface->location);
+  if (it == orderedRootOps.end())
+    builder.setInsertionPointToEnd(intoModuleOp.getBody());
+  else
+    builder.setInsertionPoint(it->second);
+
+  // Create the interface op
+  auto ifaceOp = moore::InterfaceDeclOp::create(
+      builder, loc, iface->getDefinition().name);
+  orderedRootOps.insert(it, {iface->location, ifaceOp});
+  lowering.op = ifaceOp;
+
+  // Add the interface to the symbol table
+  symbolTable.insert(ifaceOp);
+
+  // Schedule the body to be lowered
+  interfaceWorklist.push(iface);
+
+  return &lowering;
+}
+
+/// Convert an interface body - signals and modports.
+LogicalResult
+Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
+  auto &lowering = *interfaces[iface];
+  OpBuilder::InsertionGuard g(builder);
+  builder.setInsertionPointToStart(&lowering.op.getBody().front());
+
+  // Convert all members of the interface
+  for (auto &member : iface->members()) {
+    auto loc = convertLocation(member.location);
+
+    // Handle variables/nets as interface signals
+    if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
+      auto type = convertType(var->getType());
+      if (!type)
+        return failure();
+      moore::InterfaceSignalDeclOp::create(builder, loc, var->name,
+                                           mlir::TypeAttr::get(type));
+      continue;
+    }
+
+    if (auto *net = member.as_if<slang::ast::NetSymbol>()) {
+      auto type = convertType(net->getType());
+      if (!type)
+        return failure();
+      moore::InterfaceSignalDeclOp::create(builder, loc, net->name,
+                                           mlir::TypeAttr::get(type));
+      continue;
+    }
+
+    // Handle modports
+    if (auto *modport = member.as_if<slang::ast::ModportSymbol>()) {
+      SmallVector<mlir::Attribute> ports;
+
+      for (auto &portMember : modport->members()) {
+        if (auto *port =
+                portMember.as_if<slang::ast::ModportPortSymbol>()) {
+          // Map slang direction to Moore ModportDir
+          moore::ModportDir dir;
+          switch (port->direction) {
+          case slang::ast::ArgumentDirection::In:
+            dir = moore::ModportDir::Input;
+            break;
+          case slang::ast::ArgumentDirection::Out:
+            dir = moore::ModportDir::Output;
+            break;
+          case slang::ast::ArgumentDirection::InOut:
+            dir = moore::ModportDir::InOut;
+            break;
+          case slang::ast::ArgumentDirection::Ref:
+            dir = moore::ModportDir::Ref;
+            break;
+          }
+
+          // Get the signal name from the internal symbol
+          StringRef signalName;
+          if (port->internalSymbol) {
+            signalName = port->internalSymbol->name;
+          } else {
+            signalName = port->name;
+          }
+
+          auto dirAttr = moore::ModportDirAttr::get(getContext(), dir);
+          auto signalRef =
+              mlir::FlatSymbolRefAttr::get(getContext(), signalName);
+          ports.push_back(
+              moore::ModportPortAttr::get(getContext(), dirAttr, signalRef));
+        }
+      }
+
+      moore::ModportDeclOp::create(builder, loc, modport->name,
+                                   builder.getArrayAttr(ports));
+      continue;
+    }
+
+    // Skip other members for now (parameters, etc.)
+  }
+
   return success();
 }
 
