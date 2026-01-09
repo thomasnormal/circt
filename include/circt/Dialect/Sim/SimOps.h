@@ -23,8 +23,30 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
+
+namespace circt {
+namespace sim {
+
+/// A trait for operations that define a simulation process region.
+/// Operations with this trait represent concurrent processes that
+/// execute in an event-driven simulation context.
+template <typename ConcreteType>
+class SimProcessRegion
+    : public mlir::OpTrait::TraitBase<ConcreteType, SimProcessRegion> {
+public:
+  /// Verify that the operation is valid within a simulation context.
+  static mlir::LogicalResult verifyTrait(mlir::Operation *op) {
+    // Currently no specific verification required.
+    // Future: could verify that child operations are valid in a process context.
+    return mlir::success();
+  }
+};
+
+} // namespace sim
+} // namespace circt
 
 #define GET_OP_CLASSES
 #include "circt/Dialect/Sim/Sim.h.inc"

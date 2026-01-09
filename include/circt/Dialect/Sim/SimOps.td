@@ -14,10 +14,12 @@ include "circt/Dialect/HW/HWTypes.td"
 include "circt/Dialect/Seq/SeqTypes.td"
 include "circt/Dialect/Sim/SimDialect.td"
 include "circt/Dialect/Sim/SimTypes.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
+include "mlir/IR/SymbolInterfaces.td"
 
 class SimOp<string mnemonic, list<Trait> traits = []> :
     Op<SimDialect, mnemonic, traits>;
@@ -806,12 +808,12 @@ def SimDriveOp : SimOp<"drive", []> {
     (`delay` $delayFemtoseconds^)?
     (`mode` $mode^)?
     (`strength` $strength^)?
-    attr-dict `:` type($value)
+    attr-dict `:` type($signal) `,` type($value)
   }];
   let hasVerifier = 1;
 }
 
-def SimSampleOp : SimOp<"sample", [Pure]> {
+def SimSampleOp : SimOp<"sample", [Pure, SameOperandsAndResultType]> {
   let summary = "Sample the current value of a signal";
   let description = [{
     `sim.sample` reads the current value of a signal at the current simulation
@@ -940,7 +942,7 @@ def SimSensitivityListOp : SimOp<"sensitivity", [Pure]> {
   let hasCustomAssemblyFormat = 1;
 }
 
-def SimEdgeDetectOp : SimOp<"edge_detect", [Pure]> {
+def SimEdgeDetectOp : SimOp<"edge_detect", [Pure, SameTypeOperands]> {
   let summary = "Detect edge transitions on a signal";
   let description = [{
     `sim.edge_detect` detects edge transitions on a signal by comparing the
@@ -977,7 +979,7 @@ def SimEdgeDetectOp : SimOp<"edge_detect", [Pure]> {
   let hasFolder = 1;
 }
 
-def SimSignalRegisterOp : SimOp<"signal_register", []> {
+def SimSignalRegisterOp : SimOp<"signal_register", [SameOperandsAndResultType]> {
   let summary = "Register a signal value for edge detection";
   let description = [{
     `sim.signal_register` captures the current value of a signal and stores
@@ -1047,7 +1049,7 @@ def SimTriggeredProcessOp : SimOp<"triggered_process", [
   let hasCustomAssemblyFormat = 1;
 }
 
-def SimPrevValueOp : SimOp<"prev", [Pure]> {
+def SimPrevValueOp : SimOp<"prev", [Pure, SameOperandsAndResultType]> {
   let summary = "Get the previous value of a signal";
   let description = [{
     `sim.prev` returns the value of a signal from the previous delta cycle
@@ -1120,6 +1122,669 @@ def SimIterationLimitOp : SimOp<"iteration_limit", []> {
   }];
   let arguments = (ins I32Attr:$limit);
   let assemblyFormat = "$limit attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Fork/Join Operations
+//===----------------------------------------------------------------------===//
+
+def SimForkOp : SimOp<"fork", [
+  RecursiveMemoryEffects,
+  SingleBlockImplicitTerminator<"SimForkTerminatorOp">,
+]> {
+  let summary = "Spawn concurrent processes (SystemVerilog fork)";
+  let description = [{
+    `sim.fork` spawns multiple concurrent processes that execute in parallel.
+    This corresponds to the SystemVerilog `fork...join`, `fork...join_any`,
+    and `fork...join_none` constructs.
+
+    Each region within the fork represents a separate concurrent process.
+    The `join_type` attribute specifies the synchronization behavior:
+    - "join": Wait for all spawned processes to complete (default)
+    - "join_any": Wait for any one process to complete
+    - "join_none": Don't wait, continue immediately
+
+    The fork operation returns a handle that can be used with `sim.wait_fork`
+    or `sim.disable_fork` for later synchronization or control.
+
+    Example:
+    ```mlir
+    // Fork with join (wait for all)
+    %handle = sim.fork join_type "join" {
+      // Process 1
+      sim.delay 10 : i64
+    }, {
+      // Process 2
+      sim.delay 20 : i64
+    }, {
+      // Process 3
+      sim.delay 15 : i64
+    }
+
+    // Fork with join_any (wait for first)
+    %handle2 = sim.fork join_type "join_any" {
+      sim.delay 10 : i64
+    }, {
+      sim.delay 20 : i64
+    }
+
+    // Fork with join_none (continue immediately)
+    %handle3 = sim.fork join_type "join_none" {
+      sim.delay 100 : i64
+    }
+    ```
+  }];
+  let arguments = (ins
+    DefaultValuedStrAttr<StrAttr, "join">:$joinType,
+    OptionalAttr<StrAttr>:$name
+  );
+  let results = (outs I64:$handle);
+  let regions = (region VariadicRegion<AnyRegion>:$branches);
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def SimForkTerminatorOp : SimOp<"fork.terminator", [
+  Pure,
+  Terminator,
+  ParentOneOf<["SimForkOp"]>,
+]> {
+  let summary = "Terminator for fork branch regions";
+  let description = [{
+    `sim.fork.terminator` marks the end of a branch within a `sim.fork` operation.
+    This is an implicit terminator that is automatically inserted.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def SimJoinOp : SimOp<"join", []> {
+  let summary = "Wait for all processes in a fork to complete";
+  let description = [{
+    `sim.join` waits for all processes spawned by a fork to complete.
+    This is used when the fork was created with `join_none` to later
+    synchronize with the spawned processes.
+
+    Example:
+    ```mlir
+    %handle = sim.fork join_type "join_none" {
+      sim.delay 100 : i64
+    }
+    // ... do other work ...
+    sim.join %handle  // Now wait for the fork to complete
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let assemblyFormat = "$handle attr-dict";
+}
+
+def SimJoinAnyOp : SimOp<"join_any", []> {
+  let summary = "Wait for any process in a fork to complete";
+  let description = [{
+    `sim.join_any` waits for any one of the processes spawned by a fork
+    to complete. The remaining processes continue executing.
+
+    Example:
+    ```mlir
+    %handle = sim.fork join_type "join_none" {
+      sim.delay 100 : i64
+    }, {
+      sim.delay 50 : i64
+    }
+    sim.join_any %handle  // Waits until first completes (50 time units)
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let assemblyFormat = "$handle attr-dict";
+}
+
+def SimJoinNoneOp : SimOp<"join_none", [Pure]> {
+  let summary = "Continue without waiting (no-op marker)";
+  let description = [{
+    `sim.join_none` is a no-op that explicitly indicates the intent
+    to not wait for forked processes. This is primarily used for
+    clarity in code that was converted from SystemVerilog.
+
+    Example:
+    ```mlir
+    %handle = sim.fork join_type "join_none" {
+      sim.delay 100 : i64
+    }
+    sim.join_none %handle  // Explicit no-wait (no-op)
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let assemblyFormat = "$handle attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Wait Operations
+//===----------------------------------------------------------------------===//
+
+def SimWaitOp : SimOp<"wait", []> {
+  let summary = "Wait for a condition to become true";
+  let description = [{
+    `sim.wait` suspends the current process until the specified condition
+    becomes true. The condition is evaluated each time any of the signals
+    it depends on changes.
+
+    This corresponds to the SystemVerilog `wait(condition)` statement.
+
+    The optional `timeout` specifies a maximum time to wait in femtoseconds.
+    If the timeout expires before the condition becomes true, the process
+    resumes and the `timed_out` result is set to true.
+
+    Example:
+    ```mlir
+    // Wait for condition to be true
+    sim.wait %condition
+
+    // Wait with timeout (returns true if timed out)
+    %timed_out = sim.wait %condition timeout 1000000000 : i1
+    ```
+  }];
+  let arguments = (ins
+    I1:$condition,
+    OptionalAttr<I64Attr>:$timeoutFemtoseconds
+  );
+  let results = (outs Optional<I1>:$timedOut);
+  let assemblyFormat = [{
+    $condition
+    (`timeout` $timeoutFemtoseconds^)?
+    attr-dict (`:` type($timedOut)^)?
+  }];
+  let hasVerifier = 1;
+}
+
+def SimWaitForkOp : SimOp<"wait_fork", []> {
+  let summary = "Wait for all child processes to complete";
+  let description = [{
+    `sim.wait_fork` waits for all processes spawned by `fork...join_none`
+    in the current scope to complete. This is equivalent to the
+    SystemVerilog `wait fork` statement.
+
+    Unlike `sim.join` which operates on a specific fork handle,
+    `wait_fork` waits for ALL outstanding child processes.
+
+    Example:
+    ```mlir
+    %h1 = sim.fork join_type "join_none" { sim.delay 10 : i64 }
+    %h2 = sim.fork join_type "join_none" { sim.delay 20 : i64 }
+    %h3 = sim.fork join_type "join_none" { sim.delay 15 : i64 }
+
+    // Wait for all three forks to complete
+    sim.wait_fork
+    ```
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def SimDelayOp : SimOp<"delay", []> {
+  let summary = "Delay execution for a specified time";
+  let description = [{
+    `sim.delay` suspends the current process for the specified amount of
+    simulation time. This corresponds to the SystemVerilog `#delay` construct.
+
+    The delay is specified in femtoseconds for maximum precision.
+    Common time unit helpers:
+    - 1 ns = 1,000,000 fs
+    - 1 us = 1,000,000,000 fs
+    - 1 ms = 1,000,000,000,000 fs
+
+    Example:
+    ```mlir
+    // Delay for 10 nanoseconds
+    sim.delay 10000000 : i64
+
+    // Delay for value read from variable
+    sim.delay %time_var : i64
+    ```
+  }];
+  let arguments = (ins AnyInteger:$delay);
+  let assemblyFormat = "$delay attr-dict `:` type($delay)";
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Disable Operations
+//===----------------------------------------------------------------------===//
+
+def SimDisableOp : SimOp<"disable", []> {
+  let summary = "Disable a named block or task";
+  let description = [{
+    `sim.disable` terminates execution of a named block or task.
+    This corresponds to the SystemVerilog `disable` statement.
+
+    When a block/task is disabled:
+    - Execution jumps to the statement following the disabled block
+    - All nested blocks within the disabled block are also terminated
+    - Variables retain their values at the time of disable
+
+    The target must be the name of a `sim.named_block` block.
+
+    Example:
+    ```mlir
+    sim.named_block "outer_loop" {
+      sim.named_block "inner_loop" {
+        // ... some condition ...
+        sim.disable "outer_loop"  // Exit both loops
+      }
+    }
+    ```
+  }];
+  let arguments = (ins StrAttr:$target);
+  let assemblyFormat = "$target attr-dict";
+}
+
+def SimDisableForkOp : SimOp<"disable_fork", []> {
+  let summary = "Disable all child processes";
+  let description = [{
+    `sim.disable_fork` terminates all processes spawned by `fork...join_none`
+    in the current scope. This corresponds to the SystemVerilog `disable fork`
+    statement.
+
+    All child processes (and their descendants) are immediately terminated.
+
+    Example:
+    ```mlir
+    %h1 = sim.fork join_type "join_none" { sim.delay 100 : i64 }
+    %h2 = sim.fork join_type "join_none" { sim.delay 200 : i64 }
+
+    // Terminate all child processes
+    sim.disable_fork
+    ```
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def SimNamedBlockOp : SimOp<"named_block", [
+  RecursiveMemoryEffects,
+  SingleBlockImplicitTerminator<"SimNamedBlockTerminatorOp">,
+]> {
+  let summary = "A named block that can be disabled";
+  let description = [{
+    `sim.named_block` defines a named scope that can be targeted by
+    `sim.disable`. This corresponds to named begin...end blocks in
+    SystemVerilog.
+
+    Named blocks can be nested, and disabling an outer block also
+    terminates all nested blocks.
+
+    Example:
+    ```mlir
+    sim.named_block "search_loop" {
+      // ... loop body ...
+      scf.if %found {
+        sim.disable "search_loop"
+      }
+    }
+    ```
+  }];
+  let arguments = (ins StrAttr:$blockName);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = "$blockName attr-dict-with-keyword $body";
+}
+
+def SimNamedBlockTerminatorOp : SimOp<"named_block.terminator", [
+  Pure,
+  Terminator,
+  ParentOneOf<["SimNamedBlockOp"]>,
+]> {
+  let summary = "Terminator for named block regions";
+  let description = [{
+    `sim.named_block.terminator` marks the end of a `sim.named_block`.
+    This is an implicit terminator.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Synchronization Primitives: Semaphores
+//===----------------------------------------------------------------------===//
+
+def SimSemaphoreCreateOp : SimOp<"semaphore.create", []> {
+  let summary = "Create a semaphore with initial count";
+  let description = [{
+    `sim.semaphore.create` creates a counting semaphore with the specified
+    initial key count. Semaphores are used to control access to shared
+    resources and for inter-process synchronization.
+
+    This corresponds to SystemVerilog's `semaphore` class constructor:
+    `semaphore s = new(keyCount)`
+
+    The returned handle is used with `sim.semaphore.get`, `sim.semaphore.put`,
+    and `sim.semaphore.try_get`.
+
+    Example:
+    ```mlir
+    // Create a binary semaphore (mutex)
+    %mutex = sim.semaphore.create 1 : i64
+
+    // Create a counting semaphore with 4 keys
+    %sem = sim.semaphore.create 4 : i64
+    ```
+  }];
+  let arguments = (ins AnyInteger:$keyCount);
+  let results = (outs I64:$handle);
+  let assemblyFormat = "$keyCount attr-dict `:` type($keyCount)";
+}
+
+def SimSemaphoreGetOp : SimOp<"semaphore.get", []> {
+  let summary = "Get keys from a semaphore (blocking)";
+  let description = [{
+    `sim.semaphore.get` obtains the specified number of keys from a semaphore.
+    If insufficient keys are available, the calling process blocks until
+    enough keys become available.
+
+    This corresponds to SystemVerilog's `semaphore.get(keyCount)` method.
+
+    The default key count is 1 if not specified.
+
+    Example:
+    ```mlir
+    // Get one key (blocking)
+    sim.semaphore.get %sem
+
+    // Get 3 keys (blocking)
+    sim.semaphore.get %sem, 3 : i32
+    ```
+  }];
+  let arguments = (ins
+    I64:$handle,
+    Optional<AnyInteger>:$keyCount
+  );
+  let assemblyFormat = [{
+    $handle (`,` $keyCount^ `:` type($keyCount))? attr-dict
+  }];
+}
+
+def SimSemaphoreTryGetOp : SimOp<"semaphore.try_get", []> {
+  let summary = "Try to get keys from a semaphore (non-blocking)";
+  let description = [{
+    `sim.semaphore.try_get` attempts to obtain the specified number of keys
+    from a semaphore without blocking. Returns true if successful, false
+    if insufficient keys are available.
+
+    This corresponds to SystemVerilog's `semaphore.try_get(keyCount)` method.
+
+    Example:
+    ```mlir
+    // Try to get one key
+    %success = sim.semaphore.try_get %sem : i1
+
+    // Try to get 3 keys
+    %success = sim.semaphore.try_get %sem, 3 : i32 -> i1
+    ```
+  }];
+  let arguments = (ins
+    I64:$handle,
+    Optional<AnyInteger>:$keyCount
+  );
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $handle (`,` $keyCount^ `:` type($keyCount))? attr-dict `->` type($success)
+  }];
+}
+
+def SimSemaphorePutOp : SimOp<"semaphore.put", []> {
+  let summary = "Return keys to a semaphore";
+  let description = [{
+    `sim.semaphore.put` returns the specified number of keys to a semaphore.
+    This may unblock processes waiting on `sim.semaphore.get`.
+
+    This corresponds to SystemVerilog's `semaphore.put(keyCount)` method.
+
+    The default key count is 1 if not specified.
+
+    Example:
+    ```mlir
+    // Return one key
+    sim.semaphore.put %sem
+
+    // Return 3 keys
+    sim.semaphore.put %sem, 3 : i32
+    ```
+  }];
+  let arguments = (ins
+    I64:$handle,
+    Optional<AnyInteger>:$keyCount
+  );
+  let assemblyFormat = [{
+    $handle (`,` $keyCount^ `:` type($keyCount))? attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Synchronization Primitives: Mailboxes
+//===----------------------------------------------------------------------===//
+
+def SimMailboxCreateOp : SimOp<"mailbox.create", []> {
+  let summary = "Create a mailbox for inter-process communication";
+  let description = [{
+    `sim.mailbox.create` creates a mailbox that can be used for passing
+    messages between processes. This corresponds to SystemVerilog's
+    `mailbox` class.
+
+    The optional `bound` parameter limits the mailbox size. A bounded
+    mailbox will block on `put` when full. Unbounded mailboxes (bound=0)
+    can grow without limit.
+
+    Example:
+    ```mlir
+    // Create unbounded mailbox
+    %mbox = sim.mailbox.create : i64
+
+    // Create bounded mailbox (max 16 entries)
+    %bounded_mbox = sim.mailbox.create bound 16 : i64
+    ```
+  }];
+  let arguments = (ins
+    OptionalAttr<I32Attr>:$bound
+  );
+  let results = (outs I64:$handle);
+  let assemblyFormat = [{
+    (`bound` $bound^)? attr-dict `:` type($handle)
+  }];
+}
+
+def SimMailboxPutOp : SimOp<"mailbox.put", []> {
+  let summary = "Put a message into a mailbox (blocking)";
+  let description = [{
+    `sim.mailbox.put` places a message into a mailbox. For bounded mailboxes,
+    this operation blocks if the mailbox is full.
+
+    This corresponds to SystemVerilog's `mailbox.put(message)` method.
+
+    The message can be any type that the mailbox was parameterized with.
+
+    Example:
+    ```mlir
+    sim.mailbox.put %mbox, %data : i32
+    ```
+  }];
+  let arguments = (ins
+    I64:$handle,
+    AnyType:$message
+  );
+  let assemblyFormat = "$handle `,` $message attr-dict `:` type($message)";
+}
+
+def SimMailboxTryPutOp : SimOp<"mailbox.try_put", []> {
+  let summary = "Try to put a message into a mailbox (non-blocking)";
+  let description = [{
+    `sim.mailbox.try_put` attempts to place a message into a mailbox without
+    blocking. Returns true if successful, false if the mailbox is full.
+
+    This corresponds to SystemVerilog's `mailbox.try_put(message)` method.
+
+    Example:
+    ```mlir
+    %success = sim.mailbox.try_put %mbox, %data : i32 -> i1
+    ```
+  }];
+  let arguments = (ins
+    I64:$handle,
+    AnyType:$message
+  );
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $handle `,` $message attr-dict `:` type($message) `->` type($success)
+  }];
+}
+
+def SimMailboxGetOp : SimOp<"mailbox.get", []> {
+  let summary = "Get a message from a mailbox (blocking)";
+  let description = [{
+    `sim.mailbox.get` retrieves and removes a message from a mailbox.
+    If the mailbox is empty, the operation blocks until a message
+    is available.
+
+    This corresponds to SystemVerilog's `mailbox.get(message)` method.
+
+    Example:
+    ```mlir
+    %data = sim.mailbox.get %mbox : i32
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let results = (outs AnyType:$message);
+  let assemblyFormat = "$handle attr-dict `:` type($message)";
+}
+
+def SimMailboxTryGetOp : SimOp<"mailbox.try_get", []> {
+  let summary = "Try to get a message from a mailbox (non-blocking)";
+  let description = [{
+    `sim.mailbox.try_get` attempts to retrieve a message from a mailbox
+    without blocking. Returns true and the message if available, false
+    and undefined data if empty.
+
+    This corresponds to SystemVerilog's `mailbox.try_get(message)` method.
+
+    Example:
+    ```mlir
+    %success, %data = sim.mailbox.try_get %mbox : i1, i32
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let results = (outs I1:$success, AnyType:$message);
+  let assemblyFormat = "$handle attr-dict `:` type($success) `,` type($message)";
+}
+
+def SimMailboxPeekOp : SimOp<"mailbox.peek", []> {
+  let summary = "Peek at a message without removing it (blocking)";
+  let description = [{
+    `sim.mailbox.peek` retrieves a copy of the message at the front of
+    the mailbox without removing it. If the mailbox is empty, the
+    operation blocks until a message is available.
+
+    This corresponds to SystemVerilog's `mailbox.peek(message)` method.
+
+    Example:
+    ```mlir
+    %data = sim.mailbox.peek %mbox : i32
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let results = (outs AnyType:$message);
+  let assemblyFormat = "$handle attr-dict `:` type($message)";
+}
+
+def SimMailboxTryPeekOp : SimOp<"mailbox.try_peek", []> {
+  let summary = "Try to peek at a message without blocking";
+  let description = [{
+    `sim.mailbox.try_peek` attempts to retrieve a copy of the message
+    at the front of the mailbox without removing it or blocking.
+
+    This corresponds to SystemVerilog's `mailbox.try_peek(message)` method.
+
+    Example:
+    ```mlir
+    %success, %data = sim.mailbox.try_peek %mbox : i1, i32
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let results = (outs I1:$success, AnyType:$message);
+  let assemblyFormat = "$handle attr-dict `:` type($success) `,` type($message)";
+}
+
+def SimMailboxNumOp : SimOp<"mailbox.num", [Pure]> {
+  let summary = "Get the number of messages in a mailbox";
+  let description = [{
+    `sim.mailbox.num` returns the current number of messages in the mailbox.
+
+    This corresponds to SystemVerilog's `mailbox.num()` method.
+
+    Example:
+    ```mlir
+    %count = sim.mailbox.num %mbox : i32
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let results = (outs AnyInteger:$count);
+  let assemblyFormat = "$handle attr-dict `:` type($count)";
+}
+
+//===----------------------------------------------------------------------===//
+// Synchronization Primitives: Events
+//===----------------------------------------------------------------------===//
+
+def SimEventCreateOp : SimOp<"event.create", []> {
+  let summary = "Create a named event for synchronization";
+  let description = [{
+    `sim.event.create` creates a named event that can be used for
+    process synchronization. This corresponds to SystemVerilog's
+    `event` type.
+
+    Events can be triggered with `sim.event.trigger` and waited
+    upon with `sim.event.wait`.
+
+    Example:
+    ```mlir
+    %evt = sim.event.create : i64
+    ```
+  }];
+  let results = (outs I64:$handle);
+  let assemblyFormat = "attr-dict `:` type($handle)";
+}
+
+def SimEventTriggerOp : SimOp<"event.trigger", []> {
+  let summary = "Trigger an event";
+  let description = [{
+    `sim.event.trigger` triggers the specified event, unblocking any
+    processes waiting on it. This corresponds to SystemVerilog's
+    `->event` or `->>(nonblocking)event` trigger.
+
+    The `nonblocking` attribute makes this a non-blocking trigger
+    (scheduled for the NBA region).
+
+    Example:
+    ```mlir
+    // Blocking trigger
+    sim.event.trigger %evt
+
+    // Non-blocking trigger
+    sim.event.trigger %evt nonblocking
+    ```
+  }];
+  let arguments = (ins
+    I64:$handle,
+    UnitAttr:$nonblocking
+  );
+  let assemblyFormat = "$handle (`nonblocking` $nonblocking^)? attr-dict";
+}
+
+def SimEventWaitOp : SimOp<"event.wait", []> {
+  let summary = "Wait for an event to be triggered";
+  let description = [{
+    `sim.event.wait` suspends the current process until the specified
+    event is triggered. This corresponds to SystemVerilog's `@(event)`
+    or `wait(event.triggered)`.
+
+    Example:
+    ```mlir
+    sim.event.wait %evt
+    ```
+  }];
+  let arguments = (ins I64:$handle);
+  let assemblyFormat = "$handle attr-dict";
 }
 
 #endif // CIRCT_DIALECT_SIM_SIMOPS_TD
