@@ -1018,10 +1018,24 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToEnd(intoModuleOp.getBody());
   ValueSymbolScope scope(valueSymbols);
+
+  // Two-pass conversion:
+  // Pass 1: Convert global variables first so they're available for classes
   for (auto &member : package.members()) {
-    auto loc = convertLocation(member.location);
-    if (failed(member.visit(PackageVisitor(*this, loc))))
-      return failure();
+    if (member.kind == slang::ast::SymbolKind::Variable) {
+      auto loc = convertLocation(member.location);
+      if (failed(member.visit(PackageVisitor(*this, loc))))
+        return failure();
+    }
+  }
+
+  // Pass 2: Convert remaining members (classes, functions, etc.)
+  for (auto &member : package.members()) {
+    if (member.kind != slang::ast::SymbolKind::Variable) {
+      auto loc = convertLocation(member.location);
+      if (failed(member.visit(PackageVisitor(*this, loc))))
+        return failure();
+    }
   }
   return success();
 }
@@ -1947,11 +1961,13 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
   auto timeScaleGuard =
       llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
 
-  // Check if there already is a declaration for this class.
-  if (classes.contains(&classdecl))
-    return success();
-
+  // Get or create the class declaration.
   auto *lowering = declareClass(classdecl);
+  if (!lowering)
+    return failure();
+
+  // If the body has already been converted (or is being converted), skip.
+  // ClassDeclVisitor::run checks if body is empty and populates it.
   if (failed(ClassDeclVisitor(*this, *lowering).run(classdecl)))
     return failure();
 
