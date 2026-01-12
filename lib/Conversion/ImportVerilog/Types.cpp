@@ -167,6 +167,9 @@ struct TypeVisitor {
   }
 
   Type visit(const slang::ast::ClassType &type) {
+    // Convert the class declaration and populate its body.
+    // convertClassDeclaration handles recursive calls by checking if the
+    // body is already being converted (via ClassDeclVisitor::run's guard).
     if (failed(context.convertClassDeclaration(type)))
       return {};
     auto *lowering = context.declareClass(type);
@@ -184,6 +187,36 @@ struct TypeVisitor {
     // Treat `event` types as simple `i1` values where an event is signaled by
     // toggling the value.
     return moore::IntType::getInt(context.getContext(), 1);
+  }
+
+  Type visit(const slang::ast::VirtualInterfaceType &type) {
+    // Get the interface name from the instance
+    auto &iface = type.iface;
+    auto ifaceName = iface.body.getDefinition().name;
+
+    // Build the symbol reference
+    mlir::SymbolRefAttr symRef;
+    if (type.modport) {
+      // Virtual interface with modport: @interface::@modport
+      symRef = mlir::SymbolRefAttr::get(
+          context.getContext(),
+          ifaceName,
+          {mlir::FlatSymbolRefAttr::get(context.getContext(),
+                                        type.modport->name)});
+    } else {
+      // Virtual interface without modport: @interface
+      symRef = mlir::FlatSymbolRefAttr::get(context.getContext(), ifaceName);
+    }
+
+    return moore::VirtualInterfaceType::get(context.getContext(), symRef);
+  }
+
+  Type visit(const slang::ast::NullType &type) {
+    // The null type represents the type of the `null` literal.
+    // We represent it as a class handle with a special "__null__" symbol.
+    // This allows null to be assigned to any class handle.
+    auto nullSym = mlir::FlatSymbolRefAttr::get(context.getContext(), "__null__");
+    return moore::ClassHandleType::get(context.getContext(), nullSym);
   }
 
   /// Emit an error for all other types.

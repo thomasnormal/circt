@@ -57,7 +57,6 @@ def SVModuleOp : MooreOp<"module", [
   IsolatedFromAbove,
   RegionKindInterface,
   Symbol,
-  SymbolTable,
   SingleBlockImplicitTerminator<"OutputOp">,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
@@ -591,7 +590,7 @@ def ConstantOp : MooreOp<"constant", [Pure, ConstantLike]> {
     OpBuilder<(ins "IntType":$type, "const FVInt &":$value)>,
     OpBuilder<(ins "IntType":$type, "const APInt &":$value)>,
     OpBuilder<(
-      ins "IntType":$type, "int64_t":$value, CArg<"bool", "true">:$isSigned)>,
+      ins "IntType":$type, "int64_t":$value, CArg<"bool", "false">:$isSigned)>,
   ];
 }
 
@@ -1268,6 +1267,25 @@ def StringCmpOp : MooreOp<"string_cmp", [
   let assemblyFormat = [{
     $predicate $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
   }];
+}
+
+def StringConcatOp : MooreOp<"string_concat", [Pure]> {
+  let summary = "Concatenate strings";
+  let description = [{
+    Concatenates an arbitrary number of strings into one larger string.
+    The strings are concatenated from left to right, with the first
+    operand appearing at the left start of the result string, and the last
+    operand appearing at the right end. Produces an empty string if no inputs
+    are provided.
+
+    Example:
+    ```mlir
+    %result = moore.string_concat (%a, %b, %c) : !moore.string
+    ```
+  }];
+  let arguments = (ins Variadic<StringType>:$inputs);
+  let results = (outs StringType:$result);
+  let assemblyFormat = "` ` `(` $inputs `)` attr-dict `:` type($result)";
 }
 
 class LogicalEqOpBase<string mnemonic> : MooreOp<mnemonic, [
@@ -2419,22 +2437,59 @@ def AtanhBIOp : RealMathFunc<"atanh"> {
 // Classes
 //===----------------------------------------------------------------------===//
 
+// Access visibility for class members (properties and methods)
+// Named "MemberAccess" to avoid conflict with MLIR's Symbol visibility
+def MemberAccessPublic: I32EnumAttrCase<"Public", 0, "public">;
+def MemberAccessProtected: I32EnumAttrCase<"Protected", 1, "protected">;
+def MemberAccessLocal: I32EnumAttrCase<"Local", 2, "local">;
+
+def MemberAccessAttr: I32EnumAttr<"MemberAccess", "Member access visibility",
+            [MemberAccessPublic, MemberAccessProtected, MemberAccessLocal]>{
+  let cppNamespace = "circt::moore";
+}
+
+// Randomization mode for class properties and struct fields
+def RandModeNone: I32EnumAttrCase<"None", 0, "none">;
+def RandModeRand: I32EnumAttrCase<"Rand", 1, "rand">;
+def RandModeRandC: I32EnumAttrCase<"RandC", 2, "randc">;
+
+def RandModeAttr: I32EnumAttr<"RandMode", "Randomization mode",
+            [RandModeNone, RandModeRand, RandModeRandC]>{
+  let cppNamespace = "circt::moore";
+}
+
 def ClassPropertyDeclOp
     : MooreOp<"class.propertydecl", [Symbol, HasParent<"ClassDeclOp">]> {
   let summary = "Declare a class property";
   let description = [{
-  Declares a property within a class declaration.
+  Declares a property within a class declaration. The `member_access` attribute
+  specifies the access level:
+  - `public`: Accessible from anywhere (default)
+  - `protected`: Accessible from this class and derived classes
+  - `local`: Accessible only from within this class
+
+  The optional `rand_mode` attribute indicates whether this property
+  participates in randomization:
+  - `none`: Not randomizable (default)
+  - `rand`: Standard random variable
+  - `randc`: Random-cyclic variable (cycles through all values before repeating)
   }];
 
-  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type);
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type,
+                       DefaultValuedAttr<MemberAccessAttr, "MemberAccess::Public">:$member_access,
+                       DefaultValuedAttr<RandModeAttr, "RandMode::None">:$rand_mode);
 
   let results = (outs);
   let assemblyFormat = [{
-     $sym_name `:` $type  attr-dict
+     $sym_name `:` $type (`rand_mode` $rand_mode^)? attr-dict
   }];
 
   let extraClassDeclaration = [{
     ::mlir::Type getPropertyType() { return getTypeAttr().getValue(); }
+    bool isRandomizable() { return getRandMode() != RandMode::None; }
+    bool isMemberAccessPublic() { return getMemberAccess() == MemberAccess::Public; }
+    bool isMemberAccessProtected() { return getMemberAccess() == MemberAccess::Protected; }
+    bool isMemberAccessLocal() { return getMemberAccess() == MemberAccess::Local; }
   }];
 }
 
@@ -2467,6 +2522,315 @@ def ClassDeclOp
     attr-dict-with-keyword $body
   }];
   let hasVerifier = 1;
+}
+
+def ConstraintBlockOp
+    : MooreOp<"constraint.block", [Symbol, HasParent<"ClassDeclOp">,
+    NoTerminator, SingleBlock]> {
+  let summary = "Define a constraint block";
+  let description = [{
+    Represents a named constraint block within a class. Constraint blocks
+    define relationships between randomizable variables that must be satisfied
+    during randomization.
+
+    Example:
+    ```mlir
+    moore.constraint.block @valid_range {
+      // constraint expressions go here
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5 "Constraint blocks".
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       UnitAttr:$is_static,
+                       UnitAttr:$is_pure);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    (`static` $is_static^)? (`pure` $is_pure^)? $sym_name
+    attr-dict-with-keyword $body
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Constraint Expression Operations
+//===----------------------------------------------------------------------===//
+
+def ConstraintExprOp
+    : MooreOp<"constraint.expr", []> {
+  let summary = "A constraint expression";
+  let description = [{
+    Represents a constraint expression that must hold during randomization.
+    The expression evaluates to a boolean condition that constrains the
+    values of random variables.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      %cond = moore.lt %a, %b : i32
+      moore.constraint.expr %cond
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.1 "Constraint expressions".
+  }];
+
+  let arguments = (ins I1:$condition);
+  let results = (outs);
+  let assemblyFormat = [{
+    $condition attr-dict
+  }];
+}
+
+def ConstraintImplicationOp
+    : MooreOp<"constraint.implication", [SingleBlock, NoTerminator]> {
+  let summary = "Constraint implication (expr -> constraint)";
+  let description = [{
+    Represents a constraint implication where if the antecedent expression
+    is true, the constraints in the consequent block must be satisfied.
+    If the antecedent is false, the consequent constraints are ignored.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      moore.constraint.implication %mode_is_fast {
+        // constraints that only apply when mode_is_fast is true
+        moore.constraint.expr %speed_limit
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.6 "Implication constraints".
+  }];
+
+  let arguments = (ins I1:$antecedent);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$consequent);
+  let assemblyFormat = [{
+    $antecedent attr-dict-with-keyword $consequent
+  }];
+}
+
+def ConstraintIfElseOp
+    : MooreOp<"constraint.if_else", [SingleBlock, NoTerminator]> {
+  let summary = "Conditional constraint (if-else)";
+  let description = [{
+    Represents a conditional constraint where different constraints apply
+    based on a condition. If the condition is true, the constraints in
+    the then_region apply; otherwise, the constraints in the else_region
+    (if present) apply.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      moore.constraint.if_else %is_write {
+        // constraints for write mode
+      } else {
+        // constraints for read mode
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.7 "if-else constraints".
+  }];
+
+  let arguments = (ins I1:$condition);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$then_region, AnyRegion:$else_region);
+  let assemblyFormat = [{
+    $condition $then_region (`else` $else_region^)? attr-dict
+  }];
+}
+
+def ConstraintForeachOp
+    : MooreOp<"constraint.foreach", [SingleBlock, NoTerminator]> {
+  let summary = "Foreach constraint over array elements";
+  let description = [{
+    Represents a foreach constraint that iterates over array elements
+    and applies constraints involving each element. The loop variable
+    is passed as a block argument.
+
+    Example:
+    ```mlir
+    moore.constraint.block @c1 {
+      moore.constraint.foreach %array : !moore.uarray<8 x i32> {
+      ^bb0(%i: index, %elem: !moore.i32):
+        // constraints involving %elem
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.8 "foreach constraints".
+  }];
+
+  let arguments = (ins AnyType:$array);
+  let results = (outs);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $array `:` type($array) $body attr-dict
+  }];
+}
+
+def ConstraintDistOp
+    : MooreOp<"constraint.dist", []> {
+  let summary = "Distribution constraint";
+  let description = [{
+    Represents a distribution constraint that specifies weighted probability
+    distributions for random variable values.
+
+    The values array contains the distribution points: single values are
+    represented once, ranges as [low, high] pairs. The range_markers array
+    indicates which entries are range starts (1) vs single values (0).
+    The weights array provides the relative probability weight for each entry.
+    The per_range array indicates whether each weight applies per-item (0)
+    or is divided across the range (1 = :/).
+
+    Example:
+    ```mlir
+    // x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }
+    moore.constraint.dist %x, [0, 1, 5, 6], [10, 50, 40], [0, 1, 0] : i8
+    // values: 0, range [1,5], 6
+    // weights: 10, 50, 40
+    // per_range: false, true, false (0=:=, 1=:/)
+    ```
+
+    See IEEE 1800-2017 Section 18.5.4 "Distribution constraints".
+  }];
+
+  let arguments = (ins AnyType:$variable,
+                       DenseI64ArrayAttr:$values,
+                       DenseI64ArrayAttr:$weights,
+                       DenseI64ArrayAttr:$per_range);
+  let results = (outs);
+  let assemblyFormat = [{
+    $variable `,` $values `,` $weights `,` $per_range `:` type($variable) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ConstraintInsideOp
+    : MooreOp<"constraint.inside", []> {
+  let summary = "Inside constraint (set membership)";
+  let description = [{
+    Represents an inside constraint that requires a variable to be
+    a member of a set of values or ranges.
+
+    The ranges array contains pairs of [low, high] values. Single values
+    are represented as [value, value].
+
+    Example:
+    ```mlir
+    // x inside { 1, [3:5], 7 }
+    moore.constraint.inside %x, [[1, 1], [3, 5], [7, 7]] : i8
+    ```
+
+    See IEEE 1800-2017 Section 18.5.3 "Set membership constraints".
+  }];
+
+  let arguments = (ins AnyType:$variable,
+                       DenseI64ArrayAttr:$ranges);
+  let results = (outs);
+  let assemblyFormat = [{
+    $variable `,` $ranges `:` type($variable) attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def ConstraintSolveBeforeOp
+    : MooreOp<"constraint.solve_before", []> {
+  let summary = "Solve ordering constraint";
+  let description = [{
+    Specifies that certain random variables should be solved before others.
+    This provides guidance to the constraint solver about the order in which
+    to determine variable values.
+
+    Example:
+    ```mlir
+    // solve mode before data, addr
+    moore.constraint.solve_before [@mode], [@data, @addr]
+    ```
+
+    See IEEE 1800-2017 Section 18.5.10 "Constraint ordering".
+  }];
+
+  let arguments = (ins SymbolRefArrayAttr:$before,
+                       SymbolRefArrayAttr:$after);
+  let results = (outs);
+  let assemblyFormat = [{
+    $before `,` $after attr-dict
+  }];
+}
+
+def ConstraintDisableOp
+    : MooreOp<"constraint.disable", []> {
+  let summary = "Disable soft constraint";
+  let description = [{
+    Disables a soft constraint by name. This allows overriding soft constraints
+    defined in base classes or earlier in the constraint block.
+
+    Example:
+    ```mlir
+    moore.constraint.disable @soft_limit
+    ```
+
+    See IEEE 1800-2017 Section 18.5.13 "Soft constraints".
+  }];
+
+  let arguments = (ins SymbolRefAttr:$constraint_name);
+  let results = (outs);
+  let assemblyFormat = [{
+    $constraint_name attr-dict
+  }];
+}
+
+def ConstraintUniqueOp
+    : MooreOp<"constraint.unique", []> {
+  let summary = "Unique constraint for array elements";
+  let description = [{
+    Specifies that all elements of an array must have unique values
+    after randomization.
+
+    Example:
+    ```mlir
+    // unique { arr }
+    moore.constraint.unique %arr : !moore.uarray<8 x i32>
+    ```
+
+    See IEEE 1800-2017 Section 18.5.5 "Uniqueness constraints".
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$variables);
+  let results = (outs);
+  let assemblyFormat = [{
+    $variables `:` type($variables) attr-dict
+  }];
+}
+
+def RandomizeOp
+    : MooreOp<"randomize", []> {
+  let summary = "Randomize an object";
+  let description = [{
+    Invokes the randomize() method on a class object. This operation
+    assigns random values to all `rand` and `randc` properties while
+    satisfying all active constraints.
+
+    The result is a 1-bit value indicating success (1) or failure (0).
+
+    Example:
+    ```mlir
+    %success = moore.randomize %obj : !moore.class.object<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 18.6 "Randomization methods".
+  }];
+
+  let arguments = (ins ClassHandleType:$object);
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $object `:` type($object) attr-dict
+  }];
 }
 
 def ClassNewOp
@@ -2581,372 +2945,1217 @@ def VTableEntryOp : MooreOp<"vtable_entry", [
 
 
 //===----------------------------------------------------------------------===//
-// Covergroups (Functional Coverage)
+// Interfaces and Virtual Interfaces
 //===----------------------------------------------------------------------===//
 
-def SampleEventKind : I32EnumAttr<"SampleEventKind", "Sample event type",
-    [
-      I32EnumAttrCase<"Explicit", 0, "explicit">,
-      I32EnumAttrCase<"Posedge", 1, "posedge">,
-      I32EnumAttrCase<"Negedge", 2, "negedge">,
-      I32EnumAttrCase<"Edge", 3, "edge">,
-      I32EnumAttrCase<"CrossTransaction", 4, "cross_transaction">,
-    ]> {
-  let cppNamespace = "circt::moore";
-}
-
-def CovergroupDeclOp : MooreOp<"covergroup.decl", [
-    Symbol, SymbolTable, NoTerminator, SingleBlock
+def InterfaceDeclOp : MooreOp<"interface", [
+  Symbol,
+  SymbolTable,
+  IsolatedFromAbove,
+  NoTerminator,
+  SingleBlock
 ]> {
-  let summary = "Declare a SystemVerilog covergroup";
+  let summary = "Interface declaration";
   let description = [{
-    The `moore.covergroup.decl` operation represents a SystemVerilog covergroup
-    declaration. A covergroup is a container for coverage specification
-    consisting of coverpoints and crosses.
+    Declares a SystemVerilog interface. Interfaces are bundles of signals and
+    modports that provide a standardized way to connect modules. They are
+    essential for UVM testbenches where they define the communication protocol
+    between the DUT and verification components.
 
     Example:
     ```mlir
-    moore.covergroup.decl @my_covergroup sample_event<posedge> %clk : !moore.i1 {
-      moore.covergroup.coverpoint @cp1 %data : !moore.i8
+    moore.interface @my_bus {
+      moore.interface.signal @clk : !moore.l1
+      moore.interface.signal @data : !moore.l32
+      moore.interface.signal @valid : !moore.l1
+      moore.interface.modport @driver (output @clk, output @data, output @valid)
+      moore.interface.modport @monitor (input @clk, input @data, input @valid)
     }
     ```
 
-    The covergroup can optionally specify a sampling event (posedge/negedge of
-    a signal, or explicit sampling via sample() method call).
-
-    See IEEE 1800-2017 Section 19 "Functional Coverage".
+    See IEEE 1800-2017 Section 25 "Interfaces".
   }];
 
   let arguments = (ins
-    SymbolNameAttr:$sym_name,
-    OptionalAttr<SampleEventKind>:$sample_event_kind,
-    Optional<UnpackedType>:$sample_signal
+    SymbolNameAttr:$sym_name
   );
   let regions = (region SizedRegion<1>:$body);
-
   let assemblyFormat = [{
-    $sym_name
-    (`sample_event` `<` $sample_event_kind^ `>` $sample_signal `:` type($sample_signal))?
-    attr-dict-with-keyword $body
+    $sym_name attr-dict-with-keyword $body
   }];
 }
 
-def CoverpointOp : MooreOp<"covergroup.coverpoint", [
-    Symbol, HasParent<"CovergroupDeclOp">, NoTerminator, SingleBlock
+def InterfaceSignalDeclOp : MooreOp<"interface.signal", [
+  Symbol,
+  HasParent<"InterfaceDeclOp">
 ]> {
-  let summary = "Declare a coverpoint within a covergroup";
+  let summary = "Declare a signal within an interface";
   let description = [{
-    The `moore.covergroup.coverpoint` operation represents a SystemVerilog
-    coverpoint. It specifies an expression to be monitored for coverage.
+    Declares a signal within an interface. Signals define the wires and
+    registers that make up the interface's communication channels.
 
     Example:
     ```mlir
-    moore.covergroup.coverpoint @state_cp %state : !moore.i4 {
-      moore.covergroup.bins "idle" values [0]
-      moore.covergroup.bins "running" values [1, 2, 3]
-      moore.covergroup.bins "error" values [15] illegal
-    }
+    moore.interface.signal @data : !moore.l32
+    moore.interface.signal @valid : !moore.l1
     ```
-
-    Each coverpoint monitors a specific expression and divides its value space
-    into bins. Coverage is achieved when all bins have been hit at least once.
-
-    See IEEE 1800-2017 Section 19.5 "Defining coverpoints".
   }];
 
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    UnpackedType:$expression,
-    OptionalAttr<I64Attr>:$auto_bin_max
+    TypeAttr:$type
   );
-  let regions = (region AnyRegion:$body);
-
   let assemblyFormat = [{
-    $sym_name $expression `:` type($expression)
-    (`auto_bin_max` $auto_bin_max^)?
-    attr-dict-with-keyword $body
+    $sym_name `:` $type attr-dict
   }];
 
-  let builders = [
-    OpBuilder<(ins "StringRef":$name, "Value":$expr,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$autoBinMax)>
-  ];
-
   let extraClassDeclaration = [{
-    /// Return whether this coverpoint uses auto bins
-    bool hasAutoBins() { return getAutoBinMax().has_value(); }
+    ::mlir::Type getSignalType() { return getTypeAttr().getValue(); }
   }];
 }
 
-def BinsKind : I32EnumAttr<"BinsKind", "Kind of coverage bin",
-    [
-      I32EnumAttrCase<"Normal", 0, "normal">,
-      I32EnumAttrCase<"Illegal", 1, "illegal">,
-      I32EnumAttrCase<"Ignore", 2, "ignore">,
-      I32EnumAttrCase<"Wildcard", 3, "wildcard">,
-    ]> {
+def ModportDeclOp : MooreOp<"interface.modport", [
+  Symbol,
+  HasParent<"InterfaceDeclOp">
+]> {
+  let summary = "Declare a modport within an interface";
+  let description = [{
+    Declares a modport within an interface. Modports define directional views
+    of an interface's signals, specifying which signals are inputs, outputs,
+    or bidirectional from a particular perspective.
+
+    Modports are crucial for UVM as they allow different verification
+    components (drivers, monitors) to have appropriate access to interface
+    signals.
+
+    Example:
+    ```mlir
+    moore.interface.modport @driver (output @clk, output @data, input @ready)
+    moore.interface.modport @monitor (input @clk, input @data, input @ready)
+    ```
+
+    See IEEE 1800-2017 Section 25.4 "Modports".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    ModportPortArrayAttr:$ports
+  );
+  let assemblyFormat = [{
+    $sym_name custom<ModportPorts>($ports) attr-dict
+  }];
+}
+
+def InterfaceInstanceOp : MooreOp<"interface.instance", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Instantiate an interface";
+  let description = [{
+    Creates an instance of an interface. Interface instances are used to
+    connect modules and provide the actual signals that virtual interfaces
+    can reference.
+
+    Example:
+    ```mlir
+    %bus = moore.interface.instance @my_bus : !moore.ref<!moore.virtual_interface<@my_bus>>
+    ```
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    FlatSymbolRefAttr:$interfaceName
+  );
+  let results = (outs VirtualInterfaceRefType:$result);
+  let assemblyFormat = [{
+    custom<ImplicitSSAName>($name) $interfaceName attr-dict `:` type($result)
+  }];
+}
+
+def VirtualInterfaceGetOp : MooreOp<"virtual_interface.get", [
+  Pure,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Get a modport view from a virtual interface";
+  let description = [{
+    Extracts a modport view from a virtual interface. This is used when a
+    UVM component needs to access interface signals through a specific
+    modport perspective.
+
+    Example:
+    ```mlir
+    %driver_view = moore.virtual_interface.get %vif @driver :
+      !moore.virtual_interface<@my_bus> -> !moore.virtual_interface<@my_bus::@driver>
+    ```
+  }];
+
+  let arguments = (ins
+    VirtualInterfaceType:$vif,
+    FlatSymbolRefAttr:$modport
+  );
+  let results = (outs VirtualInterfaceType:$result);
+  let assemblyFormat = [{
+    $vif $modport attr-dict `:` type($vif) `->` type($result)
+  }];
+}
+
+def VirtualInterfaceSignalRefOp : MooreOp<"virtual_interface.signal_ref", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Get a reference to a signal in a virtual interface";
+  let description = [{
+    Returns a reference to a signal within a virtual interface. This allows
+    reading from and writing to interface signals through the virtual
+    interface handle.
+
+    Example:
+    ```mlir
+    %data_ref = moore.virtual_interface.signal_ref %vif @data :
+      !moore.virtual_interface<@my_bus> -> !moore.ref<!moore.l32>
+    ```
+  }];
+
+  let arguments = (ins
+    VirtualInterfaceType:$vif,
+    FlatSymbolRefAttr:$signal
+  );
+  let results = (outs RefType:$result);
+  let assemblyFormat = [{
+    $vif `[` $signal `]` attr-dict `:` type($vif) `->` type($result)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Factory Support
+//===----------------------------------------------------------------------===//
+
+// Base class for UVM operations
+class UVMOp<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"uvm." # mnemonic, traits>;
+
+// UVM Component/Object type kind
+def UVMObjectKind: I32EnumAttrCase<"Object", 0, "object">;
+def UVMComponentKind: I32EnumAttrCase<"Component", 1, "component">;
+
+def UVMTypeKindAttr: I32EnumAttr<"UVMTypeKind", "UVM type kind",
+            [UVMObjectKind, UVMComponentKind]>{
   let cppNamespace = "circt::moore";
 }
 
-def CoverBinsOp : MooreOp<"covergroup.bins", [
-    HasParent<"CoverpointOp">
+def UVMTypeRegistrationOp : UVMOp<"type_register", [
+  Symbol,
+  IsolatedFromAbove,
+  NoTerminator,
+  SingleBlock
 ]> {
-  let summary = "Define bins for a coverpoint";
+  let summary = "Register a class type with the UVM factory";
   let description = [{
-    The `moore.covergroup.bins` operation defines one or more value bins for
-    a coverpoint. Bins can be normal coverage bins, illegal bins (values that
-    should never occur), or ignore bins (values to exclude from coverage).
+    Registers a class type with the UVM factory system. This is equivalent
+    to the `uvm_component_utils or `uvm_object_utils macros in SystemVerilog.
+
+    The factory registration enables dynamic object creation through
+    type names and supports type overrides for verification reuse.
 
     Example:
     ```mlir
-    // Normal bins
-    moore.covergroup.bins "low" values [0, 1, 2, 3]
-    // Illegal bins (fails if hit)
-    moore.covergroup.bins "error_state" values [255] illegal
-    // Ignore bins (not counted in coverage)
-    moore.covergroup.bins "dont_care" values [128, 129] ignore
-    // Wildcard bins (X/Z matching)
-    moore.covergroup.bins "high_nibble" values [240] wildcard
-    ```
-
-    See IEEE 1800-2017 Section 19.5.1 "Defining bins".
-  }];
-
-  let arguments = (ins
-    StrAttr:$name,
-    I64ArrayAttr:$values,
-    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind
-  );
-
-  let assemblyFormat = [{
-    $name `values` $values (`kind` $kind^)? attr-dict
-  }];
-
-  let extraClassDeclaration = [{
-    /// Return true if this is an illegal bin
-    bool isIllegal() { return getKind() == BinsKind::Illegal; }
-    /// Return true if this is an ignore bin
-    bool isIgnore() { return getKind() == BinsKind::Ignore; }
-    /// Return true if this is a wildcard bin
-    bool isWildcard() { return getKind() == BinsKind::Wildcard; }
-  }];
-}
-
-def CoverBinsRangeOp : MooreOp<"covergroup.bins_range", [
-    HasParent<"CoverpointOp">
-]> {
-  let summary = "Define range bins for a coverpoint";
-  let description = [{
-    The `moore.covergroup.bins_range` operation defines bins covering a range
-    of values. This is useful for large value spaces where individual bins
-    would be impractical.
-
-    Example:
-    ```mlir
-    // Single bin covering range [0, 100]
-    moore.covergroup.bins_range "low_range" from 0 to 100
-    // Array of bins, one per value in range
-    moore.covergroup.bins_range "mid_values" from 100 to 200 array
-    ```
-
-    See IEEE 1800-2017 Section 19.5.1.1 "Range of values".
-  }];
-
-  let arguments = (ins
-    StrAttr:$name,
-    I64Attr:$from_value,
-    I64Attr:$to_value,
-    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind,
-    OptionalAttr<UnitAttr>:$is_array
-  );
-
-  let assemblyFormat = [{
-    $name `from` $from_value `to` $to_value
-    (`kind` $kind^)?
-    (`array` $is_array^)?
-    attr-dict
-  }];
-}
-
-def TransitionBinsOp : MooreOp<"covergroup.transition_bins", [
-    HasParent<"CoverpointOp">
-]> {
-  let summary = "Define transition bins for a coverpoint";
-  let description = [{
-    The `moore.covergroup.transition_bins` operation defines bins that track
-    value transitions (sequences of values). This is useful for FSM coverage.
-
-    Example:
-    ```mlir
-    // Transition 0 -> 1 -> 2
-    moore.covergroup.transition_bins "startup" transitions [[0, 1, 2]]
-    // Multiple transitions
-    moore.covergroup.transition_bins "reset_paths" transitions [[3, 0], [2, 0]]
-    ```
-
-    See IEEE 1800-2017 Section 19.5.1.2 "Transition bins".
-  }];
-
-  let arguments = (ins
-    StrAttr:$name,
-    ArrayAttr:$transitions,
-    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind
-  );
-
-  let assemblyFormat = [{
-    $name `transitions` $transitions (`kind` $kind^)? attr-dict
-  }];
-}
-
-def CrossOp : MooreOp<"covergroup.cross", [
-    Symbol, HasParent<"CovergroupDeclOp">, NoTerminator, SingleBlock
-]> {
-  let summary = "Define a cross coverage between coverpoints";
-  let description = [{
-    The `moore.covergroup.cross` operation defines cross coverage between two
-    or more coverpoints. It creates bins for all combinations of the
-    cross-product of the constituent coverpoint bins.
-
-    Example:
-    ```mlir
-    moore.covergroup.decl @cg {
-      moore.covergroup.coverpoint @addr_cp %addr : !moore.i4
-      moore.covergroup.coverpoint @data_cp %data : !moore.i8
-      moore.covergroup.cross @addr_data_cross coverpoints [@addr_cp, @data_cp]
+    moore.uvm.type_register @MyComponent component {
+      // Optional: field registration for automation
+      moore.uvm.field_int @addr, UVM_DEFAULT
+      moore.uvm.field_object @child, UVM_DEFAULT
     }
     ```
 
-    Cross coverage is useful for verifying that combinations of values have
-    been exercised.
-
-    See IEEE 1800-2017 Section 19.6 "Defining cross coverage".
+    See UVM 1.2 Reference Manual Section 8.2 "Factory Registration".
   }];
 
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    SymbolRefArrayAttr:$coverpoints
+    SymbolRefAttr:$class_type,
+    UVMTypeKindAttr:$kind
   );
-  let regions = (region AnyRegion:$body);
-
+  let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $sym_name `coverpoints` $coverpoints attr-dict-with-keyword $body
-  }];
-
-  let hasVerifier = 1;
-
-  let extraClassDeclaration = [{
-    /// Return the number of coverpoints being crossed
-    unsigned getNumCoverpoints() { return getCoverpoints().size(); }
+    $sym_name $class_type $kind attr-dict-with-keyword $body
   }];
 }
 
-def CrossBinsOp : MooreOp<"covergroup.cross_bins", [
-    HasParent<"CrossOp">
-]> {
-  let summary = "Define explicit bins for cross coverage";
+def UVMFieldIntOp : UVMOp<"field_int", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register an integer field for UVM automation";
   let description = [{
-    The `moore.covergroup.cross_bins` operation defines explicit bins for cross
-    coverage, allowing fine-grained control over which cross products are
-    tracked.
+    Registers an integer field for UVM automation. This enables automatic
+    field operations like copy, compare, pack, unpack, print, and record.
 
     Example:
     ```mlir
-    moore.covergroup.cross @cross1 coverpoints [@cp1, @cp2] {
-      // Explicit cross bin for specific combinations
-      moore.covergroup.cross_bins "corner_cases" select [
-        [0, 255], [255, 0]  // (cp1=0, cp2=255) and (cp1=255, cp2=0)
-      ]
+    moore.uvm.field_int @addr, UVM_DEFAULT
+    moore.uvm.field_int @data, UVM_NOPRINT | UVM_NOCOPY
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3 "Field Macros".
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMFieldObjectOp : UVMOp<"field_object", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register an object field for UVM automation";
+  let description = [{
+    Registers an object (class handle) field for UVM automation.
+
+    Example:
+    ```mlir
+    moore.uvm.field_object @child, UVM_DEFAULT
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMFieldStringOp : UVMOp<"field_string", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register a string field for UVM automation";
+  let description = [{
+    Registers a string field for UVM automation.
+
+    Example:
+    ```mlir
+    moore.uvm.field_string @name, UVM_DEFAULT
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMFieldArrayIntOp : UVMOp<"field_array_int", [HasParent<"UVMTypeRegistrationOp">]> {
+  let summary = "Register an integer array field for UVM automation";
+  let description = [{
+    Registers an integer array field for UVM automation.
+
+    Example:
+    ```mlir
+    moore.uvm.field_array_int @data_array, UVM_DEFAULT
+    ```
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$field_name,
+    I32Attr:$flags
+  );
+  let assemblyFormat = [{
+    $field_name `,` $flags attr-dict
+  }];
+}
+
+def UVMObjectCreateOp : UVMOp<"create_object"> {
+  let summary = "Create an object via the UVM factory";
+  let description = [{
+    Creates an object using the UVM factory. This is equivalent to
+    factory.create_object_by_type() or type::type_id::create() in
+    SystemVerilog UVM code.
+
+    The factory lookup allows type overrides to substitute derived types
+    at runtime without changing the calling code.
+
+    Example:
+    ```mlir
+    %obj = moore.uvm.create_object "my_transaction" : !moore.class<@my_transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3 "Factory Methods".
+  }];
+
+  let arguments = (ins
+    StrAttr:$type_name,
+    OptionalAttr<StrAttr>:$inst_name,
+    Optional<ClassHandleType>:$parent
+  );
+  let results = (outs ClassHandleType:$result);
+  let assemblyFormat = [{
+    $type_name (`,` $inst_name^)? (`parent` $parent^ `:` type($parent))?
+    attr-dict `:` type($result)
+  }];
+}
+
+def UVMComponentCreateOp : UVMOp<"create_component"> {
+  let summary = "Create a component via the UVM factory";
+  let description = [{
+    Creates a component using the UVM factory. This is equivalent to
+    factory.create_component_by_type() or type::type_id::create() in
+    SystemVerilog UVM code.
+
+    Components require a name and parent for the UVM hierarchy.
+
+    Example:
+    ```mlir
+    %comp = moore.uvm.create_component "my_driver", "drv0", %parent :
+      !moore.class<@my_driver>
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3 "Factory Methods".
+  }];
+
+  let arguments = (ins
+    StrAttr:$type_name,
+    StrAttr:$inst_name,
+    ClassHandleType:$parent
+  );
+  let results = (outs ClassHandleType:$result);
+  let assemblyFormat = [{
+    $type_name `,` $inst_name `,` $parent `:` type($parent) attr-dict `->` type($result)
+  }];
+}
+
+def UVMTypeOverrideOp : UVMOp<"type_override"> {
+  let summary = "Override a type in the UVM factory";
+  let description = [{
+    Registers a type override in the UVM factory. When the original type
+    is requested through create_object or create_component, the override
+    type will be created instead.
+
+    Example:
+    ```mlir
+    moore.uvm.type_override "base_driver", "extended_driver"
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3.2 "Type Overrides".
+  }];
+
+  let arguments = (ins
+    StrAttr:$original_type,
+    StrAttr:$override_type,
+    UnitAttr:$replace
+  );
+  let assemblyFormat = [{
+    $original_type `->` $override_type (`replace` $replace^)? attr-dict
+  }];
+}
+
+def UVMInstanceOverrideOp : UVMOp<"instance_override"> {
+  let summary = "Override a type for a specific instance path";
+  let description = [{
+    Registers an instance-specific type override in the UVM factory.
+    Only instances matching the given path will use the override type.
+
+    Example:
+    ```mlir
+    moore.uvm.instance_override "base_driver", "debug_driver", "env.agent.driver"
+    ```
+
+    See UVM 1.2 Reference Manual Section 8.3.2 "Instance Overrides".
+  }];
+
+  let arguments = (ins
+    StrAttr:$original_type,
+    StrAttr:$override_type,
+    StrAttr:$inst_path
+  );
+  let assemblyFormat = [{
+    $original_type `->` $override_type `at` $inst_path attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Phase Support
+//===----------------------------------------------------------------------===//
+
+// UVM phase enumeration
+def UVMBuildPhase: I32EnumAttrCase<"Build", 0, "build">;
+def UVMConnectPhase: I32EnumAttrCase<"Connect", 1, "connect">;
+def UVMEndOfElaborationPhase: I32EnumAttrCase<"EndOfElaboration", 2, "end_of_elaboration">;
+def UVMStartOfSimulationPhase: I32EnumAttrCase<"StartOfSimulation", 3, "start_of_simulation">;
+def UVMRunPhase: I32EnumAttrCase<"Run", 4, "run">;
+def UVMExtractPhase: I32EnumAttrCase<"Extract", 5, "extract">;
+def UVMCheckPhase: I32EnumAttrCase<"Check", 6, "check">;
+def UVMReportPhase: I32EnumAttrCase<"Report", 7, "report">;
+def UVMFinalPhase: I32EnumAttrCase<"Final", 8, "final">;
+// Run-time sub-phases
+def UVMPreResetPhase: I32EnumAttrCase<"PreReset", 9, "pre_reset">;
+def UVMResetPhase: I32EnumAttrCase<"Reset", 10, "reset">;
+def UVMPostResetPhase: I32EnumAttrCase<"PostReset", 11, "post_reset">;
+def UVMPreConfigurePhase: I32EnumAttrCase<"PreConfigure", 12, "pre_configure">;
+def UVMConfigurePhase: I32EnumAttrCase<"Configure", 13, "configure">;
+def UVMPostConfigurePhase: I32EnumAttrCase<"PostConfigure", 14, "post_configure">;
+def UVMPreMainPhase: I32EnumAttrCase<"PreMain", 15, "pre_main">;
+def UVMMainPhase: I32EnumAttrCase<"Main", 16, "main">;
+def UVMPostMainPhase: I32EnumAttrCase<"PostMain", 17, "post_main">;
+def UVMPreShutdownPhase: I32EnumAttrCase<"PreShutdown", 18, "pre_shutdown">;
+def UVMShutdownPhase: I32EnumAttrCase<"Shutdown", 19, "shutdown">;
+def UVMPostShutdownPhase: I32EnumAttrCase<"PostShutdown", 20, "post_shutdown">;
+
+def UVMPhaseAttr: I32EnumAttr<"UVMPhase", "UVM phase",
+            [UVMBuildPhase, UVMConnectPhase, UVMEndOfElaborationPhase,
+             UVMStartOfSimulationPhase, UVMRunPhase, UVMExtractPhase,
+             UVMCheckPhase, UVMReportPhase, UVMFinalPhase,
+             UVMPreResetPhase, UVMResetPhase, UVMPostResetPhase,
+             UVMPreConfigurePhase, UVMConfigurePhase, UVMPostConfigurePhase,
+             UVMPreMainPhase, UVMMainPhase, UVMPostMainPhase,
+             UVMPreShutdownPhase, UVMShutdownPhase, UVMPostShutdownPhase]>{
+  let cppNamespace = "circt::moore";
+}
+
+def UVMPhaseMethodOp : UVMOp<"phase_method", [
+  HasParent<"ClassDeclOp">,
+  NoTerminator,
+  SingleBlock
+]> {
+  let summary = "Declare a UVM phase method";
+  let description = [{
+    Declares a UVM phase method implementation within a component class.
+    Phase methods are called by the UVM phasing mechanism during simulation.
+
+    Example:
+    ```mlir
+    moore.uvm.phase_method build %phase {
+      // build_phase implementation
     }
     ```
 
-    See IEEE 1800-2017 Section 19.6.1 "bins_expression".
+    See UVM 1.2 Reference Manual Chapter 9 "Phasing".
   }];
 
   let arguments = (ins
-    StrAttr:$name,
-    ArrayAttr:$select_values,
-    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind
+    UVMPhaseAttr:$phase
   );
-
+  let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $name `select` $select_values (`kind` $kind^)? attr-dict
+    $phase attr-dict-with-keyword $body
   }];
 }
 
-def CovergroupInstanceOp : MooreOp<"covergroup.instance", [
-    DeclareOpInterfaceMethods<SymbolUserOpInterface>
+def UVMRaiseObjectionOp : UVMOp<"raise_objection"> {
+  let summary = "Raise an objection to phase advancement";
+  let description = [{
+    Raises an objection to prevent the current phase from ending.
+    The phase will not complete until all objections are dropped.
+
+    Example:
+    ```mlir
+    moore.uvm.raise_objection %phase
+    ```
+
+    See UVM 1.2 Reference Manual Section 9.3 "Objections".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$phase,
+    Optional<TwoValuedI32>:$count
+  );
+  let assemblyFormat = [{
+    $phase (`,` $count^)? `:` type($phase) attr-dict
+  }];
+}
+
+def UVMDropObjectionOp : UVMOp<"drop_objection"> {
+  let summary = "Drop an objection to phase advancement";
+  let description = [{
+    Drops a previously raised objection, potentially allowing the phase
+    to complete if all objections are dropped.
+
+    Example:
+    ```mlir
+    moore.uvm.drop_objection %phase
+    ```
+
+    See UVM 1.2 Reference Manual Section 9.3 "Objections".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$phase,
+    Optional<TwoValuedI32>:$count
+  );
+  let assemblyFormat = [{
+    $phase (`,` $count^)? `:` type($phase) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Configuration Database
+//===----------------------------------------------------------------------===//
+
+def UVMConfigDbSetOp : UVMOp<"config_db.set"> {
+  let summary = "Set a value in the UVM configuration database";
+  let description = [{
+    Sets a value in the UVM configuration database. The value can be
+    retrieved by components matching the instance path using config_db.get.
+
+    Example:
+    ```mlir
+    moore.uvm.config_db.set %null, "*.driver", "vif", %vif : !moore.virtual_interface<@my_if>
+    ```
+
+    See UVM 1.2 Reference Manual Section 7.3 "Configuration Database".
+  }];
+
+  let arguments = (ins
+    Optional<ClassHandleType>:$context,
+    StrAttr:$inst_name,
+    StrAttr:$field_name,
+    AnyType:$value
+  );
+  let assemblyFormat = [{
+    ($context^ `:` type($context) `,`)? $inst_name `,` $field_name `,`
+    $value `:` type($value) attr-dict
+  }];
+}
+
+def UVMConfigDbGetOp : UVMOp<"config_db.get"> {
+  let summary = "Get a value from the UVM configuration database";
+  let description = [{
+    Retrieves a value from the UVM configuration database. Returns true
+    if the value was found, false otherwise.
+
+    Example:
+    ```mlir
+    %found, %vif = moore.uvm.config_db.get %this, "", "vif" :
+      !moore.class<@my_component> -> !moore.virtual_interface<@my_if>
+    ```
+
+    See UVM 1.2 Reference Manual Section 7.3 "Configuration Database".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$context,
+    StrAttr:$inst_name,
+    StrAttr:$field_name
+  );
+  let results = (outs I1:$found, AnyType:$value);
+  let assemblyFormat = [{
+    $context `:` type($context) `,` $inst_name `,` $field_name attr-dict `->` type($value)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Sequence and TLM Support
+//===----------------------------------------------------------------------===//
+
+def UVMSequenceStartOp : UVMOp<"sequence.start"> {
+  let summary = "Start a sequence on a sequencer";
+  let description = [{
+    Starts a UVM sequence on a sequencer. This is equivalent to
+    sequence.start(sequencer) in SystemVerilog.
+
+    The operation is a blocking call that completes when the sequence
+    finishes executing.
+
+    Example:
+    ```mlir
+    moore.uvm.sequence.start %seq, %sqr : !moore.class<@my_sequence>,
+      !moore.class<@my_sequencer>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.4 "Sequence Execution".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$sequence,
+    ClassHandleType:$sequencer,
+    Optional<ClassHandleType>:$parent_sequence
+  );
+  let assemblyFormat = [{
+    $sequence `,` $sequencer (`,` `parent` $parent_sequence^ `:` type($parent_sequence))?
+    `:` type($sequence) `,` type($sequencer) attr-dict
+  }];
+}
+
+def UVMSequenceItemStartOp : UVMOp<"seq_item.start"> {
+  let summary = "Start item phase for a sequence item";
+  let description = [{
+    Begins the start_item phase of sequence item execution.
+    This requests arbitration from the sequencer.
+
+    Example:
+    ```mlir
+    moore.uvm.seq_item.start %item, %sqr : !moore.class<@my_item>,
+      !moore.class<@my_sequencer>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.5 "Sequence Items".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$item,
+    ClassHandleType:$sequencer
+  );
+  let assemblyFormat = [{
+    $item `,` $sequencer `:` type($item) `,` type($sequencer) attr-dict
+  }];
+}
+
+def UVMSequenceItemFinishOp : UVMOp<"seq_item.finish"> {
+  let summary = "Finish item phase for a sequence item";
+  let description = [{
+    Completes the finish_item phase of sequence item execution.
+    This sends the item to the driver and waits for the response.
+
+    Example:
+    ```mlir
+    moore.uvm.seq_item.finish %item, %sqr : !moore.class<@my_item>,
+      !moore.class<@my_sequencer>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.5 "Sequence Items".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$item,
+    ClassHandleType:$sequencer
+  );
+  let assemblyFormat = [{
+    $item `,` $sequencer `:` type($item) `,` type($sequencer) attr-dict
+  }];
+}
+
+def UVMGetResponseOp : UVMOp<"get_response"> {
+  let summary = "Get response from driver";
+  let description = [{
+    Retrieves a response item from the driver. This is used in
+    request-response protocols where the driver sends back a response
+    for each transaction.
+
+    Example:
+    ```mlir
+    %rsp = moore.uvm.get_response %sqr : !moore.class<@my_sequencer>
+      -> !moore.class<@my_response>
+    ```
+
+    See UVM 1.2 Reference Manual Section 5.6 "Response Handling".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$sequencer
+  );
+  let results = (outs ClassHandleType:$response);
+  let assemblyFormat = [{
+    $sequencer `:` type($sequencer) attr-dict `->` type($response)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM TLM Port Operations
+//===----------------------------------------------------------------------===//
+
+def UVMTLMPutOp : UVMOp<"tlm.put"> {
+  let summary = "Put a transaction on a TLM port";
+  let description = [{
+    Puts a transaction on a TLM port. This is a blocking operation
+    that waits for the target to accept the transaction.
+
+    Example:
+    ```mlir
+    moore.uvm.tlm.put %port, %txn : !moore.class<@port_type>,
+      !moore.class<@transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.2 "TLM Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$transaction
+  );
+  let assemblyFormat = [{
+    $port `,` $transaction `:` type($port) `,` type($transaction) attr-dict
+  }];
+}
+
+def UVMTLMGetOp : UVMOp<"tlm.get"> {
+  let summary = "Get a transaction from a TLM port";
+  let description = [{
+    Gets a transaction from a TLM port. This is a blocking operation
+    that waits for a transaction to be available.
+
+    Example:
+    ```mlir
+    %txn = moore.uvm.tlm.get %port : !moore.class<@port_type>
+      -> !moore.class<@transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.2 "TLM Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port
+  );
+  let results = (outs ClassHandleType:$transaction);
+  let assemblyFormat = [{
+    $port `:` type($port) attr-dict `->` type($transaction)
+  }];
+}
+
+def UVMTLMTryPutOp : UVMOp<"tlm.try_put"> {
+  let summary = "Try to put a transaction on a TLM port (non-blocking)";
+  let description = [{
+    Attempts to put a transaction on a TLM port without blocking.
+    Returns true if successful, false if the port cannot accept.
+
+    Example:
+    ```mlir
+    %ok = moore.uvm.tlm.try_put %port, %txn : !moore.class<@port_type>,
+      !moore.class<@transaction>
+    ```
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$transaction
+  );
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $port `,` $transaction `:` type($port) `,` type($transaction) attr-dict
+  }];
+}
+
+def UVMTLMTryGetOp : UVMOp<"tlm.try_get"> {
+  let summary = "Try to get a transaction from a TLM port (non-blocking)";
+  let description = [{
+    Attempts to get a transaction from a TLM port without blocking.
+    Returns true if successful, false if no transaction available.
+
+    Example:
+    ```mlir
+    %ok, %txn = moore.uvm.tlm.try_get %port : !moore.class<@port_type>
+      -> !moore.class<@transaction>
+    ```
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port
+  );
+  let results = (outs I1:$success, ClassHandleType:$transaction);
+  let assemblyFormat = [{
+    $port `:` type($port) attr-dict `->` type($transaction)
+  }];
+}
+
+def UVMTLMAnalysisWriteOp : UVMOp<"tlm.analysis_write"> {
+  let summary = "Write to an analysis port (broadcast)";
+  let description = [{
+    Writes a transaction to an analysis port, broadcasting it to all
+    connected subscribers. This is a non-blocking operation.
+
+    Example:
+    ```mlir
+    moore.uvm.tlm.analysis_write %port, %txn : !moore.class<@analysis_port>,
+      !moore.class<@transaction>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.3 "Analysis Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$transaction
+  );
+  let assemblyFormat = [{
+    $port `,` $transaction `:` type($port) `,` type($transaction) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Reporting
+//===----------------------------------------------------------------------===//
+
+// UVM severity levels
+def UVMInfoSeverity: I32EnumAttrCase<"Info", 0, "info">;
+def UVMWarningSeverity: I32EnumAttrCase<"Warning", 1, "warning">;
+def UVMErrorSeverity: I32EnumAttrCase<"Error", 2, "error">;
+def UVMFatalSeverity: I32EnumAttrCase<"Fatal", 3, "fatal">;
+
+def UVMSeverityAttr: I32EnumAttr<"UVMSeverity", "UVM message severity",
+            [UVMInfoSeverity, UVMWarningSeverity, UVMErrorSeverity, UVMFatalSeverity]>{
+  let cppNamespace = "circt::moore";
+}
+
+def UVMReportOp : UVMOp<"report"> {
+  let summary = "Issue a UVM report message";
+  let description = [{
+    Issues a UVM report message with the specified severity, ID, and message.
+    This is equivalent to `uvm_info, `uvm_warning, `uvm_error, and `uvm_fatal.
+
+    Example:
+    ```mlir
+    moore.uvm.report info, "MY_ID", "Transaction completed" : !moore.string
+    ```
+
+    See UVM 1.2 Reference Manual Section 6.2 "Reporting".
+  }];
+
+  let arguments = (ins
+    UVMSeverityAttr:$severity,
+    StrAttr:$id,
+    StringType:$message,
+    I32Attr:$verbosity
+  );
+  let assemblyFormat = [{
+    $severity `,` $id `,` $message `:` type($message) `,` $verbosity attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Base Class Operations
+//===----------------------------------------------------------------------===//
+
+def UVMClassDeclOp : UVMOp<"class.decl", [
+  Symbol,
+  SymbolTable,
+  IsolatedFromAbove,
+  NoTerminator,
+  SingleBlock
 ]> {
-  let summary = "Instantiate a covergroup";
+  let summary = "Declare a UVM class extending a base class";
   let description = [{
-    The `moore.covergroup.instance` operation creates an instance of a
-    covergroup. Multiple instances of the same covergroup can exist, each
-    tracking coverage independently.
+    Declares a class that extends one of the UVM base classes. This operation
+    captures the UVM hierarchy relationship and enables proper phase method
+    resolution and factory registration.
 
     Example:
     ```mlir
-    moore.covergroup.decl @my_cg { ... }
-    %cg = moore.covergroup.instance "cg1" @my_cg
+    moore.uvm.class.decl @my_driver extends uvm_driver {
+      moore.class.propertydecl @req : !moore.class<@my_item>
+      moore.uvm.phase_method build { ... }
+    }
     ```
 
-    See IEEE 1800-2017 Section 19.3 "Defining covergroups".
+    See UVM 1.2 Reference Manual Chapter 5 "UVM Class Reference".
   }];
 
   let arguments = (ins
-    StrAttr:$instance_name,
-    FlatSymbolRefAttr:$covergroup_name
+    SymbolNameAttr:$sym_name,
+    UVMBaseClassAttr:$base_class,
+    OptionalAttr<SymbolRefAttr>:$parent_class
   );
-
-  let results = (outs Index:$handle);
-
+  let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $instance_name $covergroup_name attr-dict
+    $sym_name `extends` $base_class (`from` $parent_class^)?
+    attr-dict-with-keyword $body
   }];
 }
 
-def CovergroupSampleOp : MooreOp<"covergroup.sample"> {
-  let summary = "Explicitly sample a covergroup";
+def UVMTLMPortDeclOp : UVMOp<"tlm.port_decl", [
+  Symbol,
+  HasParent<"UVMClassDeclOp, ClassDeclOp">
+]> {
+  let summary = "Declare a TLM port in a UVM component";
   let description = [{
-    The `moore.covergroup.sample` operation triggers explicit sampling of a
-    covergroup instance. This is used when the covergroup doesn't have an
-    automatic sampling event, or when additional sampling is desired.
+    Declares a TLM port within a UVM component. TLM ports provide
+    transaction-level communication between components.
 
     Example:
     ```mlir
-    %cg = moore.covergroup.instance "cg1" @my_cg
-    moore.covergroup.sample %cg
+    moore.uvm.tlm.port_decl @seq_item_port put : !moore.class<@my_item>
+    moore.uvm.tlm.port_decl @analysis_port analysis : !moore.class<@my_item>
     ```
 
-    See IEEE 1800-2017 Section 19.8 "Coverage sampling".
+    See UVM 1.2 Reference Manual Section 12.2 "TLM Ports".
   }];
 
-  let arguments = (ins Index:$covergroup_handle);
-
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    TLMPortKindAttr:$port_kind,
+    TypeAttr:$transaction_type
+  );
   let assemblyFormat = [{
-    $covergroup_handle attr-dict
+    $sym_name $port_kind `:` $transaction_type attr-dict
   }];
 }
 
-def CovergroupGetCoverageOp : MooreOp<"covergroup.get_coverage", [Pure]> {
-  let summary = "Get the current coverage percentage";
+def UVMTLMPortConnectOp : UVMOp<"tlm.connect"> {
+  let summary = "Connect two TLM ports";
   let description = [{
-    The `moore.covergroup.get_coverage` operation returns the current coverage
-    percentage for a covergroup instance as a real number between 0.0 and 100.0.
+    Connects two TLM ports together. This is typically done in the
+    connect_phase of a UVM component.
 
     Example:
     ```mlir
-    %cg = moore.covergroup.instance "cg1" @my_cg
-    %coverage = moore.covergroup.get_coverage %cg : !moore.real
+    moore.uvm.tlm.connect %driver.seq_item_port, %sequencer.seq_item_export
+      : !moore.class<@driver_type>, !moore.class<@sequencer_type>
     ```
 
-    See IEEE 1800-2017 Section 19.8.1 "Coverage computation".
+    See UVM 1.2 Reference Manual Section 12.2.2 "Port Connections".
   }];
 
-  let arguments = (ins Index:$covergroup_handle);
-  let results = (outs RealType:$coverage);
-
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$target
+  );
   let assemblyFormat = [{
-    $covergroup_handle attr-dict `:` type($coverage)
+    $port `,` $target `:` type($port) `,` type($target) attr-dict
   }];
+}
+
+def UVMAnalysisPortConnectOp : UVMOp<"analysis.connect"> {
+  let summary = "Connect an analysis port to a subscriber";
+  let description = [{
+    Connects an analysis port to a subscriber's analysis export.
+    Analysis ports broadcast transactions to all connected subscribers.
+
+    Example:
+    ```mlir
+    moore.uvm.analysis.connect %monitor.ap, %scoreboard.analysis_export
+      : !moore.class<@monitor_type>, !moore.class<@scoreboard_type>
+    ```
+
+    See UVM 1.2 Reference Manual Section 12.3 "Analysis Ports".
+  }];
+
+  let arguments = (ins
+    ClassHandleType:$port,
+    ClassHandleType:$subscriber
+  );
+  let assemblyFormat = [{
+    $port `,` $subscriber `:` type($port) `,` type($subscriber) attr-dict
+  }];
+}
+
+def UVMGetParentOp : UVMOp<"get_parent"> {
+  let summary = "Get parent component in UVM hierarchy";
+  let description = [{
+    Returns the parent component of a UVM component. This is essential
+    for navigating the component hierarchy.
+
+    Example:
+    ```mlir
+    %parent = moore.uvm.get_parent %this : !moore.class<@my_component>
+      -> !moore.class<@uvm_component>
+    ```
+
+    See UVM 1.2 Reference Manual Section 13.1.3 "Hierarchy Information".
+  }];
+
+  let arguments = (ins ClassHandleType:$component);
+  let results = (outs ClassHandleType:$parent);
+  let assemblyFormat = [{
+    $component `:` type($component) attr-dict `->` type($parent)
+  }];
+}
+
+def UVMGetFullNameOp : UVMOp<"get_full_name"> {
+  let summary = "Get full hierarchical name of a component";
+  let description = [{
+    Returns the full hierarchical name of a UVM component as a string.
+    This includes all ancestor component names separated by dots.
+
+    Example:
+    ```mlir
+    %name = moore.uvm.get_full_name %this : !moore.class<@my_component>
+    ```
+
+    See UVM 1.2 Reference Manual Section 13.1.3 "Hierarchy Information".
+  }];
+
+  let arguments = (ins ClassHandleType:$component);
+  let results = (outs StringType:$name);
+  let assemblyFormat = [{
+    $component `:` type($component) attr-dict
+  }];
+}
+
+def UVMFindByNameOp : UVMOp<"find_by_name"> {
+  let summary = "Find a component by hierarchical path";
+  let description = [{
+    Searches for a component by its hierarchical path name.
+    Returns null if no matching component is found.
+
+    Example:
+    ```mlir
+    %comp = moore.uvm.find_by_name "env.agent.driver", %root
+      : !moore.class<@uvm_component> -> !moore.class<@my_driver>
+    ```
+
+    See UVM 1.2 Reference Manual Section 13.1.3.3 "find".
+  }];
+
+  let arguments = (ins
+    StrAttr:$path,
+    Optional<ClassHandleType>:$context
+  );
+  let results = (outs ClassHandleType:$component);
+  let assemblyFormat = [{
+    $path (`,` $context^ `:` type($context))? attr-dict `->` type($component)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Array Builtins
+//===----------------------------------------------------------------------===//
+
+class ArrayBuiltin<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"array." # mnemonic, traits>;
+
+def ArraySizeOp : ArrayBuiltin<"size"> {
+  let summary = "Get the size of a dynamic array, associative array, or queue";
+  let description = [{
+    Returns the number of elements in the given array. This corresponds to the
+    SystemVerilog `.size()` built-in method on dynamic arrays, associative
+    arrays, and queues.
+
+    For associative arrays, this is equivalent to calling `.num()`.
+
+    Example:
+    ```mlir
+    %size = moore.array.size %queue : !moore.queue<i32, 0> -> i32
+    ```
+  }];
+  let arguments = (ins AnyDynamicArrayType:$array);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$array `:` type($array) attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Queue Builtins
+//===----------------------------------------------------------------------===//
+
+class QueueBuiltin<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"queue." # mnemonic, traits>;
+
+def QueuePushBackOp : QueueBuiltin<"push_back"> {
+  let summary = "Push an element to the back of a queue";
+  let description = [{
+    Appends an element to the back of a queue. This corresponds to the
+    SystemVerilog `.push_back()` built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.push_back %queue, %elem : !moore.ref<!moore.queue<i32, 0>>, i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue, UnpackedType:$element);
+  let assemblyFormat = "$queue `,` $element `:` type($queue) `,` type($element) attr-dict";
+}
+
+def QueuePushFrontOp : QueueBuiltin<"push_front"> {
+  let summary = "Push an element to the front of a queue";
+  let description = [{
+    Prepends an element to the front of a queue. This corresponds to the
+    SystemVerilog `.push_front()` built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.push_front %queue, %elem : !moore.ref<!moore.queue<i32, 0>>, i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue, UnpackedType:$element);
+  let assemblyFormat = "$queue `,` $element `:` type($queue) `,` type($element) attr-dict";
+}
+
+def QueuePopBackOp : QueueBuiltin<"pop_back"> {
+  let summary = "Pop an element from the back of a queue";
+  let description = [{
+    Removes and returns the last element from a queue. This corresponds to the
+    SystemVerilog `.pop_back()` built-in method on queues.
+
+    Example:
+    ```mlir
+    %elem = moore.queue.pop_back %queue : !moore.ref<!moore.queue<i32, 0>> -> i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = "$queue `:` type($queue) `->` type($result) attr-dict";
+}
+
+def QueuePopFrontOp : QueueBuiltin<"pop_front"> {
+  let summary = "Pop an element from the front of a queue";
+  let description = [{
+    Removes and returns the first element from a queue. This corresponds to the
+    SystemVerilog `.pop_front()` built-in method on queues.
+
+    Example:
+    ```mlir
+    %elem = moore.queue.pop_front %queue : !moore.ref<!moore.queue<i32, 0>> -> i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = "$queue `:` type($queue) `->` type($result) attr-dict";
+}
+
+def QueueDeleteOp : QueueBuiltin<"delete"> {
+  let summary = "Delete all elements from a queue";
+  let description = [{
+    Removes all elements from a queue, leaving it empty. This corresponds to the
+    SystemVerilog `.delete()` built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.delete %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
+def QueueSortOp : QueueBuiltin<"sort"> {
+  let summary = "Sort the elements of a queue";
+  let description = [{
+    Sorts the elements of a queue in ascending order. This corresponds to the
+    SystemVerilog `.sort()` built-in method on queues and dynamic arrays.
+
+    Example:
+    ```mlir
+    moore.queue.sort %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Associative Array Builtins
+//===----------------------------------------------------------------------===//
+
+class AssocArrayBuiltin<string mnemonic, list<Trait> traits = []> :
+    MooreOp<"assoc." # mnemonic, traits>;
+
+def AssocArrayFirstOp : AssocArrayBuiltin<"first"> {
+  let summary = "Get the first key of an associative array";
+  let description = [{
+    Returns true and sets the key reference to the first key of the associative
+    array if it is non-empty. Returns false if the array is empty.
+    This corresponds to the SystemVerilog `.first(ref index)` built-in method.
+
+    Example:
+    ```mlir
+    %found = moore.assoc.first %array, %key : !moore.ref<!moore.assoc<i32, string>>, !moore.ref<string>
+    ```
+  }];
+  let arguments = (ins RefType:$array, RefType:$key);
+  let results = (outs TwoValuedI1:$found);
+  let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
+}
+
+def AssocArrayNextOp : AssocArrayBuiltin<"next"> {
+  let summary = "Get the next key of an associative array";
+  let description = [{
+    Returns true and sets the key reference to the next key of the associative
+    array after the current key. Returns false if there are no more keys.
+    This corresponds to the SystemVerilog `.next(ref index)` built-in method.
+
+    Example:
+    ```mlir
+    %found = moore.assoc.next %array, %key : !moore.ref<!moore.assoc<i32, string>>, !moore.ref<string>
+    ```
+  }];
+  let arguments = (ins RefType:$array, RefType:$key);
+  let results = (outs TwoValuedI1:$found);
+  let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }
 
 //===----------------------------------------------------------------------===//

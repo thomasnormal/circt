@@ -409,9 +409,7 @@ def RefType : MooreTypeDef<"Ref", [
     related to memory, like alloca/write/read.
   }];
   let parameters = (ins "UnpackedType":$nestedType);
-  let assemblyFormat = [{
-    `<` $nestedType `>`
-  }];
+  let hasCustomAssemblyFormat = 1;
 
   let builders = [
     AttrBuilderWithInferredContext<(ins "UnpackedType":$nestedType), [{
@@ -521,11 +519,18 @@ def TwoValuedI32 : MooreType<CPred<[{
   let builderCall = "IntType::getInt($_builder.getContext(), 32)";
 }
 
-// A 32-bit two-valued integer.
+// An 8-bit two-valued integer.
 def TwoValuedI8 : MooreType<CPred<[{
     moore::isIntType($_self, 8, moore::Domain::TwoValued)
   }]>, "8-bit two-valued integer type", "moore::IntType"> {
   let builderCall = "IntType::getInt($_builder.getContext(), 8)";
+}
+
+// A 1-bit two-valued integer (boolean).
+def TwoValuedI1 : MooreType<CPred<[{
+    moore::isIntType($_self, 1, moore::Domain::TwoValued)
+  }]>, "1-bit two-valued integer type", "moore::IntType"> {
+  let builderCall = "IntType::getInt($_builder.getContext(), 1)";
 }
 
 // A 32-bit real value.
@@ -546,6 +551,14 @@ def RealF64 : MooreType<CPred<[{
 def AnyStaticArrayType : MooreType<
   Or<[ArrayType.predicate, UnpackedArrayType.predicate]>,
   "packed or unpacked static array type",
+  "moore::UnpackedType">;
+
+/// A dynamic array type (dynamic array, associative array, or queue) that
+/// supports the .size() method.
+def AnyDynamicArrayType : MooreType<
+  Or<[OpenUnpackedArrayType.predicate, AssocArrayType.predicate,
+      QueueType.predicate]>,
+  "dynamic array, associative array, or queue type",
   "moore::UnpackedType">;
 
 /// A packed or unpacked struct type.
@@ -581,4 +594,63 @@ def AnyUnionRefType : SpecificRefType<AnyUnionType>;
 
 /// Class references.
 def ClassHandleRefType : SpecificRefType<ClassHandleType>;
+
+//===----------------------------------------------------------------------===//
+// Virtual Interface Type
+//===----------------------------------------------------------------------===//
+
+def VirtualInterfaceType : MooreTypeDef<"VirtualInterface", [],
+    "moore::UnpackedType"> {
+  let mnemonic = "virtual_interface";
+  let summary = "a virtual interface type";
+  let description = [{
+    The `!moore.virtual_interface<@I>` type represents a virtual interface
+    variable that can hold a reference to an interface instance. Virtual
+    interfaces are essential for UVM testbenches as they allow dynamic binding
+    of interface instances to verification components.
+
+    Unlike regular interface instances which are static, virtual interfaces
+    can be assigned at runtime and passed as arguments to classes and tasks.
+
+    Example:
+    ```mlir
+    // A virtual interface pointing to interface @my_bus
+    !moore.virtual_interface<@my_bus>
+
+    // A virtual interface with modport selection
+    !moore.virtual_interface<@my_bus::@driver>
+    ```
+
+    See IEEE 1800-2017 Section 25.9 "Virtual interfaces".
+  }];
+  let parameters = (ins
+    "::mlir::SymbolRefAttr":$interface
+  );
+  let assemblyFormat = "`<` $interface `>`";
+
+  let extraClassDeclaration = [{
+    /// Get the interface symbol reference without modport.
+    mlir::FlatSymbolRefAttr getInterfaceRef() const {
+      return mlir::FlatSymbolRefAttr::get(
+        getContext(), getInterface().getRootReference().getValue());
+    }
+
+    /// Check if this virtual interface has a modport selection.
+    bool hasModport() const {
+      return !getInterface().getNestedReferences().empty();
+    }
+
+    /// Get the modport name if present, empty string otherwise.
+    mlir::StringRef getModportName() const {
+      auto refs = getInterface().getNestedReferences();
+      if (!refs.empty())
+        return refs.back().getValue();
+      return "";
+    }
+  }];
+}
+
+/// Virtual interface references.
+def VirtualInterfaceRefType : SpecificRefType<VirtualInterfaceType>;
+
 #endif // CIRCT_DIALECT_MOORE_MOORETYPES

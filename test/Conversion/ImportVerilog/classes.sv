@@ -630,3 +630,102 @@ endclass
 class realFunctionClass implements virtualFunctionClass;
 virtual function void subroutine; endfunction
 endclass
+
+/// Check randomization support - rand and randc properties
+
+// CHECK-LABEL: moore.class.classdecl @RandomizableClass {
+// CHECK-NEXT:    moore.class.propertydecl @data : !moore.i32 rand_mode rand
+// CHECK-NEXT:    moore.class.propertydecl @mode : !moore.i8 rand_mode randc
+// CHECK-NEXT:    moore.class.propertydecl @fixed : !moore.i16
+// CHECK: }
+
+class RandomizableClass;
+    rand int data;
+    randc byte mode;
+    shortint fixed;
+endclass
+
+/// Check constraint block support
+
+// CHECK-LABEL: moore.class.classdecl @ConstrainedClass {
+// CHECK-NEXT:    moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK-NEXT:    moore.constraint.block @valid_range {
+// CHECK-NEXT:    }
+// CHECK: }
+
+class ConstrainedClass;
+    rand int x;
+    constraint valid_range { x > 0; x < 100; }
+endclass
+
+/// Check static constraint blocks
+
+// CHECK-LABEL: moore.class.classdecl @StaticConstraintClass {
+// CHECK-NEXT:    moore.class.propertydecl @y : !moore.i32 rand_mode rand
+// CHECK-NEXT:    moore.constraint.block static @static_bound {
+// CHECK-NEXT:    }
+// CHECK: }
+
+class StaticConstraintClass;
+    rand int y;
+    static constraint static_bound { y >= 0; }
+endclass
+
+//===----------------------------------------------------------------------===//
+// Interface Tests
+//===----------------------------------------------------------------------===//
+
+/// Check basic interface declaration with signals
+
+// CHECK-LABEL: moore.interface @basic_bus {
+// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @data : !moore.l32
+// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
+// CHECK: }
+
+interface basic_bus;
+    logic clk;
+    logic [31:0] data;
+    logic valid;
+endinterface
+
+/// Check interface with modports
+
+// CHECK-LABEL: moore.interface @handshake_bus {
+// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @data : !moore.l8
+// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @ready : !moore.l1
+// CHECK-NEXT:    moore.interface.modport @driver (output @clk, output @data, output @valid, input @ready)
+// CHECK-NEXT:    moore.interface.modport @receiver (input @clk, input @data, input @valid, output @ready)
+// CHECK: }
+
+interface handshake_bus;
+    logic clk;
+    logic [7:0] data;
+    logic valid;
+    logic ready;
+
+    modport driver (output clk, output data, output valid, input ready);
+    modport receiver (input clk, input data, input valid, output ready);
+endinterface
+
+/// Check virtual interface variable type
+
+// CHECK-LABEL: moore.class.classdecl @VifDriver {
+// CHECK-NEXT:    moore.class.propertydecl @vif : !moore.virtual_interface<@handshake_bus::@driver>
+// CHECK: }
+
+class VifDriver;
+    virtual handshake_bus.driver vif;
+endclass
+
+/// Check virtual interface without modport
+
+// CHECK-LABEL: moore.class.classdecl @VifHolder {
+// CHECK-NEXT:    moore.class.propertydecl @bus : !moore.virtual_interface<@basic_bus>
+// CHECK: }
+
+class VifHolder;
+    virtual basic_bus bus;
+endclass
