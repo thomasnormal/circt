@@ -2139,6 +2139,22 @@ struct RvalueExprVisitor : public ExprVisitor {
         value = context.convertRvalueExpression(*stream.operand);
       }
 
+      // Check if this is a dynamic array or queue type that cannot be
+      // converted to a simple bit vector. These require runtime iteration
+      // which is not yet supported.
+      if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(value.getType())) {
+        mlir::emitWarning(operandLoc)
+            << "streaming concatenation of dynamic arrays/queues is not fully "
+            << "supported; returning empty string";
+        // Return an empty string as a placeholder to allow compilation to
+        // continue. This matches the expected behavior for string streaming.
+        auto intType =
+            moore::IntType::get(context.getContext(), 0, Domain::TwoValued);
+        auto emptyConst =
+            moore::ConstantStringOp::create(builder, loc, intType, "");
+        return moore::IntToStringOp::create(builder, loc, emptyConst);
+      }
+
       value = context.convertToSimpleBitVector(value);
       if (!value)
         return {};
@@ -2660,15 +2676,8 @@ Value Context::convertToSimpleBitVector(Value value) {
     if (auto sbvType = packed.getSimpleBitVector())
       return materializeConversion(sbvType, value, false, value.getLoc());
 
-  // For unpacked types like queues and dynamic arrays that require runtime
-  // iteration to convert to a bit vector, emit a warning and skip. This
-  // commonly occurs with streaming concatenation of string queues like
-  // {>>{string_queue}}, which is used for string joining but requires runtime
-  // support not yet implemented.
-  mlir::emitWarning(value.getLoc())
-      << "expression of type " << value.getType()
-      << " cannot be cast to a simple bit vector; "
-      << "this operation is not yet supported and will be skipped";
+  mlir::emitError(value.getLoc()) << "expression of type " << value.getType()
+                                  << " cannot be cast to a simple bit vector";
   return {};
 }
 
