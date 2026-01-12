@@ -57,6 +57,7 @@ def SVModuleOp : MooreOp<"module", [
   IsolatedFromAbove,
   RegionKindInterface,
   Symbol,
+  SymbolTable,
   SingleBlockImplicitTerminator<"OutputOp">,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
@@ -2578,6 +2579,375 @@ def VTableEntryOp : MooreOp<"vtable_entry", [
   }];
 }
 
+
+//===----------------------------------------------------------------------===//
+// Covergroups (Functional Coverage)
+//===----------------------------------------------------------------------===//
+
+def SampleEventKind : I32EnumAttr<"SampleEventKind", "Sample event type",
+    [
+      I32EnumAttrCase<"Explicit", 0, "explicit">,
+      I32EnumAttrCase<"Posedge", 1, "posedge">,
+      I32EnumAttrCase<"Negedge", 2, "negedge">,
+      I32EnumAttrCase<"Edge", 3, "edge">,
+      I32EnumAttrCase<"CrossTransaction", 4, "cross_transaction">,
+    ]> {
+  let cppNamespace = "circt::moore";
+}
+
+def CovergroupDeclOp : MooreOp<"covergroup.decl", [
+    Symbol, SymbolTable, NoTerminator, SingleBlock
+]> {
+  let summary = "Declare a SystemVerilog covergroup";
+  let description = [{
+    The `moore.covergroup.decl` operation represents a SystemVerilog covergroup
+    declaration. A covergroup is a container for coverage specification
+    consisting of coverpoints and crosses.
+
+    Example:
+    ```mlir
+    moore.covergroup.decl @my_covergroup sample_event<posedge> %clk : !moore.i1 {
+      moore.covergroup.coverpoint @cp1 %data : !moore.i8
+    }
+    ```
+
+    The covergroup can optionally specify a sampling event (posedge/negedge of
+    a signal, or explicit sampling via sample() method call).
+
+    See IEEE 1800-2017 Section 19 "Functional Coverage".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<SampleEventKind>:$sample_event_kind,
+    Optional<UnpackedType>:$sample_signal
+  );
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = [{
+    $sym_name
+    (`sample_event` `<` $sample_event_kind^ `>` $sample_signal `:` type($sample_signal))?
+    attr-dict-with-keyword $body
+  }];
+}
+
+def CoverpointOp : MooreOp<"covergroup.coverpoint", [
+    Symbol, HasParent<"CovergroupDeclOp">, NoTerminator, SingleBlock
+]> {
+  let summary = "Declare a coverpoint within a covergroup";
+  let description = [{
+    The `moore.covergroup.coverpoint` operation represents a SystemVerilog
+    coverpoint. It specifies an expression to be monitored for coverage.
+
+    Example:
+    ```mlir
+    moore.covergroup.coverpoint @state_cp %state : !moore.i4 {
+      moore.covergroup.bins "idle" values [0]
+      moore.covergroup.bins "running" values [1, 2, 3]
+      moore.covergroup.bins "error" values [15] illegal
+    }
+    ```
+
+    Each coverpoint monitors a specific expression and divides its value space
+    into bins. Coverage is achieved when all bins have been hit at least once.
+
+    See IEEE 1800-2017 Section 19.5 "Defining coverpoints".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    UnpackedType:$expression,
+    OptionalAttr<I64Attr>:$auto_bin_max
+  );
+  let regions = (region AnyRegion:$body);
+
+  let assemblyFormat = [{
+    $sym_name $expression `:` type($expression)
+    (`auto_bin_max` $auto_bin_max^)?
+    attr-dict-with-keyword $body
+  }];
+
+  let builders = [
+    OpBuilder<(ins "StringRef":$name, "Value":$expr,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$autoBinMax)>
+  ];
+
+  let extraClassDeclaration = [{
+    /// Return whether this coverpoint uses auto bins
+    bool hasAutoBins() { return getAutoBinMax().has_value(); }
+  }];
+}
+
+def BinsKind : I32EnumAttr<"BinsKind", "Kind of coverage bin",
+    [
+      I32EnumAttrCase<"Normal", 0, "normal">,
+      I32EnumAttrCase<"Illegal", 1, "illegal">,
+      I32EnumAttrCase<"Ignore", 2, "ignore">,
+      I32EnumAttrCase<"Wildcard", 3, "wildcard">,
+    ]> {
+  let cppNamespace = "circt::moore";
+}
+
+def CoverBinsOp : MooreOp<"covergroup.bins", [
+    HasParent<"CoverpointOp">
+]> {
+  let summary = "Define bins for a coverpoint";
+  let description = [{
+    The `moore.covergroup.bins` operation defines one or more value bins for
+    a coverpoint. Bins can be normal coverage bins, illegal bins (values that
+    should never occur), or ignore bins (values to exclude from coverage).
+
+    Example:
+    ```mlir
+    // Normal bins
+    moore.covergroup.bins "low" values [0, 1, 2, 3]
+    // Illegal bins (fails if hit)
+    moore.covergroup.bins "error_state" values [255] illegal
+    // Ignore bins (not counted in coverage)
+    moore.covergroup.bins "dont_care" values [128, 129] ignore
+    // Wildcard bins (X/Z matching)
+    moore.covergroup.bins "high_nibble" values [240] wildcard
+    ```
+
+    See IEEE 1800-2017 Section 19.5.1 "Defining bins".
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    I64ArrayAttr:$values,
+    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind
+  );
+
+  let assemblyFormat = [{
+    $name `values` $values (`kind` $kind^)? attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    /// Return true if this is an illegal bin
+    bool isIllegal() { return getKind() == BinsKind::Illegal; }
+    /// Return true if this is an ignore bin
+    bool isIgnore() { return getKind() == BinsKind::Ignore; }
+    /// Return true if this is a wildcard bin
+    bool isWildcard() { return getKind() == BinsKind::Wildcard; }
+  }];
+}
+
+def CoverBinsRangeOp : MooreOp<"covergroup.bins_range", [
+    HasParent<"CoverpointOp">
+]> {
+  let summary = "Define range bins for a coverpoint";
+  let description = [{
+    The `moore.covergroup.bins_range` operation defines bins covering a range
+    of values. This is useful for large value spaces where individual bins
+    would be impractical.
+
+    Example:
+    ```mlir
+    // Single bin covering range [0, 100]
+    moore.covergroup.bins_range "low_range" from 0 to 100
+    // Array of bins, one per value in range
+    moore.covergroup.bins_range "mid_values" from 100 to 200 array
+    ```
+
+    See IEEE 1800-2017 Section 19.5.1.1 "Range of values".
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    I64Attr:$from_value,
+    I64Attr:$to_value,
+    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind,
+    OptionalAttr<UnitAttr>:$is_array
+  );
+
+  let assemblyFormat = [{
+    $name `from` $from_value `to` $to_value
+    (`kind` $kind^)?
+    (`array` $is_array^)?
+    attr-dict
+  }];
+}
+
+def TransitionBinsOp : MooreOp<"covergroup.transition_bins", [
+    HasParent<"CoverpointOp">
+]> {
+  let summary = "Define transition bins for a coverpoint";
+  let description = [{
+    The `moore.covergroup.transition_bins` operation defines bins that track
+    value transitions (sequences of values). This is useful for FSM coverage.
+
+    Example:
+    ```mlir
+    // Transition 0 -> 1 -> 2
+    moore.covergroup.transition_bins "startup" transitions [[0, 1, 2]]
+    // Multiple transitions
+    moore.covergroup.transition_bins "reset_paths" transitions [[3, 0], [2, 0]]
+    ```
+
+    See IEEE 1800-2017 Section 19.5.1.2 "Transition bins".
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    ArrayAttr:$transitions,
+    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind
+  );
+
+  let assemblyFormat = [{
+    $name `transitions` $transitions (`kind` $kind^)? attr-dict
+  }];
+}
+
+def CrossOp : MooreOp<"covergroup.cross", [
+    Symbol, HasParent<"CovergroupDeclOp">, NoTerminator, SingleBlock
+]> {
+  let summary = "Define a cross coverage between coverpoints";
+  let description = [{
+    The `moore.covergroup.cross` operation defines cross coverage between two
+    or more coverpoints. It creates bins for all combinations of the
+    cross-product of the constituent coverpoint bins.
+
+    Example:
+    ```mlir
+    moore.covergroup.decl @cg {
+      moore.covergroup.coverpoint @addr_cp %addr : !moore.i4
+      moore.covergroup.coverpoint @data_cp %data : !moore.i8
+      moore.covergroup.cross @addr_data_cross coverpoints [@addr_cp, @data_cp]
+    }
+    ```
+
+    Cross coverage is useful for verifying that combinations of values have
+    been exercised.
+
+    See IEEE 1800-2017 Section 19.6 "Defining cross coverage".
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    SymbolRefArrayAttr:$coverpoints
+  );
+  let regions = (region AnyRegion:$body);
+
+  let assemblyFormat = [{
+    $sym_name `coverpoints` $coverpoints attr-dict-with-keyword $body
+  }];
+
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Return the number of coverpoints being crossed
+    unsigned getNumCoverpoints() { return getCoverpoints().size(); }
+  }];
+}
+
+def CrossBinsOp : MooreOp<"covergroup.cross_bins", [
+    HasParent<"CrossOp">
+]> {
+  let summary = "Define explicit bins for cross coverage";
+  let description = [{
+    The `moore.covergroup.cross_bins` operation defines explicit bins for cross
+    coverage, allowing fine-grained control over which cross products are
+    tracked.
+
+    Example:
+    ```mlir
+    moore.covergroup.cross @cross1 coverpoints [@cp1, @cp2] {
+      // Explicit cross bin for specific combinations
+      moore.covergroup.cross_bins "corner_cases" select [
+        [0, 255], [255, 0]  // (cp1=0, cp2=255) and (cp1=255, cp2=0)
+      ]
+    }
+    ```
+
+    See IEEE 1800-2017 Section 19.6.1 "bins_expression".
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    ArrayAttr:$select_values,
+    DefaultValuedAttr<BinsKind, "BinsKind::Normal">:$kind
+  );
+
+  let assemblyFormat = [{
+    $name `select` $select_values (`kind` $kind^)? attr-dict
+  }];
+}
+
+def CovergroupInstanceOp : MooreOp<"covergroup.instance", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Instantiate a covergroup";
+  let description = [{
+    The `moore.covergroup.instance` operation creates an instance of a
+    covergroup. Multiple instances of the same covergroup can exist, each
+    tracking coverage independently.
+
+    Example:
+    ```mlir
+    moore.covergroup.decl @my_cg { ... }
+    %cg = moore.covergroup.instance "cg1" @my_cg
+    ```
+
+    See IEEE 1800-2017 Section 19.3 "Defining covergroups".
+  }];
+
+  let arguments = (ins
+    StrAttr:$instance_name,
+    FlatSymbolRefAttr:$covergroup_name
+  );
+
+  let results = (outs Index:$handle);
+
+  let assemblyFormat = [{
+    $instance_name $covergroup_name attr-dict
+  }];
+}
+
+def CovergroupSampleOp : MooreOp<"covergroup.sample"> {
+  let summary = "Explicitly sample a covergroup";
+  let description = [{
+    The `moore.covergroup.sample` operation triggers explicit sampling of a
+    covergroup instance. This is used when the covergroup doesn't have an
+    automatic sampling event, or when additional sampling is desired.
+
+    Example:
+    ```mlir
+    %cg = moore.covergroup.instance "cg1" @my_cg
+    moore.covergroup.sample %cg
+    ```
+
+    See IEEE 1800-2017 Section 19.8 "Coverage sampling".
+  }];
+
+  let arguments = (ins Index:$covergroup_handle);
+
+  let assemblyFormat = [{
+    $covergroup_handle attr-dict
+  }];
+}
+
+def CovergroupGetCoverageOp : MooreOp<"covergroup.get_coverage", [Pure]> {
+  let summary = "Get the current coverage percentage";
+  let description = [{
+    The `moore.covergroup.get_coverage` operation returns the current coverage
+    percentage for a covergroup instance as a real number between 0.0 and 100.0.
+
+    Example:
+    ```mlir
+    %cg = moore.covergroup.instance "cg1" @my_cg
+    %coverage = moore.covergroup.get_coverage %cg : !moore.real
+    ```
+
+    See IEEE 1800-2017 Section 19.8.1 "Coverage computation".
+  }];
+
+  let arguments = (ins Index:$covergroup_handle);
+  let results = (outs RealType:$coverage);
+
+  let assemblyFormat = [{
+    $covergroup_handle attr-dict `:` type($coverage)
+  }];
+}
 
 //===----------------------------------------------------------------------===//
 // String Builtins

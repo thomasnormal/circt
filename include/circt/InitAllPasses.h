@@ -19,6 +19,7 @@
 #include "circt/Dialect/Arc/ArcPasses.h"
 #include "circt/Dialect/Calyx/CalyxPasses.h"
 #include "circt/Dialect/Comb/CombPasses.h"
+#include "circt/Dialect/Coverage/CoveragePasses.h"
 #include "circt/Dialect/DC/DCPasses.h"
 #include "circt/Dialect/Datapath/DatapathPasses.h"
 #include "circt/Dialect/ESI/ESIDialect.h"
@@ -66,6 +67,7 @@ inline void registerAllPasses() {
   arc::registerPasses();
   calyx::registerPasses();
   comb::registerPasses();
+  coverage::registerPasses();
   datapath::registerPasses();
   dc::registerPasses();
   emit::registerPasses();
