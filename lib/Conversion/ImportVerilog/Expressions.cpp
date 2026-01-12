@@ -1634,10 +1634,13 @@ struct RvalueExprVisitor : public ExprVisitor {
     // Handle queue methods that need special treatment (lvalue for queue).
     // push_back, push_front need queue as lvalue + element as rvalue.
     // pop_back, pop_front need queue as lvalue, no additional args.
+    // delete, sort need queue as lvalue, no additional args, return void.
     bool isQueuePushMethod =
         (subroutine.name == "push_back" || subroutine.name == "push_front");
     bool isQueuePopMethod =
         (subroutine.name == "pop_back" || subroutine.name == "pop_front");
+    bool isQueueVoidMethod =
+        (subroutine.name == "delete" || subroutine.name == "sort");
 
     if (isQueuePushMethod && args.size() == 2) {
       // First arg is the queue (need lvalue), second is the element
@@ -1659,6 +1662,18 @@ struct RvalueExprVisitor : public ExprVisitor {
         return {};
       auto ty = context.convertType(*expr.type);
       result = context.convertQueueMethodCallNoArg(subroutine, loc, queueRef, ty);
+      if (failed(result))
+        return {};
+      if (*result)
+        return *result;
+    }
+
+    if (isQueueVoidMethod && args.size() == 1) {
+      // Array/queue reference only, returns void
+      Value queueRef = context.convertLvalueExpression(*args[0]);
+      if (!queueRef)
+        return {};
+      result = context.convertArrayVoidMethodCall(subroutine, loc, queueRef);
       if (failed(result))
         return {};
       if (*result)
@@ -2932,6 +2947,29 @@ Context::convertQueueMethodCallNoArg(const slang::ast::SystemSubroutine &subrout
           .Case("pop_front",
                 [&]() -> FailureOr<Value> {
                   return (Value)moore::QueuePopFrontOp::create(builder, loc, elementType, queueRef);
+                })
+          .Default([&]() -> FailureOr<Value> { return Value{}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                                    Location loc, Value arrayRef) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("delete",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueDeleteOp::create(builder, loc, arrayRef);
+                  // delete returns void, return a dummy value
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("sort",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueSortOp::create(builder, loc, arrayRef);
+                  // sort returns void, return a dummy value
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Default([&]() -> FailureOr<Value> { return Value{}; });
   return systemCallRes();
