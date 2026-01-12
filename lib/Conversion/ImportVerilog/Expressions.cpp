@@ -105,6 +105,30 @@ static Value visitClassProperty(Context &context,
   auto builder = context.builder;
 
   auto type = context.convertType(expr.getType());
+  if (!type)
+    return {};
+
+  // Check if this is a static property
+  bool isStatic = expr.lifetime == slang::ast::VariableLifetime::Static;
+
+  if (isStatic) {
+    // Static properties are class-level (not instance-level).
+    // For now, emit a warning and return a dummy read to allow parsing to
+    // continue. Full static property support requires treating them as global
+    // variables with class-qualified names.
+    mlir::emitWarning(loc) << "static class property '" << expr.name
+                           << "' access is not fully supported yet; "
+                           << "treating as uninitialized variable";
+    // Create a temporary variable to allow parsing to continue
+    auto fieldTy = cast<moore::UnpackedType>(type);
+    auto refTy = moore::RefType::get(fieldTy);
+    // Use a VariableOp to represent the static property
+    auto nameAttr = builder.getStringAttr(expr.name);
+    auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
+                                           /*initial=*/Value{});
+    return varOp;
+  }
+
   // Get the scope's implicit this variable
   mlir::Value instRef = context.getImplicitThisRef();
   if (!instRef) {
@@ -117,16 +141,39 @@ static Value visitClassProperty(Context &context,
   auto fieldTy = cast<moore::UnpackedType>(type);
   auto fieldRefTy = moore::RefType::get(fieldTy);
 
+  // Get the class that declares this property from slang's AST.
+  // This avoids the need to look up the property in Moore IR, which may not
+  // have been fully populated yet due to circular dependencies between classes.
+  const auto *parentScope = expr.getParentScope();
+  if (!parentScope) {
+    mlir::emitError(loc) << "class property '" << expr.name
+                         << "' has no parent scope";
+    return {};
+  }
+  const auto *declaringClass = parentScope->asSymbol().as_if<slang::ast::ClassType>();
+  if (!declaringClass) {
+    mlir::emitError(loc) << "class property '" << expr.name
+                         << "' is not declared in a class";
+    return {};
+  }
+
+  // Get the class symbol name from the declaring class
+  auto declaringClassSym = fullyQualifiedClassName(context, *declaringClass);
+  auto targetClassHandle = moore::ClassHandleType::get(
+      context.getContext(),
+      mlir::FlatSymbolRefAttr::get(context.getContext(), declaringClassSym));
+
   moore::ClassHandleType classTy =
       cast<moore::ClassHandleType>(instRef.getType());
 
-  auto targetClassHandle =
-      context.getAncestorClassWithProperty(classTy, expr.name, loc);
-  if (!targetClassHandle)
-    return {};
-
-  auto upcastRef = context.materializeConversion(targetClassHandle, instRef,
-                                                 false, instRef.getLoc());
+  // If target class is same as current class, no conversion needed
+  Value upcastRef;
+  if (targetClassHandle.getClassSym() == classTy.getClassSym()) {
+    upcastRef = instRef;
+  } else {
+    upcastRef = context.materializeConversion(targetClassHandle, instRef,
+                                               false, instRef.getLoc());
+  }
   if (!upcastRef)
     return {};
 
@@ -168,8 +215,18 @@ struct ExprVisitor {
     auto derefType = value.getType();
     if (isLvalue)
       derefType = cast<moore::RefType>(derefType).getNestedType();
-    if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType>(
-            derefType)) {
+
+    // String character access: s[i] returns a byte (8-bit integer)
+    if (isa<moore::StringType>(derefType)) {
+      auto index = context.convertRvalueExpression(expr.selector());
+      if (!index)
+        return {};
+      // String indexing uses getc() method - s[i] is equivalent to s.getc(i)
+      return moore::StringGetCOp::create(builder, loc, value, index);
+    }
+
+    if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
+             moore::QueueType>(derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";
       return {};
@@ -177,6 +234,26 @@ struct ExprVisitor {
 
     auto resultType =
         isLvalue ? moore::RefType::get(cast<moore::UnpackedType>(type)) : type;
+
+    // For queue types (and other dynamically-sized types), we use the index
+    // directly without translation since they are 0-based.
+    bool isDynamicType = isa<moore::QueueType>(derefType);
+
+    if (isDynamicType) {
+      // Dynamic types (queues) use the index directly - always use dynamic
+      // extract since we can't statically verify bounds.
+      auto lowBit = context.convertRvalueExpression(expr.selector());
+      if (!lowBit)
+        return {};
+      if (isLvalue)
+        return moore::DynExtractRefOp::create(builder, loc, resultType, value,
+                                              lowBit);
+      else
+        return moore::DynExtractOp::create(builder, loc, resultType, value,
+                                           lowBit);
+    }
+
+    // For fixed-size types, we need to translate the index based on the range.
     auto range = expr.value().type->getFixedRange();
     if (auto *constValue = expr.selector().getConstant();
         constValue && constValue->isInteger()) {
@@ -340,6 +417,10 @@ struct ExprVisitor {
 
   /// Handle concatenations.
   Value visit(const slang::ast::ConcatenationExpression &expr) {
+    // Check if this is a string concatenation by looking at the result type.
+    // SystemVerilog has two kinds of concatenation: bit vector and string.
+    bool isStringConcat = expr.type->isString();
+
     SmallVector<Value> operands;
     for (auto *operand : expr.operands()) {
       // Handle empty replications like `{0{...}}` which may occur within
@@ -350,7 +431,7 @@ struct ExprVisitor {
       auto value = convertLvalueOrRvalueExpression(*operand);
       if (!value)
         return {};
-      if (!isLvalue)
+      if (!isLvalue && !isStringConcat)
         value = context.convertToSimpleBitVector(value);
       if (!value)
         return {};
@@ -358,6 +439,8 @@ struct ExprVisitor {
     }
     if (isLvalue)
       return moore::ConcatRefOp::create(builder, loc, operands);
+    else if (isStringConcat)
+      return moore::StringConcatOp::create(builder, loc, operands);
     else
       return moore::ConcatOp::create(builder, loc, operands);
   }
@@ -991,7 +1074,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       else if (isa<moore::StringType>(lhs.getType()))
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
-      else
+      else if (isa<moore::ClassHandleType>(lhs.getType()) ||
+               isa<moore::ClassHandleType>(rhs.getType())) {
+        // Class handle comparison (e.g., obj == null).
+        // For now, emit a warning and return a constant false/true.
+        // Full class handle comparison support would require a dedicated op.
+        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
+                               << "returning constant result";
+        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, resultTy, 0);
+      } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
@@ -1000,7 +1092,14 @@ struct RvalueExprVisitor : public ExprVisitor {
       else if (isa<moore::StringType>(lhs.getType()))
         return moore::StringCmpOp::create(
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
-      else
+      else if (isa<moore::ClassHandleType>(lhs.getType()) ||
+               isa<moore::ClassHandleType>(rhs.getType())) {
+        // Class handle comparison (e.g., obj != null).
+        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
+                               << "returning constant result";
+        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, resultTy, 1);
+      } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
       return createBinary<moore::CaseEqOp>(lhs, rhs);
@@ -1476,6 +1575,111 @@ struct RvalueExprVisitor : public ExprVisitor {
       return fmtValue.value();
     }
 
+    // $cast(dest, src) is a special case because the first argument is an
+    // output parameter. Slang wraps it in an AssignmentExpression with
+    // EmptyArgument as RHS.
+    // IEEE 1800-2017 Section 8.16: $cast attempts to assign the source
+    // expression to the destination variable. When used as a function,
+    // it returns 1 if the cast is legal and 0 if not.
+    if (!subroutine.name.compare("$cast") && args.size() == 2) {
+      // Unpack the first argument from AssignmentExpression
+      auto *destExpr = args[0];
+      if (const auto *assign =
+              destExpr->as_if<slang::ast::AssignmentExpression>())
+        destExpr = &assign->left();
+
+      // Convert destination as lvalue and source as rvalue
+      Value destLvalue = context.convertLvalueExpression(*destExpr);
+      Value srcRvalue = context.convertRvalueExpression(*args[1]);
+      if (!destLvalue || !srcRvalue)
+        return {};
+
+      // For now, emit a warning that $cast is not fully supported.
+      // $cast is used for runtime type checking and downcasting, which
+      // requires runtime support. We return a constant result for now.
+      mlir::emitWarning(loc)
+          << "$cast is not fully supported; returning constant result";
+
+      // Check if both are class handle types - this is the common case for
+      // dynamic downcasting in OOP
+      auto destRefTy = cast<moore::RefType>(destLvalue.getType());
+      auto destTy = destRefTy.getNestedType();
+      auto srcTy = srcRvalue.getType();
+
+      bool isClassDowncast =
+          isa<moore::ClassHandleType>(destTy) &&
+          isa<moore::ClassHandleType>(srcTy);
+
+      if (isClassDowncast) {
+        // For class downcasting, we can't perform the actual cast at compile
+        // time. Just return 1 to indicate the cast would succeed. The actual
+        // value won't be assigned, which may cause issues but allows parsing
+        // to continue.
+      } else {
+        // For non-class types, try to perform the conversion
+        auto castValue = context.materializeConversion(destTy, srcRvalue,
+                                                       args[1]->type->isSigned(),
+                                                       loc);
+        if (castValue) {
+          // Store the cast value to the destination
+          moore::BlockingAssignOp::create(builder, loc, destLvalue, castValue);
+        }
+      }
+
+      // Return 1 (success) - $cast as a function returns int
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      return moore::ConstantOp::create(builder, loc, intTy, 1);
+    }
+
+    // Handle queue methods that need special treatment (lvalue for queue).
+    // push_back, push_front need queue as lvalue + element as rvalue.
+    // pop_back, pop_front need queue as lvalue, no additional args.
+    // delete, sort need queue as lvalue, no additional args, return void.
+    bool isQueuePushMethod =
+        (subroutine.name == "push_back" || subroutine.name == "push_front");
+    bool isQueuePopMethod =
+        (subroutine.name == "pop_back" || subroutine.name == "pop_front");
+    bool isQueueVoidMethod =
+        (subroutine.name == "delete" || subroutine.name == "sort");
+
+    if (isQueuePushMethod && args.size() == 2) {
+      // First arg is the queue (need lvalue), second is the element
+      Value queueRef = context.convertLvalueExpression(*args[0]);
+      Value element = context.convertRvalueExpression(*args[1]);
+      if (!queueRef || !element)
+        return {};
+      result = context.convertQueueMethodCall(subroutine, loc, queueRef, element);
+      if (failed(result))
+        return {};
+      if (*result)
+        return *result;
+    }
+
+    if (isQueuePopMethod && args.size() == 1) {
+      // Only the queue reference, return element type
+      Value queueRef = context.convertLvalueExpression(*args[0]);
+      if (!queueRef)
+        return {};
+      auto ty = context.convertType(*expr.type);
+      result = context.convertQueueMethodCallNoArg(subroutine, loc, queueRef, ty);
+      if (failed(result))
+        return {};
+      if (*result)
+        return *result;
+    }
+
+    if (isQueueVoidMethod && args.size() == 1) {
+      // Array/queue reference only, returns void
+      Value queueRef = context.convertLvalueExpression(*args[0]);
+      if (!queueRef)
+        return {};
+      result = context.convertArrayVoidMethodCall(subroutine, loc, queueRef);
+      if (failed(result))
+        return {};
+      if (*result)
+        return *result;
+    }
+
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
@@ -1537,6 +1741,28 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto fTy = mlir::Float64Type::get(context.getContext());
     auto attr = mlir::FloatAttr::get(fTy, expr.getValue());
     return moore::ConstantRealOp::create(builder, loc, attr).getResult();
+  }
+
+  /// Handle null literals.
+  Value visit(const slang::ast::NullLiteral &expr) {
+    // Null represents a null class handle (no object).
+    auto type = context.convertType(*expr.type);
+    if (!type)
+      return {};
+
+    // For class handles, emit a special null constant.
+    // For now, we emit a warning and create a dummy variable and read from it.
+    // Full null support would require a dedicated NullOp or special handling.
+    mlir::emitWarning(loc) << "null literal support is incomplete; "
+                           << "treating as uninitialized value";
+
+    // Create a variable to represent the null value, then read from it
+    auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+    auto nameAttr = builder.getStringAttr("null_literal");
+    auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
+                                           /*initial=*/Value{});
+    // Read the variable to get an rvalue
+    return moore::ReadOp::create(builder, loc, varOp);
   }
 
   /// Helper function to convert RValues at creation of a new Struct, Array or
@@ -2300,6 +2526,17 @@ static mlir::Value maybeUpcastHandle(Context &context, mlir::Value actualHandle,
   if (actualHandleTy == expectedHandleTy)
     return actualHandle;
 
+  // Handle null type: a null handle (with special "__null__" symbol) can be
+  // assigned to any class handle type. This allows "return null;" to work for
+  // any class type.
+  if (actualHandleTy.getClassSym() &&
+      actualHandleTy.getClassSym().getRootReference() == "__null__") {
+    // The source is a null handle - just cast it to the expected type.
+    // Use ConversionOp since we don't have a dedicated NullCastOp.
+    return moore::ConversionOp::create(context.builder, loc, expectedHandleTy,
+                                       actualHandle);
+  }
+
   if (!context.isClassDerivedFrom(actualHandleTy, expectedHandleTy)) {
     mlir::emitError(loc)
         << "receiver class " << actualHandleTy.getClassSym()
@@ -2637,6 +2874,24 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   return moore::StringToLowerOp::create(builder, loc, value);
                 })
+          // Array/queue built-in methods
+          .Case("size",
+                [&]() -> Value {
+                  // size() is a built-in method on dynamic arrays, associative
+                  // arrays, and queues
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::AssocArrayType,
+                          moore::QueueType>(type))
+                    return moore::ArraySizeOp::create(builder, loc, value);
+                  return {};
+                })
+          .Case("num",
+                [&]() -> Value {
+                  // num() is an alias for size() on associative arrays
+                  if (isa<moore::AssocArrayType>(value.getType()))
+                    return moore::ArraySizeOp::create(builder, loc, value);
+                  return {};
+                })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
@@ -2652,6 +2907,71 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                                                      value2);
                 })
           .Default([&]() -> Value { return {}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertQueueMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                                Location loc, Value queueRef, Value element) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("push_back",
+                [&]() -> FailureOr<Value> {
+                  // push_back modifies the queue, so we need a reference
+                  moore::QueuePushBackOp::create(builder, loc, queueRef, element);
+                  // push_back returns void, return a dummy integer value
+                  // since expressions need to return something
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("push_front",
+                [&]() -> FailureOr<Value> {
+                  moore::QueuePushFrontOp::create(builder, loc, queueRef, element);
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Default([&]() -> FailureOr<Value> { return Value{}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertQueueMethodCallNoArg(const slang::ast::SystemSubroutine &subroutine,
+                                     Location loc, Value queueRef,
+                                     Type elementType) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("pop_back",
+                [&]() -> FailureOr<Value> {
+                  return (Value)moore::QueuePopBackOp::create(builder, loc, elementType, queueRef);
+                })
+          .Case("pop_front",
+                [&]() -> FailureOr<Value> {
+                  return (Value)moore::QueuePopFrontOp::create(builder, loc, elementType, queueRef);
+                })
+          .Default([&]() -> FailureOr<Value> { return Value{}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                                    Location loc, Value arrayRef) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          .Case("delete",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueDeleteOp::create(builder, loc, arrayRef);
+                  // delete returns void, return a dummy value
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("sort",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueSortOp::create(builder, loc, arrayRef);
+                  // sort returns void, return a dummy value
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Default([&]() -> FailureOr<Value> { return Value{}; });
   return systemCallRes();
 }
 
@@ -2673,6 +2993,9 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
 
   auto *op = resolve(*this, actualSym);
   auto decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(op);
+  if (!decl)
+    return false;
+
   // Walk up the inheritance chain via ClassDeclOp::$base (SymbolRefAttr).
   while (decl) {
     mlir::SymbolRefAttr curBase = decl.getBaseAttr();

@@ -31,7 +31,7 @@ using namespace mlir;
 
 void SVModuleOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                        llvm::StringRef name, hw::ModuleType type) {
-  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+  state.addAttribute(SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getModuleTypeAttrName(state.name), TypeAttr::get(type));
   state.addRegion();
@@ -41,11 +41,11 @@ void SVModuleOp::print(OpAsmPrinter &p) {
   p << " ";
 
   // Print the visibility of the module.
-  StringRef visibilityAttrName = mlir::SymbolTable::getVisibilityAttrName();
+  StringRef visibilityAttrName = SymbolTable::getVisibilityAttrName();
   if (auto visibility = (*this)->getAttrOfType<StringAttr>(visibilityAttrName))
     p << visibility.getValue() << ' ';
 
-  p.printSymbolName(mlir::SymbolTable::getSymbolName(*this).getValue());
+  p.printSymbolName(SymbolTable::getSymbolName(*this).getValue());
   hw::module_like_impl::printModuleSignatureNew(p, getBodyRegion(),
                                                 getModuleType(), {}, {});
   p << " ";
@@ -669,10 +669,10 @@ void ConstantOp::build(OpBuilder &builder, OperationState &result, IntType type,
   build(builder, result, type, FVInt(value));
 }
 
-/// This builder allows construction of small signed integers like 0, 1, -1
-/// matching a specified MLIR type. This shouldn't be used for general constant
-/// folding because it only works with values that can be expressed in an
-/// `int64_t`.
+/// This builder allows construction of small integers like 0, 1, -1 matching a
+/// specified MLIR type. This shouldn't be used for general constant folding
+/// because it only works with values that can be expressed in an `int64_t`.
+/// The isSigned parameter defaults to false for safety with small bit widths.
 void ConstantOp::build(OpBuilder &builder, OperationState &result, IntType type,
                        int64_t value, bool isSigned) {
   build(builder, result, type,
@@ -1453,13 +1453,15 @@ LogicalResult ClassDeclOp::verify() {
   auto &block = body.front();
   for (mlir::Operation &op : block) {
 
-    // allow only property and method decls and terminator
+    // allow property decls, method decls, and constraint blocks
     if (llvm::isa<circt::moore::ClassPropertyDeclOp,
-                  circt::moore::ClassMethodDeclOp>(&op))
+                  circt::moore::ClassMethodDeclOp,
+                  circt::moore::ConstraintBlockOp>(&op))
       continue;
 
     return emitOpError()
-           << "body may only contain 'moore.class.propertydecl' operations";
+           << "body may only contain 'moore.class.propertydecl', "
+              "'moore.class.methoddecl', or 'moore.constraint.block' operations";
   }
   return mlir::success();
 }
@@ -1749,57 +1751,181 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
-// Covergroups (Functional Coverage)
+// InterfaceInstanceOp
 //===----------------------------------------------------------------------===//
 
-void CoverpointOp::build(OpBuilder &builder, OperationState &state,
-                         StringRef name, Value expr,
-                         std::optional<int64_t> autoBinMax) {
-  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
-                     builder.getStringAttr(name));
-  state.addOperands(expr);
-  if (autoBinMax)
-    state.addAttribute("auto_bin_max",
-                       builder.getI64IntegerAttr(autoBinMax.value()));
-  state.addRegion();
+void InterfaceInstanceOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
+  setNameFn(getResult(), getName());
 }
 
-LogicalResult CrossOp::verify() {
-  // Verify that at least two coverpoints are referenced.
-  if (getCoverpoints().size() < 2)
-    return emitOpError("cross coverage requires at least two coverpoints");
+LogicalResult
+InterfaceInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto *symbol =
+      symbolTable.lookupNearestSymbolFrom(*this, getInterfaceNameAttr());
+  if (!symbol)
+    return emitOpError("references unknown interface @") << getInterfaceName();
+  if (!isa<InterfaceDeclOp>(symbol))
+    return emitOpError("must reference a 'moore.interface', but @")
+           << getInterfaceName() << " is a " << symbol->getName();
+  return success();
+}
 
-  // Verify that all referenced coverpoints exist within the parent covergroup.
-  auto covergroupDecl = cast<CovergroupDeclOp>((*this)->getParentOp());
-  SymbolTable symbolTable(covergroupDecl);
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceGetOp
+//===----------------------------------------------------------------------===//
 
-  for (auto coverpointRef : getCoverpoints()) {
-    auto coverpointSymbol = cast<FlatSymbolRefAttr>(coverpointRef);
-    auto *coverpoint = symbolTable.lookup(coverpointSymbol.getValue());
-    if (!coverpoint)
-      return emitOpError("referenced coverpoint '")
-             << coverpointSymbol.getValue() << "' not found in covergroup";
-    if (!isa<CoverpointOp>(coverpoint))
-      return emitOpError("symbol '")
-             << coverpointSymbol.getValue() << "' is not a coverpoint";
+LogicalResult
+VirtualInterfaceGetOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the modport within the interface
+  auto modportName = getModport();
+  auto *modportSymbol = ifaceOp.lookupSymbol(modportName);
+  if (!modportSymbol)
+    return emitOpError("references unknown modport @")
+           << modportName << " in interface @" << ifaceOp.getSymName();
+  if (!isa<ModportDeclOp>(modportSymbol))
+    return emitOpError("@") << modportName << " is not a modport declaration";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceSignalRefOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult VirtualInterfaceSignalRefOp::verifySymbolUses(
+    SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the signal within the interface
+  auto signalName = getSignal();
+  auto *signalSymbol = ifaceOp.lookupSymbol(signalName);
+  if (!signalSymbol)
+    return emitOpError("references unknown signal @")
+           << signalName << " in interface @" << ifaceOp.getSymName();
+  if (!isa<InterfaceSignalDeclOp>(signalSymbol))
+    return emitOpError("@") << signalName << " is not a signal declaration";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// ModportDeclOp custom parser/printer
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseModportPorts(OpAsmParser &parser,
+                                     ArrayAttr &portsAttr) {
+  auto *context = parser.getBuilder().getContext();
+
+  SmallVector<Attribute, 8> ports;
+  auto parseElement = [&]() -> ParseResult {
+    // Parse direction keyword
+    StringRef dirStr;
+    if (parser.parseKeyword(&dirStr))
+      return failure();
+    auto dir = symbolizeModportDir(dirStr);
+    if (!dir) {
+      parser.emitError(parser.getCurrentLocation())
+          << "expected modport direction (input, output, inout, or ref)";
+      return failure();
+    }
+
+    FlatSymbolRefAttr signal;
+    if (parser.parseAttribute(signal))
+      return failure();
+
+    ports.push_back(ModportPortAttr::get(
+        context, ModportDirAttr::get(context, *dir), signal));
+    return success();
+  };
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Paren,
+                                     parseElement))
+    return failure();
+
+  portsAttr = ArrayAttr::get(context, ports);
+  return success();
+}
+
+static void printModportPorts(OpAsmPrinter &p, Operation *,
+                              ArrayAttr portsAttr) {
+  p << "(";
+  llvm::interleaveComma(portsAttr, p, [&](Attribute attr) {
+    auto port = cast<ModportPortAttr>(attr);
+    p << stringifyEnum(port.getDirection().getValue());
+    p << ' ';
+    p.printSymbolName(port.getSignal().getRootReference().getValue());
+  });
+  p << ')';
+}
+
+//===----------------------------------------------------------------------===//
+// Constraint Operations
+//===----------------------------------------------------------------------===//
+
+LogicalResult ConstraintDistOp::verify() {
+  // Verify that the number of weights matches the per_range array
+  auto weights = getWeights();
+  auto perRange = getPerRange();
+
+  if (weights.size() != perRange.size())
+    return emitOpError() << "weights array size (" << weights.size()
+                         << ") must match per_range array size ("
+                         << perRange.size() << ")";
+
+  // Verify that all per_range values are 0 or 1
+  for (size_t i = 0; i < perRange.size(); ++i) {
+    if (perRange[i] != 0 && perRange[i] != 1)
+      return emitOpError() << "per_range[" << i
+                           << "] must be 0 (:=) or 1 (:/); got " << perRange[i];
   }
 
   return success();
 }
 
-LogicalResult
-CovergroupInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  auto covergroupName = getCovergroupNameAttr();
-  auto *covergroupDecl =
-      symbolTable.lookupNearestSymbolFrom(getOperation(), covergroupName);
+LogicalResult ConstraintInsideOp::verify() {
+  // Verify that ranges array has even number of elements (pairs of low, high)
+  auto ranges = getRanges();
+  if (ranges.size() % 2 != 0)
+    return emitOpError()
+           << "ranges array must have even number of elements (pairs of "
+              "[low, high]); got "
+           << ranges.size() << " elements";
 
-  if (!covergroupDecl)
-    return emitOpError("referenced covergroup '")
-           << covergroupName.getValue() << "' not found";
-
-  if (!isa<CovergroupDeclOp>(covergroupDecl))
-    return emitOpError("symbol '")
-           << covergroupName.getValue() << "' is not a covergroup declaration";
+  // Verify that low <= high for each pair
+  for (size_t i = 0; i < ranges.size(); i += 2) {
+    if (ranges[i] > ranges[i + 1])
+      return emitOpError() << "range at index " << (i / 2) << " has low ("
+                           << ranges[i] << ") > high (" << ranges[i + 1] << ")";
+  }
 
   return success();
 }

@@ -60,6 +60,11 @@ struct ClassLowering {
   circt::moore::ClassDeclOp op;
 };
 
+// Interface lowering information.
+struct InterfaceLowering {
+  circt::moore::InterfaceDeclOp op;
+};
+
 /// Information about a loops continuation and exit blocks relevant while
 /// lowering the loop's body statements.
 struct LoopFrame {
@@ -123,6 +128,11 @@ struct Context {
   LogicalResult convertClassDeclaration(const slang::ast::ClassType &classdecl);
   ClassLowering *declareClass(const slang::ast::ClassType &cls);
   LogicalResult convertGlobalVariable(const slang::ast::VariableSymbol &var);
+
+  /// Convert interface declarations
+  InterfaceLowering *
+  convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface);
+  LogicalResult convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface);
 
   /// Checks whether one class (actualTy) is derived from another class
   /// (baseTy). True if it's a subclass, false otherwise.
@@ -243,6 +253,21 @@ struct Context {
   convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                           Location loc, Value value1, Value value2);
 
+  /// Convert queue method calls with one argument (e.g., push_back, push_front).
+  FailureOr<Value>
+  convertQueueMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                         Location loc, Value queueRef, Value element);
+
+  /// Convert queue method calls with no arguments (e.g., pop_back, pop_front).
+  FailureOr<Value>
+  convertQueueMethodCallNoArg(const slang::ast::SystemSubroutine &subroutine,
+                              Location loc, Value queueRef, Type elementType);
+
+  /// Convert array/queue void method calls (e.g., delete, sort).
+  FailureOr<Value>
+  convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                             Location loc, Value arrayRef);
+
   /// Convert system function calls within properties and assertion with a
   /// single argument.
   FailureOr<Value> convertAssertionSystemCallArity1(
@@ -282,6 +307,14 @@ struct Context {
   /// Classes that have already been converted.
   DenseMap<const slang::ast::ClassType *, std::unique_ptr<ClassLowering>>
       classes;
+
+  /// Interfaces that have already been converted.
+  DenseMap<const slang::ast::InstanceBodySymbol *,
+           std::unique_ptr<InterfaceLowering>>
+      interfaces;
+  /// A list of interfaces for which the header has been created, but the body
+  /// has not been converted yet.
+  std::queue<const slang::ast::InstanceBodySymbol *> interfaceWorklist;
 
   /// A table of defined values, such as variables, that may be referred to by
   /// name in expressions. The expressions use this table to lookup the MLIR
@@ -346,6 +379,11 @@ private:
                       mlir::StringRef qualifiedName,
                       llvm::SmallVectorImpl<Type> &extraParams);
 };
+
+/// Construct a fully qualified class name containing the instance hierarchy
+/// and the class name formatted as H1::H2::@C
+mlir::StringAttr fullyQualifiedClassName(Context &ctx,
+                                         const slang::ast::Type &ty);
 
 } // namespace ImportVerilog
 } // namespace circt

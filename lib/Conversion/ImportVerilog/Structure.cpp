@@ -9,6 +9,7 @@
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/symbols/ClassSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace circt;
@@ -697,17 +698,35 @@ LogicalResult Context::convertCompilation() {
     }
   }
 
-  // Prime the root definition worklist by adding all the top-level modules.
+  // Prime the root definition worklist by adding all the top-level modules
+  // and interfaces.
   SmallVector<const slang::ast::InstanceSymbol *> topInstances;
-  for (auto *inst : root.topInstances)
-    if (!convertModuleHeader(&inst->body))
-      return failure();
+  for (auto *inst : root.topInstances) {
+    auto kind = inst->body.getDefinition().definitionKind;
+    if (kind == slang::ast::DefinitionKind::Interface) {
+      // Handle interfaces separately
+      if (!convertInterfaceHeader(&inst->body))
+        return failure();
+    } else {
+      // Handle modules and programs
+      if (!convertModuleHeader(&inst->body))
+        return failure();
+    }
+  }
 
   // Convert all the root module definitions.
   while (!moduleWorklist.empty()) {
     auto *module = moduleWorklist.front();
     moduleWorklist.pop();
     if (failed(convertModuleBody(module)))
+      return failure();
+  }
+
+  // Convert all the interface bodies.
+  while (!interfaceWorklist.empty()) {
+    auto *iface = interfaceWorklist.front();
+    interfaceWorklist.pop();
+    if (failed(convertInterfaceBody(iface)))
       return failure();
   }
 
@@ -803,9 +822,8 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
   auto loc = convertLocation(module->location);
   OpBuilder::InsertionGuard g(builder);
 
-  // We only support modules and programs for now. Extension to interfaces
-  // should be trivial though, since they are essentially the same thing with
-  // only minor differences in semantics.
+  // We only support modules and programs for now. Interfaces are handled
+  // separately via convertInterfaceHeader.
   auto kind = module->getDefinition().definitionKind;
   if (kind != slang::ast::DefinitionKind::Module &&
       kind != slang::ast::DefinitionKind::Program) {
@@ -1000,11 +1018,144 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToEnd(intoModuleOp.getBody());
   ValueSymbolScope scope(valueSymbols);
+
+  // Two-pass conversion:
+  // Pass 1: Convert global variables first so they're available for classes
   for (auto &member : package.members()) {
-    auto loc = convertLocation(member.location);
-    if (failed(member.visit(PackageVisitor(*this, loc))))
-      return failure();
+    if (member.kind == slang::ast::SymbolKind::Variable) {
+      auto loc = convertLocation(member.location);
+      if (failed(member.visit(PackageVisitor(*this, loc))))
+        return failure();
+    }
   }
+
+  // Pass 2: Convert remaining members (classes, functions, etc.)
+  for (auto &member : package.members()) {
+    if (member.kind != slang::ast::SymbolKind::Variable) {
+      auto loc = convertLocation(member.location);
+      if (failed(member.visit(PackageVisitor(*this, loc))))
+        return failure();
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Interface Conversion
+//===----------------------------------------------------------------------===//
+
+/// Convert an interface declaration header. Creates the moore.interface op
+/// and schedules the body for conversion.
+InterfaceLowering *
+Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
+  auto &slot = interfaces[iface];
+  if (slot)
+    return slot.get();
+
+  slot = std::make_unique<InterfaceLowering>();
+  auto &lowering = *slot;
+
+  auto loc = convertLocation(iface->location);
+  OpBuilder::InsertionGuard g(builder);
+
+  // Pick an insertion point according to the source file location.
+  auto it = orderedRootOps.upper_bound(iface->location);
+  if (it == orderedRootOps.end())
+    builder.setInsertionPointToEnd(intoModuleOp.getBody());
+  else
+    builder.setInsertionPoint(it->second);
+
+  // Create the interface op
+  auto ifaceOp = moore::InterfaceDeclOp::create(
+      builder, loc, iface->getDefinition().name);
+  orderedRootOps.insert(it, {iface->location, ifaceOp});
+  lowering.op = ifaceOp;
+
+  // Add the interface to the symbol table
+  symbolTable.insert(ifaceOp);
+
+  // Schedule the body to be lowered
+  interfaceWorklist.push(iface);
+
+  return &lowering;
+}
+
+/// Convert an interface body - signals and modports.
+LogicalResult
+Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
+  auto &lowering = *interfaces[iface];
+  OpBuilder::InsertionGuard g(builder);
+  builder.setInsertionPointToStart(&lowering.op.getBody().front());
+
+  // Convert all members of the interface
+  for (auto &member : iface->members()) {
+    auto loc = convertLocation(member.location);
+
+    // Handle variables/nets as interface signals
+    if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
+      auto type = convertType(var->getType());
+      if (!type)
+        return failure();
+      moore::InterfaceSignalDeclOp::create(builder, loc, var->name, type);
+      continue;
+    }
+
+    if (auto *net = member.as_if<slang::ast::NetSymbol>()) {
+      auto type = convertType(net->getType());
+      if (!type)
+        return failure();
+      moore::InterfaceSignalDeclOp::create(builder, loc, net->name, type);
+      continue;
+    }
+
+    // Handle modports
+    if (auto *modport = member.as_if<slang::ast::ModportSymbol>()) {
+      SmallVector<mlir::Attribute> ports;
+
+      for (auto &portMember : modport->members()) {
+        if (auto *port =
+                portMember.as_if<slang::ast::ModportPortSymbol>()) {
+          // Map slang direction to Moore ModportDir
+          moore::ModportDir dir;
+          switch (port->direction) {
+          case slang::ast::ArgumentDirection::In:
+            dir = moore::ModportDir::Input;
+            break;
+          case slang::ast::ArgumentDirection::Out:
+            dir = moore::ModportDir::Output;
+            break;
+          case slang::ast::ArgumentDirection::InOut:
+            dir = moore::ModportDir::InOut;
+            break;
+          case slang::ast::ArgumentDirection::Ref:
+            dir = moore::ModportDir::Ref;
+            break;
+          }
+
+          // Get the signal name from the internal symbol
+          StringRef signalName;
+          if (port->internalSymbol) {
+            signalName = port->internalSymbol->name;
+          } else {
+            signalName = port->name;
+          }
+
+          auto dirAttr = moore::ModportDirAttr::get(getContext(), dir);
+          auto signalRef =
+              mlir::FlatSymbolRefAttr::get(getContext(), signalName);
+          ports.push_back(
+              moore::ModportPortAttr::get(getContext(), dirAttr, signalRef));
+        }
+      }
+
+      moore::ModportDeclOp::create(builder, loc, modport->name,
+                                   builder.getArrayAttr(ports));
+      continue;
+    }
+
+    // Skip other members for now (parameters, etc.)
+  }
+
   return success();
 }
 
@@ -1446,41 +1597,6 @@ Context::finalizeFunctionBodyCaptures(FunctionLowering &lowering) {
 
 namespace {
 
-/// Construct a fully qualified class name containing the instance hierarchy
-/// and the class name formatted as H1::H2::@C
-mlir::StringAttr fullyQualifiedClassName(Context &ctx,
-                                         const slang::ast::Type &ty) {
-  SmallString<64> name;
-  SmallVector<llvm::StringRef, 8> parts;
-
-  const slang::ast::Scope *scope = ty.getParentScope();
-  while (scope) {
-    const auto &sym = scope->asSymbol();
-    switch (sym.kind) {
-    case slang::ast::SymbolKind::Root:
-      scope = nullptr; // stop at $root
-      continue;
-    case slang::ast::SymbolKind::InstanceBody:
-    case slang::ast::SymbolKind::Instance:
-    case slang::ast::SymbolKind::Package:
-    case slang::ast::SymbolKind::ClassType:
-      if (!sym.name.empty())
-        parts.push_back(sym.name); // keep packages + outer classes
-      break;
-    default:
-      break;
-    }
-    scope = sym.getParentScope();
-  }
-
-  for (auto p : llvm::reverse(parts)) {
-    name += p;
-    name += "::";
-  }
-  name += ty.name; // class’s own name
-  return mlir::StringAttr::get(ctx.getContext(), name);
-}
-
 /// Helper function to construct the classes fully qualified base class name
 /// and the name of all implemented interface classes
 std::pair<mlir::SymbolRefAttr, mlir::ArrayAttr>
@@ -1527,9 +1643,33 @@ struct ClassDeclVisitor {
     Block *body = &classLowering.op.getBody().emplaceBlock();
     builder.setInsertionPointToEnd(body);
 
-    for (const auto &mem : classAST.members())
-      if (failed(mem.visit(*this)))
-        return failure();
+    // Two-pass conversion: properties first, then methods.
+    // This ensures properties are declared before method bodies are converted,
+    // since method bodies may reference properties.
+
+    // Pass 1: Convert properties, parameters, type aliases, and constraints
+    for (const auto &mem : classAST.members()) {
+      if (mem.kind == slang::ast::SymbolKind::ClassProperty ||
+          mem.kind == slang::ast::SymbolKind::Parameter ||
+          mem.kind == slang::ast::SymbolKind::TypeAlias ||
+          mem.kind == slang::ast::SymbolKind::TypeParameter ||
+          mem.kind == slang::ast::SymbolKind::ConstraintBlock) {
+        if (failed(mem.visit(*this)))
+          return failure();
+      }
+    }
+
+    // Pass 2: Convert methods and other members
+    for (const auto &mem : classAST.members()) {
+      if (mem.kind != slang::ast::SymbolKind::ClassProperty &&
+          mem.kind != slang::ast::SymbolKind::Parameter &&
+          mem.kind != slang::ast::SymbolKind::TypeAlias &&
+          mem.kind != slang::ast::SymbolKind::TypeParameter &&
+          mem.kind != slang::ast::SymbolKind::ConstraintBlock) {
+        if (failed(mem.visit(*this)))
+          return failure();
+      }
+    }
 
     return success();
   }
@@ -1541,7 +1681,36 @@ struct ClassDeclVisitor {
     if (!ty)
       return failure();
 
-    moore::ClassPropertyDeclOp::create(builder, loc, prop.name, ty);
+    // Convert slang's Visibility to Moore's MemberAccess
+    moore::MemberAccess memberAccess;
+    switch (prop.visibility) {
+    case slang::ast::Visibility::Public:
+      memberAccess = moore::MemberAccess::Public;
+      break;
+    case slang::ast::Visibility::Protected:
+      memberAccess = moore::MemberAccess::Protected;
+      break;
+    case slang::ast::Visibility::Local:
+      memberAccess = moore::MemberAccess::Local;
+      break;
+    }
+
+    // Convert slang's RandMode to Moore's RandMode
+    moore::RandMode randMode;
+    switch (prop.randMode) {
+    case slang::ast::RandMode::None:
+      randMode = moore::RandMode::None;
+      break;
+    case slang::ast::RandMode::Rand:
+      randMode = moore::RandMode::Rand;
+      break;
+    case slang::ast::RandMode::RandC:
+      randMode = moore::RandMode::RandC;
+      break;
+    }
+
+    moore::ClassPropertyDeclOp::create(builder, loc, prop.name, ty, memberAccess,
+                                       randMode);
     return success();
   }
 
@@ -1593,6 +1762,8 @@ struct ClassDeclVisitor {
       extraParams.push_back(handleTy);
 
       auto funcTy = getFunctionSignature(context, fn, extraParams);
+      if (!funcTy)
+        return failure();
       moore::ClassMethodDeclOp::create(builder, loc, fn.name, funcTy, nullptr);
       return success();
     }
@@ -1665,6 +1836,29 @@ struct ClassDeclVisitor {
     return success();
   }
 
+  // Constraint blocks: convert to moore.constraint.block
+  LogicalResult visit(const slang::ast::ConstraintBlockSymbol &constraint) {
+    auto loc = convertLocation(constraint.location);
+
+    // Check for static and pure flags
+    bool isStatic =
+        (constraint.flags & slang::ast::ConstraintBlockFlags::Static) ==
+        slang::ast::ConstraintBlockFlags::Static;
+    bool isPure =
+        (constraint.flags & slang::ast::ConstraintBlockFlags::Pure) ==
+        slang::ast::ConstraintBlockFlags::Pure;
+
+    // Create the constraint block operation
+    auto constraintOp = moore::ConstraintBlockOp::create(
+        builder, loc, constraint.name, isStatic, isPure);
+
+    // For now, leave the body empty. Full constraint expression parsing
+    // will be added in a future patch.
+    constraintOp.getBody().emplaceBlock();
+
+    return success();
+  }
+
   // Emit an error for all other members.
   template <typename T>
   LogicalResult visit(T &&node) {
@@ -1686,42 +1880,57 @@ private:
 ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
   // Check if there already is a declaration for this class.
   auto &lowering = classes[&cls];
-  if (lowering)
-    return lowering.get();
-  lowering = std::make_unique<ClassLowering>();
-  auto loc = convertLocation(cls.location);
+  bool isNewDecl = !lowering;
+  if (isNewDecl) {
+    lowering = std::make_unique<ClassLowering>();
+    auto loc = convertLocation(cls.location);
 
-  // Pick an insertion point for this function according to the source file
-  // location.
-  OpBuilder::InsertionGuard g(builder);
-  auto it = orderedRootOps.upper_bound(cls.location);
-  if (it == orderedRootOps.end())
-    builder.setInsertionPointToEnd(intoModuleOp.getBody());
-  else
-    builder.setInsertionPoint(it->second);
+    // Pick an insertion point for this function according to the source file
+    // location.
+    OpBuilder::InsertionGuard g(builder);
+    auto it = orderedRootOps.upper_bound(cls.location);
+    if (it == orderedRootOps.end())
+      builder.setInsertionPointToEnd(intoModuleOp.getBody());
+    else
+      builder.setInsertionPoint(it->second);
 
-  auto symName = fullyQualifiedClassName(*this, cls);
+    auto symName = fullyQualifiedClassName(*this, cls);
 
-  // Force build of base here.
+    // Create the ClassDeclOp first with empty base/implements attrs.
+    // We need to do this before processing base classes because base class
+    // processing may recursively reference this class (e.g., through method
+    // parameter types), and we need lowering->op to be valid.
+    auto classDeclOp =
+        moore::ClassDeclOp::create(builder, loc, symName, nullptr, nullptr);
+
+    SymbolTable::setSymbolVisibility(classDeclOp,
+                                     SymbolTable::Visibility::Public);
+    orderedRootOps.insert(it, {cls.location, classDeclOp});
+    lowering->op = classDeclOp;
+    symbolTable.insert(classDeclOp);
+  }
+
+  // Always ensure base class is converted if present
+  // This ensures recursive type references find a valid lowering->op.
   if (const auto *maybeBaseClass = cls.getBaseClass())
     if (const auto *baseClass = maybeBaseClass->as_if<slang::ast::ClassType>())
       if (!classes.contains(baseClass) &&
           failed(convertClassDeclaration(*baseClass))) {
+        auto loc = convertLocation(cls.location);
         mlir::emitError(loc) << "Failed to convert base class "
                              << baseClass->name << " of class " << cls.name;
         return {};
       }
 
+  // Always update the base and implements attributes.
+  // This handles the case where the class was forward-declared during type
+  // conversion and the base attributes weren't set.
   auto [base, impls] = buildBaseAndImplementsAttrs(*this, cls);
-  auto classDeclOp =
-      moore::ClassDeclOp::create(builder, loc, symName, base, impls);
+  if (base && !lowering->op.getBaseAttr())
+    lowering->op.setBaseAttr(base);
+  if (impls && !lowering->op.getImplementedInterfacesAttr())
+    lowering->op.setImplementedInterfacesAttr(impls);
 
-  SymbolTable::setSymbolVisibility(classDeclOp,
-                                   SymbolTable::Visibility::Public);
-  orderedRootOps.insert(it, {cls.location, classDeclOp});
-  lowering->op = classDeclOp;
-
-  symbolTable.insert(classDeclOp);
   return lowering.get();
 }
 
@@ -1734,11 +1943,13 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
   auto timeScaleGuard =
       llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
 
-  // Check if there already is a declaration for this class.
-  if (classes.contains(&classdecl))
-    return success();
-
+  // Get or create the class declaration.
   auto *lowering = declareClass(classdecl);
+  if (!lowering)
+    return failure();
+
+  // If the body has already been converted (or is being converted), skip.
+  // ClassDeclVisitor::run checks if body is empty and populates it.
   if (failed(ClassDeclVisitor(*this, *lowering).run(classdecl)))
     return failure();
 
@@ -1783,4 +1994,39 @@ Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
     globalVariableWorklist.push_back(&var);
 
   return success();
+}
+
+/// Construct a fully qualified class name containing the instance hierarchy
+/// and the class name formatted as H1::H2::@C
+mlir::StringAttr circt::ImportVerilog::fullyQualifiedClassName(
+    Context &ctx, const slang::ast::Type &ty) {
+  SmallString<64> name;
+  SmallVector<llvm::StringRef, 8> parts;
+
+  const slang::ast::Scope *scope = ty.getParentScope();
+  while (scope) {
+    const auto &sym = scope->asSymbol();
+    switch (sym.kind) {
+    case slang::ast::SymbolKind::Root:
+      scope = nullptr; // stop at $root
+      continue;
+    case slang::ast::SymbolKind::InstanceBody:
+    case slang::ast::SymbolKind::Instance:
+    case slang::ast::SymbolKind::Package:
+    case slang::ast::SymbolKind::ClassType:
+      if (!sym.name.empty())
+        parts.push_back(sym.name); // keep packages + outer classes
+      break;
+    default:
+      break;
+    }
+    scope = sym.getParentScope();
+  }
+
+  for (auto p : llvm::reverse(parts)) {
+    name += p;
+    name += "::";
+  }
+  name += ty.name; // class's own name
+  return mlir::StringAttr::get(ctx.getContext(), name);
 }

@@ -18,6 +18,9 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+// NOTE: This header requires MooreEnums.h.inc to be included first when
+// using ModportPortAttr, as it depends on ModportDirAttr from that file.
+
 // Include generated attributes.
 #define GET_ATTRDEF_CLASSES
 #include "circt/Dialect/Moore/MooreAttributes.h.inc"
