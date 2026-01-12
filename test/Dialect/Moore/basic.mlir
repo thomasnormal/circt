@@ -526,10 +526,36 @@ moore.get_global_variable @GlobalVar2 : <i42>
 // CHECK-LABEL: func.func @StringConversion
 // CHECK-SAME: [[A:%.+]]: !moore.i32
 // CHECK-SAME: [[B:%.+]]: !moore.string
-func.func @StringConversion(%a: !moore.i32, %b: !moore.string) { 
+func.func @StringConversion(%a: !moore.i32, %b: !moore.string) {
   // CHECK: moore.int_to_string [[A]] : i32
   moore.int_to_string %a : i32
   // CHECK: moore.string_to_int [[B]] : i32
   moore.string_to_int %b : i32
+  return
+}
+
+// CHECK-LABEL: func.func @AssocArrayBuiltins
+// CHECK-SAME: [[ARRAY1:%.+]]: !moore.ref<assoc_array<i32, string>>
+// CHECK-SAME: [[KEY1:%.+]]: !moore.ref<string>
+// CHECK-SAME: [[ARRAY2:%.+]]: !moore.ref<assoc_array<i64, i32>>
+// CHECK-SAME: [[KEY2:%.+]]: !moore.ref<i32>
+func.func @AssocArrayBuiltins(
+  %array1: !moore.ref<assoc_array<i32, string>>,
+  %key1: !moore.ref<string>,
+  %array2: !moore.ref<assoc_array<i64, i32>>,
+  %key2: !moore.ref<i32>
+) {
+  // Test assoc.first with string key type
+  // CHECK: [[FOUND1:%.+]] = moore.assoc.first [[ARRAY1]], [[KEY1]] : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
+  %0 = moore.assoc.first %array1, %key1 : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
+  // Test assoc.next with string key type
+  // CHECK: [[FOUND2:%.+]] = moore.assoc.next [[ARRAY1]], [[KEY1]] : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
+  %1 = moore.assoc.next %array1, %key1 : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
+  // Test assoc.first with integer key type
+  // CHECK: [[FOUND3:%.+]] = moore.assoc.first [[ARRAY2]], [[KEY2]] : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
+  %2 = moore.assoc.first %array2, %key2 : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
+  // Test assoc.next with integer key type
+  // CHECK: [[FOUND4:%.+]] = moore.assoc.next [[ARRAY2]], [[KEY2]] : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
+  %3 = moore.assoc.next %array2, %key2 : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
   return
 }

@@ -4133,7 +4133,7 @@ def AssocArrayFirstOp : AssocArrayBuiltin<"first"> {
 
     Example:
     ```mlir
-    %found = moore.assoc.first %array, %key : !moore.ref<!moore.assoc<i32, string>>, !moore.ref<string>
+    %found = moore.assoc.first %array, %key : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
     ```
   }];
   let arguments = (ins RefType:$array, RefType:$key);
@@ -4150,7 +4150,7 @@ def AssocArrayNextOp : AssocArrayBuiltin<"next"> {
 
     Example:
     ```mlir
-    %found = moore.assoc.next %array, %key : !moore.ref<!moore.assoc<i32, string>>, !moore.ref<string>
+    %found = moore.assoc.next %array, %key : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
     ```
   }];
   let arguments = (ins RefType:$array, RefType:$key);
