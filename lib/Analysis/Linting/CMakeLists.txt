@@ -17,5 +17,5 @@ add_circt_library(CIRCTLinting
 
 target_include_directories(CIRCTLinting
   PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../../include
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include>
 )

@@ -1575,6 +1575,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       return fmtValue.value();
     }
 
+    // Handle string substr method: str.substr(start, len) has 3 args
+    if (!subroutine.name.compare("substr") && args.size() == 3) {
+      Value str = context.convertRvalueExpression(*args[0]);
+      Value start = context.convertRvalueExpression(*args[1]);
+      Value len = context.convertRvalueExpression(*args[2]);
+      if (!str || !start || !len)
+        return {};
+      return moore::StringSubstrOp::create(builder, loc, str, start, len);
+    }
+
     // $cast(dest, src) is a special case because the first argument is an
     // output parameter. Slang wraps it in an AssignmentExpression with
     // EmptyArgument as RHS.

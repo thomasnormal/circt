@@ -4205,4 +4205,17 @@ def StringGetCOp : StringBuiltin<"getc"> {
   let assemblyFormat = "$str `[` $index `]` attr-dict";
 }
 
+def StringSubstrOp : StringBuiltin<"substr"> {
+  let summary = "Extract a substring from a string";
+  let description = [{
+    Returns a substring from the given string starting at `start` index
+    and having `length` characters. Per IEEE 1800-2017 Section 6.16.8,
+    str.substr(start, length) returns a new string that is a substring
+    formed by characters from position start to position start+length-1.
+  }];
+  let arguments = (ins StringType:$str, TwoValuedI32:$start, TwoValuedI32:$length);
+  let results = (outs StringType:$result);
+  let assemblyFormat = "$str `[` $start `:` $length `]` attr-dict";
+}
+
 #endif // CIRCT_DIALECT_MOORE_MOOREOPS
