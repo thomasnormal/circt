@@ -263,6 +263,11 @@ struct Context {
   convertQueueMethodCallNoArg(const slang::ast::SystemSubroutine &subroutine,
                               Location loc, Value queueRef, Type elementType);
 
+  /// Convert array/queue void method calls (e.g., delete, sort).
+  FailureOr<Value>
+  convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subroutine,
+                             Location loc, Value arrayRef);
+
   /// Convert system function calls within properties and assertion with a
   /// single argument.
   FailureOr<Value> convertAssertionSystemCallArity1(
