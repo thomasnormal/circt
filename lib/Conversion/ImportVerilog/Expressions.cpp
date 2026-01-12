@@ -493,18 +493,41 @@ struct ExprVisitor {
         return {};
       auto targetTy = cast<moore::ClassHandleType>(valTy);
 
-      // We need to pick the closest ancestor that declares a property with the
-      // relevant name. System Verilog explicitly enforces lexical shadowing, as
-      // shown in IEEE 1800-2023 Section 8.14 "Overridden members".
-      auto upcastTargetTy =
-          context.getAncestorClassWithProperty(targetTy, expr.member.name, loc);
-      if (!upcastTargetTy)
+      // Get the class that declares this property from slang's AST.
+      // This avoids the need to look up the property in Moore IR, which may not
+      // have been fully populated yet due to circular dependencies between
+      // classes.
+      const auto *parentScope = expr.member.getParentScope();
+      if (!parentScope) {
+        mlir::emitError(loc) << "class property '" << expr.member.name
+                             << "' has no parent scope";
         return {};
+      }
+      const auto *declaringClass =
+          parentScope->asSymbol().as_if<slang::ast::ClassType>();
+      if (!declaringClass) {
+        mlir::emitError(loc) << "class property '" << expr.member.name
+                             << "' is not declared in a class";
+        return {};
+      }
+
+      // Get the class symbol name from the declaring class
+      auto declaringClassSym =
+          fullyQualifiedClassName(context, *declaringClass);
+      auto upcastTargetTy = moore::ClassHandleType::get(
+          context.getContext(),
+          mlir::FlatSymbolRefAttr::get(context.getContext(),
+                                       declaringClassSym));
 
       // Convert the class handle to the required target type for property
-      // shadowing purposes.
-      Value baseVal =
-          context.convertRvalueExpression(expr.value(), upcastTargetTy);
+      // shadowing purposes, if needed.
+      Value baseVal;
+      if (upcastTargetTy.getClassSym() == targetTy.getClassSym()) {
+        baseVal = context.convertRvalueExpression(expr.value());
+      } else {
+        baseVal =
+            context.convertRvalueExpression(expr.value(), upcastTargetTy);
+      }
       if (!baseVal)
         return {};
 
@@ -1573,6 +1596,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (failed(fmtValue))
         return {};
       return fmtValue.value();
+    }
+
+    // Handle string substr method: str.substr(start, len) has 3 args
+    if (!subroutine.name.compare("substr") && args.size() == 3) {
+      Value str = context.convertRvalueExpression(*args[0]);
+      Value start = context.convertRvalueExpression(*args[1]);
+      Value len = context.convertRvalueExpression(*args[2]);
+      if (!str || !start || !len)
+        return {};
+      return moore::StringSubstrOp::create(builder, loc, str, start, len);
     }
 
     // $cast(dest, src) is a special case because the first argument is an
