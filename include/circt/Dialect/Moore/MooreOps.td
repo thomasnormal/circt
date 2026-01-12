@@ -4195,6 +4195,17 @@ def StringToLowerOp : StringBuiltin<"tolower"> {
   let assemblyFormat = "$str attr-dict";
 }
 
+def StringSubstrOp : StringBuiltin<"substr"> {
+  let summary = "Extract a substring from a string";
+  let description = [{
+    Extracts a substring from the given string, starting at `start` with
+    the specified `len` number of characters.
+  }];
+  let arguments = (ins StringType:$str, TwoValuedI32:$start, TwoValuedI32:$len);
+  let results = (outs StringType:$result);
+  let assemblyFormat = "$str `[` $start `,` $len `]` attr-dict";
+}
+
 def StringGetCOp : StringBuiltin<"getc"> {
   let summary = "Get a character from a string";
   let description = [{
