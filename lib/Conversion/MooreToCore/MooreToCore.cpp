@@ -860,6 +860,124 @@ private:
   ClassTypeCache &cache; // shared, owned by the pass
 };
 
+/// moore.vtable lowering: erase the vtable declaration.
+/// The vtable entries are resolved at load time via symbol lookup.
+/// Note: This pattern has a lower benefit than VTableLoadMethodOpConversion
+/// to ensure vtables are not erased before load_method ops are converted.
+struct VTableOpConversion : public OpConversionPattern<VTableOp> {
+  VTableOpConversion(TypeConverter &tc, MLIRContext *ctx)
+      : OpConversionPattern<VTableOp>(tc, ctx, /*benefit=*/1) {}
+
+  LogicalResult
+  matchAndRewrite(VTableOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // The vtable declaration itself is a no-op in lowering.
+    // Method dispatch is resolved via VTableLoadMethodOp.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// moore.vtable_entry lowering: erase the vtable entry declaration.
+/// The entries are resolved at load time via symbol lookup.
+/// Note: This pattern has a lower benefit than VTableLoadMethodOpConversion.
+struct VTableEntryOpConversion : public OpConversionPattern<VTableEntryOp> {
+  VTableEntryOpConversion(TypeConverter &tc, MLIRContext *ctx)
+      : OpConversionPattern<VTableEntryOp>(tc, ctx, /*benefit=*/1) {}
+
+  LogicalResult
+  matchAndRewrite(VTableEntryOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // The vtable entry is a no-op; method lookup happens at dispatch time.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// moore.vtable.load_method lowering: resolve the virtual method and return
+/// a function pointer.
+/// Note: Higher benefit ensures this runs before VTableOp/VTableEntryOp erasure.
+struct VTableLoadMethodOpConversion
+    : public OpConversionPattern<VTableLoadMethodOp> {
+  VTableLoadMethodOpConversion(TypeConverter &tc, MLIRContext *ctx)
+      : OpConversionPattern<VTableLoadMethodOp>(tc, ctx, /*benefit=*/10) {}
+
+  LogicalResult
+  matchAndRewrite(VTableLoadMethodOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    // Get the class type from the object operand.
+    auto handleTy = cast<ClassHandleType>(op.getObject().getType());
+    auto classSym = handleTy.getClassSym();
+
+    // Look up the vtable for this class by searching all VTableOps in the
+    // module. The vtable symbol is `@ClassName::@vtable` where ClassName
+    // is the root reference.
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    VTableOp vtable = nullptr;
+    StringRef className = classSym.getRootReference();
+
+    for (auto vt : mod.getOps<VTableOp>()) {
+      // The vtable's sym_name is @ClassName::@vtable, so check if root matches.
+      if (vt.getSymName().getRootReference() == className) {
+        vtable = vt;
+        break;
+      }
+    }
+
+    if (!vtable)
+      return rewriter.notifyMatchFailure(
+          op, "could not find vtable for class " + className.str());
+
+    // Search for the method in the vtable (including nested vtables for base
+    // classes).
+    auto methodSym = op.getMethodSym();
+    StringRef methodName = methodSym.getLeafReference();
+
+    // Recursive helper to find entry in vtable hierarchy.
+    std::function<VTableEntryOp(VTableOp)> findEntry =
+        [&](VTableOp vt) -> VTableEntryOp {
+      for (Operation &child : vt.getBody().front()) {
+        if (auto entry = dyn_cast<VTableEntryOp>(child)) {
+          if (entry.getName() == methodName)
+            return entry;
+        } else if (auto nestedVt = dyn_cast<VTableOp>(child)) {
+          if (auto found = findEntry(nestedVt))
+            return found;
+        }
+      }
+      return nullptr;
+    };
+
+    auto entry = findEntry(vtable);
+    if (!entry)
+      return rewriter.notifyMatchFailure(
+          op, "could not find method " + methodName.str() + " in vtable");
+
+    // Get the target function symbol.
+    auto targetSym = entry.getTarget();
+
+    // Convert SymbolRefAttr to FlatSymbolRefAttr (the target should be a flat
+    // symbol for a top-level function).
+    auto flatTargetSym =
+        FlatSymbolRefAttr::get(ctx, targetSym.getRootReference());
+
+    // Convert the result function type from Moore types to the lowered types.
+    auto resultTy = typeConverter->convertType(op.getResult().getType());
+    if (!resultTy)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Create a func.constant operation to get the function pointer.
+    auto constOp =
+        func::ConstantOp::create(rewriter, loc, resultTy, flatTargetSym);
+
+    rewriter.replaceOp(op, constOp.getResult());
+    return success();
+  }
+};
+
 /// moore.class.null lowering: create a null pointer constant.
 struct ClassNullOpConversion : public OpConversionPattern<ClassNullOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2356,6 +2474,26 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   typeConverter.addConversion([](debug::ScopeType type) { return type; });
   typeConverter.addConversion([](debug::StructType type) { return type; });
 
+  // Function types (used for function pointers from vtable.load_method).
+  typeConverter.addConversion(
+      [&](mlir::FunctionType type) -> std::optional<Type> {
+        SmallVector<Type> inputs;
+        for (auto input : type.getInputs()) {
+          auto converted = typeConverter.convertType(input);
+          if (!converted)
+            return {};
+          inputs.push_back(converted);
+        }
+        SmallVector<Type> results;
+        for (auto result : type.getResults()) {
+          auto converted = typeConverter.convertType(result);
+          if (!converted)
+            return {};
+          results.push_back(converted);
+        }
+        return mlir::FunctionType::get(type.getContext(), inputs, results);
+      });
+
   typeConverter.addConversion([&](llhd::RefType type) -> std::optional<Type> {
     if (auto innerType = typeConverter.convertType(type.getNestedType()))
       return llhd::RefType::get(innerType);
@@ -2412,6 +2550,11 @@ static void populateOpConversion(ConversionPatternSet &patterns,
                                      classCache);
   patterns.add<ClassPropertyRefOpConversion>(typeConverter,
                                              patterns.getContext(), classCache);
+
+  // Patterns of vtable operations (with explicit benefits for ordering).
+  patterns.add<VTableOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<VTableEntryOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<VTableLoadMethodOpConversion>(typeConverter, patterns.getContext());
 
   // clang-format off
   patterns.add<
