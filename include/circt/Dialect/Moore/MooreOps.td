@@ -4087,6 +4087,36 @@ def QueuePopFrontOp : QueueBuiltin<"pop_front"> {
   let assemblyFormat = "$queue `:` type($queue) `->` type($result) attr-dict";
 }
 
+def QueueDeleteOp : QueueBuiltin<"delete"> {
+  let summary = "Delete all elements from a queue";
+  let description = [{
+    Removes all elements from a queue, leaving it empty. This corresponds to the
+    SystemVerilog `.delete()` built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.delete %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
+def QueueSortOp : QueueBuiltin<"sort"> {
+  let summary = "Sort the elements of a queue";
+  let description = [{
+    Sorts the elements of a queue in ascending order. This corresponds to the
+    SystemVerilog `.sort()` built-in method on queues and dynamic arrays.
+
+    Example:
+    ```mlir
+    moore.queue.sort %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//
