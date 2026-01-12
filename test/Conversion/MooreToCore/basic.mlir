@@ -341,7 +341,7 @@ func.func @Expressions(%arg0: !moore.i1, %arg1: !moore.l1, %arg2: !moore.i6, %ar
 // CHECK-LABEL: ExtractRefArrayElement
 func.func @ExtractRefArrayElement(%j: !moore.ref<!moore.array<1 x array<1 x l3>>>) -> (!moore.ref<!moore.array<1 x l3>>) {
   // CHECK: llhd.sig.array_get
-  %0 = moore.extract_ref %j from 0 : <array<1 x array<1 x l3>>> -> <array<1 x l3>>
+  %0 = moore.extract_ref %j from 0 : !moore.ref<!moore.array<1 x array<1 x l3>>> -> !moore.ref<!moore.array<1 x l3>>
   return %0 : !moore.ref<!moore.array<1 x l3>>
 }
 
@@ -355,7 +355,7 @@ func.func @DynExtractArrayElement(%j: !moore.array<2 x array<1 x l3>>, %idx: !mo
 // CHECK-LABEL: DynExtractRefArrayElement
 func.func @DynExtractRefArrayElement(%j: !moore.ref<!moore.array<2 x array<1 x l3>>>, %idx: !moore.l1) -> (!moore.ref<!moore.array<1 x l3>>) {
   // CHECK: llhd.sig.array_get
-  %0 = moore.dyn_extract_ref %j from %idx : <array<2 x array<1 x l3>>>, !moore.l1 -> <array<1 x l3>>
+  %0 = moore.dyn_extract_ref %j from %idx : !moore.ref<!moore.array<2 x array<1 x l3>>>, !moore.l1 -> !moore.ref<!moore.array<1 x l3>>
   return %0 : !moore.ref<!moore.array<1 x l3>>
 }
 
@@ -504,14 +504,14 @@ moore.module @Variable() {
   %b1 = moore.variable : !moore.ref<!moore.i8>
 
   // CHECK: [[PRB:%.+]] = llhd.prb %b1 : i8
-  %0 = moore.read %b1 : <i8>
+  %0 = moore.read %b1 : !moore.ref<!moore.i8>
   // CHECK: %b2 = llhd.sig [[PRB]] : i8
-  %b2 = moore.variable %0 : <i8>
+  %b2 = moore.variable %0 : !moore.ref<!moore.i8>
 
   // CHECK: %true = hw.constant true
   %1 = moore.constant 1 : l1
   // CHECK: %l = llhd.sig %true : i1
-  %l = moore.variable %1 : <l1>
+  %l = moore.variable %1 : !moore.ref<!moore.l1>
   // CHECK: [[TMP:%.+]] = hw.constant 0 : i19
   // CHECK: %m = llhd.sig [[TMP]] : i19
   %m = moore.variable : !moore.ref<!moore.l19>
@@ -552,16 +552,16 @@ moore.module @Variable() {
 moore.module @Net() {
   // CHECK: [[TMP:%.+]] = hw.constant 0 : i32
   // CHECK: %a = llhd.sig [[TMP]] : i32
-  %a = moore.net wire : <i32>
+  %a = moore.net wire : !moore.ref<!moore.i32>
 
   // CHECK: [[PRB:%.+]] = llhd.prb %a : i32
-  %0 = moore.read %a : <i32>
+  %0 = moore.read %a : !moore.ref<!moore.i32>
 
   // CHECK: [[TMP:%.+]] = hw.constant 0 : i32
   // CHECK: %b = llhd.sig [[TMP]] : i32
   // CHECK: [[TIME:%.+]] = llhd.constant_time <0ns, 0d, 1e>
   // CHECK: llhd.drv %b, [[PRB]] after [[TIME]] : i32
-  %b = moore.net wire %0 : <i32>
+  %b = moore.net wire %0 : !moore.ref<!moore.i32>
 
   // CHECK: [[TMP:%.+]] = hw.constant 10 : i32
   %3 = moore.constant 10 : i32
@@ -603,7 +603,7 @@ moore.module @Struct(in %a : !moore.i32, in %b : !moore.i32, in %arg0 : !moore.s
   %0 = moore.struct_extract %arg0, "exp_bits" : !moore.struct<{exp_bits: i32, man_bits: i32}> -> i32
 
   // CHECK: llhd.sig.struct_extract %arg1["exp_bits"] : <!hw.struct<exp_bits: i32, man_bits: i32>>
-  %ref = moore.struct_extract_ref %arg1, "exp_bits" : <!moore.struct<{exp_bits: i32, man_bits: i32}>> -> <i32>
+  %ref = moore.struct_extract_ref %arg1, "exp_bits" : !moore.ref<!moore.struct<{exp_bits: i32, man_bits: i32}>> -> !moore.ref<!moore.i32>
   moore.assign %ref, %0 : !moore.i32
   
   // CHECK: [[C0:%.+]] = hw.constant 0 : i64
@@ -611,10 +611,10 @@ moore.module @Struct(in %a : !moore.i32, in %b : !moore.i32, in %arg0 : !moore.s
   // CHECK: llhd.sig [[INIT]] : !hw.struct<exp_bits: i32, man_bits: i32>
   // CHECK: llhd.sig %arg0 : !hw.struct<exp_bits: i32, man_bits: i32>
   %1 = moore.variable : !moore.ref<!moore.struct<{exp_bits: i32, man_bits: i32}>>
-  %2 = moore.variable %arg0 : <struct<{exp_bits: i32, man_bits: i32}>>
+  %2 = moore.variable %arg0 : !moore.ref<!moore.struct<{exp_bits: i32, man_bits: i32}>>
 
-  %3 = moore.read %1 : <struct<{exp_bits: i32, man_bits: i32}>>
-  %4 = moore.read %2 : <struct<{exp_bits: i32, man_bits: i32}>>
+  %3 = moore.read %1 : !moore.ref<!moore.struct<{exp_bits: i32, man_bits: i32}>>
+  %4 = moore.read %2 : !moore.ref<!moore.struct<{exp_bits: i32, man_bits: i32}>>
 
   // CHECK; hw.struct_create %a, %b : !hw.struct<a: i32, b: i32>
   moore.struct_create %a, %b : !moore.i32, !moore.i32 -> struct<{a: i32, b: i32}>
@@ -856,7 +856,7 @@ moore.module @WaitEvent() {
       func.call @dummyB() : () -> ()
     }
     func.call @dummyC() : () -> ()
-    moore.read %a : <i1>
+    moore.read %a : !moore.ref<!moore.i1>
     moore.return
   }
 
@@ -868,7 +868,7 @@ moore.module @WaitEvent() {
     // CHECK:   cf.br ^[[RESUME:.+]]
     // CHECK: ^[[RESUME]]:
     moore.wait_event {
-      %0 = moore.read %a : <i1>
+      %0 = moore.read %a : !moore.ref<!moore.i1>
       moore.detect_event any %0 : i1
     }
     moore.return
@@ -886,8 +886,8 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP2:%.+]] = comb.and bin [[TMP1]], [[AFTER_B]]
     // CHECK:   cf.cond_br [[TMP2]]
     moore.wait_event {
-      %0 = moore.read %a : <i1>
-      %1 = moore.read %b : <i1>
+      %0 = moore.read %a : !moore.ref<!moore.i1>
+      %1 = moore.read %b : !moore.ref<!moore.i1>
       moore.detect_event any %0 if %1 : i1
     }
     moore.return
@@ -899,10 +899,10 @@ moore.module @WaitEvent() {
     // CHECK: ^[[CHECK]]:
     // CHECK:   cf.br
     moore.wait_event {
-      %0 = moore.read %a : <i1>
-      %1 = moore.read %b : <i1>
-      %2 = moore.read %c : <i1>
-      %3 = moore.read %d : <i4>
+      %0 = moore.read %a : !moore.ref<!moore.i1>
+      %1 = moore.read %b : !moore.ref<!moore.i1>
+      %2 = moore.read %c : !moore.ref<!moore.i1>
+      %3 = moore.read %d : !moore.ref<!moore.i4>
       moore.detect_event any %0 : i1
       moore.detect_event any %1 : i1
       moore.detect_event any %2 : i1
@@ -922,7 +922,7 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP2:%.+]] = comb.and bin [[TMP1]], [[AFTER]]
     // CHECK:   cf.cond_br [[TMP2]]
     moore.wait_event {
-      %0 = moore.read %a : <i1>
+      %0 = moore.read %a : !moore.ref<!moore.i1>
       moore.detect_event posedge %0 : i1
     }
     moore.return
@@ -939,7 +939,7 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP2:%.+]] = comb.and bin [[BEFORE]], [[TMP1]]
     // CHECK:   cf.cond_br [[TMP2]]
     moore.wait_event {
-      %0 = moore.read %a : <i1>
+      %0 = moore.read %a : !moore.ref<!moore.i1>
       moore.detect_event negedge %0 : i1
     }
     moore.return
@@ -959,7 +959,7 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP5:%.+]] = comb.or bin [[TMP2]], [[TMP4]]
     // CHECK:   cf.cond_br [[TMP5]]
     moore.wait_event {
-      %0 = moore.read %a : <i1>
+      %0 = moore.read %a : !moore.ref<!moore.i1>
       moore.detect_event edge %0 : i1
     }
     moore.return
@@ -978,7 +978,7 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP4:%.+]] = comb.and bin [[TMP3]], [[TMP2]]
     // CHECK:   cf.cond_br [[TMP4]]
     moore.wait_event {
-      %0 = moore.read %d : <i4>
+      %0 = moore.read %d : !moore.ref<!moore.i4>
       moore.detect_event posedge %0 : i4
     }
     moore.return
@@ -997,7 +997,7 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP4:%.+]] = comb.and bin [[TMP1]], [[TMP3]]
     // CHECK:   cf.cond_br [[TMP4]]
     moore.wait_event {
-      %0 = moore.read %d : <i4>
+      %0 = moore.read %d : !moore.ref<!moore.i4>
       moore.detect_event negedge %0 : i4
     }
     moore.return
@@ -1019,7 +1019,7 @@ moore.module @WaitEvent() {
     // CHECK:   [[TMP7:%.+]] = comb.or bin [[TMP4]], [[TMP6]]
     // CHECK:   cf.cond_br [[TMP7]]
     moore.wait_event {
-      %0 = moore.read %d : <i4>
+      %0 = moore.read %d : !moore.ref<!moore.i4>
       moore.detect_event edge %0 : i4
     }
     moore.return
@@ -1038,10 +1038,10 @@ moore.module @WaitEvent() {
     // CHECK: ^[[BB2]]:
     // CHECK:   llhd.wait ([[PRB_A]], [[PRB_B]] : {{.*}}), ^[[BB1]]
     %1 = moore.conditional %cond : i1 -> i1 {
-      %2 = moore.read %a : <i1>
+      %2 = moore.read %a : !moore.ref<!moore.i1>
       moore.yield %2 : !moore.i1
     } {
-      %3 = moore.read %b : <i1>
+      %3 = moore.read %b : !moore.ref<!moore.i1>
       moore.yield %3 : !moore.i1
     }
     moore.return
@@ -1056,7 +1056,7 @@ moore.module @WaitEvent() {
   // CHECK: ^[[BB2]]:
   // CHECK:   llhd.wait ([[PRB_E]] : {{.*}}), ^[[BB1]]
   moore.procedure always_latch {
-    %3 = moore.read %e : <i1>
+    %3 = moore.read %e : !moore.ref<!moore.i1>
     moore.return
   }
 
@@ -1069,10 +1069,10 @@ moore.module @WaitEvent() {
     moore.wait_event {
       %0 = moore.constant 0 : i1
       %1 = moore.conditional %0 : i1 -> i1 {
-        %2 = moore.read %a : <i1>
+        %2 = moore.read %a : !moore.ref<!moore.i1>
         moore.yield %2 : !moore.i1
       } {
-        %3 = moore.read %b : <i1>
+        %3 = moore.read %b : !moore.ref<!moore.i1>
         moore.yield %3 : !moore.i1
       }
       moore.detect_event any %1 : i1
@@ -1100,7 +1100,7 @@ moore.module @EmptyWaitEvent(out out : !moore.l32) {
     moore.blocking_assign %out, %0 : l32
     moore.return
   }
-  %1 = moore.read %out : <l32>
+  %1 = moore.read %out : !moore.ref<!moore.l32>
   moore.output %1 : !moore.l32
 }
 
@@ -1153,14 +1153,14 @@ moore.module @NoPredecessorBlockErasure(in %clk_i : !moore.l1, in %raddr_i : !mo
     %6 = moore.add %5, %1 : i32
     cf.br ^bb3(%6 : !moore.i32)
   ^bb7:  // no predecessors
-    %7 = moore.extract_ref %mem from 0 : <array<32 x l32>> -> <l32>
+    %7 = moore.extract_ref %mem from 0 : !moore.ref<!moore.array<32 x l32>> -> !moore.ref<!moore.l32>
     moore.nonblocking_assign %7, %0 : l32
     cf.br ^bb8
   ^bb8:  // 2 preds: ^bb3, ^bb7
     %8 = moore.add %4, %1 : i32
     cf.br ^bb1(%8 : !moore.i32)
   }
-  %3 = moore.read %rdata_o : <array<2 x l32>>
+  %3 = moore.read %rdata_o : !moore.ref<!moore.array<2 x l32>>
   moore.output %3 : !moore.array<2 x l32>
 }
 
