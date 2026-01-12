@@ -103,8 +103,6 @@ moore.module @DisableForkBasic() {
 // CHECK-LABEL: moore.module @NamedBlockBasic
 moore.module @NamedBlockBasic() {
   moore.procedure initial {
-    %v = moore.variable : <i32>
-
     // CHECK: moore.named_block "outer_loop"
     // CHECK:   moore.named_block "inner_loop"
     // CHECK:     moore.disable "outer_loop"
