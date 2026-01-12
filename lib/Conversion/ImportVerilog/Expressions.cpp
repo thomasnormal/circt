@@ -108,8 +108,23 @@ static Value visitClassProperty(Context &context,
   if (!type)
     return {};
 
-  // Check if this is a static property
+  // Check if this is a static property.
+  // We check expr.lifetime first, but also handle the case where there's no
+  // implicit 'this' reference - in that case, we must be in a static context
+  // (e.g., static function) accessing a static property, since slang would
+  // reject non-static property access without a receiver object.
   bool isStatic = expr.lifetime == slang::ast::VariableLifetime::Static;
+
+  // Get the scope's implicit this variable
+  mlir::Value instRef = context.getImplicitThisRef();
+
+  // If there's no implicit 'this' and we're accessing a class property,
+  // it must be a static property (slang validates this at parse time).
+  // This handles cases where expr.lifetime may not reflect the static
+  // storage class correctly (e.g., in some parameterized class contexts).
+  if (!instRef) {
+    isStatic = true;
+  }
 
   if (isStatic) {
     // Static properties are class-level (not instance-level).
@@ -129,9 +144,10 @@ static Value visitClassProperty(Context &context,
     return varOp;
   }
 
-  // Get the scope's implicit this variable
-  mlir::Value instRef = context.getImplicitThisRef();
+  // At this point we have an implicit 'this' reference, so this is
+  // an instance property access.
   if (!instRef) {
+    // This should never happen based on the logic above, but keep as a safety check
     mlir::emitError(loc) << "class property '" << expr.name
                          << "' referenced without an implicit 'this'";
     return {};
@@ -593,6 +609,8 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
       auto fieldRef = visitClassProperty(context, *property);
+      if (!fieldRef)
+        return {};
       return moore::ReadOp::create(builder, loc, fieldRef).getResult();
     }
 
