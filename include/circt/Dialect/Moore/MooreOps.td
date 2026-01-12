@@ -4304,6 +4304,33 @@ def ArraySizeOp : ArrayBuiltin<"size"> {
   let assemblyFormat = "$array `:` type($array) attr-dict";
 }
 
+def DynArrayNewOp : MooreOp<"dyn_array.new",
+    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Create a new dynamic array with a given size";
+  let description = [{
+    Creates a new dynamic array with the specified number of elements. This
+    corresponds to the SystemVerilog `new[size]` expression for dynamic arrays.
+
+    If the optional `init` operand is provided, the existing elements from that
+    array are copied into the new array, corresponding to `new[size](init)`.
+
+    Example:
+    ```mlir
+    // arr = new[10];
+    %arr = moore.dyn_array.new %size : i32 -> !moore.open_uarray<i32>
+
+    // arr = new[20](existing);
+    %arr2 = moore.dyn_array.new %size, %existing : i32, !moore.open_uarray<i32> -> !moore.open_uarray<i32>
+    ```
+  }];
+  let arguments = (ins TwoValuedI32:$size,
+                       Optional<OpenUnpackedArrayType>:$init);
+  let results = (outs OpenUnpackedArrayType:$result);
+  let assemblyFormat = [{
+    $size (`,` $init^)? `:` type($size) (`,` type($init)^)? `->` type($result) attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Queue Builtins
 //===----------------------------------------------------------------------===//

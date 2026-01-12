@@ -2158,6 +2158,42 @@ struct RvalueExprVisitor : public ExprVisitor {
     return context.convertAssertionExpression(expr.body, loc);
   }
 
+  // Handle dynamic array new[size] expression.
+  // In SystemVerilog: arr = new[size]; or arr = new[size](existing);
+  Value visit(const slang::ast::NewArrayExpression &expr) {
+    auto type = context.convertType(*expr.type);
+    if (!type)
+      return {};
+
+    auto arrayType = dyn_cast<moore::OpenUnpackedArrayType>(type);
+    if (!arrayType) {
+      mlir::emitError(loc) << "new[] expression must create a dynamic array, "
+                           << "got " << type;
+      return {};
+    }
+
+    // Convert the size expression.
+    auto sizeValue = context.convertRvalueExpression(expr.sizeExpr());
+    if (!sizeValue)
+      return {};
+
+    // Convert size to i32 if needed.
+    auto i32Type =
+        moore::IntType::get(context.getContext(), 32, Domain::TwoValued);
+    sizeValue = context.materializeConversion(i32Type, sizeValue, false, loc);
+
+    // Convert the optional initializer expression.
+    Value initValue;
+    if (const auto *initExpr = expr.initExpr()) {
+      initValue = context.convertRvalueExpression(*initExpr);
+      if (!initValue)
+        return {};
+    }
+
+    return moore::DynArrayNewOp::create(builder, loc, arrayType, sizeValue,
+                                        initValue);
+  }
+
   // A new class expression can stand for one of two things:
   // 1) A call to the `new` method (ctor) of a class made outside the scope of
   // the class
