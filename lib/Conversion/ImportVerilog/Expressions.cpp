@@ -2991,6 +2991,55 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                     return moore::ArraySizeOp::create(builder, loc, value);
                   return {};
                 })
+          // Array locator methods (IEEE 1800-2017 Section 7.12.3)
+          .Case("max",
+                [&]() -> Value {
+                  // max() returns a queue with the maximum value(s)
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
+                    // Get the element type of the array
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
+                    // Result is a queue of the element type
+                    auto resultType = moore::QueueType::get(
+                        cast<moore::UnpackedType>(elementType), 0);
+                    return moore::QueueMaxOp::create(builder, loc, resultType,
+                                                     value);
+                  }
+                  return {};
+                })
+          .Case("min",
+                [&]() -> Value {
+                  // min() returns a queue with the minimum value(s)
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
+                    // Get the element type of the array
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
+                    // Result is a queue of the element type
+                    auto resultType = moore::QueueType::get(
+                        cast<moore::UnpackedType>(elementType), 0);
+                    return moore::QueueMinOp::create(builder, loc, resultType,
+                                                     value);
+                  }
+                  return {};
+                })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
