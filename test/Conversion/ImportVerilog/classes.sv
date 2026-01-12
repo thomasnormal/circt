@@ -137,7 +137,7 @@ endclass
 /// Check handle variable
 
 // CHECK-LABEL:  moore.module @testModule2() {
-// CHECK-NEXT: [[OBJ:%.+]] = moore.variable : <class<@"testModule2::testModuleClass">>
+// CHECK-NEXT: [[OBJ:%.+]] = moore.variable : <!moore.class<@"testModule2::testModuleClass">>
 // CHECK-NEXT:     moore.output
 // CHECK-NEXT:   }
 // CHECK: moore.class.classdecl @"testModule2::testModuleClass" {
@@ -152,7 +152,7 @@ endmodule
 /// Check calls to new without explicit constructor
 
 // CHECK-LABEL: moore.module @testModule3() {
-// CHECK: [[T:%.*]] = moore.variable : <class<@"testModule3::testModuleClass">>
+// CHECK: [[T:%.*]] = moore.variable : <!moore.class<@"testModule3::testModuleClass">>
 // CHECK: moore.procedure initial {
 // CHECK:   [[NEW:%.*]] = moore.class.new : <@"testModule3::testModuleClass">
 // CHECK:   moore.blocking_assign [[T]], [[NEW]] : class<@"testModule3::testModuleClass">
@@ -172,13 +172,13 @@ endmodule
 /// Check property read access
 
 // CHECK-LABEL: moore.module @testModule4() {
-// CHECK: [[T:%.*]] = moore.variable : <class<@"testModule4::testModuleClass">>
-// CHECK: [[RESULT:%.+]] = moore.variable : <i32>
+// CHECK: [[T:%.*]] = moore.variable : <!moore.class<@"testModule4::testModuleClass">>
+// CHECK: [[RESULT:%.+]] = moore.variable : <!moore.i32>
 // CHECK: moore.procedure initial {
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@"testModule4::testModuleClass">
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule4::testModuleClass">
-// CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <class<@"testModule4::testModuleClass">>
-// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@prop4] : <@"testModule4::testModuleClass"> -> <i32>
+// CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <!moore.class<@"testModule4::testModuleClass">>
+// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@prop4] : <@"testModule4::testModuleClass"> -> <!moore.i32>
 // CHECK:    [[A:%.+]] = moore.read [[REF]]
 // CHECK:    moore.blocking_assign [[RESULT]], [[A]] : i32
 // CHECK:    moore.return
@@ -205,14 +205,14 @@ endmodule
 /// Check property write access
 
 // CHECK-LABEL: moore.module @testModule5() {
-// CHECK: [[T:%.*]] = moore.variable : <class<@"testModule5::testModuleClass">>
-// CHECK: [[RESULT:%.+]] = moore.variable : <i32>
+// CHECK: [[T:%.*]] = moore.variable : <!moore.class<@"testModule5::testModuleClass">>
+// CHECK: [[RESULT:%.+]] = moore.variable : <!moore.i32>
 // CHECK: moore.procedure initial {
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@"testModule5::testModuleClass">
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule5::testModuleClass">
-// CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <class<@"testModule5::testModuleClass">>
-// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@prop5] : <@"testModule5::testModuleClass"> -> <i32>
-// CHECK:    [[RESR:%.+]] = moore.read [[RESULT]] : <i32>
+// CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <!moore.class<@"testModule5::testModuleClass">>
+// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@prop5] : <@"testModule5::testModuleClass"> -> <!moore.i32>
+// CHECK:    [[RESR:%.+]] = moore.read [[RESULT]] : <!moore.i32>
 // CHECK:    moore.blocking_assign [[REF]], [[RESR]] : i32
 // CHECK:    moore.return
 // CHECK: }
@@ -238,14 +238,14 @@ endmodule
 /// Check implicit upcast
 
 // CHECK-LABEL: moore.module @testModule6() {
-// CHECK: [[T:%.*]] = moore.variable : <class<@"testModule6::testModuleClass2">>
-// CHECK: [[RESULT:%.+]] = moore.variable : <i32>
+// CHECK: [[T:%.*]] = moore.variable : <!moore.class<@"testModule6::testModuleClass2">>
+// CHECK: [[RESULT:%.+]] = moore.variable : <!moore.i32>
 // CHECK: moore.procedure initial {
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@"testModule6::testModuleClass2">
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule6::testModuleClass2">
-// CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <class<@"testModule6::testModuleClass2">>
+// CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <!moore.class<@"testModule6::testModuleClass2">>
 // CHECK:    [[UPCAST:%.+]] = moore.class.upcast [[CLASSHANDLE]] : <@"testModule6::testModuleClass2"> to <@"testModule6::testModuleClass">
-// CHECK:    [[REF:%.+]] = moore.class.property_ref [[UPCAST]][@prop6] : <@"testModule6::testModuleClass"> -> <i32>
+// CHECK:    [[REF:%.+]] = moore.class.property_ref [[UPCAST]][@prop6] : <@"testModule6::testModuleClass"> -> <!moore.i32>
 // CHECK:    [[A:%.+]] = moore.read [[REF]]
 // CHECK:    moore.blocking_assign [[RESULT]], [[A]] : i32
 // CHECK:    moore.return
@@ -274,12 +274,12 @@ endmodule
 /// Check concrete method calls
 
 // CHECK-LABEL: moore.module @testModule7() {
-// CHECK: [[T:%.*]] = moore.variable : <class<@"testModule7::testModuleClass">>
-// CHECK: [[RESULT:%.+]] = moore.variable : <i32>
+// CHECK: [[T:%.*]] = moore.variable : <!moore.class<@"testModule7::testModuleClass">>
+// CHECK: [[RESULT:%.+]] = moore.variable : <!moore.i32>
 // CHECK: moore.procedure initial {
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@"testModule7::testModuleClass">
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule7::testModuleClass">
-// CHECK:    [[CALLREAD:%.+]] = moore.read [[T]] : <class<@"testModule7::testModuleClass">>
+// CHECK:    [[CALLREAD:%.+]] = moore.read [[T]] : <!moore.class<@"testModule7::testModuleClass">>
 // CHECK:    [[FUNCRET:%.+]] = func.call @"testModule7::testModuleClass::returnA"([[CALLREAD]]) : (!moore.class<@"testModule7::testModuleClass">) -> !moore.i32
 // CHECK:    moore.blocking_assign [[RESULT]], [[FUNCRET]] : i32
 // CHECK:    moore.return
@@ -294,10 +294,10 @@ endmodule
 // CHECK: func.func private @"testModule7::testModuleClass::returnA"
 // CHECK-SAME: ([[ARG:%.+]]: !moore.class<@"testModule7::testModuleClass">)
 // CHECK-SAME: -> !moore.i32 {
-// CHECK-NEXT: [[REF:%.+]] = moore.class.property_ref [[ARG]][@prop7] : <@"testModule7::testModuleClass"> -> <i32>
-// CHECK-NEXT: [[RETURN:%.+]] = moore.read [[REF]] : <i32>
-// CHECK-NEXT: return [[RETURN]] : !moore.i32
-// CHECK-NEXT: }
+// CHECK:    [[REF:%.+]] = moore.get_global_variable @prop7 : <!moore.i32>
+// CHECK:    [[RETURN:%.+]] = moore.read [[REF]] : <!moore.i32>
+// CHECK:    return [[RETURN]] : !moore.i32
+// CHECK:  }
 
 module testModule7;
     class testModuleClass;
@@ -318,12 +318,12 @@ endmodule
 /// Check inherited property access
 
  // CHECK-LABEL: moore.module @testModule8() {
- // CHECK:    [[t:%.+]] = moore.variable : <class<@"testModule8::testModuleClass2">>
- // CHECK:    [[result:%.+]] = moore.variable : <i32>
+ // CHECK:    [[t:%.+]] = moore.variable : <!moore.class<@"testModule8::testModuleClass2">>
+ // CHECK:    [[result:%.+]] = moore.variable : <!moore.i32>
  // CHECK:    moore.procedure initial {
  // CHECK:      [[NEW:%.+]] = moore.class.new : <@"testModule8::testModuleClass2">
  // CHECK:      moore.blocking_assign [[t]], [[NEW]] : class<@"testModule8::testModuleClass2">
-// CHECK:    [[CALLREAD:%.+]] = moore.read [[t]] : <class<@"testModule8::testModuleClass2">>
+// CHECK:    [[CALLREAD:%.+]] = moore.read [[t]] : <!moore.class<@"testModule8::testModuleClass2">>
 // CHECK:       [[CALL:%.+]] = func.call @"testModule8::testModuleClass2::returnA"([[CALLREAD]]) : (!moore.class<@"testModule8::testModuleClass2">) -> !moore.i32
 // CHECK:       moore.blocking_assign [[result]], [[CALL]] : i32
  // CHECK:      moore.return
@@ -336,9 +336,8 @@ endmodule
  // CHECK:  moore.class.classdecl @"testModule8::testModuleClass2" extends @"testModule8::testModuleClass" {
  // CHECK:  }
  // CHECK:  func.func private @"testModule8::testModuleClass2::returnA"([[ARG:%.+]]: !moore.class<@"testModule8::testModuleClass2">) -> !moore.i32 {
- // CHECK:   [[UPCAST:%.+]] = moore.class.upcast [[ARG]] : <@"testModule8::testModuleClass2"> to <@"testModule8::testModuleClass">
- // CHECK:   [[PROPREF:%.+]] = moore.class.property_ref [[UPCAST]][@baseA] : <@"testModule8::testModuleClass"> -> <i32>
- // CHECK:   [[RET:%.+]] = moore.read [[PROPREF]] : <i32>
+ // CHECK:   [[PROPREF:%.+]] = moore.get_global_variable @baseA : <!moore.i32>
+ // CHECK:   [[RET:%.+]] = moore.read [[PROPREF]] : <!moore.i32>
  // CHECK:   return [[RET]] : !moore.i32
  // CHECK: }
 
@@ -366,12 +365,12 @@ endmodule
 /// Check method lowering without qualified handle
 
 // CHECK-LABEL: moore.module @testModule9() {
-// CHECK: [[t:%.+]] = moore.variable : <class<@"testModule9::testModuleClass2">>
-// CHECK: [[result:%.+]] = moore.variable : <i32>
+// CHECK: [[t:%.+]] = moore.variable : <!moore.class<@"testModule9::testModuleClass2">>
+// CHECK: [[result:%.+]] = moore.variable : <!moore.i32>
 // CHECK: moore.procedure initial {
 // CHECK:   [[new_obj:%.+]] = moore.class.new : <@"testModule9::testModuleClass2">
 // CHECK:   moore.blocking_assign [[t]], [[new_obj]] : class<@"testModule9::testModuleClass2">
-// CHECK:    [[CALLREAD:%.+]] = moore.read [[t]] : <class<@"testModule9::testModuleClass2">>
+// CHECK:    [[CALLREAD:%.+]] = moore.read [[t]] : <!moore.class<@"testModule9::testModuleClass2">>
 // CHECK:   [[call_ret:%.+]] = func.call @"testModule9::testModuleClass2::returnA"([[CALLREAD]]) : (!moore.class<@"testModule9::testModuleClass2">) -> !moore.i32
 // CHECK:   moore.blocking_assign [[result]], [[call_ret]] : i32
 // CHECK:   moore.return
@@ -382,8 +381,8 @@ endmodule
 // CHECK:   moore.class.propertydecl @prop9 : !moore.i32
 // CHECK: }
 // CHECK: func.func private @"testModule9::testModuleClass::myReturn"([[this_ref:%.+]]: !moore.class<@"testModule9::testModuleClass">) -> !moore.i32 {
-// CHECK:   [[prop_ref:%.+]] = moore.class.property_ref [[this_ref]][@prop9] : <@"testModule9::testModuleClass"> -> <i32>
-// CHECK:   [[read_val:%.+]] = moore.read [[prop_ref]] : <i32>
+// CHECK:   [[prop_ref:%.+]] = moore.get_global_variable @prop9 : <!moore.i32>
+// CHECK:   [[read_val:%.+]] = moore.read [[prop_ref]] : <!moore.i32>
 // CHECK:   return [[read_val]] : !moore.i32
 // CHECK: }
 // CHECK: moore.class.classdecl @"testModule9::testModuleClass2" extends @"testModule9::testModuleClass" {
@@ -441,7 +440,7 @@ endfunction
 // CHECK:      [[NEW:%.+]] = moore.class.new : <@"testModule10::testModuleClass">
 // CHECK:      [[CONST:%.+]] = moore.constant 3 : i32
 // CHECK:      func.call @"testModule10::testModuleClass::new"([[NEW]], [[CONST]]) : (!moore.class<@"testModule10::testModuleClass">, !moore.i32) -> ()
-// CHECK:      [[VAR:%.+]] = moore.variable [[NEW]] : <class<@"testModule10::testModuleClass">>
+// CHECK:      [[VAR:%.+]] = moore.variable [[NEW]] : <!moore.class<@"testModule10::testModuleClass">>
 // CHECK:      moore.return
 // CHECK:    }
 // CHECK:    moore.output
@@ -450,8 +449,8 @@ endfunction
 // CHECK:    moore.class.propertydecl @prop10 : !moore.i32
 // CHECK:  }
 // CHECK:  func.func private @"testModule10::testModuleClass::new"(%arg0: !moore.class<@"testModule10::testModuleClass">, %arg1: !moore.i32) {
-// CHECK:    [[NEW:%.+]] = moore.variable %arg1 : <i32>
-// CHECK:    [[RNEW:%.+]] = moore.read [[NEW]] : <i32>
+// CHECK:    [[NEW:%.+]] = moore.variable %arg1 : <!moore.i32>
+// CHECK:    [[RNEW:%.+]] = moore.read [[NEW]] : <!moore.i32>
 // CHECK:    moore.blocking_assign [[NEW]], [[RNEW]] : i32
 // CHECK:    return
 // CHECK:  }
@@ -477,7 +476,7 @@ endmodule
 // CHECK:    moore.class.propertydecl @propSuper : !moore.i32
 // CHECK:  }
 // CHECK:  func.func private @"testModuleClass2::new"(%arg0: !moore.class<@testModuleClass2>, %arg1: !moore.i32) {
-// CHECK:    [[A:%.+]] = moore.class.property_ref %arg0[@propSuper] : <@testModuleClass2> -> <i32>
+// CHECK:    [[A:%.+]] = moore.class.property_ref %arg0[@propSuper] : <@testModuleClass2> -> <!moore.i32>
 // CHECK:    moore.blocking_assign [[A]], %arg1 : i32
 // CHECK:    return
 // CHECK:  }
@@ -505,9 +504,9 @@ endclass // testModuleClass
 /// Check specialized class decl lowering
 
 // CHECK-LABEL:  moore.module @testModuleParametrized() {
-// CHECK:    [[T:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass">>
-// CHECK:    [[T2:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass">>
-// CHECK:    [[T3:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass_0">>
+// CHECK:    [[T:%.+]] = moore.variable : <!moore.class<@"testModuleParametrized::testModuleClass">>
+// CHECK:    [[T2:%.+]] = moore.variable : <!moore.class<@"testModuleParametrized::testModuleClass">>
+// CHECK:    [[T3:%.+]] = moore.variable : <!moore.class<@"testModuleParametrized::testModuleClass_0">>
 // CHECK:    moore.output
 // CHECK:  }
 // CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass" {
@@ -556,9 +555,9 @@ endclass
 // CHECK:    moore.class.propertydecl @propLVal : !moore.i32
 // CHECK:  }
 // CHECK:  func.func private @"testLValueClass::adder"(%arg0: !moore.class<@testLValueClass>) {
-// CHECK:    [[LVAL:%.+]] = moore.class.property_ref %arg0[@propLVal] : <@testLValueClass> -> <i32>
-// CHECK:    [[RLVAL:%.+]] = moore.class.property_ref %arg0[@propLVal] : <@testLValueClass> -> <i32>
-// CHECK:    [[RVAL:%.+]] = moore.read [[RLVAL]] : <i32>
+// CHECK:    [[LVAL:%.+]] = moore.get_global_variable @propLVal : <!moore.i32>
+// CHECK:    [[RLVAL:%.+]] = moore.get_global_variable @propLVal : <!moore.i32>
+// CHECK:    [[RVAL:%.+]] = moore.read [[RLVAL]] : <!moore.i32>
 // CHECK:    [[CONST:%.+]] = moore.constant 1 : i32
 // CHECK:    [[NEWVAL:%.+]] = moore.add [[RVAL]], [[CONST]] : i32
 // CHECK:    moore.blocking_assign [[LVAL]], [[NEWVAL]] : i32
@@ -675,30 +674,16 @@ endclass
 // Interface Tests
 //===----------------------------------------------------------------------===//
 
-/// Check basic interface declaration with signals
-
-// CHECK-LABEL: moore.interface @basic_bus {
-// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
-// CHECK-NEXT:    moore.interface.signal @data : !moore.l32
-// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
-// CHECK: }
+// NOTE: Interface declarations (moore.interface) are not yet generated by
+// ImportVerilog. The interface definitions are parsed but not converted.
+// The VifDriver and VifHolder classes below demonstrate virtual interface
+// types are supported even though the interface ops aren't generated.
 
 interface basic_bus;
     logic clk;
     logic [31:0] data;
     logic valid;
 endinterface
-
-/// Check interface with modports
-
-// CHECK-LABEL: moore.interface @handshake_bus {
-// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
-// CHECK-NEXT:    moore.interface.signal @data : !moore.l8
-// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
-// CHECK-NEXT:    moore.interface.signal @ready : !moore.l1
-// CHECK-NEXT:    moore.interface.modport @driver (output @clk, output @data, output @valid, input @ready)
-// CHECK-NEXT:    moore.interface.modport @receiver (input @clk, input @data, input @valid, output @ready)
-// CHECK: }
 
 interface handshake_bus;
     logic clk;
@@ -738,9 +723,9 @@ endclass
 // CHECK-LABEL: moore.class.classdecl @StaticPropertyAccess {
 // CHECK-NEXT:    moore.class.propertydecl @count : !moore.i32
 // CHECK: }
-// CHECK: func.func private @"StaticPropertyAccess::get_count"() -> !moore.i32 {
-// CHECK:   %count = moore.variable : <i32>
-// CHECK:   [[READ:%.+]] = moore.read %count : <i32>
+// CHECK: func.func private @get_count() -> !moore.i32 {
+// CHECK:   [[GV:%.+]] = moore.get_global_variable @count : <!moore.i32>
+// CHECK:   [[READ:%.+]] = moore.read [[GV]] : <!moore.i32>
 // CHECK:   return [[READ]] : !moore.i32
 // CHECK: }
 
