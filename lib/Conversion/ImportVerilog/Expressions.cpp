@@ -261,6 +261,30 @@ struct ExprVisitor {
     if (isDynamicType) {
       // Dynamic types (queues) use the index directly - always use dynamic
       // extract since we can't statically verify bounds.
+      //
+      // For queues, we need to set the queue target value so that the `$`
+      // (UnboundedLiteral) expression can be evaluated as `size - 1`.
+      Value queueValue;
+      if (isa<moore::QueueType>(derefType)) {
+        // For queues, get an rvalue of the queue to pass to ArraySizeOp.
+        // If we're in lvalue context, we need to read the queue ref.
+        if (isLvalue) {
+          queueValue = moore::ReadOp::create(builder, loc,
+                                             cast<moore::RefType>(value.getType())
+                                                 .getNestedType(),
+                                             value);
+        } else {
+          queueValue = value;
+        }
+      }
+
+      // Set the queue target for evaluating `$` in the selector expression.
+      auto prevQueueTarget = context.queueTargetValue;
+      if (queueValue)
+        context.queueTargetValue = queueValue;
+      auto restoreQueueTarget =
+          llvm::make_scope_exit([&] { context.queueTargetValue = prevQueueTarget; });
+
       auto lowBit = context.convertRvalueExpression(expr.selector());
       if (!lowBit)
         return {};
@@ -1865,6 +1889,28 @@ struct RvalueExprVisitor : public ExprVisitor {
                                            /*initial=*/Value{});
     // Read the variable to get an rvalue
     return moore::ReadOp::create(builder, loc, varOp);
+  }
+
+  /// Handle unbounded literals (`$`).
+  /// In SystemVerilog, `$` represents the last index of a queue/array.
+  /// For example, `q[$]` accesses the last element, which is `q[q.size()-1]`.
+  Value visit(const slang::ast::UnboundedLiteral &expr) {
+    // The `$` literal is only valid in certain contexts, specifically when
+    // indexing into a queue or dynamic array. The queue target should have
+    // been set by the parent ElementSelectExpression.
+    if (!context.queueTargetValue) {
+      mlir::emitError(loc) << "unbounded literal ($) used outside of queue "
+                           << "or array indexing context";
+      return {};
+    }
+
+    // Get the size of the queue/array.
+    auto sizeValue =
+        moore::ArraySizeOp::create(builder, loc, context.queueTargetValue);
+
+    // The `$` represents `size - 1`, i.e., the last valid index.
+    auto one = moore::ConstantOp::create(builder, loc, sizeValue.getType(), 1);
+    return moore::SubOp::create(builder, loc, sizeValue, one);
   }
 
   /// Helper function to convert RValues at creation of a new Struct, Array or
