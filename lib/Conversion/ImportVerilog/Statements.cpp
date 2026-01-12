@@ -35,12 +35,95 @@ struct StmtVisitor {
     return *block.release();
   }
 
+  /// Handle dynamic foreach loops for associative arrays.
+  /// Uses first/next pattern to iterate over keys.
+  LogicalResult recursiveForeachDynamic(
+      const slang::ast::ForeachLoopStatement &stmt, uint32_t level) {
+    const auto &loopDim = stmt.loopDims[level];
+    const auto &iter = loopDim.loopVar;
+
+    // Get the array reference as an lvalue
+    auto arrayRef = context.convertLvalueExpression(stmt.arrayRef);
+    if (!arrayRef)
+      return failure();
+
+    auto iterType = context.convertType(*iter->getDeclaredType());
+    if (!iterType)
+      return failure();
+
+    // Create a variable to hold the iterator key
+    Value keyVar = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(cast<moore::UnpackedType>(iterType)),
+        builder.getStringAttr(iter->name), Value{});
+    context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                         iter, keyVar);
+
+    auto &exitBlock = createBlock();
+    auto &bodyBlock = createBlock();
+    auto &checkBlock = createBlock();
+
+    // Push the blocks onto the loop stack such that we can continue and break.
+    context.loopStack.push_back({&checkBlock, &exitBlock});
+    auto done = llvm::make_scope_exit([&] { context.loopStack.pop_back(); });
+
+    // Call first() to initialize the iterator
+    Value firstFound =
+        moore::AssocArrayFirstOp::create(builder, loc, arrayRef, keyVar);
+    firstFound = moore::ToBuiltinBoolOp::create(builder, loc, firstFound);
+    cf::CondBranchOp::create(builder, loc, firstFound, &bodyBlock, &exitBlock);
+
+    // Body block: execute body, then call next() and branch back to check
+    builder.setInsertionPointToEnd(&bodyBlock);
+
+    // find next dimension in this foreach statement
+    bool hasNext = false;
+    for (uint32_t nextLevel = level + 1; nextLevel < stmt.loopDims.size();
+         nextLevel++) {
+      if (stmt.loopDims[nextLevel].loopVar) {
+        if (!stmt.loopDims[nextLevel].range.has_value()) {
+          if (failed(recursiveForeachDynamic(stmt, nextLevel)))
+            return failure();
+        } else {
+          if (failed(recursiveForeach(stmt, nextLevel)))
+            return failure();
+        }
+        hasNext = true;
+        break;
+      }
+    }
+
+    if (!hasNext) {
+      if (failed(context.convertStatement(stmt.body)))
+        return failure();
+    }
+
+    if (!isTerminated())
+      cf::BranchOp::create(builder, loc, &checkBlock);
+
+    // Check block: call next() and branch to body or exit
+    builder.setInsertionPointToEnd(&checkBlock);
+    Value nextFound =
+        moore::AssocArrayNextOp::create(builder, loc, arrayRef, keyVar);
+    nextFound = moore::ToBuiltinBoolOp::create(builder, loc, nextFound);
+    cf::CondBranchOp::create(builder, loc, nextFound, &bodyBlock, &exitBlock);
+
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
   LogicalResult recursiveForeach(const slang::ast::ForeachLoopStatement &stmt,
                                  uint32_t level) {
     // find current dimension we are operate.
     const auto &loopDim = stmt.loopDims[level];
-    if (!loopDim.range.has_value())
-      return mlir::emitError(loc) << "dynamic loop variable is unsupported";
+    if (!loopDim.range.has_value()) {
+      // Dynamic loop variable - use first/next pattern for associative arrays
+      return recursiveForeachDynamic(stmt, level);
+    }
     auto &exitBlock = createBlock();
     auto &stepBlock = createBlock();
     auto &bodyBlock = createBlock();
