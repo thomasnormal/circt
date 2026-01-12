@@ -2261,6 +2261,209 @@ def FinishMessageBIOp : Builtin<"finish_message"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Process Control: Fork/Join Operations
+//===----------------------------------------------------------------------===//
+
+// Join type enum for fork operations
+def JoinAll : I32EnumAttrCase<"JoinAll", 0, "join">;
+def JoinAny : I32EnumAttrCase<"JoinAny", 1, "join_any">;
+def JoinNone : I32EnumAttrCase<"JoinNone", 2, "join_none">;
+
+def JoinTypeAttr : I32EnumAttr<"JoinType", "Fork join type",
+                               [JoinAll, JoinAny, JoinNone]> {
+  let cppNamespace = "circt::moore";
+}
+
+def ForkOp : MooreOp<"fork", [
+  RecursiveMemoryEffects,
+  SingleBlockImplicitTerminator<"ForkTerminatorOp">,
+]> {
+  let summary = "Spawn concurrent processes (SystemVerilog fork)";
+  let description = [{
+    The `moore.fork` operation spawns multiple concurrent processes that execute
+    in parallel. This corresponds to the SystemVerilog `fork...join`,
+    `fork...join_any`, and `fork...join_none` constructs.
+
+    Each region within the fork represents a separate concurrent process.
+    The `join_type` attribute specifies the synchronization behavior:
+    - `join`: Wait for all spawned processes to complete (default)
+    - `join_any`: Wait for any one process to complete
+    - `join_none`: Don't wait, continue immediately
+
+    Example:
+    ```
+    // fork...join (wait for all)
+    moore.fork join {
+      // Process 1
+      moore.wait_delay %d1
+    }, {
+      // Process 2
+      moore.wait_delay %d2
+    }
+
+    // fork...join_any (wait for first)
+    moore.fork join_any {
+      // Process 1
+    }, {
+      // Process 2
+    }
+
+    // fork...join_none (continue immediately)
+    moore.fork join_none {
+      // Background process
+    }
+    ```
+
+    See IEEE 1800-2017 § 9.3.2 "Parallel blocks".
+  }];
+  let arguments = (ins
+    JoinTypeAttr:$joinType,
+    OptionalAttr<StrAttr>:$name
+  );
+  let results = (outs);
+  let regions = (region VariadicRegion<AnyRegion>:$branches);
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def ForkTerminatorOp : MooreOp<"fork.terminator", [
+  Pure,
+  Terminator,
+  ParentOneOf<["ForkOp"]>,
+]> {
+  let summary = "Terminator for fork branch regions";
+  let description = [{
+    `moore.fork.terminator` marks the end of a branch within a `moore.fork`
+    operation. This is an implicit terminator that is automatically inserted.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def WaitForkOp : MooreOp<"wait_fork"> {
+  let summary = "Wait for all child processes to complete";
+  let description = [{
+    The `moore.wait_fork` operation waits for all processes spawned by
+    `fork...join_none` in the current scope to complete. This is equivalent
+    to the SystemVerilog `wait fork` statement.
+
+    Unlike an explicit join which operates on a specific fork, `wait_fork`
+    waits for ALL outstanding child processes.
+
+    Example:
+    ```
+    moore.fork join_none { ... }
+    moore.fork join_none { ... }
+    moore.fork join_none { ... }
+
+    // Wait for all three forks to complete
+    moore.wait_fork
+    ```
+
+    See IEEE 1800-2017 § 9.6.1 "Wait fork statement".
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def DisableForkOp : MooreOp<"disable_fork"> {
+  let summary = "Disable all child processes";
+  let description = [{
+    The `moore.disable_fork` operation terminates all processes spawned by
+    `fork...join_none` in the current scope. This corresponds to the
+    SystemVerilog `disable fork` statement.
+
+    All child processes (and their descendants) are immediately terminated.
+
+    Example:
+    ```
+    moore.fork join_none { ... }
+    moore.fork join_none { ... }
+
+    // Terminate all child processes
+    moore.disable_fork
+    ```
+
+    See IEEE 1800-2017 § 9.6.2 "Disable fork statement".
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Named Blocks and Disable
+//===----------------------------------------------------------------------===//
+
+def NamedBlockOp : MooreOp<"named_block", [
+  RecursiveMemoryEffects,
+  SingleBlockImplicitTerminator<"NamedBlockTerminatorOp">,
+]> {
+  let summary = "A named block that can be disabled";
+  let description = [{
+    The `moore.named_block` operation defines a named scope that can be targeted
+    by `moore.disable`. This corresponds to named `begin...end` blocks in
+    SystemVerilog.
+
+    Named blocks can be nested, and disabling an outer block also terminates
+    all nested blocks.
+
+    Example:
+    ```
+    moore.named_block "search_loop" {
+      // ... loop body ...
+      scf.if %found {
+        moore.disable "search_loop"
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 § 9.3.4 "Block names".
+  }];
+  let arguments = (ins StrAttr:$blockName);
+  let regions = (region MinSizedRegion<1>:$body);
+  let hasCustomAssemblyFormat = 1;
+}
+
+def NamedBlockTerminatorOp : MooreOp<"named_block.terminator", [
+  Pure,
+  Terminator,
+  ParentOneOf<["NamedBlockOp"]>,
+]> {
+  let summary = "Terminator for named block regions";
+  let description = [{
+    `moore.named_block.terminator` marks the end of a `moore.named_block`.
+    This is an implicit terminator.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def DisableOp : MooreOp<"disable"> {
+  let summary = "Disable a named block or task";
+  let description = [{
+    The `moore.disable` operation terminates execution of a named block or task.
+    This corresponds to the SystemVerilog `disable` statement.
+
+    When a block/task is disabled:
+    - Execution jumps to the statement following the disabled block
+    - All nested blocks within the disabled block are also terminated
+    - Variables retain their values at the time of disable
+
+    The target must be the name of a `moore.named_block` operation.
+
+    Example:
+    ```
+    moore.named_block "outer_loop" {
+      moore.named_block "inner_loop" {
+        // ... some condition ...
+        moore.disable "outer_loop"  // Exit both loops
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 § 9.6.3 "Disable".
+  }];
+  let arguments = (ins StrAttr:$target);
+  let assemblyFormat = "$target attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
 // Severity and Display Builtins
 //===----------------------------------------------------------------------===//
 
