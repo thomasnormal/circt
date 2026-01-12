@@ -3009,6 +3009,15 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return moore::BitstoshortrealBIOp::create(builder, loc,
                                                             value);
                 })
+          // Bit vector system functions (IEEE 1800-2017 Section 20.9)
+          .Case("$isunknown",
+                [&]() -> FailureOr<Value> {
+                  value = convertToSimpleBitVector(value);
+                  if (!value)
+                    return failure();
+                  return (Value)moore::IsUnknownBIOp::create(builder, loc,
+                                                             value);
+                })
           .Case("len",
                 [&]() -> Value {
                   if (isa<moore::StringType>(value.getType()))
