@@ -41,23 +41,26 @@ module AssocArrayExistsTest;
     end
 endmodule
 
-// TODO: Enable when delete(key) is supported
-// /// Test associative array delete() method with key
-// /// delete(key) removes the entry with the specified key
-// // CHECK-LABEL: moore.module @AssocArrayDeleteTest() {
-// module AssocArrayDeleteTest;
-//     int aa[int];
-//
-//     initial begin
-//         aa[10] = 100;
-//         aa[20] = 200;
-//         aa[30] = 300;
-//
-//         // Delete specific key
-//         // Note: delete with key may emit a warning as it's not fully supported
-//         aa.delete(20);
-//     end
-// endmodule
+/// Test associative array delete() method with key
+/// delete(key) removes the entry with the specified key
+// CHECK-LABEL: moore.module @AssocArrayDeleteTest() {
+module AssocArrayDeleteTest;
+    int aa[int];
+
+    initial begin
+        aa[10] = 100;
+        aa[20] = 200;
+        aa[30] = 300;
+
+        // Delete specific key
+        // CHECK: moore.assoc.delete_key %aa, {{%.+}} : <!moore.assoc_array<i32, i32>>, i32
+        aa.delete(20);
+
+        // Delete all entries
+        // CHECK: moore.assoc.delete %aa : <!moore.assoc_array<i32, i32>>
+        aa.delete();
+    end
+endmodule
 
 // TODO: Enable when first() is implemented as a subroutine
 // /// Test associative array first() method
