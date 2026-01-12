@@ -64,4 +64,6 @@ add_circt_library(CIRCTAnalysisTestPasses
   MLIRPass
 )
 
-add_subdirectory(Linting)
+if(CIRCT_SLANG_FRONTEND_ENABLED)
+  add_subdirectory(Linting)
+endif()
