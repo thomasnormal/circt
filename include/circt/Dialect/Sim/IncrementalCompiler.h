@@ -49,6 +49,10 @@ struct ContentHash {
 
   bool operator!=(const ContentHash &other) const { return !(*this == other); }
 
+  bool operator<(const ContentHash &other) const {
+    return high < other.high || (high == other.high && low < other.low);
+  }
+
   bool isZero() const { return high == 0 && low == 0; }
 
   /// Create a hash from a string using xxHash.

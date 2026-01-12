@@ -16,9 +16,11 @@
 #define CIRCT_DIALECT_SIM_UVMFACTORY_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <memory>
 #include <regex>
@@ -160,11 +162,12 @@ public:
                     std::function<void(void *)> destructor = nullptr);
 
   /// Register a type with type_info for runtime type checking.
+  /// Note: RTTI is disabled in this build, so typeId will be nullptr.
   template <typename T>
   void registerType(llvm::StringRef typeName) {
     registerType(
         typeName, []() -> void * { return new T(); },
-        [](void *p) { delete static_cast<T *>(p); }, &typeid(T));
+        [](void *p) { delete static_cast<T *>(p); }, nullptr);
   }
 
   /// Register a type with type_info.
