@@ -1226,4 +1226,69 @@ TEST_F(CoverageDatabaseSerializationTest, AllCoverageTypesRoundTrip) {
   EXPECT_EQ(jsonResult->getTotalPointCount(), 7u);
 }
 
+//===----------------------------------------------------------------------===//
+// SaveExclusions Test
+//===----------------------------------------------------------------------===//
+
+TEST_F(CoverageDatabaseSerializationTest, SaveExclusionsRoundTrip) {
+  CoverageDatabase db;
+
+  // Add some exclusions
+  CoverageExclusion exc1;
+  exc1.pointName = "module.v:10";
+  exc1.reason = "Known unreachable code";
+  exc1.author = "test_user";
+  exc1.date = "2024-01-15";
+  exc1.ticketId = "BUG-123";
+  db.addExclusion(exc1);
+
+  CoverageExclusion exc2;
+  exc2.pointName = "module.v:20";
+  exc2.reason = "Design constraint";
+  exc2.author = "another_user";
+  exc2.date = "2024-01-16";
+  db.addExclusion(exc2);
+
+  // Save exclusions to file
+  std::string exclusionsPath = tempDir + "/exclusions.json";
+  auto saveErr = db.saveExclusions(exclusionsPath);
+  ASSERT_FALSE(static_cast<bool>(saveErr));
+
+  // Load exclusions into a new database
+  CoverageDatabase db2;
+  auto loadErr = db2.loadExclusions(exclusionsPath);
+  ASSERT_FALSE(static_cast<bool>(loadErr));
+
+  // Verify exclusions were round-tripped
+  ASSERT_EQ(db2.getExclusions().size(), 2u);
+
+  const auto *loaded1 = db2.getExclusion("module.v:10");
+  ASSERT_NE(loaded1, nullptr);
+  EXPECT_EQ(loaded1->reason, "Known unreachable code");
+  EXPECT_EQ(loaded1->author, "test_user");
+  EXPECT_EQ(loaded1->date, "2024-01-15");
+  EXPECT_EQ(loaded1->ticketId, "BUG-123");
+
+  const auto *loaded2 = db2.getExclusion("module.v:20");
+  ASSERT_NE(loaded2, nullptr);
+  EXPECT_EQ(loaded2->reason, "Design constraint");
+  EXPECT_EQ(loaded2->author, "another_user");
+}
+
+TEST_F(CoverageDatabaseSerializationTest, SaveExclusionsEmptyDatabase) {
+  CoverageDatabase db;
+
+  // Save empty exclusions
+  std::string exclusionsPath = tempDir + "/empty_exclusions.json";
+  auto saveErr = db.saveExclusions(exclusionsPath);
+  ASSERT_FALSE(static_cast<bool>(saveErr));
+
+  // Load into new database
+  CoverageDatabase db2;
+  auto loadErr = db2.loadExclusions(exclusionsPath);
+  ASSERT_FALSE(static_cast<bool>(loadErr));
+
+  EXPECT_EQ(db2.getExclusions().size(), 0u);
+}
+
 } // namespace
