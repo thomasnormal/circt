@@ -904,6 +904,47 @@ struct ClassUpcastOpConversion : public OpConversionPattern<ClassUpcastOp> {
   }
 };
 
+/// moore.class.dyn_cast lowering: runtime type check and downcast.
+/// For now, this optimistically assumes the cast succeeds (returns true).
+/// A full implementation would need runtime type information (RTTI).
+struct ClassDynCastOpConversion : public OpConversionPattern<ClassDynCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ClassDynCastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Convert the result type (should be an LLVM pointer)
+    Type dstTy = getTypeConverter()->convertType(op.getResult().getType());
+    Type srcTy = adaptor.getSource().getType();
+
+    if (!dstTy)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // For opaque pointer mode, the cast is a no-op at the pointer level.
+    // The actual type check happens at runtime. For now, we optimistically
+    // assume success (true) since we don't have RTTI yet.
+    // A full implementation would:
+    // 1. Load the vtable pointer from the object
+    // 2. Compare against the expected vtable for the target type
+    // 3. Return the result of that comparison
+
+    if (dstTy == srcTy && isa<LLVM::LLVMPointerType>(srcTy)) {
+      // Create a constant true for the success flag
+      Value successFlag =
+          arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
+
+      // The casted pointer is the same as the input (pointer bit-cast)
+      rewriter.replaceOp(op, {adaptor.getSource(), successFlag});
+      return success();
+    }
+
+    return rewriter.notifyMatchFailure(
+        op, "DynCast applied to non-opaque pointers!");
+  }
+};
+
 /// moore.class.new lowering: heap-allocate storage for the class object.
 struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
   ClassNewOpConversion(TypeConverter &tc, MLIRContext *ctx,
@@ -2792,6 +2833,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // clang-format off
   patterns.add<
     ClassUpcastOpConversion,
+    ClassDynCastOpConversion,
     ClassNullOpConversion,
     ClassHandleCmpOpConversion,
     // Patterns of declaration operations.

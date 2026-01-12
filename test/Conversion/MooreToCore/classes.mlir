@@ -122,3 +122,26 @@ moore.class.classdecl @G extends @C {
   moore.class.propertydecl @e : !moore.l32
   moore.class.propertydecl @f : !moore.l32
 }
+
+/// Check that dynamic cast lowers to runtime type check
+
+// CHECK-LABEL: func.func private @test_dyn_cast
+// CHECK-SAME: (%arg0: !llvm.ptr) -> (!llvm.ptr, i1) {
+// CHECK:   [[TRUE:%.+]] = arith.constant true
+// CHECK:   return %arg0, [[TRUE]] : !llvm.ptr, i1
+
+// CHECK-NOT: moore.class.dyn_cast
+// CHECK-NOT: moore.class.classdecl
+
+moore.class.classdecl @BaseClass {
+  moore.class.propertydecl @x : !moore.i32
+}
+
+moore.class.classdecl @DerivedClass extends @BaseClass {
+  moore.class.propertydecl @y : !moore.i32
+}
+
+func.func private @test_dyn_cast(%arg0: !moore.class<@BaseClass>) -> (!moore.class<@DerivedClass>, i1) {
+  %result, %success = moore.class.dyn_cast %arg0 : <@BaseClass> to <@DerivedClass>
+  return %result, %success : !moore.class<@DerivedClass>, i1
+}

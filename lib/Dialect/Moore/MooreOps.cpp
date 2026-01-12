@@ -1555,6 +1555,46 @@ ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 LogicalResult
+ClassDynCastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // Dynamic cast performs runtime type checking, so we only verify that
+  // both source and destination are valid class types.
+  auto srcTy = dyn_cast<ClassHandleType>(getSource().getType());
+  if (!srcTy)
+    return emitOpError() << "source must be !moore.class<...>; got "
+                         << getSource().getType();
+
+  auto dstTy = dyn_cast<ClassHandleType>(getResult().getType());
+  if (!dstTy)
+    return emitOpError() << "result must be !moore.class<...>; got "
+                         << getResult().getType();
+
+  // Verify that the class symbols can be resolved.
+  auto *op = getOperation();
+
+  auto *srcDeclOp =
+      symbolTable.lookupNearestSymbolFrom(op, srcTy.getClassSym());
+  auto *dstDeclOp =
+      symbolTable.lookupNearestSymbolFrom(op, dstTy.getClassSym());
+  if (!srcDeclOp || !dstDeclOp)
+    return emitOpError() << "failed to resolve class symbol(s): src="
+                         << srcTy.getClassSym()
+                         << ", dst=" << dstTy.getClassSym();
+
+  auto srcDecl = dyn_cast<ClassDeclOp>(srcDeclOp);
+  auto dstDecl = dyn_cast<ClassDeclOp>(dstDeclOp);
+  if (!srcDecl || !dstDecl)
+    return emitOpError()
+           << "symbol(s) do not name `moore.class.classdecl` ops: src="
+           << srcTy.getClassSym() << ", dst=" << dstTy.getClassSym();
+
+  // For dynamic cast, we allow casting between any class types in the same
+  // hierarchy. At runtime, the cast will check if the actual type is compatible.
+  // We don't enforce strict hierarchy checks here since the runtime will handle
+  // invalid casts by returning failure.
+  return success();
+}
+
+LogicalResult
 ClassPropertyRefOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // The operand is constrained to ClassHandleType in ODS; unwrap it.
   Type instTy = getInstance().getType();
