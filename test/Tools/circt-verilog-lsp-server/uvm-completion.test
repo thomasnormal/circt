@@ -1,0 +1,57 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test UVM-specific completion snippets for developer productivity.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///uvm_test.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"// UVM testbench file\n"
+}}}
+// -----
+// Request completions with "uvm_" prefix
+{"jsonrpc":"2.0","id":1,"method":"textDocument/completion","params":{
+  "textDocument":{"uri":"test:///uvm_test.sv"},
+  "position":{"line":1,"character":0}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "isIncomplete": false,
+// CHECK-NEXT:    "items": [
+// CHECK:           {
+// CHECK:             "detail": "UVM component class template",
+// CHECK:             "insertTextFormat": 2,
+// CHECK:             "kind": 15,
+// CHECK:             "label": "uvm_component (snippet)"
+// CHECK:           }
+// CHECK:           {
+// CHECK:             "detail": "UVM object class template",
+// CHECK:             "label": "uvm_object (snippet)"
+// CHECK:           }
+// CHECK:           {
+// CHECK:             "detail": "UVM sequence item class template",
+// CHECK:             "label": "uvm_sequence_item (snippet)"
+// CHECK:           }
+// CHECK:           {
+// CHECK:             "detail": "UVM sequence class template",
+// CHECK:             "label": "uvm_sequence (snippet)"
+// CHECK:           }
+// CHECK:           {
+// CHECK:             "detail": "UVM driver class template",
+// CHECK:             "label": "uvm_driver (snippet)"
+// CHECK:           }
+// CHECK:           {
+// CHECK:             "detail": "UVM monitor class template",
+// CHECK:             "label": "uvm_monitor (snippet)"
+// CHECK:           }
+// CHECK:           {
+// CHECK:             "detail": "UVM test class template",
+// CHECK:             "label": "uvm_test (snippet)"
+// CHECK:           }
+// -----
+{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
