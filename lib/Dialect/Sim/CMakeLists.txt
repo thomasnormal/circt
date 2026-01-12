@@ -10,9 +10,19 @@
 ##===----------------------------------------------------------------------===//
 
 add_circt_dialect_library(CIRCTSim
+  DesignPartitioner.cpp
+  EventQueue.cpp
+  IncrementalCompiler.cpp
+  MemoryOptimization.cpp
+  ParallelScheduler.cpp
+  PerformanceProfiler.cpp
+  ProcessScheduler.cpp
   SimDialect.cpp
   SimOps.cpp
   SimTypes.cpp
+  SimulationControl.cpp
+  UVMFactory.cpp
+  UVMPhaseManager.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${CIRCT_MAIN_INCLUDE_DIR}/circt/Dialect/Sim

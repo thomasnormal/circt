@@ -524,6 +524,444 @@ OpFoldResult StringLengthOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
+// Event-Driven Simulation Operations (SimIR)
+//===----------------------------------------------------------------------===//
+
+LogicalResult SimSuspendOp::verify() {
+  // Verify that we have either observed values or a delay (or both)
+  if (getObserved().empty() && !getDelayFemtoseconds().has_value()) {
+    // Allow region-only suspends for scheduling region changes
+    if (!getRegion().has_value())
+      return emitOpError(
+          "must specify either observed values, a delay, or a region");
+  }
+
+  // Verify region attribute if present
+  if (auto region = getRegion()) {
+    StringRef regionStr = region.value();
+    if (regionStr != "active" && regionStr != "inactive" && regionStr != "nba" &&
+        regionStr != "reactive" && regionStr != "preponed" &&
+        regionStr != "observed" && regionStr != "postponed") {
+      return emitOpError("invalid scheduling region '")
+             << regionStr
+             << "', expected one of: active, inactive, nba, reactive, "
+                "preponed, observed, postponed";
+    }
+  }
+
+  return success();
+}
+
+LogicalResult SimYieldOp::verify() {
+  // Verify that the parent is a SimCombProcessOp
+  auto parent = (*this)->getParentOp();
+  if (!isa<SimCombProcessOp>(parent)) {
+    return emitOpError("must be directly nested within a 'sim.comb_process'");
+  }
+
+  // Verify result types match the parent process
+  auto combProcess = cast<SimCombProcessOp>(parent);
+  if (getNumOperands() != combProcess.getNumResults()) {
+    return emitOpError("has ")
+           << getNumOperands() << " operands but parent process expects "
+           << combProcess.getNumResults() << " results";
+  }
+
+  for (auto [idx, pair] :
+       llvm::enumerate(llvm::zip(getOperandTypes(), combProcess.getResultTypes()))) {
+    auto [yieldType, processType] = pair;
+    if (yieldType != processType) {
+      return emitOpError("operand type mismatch at index ")
+             << idx << ": expected " << processType << " but got " << yieldType;
+    }
+  }
+
+  return success();
+}
+
+LogicalResult SimDriveOp::verify() {
+  // Verify mode attribute
+  StringRef modeStr = getMode();
+  if (modeStr != "blocking" && modeStr != "nonblocking" &&
+      modeStr != "continuous") {
+    return emitOpError("invalid drive mode '")
+           << modeStr
+           << "', expected one of: blocking, nonblocking, continuous";
+  }
+
+  // Verify strength attribute if present
+  if (auto strength = getStrength()) {
+    StringRef strengthStr = strength.value();
+    if (strengthStr != "strong" && strengthStr != "pull" &&
+        strengthStr != "weak" && strengthStr != "highz") {
+      return emitOpError("invalid signal strength '")
+             << strengthStr << "', expected one of: strong, pull, weak, highz";
+    }
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Sensitivity List and Edge Detection Operations
+//===----------------------------------------------------------------------===//
+
+/// Helper function to verify edge type string.
+static LogicalResult verifyEdgeType(Operation *op, StringRef edge) {
+  if (edge != "posedge" && edge != "negedge" && edge != "anyedge" &&
+      edge != "level") {
+    return op->emitOpError("invalid edge type '")
+           << edge << "', expected one of: posedge, negedge, anyedge, level";
+  }
+  return success();
+}
+
+LogicalResult SimSensitivityListOp::verify() {
+  // Verify that the number of edges matches the number of signals
+  auto edges = getEdges();
+  auto signals = getSignals();
+
+  if (edges.size() != signals.size()) {
+    return emitOpError("number of edge types (")
+           << edges.size() << ") must match number of signals ("
+           << signals.size() << ")";
+  }
+
+  // Verify each edge type
+  for (auto edgeAttr : edges) {
+    auto edgeStr = dyn_cast<StringAttr>(edgeAttr);
+    if (!edgeStr)
+      return emitOpError("edge type must be a string attribute");
+    if (failed(verifyEdgeType(*this, edgeStr.getValue())))
+      return failure();
+  }
+
+  return success();
+}
+
+void SimSensitivityListOp::print(OpAsmPrinter &p) {
+  auto edges = getEdges();
+  auto signals = getSignals();
+
+  p << " ";
+  llvm::interleaveComma(llvm::zip(edges, signals), p, [&](auto pair) {
+    auto [edgeAttr, signal] = pair;
+    auto edge = cast<StringAttr>(edgeAttr).getValue();
+    p << edge << " " << signal;
+  });
+
+  p << " : ";
+  llvm::interleaveComma(signals.getTypes(), p);
+  p.printOptionalAttrDict((*this)->getAttrs(), {"edges"});
+}
+
+ParseResult SimSensitivityListOp::parse(OpAsmParser &parser,
+                                        OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> signals;
+  SmallVector<Type, 4> signalTypes;
+  SmallVector<Attribute, 4> edges;
+
+  // Parse edge-signal pairs
+  do {
+    StringRef edge;
+    OpAsmParser::UnresolvedOperand signal;
+
+    if (parser.parseKeyword(&edge) || parser.parseOperand(signal))
+      return failure();
+
+    edges.push_back(StringAttr::get(parser.getContext(), edge));
+    signals.push_back(signal);
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // Parse types
+  if (parser.parseColon())
+    return failure();
+
+  if (parser.parseTypeList(signalTypes))
+    return failure();
+
+  if (signals.size() != signalTypes.size())
+    return parser.emitError(parser.getCurrentLocation(),
+                            "number of types doesn't match number of signals");
+
+  // Resolve operands
+  if (parser.resolveOperands(signals, signalTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+
+  // Add edges attribute
+  result.addAttribute("edges",
+                      ArrayAttr::get(parser.getContext(), edges));
+
+  // Add result type
+  result.addTypes(IntegerType::get(parser.getContext(), 1));
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+LogicalResult SimEdgeDetectOp::verify() {
+  // Verify edge type
+  if (failed(verifyEdgeType(*this, getEdge())))
+    return failure();
+
+  // Verify that current and previous have the same type
+  if (getCurrent().getType() != getPrevious().getType()) {
+    return emitOpError("current and previous must have the same type, got ")
+           << getCurrent().getType() << " and " << getPrevious().getType();
+  }
+
+  return success();
+}
+
+OpFoldResult SimEdgeDetectOp::fold(FoldAdaptor adaptor) {
+  auto current = adaptor.getCurrent();
+  auto previous = adaptor.getPrevious();
+
+  // Can only fold if both are constants
+  auto currInt = dyn_cast_or_null<IntegerAttr>(current);
+  auto prevInt = dyn_cast_or_null<IntegerAttr>(previous);
+  if (!currInt || !prevInt)
+    return {};
+
+  StringRef edge = getEdge();
+  bool currBit = currInt.getValue().getLoBits(1) != 0;
+  bool prevBit = prevInt.getValue().getLoBits(1) != 0;
+
+  bool detected = false;
+  if (edge == "posedge") {
+    detected = !prevBit && currBit;
+  } else if (edge == "negedge") {
+    detected = prevBit && !currBit;
+  } else if (edge == "anyedge" || edge == "level") {
+    detected = currInt.getValue() != prevInt.getValue();
+  }
+
+  return IntegerAttr::get(IntegerType::get(getContext(), 1), detected ? 1 : 0);
+}
+
+LogicalResult SimTriggeredProcessOp::verify() {
+  // Verify that the number of edges matches the number of signals
+  auto edges = getSensitivityEdges();
+  auto signals = getSensitivitySignals();
+
+  if (edges.size() != signals.size()) {
+    return emitOpError("number of edge types (")
+           << edges.size() << ") must match number of sensitivity signals ("
+           << signals.size() << ")";
+  }
+
+  // Verify each edge type
+  for (auto edgeAttr : edges) {
+    auto edgeStr = dyn_cast<StringAttr>(edgeAttr);
+    if (!edgeStr)
+      return emitOpError("edge type must be a string attribute");
+    if (failed(verifyEdgeType(*this, edgeStr.getValue())))
+      return failure();
+  }
+
+  return success();
+}
+
+void SimTriggeredProcessOp::print(OpAsmPrinter &p) {
+  auto edges = getSensitivityEdges();
+  auto signals = getSensitivitySignals();
+
+  p << " @(";
+  llvm::interleaveComma(llvm::zip(edges, signals), p, [&](auto pair) {
+    auto [edgeAttr, signal] = pair;
+    auto edge = cast<StringAttr>(edgeAttr).getValue();
+    p << edge << " " << signal;
+  });
+  p << ")";
+
+  if (!getResults().empty()) {
+    p << " -> ";
+    llvm::interleaveComma(getResultTypes(), p);
+  }
+
+  p.printOptionalAttrDictWithKeyword(
+      (*this)->getAttrs(), {"sensitivityEdges"});
+  p << " ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/true);
+}
+
+ParseResult SimTriggeredProcessOp::parse(OpAsmParser &parser,
+                                         OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> signals;
+  SmallVector<Type, 4> signalTypes;
+  SmallVector<Attribute, 4> edges;
+
+  // Parse @(...) sensitivity list
+  if (parser.parseLParen())
+    return failure();
+
+  // Check for empty sensitivity list
+  if (succeeded(parser.parseOptionalRParen())) {
+    // Empty sensitivity list
+  } else {
+    // Parse edge-signal pairs
+    do {
+      StringRef edge;
+      OpAsmParser::UnresolvedOperand signal;
+
+      if (parser.parseKeyword(&edge) || parser.parseOperand(signal))
+        return failure();
+
+      edges.push_back(StringAttr::get(parser.getContext(), edge));
+      signals.push_back(signal);
+    } while (succeeded(parser.parseOptionalComma()));
+
+    if (parser.parseRParen())
+      return failure();
+  }
+
+  // Parse optional result types
+  SmallVector<Type, 4> resultTypes;
+  if (succeeded(parser.parseOptionalArrow())) {
+    if (parser.parseTypeList(resultTypes))
+      return failure();
+  }
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  // Parse the body region
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}))
+    return failure();
+
+  // Infer signal types from the region's operands if not specified
+  // For now, we'll require explicit parsing or use i1 for all
+  for (size_t i = 0; i < signals.size(); ++i) {
+    signalTypes.push_back(IntegerType::get(parser.getContext(), 1));
+  }
+
+  // Resolve operands
+  if (parser.resolveOperands(signals, signalTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+
+  // Add edges attribute
+  result.addAttribute("sensitivityEdges",
+                      ArrayAttr::get(parser.getContext(), edges));
+
+  // Add result types
+  result.addTypes(resultTypes);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Fork/Join Operations
+//===----------------------------------------------------------------------===//
+
+LogicalResult SimForkOp::verify() {
+  // Verify join_type attribute
+  StringRef joinTypeStr = getJoinType();
+  if (joinTypeStr != "join" && joinTypeStr != "join_any" &&
+      joinTypeStr != "join_none") {
+    return emitOpError("invalid join type '")
+           << joinTypeStr << "', expected one of: join, join_any, join_none";
+  }
+
+  // Verify we have at least one branch
+  if (getBranches().empty()) {
+    return emitOpError("must have at least one branch");
+  }
+
+  return success();
+}
+
+void SimForkOp::print(OpAsmPrinter &p) {
+  p << " ";
+  if (getJoinType() != "join") {
+    p << "join_type \"" << getJoinType() << "\" ";
+  }
+  if (auto name = getName()) {
+    p << "name \"" << name.value() << "\" ";
+  }
+
+  // Print branches
+  bool first = true;
+  for (auto &region : getBranches()) {
+    if (!first)
+      p << ", ";
+    p.printRegion(region, /*printEntryBlockArgs=*/false,
+                  /*printBlockTerminators=*/false);
+    first = false;
+  }
+
+  p.printOptionalAttrDict((*this)->getAttrs(), {"joinType", "name"});
+}
+
+ParseResult SimForkOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+
+  // Parse optional join_type
+  StringRef joinType = "join";
+  if (succeeded(parser.parseOptionalKeyword("join_type"))) {
+    StringAttr joinTypeAttr;
+    if (parser.parseAttribute(joinTypeAttr))
+      return failure();
+    joinType = joinTypeAttr.getValue();
+  }
+  result.addAttribute("joinType", builder.getStringAttr(joinType));
+
+  // Parse optional name
+  if (succeeded(parser.parseOptionalKeyword("name"))) {
+    StringAttr nameAttr;
+    if (parser.parseAttribute(nameAttr))
+      return failure();
+    result.addAttribute("name", nameAttr);
+  }
+
+  // Parse branches (regions separated by commas)
+  do {
+    Region *branch = result.addRegion();
+    if (parser.parseRegion(*branch, /*arguments=*/{}, /*argTypes=*/{}))
+      return failure();
+    // Ensure the region has a terminator
+    if (branch->empty())
+      branch->emplaceBlock();
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Add result type (i64 handle)
+  result.addTypes(builder.getI64Type());
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Wait Operations
+//===----------------------------------------------------------------------===//
+
+LogicalResult SimWaitOp::verify() {
+  // If we have a timeout, we should have a timedOut result
+  if (getTimeoutFemtoseconds().has_value() && !getTimedOut()) {
+    return emitOpError(
+        "wait with timeout must have a timedOut result to capture timeout status");
+  }
+
+  // If we have a timedOut result, we should have a timeout
+  if (getTimedOut() && !getTimeoutFemtoseconds().has_value()) {
+    return emitOpError(
+        "wait without timeout should not have a timedOut result");
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen generated logic.
 //===----------------------------------------------------------------------===//
 
