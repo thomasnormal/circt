@@ -169,3 +169,36 @@ module Event;
   // CHECK: %e = moore.variable : <!moore.i1>
   event e;
 endmodule
+
+// CHECK-LABEL: moore.module @DynamicArrayElementSelect
+module DynamicArrayElementSelect;
+  // CHECK: [[ARR:%.+]] = moore.variable : <!moore.open_uarray<i1>>
+  bit arr[];
+  // CHECK: [[ARR2:%.+]] = moore.variable : <!moore.open_uarray<l8>>
+  logic [7:0] arr2[];
+  // CHECK: %b = moore.variable
+  bit b;
+  // CHECK: %val = moore.variable
+  logic [7:0] val;
+  // CHECK: %idx = moore.variable
+  int idx;
+
+  initial begin
+    // Test rvalue element select from dynamic array
+    // CHECK: [[ARR_READ:%.+]] = moore.read [[ARR]]
+    // CHECK: [[IDX_READ:%.+]] = moore.read %idx
+    // CHECK: moore.dyn_extract [[ARR_READ]] from [[IDX_READ]] : open_uarray<i1>, i32 -> i1
+    b = arr[idx];
+
+    // Test rvalue element select with constant index
+    // CHECK: [[ARR2_READ:%.+]] = moore.read [[ARR2]]
+    // CHECK: [[CONST:%.+]] = moore.constant 0
+    // CHECK: moore.dyn_extract [[ARR2_READ]] from [[CONST]] : open_uarray<l8>, i32 -> l8
+    val = arr2[0];
+
+    // Test lvalue element select into dynamic array
+    // CHECK: [[IDX_READ2:%.+]] = moore.read %idx
+    // CHECK: moore.dyn_extract_ref [[ARR]] from [[IDX_READ2]] : <!moore.open_uarray<i1>>, i32 -> <!moore.i1>
+    arr[idx] = b;
+  end
+endmodule
