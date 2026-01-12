@@ -18,7 +18,9 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <map>
 #include <queue>
 #include <thread>
 
@@ -704,7 +706,7 @@ bool IncrementalCompiler::compileParallel(const std::vector<ModuleId> &units,
     std::vector<std::thread> threads;
     std::atomic<bool> success{true};
 
-    for (const auto &id : groupUnits) {
+    for (const auto &unitId : groupUnits) {
       if (threads.size() >= config.parallelThreads) {
         // Wait for a thread to finish
         for (auto &t : threads) {
@@ -714,8 +716,8 @@ bool IncrementalCompiler::compileParallel(const std::vector<ModuleId> &units,
         threads.clear();
       }
 
-      threads.emplace_back([this, &id, &compile, &success]() {
-        if (!compileUnit(id, compile)) {
+      threads.emplace_back([this, unitId, &compile, &success]() {
+        if (!compileUnit(unitId, compile)) {
           success.store(false);
         }
       });
