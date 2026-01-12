@@ -372,6 +372,11 @@ struct Context {
   /// The time scale currently in effect.
   slang::TimeScale timeScale;
 
+  /// The current queue target value for evaluating `$` (UnboundedLiteral).
+  /// When indexing into a queue like `q[$]`, this holds the queue value so
+  /// that `$` can be evaluated as `queue.size() - 1`.
+  Value queueTargetValue = {};
+
   /// Variable to track the value of the current function's implicit `this`
   /// reference
   Value currentThisRef = {};
