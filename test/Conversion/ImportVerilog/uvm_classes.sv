@@ -148,3 +148,73 @@ module UVMHierarchyTest;
         comp = drv;
     end
 endmodule
+
+//===----------------------------------------------------------------------===//
+// Test parameterized class this_type pattern (common in UVM)
+//===----------------------------------------------------------------------===//
+
+/// Test the UVM this_type pattern where a parameterized class uses a typedef
+/// for self-referential return types. This pattern is extremely common in UVM:
+///
+/// class uvm_pool #(type KEY=int, T=uvm_void) extends uvm_object;
+///   typedef uvm_pool #(KEY,T) this_type;
+///   virtual function this_type get_global_pool();
+///     return ...;
+///   endfunction
+/// endclass
+
+class uvm_void;
+endclass
+
+class uvm_object_base;
+endclass
+
+// CHECK-LABEL: moore.class.classdecl @this_type_pool extends @uvm_object_base {
+// CHECK:   moore.class.propertydecl @m_global
+// CHECK:   moore.class.methoddecl @get_global_pool -> @"this_type_pool::get_global_pool"
+// CHECK: }
+class this_type_pool #(type KEY=int, type T=uvm_void) extends uvm_object_base;
+    typedef this_type_pool #(KEY, T) this_type;
+
+    // Static pool instance
+    static this_type m_global;
+
+    // Virtual function returning this_type
+    // This pattern previously caused the error:
+    // "receiver class @"this_type_pool_N" is not the same as, or derived from,
+    // expected base class @this_type_pool"
+    virtual function this_type get_global_pool();
+        if (m_global == null)
+            m_global = new;
+        return m_global;
+    endfunction
+endclass
+
+// A second specialization of this_type_pool is created for the this_type typedef.
+// The exact suffix (_0, _1, etc.) depends on the order of class processing.
+// CHECK-LABEL: moore.class.classdecl @this_type_pool_{{[0-9]+}} extends @uvm_object_base {
+// CHECK:   moore.class.propertydecl @m_global
+// CHECK:   moore.class.methoddecl @get_global_pool
+// CHECK: }
+
+// CHECK-LABEL: moore.module @ThisTypePatternTest() {
+// CHECK:   %pool_handle = moore.variable : <!moore.class<@this_type_pool>>
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[HANDLE:.*]] = moore.read %pool_handle
+// CHECK:     %[[METHOD:.*]] = moore.vtable.load_method %[[HANDLE]] : @get_global_pool
+// CHECK:     %[[RESULT:.*]] = func.call_indirect %[[METHOD]]
+// The key fix: conversion from this_type_pool_N to this_type_pool is allowed
+// because they are both specializations of the same generic class.
+// CHECK:     %[[CONVERTED:.*]] = moore.conversion %[[RESULT]] : !moore.class<@this_type_pool_{{[0-9]+}}> -> !moore.class<@this_type_pool>
+// CHECK:     moore.blocking_assign %pool_handle, %[[CONVERTED]]
+// CHECK:   }
+// CHECK: }
+module ThisTypePatternTest;
+    // Use the default specialization
+    this_type_pool#(int, uvm_void) pool_handle;
+
+    initial begin
+        // Call the virtual function returning this_type
+        pool_handle = pool_handle.get_global_pool();
+    end
+endmodule
