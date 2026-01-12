@@ -209,7 +209,7 @@ def FSMTransitionCoverageOp : CoverageOp<"fsm.transition"> {
 
   let assemblyFormat = [{
     $prev_state `,` $next_state `name` $name `num_states` $num_states
-    (`hierarchy` $hierarchy^)? attr-dict `:` type($prev_state)
+    (`hierarchy` $hierarchy^)? attr-dict `:` type($prev_state) `,` type($next_state)
   }];
 
   let hasVerifier = 1;
