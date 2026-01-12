@@ -2992,6 +2992,14 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   return moore::StringGetCOp::create(builder, loc, value1,
                                                      value2);
                 })
+          .Case("exists",
+                [&]() -> Value {
+                  // exists() checks if a key exists in an associative array
+                  if (isa<moore::AssocArrayType>(value1.getType()))
+                    return moore::AssocArrayExistsOp::create(builder, loc,
+                                                             value1, value2);
+                  return {};
+                })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }

@@ -4158,6 +4158,22 @@ def AssocArrayNextOp : AssocArrayBuiltin<"next"> {
   let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }
 
+def AssocArrayExistsOp : AssocArrayBuiltin<"exists"> {
+  let summary = "Check if a key exists in an associative array";
+  let description = [{
+    Returns 1 if the specified key exists in the associative array, 0 otherwise.
+    This corresponds to the SystemVerilog `.exists(index)` built-in method.
+
+    Example:
+    ```mlir
+    %found = moore.assoc.exists %array, %key : !moore.assoc_array<i32, string>, i32
+    ```
+  }];
+  let arguments = (ins AssocArrayType:$array, UnpackedType:$key);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//

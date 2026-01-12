@@ -89,3 +89,24 @@ func.func @AssocArrayWithIntKey(%array: !moore.ref<!moore.assoc_array<string, i6
   %found_next = moore.assoc.next %array, %key : <!moore.assoc_array<string, i64>>, <!moore.i64>
   return
 }
+
+//===----------------------------------------------------------------------===//
+// Associative Array Exists Operation
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @AssocArrayExists
+// CHECK-SAME: ([[ARRAY:%.+]]: !moore.assoc_array<i32, string>, [[KEY:%.+]]: !moore.string)
+func.func @AssocArrayExists(%array: !moore.assoc_array<i32, string>, %key: !moore.string) -> i32 {
+  // CHECK: moore.assoc.exists [[ARRAY]], [[KEY]] : !moore.assoc_array<i32, string>, !moore.string
+  %exists = moore.assoc.exists %array, %key : !moore.assoc_array<i32, string>, !moore.string
+  return %exists : i32
+}
+
+// Test exists with integer key type
+// CHECK-LABEL: func.func @AssocArrayExistsIntKey
+// CHECK-SAME: ([[ARRAY:%.+]]: !moore.assoc_array<i32, i64>, [[KEY:%.+]]: !moore.i64)
+func.func @AssocArrayExistsIntKey(%array: !moore.assoc_array<i32, i64>, %key: !moore.i64) -> i32 {
+  // CHECK: moore.assoc.exists [[ARRAY]], [[KEY]] : !moore.assoc_array<i32, i64>, !moore.i64
+  %exists = moore.assoc.exists %array, %key : !moore.assoc_array<i32, i64>, !moore.i64
+  return %exists : i32
+}
