@@ -15,7 +15,6 @@
 
 hw.module @ALU(in %a: i32, in %b: i32, in %op: i2, out result: i32, out zero: i1) {
   %c0_i32 = hw.constant 0 : i32
-  %c0_i2 = hw.constant 0 : i2
   %c1_i2 = hw.constant 1 : i2
   %c2_i2 = hw.constant 2 : i2
   %c3_i2 = hw.constant 3 : i2
@@ -27,7 +26,7 @@ hw.module @ALU(in %a: i32, in %b: i32, in %op: i2, out result: i32, out zero: i1
   %or_result = comb.or %a, %b : i32
 
   // Operation select comparisons
-  %is_add = comb.icmp eq %op, %c0_i2 : i2
+  %is_add = comb.icmp eq %op, %c0_i32 : i2
   %is_sub = comb.icmp eq %op, %c1_i2 : i2
   %is_and = comb.icmp eq %op, %c2_i2 : i2
   %is_or = comb.icmp eq %op, %c3_i2 : i2
