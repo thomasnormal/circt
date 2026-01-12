@@ -605,6 +605,25 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ReadOp::create(builder, loc, value);
     }
 
+    // Try on-demand conversion for global variables that haven't been converted
+    // yet. This handles forward references where a variable is used before
+    // being visited (e.g., in static method initializers of classes that are
+    // converted before the variable itself).
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto parentKind = var->getParentScope()->asSymbol().kind;
+      if (parentKind == slang::ast::SymbolKind::Package ||
+          parentKind == slang::ast::SymbolKind::Root ||
+          parentKind == slang::ast::SymbolKind::CompilationUnit) {
+        if (succeeded(context.convertGlobalVariable(*var))) {
+          if (auto globalOp = context.globalVariables.lookup(&expr.symbol)) {
+            auto value =
+                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+            return moore::ReadOp::create(builder, loc, value);
+          }
+        }
+      }
+    }
+
     // We're reading a class property.
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
@@ -2168,6 +2187,22 @@ struct LvalueExprVisitor : public ExprVisitor {
     // Handle global variables.
     if (auto globalOp = context.globalVariables.lookup(&expr.symbol))
       return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+
+    // Try on-demand conversion for global variables that haven't been converted
+    // yet. This handles forward references where a variable is used before
+    // being visited (e.g., in static method initializers of classes that are
+    // converted before the variable itself).
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto parentKind = var->getParentScope()->asSymbol().kind;
+      if (parentKind == slang::ast::SymbolKind::Package ||
+          parentKind == slang::ast::SymbolKind::Root ||
+          parentKind == slang::ast::SymbolKind::CompilationUnit) {
+        if (succeeded(context.convertGlobalVariable(*var))) {
+          if (auto globalOp = context.globalVariables.lookup(&expr.symbol))
+            return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+        }
+      }
+    }
 
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
