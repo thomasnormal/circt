@@ -1,0 +1,344 @@
+{
+  "Module": {
+    "prefix": "module",
+    "body": [
+      "module ${1:module_name} (",
+      "\tinput  logic ${2:clk},",
+      "\tinput  logic ${3:rst_n}",
+      ");",
+      "",
+      "\t$0",
+      "",
+      "endmodule : ${1:module_name}"
+    ],
+    "description": "Create a new module"
+  },
+  "Module with Parameters": {
+    "prefix": "modulep",
+    "body": [
+      "module ${1:module_name} #(",
+      "\tparameter int ${2:WIDTH} = ${3:8}",
+      ") (",
+      "\tinput  logic ${4:clk},",
+      "\tinput  logic ${5:rst_n}",
+      ");",
+      "",
+      "\t$0",
+      "",
+      "endmodule : ${1:module_name}"
+    ],
+    "description": "Create a module with parameters"
+  },
+  "Interface": {
+    "prefix": "interface",
+    "body": [
+      "interface ${1:if_name};",
+      "\tlogic ${2:data};",
+      "",
+      "\tmodport ${3:master} (",
+      "\t\toutput ${2:data}",
+      "\t);",
+      "",
+      "\tmodport ${4:slave} (",
+      "\t\tinput ${2:data}",
+      "\t);",
+      "",
+      "endinterface : ${1:if_name}"
+    ],
+    "description": "Create an interface"
+  },
+  "Always FF": {
+    "prefix": "always_ff",
+    "body": [
+      "always_ff @(posedge ${1:clk} or negedge ${2:rst_n}) begin",
+      "\tif (!${2:rst_n}) begin",
+      "\t\t${3:// Reset logic}",
+      "\tend else begin",
+      "\t\t$0",
+      "\tend",
+      "end"
+    ],
+    "description": "Always flip-flop block with async reset"
+  },
+  "Always FF Sync Reset": {
+    "prefix": "always_ffs",
+    "body": [
+      "always_ff @(posedge ${1:clk}) begin",
+      "\tif (${2:rst}) begin",
+      "\t\t${3:// Reset logic}",
+      "\tend else begin",
+      "\t\t$0",
+      "\tend",
+      "end"
+    ],
+    "description": "Always flip-flop block with sync reset"
+  },
+  "Always Comb": {
+    "prefix": "always_comb",
+    "body": [
+      "always_comb begin",
+      "\t$0",
+      "end"
+    ],
+    "description": "Combinational always block"
+  },
+  "Always Latch": {
+    "prefix": "always_latch",
+    "body": [
+      "always_latch begin",
+      "\tif (${1:enable}) begin",
+      "\t\t$0",
+      "\tend",
+      "end"
+    ],
+    "description": "Latch always block"
+  },
+  "Case": {
+    "prefix": "case",
+    "body": [
+      "case (${1:selector})",
+      "\t${2:value1}: begin",
+      "\t\t$0",
+      "\tend",
+      "\tdefault: begin",
+      "\t\t",
+      "\tend",
+      "endcase"
+    ],
+    "description": "Case statement"
+  },
+  "Unique Case": {
+    "prefix": "ucase",
+    "body": [
+      "unique case (${1:selector})",
+      "\t${2:value1}: begin",
+      "\t\t$0",
+      "\tend",
+      "\tdefault: begin",
+      "\t\t",
+      "\tend",
+      "endcase"
+    ],
+    "description": "Unique case statement"
+  },
+  "Priority Case": {
+    "prefix": "pcase",
+    "body": [
+      "priority case (${1:selector})",
+      "\t${2:value1}: begin",
+      "\t\t$0",
+      "\tend",
+      "\tdefault: begin",
+      "\t\t",
+      "\tend",
+      "endcase"
+    ],
+    "description": "Priority case statement"
+  },
+  "Function": {
+    "prefix": "function",
+    "body": [
+      "function automatic ${1:logic} ${2:func_name} (",
+      "\tinput ${3:logic} ${4:arg1}",
+      ");",
+      "\t$0",
+      "\treturn ${5:result};",
+      "endfunction : ${2:func_name}"
+    ],
+    "description": "Create a function"
+  },
+  "Task": {
+    "prefix": "task",
+    "body": [
+      "task automatic ${1:task_name} (",
+      "\tinput ${2:logic} ${3:arg1}",
+      ");",
+      "\t$0",
+      "endtask : ${1:task_name}"
+    ],
+    "description": "Create a task"
+  },
+  "Generate For": {
+    "prefix": "genfor",
+    "body": [
+      "generate",
+      "\tfor (genvar ${1:i} = 0; ${1:i} < ${2:N}; ${1:i}++) begin : gen_${3:name}",
+      "\t\t$0",
+      "\tend",
+      "endgenerate"
+    ],
+    "description": "Generate for loop"
+  },
+  "Generate If": {
+    "prefix": "genif",
+    "body": [
+      "generate",
+      "\tif (${1:CONDITION}) begin : gen_${2:name}",
+      "\t\t$0",
+      "\tend",
+      "endgenerate"
+    ],
+    "description": "Generate if block"
+  },
+  "Assertion": {
+    "prefix": "assert",
+    "body": [
+      "assert property (@(posedge ${1:clk}) ${2:condition})",
+      "\telse \\$error(\"${3:Assertion failed}\");"
+    ],
+    "description": "Immediate assertion"
+  },
+  "Property": {
+    "prefix": "property",
+    "body": [
+      "property ${1:prop_name};",
+      "\t@(posedge ${2:clk}) ${3:antecedent} |-> ${4:consequent};",
+      "endproperty : ${1:prop_name}",
+      "",
+      "assert property (${1:prop_name})",
+      "\telse \\$error(\"${5:Assertion failed}\");"
+    ],
+    "description": "Property with assertion"
+  },
+  "Covergroup": {
+    "prefix": "covergroup",
+    "body": [
+      "covergroup ${1:cg_name} @(posedge ${2:clk});",
+      "\t${3:cp_name}: coverpoint ${4:signal} {",
+      "\t\tbins ${5:bin_name}[] = {$0};",
+      "\t}",
+      "endgroup : ${1:cg_name}"
+    ],
+    "description": "Coverage group"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:class_name};",
+      "\t// Properties",
+      "\t${2:logic} ${3:data};",
+      "",
+      "\t// Constructor",
+      "\tfunction new();",
+      "\t\t$0",
+      "\tendfunction : new",
+      "",
+      "endclass : ${1:class_name}"
+    ],
+    "description": "Create a class"
+  },
+  "Package": {
+    "prefix": "package",
+    "body": [
+      "package ${1:pkg_name};",
+      "",
+      "\t$0",
+      "",
+      "endpackage : ${1:pkg_name}"
+    ],
+    "description": "Create a package"
+  },
+  "Typedef Enum": {
+    "prefix": "typedef_enum",
+    "body": [
+      "typedef enum logic [${1:1}:0] {",
+      "\t${2:STATE_IDLE}  = ${3:2'b00},",
+      "\t${4:STATE_ACTIVE} = ${5:2'b01}",
+      "} ${6:state_t};"
+    ],
+    "description": "Typedef enum"
+  },
+  "Typedef Struct": {
+    "prefix": "typedef_struct",
+    "body": [
+      "typedef struct packed {",
+      "\tlogic [${1:7}:0] ${2:field1};",
+      "\tlogic [${3:3}:0] ${4:field2};",
+      "} ${5:struct_name}_t;"
+    ],
+    "description": "Typedef struct"
+  },
+  "FSM Template": {
+    "prefix": "fsm",
+    "body": [
+      "// State encoding",
+      "typedef enum logic [${1:1}:0] {",
+      "\tIDLE  = ${2:2'b00},",
+      "\tBUSY  = ${3:2'b01},",
+      "\tDONE  = ${4:2'b10}",
+      "} state_t;",
+      "",
+      "state_t state_q, state_d;",
+      "",
+      "// State register",
+      "always_ff @(posedge clk or negedge rst_n) begin",
+      "\tif (!rst_n)",
+      "\t\tstate_q <= IDLE;",
+      "\telse",
+      "\t\tstate_q <= state_d;",
+      "end",
+      "",
+      "// Next state logic",
+      "always_comb begin",
+      "\tstate_d = state_q;",
+      "\tunique case (state_q)",
+      "\t\tIDLE: begin",
+      "\t\t\tif (${5:start})",
+      "\t\t\t\tstate_d = BUSY;",
+      "\t\tend",
+      "\t\tBUSY: begin",
+      "\t\t\tif (${6:done})",
+      "\t\t\t\tstate_d = DONE;",
+      "\t\tend",
+      "\t\tDONE: begin",
+      "\t\t\tstate_d = IDLE;",
+      "\t\tend",
+      "\t\tdefault: state_d = IDLE;",
+      "\tendcase",
+      "end",
+      "",
+      "// Output logic",
+      "always_comb begin",
+      "\t${7:busy} = (state_q == BUSY);",
+      "end"
+    ],
+    "description": "FSM template with state machine"
+  },
+  "FIFO Instantiation": {
+    "prefix": "fifo_inst",
+    "body": [
+      "${1:fifo_name} #(",
+      "\t.DEPTH(${2:8}),",
+      "\t.WIDTH(${3:32})",
+      ") ${4:u_fifo} (",
+      "\t.clk     (clk),",
+      "\t.rst_n   (rst_n),",
+      "\t.push    (${5:wr_en}),",
+      "\t.pop     (${6:rd_en}),",
+      "\t.din     (${7:din}),",
+      "\t.dout    (${8:dout}),",
+      "\t.full    (${9:full}),",
+      "\t.empty   (${10:empty})",
+      ");"
+    ],
+    "description": "FIFO module instantiation"
+  },
+  "Clock Divider": {
+    "prefix": "clkdiv",
+    "body": [
+      "// Clock divider by ${1:2}",
+      "logic [${2:0}:0] cnt_q;",
+      "logic clk_div;",
+      "",
+      "always_ff @(posedge clk or negedge rst_n) begin",
+      "\tif (!rst_n)",
+      "\t\tcnt_q <= '0;",
+      "\telse",
+      "\t\tcnt_q <= cnt_q + 1'b1;",
+      "end",
+      "",
+      "assign clk_div = cnt_q[${2:0}];"
+    ],
+    "description": "Clock divider"
+  }
+}

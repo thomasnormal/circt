@@ -6,6 +6,7 @@ add_circt_library(CIRCTSupport
   BackedgeBuilder.cpp
   CustomDirectiveImpl.cpp
   Debug.cpp
+  Diagnostics.cpp
   FVInt.cpp
   FieldRef.cpp
   InstanceGraph.cpp
@@ -18,7 +19,9 @@ add_circt_library(CIRCTSupport
   Path.cpp
   PrettyPrinter.cpp
   PrettyPrinterHelpers.cpp
+  ProjectConfig.cpp
   SymCache.cpp
+  TestReporting.cpp
   ValueMapper.cpp
   "${VERSION_CPP}"
 

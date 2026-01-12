@@ -29,6 +29,7 @@
 #include "llvm/Support/LSP/Protocol.h"
 
 #include "VerilogIndex.h"
+#include "SemanticTokens.h"
 
 namespace circt {
 namespace lsp {
@@ -54,6 +55,7 @@ public:
   // Return LSP location from slang location.
   llvm::lsp::Location getLspLocation(slang::SourceLocation loc) const;
   llvm::lsp::Location getLspLocation(slang::SourceRange range) const;
+  llvm::lsp::Range getLspRange(slang::SourceRange range) const;
 
   slang::BufferID getMainBufferID() const { return mainBufferId; }
 
@@ -68,6 +70,81 @@ public:
   void findReferencesOf(const llvm::lsp::URIForFile &uri,
                         const llvm::lsp::Position &pos,
                         std::vector<llvm::lsp::Location> &references);
+
+  //===--------------------------------------------------------------------===//
+  // Hover Information
+  //===--------------------------------------------------------------------===//
+
+  /// Return hover information for the object at the given position.
+  std::optional<llvm::lsp::Hover> getHover(const llvm::lsp::URIForFile &uri,
+                                           const llvm::lsp::Position &pos);
+
+  //===--------------------------------------------------------------------===//
+  // Document Symbols
+  //===--------------------------------------------------------------------===//
+
+  /// Return document symbols for this document.
+  void getDocumentSymbols(const llvm::lsp::URIForFile &uri,
+                          std::vector<llvm::lsp::DocumentSymbol> &symbols);
+
+  //===--------------------------------------------------------------------===//
+  // Auto-Completion
+  //===--------------------------------------------------------------------===//
+
+  /// Return completion items for the given position.
+  void getCompletions(const llvm::lsp::URIForFile &uri,
+                      const llvm::lsp::Position &pos,
+                      llvm::lsp::CompletionList &completions);
+
+  //===--------------------------------------------------------------------===//
+  // Code Actions
+  //===--------------------------------------------------------------------===//
+
+  /// Return code actions for the given range and diagnostics.
+  void getCodeActions(const llvm::lsp::URIForFile &uri,
+                      const llvm::lsp::Range &range,
+                      const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+                      std::vector<llvm::lsp::CodeAction> &codeActions);
+
+  //===--------------------------------------------------------------------===//
+  // Rename Symbol
+  //===--------------------------------------------------------------------===//
+
+  /// Prepare a rename operation at the given position.
+  /// Returns the range of the symbol being renamed and its current name.
+  std::optional<std::pair<llvm::lsp::Range, std::string>>
+  prepareRename(const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos);
+
+  /// Perform a rename operation.
+  /// Returns a workspace edit with all the changes needed.
+  std::optional<llvm::lsp::WorkspaceEdit>
+  renameSymbol(const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos,
+               llvm::StringRef newName);
+
+  //===--------------------------------------------------------------------===//
+  // Document Links
+  //===--------------------------------------------------------------------===//
+
+  /// Return document links for include directives.
+  void getDocumentLinks(const llvm::lsp::URIForFile &uri,
+                        std::vector<llvm::lsp::DocumentLink> &links);
+
+  //===--------------------------------------------------------------------===//
+  // Semantic Tokens
+  //===--------------------------------------------------------------------===//
+
+  /// Return semantic tokens for the entire document.
+  void getSemanticTokens(const llvm::lsp::URIForFile &uri,
+                         std::vector<SemanticToken> &tokens);
+
+  //===--------------------------------------------------------------------===//
+  // Inlay Hints
+  //===--------------------------------------------------------------------===//
+
+  /// Return inlay hints for the given range.
+  void getInlayHints(const llvm::lsp::URIForFile &uri,
+                     const llvm::lsp::Range &range,
+                     std::vector<llvm::lsp::InlayHint> &hints);
 
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
@@ -97,6 +174,9 @@ private:
   /// The precomputed line offsets for faster lookups
   std::vector<uint32_t> lineOffsets;
   void computeLineOffsets(std::string_view text);
+
+  /// Scan and index `include directives.
+  void scanIncludeDirectives();
 
   // The URI of the document.
   llvm::lsp::URIForFile uri;

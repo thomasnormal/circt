@@ -1,0 +1,58 @@
+{
+  "comments": {
+    "lineComment": "//",
+    "blockComment": ["/*", "*/"]
+  },
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"],
+    ["begin", "end"],
+    ["fork", "join"],
+    ["fork", "join_any"],
+    ["fork", "join_none"],
+    ["case", "endcase"],
+    ["casex", "endcase"],
+    ["casez", "endcase"],
+    ["function", "endfunction"],
+    ["task", "endtask"],
+    ["module", "endmodule"],
+    ["interface", "endinterface"],
+    ["class", "endclass"],
+    ["package", "endpackage"],
+    ["program", "endprogram"],
+    ["generate", "endgenerate"],
+    ["property", "endproperty"],
+    ["sequence", "endsequence"],
+    ["clocking", "endclocking"],
+    ["covergroup", "endgroup"],
+    ["checker", "endchecker"],
+    ["config", "endconfig"]
+  ],
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] },
+    { "open": "'", "close": "'", "notIn": ["string"] },
+    { "open": "/*", "close": " */", "notIn": ["string"] }
+  ],
+  "surroundingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"" },
+    { "open": "'", "close": "'" }
+  ],
+  "folding": {
+    "markers": {
+      "start": "^\\s*//\\s*#?region\\b",
+      "end": "^\\s*//\\s*#?endregion\\b"
+    }
+  },
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
+  "indentationRules": {
+    "increaseIndentPattern": "^.*\\b(begin|fork|function|task|module|interface|class|package|program|generate|property|sequence|clocking|covergroup|checker|config|case|casex|casez)\\b.*$|^[^\\)]*\\($|\\{[^\\}]*$",
+    "decreaseIndentPattern": "^\\s*(end|join|join_any|join_none|endfunction|endtask|endmodule|endinterface|endclass|endpackage|endprogram|endgenerate|endproperty|endsequence|endclocking|endgroup|endchecker|endconfig|endcase)\\b|^\\s*\\}|^\\s*\\)"
+  }
+}

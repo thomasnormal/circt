@@ -62,6 +62,14 @@ public:
   /// A mapping from a symbol to their references.
   const ReferenceMap &getReferences() const { return references; }
 
+  /// A mapping from include directive source ranges to included file paths.
+  using IncludeMap = llvm::SmallDenseMap<std::pair<uint32_t, uint32_t>, std::string>;
+  const IncludeMap &getIncludes() const { return includes; }
+
+  /// Register an include directive.
+  void insertInclude(uint32_t startOffset, uint32_t endOffset,
+                     llvm::StringRef includedPath);
+
 private:
   /// Parse source location emitted by ExportVerilog.
   void parseSourceLocation();
@@ -79,6 +87,9 @@ private:
 
   /// References of symbols.
   ReferenceMap references;
+
+  /// Include directive mappings.
+  IncludeMap includes;
 
   // The parent document's buffer ID.
   const slang::BufferID &bufferId;

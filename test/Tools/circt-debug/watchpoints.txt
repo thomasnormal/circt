@@ -1,0 +1,32 @@
+// RUN: circt-debug --top test -x %s --batch 2>&1 | FileCheck %s
+
+// Test watchpoint functionality
+
+// Add a watchpoint
+watch counter
+// CHECK: Watchpoint 1 set on: counter
+
+// List watchpoints
+info watchpoints
+// CHECK: 1: counter
+
+// Disable watchpoint
+disable 1
+// CHECK: Watchpoint 1 disabled.
+
+info watchpoints
+// CHECK: 1: counter [disabled]
+
+// Enable watchpoint
+enable 1
+// CHECK: Watchpoint 1 enabled.
+
+// Step and observe
+step 3
+// CHECK: Cycle: 3
+
+// Check watchpoint history via print
+print counter
+// CHECK: counter = 0x03
+
+quit

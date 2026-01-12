@@ -1,0 +1,203 @@
+# CIRCT Project Configuration Template
+# Copy this file to your project root and rename to circt-project.yaml
+# Documentation: https://circt.llvm.org/docs/Tools/circt-verilog-lsp-server/
+
+#===============================================================================
+# Project Information
+#===============================================================================
+project:
+  # Project name (used in reports and documentation)
+  name: "my_design"
+
+  # Top-level module name for elaboration
+  top: "top_module"
+
+  # Project version (semantic versioning recommended)
+  version: "1.0.0"
+
+  # Brief project description
+  description: "A Verilog/SystemVerilog design project"
+
+#===============================================================================
+# Source Files Configuration
+#===============================================================================
+sources:
+  # Include directories for `include directives
+  # Paths are relative to this configuration file
+  include_dirs:
+    - "rtl/"
+    - "rtl/includes/"
+    - "common/"
+
+  # Preprocessor defines (VAR or VAR=VALUE format)
+  defines:
+    - "SYNTHESIS"
+    - "DEBUG_LEVEL=0"
+    # - "SIMULATION"  # Uncomment for simulation builds
+
+  # Source file patterns (supports ** glob)
+  # Files are processed in order listed
+  files:
+    - "rtl/pkg/*.sv"           # Packages first
+    - "rtl/interfaces/*.sv"     # Then interfaces
+    - "rtl/**/*.sv"             # Then all other RTL files
+    # - "tb/**/*.sv"            # Uncomment to include testbenches
+
+  # File lists (.f files) to include
+  # These are parsed and their contents added to the configuration
+  file_lists:
+    # - "project.f"
+    # - "dependencies.f"
+
+  # Library directories for module resolution (-y flag equivalent)
+  lib_dirs:
+    # - "lib/std_cells/"
+    # - "lib/macros/"
+
+  # File extension mappings (defaults shown)
+  sv_extensions:
+    - ".sv"
+    - ".svh"
+
+  verilog_extensions:
+    - ".v"
+    - ".vh"
+
+#===============================================================================
+# Linting Configuration
+#===============================================================================
+lint:
+  # Enable/disable linting (default: true)
+  enabled: true
+
+  # Path to lint configuration file
+  # config: "lint.yaml"
+
+  # Rules to explicitly enable (in addition to defaults)
+  enable_rules:
+    - "unused_signal"
+    - "naming_convention"
+    - "blocking_in_sequential"
+
+  # Rules to explicitly disable (overrides config file)
+  disable_rules:
+    - "implicit_width"      # Too noisy for some codebases
+
+  # Files/patterns to exclude from linting
+  exclude_patterns:
+    - "generated/**"        # Auto-generated files
+    - "third_party/**"      # External IP
+    - "**/legacy/**"        # Legacy code
+
+#===============================================================================
+# Simulation Configuration
+#===============================================================================
+simulation:
+  # Default timescale for simulation
+  timescale: "1ns/1ps"
+
+  # Default clocking signal name
+  default_clocking: "clk"
+
+  # Default reset signal name
+  default_reset: "rst_n"
+
+  # Reset polarity (true = active high, false = active low)
+  reset_active_high: false
+
+  # Simulation-specific defines
+  defines:
+    - "SIMULATION"
+    - "VCS"
+    # - "QUESTA"
+
+#===============================================================================
+# Build Targets
+#===============================================================================
+# Define different configurations for synthesis, simulation, etc.
+targets:
+  # Synthesis target
+  synthesis:
+    # Override top module for this target
+    top: "chip_top"
+
+    # Target-specific defines
+    defines:
+      - "SYNTHESIS"
+      - "TARGET_FPGA"
+      # - "TARGET_ASIC"
+
+    # Additional include directories for this target
+    include_dirs:
+      - "syn/includes/"
+
+    # Disable lint for synthesis (optional)
+    lint_enabled: true
+
+    # Output directory for this target
+    output_dir: "build/syn/"
+
+  # Simulation target
+  simulation:
+    top: "tb_top"
+
+    defines:
+      - "SIMULATION"
+      - "ASSERT_ON"
+      - "COVERAGE_ON"
+
+    # Include testbench files
+    files:
+      - "tb/**/*.sv"
+
+    include_dirs:
+      - "tb/includes/"
+
+    output_dir: "build/sim/"
+
+  # FPGA-specific target
+  fpga:
+    top: "fpga_top"
+
+    defines:
+      - "SYNTHESIS"
+      - "TARGET_XILINX"
+      # - "TARGET_INTEL"
+
+    files:
+      - "fpga/**/*.sv"
+
+    output_dir: "build/fpga/"
+
+  # Formal verification target
+  formal:
+    top: "dut_wrapper"
+
+    defines:
+      - "FORMAL"
+      - "ASSERT_ON"
+
+    files:
+      - "formal/**/*.sv"
+
+    lint_enabled: false  # Formal tools have their own checks
+
+    output_dir: "build/formal/"
+
+#===============================================================================
+# Advanced Options
+#===============================================================================
+# These are optional and typically not needed
+
+# advanced:
+#   # Maximum file size to process (bytes)
+#   max_file_size: 10485760  # 10MB
+#
+#   # Timeout for file processing (seconds)
+#   timeout: 300
+#
+#   # Parallel processing workers
+#   workers: 4
+#
+#   # Cache directory for intermediate files
+#   cache_dir: ".circt_cache/"

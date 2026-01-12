@@ -1,0 +1,54 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test hover functionality for signals, ports, modules, and parameters.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///foo.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test #(parameter WIDTH = 8) (\n  input  logic [WIDTH-1:0] data_in,\n  output logic [WIDTH-1:0] data_out\n);\n  logic [7:0] counter;\n  assign data_out = data_in + counter;\nendmodule"
+}}}
+// -----
+// Hover over 'counter' variable (line 4, col 14)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///foo.sv"},
+  "position":{"line":4,"character":14}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "contents": {
+// CHECK-NEXT:      "kind": "markdown",
+// CHECK:           "value": "```systemverilog
+// CHECK:           logic [7:0] counter
+// CHECK:           ```"
+// CHECK-NEXT:    },
+// CHECK-NEXT:    "range":
+// -----
+// Hover over 'data_in' port (line 1, col 25)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///foo.sv"},
+  "position":{"line":1,"character":25}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "contents": {
+// CHECK-NEXT:      "kind": "markdown",
+// CHECK:           "value": "```systemverilog
+// CHECK:           input
+// -----
+// Hover on whitespace should return null
+{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///foo.sv"},
+  "position":{"line":3,"character":0}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": null
+// -----
+{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

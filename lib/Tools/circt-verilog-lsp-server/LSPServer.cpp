@@ -8,6 +8,7 @@
 
 #include "LSPServer.h"
 #include "Utils/PendingChanges.h"
+#include "VerilogServerImpl/SemanticTokens.h"
 #include "VerilogServerImpl/VerilogServer.h"
 #include "circt/Tools/circt-verilog-lsp-server/CirctVerilogLspServerMain.h"
 #include "llvm/Support/JSON.h"
@@ -63,6 +64,63 @@ struct LSPServer {
                    Callback<std::vector<Location>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Hover
+  //===--------------------------------------------------------------------===//
+
+  void onHover(const TextDocumentPositionParams &params,
+               Callback<std::optional<Hover>> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Document Symbols
+  //===--------------------------------------------------------------------===//
+
+  void onDocumentSymbol(const DocumentSymbolParams &params,
+                        Callback<std::vector<DocumentSymbol>> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Auto-Completion
+  //===--------------------------------------------------------------------===//
+
+  void onCompletion(const CompletionParams &params,
+                    Callback<CompletionList> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Code Actions
+  //===--------------------------------------------------------------------===//
+
+  void onCodeAction(const CodeActionParams &params,
+                    Callback<std::vector<CodeAction>> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Rename Symbol
+  //===--------------------------------------------------------------------===//
+
+  void onPrepareRename(const TextDocumentPositionParams &params,
+                       Callback<std::optional<Range>> reply);
+  void onRename(const json::Value &params, Callback<WorkspaceEdit> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Document Links
+  //===--------------------------------------------------------------------===//
+
+  void onDocumentLink(const DocumentLinkParams &params,
+                      Callback<std::vector<DocumentLink>> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Semantic Tokens
+  //===--------------------------------------------------------------------===//
+
+  void onSemanticTokensFull(const json::Value &params,
+                            Callback<json::Value> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Inlay Hints
+  //===--------------------------------------------------------------------===//
+
+  void onInlayHints(const InlayHintsParams &params,
+                    Callback<std::vector<InlayHint>> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -103,6 +161,9 @@ private:
 
 void LSPServer::onInitialize(const InitializeParams &params,
                              Callback<json::Value> reply) {
+  // Initialize workspace from the params
+  server.initializeWorkspace(toJSON(params));
+
   // Send a response with the capabilities of this server.
   json::Object serverCaps{
       {
@@ -117,6 +178,33 @@ void LSPServer::onInitialize(const InitializeParams &params,
       },
       {"definitionProvider", true},
       {"referencesProvider", true},
+      {"hoverProvider", true},
+      {"documentSymbolProvider", true},
+      {"completionProvider",
+       llvm::json::Object{
+           {"triggerCharacters", llvm::json::Array{"."}},
+           {"resolveProvider", false},
+       }},
+      {"codeActionProvider", true},
+      {"renameProvider",
+       llvm::json::Object{
+           {"prepareProvider", true},
+       }},
+      {"documentLinkProvider",
+       llvm::json::Object{
+           {"resolveProvider", false},
+       }},
+      {"semanticTokensProvider", circt::lsp::getSemanticTokensOptions()},
+      {"inlayHintProvider", true},
+      // Workspace capabilities
+      {"workspace",
+       llvm::json::Object{
+           {"workspaceFolders",
+            llvm::json::Object{
+                {"supported", true},
+                {"changeNotifications", true},
+            }},
+       }},
   };
 
   json::Object result{
@@ -194,6 +282,155 @@ void LSPServer::onReference(const ReferenceParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Hover
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onHover(const TextDocumentPositionParams &params,
+                        Callback<std::optional<Hover>> reply) {
+  reply(server.getHover(params.textDocument.uri, params.position));
+}
+
+//===----------------------------------------------------------------------===//
+// Document Symbols
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onDocumentSymbol(const DocumentSymbolParams &params,
+                                 Callback<std::vector<DocumentSymbol>> reply) {
+  std::vector<DocumentSymbol> symbols;
+  server.getDocumentSymbols(params.textDocument.uri, symbols);
+  reply(std::move(symbols));
+}
+
+//===----------------------------------------------------------------------===//
+// Auto-Completion
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onCompletion(const CompletionParams &params,
+                             Callback<CompletionList> reply) {
+  CompletionList completions;
+  server.getCompletions(params.textDocument.uri, params.position, completions);
+  reply(std::move(completions));
+}
+
+//===----------------------------------------------------------------------===//
+// Code Actions
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onCodeAction(const CodeActionParams &params,
+                             Callback<std::vector<CodeAction>> reply) {
+  std::vector<CodeAction> codeActions;
+  server.getCodeActions(params.textDocument.uri, params.range,
+                        params.context.diagnostics, codeActions);
+  reply(std::move(codeActions));
+}
+
+//===----------------------------------------------------------------------===//
+// Rename Symbol
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onPrepareRename(const TextDocumentPositionParams &params,
+                                Callback<std::optional<Range>> reply) {
+  auto result = server.prepareRename(params.textDocument.uri, params.position);
+  if (result)
+    reply(result->first);
+  else
+    reply(std::nullopt);
+}
+
+void LSPServer::onRename(const json::Value &params,
+                         Callback<WorkspaceEdit> reply) {
+  // Parse the rename params manually since we don't have the struct
+  json::Path::Root root;
+  auto *obj = params.getAsObject();
+  if (!obj) {
+    reply(make_error<LSPError>("invalid rename params", ErrorCode::InvalidParams));
+    return;
+  }
+
+  // Parse textDocument
+  TextDocumentIdentifier textDocument;
+  auto *textDocObj = obj->get("textDocument");
+  if (!textDocObj ||
+      !fromJSON(*textDocObj, textDocument, json::Path(root))) {
+    reply(make_error<LSPError>("missing textDocument", ErrorCode::InvalidParams));
+    return;
+  }
+
+  // Parse position
+  Position position;
+  auto *posObj = obj->get("position");
+  if (!posObj || !fromJSON(*posObj, position, json::Path(root))) {
+    reply(make_error<LSPError>("missing position", ErrorCode::InvalidParams));
+    return;
+  }
+
+  // Parse newName
+  auto newNameVal = obj->getString("newName");
+  if (!newNameVal) {
+    reply(make_error<LSPError>("missing newName", ErrorCode::InvalidParams));
+    return;
+  }
+  std::string newName = newNameVal->str();
+
+  auto result = server.renameSymbol(textDocument.uri, position, newName);
+  if (result)
+    reply(std::move(*result));
+  else
+    reply(make_error<LSPError>("cannot rename symbol at this position",
+                                ErrorCode::RequestFailed));
+}
+
+//===----------------------------------------------------------------------===//
+// Document Links
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onDocumentLink(const DocumentLinkParams &params,
+                               Callback<std::vector<DocumentLink>> reply) {
+  std::vector<DocumentLink> links;
+  server.getDocumentLinks(params.textDocument.uri, links);
+  reply(std::move(links));
+}
+
+//===----------------------------------------------------------------------===//
+// Semantic Tokens
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onSemanticTokensFull(const json::Value &params,
+                                     Callback<json::Value> reply) {
+  circt::lsp::SemanticTokensParams stParams;
+  json::Path::Root root;
+  if (!circt::lsp::fromJSON(params, stParams, json::Path(root))) {
+    reply(make_error<LSPError>("invalid semantic tokens params",
+                                ErrorCode::InvalidParams));
+    return;
+  }
+
+  auto uriOrErr = URIForFile::fromURI(stParams.textDocumentUri);
+  if (!uriOrErr) {
+    reply(make_error<LSPError>("invalid URI", ErrorCode::InvalidParams));
+    return;
+  }
+
+  std::vector<uint32_t> data;
+  server.getSemanticTokens(*uriOrErr, data);
+
+  circt::lsp::SemanticTokensResult result;
+  result.data = std::move(data);
+  reply(circt::lsp::toJSON(result));
+}
+
+//===----------------------------------------------------------------------===//
+// Inlay Hints
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onInlayHints(const InlayHintsParams &params,
+                             Callback<std::vector<InlayHint>> reply) {
+  std::vector<InlayHint> hints;
+  server.getInlayHints(params.textDocument.uri, params.range, hints);
+  reply(std::move(hints));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -228,6 +465,40 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
                         &LSPServer::onGoToDefinition);
   messageHandler.method("textDocument/references", &lspServer,
                         &LSPServer::onReference);
+
+  // Hover
+  messageHandler.method("textDocument/hover", &lspServer,
+                        &LSPServer::onHover);
+
+  // Document Symbols
+  messageHandler.method("textDocument/documentSymbol", &lspServer,
+                        &LSPServer::onDocumentSymbol);
+
+  // Auto-Completion
+  messageHandler.method("textDocument/completion", &lspServer,
+                        &LSPServer::onCompletion);
+
+  // Code Actions
+  messageHandler.method("textDocument/codeAction", &lspServer,
+                        &LSPServer::onCodeAction);
+
+  // Rename Symbol
+  messageHandler.method("textDocument/prepareRename", &lspServer,
+                        &LSPServer::onPrepareRename);
+  messageHandler.method("textDocument/rename", &lspServer,
+                        &LSPServer::onRename);
+
+  // Document Links
+  messageHandler.method("textDocument/documentLink", &lspServer,
+                        &LSPServer::onDocumentLink);
+
+  // Semantic Tokens
+  messageHandler.method("textDocument/semanticTokens/full", &lspServer,
+                        &LSPServer::onSemanticTokensFull);
+
+  // Inlay Hints
+  messageHandler.method("textDocument/inlayHint", &lspServer,
+                        &LSPServer::onInlayHints);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

@@ -67,6 +67,56 @@ public:
                         llvm::lsp::Position pos,
                         std::vector<llvm::lsp::Location> &references);
 
+  /// Return hover information for the object at the given position.
+  /// Thread-safe; acquires docMutex.
+  std::optional<llvm::lsp::Hover> getHover(const llvm::lsp::URIForFile &uri,
+                                           llvm::lsp::Position pos);
+
+  /// Return the document symbols for this file.
+  /// Thread-safe; acquires docMutex.
+  void getDocumentSymbols(const llvm::lsp::URIForFile &uri,
+                          std::vector<llvm::lsp::DocumentSymbol> &symbols);
+
+  /// Return completion items for the given position.
+  /// Thread-safe; acquires docMutex.
+  void getCompletions(const llvm::lsp::URIForFile &uri,
+                      llvm::lsp::Position pos,
+                      llvm::lsp::CompletionList &completions);
+
+  /// Return code actions for the given range and diagnostics.
+  /// Thread-safe; acquires docMutex.
+  void getCodeActions(const llvm::lsp::URIForFile &uri,
+                      const llvm::lsp::Range &range,
+                      const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+                      std::vector<llvm::lsp::CodeAction> &codeActions);
+
+  /// Prepare a rename operation at the given position.
+  /// Thread-safe; acquires docMutex.
+  std::optional<std::pair<llvm::lsp::Range, std::string>>
+  prepareRename(const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos);
+
+  /// Perform a rename operation.
+  /// Thread-safe; acquires docMutex.
+  std::optional<llvm::lsp::WorkspaceEdit>
+  renameSymbol(const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos,
+               llvm::StringRef newName);
+
+  /// Return document links for include directives.
+  /// Thread-safe; acquires docMutex.
+  void getDocumentLinks(const llvm::lsp::URIForFile &uri,
+                        std::vector<llvm::lsp::DocumentLink> &links);
+
+  /// Return semantic tokens for the entire document.
+  /// Thread-safe; acquires docMutex.
+  void getSemanticTokens(const llvm::lsp::URIForFile &uri,
+                         std::vector<uint32_t> &data);
+
+  /// Return inlay hints for the given range.
+  /// Thread-safe; acquires docMutex.
+  void getInlayHints(const llvm::lsp::URIForFile &uri,
+                     const llvm::lsp::Range &range,
+                     std::vector<llvm::lsp::InlayHint> &hints);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();
