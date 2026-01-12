@@ -729,3 +729,270 @@ endclass
 class VifHolder;
     virtual basic_bus bus;
 endclass
+
+/// Check $cast dynamic type checking for class downcasts
+
+// CHECK-LABEL: moore.class.classdecl @BaseCastClass {
+// CHECK: }
+
+class BaseCastClass;
+endclass
+
+// CHECK-LABEL: moore.class.classdecl @DerivedCastClass extends @BaseCastClass {
+// CHECK: }
+
+class DerivedCastClass extends BaseCastClass;
+endclass
+
+// CHECK-LABEL: moore.module @testCastModule() {
+// CHECK:   [[DERIVEDVAR:%.+]] = moore.variable : <!moore.class<@DerivedCastClass>>
+// CHECK:   [[BASEVAR:%.+]] = moore.variable : <!moore.class<@BaseCastClass>>
+// CHECK:   [[RESULT:%.+]] = moore.variable : <!moore.i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     [[NEW:%.+]] = moore.class.new : <@DerivedCastClass>
+// CHECK:     moore.blocking_assign [[DERIVEDVAR]], [[NEW]] : class<@DerivedCastClass>
+// CHECK:     [[DERIVEDVAL:%.+]] = moore.read [[DERIVEDVAR]] : <!moore.class<@DerivedCastClass>>
+// CHECK:     [[UPCAST:%.+]] = moore.class.upcast [[DERIVEDVAL]] : <@DerivedCastClass> to <@BaseCastClass>
+// CHECK:     moore.blocking_assign [[BASEVAR]], [[UPCAST]] : class<@BaseCastClass>
+// CHECK:     [[BASEVAL:%.+]] = moore.read [[BASEVAR]] : <!moore.class<@BaseCastClass>>
+// CHECK:     [[DYNCAST:%.+]], [[SUCCESS:%.+]] = moore.class.dyn_cast [[BASEVAL]] : <@BaseCastClass> to <@DerivedCastClass>
+// CHECK:     moore.blocking_assign [[DERIVEDVAR]], [[DYNCAST]] : class<@DerivedCastClass>
+// CHECK:     [[SUCCESSINT:%.+]] = moore.conversion [[SUCCESS]] : i1 -> !moore.i32
+// CHECK:     moore.blocking_assign [[RESULT]], [[SUCCESSINT]] : i32
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testCastModule;
+    DerivedCastClass derived;
+    BaseCastClass base;
+    int result;
+    initial begin
+        derived = new;
+        base = derived;
+        result = $cast(derived, base);
+    end
+endmodule
+
+/// Check class handle comparison with null
+
+// CHECK-LABEL: moore.class.classdecl @CmpTestClass {
+// CHECK: }
+
+class CmpTestClass;
+endclass
+
+// CHECK-LABEL: moore.class.classdecl @CmpDerivedClass extends @CmpTestClass {
+// CHECK: }
+
+class CmpDerivedClass extends CmpTestClass;
+endclass
+
+// CHECK-LABEL: moore.module @testHandleCmpNull
+// CHECK: [[T:%.+]] = moore.variable : <class<@CmpTestClass>>
+// CHECK: [[RESULT:%.+]] = moore.variable : <i1>
+// CHECK: moore.procedure initial {
+// CHECK:   [[VAL:%.+]] = moore.read [[T]] : <class<@CmpTestClass>>
+// CHECK:   [[NULL:%.+]] = moore.class.null : !moore.class<@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[VAL]], [[NULL]] : !moore.class<@CmpTestClass>
+// CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
+// CHECK:   moore.return
+// CHECK: }
+
+module testHandleCmpNull;
+    CmpTestClass t;
+    bit result;
+    initial begin
+        result = (t == null);
+    end
+endmodule
+
+/// Check class handle inequality comparison with null
+
+// CHECK-LABEL: moore.module @testHandleCmpNullNe
+// CHECK: [[T:%.+]] = moore.variable : <class<@CmpTestClass>>
+// CHECK: [[RESULT:%.+]] = moore.variable : <i1>
+// CHECK: moore.procedure initial {
+// CHECK:   [[VAL:%.+]] = moore.read [[T]] : <class<@CmpTestClass>>
+// CHECK:   [[NULL:%.+]] = moore.class.null : !moore.class<@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp ne [[VAL]], [[NULL]] : !moore.class<@CmpTestClass>
+// CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
+// CHECK:   moore.return
+// CHECK: }
+
+module testHandleCmpNullNe;
+    CmpTestClass t;
+    bit result;
+    initial begin
+        result = (t != null);
+    end
+endmodule
+
+/// Check handle-to-handle comparison (same type)
+
+// CHECK-LABEL: moore.module @testHandleCmpHandles
+// CHECK: [[T1:%.+]] = moore.variable : <class<@CmpTestClass>>
+// CHECK: [[T2:%.+]] = moore.variable : <class<@CmpTestClass>>
+// CHECK: [[RESULT:%.+]] = moore.variable : <i1>
+// CHECK: moore.procedure initial {
+// CHECK:   [[V1:%.+]] = moore.read [[T1]] : <class<@CmpTestClass>>
+// CHECK:   [[V2:%.+]] = moore.read [[T2]] : <class<@CmpTestClass>>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[V1]], [[V2]] : !moore.class<@CmpTestClass>
+// CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
+// CHECK:   moore.return
+// CHECK: }
+
+module testHandleCmpHandles;
+    CmpTestClass t1, t2;
+    bit result;
+    initial begin
+        result = (t1 == t2);
+    end
+endmodule
+
+/// Check comparison with derived class (upcasting)
+
+// CHECK-LABEL: moore.module @testHandleCmpDerived
+// CHECK: [[BASE:%.+]] = moore.variable : <class<@CmpTestClass>>
+// CHECK: [[DERIVED:%.+]] = moore.variable : <class<@CmpDerivedClass>>
+// CHECK: [[RESULT:%.+]] = moore.variable : <i1>
+// CHECK: moore.procedure initial {
+// CHECK:   [[VBASE:%.+]] = moore.read [[BASE]] : <class<@CmpTestClass>>
+// CHECK:   [[VDERIVED:%.+]] = moore.read [[DERIVED]] : <class<@CmpDerivedClass>>
+// CHECK:   [[UPCAST:%.+]] = moore.class.upcast [[VDERIVED]] : <@CmpDerivedClass> to <@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[VBASE]], [[UPCAST]] : !moore.class<@CmpTestClass>
+// CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
+// CHECK:   moore.return
+// CHECK: }
+
+module testHandleCmpDerived;
+    CmpTestClass base;
+    CmpDerivedClass derived;
+    bit result;
+    initial begin
+        result = (base == derived);
+    end
+endmodule
+
+//===----------------------------------------------------------------------===//
+// Static Class Property Tests
+//===----------------------------------------------------------------------===//
+
+/// Check static class property declaration becomes a global variable
+
+// CHECK-LABEL: moore.class.classdecl @StaticPropertyClass {
+// CHECK: }
+// CHECK: moore.global_variable @"StaticPropertyClass::counter" : !moore.i32
+
+class StaticPropertyClass;
+    static int counter;
+endclass
+
+/// Check static class property access in static function
+
+// CHECK-LABEL: moore.class.classdecl @StaticMethodClass {
+// CHECK: }
+// CHECK: moore.global_variable @"StaticMethodClass::m_inst" : !moore.class<@StaticMethodClass>
+
+class StaticMethodClass;
+    static local StaticMethodClass m_inst;
+    static function StaticMethodClass get();
+        if (m_inst == null) m_inst = new();
+        return m_inst;
+    endfunction
+endclass
+
+/// Check static class property read from module
+
+// CHECK-LABEL: moore.class.classdecl @StaticReadClass {
+// CHECK: }
+// CHECK: moore.global_variable @"StaticReadClass::value" : !moore.i32
+
+class StaticReadClass;
+    static int value;
+endclass
+
+// CHECK-LABEL: moore.module @testStaticRead() {
+// CHECK:   %result = moore.variable : <!moore.i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[GLOBAL:.+]] = moore.get_global_variable @"StaticReadClass::value" : <!moore.i32>
+// CHECK:     %[[VAL:.+]] = moore.read %[[GLOBAL]] : <!moore.i32>
+// CHECK:     moore.blocking_assign %result, %[[VAL]] : i32
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testStaticRead;
+    int result;
+    initial begin
+        result = StaticReadClass::value;
+    end
+endmodule
+
+/// Check static class property write from module
+
+// CHECK-LABEL: moore.module @testStaticWrite() {
+// CHECK:   %[[CONST:.+]] = moore.constant 42 : i32
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[GLOBAL:.+]] = moore.get_global_variable @"StaticReadClass::value" : <!moore.i32>
+// CHECK:     moore.blocking_assign %[[GLOBAL]], %[[CONST]] : i32
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testStaticWrite;
+    initial begin
+        StaticReadClass::value = 42;
+    end
+endmodule
+
+/// Check null literal and class handle comparison
+
+// CHECK-LABEL: moore.class.classdecl @NullTestClass {
+// CHECK:   moore.class.propertydecl @data : !moore.i32
+// CHECK: }
+
+class NullTestClass;
+    int data;
+endclass
+
+// CHECK-LABEL: moore.module @testNullComparison() {
+// CHECK:   [[OBJ:%.+]] = moore.variable : <class<@NullTestClass>>
+// CHECK:   [[FLAG:%.+]] = moore.variable : <i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     [[NEW:%.+]] = moore.class.new : <@NullTestClass>
+// CHECK:     moore.blocking_assign [[OBJ]], [[NEW]] : class<@NullTestClass>
+// Test obj == null: should generate ClassNullOp and ClassHandleCmpOp
+// CHECK:     [[OBJV1:%.+]] = moore.read [[OBJ]] : <class<@NullTestClass>>
+// The null literal is first created with __null__ type, then properly typed for comparison
+// CHECK:     moore.class.null : <@__null__>
+// CHECK:     [[NULL1:%.+]] = moore.class.null : <@NullTestClass>
+// CHECK:     moore.class_handle_cmp eq [[OBJV1]], [[NULL1]] : <@NullTestClass> -> i1
+// Test obj != null: should generate ClassNullOp and ClassHandleCmpOp with ne predicate
+// CHECK:     [[OBJV2:%.+]] = moore.read [[OBJ]] : <class<@NullTestClass>>
+// CHECK:     moore.class.null : <@__null__>
+// CHECK:     [[NULL2:%.+]] = moore.class.null : <@NullTestClass>
+// CHECK:     moore.class_handle_cmp ne [[OBJV2]], [[NULL2]] : <@NullTestClass> -> i1
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testNullComparison;
+    NullTestClass obj;
+    int flag;
+    initial begin
+        obj = new;
+        // Test comparison with null using ==
+        if (obj == null) begin
+            flag = 0;
+        end
+        // Test comparison with null using !=
+        if (obj != null) begin
+            flag = 1;
+        end
+    end
+endmodule
