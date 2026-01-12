@@ -1495,6 +1495,13 @@ void ClassNewOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get());
 }
 
+void DynArrayNewOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // Allocates a new dynamic array.
+  effects.emplace_back(MemoryEffects::Allocate::get());
+}
+
 LogicalResult
 ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // 1) Type checks.

@@ -202,3 +202,32 @@ module DynamicArrayElementSelect;
     arr[idx] = b;
   end
 endmodule
+
+// CHECK-LABEL: moore.module @DynamicArrayNew
+module DynamicArrayNew;
+  // CHECK: [[ARR:%.+]] = moore.variable : <!moore.open_uarray<i32>>
+  int arr[];
+  // CHECK: [[SIZE:%.+]] = moore.variable : <!moore.i32>
+  int size;
+
+  initial begin
+    // Test basic new[size]
+    // CHECK: [[SIZE_READ:%.+]] = moore.read [[SIZE]]
+    // CHECK: [[NEW_ARR:%.+]] = moore.dyn_array.new [[SIZE_READ]] : i32 ->
+    // CHECK: moore.blocking_assign [[ARR]], [[NEW_ARR]]
+    arr = new[size];
+
+    // Test new[constant]
+    // CHECK: [[CONST:%.+]] = moore.constant 10
+    // CHECK: [[NEW_ARR2:%.+]] = moore.dyn_array.new [[CONST]] : i32 ->
+    // CHECK: moore.blocking_assign [[ARR]], [[NEW_ARR2]]
+    arr = new[10];
+
+    // Test new[size](existing) - resize preserving elements
+    // CHECK: [[SIZE_READ2:%.+]] = moore.read [[SIZE]]
+    // CHECK: [[ARR_READ:%.+]] = moore.read [[ARR]]
+    // CHECK: [[NEW_ARR3:%.+]] = moore.dyn_array.new [[SIZE_READ2]], [[ARR_READ]] : i32, !moore.open_uarray<i32> ->
+    // CHECK: moore.blocking_assign [[ARR]], [[NEW_ARR3]]
+    arr = new[size](arr);
+  end
+endmodule
