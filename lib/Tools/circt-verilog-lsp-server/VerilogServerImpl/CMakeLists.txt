@@ -20,7 +20,8 @@ add_circt_library(CIRCTVerilogLspServerImpl
   MLIRIR
   MLIRLspServerSupportLib
   CIRCTVerilogLspServerUtils
-  CIRCTLinting
+  # TODO: CIRCTLinting needs slang header fixes
+  # CIRCTLinting
   CIRCTSupport
   PRIVATE
   slang_slang

@@ -22,6 +22,7 @@
 #include <regex>
 
 using namespace circt::lint;
+using namespace llvm;
 
 //===----------------------------------------------------------------------===//
 // Severity Helpers
@@ -260,39 +261,33 @@ void LintConfig::addExcludePattern(llvm::StringRef pattern) {
 bool LintConfig::shouldExcludeFile(llvm::StringRef filePath) const {
   for (const auto &pattern : excludePatterns) {
     // Simple glob matching (supports * and ?)
-    try {
-      // Convert glob pattern to regex
-      std::string regexPattern = "^";
-      for (char c : pattern) {
-        switch (c) {
-        case '*':
-          regexPattern += ".*";
-          break;
-        case '?':
-          regexPattern += ".";
-          break;
-        case '.':
-          regexPattern += "\\.";
-          break;
-        case '/':
-        case '\\':
-          regexPattern += "[/\\\\]";
-          break;
-        default:
-          regexPattern += c;
-          break;
-        }
+    // Convert glob pattern to regex
+    std::string regexPattern = "^";
+    for (char c : pattern) {
+      switch (c) {
+      case '*':
+        regexPattern += ".*";
+        break;
+      case '?':
+        regexPattern += ".";
+        break;
+      case '.':
+        regexPattern += "\\.";
+        break;
+      case '/':
+      case '\\':
+        regexPattern += "[/\\\\]";
+        break;
+      default:
+        regexPattern += c;
+        break;
       }
-      regexPattern += "$";
-
-      std::regex re(regexPattern);
-      if (std::regex_match(filePath.str(), re))
-        return true;
-    } catch (const std::regex_error &) {
-      // If regex compilation fails, try simple substring match
-      if (filePath.contains(pattern))
-        return true;
     }
+    regexPattern += "$";
+
+    std::regex re(regexPattern, std::regex_constants::nosubs);
+    if (std::regex_match(filePath.str(), re))
+      return true;
   }
   return false;
 }

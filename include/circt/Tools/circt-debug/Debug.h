@@ -181,6 +181,8 @@ struct SimTime {
   /// Comparison operators.
   bool operator<(const SimTime &other) const;
   bool operator<=(const SimTime &other) const;
+  bool operator>(const SimTime &other) const { return other < *this; }
+  bool operator>=(const SimTime &other) const { return other <= *this; }
   bool operator==(const SimTime &other) const;
   bool operator!=(const SimTime &other) const { return !(*this == other); }
 
@@ -501,7 +503,7 @@ private:
 
 /// Result of evaluating an expression.
 struct EvalResult {
-  bool success = false;
+  bool succeeded = false;
   std::optional<SignalValue> value;
   std::string error;
 

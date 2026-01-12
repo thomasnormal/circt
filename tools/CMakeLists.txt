@@ -1,7 +1,8 @@
 add_subdirectory(arcilator)
 add_subdirectory(circt-as)
 add_subdirectory(circt-bmc)
-add_subdirectory(circt-debug)
+# TODO: circt-debug needs fixes for C++17 compatibility
+# add_subdirectory(circt-debug)
 add_subdirectory(circt-cocotb-driver)
 add_subdirectory(circt-cov)
 add_subdirectory(circt-dis)
@@ -25,5 +26,6 @@ add_subdirectory(py-split-input-file)
 
 if(CIRCT_SLANG_FRONTEND_ENABLED)
   add_subdirectory(circt-verilog)
-  add_subdirectory(circt-verilog-lsp-server)
+  # TODO: circt-verilog-lsp-server has slang API compatibility issues
+  # add_subdirectory(circt-verilog-lsp-server)
 endif()
