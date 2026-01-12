@@ -99,6 +99,13 @@ static uint64_t getTimeScaleInFemtoseconds(Context &context) {
   return scale;
 }
 
+/// Check if a class handle type represents the null type.
+/// Null types have the special "__null__" symbol.
+static bool isNullHandleType(moore::ClassHandleType handleTy) {
+  return handleTy.getClassSym() &&
+         handleTy.getClassSym().getRootReference() == "__null__";
+}
+
 static Value visitClassProperty(Context &context,
                                 const slang::ast::ClassPropertySymbol &expr) {
   auto loc = context.convertLocation(expr.location);
@@ -127,17 +134,36 @@ static Value visitClassProperty(Context &context,
   }
 
   if (isStatic) {
-    // Static properties are class-level (not instance-level).
-    // For now, emit a warning and return a dummy read to allow parsing to
-    // continue. Full static property support requires treating them as global
-    // variables with class-qualified names.
+    // Static properties are stored as global variables.
+    // Look up the global variable that was created for this static property.
+    if (auto globalOp = context.globalVariables.lookup(&expr)) {
+      return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    }
+
+    // If the global variable hasn't been created yet (e.g., forward reference),
+    // try on-demand conversion. This is needed when a static method of a class
+    // is converted before the class's static properties are visited.
+    // We need to find the parent class and ensure it's converted.
+    const auto *parentScope = expr.getParentScope();
+    if (parentScope) {
+      if (const auto *classType =
+              parentScope->asSymbol().as_if<slang::ast::ClassType>()) {
+        // Trigger class conversion which will create the global variable
+        (void)context.convertClassDeclaration(*classType);
+        // Now try to look up the global variable again
+        if (auto globalOp = context.globalVariables.lookup(&expr)) {
+          return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+        }
+      }
+    }
+
+    // If we still can't find it, emit a warning and create a temporary variable
+    // as a fallback.
     mlir::emitWarning(loc) << "static class property '" << expr.name
-                           << "' access is not fully supported yet; "
+                           << "' could not be resolved to a global variable; "
                            << "treating as uninitialized variable";
-    // Create a temporary variable to allow parsing to continue
     auto fieldTy = cast<moore::UnpackedType>(type);
     auto refTy = moore::RefType::get(fieldTy);
-    // Use a VariableOp to represent the static property
     auto nameAttr = builder.getStringAttr(expr.name);
     auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
                                            /*initial=*/Value{});
@@ -1163,13 +1189,52 @@ struct RvalueExprVisitor : public ExprVisitor {
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
       else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
-        // Class handle comparison (e.g., obj == null).
-        // For now, emit a warning and return a constant false/true.
-        // Full class handle comparison support would require a dedicated op.
-        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
-                               << "returning constant result";
-        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, resultTy, 0);
+        // Class handle comparison (e.g., obj == null, obj1 == obj2).
+        auto lhsHandleTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
+        auto rhsHandleTy = dyn_cast<moore::ClassHandleType>(rhs.getType());
+
+        // Both operands must be class handles for this comparison.
+        if (!lhsHandleTy || !rhsHandleTy) {
+          mlir::emitError(loc) << "class handle comparison requires both "
+                               << "operands to be class handles";
+          return {};
+        }
+
+        // Determine the common type for comparison.
+        // If one is null, use the other's type. Otherwise, they should match.
+        moore::ClassHandleType commonTy = lhsHandleTy;
+        Value lhsVal = lhs, rhsVal = rhs;
+
+        if (isNullHandleType(lhsHandleTy) && !isNullHandleType(rhsHandleTy)) {
+          // LHS is null - create a null with RHS's type
+          commonTy = rhsHandleTy;
+          lhsVal = moore::ClassNullOp::create(builder, loc, commonTy);
+        } else if (!isNullHandleType(lhsHandleTy) && isNullHandleType(rhsHandleTy)) {
+          // RHS is null - create a null with LHS's type
+          commonTy = lhsHandleTy;
+          rhsVal = moore::ClassNullOp::create(builder, loc, commonTy);
+        } else if (lhsHandleTy != rhsHandleTy) {
+          // Neither is null but types differ - try to find common base type.
+          // For now, if they're different non-null types, upcast LHS to RHS
+          // or vice versa based on inheritance.
+          if (context.isClassDerivedFrom(lhsHandleTy, rhsHandleTy)) {
+            commonTy = rhsHandleTy;
+            lhsVal = moore::ClassUpcastOp::create(builder, loc, commonTy, lhs);
+          } else if (context.isClassDerivedFrom(rhsHandleTy, lhsHandleTy)) {
+            commonTy = lhsHandleTy;
+            rhsVal = moore::ClassUpcastOp::create(builder, loc, commonTy, rhs);
+          } else {
+            // Types are not related by inheritance - emit warning
+            mlir::emitWarning(loc) << "comparing unrelated class handle types "
+                                   << lhsHandleTy << " and " << rhsHandleTy;
+            // Use ConversionOp to cast RHS to LHS type for the comparison
+            commonTy = lhsHandleTy;
+            rhsVal = moore::ConversionOp::create(builder, loc, commonTy, rhs);
+          }
+        }
+
+        return moore::ClassHandleCmpOp::create(
+            builder, loc, moore::ClassHandleCmpPredicate::eq, lhsVal, rhsVal);
       } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
@@ -1181,11 +1246,52 @@ struct RvalueExprVisitor : public ExprVisitor {
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
       else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
-        // Class handle comparison (e.g., obj != null).
-        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
-                               << "returning constant result";
-        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, resultTy, 1);
+        // Class handle comparison (e.g., obj != null, obj1 != obj2).
+        auto lhsHandleTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
+        auto rhsHandleTy = dyn_cast<moore::ClassHandleType>(rhs.getType());
+
+        // Both operands must be class handles for this comparison.
+        if (!lhsHandleTy || !rhsHandleTy) {
+          mlir::emitError(loc) << "class handle comparison requires both "
+                               << "operands to be class handles";
+          return {};
+        }
+
+        // Determine the common type for comparison.
+        // If one is null, use the other's type. Otherwise, they should match.
+        moore::ClassHandleType commonTy = lhsHandleTy;
+        Value lhsVal = lhs, rhsVal = rhs;
+
+        if (isNullHandleType(lhsHandleTy) && !isNullHandleType(rhsHandleTy)) {
+          // LHS is null - create a null with RHS's type
+          commonTy = rhsHandleTy;
+          lhsVal = moore::ClassNullOp::create(builder, loc, commonTy);
+        } else if (!isNullHandleType(lhsHandleTy) && isNullHandleType(rhsHandleTy)) {
+          // RHS is null - create a null with LHS's type
+          commonTy = lhsHandleTy;
+          rhsVal = moore::ClassNullOp::create(builder, loc, commonTy);
+        } else if (lhsHandleTy != rhsHandleTy) {
+          // Neither is null but types differ - try to find common base type.
+          // For now, if they're different non-null types, upcast LHS to RHS
+          // or vice versa based on inheritance.
+          if (context.isClassDerivedFrom(lhsHandleTy, rhsHandleTy)) {
+            commonTy = rhsHandleTy;
+            lhsVal = moore::ClassUpcastOp::create(builder, loc, commonTy, lhs);
+          } else if (context.isClassDerivedFrom(rhsHandleTy, lhsHandleTy)) {
+            commonTy = lhsHandleTy;
+            rhsVal = moore::ClassUpcastOp::create(builder, loc, commonTy, rhs);
+          } else {
+            // Types are not related by inheritance - emit warning
+            mlir::emitWarning(loc) << "comparing unrelated class handle types "
+                                   << lhsHandleTy << " and " << rhsHandleTy;
+            // Use ConversionOp to cast RHS to LHS type for the comparison
+            commonTy = lhsHandleTy;
+            rhsVal = moore::ConversionOp::create(builder, loc, commonTy, rhs);
+          }
+        }
+
+        return moore::ClassHandleCmpOp::create(
+            builder, loc, moore::ClassHandleCmpPredicate::ne, lhsVal, rhsVal);
       } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
@@ -1691,12 +1797,6 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (!destLvalue || !srcRvalue)
         return {};
 
-      // For now, emit a warning that $cast is not fully supported.
-      // $cast is used for runtime type checking and downcasting, which
-      // requires runtime support. We return a constant result for now.
-      mlir::emitWarning(loc)
-          << "$cast is not fully supported; returning constant result";
-
       // Check if both are class handle types - this is the common case for
       // dynamic downcasting in OOP
       auto destRefTy = cast<moore::RefType>(destLvalue.getType());
@@ -1708,10 +1808,23 @@ struct RvalueExprVisitor : public ExprVisitor {
           isa<moore::ClassHandleType>(srcTy);
 
       if (isClassDowncast) {
-        // For class downcasting, we can't perform the actual cast at compile
-        // time. Just return 1 to indicate the cast would succeed. The actual
-        // value won't be assigned, which may cause issues but allows parsing
-        // to continue.
+        // For class downcasting, use ClassDynCastOp which performs runtime
+        // type checking. This is essential for UVM's factory pattern.
+        // IEEE 1800-2017 Section 8.16: $cast returns 1 if cast succeeds.
+        auto destClassTy = cast<moore::ClassHandleType>(destTy);
+        auto dynCastOp = moore::ClassDynCastOp::create(builder, loc,
+                                                        destClassTy,
+                                                        builder.getI1Type(),
+                                                        srcRvalue);
+
+        // Store the casted value to destination (only valid if cast succeeds)
+        moore::BlockingAssignOp::create(builder, loc, destLvalue,
+                                        dynCastOp.getResult());
+
+        // Return the success flag as an int (0 or 1)
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        return moore::ConversionOp::create(builder, loc, intTy,
+                                           dynCastOp.getSuccess());
       } else {
         // For non-class types, try to perform the conversion
         auto castValue = context.materializeConversion(destTy, srcRvalue,
@@ -1721,11 +1834,10 @@ struct RvalueExprVisitor : public ExprVisitor {
           // Store the cast value to the destination
           moore::BlockingAssignOp::create(builder, loc, destLvalue, castValue);
         }
+        // Return 1 (success) - static cast always succeeds
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        return moore::ConstantOp::create(builder, loc, intTy, 1);
       }
-
-      // Return 1 (success) - $cast as a function returns int
-      auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      return moore::ConstantOp::create(builder, loc, intTy, 1);
     }
 
     // Handle string.itoa method: str.itoa(value) converts integer to string.
@@ -1907,18 +2019,18 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (!type)
       return {};
 
-    // For class handles, emit a special null constant.
-    // For now, we emit a warning and create a dummy variable and read from it.
-    // Full null support would require a dedicated NullOp or special handling.
-    mlir::emitWarning(loc) << "null literal support is incomplete; "
-                           << "treating as uninitialized value";
+    // For class handles, emit a ClassNullOp.
+    if (auto classHandleTy = dyn_cast<moore::ClassHandleType>(type))
+      return moore::ClassNullOp::create(builder, loc, classHandleTy);
 
-    // Create a variable to represent the null value, then read from it
+    // For other types (like chandle), fall back to uninitialized variable.
+    mlir::emitWarning(loc) << "null literal support is incomplete for type "
+                           << type << "; treating as uninitialized value";
+
     auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
     auto nameAttr = builder.getStringAttr("null_literal");
     auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
                                            /*initial=*/Value{});
-    // Read the variable to get an rvalue
     return moore::ReadOp::create(builder, loc, varOp);
   }
 
