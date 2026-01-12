@@ -3289,6 +3289,17 @@ function automatic void ConcatSformatf(string testStr, string otherString, ref s
    $sformat(logicVector, "%s %s", testStr, otherString);
 endfunction
 
+// CHECK-LABEL: func.func private @SwriteTest(
+// CHECK-SAME: [[VAL:%.+]]: !moore.i32
+// CHECK-SAME: [[OUT:%.+]]: !moore.ref<!moore.string>
+function automatic void SwriteTest(int val, ref string outputString);
+   // $swrite without format string - uses default integer formatting
+   // CHECK: [[FMTINT:%.+]] = moore.fmt.int decimal [[VAL]], align right, pad space signed : i32
+   // CHECK-NEXT: [[STROUT:%.+]] = moore.fstring_to_string [[FMTINT]]
+   // CHECK-NEXT: moore.blocking_assign [[OUT]], [[STROUT]] : string
+   $swrite(outputString, val);
+endfunction
+
 // CHECK-LABEL: moore.module @ContinuousAssignment(
 module ContinuousAssignment;
   // CHECK-NEXT: [[A:%.+]] = moore.variable

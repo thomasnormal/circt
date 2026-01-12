@@ -287,6 +287,44 @@ struct StmtVisitor {
           return failure();
         }
       }
+
+      // According to IEEE 1800-2023 Section 21.3.3 "Formatting data to a
+      // string", $swrite is similar to $sformat but does not require a format
+      // string. Arguments are formatted using their default representation.
+      // Example: $swrite(v, pool[key]); formats pool[key] as a string into v.
+      if (!call->getSubroutineName().compare("$swrite")) {
+
+        // Use the first argument as the output location
+        auto *lhsExpr = call->arguments().front();
+        // Format the second and all later arguments as a string with default
+        // formatting (no format string expected)
+        auto fmtValue =
+            context.convertFormatString(call->arguments().subspan(1), loc,
+                                        moore::IntFormat::Decimal, false);
+        if (failed(fmtValue))
+          return failure();
+        // Convert the FormatString to a StringType
+        auto strValue = moore::FormatStringToStringOp::create(builder, loc,
+                                                              fmtValue.value());
+        // The Slang AST produces a `AssignmentExpression` for the first
+        // argument; the RHS of this expression is invalid though
+        // (`EmptyArgument`), so we only use the LHS of the
+        // `AssignmentExpression` and plug in the formatted string for the RHS.
+        if (auto assignExpr =
+                lhsExpr->as_if<slang::ast::AssignmentExpression>()) {
+          auto lhs = context.convertLvalueExpression(assignExpr->left());
+          if (!lhs)
+            return failure();
+
+          auto convertedValue = context.materializeConversion(
+              cast<moore::RefType>(lhs.getType()).getNestedType(), strValue,
+              false, loc);
+          moore::BlockingAssignOp::create(builder, loc, lhs, convertedValue);
+          return success();
+        } else {
+          return failure();
+        }
+      }
     }
 
     auto value = context.convertRvalueExpression(stmt.expr);
