@@ -3168,6 +3168,37 @@ def ClassUpcastOp
       "$instance `:` type($instance) `to` type($result) attr-dict";
 }
 
+def ClassDynCastOp
+    : MooreOp<"class.dyn_cast", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,]> {
+  let summary = "Dynamic cast (downcast) a class handle with runtime type check";
+  let description = [{
+    Implements the SystemVerilog $cast system function for class handles.
+    Attempts to downcast a class handle to a derived type at runtime.
+
+    Returns two values:
+    - `result`: The casted handle (valid only if cast succeeds)
+    - `success`: An i1 indicating whether the cast succeeded (1) or failed (0)
+
+    IEEE 1800-2017 Section 8.16: "$cast shall attempt to assign the source
+    expression to the destination variable. When used as a function, $cast
+    returns 1 if the cast is legal, and 0 if the cast fails."
+
+    This operation is essential for UVM's dynamic type checking and factory
+    pattern, where components need to be downcast from base handles to their
+    actual derived types.
+
+    Example:
+    ```mlir
+    %result, %success = moore.class.dyn_cast %src : !moore.class<@Base> to !moore.class<@Derived>
+    ```
+  }];
+  let arguments = (ins ClassHandleType:$source);
+  let results = (outs ClassHandleType:$result, I1:$success);
+  let assemblyFormat =
+      "$source `:` type($source) `to` type($result) attr-dict";
+}
+
 def VTableLoadMethodOp
     : MooreOp<"vtable.load_method", [Pure,
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
