@@ -242,7 +242,7 @@ struct ExprVisitor {
     }
 
     if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
-             moore::QueueType>(derefType)) {
+             moore::QueueType, moore::AssocArrayType>(derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";
       return {};
@@ -251,9 +251,10 @@ struct ExprVisitor {
     auto resultType =
         isLvalue ? moore::RefType::get(cast<moore::UnpackedType>(type)) : type;
 
-    // For queue types (and other dynamically-sized types), we use the index
-    // directly without translation since they are 0-based.
-    bool isDynamicType = isa<moore::QueueType>(derefType);
+    // For queue types, associative arrays, and other dynamically-sized types,
+    // we use the index directly without translation since they are 0-based
+    // or use non-integer keys.
+    bool isDynamicType = isa<moore::QueueType, moore::AssocArrayType>(derefType);
 
     if (isDynamicType) {
       // Dynamic types (queues) use the index directly - always use dynamic
@@ -2607,6 +2608,40 @@ static Value materializeSBVToPackedConversion(Context &context,
   return builder.createOrFold<moore::SBVToPackedOp>(loc, packedType, value);
 }
 
+/// Check if two class symbols are compatible specializations of the same
+/// generic class (e.g., for the UVM this_type pattern). This is different from
+/// isClassDerivedFrom which checks actual inheritance relationships.
+static bool areSameGenericSpecialization(Context &context,
+                                         mlir::SymbolRefAttr sym1,
+                                         mlir::SymbolRefAttr sym2) {
+  if (sym1 == sym2)
+    return false; // Same symbol - not a specialization case
+
+  mlir::StringAttr name1 = sym1.getRootReference();
+  mlir::StringAttr name2 = sym2.getRootReference();
+
+  // Look up the generic class for each symbol
+  auto it1 = context.classSpecializationToGeneric.find(name1);
+  auto it2 = context.classSpecializationToGeneric.find(name2);
+
+  mlir::StringAttr generic1 = (it1 != context.classSpecializationToGeneric.end())
+                                  ? it1->second
+                                  : name1;
+  mlir::StringAttr generic2 = (it2 != context.classSpecializationToGeneric.end())
+                                  ? it2->second
+                                  : name2;
+
+  // If both resolve to the same generic class, they're compatible specializations
+  if (generic1 == generic2)
+    return true;
+
+  // Check if one is the generic of the other
+  if (generic1 == name2 || generic2 == name1)
+    return true;
+
+  return false;
+}
+
 /// Check whether the actual handle is a subclass of another handle type
 /// and return a properly upcast version if so.
 static mlir::Value maybeUpcastHandle(Context &context, mlir::Value actualHandle,
@@ -2632,6 +2667,19 @@ static mlir::Value maybeUpcastHandle(Context &context, mlir::Value actualHandle,
       actualHandleTy.getClassSym().getRootReference() == "__null__") {
     // The source is a null handle - just cast it to the expected type.
     // Use ConversionOp since we don't have a dedicated NullCastOp.
+    return moore::ConversionOp::create(context.builder, loc, expectedHandleTy,
+                                       actualHandle);
+  }
+
+  // Check if the two types are compatible specializations of the same generic
+  // class. This handles the UVM this_type pattern where a typedef like
+  // "typedef uvm_pool#(KEY,T) this_type;" creates a different specialization
+  // symbol but represents the same class with the same parameters.
+  if (areSameGenericSpecialization(context, actualHandleTy.getClassSym(),
+                                   expectedHandleTy.getClassSym())) {
+    // Use ConversionOp for same-generic-class specialization conversions.
+    // These aren't real upcasts (no inheritance relationship), just different
+    // symbol names for the same logical class type.
     return moore::ConversionOp::create(context.builder, loc, expectedHandleTy,
                                        actualHandle);
   }
@@ -3136,6 +3184,46 @@ static mlir::Operation *resolve(Context &context, mlir::SymbolRefAttr sym) {
   return context.symbolTable.lookupNearestSymbolFrom(context.intoModuleOp, sym);
 }
 
+/// Get the generic class name for a symbol, if it's a specialization.
+/// Returns the input symbol name if it's not a specialization.
+static mlir::StringAttr getGenericClassName(Context &context,
+                                            mlir::StringAttr symName) {
+  auto it = context.classSpecializationToGeneric.find(symName);
+  if (it != context.classSpecializationToGeneric.end())
+    return it->second;
+  return symName;
+}
+
+/// Check if two symbols refer to the same class, accounting for the fact
+/// that they might be different specializations of the same generic class.
+/// This is needed for the UVM this_type pattern where a typedef like
+/// "typedef uvm_pool#(KEY,T) this_type;" creates a specialization that
+/// should be considered the same as the enclosing class.
+static bool areSameOrRelatedClass(Context &context, mlir::SymbolRefAttr sym1,
+                                  mlir::SymbolRefAttr sym2) {
+  if (sym1 == sym2)
+    return true;
+
+  // Get the root reference names
+  mlir::StringAttr name1 = sym1.getRootReference();
+  mlir::StringAttr name2 = sym2.getRootReference();
+
+  // Check if they're the same after resolving to generic classes
+  mlir::StringAttr generic1 = getGenericClassName(context, name1);
+  mlir::StringAttr generic2 = getGenericClassName(context, name2);
+
+  // If both resolve to the same generic class, they're related
+  if (generic1 == generic2)
+    return true;
+
+  // Check if one is the generic of the other
+  // e.g., sym1 = @test_pool_0 (specialization), sym2 = @test_pool (generic)
+  if (generic1 == name2 || generic2 == name1)
+    return true;
+
+  return false;
+}
+
 bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
                                  const moore::ClassHandleType &baseTy) {
   if (!actualTy || !baseTy)
@@ -3144,7 +3232,14 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
   mlir::SymbolRefAttr actualSym = actualTy.getClassSym();
   mlir::SymbolRefAttr baseSym = baseTy.getClassSym();
 
+  // Direct match
   if (actualSym == baseSym)
+    return true;
+
+  // Check if they're the same class through the generic class mapping.
+  // This handles the UVM this_type pattern where a typedef creates a
+  // specialization that should be considered the same as the base class.
+  if (areSameOrRelatedClass(*this, actualSym, baseSym))
     return true;
 
   auto *op = resolve(*this, actualSym);
@@ -3157,7 +3252,8 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
     mlir::SymbolRefAttr curBase = decl.getBaseAttr();
     if (!curBase)
       break;
-    if (curBase == baseSym)
+    // Use the related class check instead of direct equality
+    if (areSameOrRelatedClass(*this, curBase, baseSym))
       return true;
     decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(resolve(*this, curBase));
   }
