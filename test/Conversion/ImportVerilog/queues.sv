@@ -1,0 +1,193 @@
+// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --ir-moore %s
+// REQUIRES: slang
+
+// Internal issue in Slang v3 about jump depending on uninitialised value.
+// UNSUPPORTED: valgrind
+
+//===----------------------------------------------------------------------===//
+// Queue Operation Tests for UVM Parsing Features
+//===----------------------------------------------------------------------===//
+
+/// Test queue declaration with unbounded size
+// CHECK-LABEL: moore.module @QueueDeclarationTest() {
+module QueueDeclarationTest;
+    // CHECK: [[Q:%.+]] = moore.variable : <!moore.queue<i32, 0>>
+    int q[$];
+    // CHECK: [[Q2:%.+]] = moore.variable : <!moore.queue<l8, 0>>
+    logic [7:0] q2[$];
+    // CHECK: [[Q3:%.+]] = moore.variable : <!moore.queue<i32, 10>>
+    int q3[$:10];  // bounded queue
+endmodule
+
+/// Test queue push_back and push_front methods
+// CHECK-LABEL: moore.module @QueuePushTest() {
+module QueuePushTest;
+    int q[$];
+
+    initial begin
+        // CHECK: moore.queue.push_back
+        q.push_back(1);
+        // CHECK: moore.queue.push_back
+        q.push_back(2);
+        // CHECK: moore.queue.push_front
+        q.push_front(0);
+    end
+endmodule
+
+/// Test queue pop_back and pop_front methods
+// CHECK-LABEL: moore.module @QueuePopTest() {
+module QueuePopTest;
+    int q[$];
+    int val;
+
+    initial begin
+        q.push_back(1);
+        q.push_back(2);
+        q.push_back(3);
+        // CHECK: moore.queue.pop_back
+        val = q.pop_back();
+        // CHECK: moore.queue.pop_front
+        val = q.pop_front();
+    end
+endmodule
+
+/// Test queue size method
+// CHECK-LABEL: moore.module @QueueSizeTest() {
+module QueueSizeTest;
+    int q[$];
+    int sz;
+
+    initial begin
+        q.push_back(1);
+        q.push_back(2);
+        // CHECK: moore.array.size
+        sz = q.size();
+    end
+endmodule
+
+/// Test queue delete method
+// CHECK-LABEL: moore.module @QueueDeleteTest() {
+module QueueDeleteTest;
+    int q[$];
+
+    initial begin
+        q.push_back(1);
+        q.push_back(2);
+        // CHECK: moore.queue.delete
+        q.delete();
+    end
+endmodule
+
+/// Test queue element access with $ unbounded literal
+/// The $ symbol represents the last element index (size - 1)
+// CHECK-LABEL: moore.module @QueueDollarAccessTest() {
+module QueueDollarAccessTest;
+    int q[$];
+    int first_elem;
+    int last_elem;
+
+    initial begin
+        q.push_back(10);
+        q.push_back(20);
+        q.push_back(30);
+
+        // Access first element
+        // CHECK: moore.dyn_extract
+        first_elem = q[0];
+
+        // Access last element using $ - this represents q[q.size()-1]
+        // The $ literal should be converted to (size - 1)
+        // CHECK: moore.array.size
+        // CHECK: moore.sub
+        // CHECK: moore.dyn_extract
+        last_elem = q[$];
+    end
+endmodule
+
+/// Test queue with different element types
+// CHECK-LABEL: moore.module @QueueTypesTest() {
+module QueueTypesTest;
+    // CHECK: moore.variable : <!moore.queue<i8, 0>>
+    byte byte_q[$];
+    // CHECK: moore.variable : <!moore.queue<i64, 0>>
+    longint long_q[$];
+    // CHECK: moore.variable : <!moore.queue<string, 0>>
+    string str_q[$];
+    // CHECK: moore.variable : <!moore.queue<l32, 0>>
+    logic [31:0] logic_q[$];
+
+    initial begin
+        byte_q.push_back(8'hAB);
+        long_q.push_back(64'd12345678);
+        str_q.push_back("hello");
+        logic_q.push_back(32'hDEADBEEF);
+    end
+endmodule
+
+//===----------------------------------------------------------------------===//
+// String Method Tests
+//===----------------------------------------------------------------------===//
+
+// Note: String itoa() method tests are commented out due to a known limitation
+// where slang promotes integer arguments to logic types, but moore.int_to_string
+// requires two-valued integer types. The itoa method IS recognized by the
+// converter but needs a type conversion fix.
+//
+// TODO: Add itoa tests once the type conversion issue is resolved:
+// - s.itoa(num) should convert integer to decimal string
+// - Works with int, byte, shortint, longint types
+
+/// Test string methods used together (UVM pattern)
+// CHECK-LABEL: moore.module @StringMethodsComboTest() {
+module StringMethodsComboTest;
+    string s;
+    string result;
+    int len;
+
+    initial begin
+        s = "Hello";
+        // CHECK: moore.string.len
+        len = s.len();
+        // CHECK: moore.string.toupper
+        result = s.toupper();
+        // CHECK: moore.string.tolower
+        result = s.tolower();
+    end
+endmodule
+
+//===----------------------------------------------------------------------===//
+// Queue in Class Context (UVM Pattern)
+//===----------------------------------------------------------------------===//
+
+/// Test queue usage within a class (common UVM pattern)
+// CHECK-LABEL: moore.class.classdecl @QueueContainer {
+// CHECK:   moore.class.propertydecl @items : !moore.queue<i32, 0>
+// CHECK: }
+class QueueContainer;
+    int items[$];
+
+    function void add_item(int item);
+        items.push_back(item);
+    endfunction
+
+    function int get_last();
+        return items[$];
+    endfunction
+
+    function int get_size();
+        return items.size();
+    endfunction
+endclass
+
+// CHECK-LABEL: moore.module @QueueInClassTest() {
+module QueueInClassTest;
+    QueueContainer container;
+
+    initial begin
+        container = new;
+        container.add_item(1);
+        container.add_item(2);
+        container.add_item(3);
+    end
+endmodule
