@@ -76,6 +76,10 @@ func.func @AssocArrayIteration(%array: !moore.ref<!moore.assoc_array<i32, string
   %found_first = moore.assoc.first %array, %key : <!moore.assoc_array<i32, string>>, <!moore.string>
   // CHECK: moore.assoc.next [[ARRAY]], [[KEY]] : <!moore.assoc_array<i32, string>>, <!moore.string>
   %found_next = moore.assoc.next %array, %key : <!moore.assoc_array<i32, string>>, <!moore.string>
+  // CHECK: moore.assoc.last [[ARRAY]], [[KEY]] : <!moore.assoc_array<i32, string>>, <!moore.string>
+  %found_last = moore.assoc.last %array, %key : <!moore.assoc_array<i32, string>>, <!moore.string>
+  // CHECK: moore.assoc.prev [[ARRAY]], [[KEY]] : <!moore.assoc_array<i32, string>>, <!moore.string>
+  %found_prev = moore.assoc.prev %array, %key : <!moore.assoc_array<i32, string>>, <!moore.string>
   return
 }
 
@@ -87,6 +91,10 @@ func.func @AssocArrayWithIntKey(%array: !moore.ref<!moore.assoc_array<string, i6
   %found_first = moore.assoc.first %array, %key : <!moore.assoc_array<string, i64>>, <!moore.i64>
   // CHECK: moore.assoc.next [[ARRAY]], [[KEY]] : <!moore.assoc_array<string, i64>>, <!moore.i64>
   %found_next = moore.assoc.next %array, %key : <!moore.assoc_array<string, i64>>, <!moore.i64>
+  // CHECK: moore.assoc.last [[ARRAY]], [[KEY]] : <!moore.assoc_array<string, i64>>, <!moore.i64>
+  %found_last = moore.assoc.last %array, %key : <!moore.assoc_array<string, i64>>, <!moore.i64>
+  // CHECK: moore.assoc.prev [[ARRAY]], [[KEY]] : <!moore.assoc_array<string, i64>>, <!moore.i64>
+  %found_prev = moore.assoc.prev %array, %key : <!moore.assoc_array<string, i64>>, <!moore.i64>
   return
 }
 

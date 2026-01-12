@@ -62,104 +62,119 @@ module AssocArrayDeleteTest;
     end
 endmodule
 
-// TODO: Enable when first() is implemented as a subroutine
-// /// Test associative array first() method
-// /// first(ref key) sets key to the first (smallest) key and returns 1 if array is non-empty
-// // CHECK-LABEL: moore.module @AssocArrayFirstTest() {
-// module AssocArrayFirstTest;
-//     int aa[int];
-//     int key;
-//     int found;
-//
-//     initial begin
-//         aa[30] = 300;
-//         aa[10] = 100;
-//         aa[20] = 200;
-//
-//         // Get first key (should be 10 - smallest)
-//         // CHECK: moore.assoc.first
-//         found = aa.first(key);
-//     end
-// endmodule
+/// Test associative array first() method
+/// first(ref key) sets key to the first (smallest) key and returns 1 if array is non-empty
+// CHECK-LABEL: moore.module @AssocArrayFirstTest() {
+module AssocArrayFirstTest;
+    int aa[int];
+    int key;
+    int found;
 
-// TODO: Enable when next() is implemented as a subroutine
-// /// Test associative array next() method
-// /// next(ref key) sets key to the next key after current key value
-// // CHECK-LABEL: moore.module @AssocArrayNextTest() {
-// module AssocArrayNextTest;
-//     int aa[int];
-//     int key;
-//     int found;
-//
-//     initial begin
-//         aa[10] = 100;
-//         aa[20] = 200;
-//         aa[30] = 300;
-//
-//         // Get first key
-//         // CHECK: moore.assoc.first
-//         found = aa.first(key);
-//
-//         // Get next key
-//         // CHECK: moore.assoc.next
-//         found = aa.next(key);
-//
-//         // Get next key again
-//         // CHECK: moore.assoc.next
-//         found = aa.next(key);
-//     end
-// endmodule
+    initial begin
+        aa[30] = 300;
+        aa[10] = 100;
+        aa[20] = 200;
 
-// TODO: Enable when prev() is implemented as a subroutine
-// /// Test associative array prev() method
-// /// prev(ref key) sets key to the previous key before current key value
-// // CHECK-LABEL: moore.module @AssocArrayPrevTest() {
-// module AssocArrayPrevTest;
-//     int aa[int];
-//     int key;
-//     int found;
-//
-//     initial begin
-//         aa[10] = 100;
-//         aa[20] = 200;
-//         aa[30] = 300;
-//
-//         // Start from a key
-//         key = 30;
-//
-//         // Get previous key (should be 20)
-//         // Note: prev may emit a warning as it's not fully supported
-//         found = aa.prev(key);
-//     end
-// endmodule
+        // Get first key (should be 10 - smallest)
+        // CHECK: moore.assoc.first
+        found = aa.first(key);
+    end
+endmodule
 
-// TODO: Enable when first()/next() are implemented as subroutines
-// /// Test associative array iteration pattern (UVM common pattern)
-// // CHECK-LABEL: moore.module @AssocArrayIterationTest() {
-// module AssocArrayIterationTest;
-//     int aa[int];
-//     int key;
-//     int value;
-//
-//     initial begin
-//         // Populate array
-//         aa[100] = 1;
-//         aa[200] = 2;
-//         aa[300] = 3;
-//
-//         // Iterate through all keys using first/next pattern
-//         // CHECK: moore.assoc.first
-//         if (aa.first(key)) begin
-//             // CHECK: moore.dyn_extract
-//             value = aa[key];
-//             // CHECK: moore.assoc.next
-//             while (aa.next(key)) begin
-//                 // CHECK: moore.dyn_extract
-//                 value = aa[key];
-//             end
-//         end
-//     end
-// endmodule
+/// Test associative array next() method
+/// next(ref key) sets key to the next key after current key value
+// CHECK-LABEL: moore.module @AssocArrayNextTest() {
+module AssocArrayNextTest;
+    int aa[int];
+    int key;
+    int found;
+
+    initial begin
+        aa[10] = 100;
+        aa[20] = 200;
+        aa[30] = 300;
+
+        // Get first key
+        // CHECK: moore.assoc.first
+        found = aa.first(key);
+
+        // Get next key
+        // CHECK: moore.assoc.next
+        found = aa.next(key);
+
+        // Get next key again
+        // CHECK: moore.assoc.next
+        found = aa.next(key);
+    end
+endmodule
+
+/// Test associative array last() method
+/// last(ref key) sets key to the last (largest) key and returns 1 if array is non-empty
+// CHECK-LABEL: moore.module @AssocArrayLastTest() {
+module AssocArrayLastTest;
+    int aa[int];
+    int key;
+    int found;
+
+    initial begin
+        aa[10] = 100;
+        aa[20] = 200;
+        aa[30] = 300;
+
+        // Get last key (should be 30 - largest)
+        // CHECK: moore.assoc.last
+        found = aa.last(key);
+    end
+endmodule
+
+/// Test associative array prev() method
+/// prev(ref key) sets key to the previous key before current key value
+// CHECK-LABEL: moore.module @AssocArrayPrevTest() {
+module AssocArrayPrevTest;
+    int aa[int];
+    int key;
+    int found;
+
+    initial begin
+        aa[10] = 100;
+        aa[20] = 200;
+        aa[30] = 300;
+
+        // Start from a key
+        key = 30;
+
+        // Get previous key (should be 20)
+        // CHECK: moore.assoc.prev
+        found = aa.prev(key);
+    end
+endmodule
+
+/// Test associative array iteration pattern (UVM common pattern)
+// CHECK-LABEL: moore.module @AssocArrayIterationTest() {
+module AssocArrayIterationTest;
+    int aa[int];
+    int key;
+    int value;
+
+    initial begin
+        // Populate array
+        aa[100] = 1;
+        aa[200] = 2;
+        aa[300] = 3;
+
+        // Iterate through all keys using first/next pattern
+        // CHECK: moore.assoc.first
+        if (aa.first(key)) begin
+            // CHECK: moore.dyn_extract
+            value = aa[key];
+            // CHECK: moore.assoc.next
+            while (aa.next(key)) begin
+                // CHECK: moore.dyn_extract
+                value = aa[key];
+            end
+        end
+    end
+endmodule
 
 /// Test associative array with string keys (common in UVM)
 // CHECK-LABEL: moore.module @AssocArrayStringKeyTest() {
