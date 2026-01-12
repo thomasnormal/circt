@@ -33,6 +33,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "slang/ast/ASTVisitor.h"
+#include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
@@ -793,6 +794,54 @@ static std::string formatSymbolInfo(const slang::ast::Symbol &symbol) {
   case slang::ast::SymbolKind::Package: {
     os << "```systemverilog\n";
     os << "package " << symbol.name;
+    os << "\n```";
+    break;
+  }
+  case slang::ast::SymbolKind::ClassType: {
+    const auto &classType = symbol.as<slang::ast::ClassType>();
+    os << "```systemverilog\n";
+    os << "class " << symbol.name;
+    // Show base class if exists
+    if (classType.getBaseClass()) {
+      os << " extends " << classType.getBaseClass()->name;
+    }
+    os << "\n```\n\n";
+    // Show members summary
+    os << "**Members:**\n";
+    for (const auto &member : classType.members()) {
+      if (member.name.empty())
+        continue;
+      os << "- ";
+      switch (member.kind) {
+      case slang::ast::SymbolKind::ClassProperty:
+        os << "`property` ";
+        break;
+      case slang::ast::SymbolKind::Subroutine:
+        os << "`method` ";
+        break;
+      default:
+        os << "`" << slang::ast::toString(member.kind) << "` ";
+        break;
+      }
+      os << "`" << member.name << "`\n";
+    }
+    break;
+  }
+  case slang::ast::SymbolKind::ClassProperty: {
+    const auto &prop = symbol.as<slang::ast::ClassPropertySymbol>();
+    os << "```systemverilog\n";
+    // Show visibility
+    switch (prop.visibility) {
+    case slang::ast::Visibility::Public:
+      break; // public is implicit
+    case slang::ast::Visibility::Protected:
+      os << "protected ";
+      break;
+    case slang::ast::Visibility::Local:
+      os << "local ";
+      break;
+    }
+    os << formatTypeDescription(prop.getType()) << " " << symbol.name;
     os << "\n```";
     break;
   }

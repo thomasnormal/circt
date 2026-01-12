@@ -1,0 +1,80 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test go-to-definition for SystemVerilog classes (important for UVM support)
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///classes.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"class MyBase;\n  int data;\n  function void print();\n    $display(\"data=%d\", data);\n  endfunction\nendclass\n\nclass MyDerived extends MyBase;\n  string name;\n  function new(string n);\n    name = n;\n    data = 42;\n  endfunction\n  function void show();\n    print();\n    $display(\"name=%s\", name);\n  endfunction\nendclass\n\nmodule test;\n  MyDerived obj;\n  initial begin\n    obj = new(\"test\");\n    obj.show();\n  end\nendmodule"
+}}}
+// -----
+// Find definition of class MyBase (from extends clause)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":7,"character":24}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 0
+// CHECK:           },
+// CHECK:           "uri": "test:///classes.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Find definition of method print() (called in show())
+{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":14,"character":6}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 2
+// CHECK:           },
+// CHECK:           "uri": "test:///classes.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Find definition of property data (used in constructor)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":11,"character":6}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 1
+// CHECK:           },
+// CHECK:           "uri": "test:///classes.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Find definition of obj.show() method call
+{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":22,"character":10}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 13
+// CHECK:           },
+// CHECK:           "uri": "test:///classes.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
