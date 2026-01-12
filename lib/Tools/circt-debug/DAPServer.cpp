@@ -9,6 +9,7 @@
 #include "circt/Tools/circt-debug/DAPServer.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/Path.h"
 #include <iostream>
 #include <sstream>
 
@@ -293,9 +294,9 @@ int DAPServer::run(std::istream &in, llvm::raw_ostream &out) {
 
     // Parse as request
     Request req;
-    if (auto *seq = msgOpt->getInteger("seq"))
+    if (auto seq = msgOpt->getInteger("seq"))
       req.seq = *seq;
-    if (auto *cmd = msgOpt->getString("command"))
+    if (auto cmd = msgOpt->getString("command"))
       req.command = cmd->str();
     if (auto *args = msgOpt->getObject("arguments"))
       req.arguments = llvm::json::Object(*args);
@@ -403,7 +404,7 @@ Response DAPServer::handleDisconnect(const Request &req) {
   Response resp(req, true);
 
   bool terminateDebuggee = false;
-  if (auto *term = req.arguments.getBoolean("terminateDebuggee"))
+  if (auto term = req.arguments.getBoolean("terminateDebuggee"))
     terminateDebuggee = *term;
 
   if (terminateDebuggee || launched) {
@@ -425,7 +426,7 @@ Response DAPServer::handleSetBreakpoints(const Request &req) {
   // Get source file
   std::string sourcePath;
   if (auto *source = req.arguments.getObject("source")) {
-    if (auto *path = source->getString("path"))
+    if (auto path = source->getString("path"))
       sourcePath = path->str();
   }
 
@@ -453,14 +454,14 @@ Response DAPServer::handleSetBreakpoints(const Request &req) {
         continue;
 
       int line = 0;
-      if (auto *l = bpObj->getInteger("line"))
+      if (auto l = bpObj->getInteger("line"))
         line = *l;
 
       // Create the breakpoint
       unsigned circtId = mgr.addLineBreakpoint(sourcePath, line);
 
       // Handle condition
-      if (auto *cond = bpObj->getString("condition")) {
+      if (auto cond = bpObj->getString("condition")) {
         // For conditional breakpoints, remove the line breakpoint and add a
         // condition
         mgr.removeBreakpoint(circtId);
@@ -498,7 +499,7 @@ Response DAPServer::handleSetDataBreakpoints(const Request &req) {
         continue;
 
       std::string dataId;
-      if (auto *id = bpObj->getString("dataId"))
+      if (auto id = bpObj->getString("dataId"))
         dataId = id->str();
 
       // Create signal breakpoint
@@ -573,7 +574,7 @@ Response DAPServer::handleScopes(const Request &req) {
   Response resp(req, true);
 
   int frameId = 0;
-  if (auto *fid = req.arguments.getInteger("frameId"))
+  if (auto fid = req.arguments.getInteger("frameId"))
     frameId = *fid;
 
   auto scopes = varRefs.getScopes(session.getState(), frameId);
@@ -596,7 +597,7 @@ Response DAPServer::handleVariables(const Request &req) {
   Response resp(req, true);
 
   int varRef = 0;
-  if (auto *ref = req.arguments.getInteger("variablesReference"))
+  if (auto ref = req.arguments.getInteger("variablesReference"))
     varRef = *ref;
 
   auto variables = varRefs.getVariables(session.getState(), varRef);
@@ -624,9 +625,9 @@ Response DAPServer::handleSetVariable(const Request &req) {
   std::string name;
   std::string value;
 
-  if (auto *n = req.arguments.getString("name"))
+  if (auto n = req.arguments.getString("name"))
     name = n->str();
-  if (auto *v = req.arguments.getString("value"))
+  if (auto v = req.arguments.getString("value"))
     value = v->str();
 
   auto parsedVal = SignalValue::fromString(value, 32);
@@ -650,7 +651,7 @@ Response DAPServer::handleEvaluate(const Request &req) {
   Response resp(req, true);
 
   std::string expression;
-  if (auto *expr = req.arguments.getString("expression"))
+  if (auto expr = req.arguments.getString("expression"))
     expression = expr->str();
 
   auto result = session.evaluate(expression);
@@ -734,7 +735,7 @@ Response DAPServer::handleCompletions(const Request &req) {
   Response resp(req, true);
 
   std::string text;
-  if (auto *t = req.arguments.getString("text"))
+  if (auto t = req.arguments.getString("text"))
     text = t->str();
 
   llvm::json::Array targets;
@@ -857,9 +858,10 @@ DAPServer::DAPBreakpoint DAPServer::toDAPBreakpoint(const Breakpoint &bp) {
   dapBp.verified = bp.isEnabled();
   dapBp.message = bp.getDescription();
 
-  if (auto *lineBp = dynamic_cast<const LineBreakpoint *>(&bp)) {
-    dapBp.line = lineBp->getLine();
-    dapBp.source = lineBp->getFile().str();
+  if (bp.getType() == Breakpoint::Type::Line) {
+    const auto &lineBp = static_cast<const LineBreakpoint &>(bp);
+    dapBp.line = lineBp.getLine();
+    dapBp.source = lineBp.getFile().str();
   }
 
   return dapBp;
@@ -906,7 +908,8 @@ void DAPTransport::writeMessage(const llvm::json::Object &msg) {
 
   std::string body;
   llvm::raw_string_ostream bodyStream(body);
-  bodyStream << llvm::json::Value(msg);
+  llvm::json::Object msgCopy(msg);
+  bodyStream << llvm::json::Value(std::move(msgCopy));
   bodyStream.flush();
 
   out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
@@ -937,7 +940,3 @@ std::optional<size_t> DAPTransport::readContentLength() {
 
   return std::nullopt;
 }
-
-} // namespace dap
-} // namespace debug
-} // namespace circt

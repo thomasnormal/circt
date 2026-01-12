@@ -1,8 +1,7 @@
 add_subdirectory(arcilator)
 add_subdirectory(circt-as)
 add_subdirectory(circt-bmc)
-# TODO: circt-debug needs fixes for C++17 compatibility
-# add_subdirectory(circt-debug)
+add_subdirectory(circt-debug)
 add_subdirectory(circt-cocotb-driver)
 add_subdirectory(circt-cov)
 add_subdirectory(circt-dis)

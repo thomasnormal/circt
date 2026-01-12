@@ -437,6 +437,3 @@ void WaveformCapture::clear() {
   capturing = false;
   postCaptureCount = 0;
 }
-
-} // namespace debug
-} // namespace circt
