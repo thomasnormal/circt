@@ -1206,6 +1206,3 @@ std::optional<std::string> InteractiveCLI::readLine() {
 void InteractiveCLI::setupSignalHandlers() {
   // TODO: Set up Ctrl+C handling
 }
-
-} // namespace debug
-} // namespace circt
