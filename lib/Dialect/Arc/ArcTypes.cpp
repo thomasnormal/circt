@@ -91,6 +91,22 @@ unsigned MemoryType::getStride() {
   return llvm::alignToPowerOf2(stride, llvm::bit_ceil(std::min(stride, 16U)));
 }
 
+//===----------------------------------------------------------------------===//
+// FourStateType
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+FourStateType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                      unsigned width) {
+  if (width == 0)
+    return emitError() << "4-state logic type must have a positive width";
+  // Limit width to prevent overflow in storage calculations
+  // Max width allows for 2x bits for dual-rail encoding
+  if (width > (1u << 24))
+    return emitError() << "4-state logic type width too large";
+  return success();
+}
+
 void ArcDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST

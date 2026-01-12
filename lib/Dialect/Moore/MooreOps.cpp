@@ -31,7 +31,7 @@ using namespace mlir;
 
 void SVModuleOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                        llvm::StringRef name, hw::ModuleType type) {
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
+  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getModuleTypeAttrName(state.name), TypeAttr::get(type));
   state.addRegion();
@@ -41,11 +41,11 @@ void SVModuleOp::print(OpAsmPrinter &p) {
   p << " ";
 
   // Print the visibility of the module.
-  StringRef visibilityAttrName = SymbolTable::getVisibilityAttrName();
+  StringRef visibilityAttrName = mlir::SymbolTable::getVisibilityAttrName();
   if (auto visibility = (*this)->getAttrOfType<StringAttr>(visibilityAttrName))
     p << visibility.getValue() << ' ';
 
-  p.printSymbolName(SymbolTable::getSymbolName(*this).getValue());
+  p.printSymbolName(mlir::SymbolTable::getSymbolName(*this).getValue());
   hw::module_like_impl::printModuleSignatureNew(p, getBodyRegion(),
                                                 getModuleType(), {}, {});
   p << " ";
@@ -1744,6 +1744,62 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   if (!defined)
     return emitOpError()
            << "Parent class does not point to any implementation!";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Covergroups (Functional Coverage)
+//===----------------------------------------------------------------------===//
+
+void CoverpointOp::build(OpBuilder &builder, OperationState &state,
+                         StringRef name, Value expr,
+                         std::optional<int64_t> autoBinMax) {
+  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+                     builder.getStringAttr(name));
+  state.addOperands(expr);
+  if (autoBinMax)
+    state.addAttribute("auto_bin_max",
+                       builder.getI64IntegerAttr(autoBinMax.value()));
+  state.addRegion();
+}
+
+LogicalResult CrossOp::verify() {
+  // Verify that at least two coverpoints are referenced.
+  if (getCoverpoints().size() < 2)
+    return emitOpError("cross coverage requires at least two coverpoints");
+
+  // Verify that all referenced coverpoints exist within the parent covergroup.
+  auto covergroupDecl = cast<CovergroupDeclOp>((*this)->getParentOp());
+  SymbolTable symbolTable(covergroupDecl);
+
+  for (auto coverpointRef : getCoverpoints()) {
+    auto coverpointSymbol = cast<FlatSymbolRefAttr>(coverpointRef);
+    auto *coverpoint = symbolTable.lookup(coverpointSymbol.getValue());
+    if (!coverpoint)
+      return emitOpError("referenced coverpoint '")
+             << coverpointSymbol.getValue() << "' not found in covergroup";
+    if (!isa<CoverpointOp>(coverpoint))
+      return emitOpError("symbol '")
+             << coverpointSymbol.getValue() << "' is not a coverpoint";
+  }
+
+  return success();
+}
+
+LogicalResult
+CovergroupInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto covergroupName = getCovergroupNameAttr();
+  auto *covergroupDecl =
+      symbolTable.lookupNearestSymbolFrom(getOperation(), covergroupName);
+
+  if (!covergroupDecl)
+    return emitOpError("referenced covergroup '")
+           << covergroupName.getValue() << "' not found";
+
+  if (!isa<CovergroupDeclOp>(covergroupDecl))
+    return emitOpError("symbol '")
+           << covergroupName.getValue() << "' is not a covergroup declaration";
 
   return success();
 }

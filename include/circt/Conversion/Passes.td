@@ -601,6 +601,28 @@ def ConvertHWToBTOR2 : Pass<"convert-hw-to-btor2", "mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// SVAToLTL
+//===----------------------------------------------------------------------===//
+
+def LowerSVAToLTL : Pass<"lower-sva-to-ltl", "hw::HWModuleOp"> {
+  let summary = "Convert SVA to LTL and Verif";
+  let description = [{
+    This pass converts SVA (SystemVerilog Assertions) dialect operations to
+    LTL (Linear Temporal Logic) and Verif dialect operations. This enables
+    the use of existing formal verification infrastructure for SVA assertions.
+
+    The conversion maps:
+    - SVA sequence operations to LTL sequence operations
+    - SVA property operations to LTL property operations
+    - SVA assertion directives to Verif assertion operations
+  }];
+  let constructor = "circt::createLowerSVAToLTLPass()";
+  let dependentDialects = [
+    "ltl::LTLDialect", "verif::VerifDialect", "hw::HWDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // LTLToCore
 //===----------------------------------------------------------------------===//
 
