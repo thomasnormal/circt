@@ -27,6 +27,27 @@ unsigned ToggleCoverageOp::getSignalWidth() {
   return 1;
 }
 
+//===----------------------------------------------------------------------===//
+// FSMTransitionCoverageOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FSMTransitionCoverageOp::verify() {
+  // Verify that prev_state and next_state have the same type
+  if (getPrevState().getType() != getNextState().getType())
+    return emitOpError("prev_state and next_state must have the same type");
+
+  // Verify that num_states is reasonable for the bit width
+  unsigned width =
+      cast<IntegerType>(getPrevState().getType()).getWidth();
+  unsigned maxStates = 1u << width;
+  if (getNumStates() > static_cast<int32_t>(maxStates))
+    return emitOpError("num_states (")
+           << getNumStates() << ") exceeds maximum for " << width
+           << "-bit state (" << maxStates << ")";
+
+  return success();
+}
+
 // Operation implementations generated from `Coverage.td`
 #define GET_OP_CLASSES
 #include "circt/Dialect/Coverage/Coverage.cpp.inc"

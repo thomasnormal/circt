@@ -56,6 +56,14 @@ struct ExportCoverageDataPass
         processToggleCoverage(toggleOp, db);
       } else if (auto branchOp = llvm::dyn_cast<BranchCoverageOp>(op)) {
         processBranchCoverage(branchOp, db);
+      } else if (auto fsmStateOp = llvm::dyn_cast<FSMStateCoverageOp>(op)) {
+        processFSMStateCoverage(fsmStateOp, db);
+      } else if (auto fsmTransOp = llvm::dyn_cast<FSMTransitionCoverageOp>(op)) {
+        processFSMTransitionCoverage(fsmTransOp, db);
+      } else if (auto exprOp = llvm::dyn_cast<ExpressionCoverageOp>(op)) {
+        processExpressionCoverage(exprOp, db);
+      } else if (auto assertOp = llvm::dyn_cast<AssertionCoverageOp>(op)) {
+        processAssertionCoverage(assertOp, db);
       } else if (auto groupOp = llvm::dyn_cast<CoverageGroupOp>(op)) {
         processCoverageGroup(groupOp, db);
       }
@@ -150,6 +158,101 @@ private:
 
     point.metadata["true_id"] = std::to_string(op.getTrueId());
     point.metadata["false_id"] = std::to_string(op.getFalseId());
+
+    db.addCoveragePoint(point);
+  }
+
+  void processFSMStateCoverage(FSMStateCoverageOp op, CoverageDatabase &db) {
+    CoveragePoint point;
+    point.name = op.getCoveragePointId();
+    point.type = CoverageType::FSMState;
+    point.hits = 0;
+    point.goal = op.getNumStates();
+
+    if (op.getHierarchy())
+      point.hierarchy = op.getHierarchy()->str();
+
+    point.metadata["num_states"] = std::to_string(op.getNumStates());
+    point.metadata["width"] = std::to_string(op.getStateWidth());
+
+    // Store state names if provided
+    if (auto stateNames = op.getStateNames()) {
+      std::string names;
+      for (auto attr : *stateNames) {
+        if (!names.empty())
+          names += ",";
+        names += llvm::cast<StringAttr>(attr).getValue().str();
+      }
+      if (!names.empty())
+        point.metadata["state_names"] = names;
+    }
+
+    db.addCoveragePoint(point);
+  }
+
+  void processFSMTransitionCoverage(FSMTransitionCoverageOp op,
+                                    CoverageDatabase &db) {
+    CoveragePoint point;
+    point.name = op.getCoveragePointId();
+    point.type = CoverageType::FSMTransition;
+    point.hits = 0;
+    // Goal is N^2 possible transitions for N states
+    int32_t numStates = op.getNumStates();
+    point.goal = numStates * numStates;
+
+    if (op.getHierarchy())
+      point.hierarchy = op.getHierarchy()->str();
+
+    point.metadata["num_states"] = std::to_string(numStates);
+    point.metadata["width"] = std::to_string(op.getStateWidth());
+
+    db.addCoveragePoint(point);
+  }
+
+  void processExpressionCoverage(ExpressionCoverageOp op,
+                                 CoverageDatabase &db) {
+    CoveragePoint point;
+    point.name = op.getCoveragePointId();
+    point.type = CoverageType::Expression;
+    point.hits = 0;
+    // Goal for MC/DC is 2*N unique independence pairs (where N is # conditions)
+    unsigned numConds = op.getNumConditions();
+    point.goal = 2 * numConds;
+
+    if (op.getHierarchy())
+      point.hierarchy = op.getHierarchy()->str();
+
+    point.metadata["num_conditions"] = std::to_string(numConds);
+
+    // Store condition names if provided
+    if (auto condNames = op.getConditionNames()) {
+      std::string names;
+      for (auto attr : *condNames) {
+        if (!names.empty())
+          names += ",";
+        names += llvm::cast<StringAttr>(attr).getValue().str();
+      }
+      if (!names.empty())
+        point.metadata["condition_names"] = names;
+    }
+
+    db.addCoveragePoint(point);
+  }
+
+  void processAssertionCoverage(AssertionCoverageOp op, CoverageDatabase &db) {
+    CoveragePoint point;
+    point.name = op.getCoveragePointId();
+    point.type = CoverageType::Assertion;
+    point.hits = 0;
+    point.goal = 1;
+
+    if (op.getHierarchy())
+      point.hierarchy = op.getHierarchy()->str();
+
+    if (op.getFilename())
+      point.location.filename = op.getFilename()->str();
+    if (op.getLine())
+      point.location.line = *op.getLine();
 
     db.addCoveragePoint(point);
   }

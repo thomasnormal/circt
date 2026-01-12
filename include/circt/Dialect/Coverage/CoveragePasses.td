@@ -34,7 +34,8 @@ def InstrumentCoverage : Pass<"coverage-instrument", "mlir::ModuleOp"> {
     "circt::comb::CombDialect",
     "circt::coverage::CoverageDialect",
     "circt::hw::HWDialect",
-    "circt::seq::SeqDialect"
+    "circt::seq::SeqDialect",
+    "circt::sv::SVDialect"
   ];
 
   let options = [
@@ -44,6 +45,12 @@ def InstrumentCoverage : Pass<"coverage-instrument", "mlir::ModuleOp"> {
            "Insert toggle coverage for ports and wires">,
     Option<"instrumentBranch", "branch", "bool", "false",
            "Insert branch coverage for conditionals">,
+    Option<"instrumentFSM", "fsm", "bool", "false",
+           "Insert FSM state and transition coverage">,
+    Option<"instrumentExpression", "expression", "bool", "false",
+           "Insert expression/condition coverage">,
+    Option<"instrumentAssertion", "assertion", "bool", "false",
+           "Insert assertion coverage tracking">,
     Option<"hierarchyPrefix", "hierarchy", "std::string", "\"\"",
            "Prefix for hierarchy paths in coverage data">
   ];
@@ -54,7 +61,15 @@ def InstrumentCoverage : Pass<"coverage-instrument", "mlir::ModuleOp"> {
     Statistic<"numToggleCoverageOps", "toggle-coverage-ops",
       "Number of toggle coverage operations inserted">,
     Statistic<"numBranchCoverageOps", "branch-coverage-ops",
-      "Number of branch coverage operations inserted">
+      "Number of branch coverage operations inserted">,
+    Statistic<"numFSMStateCoverageOps", "fsm-state-coverage-ops",
+      "Number of FSM state coverage operations inserted">,
+    Statistic<"numFSMTransitionCoverageOps", "fsm-transition-coverage-ops",
+      "Number of FSM transition coverage operations inserted">,
+    Statistic<"numExpressionCoverageOps", "expression-coverage-ops",
+      "Number of expression coverage operations inserted">,
+    Statistic<"numAssertionCoverageOps", "assertion-coverage-ops",
+      "Number of assertion coverage operations inserted">
   ];
 }
 

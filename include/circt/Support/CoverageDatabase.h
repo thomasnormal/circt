@@ -44,13 +44,16 @@ struct SourceLocation {
 
 /// Type of coverage point.
 enum class CoverageType {
-  Line,      // Line/statement coverage
-  Toggle,    // Signal toggle coverage (0->1, 1->0)
-  Branch,    // Branch coverage (true/false)
-  Condition, // Condition coverage
-  FSM,       // FSM state/transition coverage
-  Assertion, // Assertion coverage
-  Coverpoint // User-defined coverpoint
+  Line,          // Line/statement coverage
+  Toggle,        // Signal toggle coverage (0->1, 1->0)
+  Branch,        // Branch coverage (true/false)
+  Condition,     // Condition coverage
+  FSM,           // FSM state/transition coverage (generic)
+  FSMState,      // FSM state coverage (which states visited)
+  FSMTransition, // FSM transition coverage (which transitions taken)
+  Expression,    // Expression/MC/DC coverage
+  Assertion,     // Assertion coverage
+  Coverpoint     // User-defined coverpoint
 };
 
 /// Returns the string name for a coverage type.
