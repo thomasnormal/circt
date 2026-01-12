@@ -178,7 +178,7 @@ endmodule
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@"testModule4::testModuleClass">
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule4::testModuleClass">
 // CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <class<@"testModule4::testModuleClass">>
-// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@a] : <@"testModule4::testModuleClass"> -> <i32>
+// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@prop4] : <@"testModule4::testModuleClass"> -> <i32>
 // CHECK:    [[A:%.+]] = moore.read [[REF]]
 // CHECK:    moore.blocking_assign [[RESULT]], [[A]] : i32
 // CHECK:    moore.return
@@ -187,18 +187,18 @@ endmodule
 // CHECK: }
 
 // CHECK: moore.class.classdecl @"testModule4::testModuleClass" {
-// CHECK-NEXT: moore.class.propertydecl @a : !moore.i32
+// CHECK-NEXT: moore.class.propertydecl @prop4 : !moore.i32
 // CHECK: }
 
 module testModule4;
     class testModuleClass;
-       int a;
+       int prop4;
     endclass
     testModuleClass t;
     int result;
     initial begin
         t = new;
-        result = t.a;
+        result = t.prop4;
     end
 endmodule
 
@@ -211,7 +211,7 @@ endmodule
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@"testModule5::testModuleClass">
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule5::testModuleClass">
 // CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <class<@"testModule5::testModuleClass">>
-// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@a] : <@"testModule5::testModuleClass"> -> <i32>
+// CHECK:    [[REF:%.+]] = moore.class.property_ref [[CLASSHANDLE]][@prop5] : <@"testModule5::testModuleClass"> -> <i32>
 // CHECK:    [[RESR:%.+]] = moore.read [[RESULT]] : <i32>
 // CHECK:    moore.blocking_assign [[REF]], [[RESR]] : i32
 // CHECK:    moore.return
@@ -220,18 +220,18 @@ endmodule
 // CHECK: }
 
 // CHECK: moore.class.classdecl @"testModule5::testModuleClass" {
-// CHECK-NEXT: moore.class.propertydecl @a : !moore.i32
+// CHECK-NEXT: moore.class.propertydecl @prop5 : !moore.i32
 // CHECK: }
 
 module testModule5;
     class testModuleClass;
-       int a;
+       int prop5;
     endclass
     testModuleClass t;
     int result;
     initial begin
         t = new;
-        t.a = result;
+        t.prop5 = result;
     end
 endmodule
 
@@ -245,7 +245,7 @@ endmodule
 // CHECK:    moore.blocking_assign [[T]], [[NEW]] : class<@"testModule6::testModuleClass2">
 // CHECK:    [[CLASSHANDLE:%.+]] = moore.read [[T]] : <class<@"testModule6::testModuleClass2">>
 // CHECK:    [[UPCAST:%.+]] = moore.class.upcast [[CLASSHANDLE]] : <@"testModule6::testModuleClass2"> to <@"testModule6::testModuleClass">
-// CHECK:    [[REF:%.+]] = moore.class.property_ref [[UPCAST]][@a] : <@"testModule6::testModuleClass"> -> <i32>
+// CHECK:    [[REF:%.+]] = moore.class.property_ref [[UPCAST]][@prop6] : <@"testModule6::testModuleClass"> -> <i32>
 // CHECK:    [[A:%.+]] = moore.read [[REF]]
 // CHECK:    moore.blocking_assign [[RESULT]], [[A]] : i32
 // CHECK:    moore.return
@@ -254,12 +254,12 @@ endmodule
 // CHECK: }
 
 // CHECK: moore.class.classdecl @"testModule6::testModuleClass" {
-// CHECK-NEXT: moore.class.propertydecl @a : !moore.i32
+// CHECK-NEXT: moore.class.propertydecl @prop6 : !moore.i32
 // CHECK: }
 
 module testModule6;
     class testModuleClass;
-       int a;
+       int prop6;
     endclass
     class testModuleClass2 extends testModuleClass;
     endclass
@@ -267,7 +267,7 @@ module testModule6;
     int result;
     initial begin
         t = new;
-        result = t.a;
+        result = t.prop6;
     end
 endmodule
 
@@ -288,22 +288,22 @@ endmodule
 // CHECK: }
 
 // CHECK: moore.class.classdecl @"testModule7::testModuleClass" {
-// CHECK-NEXT: moore.class.propertydecl @a : !moore.i32
+// CHECK-NEXT: moore.class.propertydecl @prop7 : !moore.i32
 // CHECK: }
 
 // CHECK: func.func private @"testModule7::testModuleClass::returnA"
 // CHECK-SAME: ([[ARG:%.+]]: !moore.class<@"testModule7::testModuleClass">)
 // CHECK-SAME: -> !moore.i32 {
-// CHECK-NEXT: [[REF:%.+]] = moore.class.property_ref [[ARG]][@a] : <@"testModule7::testModuleClass"> -> <i32>
+// CHECK-NEXT: [[REF:%.+]] = moore.class.property_ref [[ARG]][@prop7] : <@"testModule7::testModuleClass"> -> <i32>
 // CHECK-NEXT: [[RETURN:%.+]] = moore.read [[REF]] : <i32>
 // CHECK-NEXT: return [[RETURN]] : !moore.i32
 // CHECK-NEXT: }
 
 module testModule7;
     class testModuleClass;
-       int a;
+       int prop7;
        function int returnA();
-          return a;
+          return prop7;
        endfunction
     endclass
     testModuleClass t;
@@ -331,13 +331,13 @@ endmodule
  // CHECK:    moore.output
  // CHECK:  }
  // CHECK:  moore.class.classdecl @"testModule8::testModuleClass" {
- // CHECK:    moore.class.propertydecl @a : !moore.i32
+ // CHECK:    moore.class.propertydecl @baseA : !moore.i32
  // CHECK:  }
  // CHECK:  moore.class.classdecl @"testModule8::testModuleClass2" extends @"testModule8::testModuleClass" {
  // CHECK:  }
  // CHECK:  func.func private @"testModule8::testModuleClass2::returnA"([[ARG:%.+]]: !moore.class<@"testModule8::testModuleClass2">) -> !moore.i32 {
  // CHECK:   [[UPCAST:%.+]] = moore.class.upcast [[ARG]] : <@"testModule8::testModuleClass2"> to <@"testModule8::testModuleClass">
- // CHECK:   [[PROPREF:%.+]] = moore.class.property_ref [[UPCAST]][@a] : <@"testModule8::testModuleClass"> -> <i32>
+ // CHECK:   [[PROPREF:%.+]] = moore.class.property_ref [[UPCAST]][@baseA] : <@"testModule8::testModuleClass"> -> <i32>
  // CHECK:   [[RET:%.+]] = moore.read [[PROPREF]] : <i32>
  // CHECK:   return [[RET]] : !moore.i32
  // CHECK: }
@@ -345,12 +345,12 @@ endmodule
 module testModule8;
 
     class testModuleClass;
-       int a;
+       int baseA;
     endclass // testModuleClass
 
    class testModuleClass2 extends testModuleClass;
        function int returnA();
-          return a;
+          return baseA;
        endfunction
    endclass // testModuleClass2
 
@@ -379,10 +379,10 @@ endmodule
 // CHECK: moore.output
 // CHECK: }
 // CHECK: moore.class.classdecl @"testModule9::testModuleClass" {
-// CHECK:   moore.class.propertydecl @a : !moore.i32
+// CHECK:   moore.class.propertydecl @prop9 : !moore.i32
 // CHECK: }
 // CHECK: func.func private @"testModule9::testModuleClass::myReturn"([[this_ref:%.+]]: !moore.class<@"testModule9::testModuleClass">) -> !moore.i32 {
-// CHECK:   [[prop_ref:%.+]] = moore.class.property_ref [[this_ref]][@a] : <@"testModule9::testModuleClass"> -> <i32>
+// CHECK:   [[prop_ref:%.+]] = moore.class.property_ref [[this_ref]][@prop9] : <@"testModule9::testModuleClass"> -> <i32>
 // CHECK:   [[read_val:%.+]] = moore.read [[prop_ref]] : <i32>
 // CHECK:   return [[read_val]] : !moore.i32
 // CHECK: }
@@ -397,9 +397,9 @@ endmodule
 module testModule9;
 
     class testModuleClass;
-       int a;
+       int prop9;
        function int myReturn();
-          return a;
+          return prop9;
        endfunction; // myReturn
     endclass // testModuleClass
 
@@ -447,7 +447,7 @@ endfunction
 // CHECK:    moore.output
 // CHECK:  }
 // CHECK:  moore.class.classdecl @"testModule10::testModuleClass" {
-// CHECK:    moore.class.propertydecl @a : !moore.i32
+// CHECK:    moore.class.propertydecl @prop10 : !moore.i32
 // CHECK:  }
 // CHECK:  func.func private @"testModule10::testModuleClass::new"(%arg0: !moore.class<@"testModule10::testModuleClass">, %arg1: !moore.i32) {
 // CHECK:    [[NEW:%.+]] = moore.variable %arg1 : <i32>
@@ -459,9 +459,9 @@ endfunction
 module testModule10;
 
     class testModuleClass;
-       int a;
-        function new(int a);
-           a = a;
+       int prop10;
+        function new(int prop10);
+           prop10 = prop10;
         endfunction
     endclass // testModuleClass
 
@@ -474,10 +474,10 @@ endmodule
 /// Check that calls to new by classes with super ctor call the ctor.
 
 // CHECK-LABEL:  moore.class.classdecl @testModuleClass2 {
-// CHECK:    moore.class.propertydecl @a : !moore.i32
+// CHECK:    moore.class.propertydecl @propSuper : !moore.i32
 // CHECK:  }
 // CHECK:  func.func private @"testModuleClass2::new"(%arg0: !moore.class<@testModuleClass2>, %arg1: !moore.i32) {
-// CHECK:    [[A:%.+]] = moore.class.property_ref %arg0[@a] : <@testModuleClass2> -> <i32>
+// CHECK:    [[A:%.+]] = moore.class.property_ref %arg0[@propSuper] : <@testModuleClass2> -> <i32>
 // CHECK:    moore.blocking_assign [[A]], %arg1 : i32
 // CHECK:    return
 // CHECK:  }
@@ -490,15 +490,15 @@ endmodule
 // CHECK:  }
 
 class testModuleClass2;
-    int a;
-    function new(int a);
-        this.a = a;
+    int propSuper;
+    function new(int val);
+        this.propSuper = val;
     endfunction
 endclass // testModuleClass
 
 class testModuleClass3 extends testModuleClass2;
-    function new(int a);
-        super.new(a);
+    function new(int val);
+        super.new(val);
     endfunction
 endclass // testModuleClass
 
@@ -553,11 +553,11 @@ endclass
 /// Check that LValues get generated for ClassProperty assignments
 
 // CHECK-LABEL:  moore.class.classdecl @testLValueClass {
-// CHECK:    moore.class.propertydecl @a : !moore.i32
+// CHECK:    moore.class.propertydecl @propLVal : !moore.i32
 // CHECK:  }
 // CHECK:  func.func private @"testLValueClass::adder"(%arg0: !moore.class<@testLValueClass>) {
-// CHECK:    [[LVAL:%.+]] = moore.class.property_ref %arg0[@a] : <@testLValueClass> -> <i32>
-// CHECK:    [[RLVAL:%.+]] = moore.class.property_ref %arg0[@a] : <@testLValueClass> -> <i32>
+// CHECK:    [[LVAL:%.+]] = moore.class.property_ref %arg0[@propLVal] : <@testLValueClass> -> <i32>
+// CHECK:    [[RLVAL:%.+]] = moore.class.property_ref %arg0[@propLVal] : <@testLValueClass> -> <i32>
 // CHECK:    [[RVAL:%.+]] = moore.read [[RLVAL]] : <i32>
 // CHECK:    [[CONST:%.+]] = moore.constant 1 : i32
 // CHECK:    [[NEWVAL:%.+]] = moore.add [[RVAL]], [[CONST]] : i32
@@ -566,9 +566,9 @@ endclass
 // CHECK:  }
 
 class testLValueClass;
-int a;
+int propLVal;
 function void adder;
-    a = a + 1;
+    propLVal = propLVal + 1;
 endfunction
 endclass
 
