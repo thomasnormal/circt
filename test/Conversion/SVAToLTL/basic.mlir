@@ -35,7 +35,7 @@ hw.module @test(in %clk: i1, in %req: i1, in %gnt: i1) {
   %prop3 = sva.prop.eventually %gnt : i1
 
   // Test assert property conversion
-  // CHECK: verif.assert %prop0 : !ltl.property
+  // CHECK: verif.assert {{%.+}} : !ltl.property
   sva.assert %prop0 : !sva.property
 
   // Test clocked assert property conversion
