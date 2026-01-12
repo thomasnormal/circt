@@ -1766,6 +1766,22 @@ struct RvalueExprVisitor : public ExprVisitor {
         return *result;
     }
 
+    // Handle associative array delete(key) method - 2 args: array ref + key
+    if (subroutine.name == "delete" && args.size() == 2) {
+      Value arrayRef = context.convertLvalueExpression(*args[0]);
+      Value key = context.convertRvalueExpression(*args[1]);
+      if (!arrayRef || !key)
+        return {};
+      // Check if it's an associative array
+      auto refType = dyn_cast<moore::RefType>(arrayRef.getType());
+      if (refType && isa<moore::AssocArrayType>(refType.getNestedType())) {
+        moore::AssocArrayDeleteKeyOp::create(builder, loc, arrayRef, key);
+        // delete returns void, return a dummy value
+        auto intTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, intTy, 0);
+      }
+    }
+
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
@@ -3170,11 +3186,20 @@ Context::convertQueueMethodCallNoArg(const slang::ast::SystemSubroutine &subrout
 FailureOr<Value>
 Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subroutine,
                                     Location loc, Value arrayRef) {
+  // Get the underlying type of the array reference
+  auto refType = cast<moore::RefType>(arrayRef.getType());
+  auto nestedType = refType.getNestedType();
+  bool isAssocArray = isa<moore::AssocArrayType>(nestedType);
+
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
           .Case("delete",
                 [&]() -> FailureOr<Value> {
-                  moore::QueueDeleteOp::create(builder, loc, arrayRef);
+                  if (isAssocArray) {
+                    moore::AssocArrayDeleteOp::create(builder, loc, arrayRef);
+                  } else {
+                    moore::QueueDeleteOp::create(builder, loc, arrayRef);
+                  }
                   // delete returns void, return a dummy value
                   auto intTy = moore::IntType::getInt(getContext(), 1);
                   return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
