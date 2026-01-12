@@ -1749,6 +1749,130 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
+// Process Control: Fork/Join Operations
+//===----------------------------------------------------------------------===//
+
+LogicalResult ForkOp::verify() {
+  // Verify we have at least one branch
+  if (getBranches().empty()) {
+    return emitOpError("must have at least one branch");
+  }
+
+  return success();
+}
+
+void ForkOp::print(OpAsmPrinter &p) {
+  p << " ";
+  // Print join type (join is default, only print others)
+  if (getJoinType() != JoinType::JoinAll) {
+    p << stringifyJoinType(getJoinType()) << " ";
+  }
+  if (auto name = getName()) {
+    p << "name \"" << name.value() << "\" ";
+  }
+
+  // Print branches
+  bool first = true;
+  for (auto &region : getBranches()) {
+    if (!first)
+      p << ", ";
+    p.printRegion(region, /*printEntryBlockArgs=*/false,
+                  /*printBlockTerminators=*/false);
+    first = false;
+  }
+
+  p.printOptionalAttrDict((*this)->getAttrs(), {"joinType", "name"});
+}
+
+ParseResult ForkOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+
+  // Parse optional join_type (join, join_any, join_none)
+  JoinType joinType = JoinType::JoinAll;
+  if (succeeded(parser.parseOptionalKeyword("join_any"))) {
+    joinType = JoinType::JoinAny;
+  } else if (succeeded(parser.parseOptionalKeyword("join_none"))) {
+    joinType = JoinType::JoinNone;
+  } else {
+    // Default is "join", which may or may not be present
+    (void)parser.parseOptionalKeyword("join");
+    joinType = JoinType::JoinAll;
+  }
+  result.addAttribute("joinType", JoinTypeAttr::get(builder.getContext(), joinType));
+
+  // Parse optional name
+  if (succeeded(parser.parseOptionalKeyword("name"))) {
+    StringAttr nameAttr;
+    if (parser.parseAttribute(nameAttr))
+      return failure();
+    result.addAttribute("name", nameAttr);
+  }
+
+  // Parse branches (regions separated by commas)
+  SmallVector<Region *> branches;
+  do {
+    Region *branch = result.addRegion();
+    branches.push_back(branch);
+    if (parser.parseRegion(*branch, /*arguments=*/{}, /*argTypes=*/{}))
+      return failure();
+    // Ensure the region has at least one block
+    if (branch->empty())
+      branch->emplaceBlock();
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Add implicit terminators to each branch
+  for (Region *branch : branches)
+    ensureTerminator(*branch, builder, result.location);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Process Control: Named Blocks
+//===----------------------------------------------------------------------===//
+
+void NamedBlockOp::print(OpAsmPrinter &p) {
+  p << " ";
+  p.printAttributeWithoutType(getBlockNameAttr());
+  p << " ";
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(), {"blockName"});
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/false);
+}
+
+ParseResult NamedBlockOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+
+  // Parse block name
+  StringAttr blockNameAttr;
+  if (parser.parseAttribute(blockNameAttr))
+    return failure();
+  result.addAttribute("blockName", blockNameAttr);
+
+  // Parse optional attributes
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  // Parse body region
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}))
+    return failure();
+
+  // Ensure the region has at least one block
+  if (body->empty())
+    body->emplaceBlock();
+
+  // Add implicit terminator
+  ensureTerminator(*body, builder, result.location);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen generated logic.
 //===----------------------------------------------------------------------===//
 
