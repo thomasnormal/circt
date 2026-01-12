@@ -729,3 +729,24 @@ endclass
 class VifHolder;
     virtual basic_bus bus;
 endclass
+
+/// Check static property access from static methods
+/// This tests the fix for static properties accessed from static methods.
+/// The fix ensures that when there's no implicit 'this' reference (because
+/// we're in a static context), we correctly treat the property as static.
+
+// CHECK-LABEL: moore.class.classdecl @StaticPropertyAccess {
+// CHECK-NEXT:    moore.class.propertydecl @count : !moore.i32
+// CHECK: }
+// CHECK: func.func private @"StaticPropertyAccess::get_count"() -> !moore.i32 {
+// CHECK:   %count = moore.variable : <i32>
+// CHECK:   [[READ:%.+]] = moore.read %count : <i32>
+// CHECK:   return [[READ]] : !moore.i32
+// CHECK: }
+
+class StaticPropertyAccess;
+    static int count;
+    static function int get_count();
+        return count;  // Access static property from static function
+    endfunction
+endclass
