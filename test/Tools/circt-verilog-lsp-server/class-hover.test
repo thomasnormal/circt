@@ -1,0 +1,71 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test hover functionality for SystemVerilog classes (important for UVM support).
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///classes.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"class BaseTransaction;\n  rand bit [7:0] data;\n  int id;\n  function void display();\n    $display(\"id=%d data=%h\", id, data);\n  endfunction\nendclass\n\nclass MyTransaction extends BaseTransaction;\n  protected string name;\n  local int count;\n  function new(string n);\n    name = n;\n    count = 0;\n  endfunction\nendclass"
+}}}
+// -----
+// Hover over class name 'BaseTransaction' (line 0, col 6)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":0,"character":8}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "contents": {
+// CHECK-NEXT:      "kind": "markdown",
+// CHECK:           "value": "```systemverilog
+// CHECK:           class BaseTransaction
+// CHECK:           ```
+// -----
+// Hover over derived class 'MyTransaction' (line 8, col 6)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":8,"character":8}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "contents": {
+// CHECK-NEXT:      "kind": "markdown",
+// CHECK:           "value": "```systemverilog
+// CHECK:           class MyTransaction extends BaseTransaction
+// CHECK:           ```
+// -----
+// Hover over protected property 'name' (line 9, col 20)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":9,"character":20}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "contents": {
+// CHECK-NEXT:      "kind": "markdown",
+// CHECK:           "value": "```systemverilog
+// CHECK:           protected
+// -----
+// Hover over method 'display' (line 3, col 17)
+{"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///classes.sv"},
+  "position":{"line":3,"character":17}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "contents": {
+// CHECK-NEXT:      "kind": "markdown",
+// CHECK:           "value": "```systemverilog
+// CHECK:           function void display()
+// CHECK:           ```"
+// -----
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
