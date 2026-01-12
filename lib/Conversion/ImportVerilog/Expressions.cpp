@@ -1701,6 +1701,19 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ConstantOp::create(builder, loc, intTy, 1);
     }
 
+    // Handle string.itoa method: str.itoa(value) converts integer to string.
+    // The string is modified in-place, so we need lvalue for string.
+    if (subroutine.name == "itoa" && args.size() == 2) {
+      Value strRef = context.convertLvalueExpression(*args[0]);
+      Value intVal = context.convertRvalueExpression(*args[1]);
+      if (!strRef || !intVal)
+        return {};
+      moore::StringItoaOp::create(builder, loc, strRef, intVal);
+      // itoa returns void, return a dummy value
+      auto intTy = moore::IntType::getInt(context.getContext(), 1);
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    }
+
     // Handle queue methods that need special treatment (lvalue for queue).
     // push_back, push_front need queue as lvalue + element as rvalue.
     // pop_back, pop_front need queue as lvalue, no additional args.
