@@ -1020,7 +1020,10 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
   ValueSymbolScope scope(valueSymbols);
 
   // Two-pass conversion:
-  // Pass 1: Convert global variables first so they're available for classes
+  // Pass 1: Convert global variables first so they're available for classes.
+  // Note: Some variables may not appear in members() due to how Slang handles
+  // symbols declared after forward typedefs. Those are handled via on-demand
+  // conversion in Expressions.cpp when they're first referenced.
   for (auto &member : package.members()) {
     if (member.kind == slang::ast::SymbolKind::Variable) {
       auto loc = convertLocation(member.location);
@@ -1611,9 +1614,24 @@ buildBaseAndImplementsAttrs(Context &context,
   mlir::MLIRContext *ctx = context.getContext();
 
   // Base class (if any)
+  // Look up the actual ClassDeclOp to get the correct symbol name, since
+  // symbolTable.insert() may have renamed it to avoid conflicts.
   mlir::SymbolRefAttr base;
-  if (const auto *b = cls.getBaseClass())
-    base = mlir::SymbolRefAttr::get(fullyQualifiedClassName(context, *b));
+  if (const auto *b = cls.getBaseClass()) {
+    const auto &canonicalBase = b->getCanonicalType();
+    if (const auto *baseClass = canonicalBase.as_if<slang::ast::ClassType>()) {
+      auto it = context.classes.find(baseClass);
+      if (it != context.classes.end() && it->second && it->second->op) {
+        base = mlir::SymbolRefAttr::get(it->second->op.getSymNameAttr());
+      } else {
+        // Fallback to computing the name if the class isn't in the map yet.
+        base = mlir::SymbolRefAttr::get(fullyQualifiedClassName(context, *b));
+      }
+    } else {
+      // Not a ClassType, fall back to name-based lookup
+      base = mlir::SymbolRefAttr::get(fullyQualifiedClassName(context, *b));
+    }
+  }
 
   // Implemented interfaces (if any)
   SmallVector<mlir::Attribute> impls;
@@ -1913,20 +1931,37 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
                                      SymbolTable::Visibility::Public);
     orderedRootOps.insert(it, {cls.location, classDeclOp});
     lowering->op = classDeclOp;
-    symbolTable.insert(classDeclOp);
+    // insert() may rename the symbol if there's a conflict
+    mlir::StringAttr actualSymName = symbolTable.insert(classDeclOp);
+
+    // If this class is a specialization of a generic class, record the mapping
+    // from specialized name to generic class name. This allows us to recognize
+    // when two class types (e.g., uvm_pool_18 and uvm_pool) are related through
+    // the same generic class template. Use actualSymName since insert() may
+    // have renamed the symbol.
+    if (cls.genericClass) {
+      auto genericSymName = fullyQualifiedSymbolName(*this, *cls.genericClass);
+      classSpecializationToGeneric[actualSymName] = genericSymName;
+    }
   }
 
-  // Always ensure base class is converted if present
+  // Always ensure base class is declared if present.
   // This ensures recursive type references find a valid lowering->op.
-  if (const auto *maybeBaseClass = cls.getBaseClass())
-    if (const auto *baseClass = maybeBaseClass->as_if<slang::ast::ClassType>())
-      if (!classes.contains(baseClass) &&
-          failed(convertClassDeclaration(*baseClass))) {
-        auto loc = convertLocation(cls.location);
-        mlir::emitError(loc) << "Failed to convert base class "
-                             << baseClass->name << " of class " << cls.name;
-        return {};
+  // Use getCanonicalType() to unwrap type aliases (e.g., typedef class foo)
+  // so we get the same ClassType pointer that's used in the 'classes' map.
+  // Note: We don't fail if the base class body conversion fails - the class
+  // declaration will still exist and can be referenced. Body conversion
+  // failures are handled separately during member conversion.
+  if (const auto *maybeBaseClass = cls.getBaseClass()) {
+    const auto &canonicalBase = maybeBaseClass->getCanonicalType();
+    if (const auto *baseClass = canonicalBase.as_if<slang::ast::ClassType>()) {
+      if (!classes.contains(baseClass)) {
+        // Trigger conversion - this will add baseClass to the classes map
+        // even if body conversion fails.
+        (void)convertClassDeclaration(*baseClass);
       }
+    }
+  }
 
   // Always update the base and implements attributes.
   // This handles the case where the class was forward-declared during type
@@ -1965,6 +2000,10 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
 /// Convert a variable to a `moore.global_variable` operation.
 LogicalResult
 Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
+  // Check if already converted (for on-demand conversion).
+  if (globalVariables.count(&var))
+    return success();
+
   auto loc = convertLocation(var.location);
 
   // Pick an insertion point for this variable according to the source file
@@ -2034,5 +2073,39 @@ mlir::StringAttr circt::ImportVerilog::fullyQualifiedClassName(
     name += "::";
   }
   name += ty.name; // class's own name
+  return mlir::StringAttr::get(ctx.getContext(), name);
+}
+
+/// Construct a fully qualified symbol name for generic class definitions
+mlir::StringAttr circt::ImportVerilog::fullyQualifiedSymbolName(
+    Context &ctx, const slang::ast::Symbol &sym) {
+  SmallString<64> name;
+  SmallVector<llvm::StringRef, 8> parts;
+
+  const slang::ast::Scope *scope = sym.getParentScope();
+  while (scope) {
+    const auto &parentSym = scope->asSymbol();
+    switch (parentSym.kind) {
+    case slang::ast::SymbolKind::Root:
+      scope = nullptr; // stop at $root
+      continue;
+    case slang::ast::SymbolKind::InstanceBody:
+    case slang::ast::SymbolKind::Instance:
+    case slang::ast::SymbolKind::Package:
+    case slang::ast::SymbolKind::ClassType:
+      if (!parentSym.name.empty())
+        parts.push_back(parentSym.name); // keep packages + outer classes
+      break;
+    default:
+      break;
+    }
+    scope = parentSym.getParentScope();
+  }
+
+  for (auto p : llvm::reverse(parts)) {
+    name += p;
+    name += "::";
+  }
+  name += sym.name; // symbol's own name
   return mlir::StringAttr::get(ctx.getContext(), name);
 }

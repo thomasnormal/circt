@@ -308,6 +308,11 @@ struct Context {
   DenseMap<const slang::ast::ClassType *, std::unique_ptr<ClassLowering>>
       classes;
 
+  /// Map from specialized class symbol to generic class symbol.
+  /// Used to track which class specializations came from the same generic
+  /// class template (e.g., uvm_pool_18 -> uvm_pool).
+  DenseMap<mlir::StringAttr, mlir::StringAttr> classSpecializationToGeneric;
+
   /// Interfaces that have already been converted.
   DenseMap<const slang::ast::InstanceBodySymbol *,
            std::unique_ptr<InterfaceLowering>>
@@ -384,6 +389,10 @@ private:
 /// and the class name formatted as H1::H2::@C
 mlir::StringAttr fullyQualifiedClassName(Context &ctx,
                                          const slang::ast::Type &ty);
+
+/// Construct a fully qualified symbol name for generic class definitions
+mlir::StringAttr fullyQualifiedSymbolName(Context &ctx,
+                                          const slang::ast::Symbol &sym);
 
 } // namespace ImportVerilog
 } // namespace circt
