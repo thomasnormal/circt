@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top=Counter --max-time=100000 --stats 2>&1 | FileCheck %s
+// RUN: circt-sim %s --top=Counter --max-time=100000 --sim-stats 2>&1 | FileCheck %s
 // REQUIRES: circt-sim
 
 // A simple 8-bit counter design for testing the simulation driver.
