@@ -1370,6 +1370,12 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   if (lowering->capturesFinalized || lowering->isConverting)
     return success();
 
+  // DPI-imported functions have no body to convert; just mark them as finalized.
+  if (subroutine.flags & slang::ast::MethodFlags::DPIImport) {
+    lowering->capturesFinalized = true;
+    return success();
+  }
+
   const bool isMethod = (subroutine.thisVar != nullptr);
 
   ValueSymbolScope scope(valueSymbols);
