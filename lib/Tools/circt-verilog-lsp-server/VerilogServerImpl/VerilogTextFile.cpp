@@ -157,6 +157,75 @@ void VerilogTextFile::findReferencesOf(
   doc->findReferencesOf(uri, pos, references);
 }
 
+std::optional<llvm::lsp::Hover>
+VerilogTextFile::getHover(const llvm::lsp::URIForFile &uri,
+                          llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->getHover(uri, pos);
+}
+
+void VerilogTextFile::getDocumentSymbols(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<llvm::lsp::DocumentSymbol> &symbols) {
+  auto doc = getDocument();
+  doc->getDocumentSymbols(uri, symbols);
+}
+
+void VerilogTextFile::getCompletions(const llvm::lsp::URIForFile &uri,
+                                     llvm::lsp::Position pos,
+                                     llvm::lsp::CompletionList &completions) {
+  auto doc = getDocument();
+  doc->getCompletions(uri, pos, completions);
+}
+
+void VerilogTextFile::getCodeActions(
+    const llvm::lsp::URIForFile &uri, const llvm::lsp::Range &range,
+    const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+    std::vector<llvm::lsp::CodeAction> &codeActions) {
+  auto doc = getDocument();
+  doc->getCodeActions(uri, range, diagnostics, codeActions);
+}
+
+std::optional<std::pair<llvm::lsp::Range, std::string>>
+VerilogTextFile::prepareRename(const llvm::lsp::URIForFile &uri,
+                               llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->prepareRename(uri, pos);
+}
+
+std::optional<llvm::lsp::WorkspaceEdit>
+VerilogTextFile::renameSymbol(const llvm::lsp::URIForFile &uri,
+                              llvm::lsp::Position pos, llvm::StringRef newName) {
+  auto doc = getDocument();
+  return doc->renameSymbol(uri, pos, newName);
+}
+
+void VerilogTextFile::getDocumentLinks(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<llvm::lsp::DocumentLink> &links) {
+  auto doc = getDocument();
+  doc->getDocumentLinks(uri, links);
+}
+
+void VerilogTextFile::getSemanticTokens(const llvm::lsp::URIForFile &uri,
+                                        std::vector<uint32_t> &data) {
+  auto doc = getDocument();
+  std::vector<SemanticToken> tokens;
+  doc->getSemanticTokens(uri, tokens);
+
+  // Encode the tokens
+  SemanticTokensResult result;
+  result.encodeTokens(tokens);
+  data = std::move(result.data);
+}
+
+void VerilogTextFile::getInlayHints(const llvm::lsp::URIForFile &uri,
+                                    const llvm::lsp::Range &range,
+                                    std::vector<llvm::lsp::InlayHint> &hints) {
+  auto doc = getDocument();
+  doc->getInlayHints(uri, range, hints);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;

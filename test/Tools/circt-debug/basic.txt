@@ -1,0 +1,94 @@
+// RUN: circt-debug --top test -x %s --batch 2>&1 | FileCheck %s
+
+// Test basic debugger commands
+
+// CHECK: CIRCT Debug - Interactive Hardware Debugger
+
+// Test info time command
+info time
+// CHECK: Time: 0ns
+// CHECK: Cycle: 0
+
+// Test step command
+step
+// CHECK: Time: 10ns
+// CHECK: Cycle: 1
+
+// Test step multiple cycles
+step 5
+// CHECK: Time: 60ns
+// CHECK: Cycle: 6
+
+// Test print command
+print counter
+// CHECK: counter = 0x06
+
+// Test scope navigation
+scope
+// CHECK: Current scope: test
+
+list
+// CHECK: submodule/
+// CHECK: clk
+// CHECK: rst
+// CHECK: counter
+// CHECK: data_out
+
+// Test info signals
+info signals
+// CHECK: clk [1] input
+// CHECK: rst [1] input
+// CHECK: counter [8] reg
+// CHECK: data_out [32] output
+
+// Test scope change
+scope submodule
+// CHECK: Scope: test.submodule
+
+print reg_a
+// CHECK: reg_a = 0x0012
+
+scope ..
+// CHECK: Scope: test
+
+// Test breakpoint
+break -cycle 10
+// CHECK: Breakpoint {{[0-9]+}} set: at cycle 10
+
+continue
+// CHECK: Stopped: breakpoint
+// CHECK: Cycle: 10
+
+// Test breakpoint on signal
+break -sig counter
+// CHECK: Breakpoint {{[0-9]+}} set: on signal counter
+
+step
+// CHECK: Stopped: step
+
+// Test info breakpoints
+info breakpoints
+// CHECK: {{[0-9]+}}: at cycle 10
+// CHECK: {{[0-9]+}}: on signal counter
+
+// Test delete
+delete
+// CHECK: All breakpoints and watchpoints deleted.
+
+info breakpoints
+// CHECK: No breakpoints.
+
+// Test reset
+reset
+// CHECK: Simulation reset to initial state.
+
+info time
+// CHECK: Time: 0ns
+// CHECK: Cycle: 0
+
+// Test help
+help
+// CHECK: CIRCT Debug Commands
+
+// Exit
+quit

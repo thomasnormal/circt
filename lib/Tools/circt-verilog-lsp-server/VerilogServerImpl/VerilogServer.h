@@ -19,6 +19,7 @@
 #define LIB_CIRCT_TOOLS_CIRCT_VERILOG_LSP_SERVER_VERILOGSERVER_H_
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/LSP/Protocol.h"
 
 #include <memory>
@@ -74,6 +75,57 @@ public:
   /// Find all references of the object pointed at by the given position.
   void findReferencesOf(const URIForFile &uri, const llvm::lsp::Position &pos,
                         std::vector<llvm::lsp::Location> &references);
+
+  /// Return hover information for the object at the given position.
+  std::optional<llvm::lsp::Hover> getHover(const URIForFile &uri,
+                                           const llvm::lsp::Position &pos);
+
+  /// Return the document symbols for the given document.
+  void getDocumentSymbols(const URIForFile &uri,
+                          std::vector<llvm::lsp::DocumentSymbol> &symbols);
+
+  /// Return completion items for the given position.
+  void getCompletions(const URIForFile &uri, const llvm::lsp::Position &pos,
+                      llvm::lsp::CompletionList &completions);
+
+  /// Return code actions for the given range and diagnostics.
+  void getCodeActions(const URIForFile &uri, const llvm::lsp::Range &range,
+                      const std::vector<llvm::lsp::Diagnostic> &diagnostics,
+                      std::vector<llvm::lsp::CodeAction> &codeActions);
+
+  /// Prepare a rename operation at the given position.
+  std::optional<std::pair<llvm::lsp::Range, std::string>>
+  prepareRename(const URIForFile &uri, const llvm::lsp::Position &pos);
+
+  /// Perform a rename operation.
+  std::optional<llvm::lsp::WorkspaceEdit>
+  renameSymbol(const URIForFile &uri, const llvm::lsp::Position &pos,
+               llvm::StringRef newName);
+
+  /// Return document links for include directives.
+  void getDocumentLinks(const URIForFile &uri,
+                        std::vector<llvm::lsp::DocumentLink> &links);
+
+  /// Return semantic tokens for the entire document.
+  void getSemanticTokens(const URIForFile &uri,
+                         std::vector<uint32_t> &data);
+
+  /// Return inlay hints for the given range.
+  void getInlayHints(const URIForFile &uri, const llvm::lsp::Range &range,
+                     std::vector<llvm::lsp::InlayHint> &hints);
+
+  /// Initialize workspace from LSP initialize parameters.
+  void initializeWorkspace(const llvm::json::Value &initParams);
+
+  /// Handle workspace folder changes.
+  void workspaceFoldersChanged(llvm::ArrayRef<std::string> added,
+                               llvm::ArrayRef<std::string> removed);
+
+  /// Handle file change notifications (for config file reloading).
+  void onFileChanged(const URIForFile &uri);
+
+  /// Get workspace configuration as JSON for the client.
+  llvm::json::Value getWorkspaceConfiguration() const;
 
 private:
   struct Impl;

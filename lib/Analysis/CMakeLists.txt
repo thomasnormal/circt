@@ -63,3 +63,5 @@ add_circt_library(CIRCTAnalysisTestPasses
   CIRCTHW
   MLIRPass
 )
+
+add_subdirectory(Linting)
