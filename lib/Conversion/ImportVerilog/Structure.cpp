@@ -1705,6 +1705,39 @@ struct ClassDeclVisitor {
     if (!ty)
       return failure();
 
+    // Check if this is a static property.
+    bool isStatic = prop.lifetime == slang::ast::VariableLifetime::Static;
+
+    // Static properties are stored as global variables, not instance fields.
+    if (isStatic) {
+      // Check if already converted (for on-demand conversion).
+      if (context.globalVariables.count(&prop))
+        return success();
+
+      // Pick an insertion point for this variable at the module level.
+      OpBuilder::InsertionGuard g(builder);
+      auto it = context.orderedRootOps.upper_bound(prop.location);
+      if (it == context.orderedRootOps.end())
+        builder.setInsertionPointToEnd(context.intoModuleOp.getBody());
+      else
+        builder.setInsertionPoint(it->second);
+
+      // Use fully qualified name: Class::property
+      auto symName = fullyQualifiedSymbolName(context, prop);
+
+      // Create the global variable op.
+      auto varOp = moore::GlobalVariableOp::create(
+          builder, loc, symName, cast<moore::UnpackedType>(ty));
+      context.orderedRootOps.insert({prop.location, varOp});
+      context.globalVariables.insert({&prop, varOp});
+
+      // If the property has an initializer expression, remember it for later.
+      if (prop.getInitializer())
+        context.globalVariableWorklist.push_back(&prop);
+
+      return success();
+    }
+
     // Convert slang's Visibility to Moore's MemberAccess
     moore::MemberAccess memberAccess;
     switch (prop.visibility) {
