@@ -674,8 +674,115 @@ static LogicalResult convert(UnreachableOp op, UnreachableOp::Adaptor adaptor,
   return success();
 }
 
-// TODO: Fork/join conversion requires ForkOp, NamedBlockOp etc. to be defined
-// in MooreOps.td (Track A work). Commented out until those ops are merged.
+//===----------------------------------------------------------------------===//
+// Process Control Conversion (Fork/Join)
+//===----------------------------------------------------------------------===//
+
+// moore.fork -> sim.fork
+struct ForkOpConversion : public OpConversionPattern<ForkOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ForkOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Map Moore JoinType to Sim join_type string
+    StringRef simJoinType;
+    switch (op.getJoinType()) {
+    case JoinType::JoinAll:
+      simJoinType = "join";
+      break;
+    case JoinType::JoinAny:
+      simJoinType = "join_any";
+      break;
+    case JoinType::JoinNone:
+      simJoinType = "join_none";
+      break;
+    }
+
+    // Get optional name attribute
+    StringAttr nameAttr = nullptr;
+    if (op.getName())
+      nameAttr = rewriter.getStringAttr(op.getName().value());
+
+    // Create sim.fork operation with correct number of branches
+    unsigned numBranches = op.getBranches().size();
+    auto simFork = sim::SimForkOp::create(rewriter, loc, rewriter.getI64Type(),
+                                          simJoinType, nameAttr, numBranches);
+
+    // Move regions from Moore fork to Sim fork
+    for (auto [idx, branch] : llvm::enumerate(op.getBranches())) {
+      Region &simRegion = simFork.getBranches()[idx];
+      rewriter.inlineRegionBefore(branch, simRegion, simRegion.end());
+
+      // Convert ForkTerminatorOp to SimForkTerminatorOp
+      for (Block &block : simRegion) {
+        if (auto terminator = dyn_cast<ForkTerminatorOp>(block.getTerminator())) {
+          rewriter.setInsertionPoint(terminator);
+          sim::SimForkTerminatorOp::create(rewriter, terminator.getLoc());
+          rewriter.eraseOp(terminator);
+        }
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// moore.wait_fork -> sim.wait_fork
+static LogicalResult convert(WaitForkOp op, WaitForkOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<sim::SimWaitForkOp>(op);
+  return success();
+}
+
+// moore.disable_fork -> sim.disable_fork
+static LogicalResult convert(DisableForkOp op, DisableForkOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<sim::SimDisableForkOp>(op);
+  return success();
+}
+
+// moore.disable -> sim.disable
+static LogicalResult convert(DisableOp op, DisableOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<sim::SimDisableOp>(op, op.getTarget());
+  return success();
+}
+
+// moore.named_block -> sim.named_block
+struct NamedBlockOpConversion : public OpConversionPattern<NamedBlockOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(NamedBlockOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Create sim.named_block operation with the block name as StringRef
+    auto simNamedBlock =
+        sim::SimNamedBlockOp::create(rewriter, loc, op.getBlockName().str());
+
+    // Move the body region
+    rewriter.inlineRegionBefore(op.getBody(), simNamedBlock.getBody(),
+                                simNamedBlock.getBody().end());
+
+    // Convert NamedBlockTerminatorOp to SimNamedBlockTerminatorOp
+    for (Block &block : simNamedBlock.getBody()) {
+      if (auto terminator =
+              dyn_cast<NamedBlockTerminatorOp>(block.getTerminator())) {
+        rewriter.setInsertionPoint(terminator);
+        sim::SimNamedBlockTerminatorOp::create(rewriter, terminator.getLoc());
+        rewriter.eraseOp(terminator);
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Declaration Conversion
@@ -863,6 +970,20 @@ private:
   ClassTypeCache &cache; // shared, owned by the pass
 };
 
+/// moore.class.null lowering: create a null pointer constant.
+struct ClassNullOpConversion : public OpConversionPattern<ClassNullOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ClassNullOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // ClassHandleType converts to !llvm.ptr, so we just need a null pointer.
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+    rewriter.replaceOpWithNewOp<LLVM::ZeroOp>(op, ptrTy);
+    return success();
+  }
+};
+
 /// moore.vtable lowering: erase the vtable declaration.
 /// The vtable entries are resolved at load time via symbol lookup.
 /// Note: This pattern has a lower benefit than VTableLoadMethodOpConversion
@@ -981,8 +1102,34 @@ struct VTableLoadMethodOpConversion
   }
 };
 
-// TODO: ClassNullOp and ClassHandleCmpOp require class ops from Track B.
-// Commented out until those ops are merged.
+/// moore.class_handle_cmp lowering: compare two class handles using icmp.
+struct ClassHandleCmpOpConversion
+    : public OpConversionPattern<ClassHandleCmpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ClassHandleCmpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Map the moore predicate to LLVM icmp predicate.
+    LLVM::ICmpPredicate pred;
+    switch (op.getPredicate()) {
+    case ClassHandleCmpPredicate::eq:
+      pred = LLVM::ICmpPredicate::eq;
+      break;
+    case ClassHandleCmpPredicate::ne:
+      pred = LLVM::ICmpPredicate::ne;
+      break;
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, resultType, pred,
+                                              adaptor.getLhs(), adaptor.getRhs());
+    return success();
+  }
+};
 
 struct VariableOpConversion : public OpConversionPattern<VariableOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2645,7 +2792,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // clang-format off
   patterns.add<
     ClassUpcastOpConversion,
-    // TODO: ClassNullOpConversion, ClassHandleCmpOpConversion - need class ops from Track B
+    ClassNullOpConversion,
+    ClassHandleCmpOpConversion,
     // Patterns of declaration operations.
     VariableOpConversion,
     NetOpConversion,
@@ -2786,12 +2934,12 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<WaitDelayOp>(convert);
   patterns.add<UnreachableOp>(convert);
 
-  // TODO: Process control (fork/join) - requires ForkOp etc. from Track A
-  // patterns.add<ForkOpConversion>(typeConverter, patterns.getContext());
-  // patterns.add<NamedBlockOpConversion>(typeConverter, patterns.getContext());
-  // patterns.add<WaitForkOp>(convert);
-  // patterns.add<DisableForkOp>(convert);
-  // patterns.add<DisableOp>(convert);
+  // Process control (fork/join)
+  patterns.add<ForkOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<NamedBlockOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<WaitForkOp>(convert);
+  patterns.add<DisableForkOp>(convert);
+  patterns.add<DisableOp>(convert);
 
   // Simulation control
   patterns.add<StopBIOp>(convert);
