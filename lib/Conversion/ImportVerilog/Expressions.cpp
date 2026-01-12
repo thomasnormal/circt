@@ -1144,13 +1144,35 @@ struct RvalueExprVisitor : public ExprVisitor {
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
       else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
-        // Class handle comparison (e.g., obj == null).
-        // For now, emit a warning and return a constant false/true.
-        // Full class handle comparison support would require a dedicated op.
-        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
-                               << "returning constant result";
-        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, resultTy, 0);
+        // Class handle comparison (e.g., obj == null or a == b).
+        // If one side is null (represented as @__null__), we need to create
+        // a properly typed null to match the other operand.
+        auto lhsClassTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
+        auto rhsClassTy = dyn_cast<moore::ClassHandleType>(rhs.getType());
+
+        // Helper to check if a type is the special null type
+        auto isNullType = [](moore::ClassHandleType ty) {
+          return ty && ty.getClassSym() &&
+                 ty.getClassSym().getRootReference() == "__null__";
+        };
+
+        Value lhsVal = lhs;
+        Value rhsVal = rhs;
+
+        // If lhs is null type, create a typed null matching rhs
+        if (isNullType(lhsClassTy) && rhsClassTy && !isNullType(rhsClassTy))
+          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
+        // If rhs is null type, create a typed null matching lhs
+        else if (isNullType(rhsClassTy) && lhsClassTy && !isNullType(lhsClassTy))
+          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
+        // If one side is not a class handle at all (shouldn't happen normally)
+        else if (!lhsClassTy && rhsClassTy)
+          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
+        else if (lhsClassTy && !rhsClassTy)
+          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
+
+        return moore::ClassHandleCmpOp::create(
+            builder, loc, moore::ClassHandleCmpPredicate::eq, lhsVal, rhsVal);
       } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
@@ -1162,11 +1184,35 @@ struct RvalueExprVisitor : public ExprVisitor {
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
       else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
-        // Class handle comparison (e.g., obj != null).
-        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
-                               << "returning constant result";
-        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, resultTy, 1);
+        // Class handle comparison (e.g., obj != null or a != b).
+        // If one side is null (represented as @__null__), we need to create
+        // a properly typed null to match the other operand.
+        auto lhsClassTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
+        auto rhsClassTy = dyn_cast<moore::ClassHandleType>(rhs.getType());
+
+        // Helper to check if a type is the special null type
+        auto isNullType = [](moore::ClassHandleType ty) {
+          return ty && ty.getClassSym() &&
+                 ty.getClassSym().getRootReference() == "__null__";
+        };
+
+        Value lhsVal = lhs;
+        Value rhsVal = rhs;
+
+        // If lhs is null type, create a typed null matching rhs
+        if (isNullType(lhsClassTy) && rhsClassTy && !isNullType(rhsClassTy))
+          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
+        // If rhs is null type, create a typed null matching lhs
+        else if (isNullType(rhsClassTy) && lhsClassTy && !isNullType(lhsClassTy))
+          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
+        // If one side is not a class handle at all (shouldn't happen normally)
+        else if (!lhsClassTy && rhsClassTy)
+          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
+        else if (lhsClassTy && !rhsClassTy)
+          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
+
+        return moore::ClassHandleCmpOp::create(
+            builder, loc, moore::ClassHandleCmpPredicate::ne, lhsVal, rhsVal);
       } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
@@ -1919,18 +1965,18 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (!type)
       return {};
 
-    // For class handles, emit a special null constant.
-    // For now, we emit a warning and create a dummy variable and read from it.
-    // Full null support would require a dedicated NullOp or special handling.
-    mlir::emitWarning(loc) << "null literal support is incomplete; "
-                           << "treating as uninitialized value";
+    // For class handles, emit a ClassNullOp.
+    if (auto classHandleTy = dyn_cast<moore::ClassHandleType>(type))
+      return moore::ClassNullOp::create(builder, loc, classHandleTy);
 
-    // Create a variable to represent the null value, then read from it
+    // For other types (like chandle), fall back to uninitialized variable.
+    mlir::emitWarning(loc) << "null literal support is incomplete for type "
+                           << type << "; treating as uninitialized value";
+
     auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
     auto nameAttr = builder.getStringAttr("null_literal");
     auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
                                            /*initial=*/Value{});
-    // Read the variable to get an rvalue
     return moore::ReadOp::create(builder, loc, varOp);
   }
 

@@ -921,6 +921,15 @@ def StringCmpPredicateAttr : I64EnumAttr<
   let cppNamespace = "circt::moore";
 }
 
+def ClassHandleCmpPredicateAttr : I64EnumAttr<
+    "ClassHandleCmpPredicate", "",
+    [
+      I64EnumAttrCase<"eq", 0>,
+      I64EnumAttrCase<"ne", 1>
+    ]> {
+  let cppNamespace = "circt::moore";
+}
+
 def NegOp : MooreOp<"neg", [Pure, SameOperandsAndResultType]> {
   let summary = "Arithmetic negation";
   let description = [{
@@ -1262,6 +1271,63 @@ def StringCmpOp : MooreOp<"string_cmp", [
     StringCmpPredicateAttr:$predicate,
     StringType:$lhs,
     StringType:$rhs
+  );
+  let results = (outs BitType:$result);
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
+  }];
+}
+
+def ClassNullOp : MooreOp<"class.null", [Pure]> {
+  let summary = "Create a null class handle";
+  let description = [{
+    Creates a null class handle value. In SystemVerilog, `null` represents
+    the absence of a valid class instance reference. Comparing a class handle
+    to `null` checks whether the handle points to a valid object.
+
+    Example:
+    ```mlir
+    %null = moore.class.null : !moore.class<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 8.4 "Class handle operations".
+  }];
+
+  let arguments = (ins);
+  let results = (outs ClassHandleType:$result);
+
+  let assemblyFormat = [{
+    `:` type($result) attr-dict
+  }];
+}
+
+def ClassHandleCmpOp : MooreOp<"class_handle_cmp", [
+  Pure,
+  Commutative,
+  SameTypeOperands
+]> {
+  let summary = "Compare class handles for reference equality";
+  let description = [{
+    Compares two class handles using reference equality. This checks whether
+    two handles point to the same object instance (or are both null).
+    Supported predicates:
+    - eq : equal (handles point to same object or both null)
+    - ne : not equal (handles point to different objects)
+
+    Note: This is different from comparing the contents of the objects.
+    Two different objects with identical data will compare as not equal.
+
+    Example:
+    ```mlir
+    %result = moore.class_handle_cmp eq %a, %b : !moore.class<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 8.4 "Class handle operations".
+  }];
+  let arguments = (ins
+    ClassHandleCmpPredicateAttr:$predicate,
+    ClassHandleType:$lhs,
+    ClassHandleType:$rhs
   );
   let results = (outs BitType:$result);
   let assemblyFormat = [{
