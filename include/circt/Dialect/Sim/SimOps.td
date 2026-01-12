@@ -1192,7 +1192,6 @@ def SimIterationLimitOp : SimOp<"iteration_limit", []> {
 
 def SimForkOp : SimOp<"fork", [
   RecursiveMemoryEffects,
-  SingleBlockImplicitTerminator<"SimForkTerminatorOp">,
 ]> {
   let summary = "Spawn concurrent processes (SystemVerilog fork)";
   let description = [{
