@@ -9,9 +9,11 @@
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/statements/MiscStatements.h"
+#include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/text/SourceManager.h"
@@ -178,6 +180,42 @@ struct VerilogIndexer : slang::ast::ASTVisitor<VerilogIndexer, true, true> {
 
   void visit(const slang::ast::VariableDeclStatement &expr) {
     insertSymbol(&expr.symbol, expr.sourceRange, /*isDefinition=*/true);
+    recurseIfInMainBuffer(expr);
+  }
+
+  // Handle class types (important for UVM)
+  void visit(const slang::ast::ClassType &classType) {
+    insertSymbol(&classType, classType.location, /*isDefinition=*/true);
+
+    // Index all class members (properties, methods, etc.)
+    for (const auto &member : classType.members()) {
+      if (member.location.valid() && !member.name.empty()) {
+        insertSymbol(&member, member.location, /*isDefinition=*/true);
+      }
+    }
+    recurseIfInMainBuffer(classType);
+  }
+
+  // Handle subroutines (functions and tasks) - important for UVM methods
+  void visit(const slang::ast::SubroutineSymbol &sub) {
+    insertSymbol(&sub, sub.location, /*isDefinition=*/true);
+
+    // Index the arguments
+    for (const auto *arg : sub.getArguments()) {
+      if (arg->location.valid() && !arg->name.empty()) {
+        insertSymbol(arg, arg->location, /*isDefinition=*/true);
+      }
+    }
+    recurseIfInMainBuffer(sub);
+  }
+
+  // Handle class property references (this.property, class.property)
+  void visit(const slang::ast::MemberAccessExpression &expr) {
+    auto *symbol = expr.getSymbolReference(true);
+    if (symbol && !symbol->name.empty()) {
+      // The member being accessed
+      insertSymbol(symbol, expr.sourceRange, /*isDefinition=*/false);
+    }
     recurseIfInMainBuffer(expr);
   }
 
