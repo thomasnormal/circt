@@ -926,7 +926,7 @@ std::optional<size_t> DAPTransport::readContentLength() {
       break;
 
     // Look for Content-Length header
-    if (line.starts_with("Content-Length: ")) {
+    if (line.rfind("Content-Length: ", 0) == 0) {
       std::string lengthStr = line.substr(16);
       size_t length;
       if (llvm::StringRef(lengthStr).getAsInteger(10, length))

@@ -130,8 +130,11 @@ std::string SignalValue::toString(unsigned radix) const {
     return toHexString();
 
   // For decimal, just convert the APInt
-  if (isFullyDefined())
-    return toAPInt().toString(radix, false);
+  if (isFullyDefined()) {
+    llvm::SmallString<64> str;
+    toAPInt().toString(str, radix, false);
+    return std::string(str);
+  }
 
   // If has unknowns, show binary
   return toBinaryString();
@@ -790,8 +793,8 @@ void BreakpointManager::setConditionEvaluator(
     ConditionBreakpoint::ConditionEvaluator eval) {
   conditionEvaluator = std::move(eval);
   for (auto &bp : breakpoints) {
-    if (auto *cond = dynamic_cast<ConditionBreakpoint *>(bp.get()))
-      cond->setEvaluator(conditionEvaluator);
+    if (bp->getType() == Breakpoint::Type::Condition)
+      static_cast<ConditionBreakpoint *>(bp.get())->setEvaluator(conditionEvaluator);
   }
 }
 
@@ -835,7 +838,7 @@ EvalResult ExpressionEvaluator::evaluateComparison(StringRef expr) const {
   if (opPos == StringRef::npos) {
     // Not a comparison - treat as boolean expression
     auto result = evaluate(expr);
-    if (!result.success)
+    if (!result.succeeded)
       return result;
     // Non-zero is true
     SignalValue oneVal(1, 1);
@@ -850,11 +853,11 @@ EvalResult ExpressionEvaluator::evaluateComparison(StringRef expr) const {
   StringRef rhs = expr.drop_front(opPos + op.size()).trim();
 
   auto lhsResult = evaluate(lhs);
-  if (!lhsResult.success)
+  if (!lhsResult.succeeded)
     return lhsResult;
 
   auto rhsResult = evaluate(rhs);
-  if (!rhsResult.success)
+  if (!rhsResult.succeeded)
     return rhsResult;
 
   // Compare
@@ -890,7 +893,7 @@ EvalResult ExpressionEvaluator::evaluateComparison(StringRef expr) const {
 
 bool ExpressionEvaluator::isTrue(StringRef expr) const {
   auto result = evaluateComparison(expr);
-  if (!result.success || !result.value)
+  if (!result.succeeded || !result.value)
     return false;
   return result.value->isFullyDefined() &&
          result.value->toAPInt().getBoolValue();

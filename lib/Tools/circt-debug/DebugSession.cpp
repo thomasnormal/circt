@@ -358,7 +358,7 @@ std::vector<std::string> DebugSession::listScopes() const {
     return results;
 
   for (const auto &child : scope->getChildren()) {
-    results.push_back(child->getName());
+    results.push_back(child->getName().str());
   }
   return results;
 }
@@ -910,7 +910,7 @@ CommandResult CommandProcessor::cmdPrint(const std::vector<std::string> &args) {
   std::string format = "hex";
   std::string expr;
 
-  if (args[0].starts_with("/")) {
+  if (!args[0].empty() && args[0][0] == '/') {
     if (args[0] == "/x")
       format = "hex";
     else if (args[0] == "/b")
@@ -935,7 +935,7 @@ CommandResult CommandProcessor::cmdPrint(const std::vector<std::string> &args) {
   }
 
   auto result = session.evaluate(expr);
-  if (!result.success)
+  if (!result.succeeded)
     return CommandResult::error(result.error);
 
   std::string output = expr + " = ";
@@ -981,7 +981,7 @@ CommandResult CommandProcessor::cmdInfo(const std::vector<std::string> &args) {
         auto val = session.getSignal(sig.fullPath);
         output += "  " + sig.name + " [" + std::to_string(sig.width) + "] " +
                   std::string(sig.getTypeString());
-        if (val.success && val.value)
+        if (val.succeeded && val.value)
           output += " = 0x" + val.value->toHexString();
         output += "\n";
       }

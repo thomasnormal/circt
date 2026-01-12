@@ -64,6 +64,7 @@ add_circt_library(CIRCTAnalysisTestPasses
   MLIRPass
 )
 
-if(CIRCT_SLANG_FRONTEND_ENABLED)
-  add_subdirectory(Linting)
-endif()
+# TODO: Linting code needs slang header path fixes
+# if(CIRCT_SLANG_FRONTEND_ENABLED)
+#   add_subdirectory(Linting)
+# endif()
