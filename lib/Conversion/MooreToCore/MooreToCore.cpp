@@ -1196,6 +1196,114 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
   }
 };
 
+
+//===----------------------------------------------------------------------===//
+// Global Variable Conversion
+//===----------------------------------------------------------------------===//
+
+/// Helper to create an LLVM zero initializer for a given type.
+static Attribute createLLVMZeroAttr(Type type, MLIRContext *ctx) {
+  // Handle LLVM struct types (used for queues and dynamic arrays).
+  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(type)) {
+    SmallVector<Attribute> elements;
+    for (Type elemTy : structTy.getBody())
+      elements.push_back(createLLVMZeroAttr(elemTy, ctx));
+    return LLVM::ConstantArrayAttr::get(ctx, type, elements);
+  }
+
+  // Handle LLVM pointer types.
+  if (isa<LLVM::LLVMPointerType>(type))
+    return LLVM::ZeroAttr::get(ctx);
+
+  // Handle integer types.
+  if (auto intTy = dyn_cast<IntegerType>(type))
+    return IntegerAttr::get(intTy, 0);
+
+  // Handle float types.
+  if (auto floatTy = dyn_cast<FloatType>(type))
+    return FloatAttr::get(floatTy, 0.0);
+
+  // Handle hw::ArrayType.
+  if (isa<hw::ArrayType>(type)) {
+    int64_t width = hw::getBitWidth(type);
+    if (width > 0) {
+      auto intTy = IntegerType::get(ctx, width);
+      return IntegerAttr::get(intTy, 0);
+    }
+  }
+
+  // Handle hw::StructType by creating a zero-initialized integer.
+  if (isa<hw::StructType>(type)) {
+    int64_t width = hw::getBitWidth(type);
+    if (width > 0) {
+      auto intTy = IntegerType::get(ctx, width);
+      return IntegerAttr::get(intTy, 0);
+    }
+  }
+
+  // Default: return zero attr for types with known bit width.
+  int64_t width = hw::getBitWidth(type);
+  if (width > 0) {
+    auto intTy = IntegerType::get(ctx, width);
+    return IntegerAttr::get(intTy, 0);
+  }
+
+  return {};
+}
+
+struct GlobalVariableOpConversion
+    : public OpConversionPattern<GlobalVariableOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(GlobalVariableOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type convertedType = typeConverter->convertType(op.getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(loc,
+                                         "failed to convert global var type");
+
+    // Create an LLVM global with zero initialization.
+    Attribute initAttr = createLLVMZeroAttr(convertedType, op.getContext());
+
+    LLVM::GlobalOp::create(rewriter, loc, convertedType, /*isConstant=*/false,
+                           LLVM::Linkage::Internal, op.getSymName(), initAttr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GetGlobalVariableOpConversion
+    : public OpConversionPattern<GetGlobalVariableOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(GetGlobalVariableOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(loc,
+                                         "failed to convert result type");
+
+    auto refType = dyn_cast<llhd::RefType>(resultType);
+
+    auto ptrTy = LLVM::LLVMPointerType::get(op.getContext());
+    auto addressOf =
+        LLVM::AddressOfOp::create(rewriter, loc, ptrTy, op.getGlobalName());
+
+    if (refType) {
+      rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(op, resultType,
+                                                               addressOf);
+    } else {
+      rewriter.replaceOp(op, addressOf.getResult());
+    }
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Expression Conversion
 //===----------------------------------------------------------------------===//
@@ -2556,6 +2664,29 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
         return hw::StructType::get(type.getContext(), fields);
       });
 
+
+  // QueueType -> LLVM struct {ptr, i64} representing a dynamic queue.
+  typeConverter.addConversion([&](QueueType type) -> std::optional<Type> {
+    auto *ctx = type.getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  });
+
+  // OpenUnpackedArrayType (dynamic array) -> LLVM struct {ptr, i64}.
+  typeConverter.addConversion(
+      [&](OpenUnpackedArrayType type) -> std::optional<Type> {
+        auto *ctx = type.getContext();
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+        auto i64Ty = IntegerType::get(ctx, 64);
+        return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+      });
+
+  // AssocArrayType (associative array) -> LLVM pointer (opaque map handle).
+  typeConverter.addConversion([&](AssocArrayType type) -> std::optional<Type> {
+    return LLVM::LLVMPointerType::get(type.getContext());
+  });
+
   // Conversion of CHandle to LLVMPointerType
   typeConverter.addConversion([&](ChandleType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(type.getContext());
@@ -2674,6 +2805,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns of declaration operations.
     VariableOpConversion,
     NetOpConversion,
+    GlobalVariableOpConversion,
+    GetGlobalVariableOpConversion,
 
     // Patterns for conversion operations.
     ConversionOpConversion,
