@@ -105,25 +105,8 @@ struct TypeVisitor {
 
   // Handle type defs.
   Type visit(const slang::ast::TypeAliasType &type) {
-    // Use getCanonicalType() to fully resolve the underlying type.
-    // This is important for typedefs to parameterized class specializations,
-    // where we need to get the specialized class type (e.g., registry_0)
-    // rather than the generic class type (e.g., registry).
-    auto &targetType = type.targetType.getType();
-    if (auto *classType = targetType.as_if<slang::ast::ClassType>()) {
-      LLVM_DEBUG(llvm::dbgs() << "TypeAliasType: " << type.name
-                              << " -> targetType: " << targetType.name
-                              << " (ClassType, genericClass: "
-                              << (classType->genericClass ? classType->genericClass->name : "none")
-                              << ")"
-                              << " -> canonical: " << type.getCanonicalType().name << "\n");
-    } else {
-      LLVM_DEBUG(llvm::dbgs() << "TypeAliasType: " << type.name
-                              << " -> targetType: " << targetType.name
-                              << " (kind: " << slang::ast::toString(targetType.kind) << ")"
-                              << " -> canonical: " << type.getCanonicalType().name << "\n");
-    }
-    return type.getCanonicalType().visit(*this);
+    // Simply return the underlying type.
+    return type.targetType.getType().visit(*this);
   }
 
   // Handle enums.
@@ -187,12 +170,6 @@ struct TypeVisitor {
     // Convert the class declaration and populate its body.
     // convertClassDeclaration handles recursive calls by checking if the
     // body is already being converted (via ClassDeclVisitor::run's guard).
-    LLVM_DEBUG({
-      llvm::dbgs() << "ClassType: " << type.name << " ptr=" << &type;
-      if (type.genericClass)
-        llvm::dbgs() << " genericClass@" << type.genericClass;
-      llvm::dbgs() << "\n";
-    });
     if (failed(context.convertClassDeclaration(type)))
       return {};
     auto *lowering = context.declareClass(type);
@@ -202,7 +179,6 @@ struct TypeVisitor {
       return {};
     }
     mlir::StringAttr symName = lowering->op.getSymNameAttr();
-    LLVM_DEBUG(llvm::dbgs() << "  -> lowering symName: " << symName << "\n");
     mlir::FlatSymbolRefAttr symRef = mlir::FlatSymbolRefAttr::get(symName);
     return moore::ClassHandleType::get(context.getContext(), symRef);
   }

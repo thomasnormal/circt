@@ -11,7 +11,6 @@
 #include "slang/ast/SystemSubroutine.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/Support/Debug.h"
 
 using namespace circt;
 using namespace ImportVerilog;
@@ -109,23 +108,8 @@ static Value visitClassProperty(Context &context,
   if (!type)
     return {};
 
-  // Check if this is a static property.
-  // We check expr.lifetime first, but also handle the case where there's no
-  // implicit 'this' reference - in that case, we must be in a static context
-  // (e.g., static function) accessing a static property, since slang would
-  // reject non-static property access without a receiver object.
+  // Check if this is a static property
   bool isStatic = expr.lifetime == slang::ast::VariableLifetime::Static;
-
-  // Get the scope's implicit this variable
-  mlir::Value instRef = context.getImplicitThisRef();
-
-  // If there's no implicit 'this' and we're accessing a class property,
-  // it must be a static property (slang validates this at parse time).
-  // This handles cases where expr.lifetime may not reflect the static
-  // storage class correctly (e.g., in some parameterized class contexts).
-  if (!instRef) {
-    isStatic = true;
-  }
 
   if (isStatic) {
     // Static properties are class-level (not instance-level).
@@ -145,10 +129,9 @@ static Value visitClassProperty(Context &context,
     return varOp;
   }
 
-  // At this point we have an implicit 'this' reference, so this is
-  // an instance property access.
+  // Get the scope's implicit this variable
+  mlir::Value instRef = context.getImplicitThisRef();
   if (!instRef) {
-    // This should never happen based on the logic above, but keep as a safety check
     mlir::emitError(loc) << "class property '" << expr.name
                          << "' referenced without an implicit 'this'";
     return {};
@@ -243,7 +226,7 @@ struct ExprVisitor {
     }
 
     if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
-             moore::QueueType, moore::AssocArrayType>(derefType)) {
+             moore::QueueType>(derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";
       return {};
@@ -252,26 +235,14 @@ struct ExprVisitor {
     auto resultType =
         isLvalue ? moore::RefType::get(cast<moore::UnpackedType>(type)) : type;
 
-    // For queue and associative array types (dynamically-sized), we use the
-    // index directly without translation since they are key-based.
-    bool isDynamicType = isa<moore::QueueType, moore::AssocArrayType>(derefType);
+    // For queue types (and other dynamically-sized types), we use the index
+    // directly without translation since they are 0-based.
+    bool isDynamicType = isa<moore::QueueType>(derefType);
 
     if (isDynamicType) {
       // Dynamic types (queues) use the index directly - always use dynamic
       // extract since we can't statically verify bounds.
-      Value lowBit;
-
-      // Handle $ (unbounded literal) specially - it means size-1 (last element)
-      if (expr.selector().kind ==
-          slang::ast::ExpressionKind::UnboundedLiteral) {
-        // Compute size - 1 for the $ index
-        auto sizeVal = moore::ArraySizeOp::create(builder, loc, value);
-        auto intTy = moore::IntType::getInt(context.getContext(), 32);
-        auto oneVal = moore::ConstantOp::create(builder, loc, intTy, 1);
-        lowBit = moore::SubOp::create(builder, loc, sizeVal, oneVal);
-      } else {
-        lowBit = context.convertRvalueExpression(expr.selector());
-      }
+      auto lowBit = context.convertRvalueExpression(expr.selector());
       if (!lowBit)
         return {};
       if (isLvalue)
@@ -522,41 +493,18 @@ struct ExprVisitor {
         return {};
       auto targetTy = cast<moore::ClassHandleType>(valTy);
 
-      // Get the class that declares this property from slang's AST.
-      // This avoids the need to look up the property in Moore IR, which may not
-      // have been fully populated yet due to circular dependencies between
-      // classes.
-      const auto *parentScope = expr.member.getParentScope();
-      if (!parentScope) {
-        mlir::emitError(loc) << "class property '" << expr.member.name
-                             << "' has no parent scope";
+      // We need to pick the closest ancestor that declares a property with the
+      // relevant name. System Verilog explicitly enforces lexical shadowing, as
+      // shown in IEEE 1800-2023 Section 8.14 "Overridden members".
+      auto upcastTargetTy =
+          context.getAncestorClassWithProperty(targetTy, expr.member.name, loc);
+      if (!upcastTargetTy)
         return {};
-      }
-      const auto *declaringClass =
-          parentScope->asSymbol().as_if<slang::ast::ClassType>();
-      if (!declaringClass) {
-        mlir::emitError(loc) << "class property '" << expr.member.name
-                             << "' is not declared in a class";
-        return {};
-      }
-
-      // Get the class symbol name from the declaring class
-      auto declaringClassSym =
-          fullyQualifiedClassName(context, *declaringClass);
-      auto upcastTargetTy = moore::ClassHandleType::get(
-          context.getContext(),
-          mlir::FlatSymbolRefAttr::get(context.getContext(),
-                                       declaringClassSym));
 
       // Convert the class handle to the required target type for property
-      // shadowing purposes, if needed.
-      Value baseVal;
-      if (upcastTargetTy.getClassSym() == targetTy.getClassSym()) {
-        baseVal = context.convertRvalueExpression(expr.value());
-      } else {
-        baseVal =
-            context.convertRvalueExpression(expr.value(), upcastTargetTy);
-      }
+      // shadowing purposes.
+      Value baseVal =
+          context.convertRvalueExpression(expr.value(), upcastTargetTy);
       if (!baseVal)
         return {};
 
@@ -618,26 +566,10 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ReadOp::create(builder, loc, value);
     }
 
-    // If the lookup failed but this is a Variable symbol, try on-demand
-    // conversion. This handles cases where Slang's package.members() doesn't
-    // include certain variables (e.g., those declared after forward typedefs)
-    // even though they are in the package scope.
-    if (auto *varSym = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
-      if (succeeded(context.convertGlobalVariable(*varSym))) {
-        if (auto globalOp = context.globalVariables.lookup(varSym)) {
-          auto value =
-              moore::GetGlobalVariableOp::create(builder, loc, globalOp);
-          return moore::ReadOp::create(builder, loc, value);
-        }
-      }
-    }
-
     // We're reading a class property.
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
       auto fieldRef = visitClassProperty(context, *property);
-      if (!fieldRef)
-        return {};
       return moore::ReadOp::create(builder, loc, fieldRef).getResult();
     }
 
@@ -1144,35 +1076,13 @@ struct RvalueExprVisitor : public ExprVisitor {
             builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
       else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
-        // Class handle comparison (e.g., obj == null or a == b).
-        // If one side is null (represented as @__null__), we need to create
-        // a properly typed null to match the other operand.
-        auto lhsClassTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
-        auto rhsClassTy = dyn_cast<moore::ClassHandleType>(rhs.getType());
-
-        // Helper to check if a type is the special null type
-        auto isNullType = [](moore::ClassHandleType ty) {
-          return ty && ty.getClassSym() &&
-                 ty.getClassSym().getRootReference() == "__null__";
-        };
-
-        Value lhsVal = lhs;
-        Value rhsVal = rhs;
-
-        // If lhs is null type, create a typed null matching rhs
-        if (isNullType(lhsClassTy) && rhsClassTy && !isNullType(rhsClassTy))
-          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
-        // If rhs is null type, create a typed null matching lhs
-        else if (isNullType(rhsClassTy) && lhsClassTy && !isNullType(lhsClassTy))
-          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
-        // If one side is not a class handle at all (shouldn't happen normally)
-        else if (!lhsClassTy && rhsClassTy)
-          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
-        else if (lhsClassTy && !rhsClassTy)
-          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
-
-        return moore::ClassHandleCmpOp::create(
-            builder, loc, moore::ClassHandleCmpPredicate::eq, lhsVal, rhsVal);
+        // Class handle comparison (e.g., obj == null).
+        // For now, emit a warning and return a constant false/true.
+        // Full class handle comparison support would require a dedicated op.
+        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
+                               << "returning constant result";
+        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, resultTy, 0);
       } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
@@ -1184,35 +1094,11 @@ struct RvalueExprVisitor : public ExprVisitor {
             builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
       else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
-        // Class handle comparison (e.g., obj != null or a != b).
-        // If one side is null (represented as @__null__), we need to create
-        // a properly typed null to match the other operand.
-        auto lhsClassTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
-        auto rhsClassTy = dyn_cast<moore::ClassHandleType>(rhs.getType());
-
-        // Helper to check if a type is the special null type
-        auto isNullType = [](moore::ClassHandleType ty) {
-          return ty && ty.getClassSym() &&
-                 ty.getClassSym().getRootReference() == "__null__";
-        };
-
-        Value lhsVal = lhs;
-        Value rhsVal = rhs;
-
-        // If lhs is null type, create a typed null matching rhs
-        if (isNullType(lhsClassTy) && rhsClassTy && !isNullType(rhsClassTy))
-          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
-        // If rhs is null type, create a typed null matching lhs
-        else if (isNullType(rhsClassTy) && lhsClassTy && !isNullType(lhsClassTy))
-          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
-        // If one side is not a class handle at all (shouldn't happen normally)
-        else if (!lhsClassTy && rhsClassTy)
-          lhsVal = moore::ClassNullOp::create(builder, loc, rhsClassTy);
-        else if (lhsClassTy && !rhsClassTy)
-          rhsVal = moore::ClassNullOp::create(builder, loc, lhsClassTy);
-
-        return moore::ClassHandleCmpOp::create(
-            builder, loc, moore::ClassHandleCmpPredicate::ne, lhsVal, rhsVal);
+        // Class handle comparison (e.g., obj != null).
+        mlir::emitWarning(loc) << "class handle comparison not fully supported; "
+                               << "returning constant result";
+        auto resultTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, resultTy, 1);
       } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
@@ -1689,16 +1575,6 @@ struct RvalueExprVisitor : public ExprVisitor {
       return fmtValue.value();
     }
 
-    // Handle string substr method: str.substr(start, len) has 3 args
-    if (!subroutine.name.compare("substr") && args.size() == 3) {
-      Value str = context.convertRvalueExpression(*args[0]);
-      Value start = context.convertRvalueExpression(*args[1]);
-      Value len = context.convertRvalueExpression(*args[2]);
-      if (!str || !start || !len)
-        return {};
-      return moore::StringSubstrOp::create(builder, loc, str, start, len);
-    }
-
     // $cast(dest, src) is a special case because the first argument is an
     // output parameter. Slang wraps it in an AssignmentExpression with
     // EmptyArgument as RHS.
@@ -1804,97 +1680,6 @@ struct RvalueExprVisitor : public ExprVisitor {
         return *result;
     }
 
-    // Handle associative array exists method: array.exists(key) returns int.
-    // Slang presents this as a SystemCall with 2 args: array ref and key.
-    if (subroutine.name == "exists" && args.size() == 2) {
-      Value arrayRef = context.convertLvalueExpression(*args[0]);
-      Value key = context.convertRvalueExpression(*args[1]);
-      if (!arrayRef || !key)
-        return {};
-
-      // Check if this is an associative array
-      auto refTy = dyn_cast<moore::RefType>(arrayRef.getType());
-      if (refTy && isa<moore::AssocArrayType>(refTy.getNestedType())) {
-        return moore::AssocArrayExistsOp::create(builder, loc, arrayRef, key);
-      }
-    }
-
-    // Handle associative array delete method: array.delete(key) removes entry.
-    // Slang presents this as a SystemCall with 2 args: array ref and key.
-    // This is different from queue.delete() which takes no key arg.
-    if (subroutine.name == "delete" && args.size() == 2) {
-      Value arrayRef = context.convertLvalueExpression(*args[0]);
-      Value key = context.convertRvalueExpression(*args[1]);
-      if (!arrayRef || !key)
-        return {};
-
-      // Check if this is an associative array
-      auto refTy = dyn_cast<moore::RefType>(arrayRef.getType());
-      if (refTy && isa<moore::AssocArrayType>(refTy.getNestedType())) {
-        // TODO: Add moore::AssocArrayDeleteOp operation
-        // For now, emit a warning and return a dummy int value since
-        // expressions need to return something (even for void methods)
-        mlir::emitWarning(loc)
-            << "associative array delete method is not fully supported yet";
-        auto intTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, intTy, 0);
-      }
-    }
-
-    // Handle associative array first/next/last/prev methods: array.first(ref key)
-    // Slang presents this as a SystemCall with 2 args: array ref and key ref.
-    bool isAssocArrayIterMethod =
-        (subroutine.name == "first" || subroutine.name == "next" ||
-         subroutine.name == "last" || subroutine.name == "prev");
-    if (isAssocArrayIterMethod && args.size() == 2) {
-      Value arrayRef = context.convertLvalueExpression(*args[0]);
-      Value keyRef = context.convertLvalueExpression(*args[1]);
-      if (!arrayRef || !keyRef)
-        return {};
-
-      // Check if this is an associative array
-      auto refTy = dyn_cast<moore::RefType>(arrayRef.getType());
-      if (refTy && isa<moore::AssocArrayType>(refTy.getNestedType())) {
-        // first and next have Moore operations; last and prev need to be added
-        if (subroutine.name == "first")
-          return moore::AssocArrayFirstOp::create(builder, loc, arrayRef,
-                                                  keyRef);
-        else if (subroutine.name == "next")
-          return moore::AssocArrayNextOp::create(builder, loc, arrayRef,
-                                                 keyRef);
-        else {
-          // For last/prev, emit warning and return a dummy value for now
-          mlir::emitWarning(loc)
-              << "associative array " << subroutine.name
-              << " method is not fully supported yet";
-          auto intTy = moore::IntType::getInt(context.getContext(), 1);
-          return moore::ConstantOp::create(builder, loc, intTy, 0);
-        }
-      }
-    }
-
-    // Handle string itoa method: str.itoa(integer) converts integer to decimal
-    // string and stores in str. Slang presents this as a SystemCall with 2 args:
-    // string ref and integer value. Returns void (we return dummy int).
-    if (subroutine.name == "itoa" && args.size() == 2) {
-      Value strRef = context.convertLvalueExpression(*args[0]);
-      Value intVal = context.convertRvalueExpression(*args[1]);
-      if (!strRef || !intVal)
-        return {};
-
-      // Check if this is a string type
-      auto refTy = dyn_cast<moore::RefType>(strRef.getType());
-      if (refTy && isa<moore::StringType>(refTy.getNestedType())) {
-        // Convert integer to string and assign to strRef
-        // Use IntToStringOp to convert, then assign
-        auto strVal = moore::IntToStringOp::create(builder, loc, intVal);
-        moore::BlockingAssignOp::create(builder, loc, strRef, strVal);
-        // Return dummy value since itoa returns void
-        auto intTy = moore::IntType::getInt(context.getContext(), 1);
-        return moore::ConstantOp::create(builder, loc, intTy, 0);
-      }
-    }
-
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
@@ -1965,18 +1750,18 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (!type)
       return {};
 
-    // For class handles, emit a ClassNullOp.
-    if (auto classHandleTy = dyn_cast<moore::ClassHandleType>(type))
-      return moore::ClassNullOp::create(builder, loc, classHandleTy);
+    // For class handles, emit a special null constant.
+    // For now, we emit a warning and create a dummy variable and read from it.
+    // Full null support would require a dedicated NullOp or special handling.
+    mlir::emitWarning(loc) << "null literal support is incomplete; "
+                           << "treating as uninitialized value";
 
-    // For other types (like chandle), fall back to uninitialized variable.
-    mlir::emitWarning(loc) << "null literal support is incomplete for type "
-                           << type << "; treating as uninitialized value";
-
+    // Create a variable to represent the null value, then read from it
     auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
     auto nameAttr = builder.getStringAttr("null_literal");
     auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
                                            /*initial=*/Value{});
+    // Read the variable to get an rvalue
     return moore::ReadOp::create(builder, loc, varOp);
   }
 
@@ -2175,20 +1960,6 @@ struct RvalueExprVisitor : public ExprVisitor {
         value = context.convertRvalueExpression(*stream.operand);
       }
 
-      // Queues and other dynamic types cannot be converted to bit vectors.
-      // Emit a warning and return an empty string instead.
-      if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(value.getType())) {
-        mlir::emitWarning(operandLoc)
-            << "streaming concatenation of dynamic arrays/queues "
-            << "is not fully supported; returning empty string";
-        // Create an empty string constant by creating a 0-width integer and
-        // converting it to a string. ConstantStringOp requires IntType result.
-        auto intTy = moore::IntType::getInt(context.getContext(), 0);
-        auto intVal =
-            moore::ConstantStringOp::create(builder, loc, intTy, "").getResult();
-        return moore::IntToStringOp::create(builder, loc, intVal);
-      }
-
       value = context.convertToSimpleBitVector(value);
       if (!value)
         return {};
@@ -2346,17 +2117,6 @@ struct LvalueExprVisitor : public ExprVisitor {
     // Handle global variables.
     if (auto globalOp = context.globalVariables.lookup(&expr.symbol))
       return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
-
-    // If the lookup failed but this is a Variable symbol, try on-demand
-    // conversion. This handles cases where Slang's package.members() doesn't
-    // include certain variables (e.g., those declared after forward typedefs)
-    // even though they are in the package scope.
-    if (auto *varSym = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
-      if (succeeded(context.convertGlobalVariable(*varSym))) {
-        if (auto globalOp = context.globalVariables.lookup(varSym))
-          return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
-      }
-    }
 
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
@@ -3132,15 +2892,6 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                     return moore::ArraySizeOp::create(builder, loc, value);
                   return {};
                 })
-          .Case("$isunknown",
-                [&, this]() -> Value {
-                  // $isunknown returns 1 if any bit is X or Z, 0 otherwise
-                  // For now, emit a warning and return 0 (no unknown bits)
-                  mlir::emitWarning(loc)
-                      << "$isunknown is not fully supported; returning 0";
-                  auto intTy = moore::IntType::getInt(getContext(), 1);
-                  return moore::ConstantOp::create(builder, loc, intTy, 0);
-                })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
@@ -3238,26 +2989,6 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
   mlir::SymbolRefAttr baseSym = baseTy.getClassSym();
 
   if (actualSym == baseSym)
-    return true;
-
-  // Check if both classes are specializations of the same generic class.
-  // This handles cases like uvm_pool_18 and uvm_pool where both are related
-  // through the same generic class template uvm_pool#(KEY, T).
-  auto actualNameAttr = actualSym.getRootReference();
-  auto baseNameAttr = baseSym.getRootReference();
-
-  auto actualGenericIt = classSpecializationToGeneric.find(actualNameAttr);
-  auto baseGenericIt = classSpecializationToGeneric.find(baseNameAttr);
-
-  // Case 1: actualTy is a specialization and baseTy is its generic class
-  if (actualGenericIt != classSpecializationToGeneric.end() &&
-      actualGenericIt->second == baseNameAttr)
-    return true;
-
-  // Case 2: Both are specializations of the same generic class
-  if (actualGenericIt != classSpecializationToGeneric.end() &&
-      baseGenericIt != classSpecializationToGeneric.end() &&
-      actualGenericIt->second == baseGenericIt->second)
     return true;
 
   auto *op = resolve(*this, actualSym);
