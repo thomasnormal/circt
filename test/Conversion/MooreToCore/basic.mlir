@@ -1135,8 +1135,8 @@ moore.module @NoPredecessorBlockErasure(in %clk_i : !moore.l1, in %raddr_i : !mo
   %0 = moore.constant 0 : l32
   %1 = moore.constant 1 : i32
   %2 = moore.constant 0 : i32
-  %rdata_o = moore.variable : <array<2 x l32>>
-  %mem = moore.variable : <array<32 x l32>>
+  %rdata_o = moore.variable : !moore.ref<!moore.array<2 x l32>>
+  %mem = moore.variable : !moore.ref<!moore.array<32 x l32>>
   moore.procedure always_ff {
     cf.br ^bb1(%2 : !moore.i32)
   ^bb1(%4: !moore.i32):  // 2 preds: ^bb0, ^bb8
