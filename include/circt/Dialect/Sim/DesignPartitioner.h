@@ -39,8 +39,20 @@ struct DependencyNode {
     SignalId signalId;
   };
 
-  DependencyNode(ProcessId pid) : kind(Kind::Process), processId(pid) {}
-  DependencyNode(SignalId sid) : kind(Kind::Signal), signalId(sid) {}
+  /// Tag types for disambiguation.
+  struct ProcessTag {};
+  struct SignalTag {};
+
+  DependencyNode(ProcessTag, ProcessId pid) : kind(Kind::Process), processId(pid) {}
+  DependencyNode(SignalTag, SignalId sid) : kind(Kind::Signal), signalId(sid) {}
+
+  /// Factory methods for easier construction.
+  static DependencyNode process(ProcessId pid) {
+    return DependencyNode(ProcessTag{}, pid);
+  }
+  static DependencyNode signal(SignalId sid) {
+    return DependencyNode(SignalTag{}, sid);
+  }
 
   bool isProcess() const { return kind == Kind::Process; }
   bool isSignal() const { return kind == Kind::Signal; }
@@ -69,7 +81,7 @@ public:
   /// Add a process node and return its index.
   size_t addProcessNode(ProcessId pid) {
     size_t idx = nodes.size();
-    nodes.emplace_back(pid);
+    nodes.push_back(DependencyNode::process(pid));
     processToNode[pid] = idx;
     return idx;
   }
@@ -77,7 +89,7 @@ public:
   /// Add a signal node and return its index.
   size_t addSignalNode(SignalId sid) {
     size_t idx = nodes.size();
-    nodes.emplace_back(sid);
+    nodes.push_back(DependencyNode::signal(sid));
     signalToNode[sid] = idx;
     return idx;
   }

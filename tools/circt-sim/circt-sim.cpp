@@ -492,10 +492,10 @@ LogicalResult SimulationContext::setupProfiling() {
     return success();
 
   PerformanceProfiler::Config config;
-  config.enableEventProfiling = true;
-  config.enableMemoryProfiling = true;
-  config.enableTimingProfiling = true;
-  config.enableHotspotDetection = true;
+  config.enabled = true;
+  config.profileProcesses = true;
+  config.profileSignals = true;
+  config.collectHistograms = true;
 
   profiler = std::make_unique<PerformanceProfiler>(config);
   profiler->startSession("circt-sim");
@@ -557,9 +557,7 @@ LogicalResult SimulationContext::run() {
   }
 
   // Start profiling
-  if (profiler) {
-    profiler->beginRegion("simulation_main");
-  }
+  auto simulationStartTime = std::chrono::high_resolution_clock::now();
 
   // Initialize the scheduler
   scheduler.initialize();
@@ -624,7 +622,9 @@ LogicalResult SimulationContext::run() {
 
   // End profiling
   if (profiler) {
-    profiler->endRegion("simulation_main");
+    auto simulationEndTime = std::chrono::high_resolution_clock::now();
+    auto duration = simulationEndTime - simulationStartTime;
+    profiler->endOperation(ProfileCategory::Custom, duration, "simulation_main");
   }
 
   // Close VCD file

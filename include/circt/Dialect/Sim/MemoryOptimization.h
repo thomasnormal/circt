@@ -328,6 +328,10 @@ public:
     Config()
         : maxElaboratedInstances(1000), backgroundElaboration(false),
           prefetchDepth(2) {}
+
+    Config(size_t maxInstances, bool background, size_t prefetch)
+        : maxElaboratedInstances(maxInstances), backgroundElaboration(background),
+          prefetchDepth(prefetch) {}
   };
 
   OnDemandElaborator(Config config = Config());
