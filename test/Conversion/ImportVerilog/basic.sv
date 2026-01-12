@@ -3862,3 +3862,26 @@ module Events;
   // CHECK-NEXT: call @dummyA()
   initial @(e) dummyA();
 endmodule
+
+/// Check DPI import function declarations
+/// This tests that DPI-C imported functions are correctly converted to
+/// func.func private declarations without bodies.
+
+// CHECK-LABEL: func.func private @my_dpi_func(!moore.i32, !moore.i32) -> !moore.i32
+import "DPI-C" function int my_dpi_func(int a, int b);
+
+// CHECK-LABEL: func.func private @my_dpi_void(!moore.i32)
+import "DPI-C" function void my_dpi_void(int x);
+
+// CHECK-LABEL: moore.module @TestDPIImport()
+module TestDPIImport;
+    int result;
+    // CHECK: moore.procedure initial {
+    // CHECK:   [[CONST1:%.+]] = moore.constant 10 : i32
+    // CHECK:   [[CONST2:%.+]] = moore.constant 20 : i32
+    // CHECK:   [[CALL:%.+]] = call @my_dpi_func([[CONST1]], [[CONST2]]) : (!moore.i32, !moore.i32) -> !moore.i32
+    // CHECK:   moore.blocking_assign %result, [[CALL]]
+    initial begin
+        result = my_dpi_func(10, 20);
+    end
+endmodule
