@@ -113,9 +113,9 @@ moore.class.classdecl @F extends @C {
 // CHECK-NOT: moore.class.property_ref
 // CHECK-NOT: moore.class.classdecl
 
-func.func private @test_new6(%arg0: !moore.class<@G>) -> !moore.ref<i32> {
-  %gep = moore.class.property_ref %arg0[@d] : <@G> -> !moore.ref<i32>
-  return %gep : !moore.ref<i32>
+func.func private @test_new6(%arg0: !moore.class<@G>) -> !moore.ref<!moore.i32> {
+  %gep = moore.class.property_ref %arg0[@d] : <@G> -> !moore.ref<!moore.i32>
+  return %gep : !moore.ref<!moore.i32>
 }
 moore.class.classdecl @G extends @C {
   moore.class.propertydecl @d : !moore.i32
