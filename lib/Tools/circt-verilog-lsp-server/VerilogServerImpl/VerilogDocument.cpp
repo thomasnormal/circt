@@ -33,6 +33,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "slang/ast/ASTVisitor.h"
+#include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
@@ -796,6 +797,54 @@ static std::string formatSymbolInfo(const slang::ast::Symbol &symbol) {
     os << "\n```";
     break;
   }
+  case slang::ast::SymbolKind::ClassType: {
+    const auto &classType = symbol.as<slang::ast::ClassType>();
+    os << "```systemverilog\n";
+    os << "class " << symbol.name;
+    // Show base class if exists
+    if (classType.getBaseClass()) {
+      os << " extends " << classType.getBaseClass()->name;
+    }
+    os << "\n```\n\n";
+    // Show members summary
+    os << "**Members:**\n";
+    for (const auto &member : classType.members()) {
+      if (member.name.empty())
+        continue;
+      os << "- ";
+      switch (member.kind) {
+      case slang::ast::SymbolKind::ClassProperty:
+        os << "`property` ";
+        break;
+      case slang::ast::SymbolKind::Subroutine:
+        os << "`method` ";
+        break;
+      default:
+        os << "`" << slang::ast::toString(member.kind) << "` ";
+        break;
+      }
+      os << "`" << member.name << "`\n";
+    }
+    break;
+  }
+  case slang::ast::SymbolKind::ClassProperty: {
+    const auto &prop = symbol.as<slang::ast::ClassPropertySymbol>();
+    os << "```systemverilog\n";
+    // Show visibility
+    switch (prop.visibility) {
+    case slang::ast::Visibility::Public:
+      break; // public is implicit
+    case slang::ast::Visibility::Protected:
+      os << "protected ";
+      break;
+    case slang::ast::Visibility::Local:
+      os << "local ";
+      break;
+    }
+    os << formatTypeDescription(prop.getType()) << " " << symbol.name;
+    os << "\n```";
+    break;
+  }
   default:
     os << "```systemverilog\n";
     os << symbol.name;
@@ -1505,6 +1554,186 @@ void VerilogDocument::getCompletions(const llvm::lsp::URIForFile &uri,
                                    "end";
     alwaysCombSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
     completions.items.push_back(std::move(alwaysCombSnippet));
+  }
+
+  // UVM-specific snippet completions
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_component").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmComponentSnippet;
+    uvmComponentSnippet.label = "uvm_component (snippet)";
+    uvmComponentSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmComponentSnippet.detail = "UVM component class template";
+    uvmComponentSnippet.insertText =
+        "class ${1:my_component} extends uvm_component;\n"
+        "  `uvm_component_utils(${1:my_component})\n"
+        "\n"
+        "  function new(string name, uvm_component parent);\n"
+        "    super.new(name, parent);\n"
+        "  endfunction\n"
+        "\n"
+        "  function void build_phase(uvm_phase phase);\n"
+        "    super.build_phase(phase);\n"
+        "    ${2:// build phase}\n"
+        "  endfunction\n"
+        "\n"
+        "  task run_phase(uvm_phase phase);\n"
+        "    ${0:// run phase}\n"
+        "  endtask\n"
+        "endclass";
+    uvmComponentSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmComponentSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_object").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmObjectSnippet;
+    uvmObjectSnippet.label = "uvm_object (snippet)";
+    uvmObjectSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmObjectSnippet.detail = "UVM object class template";
+    uvmObjectSnippet.insertText =
+        "class ${1:my_object} extends uvm_object;\n"
+        "  `uvm_object_utils(${1:my_object})\n"
+        "\n"
+        "  function new(string name = \"${1:my_object}\");\n"
+        "    super.new(name);\n"
+        "  endfunction\n"
+        "\n"
+        "  ${0:// properties and methods}\n"
+        "endclass";
+    uvmObjectSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmObjectSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_sequence_item").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmSeqItemSnippet;
+    uvmSeqItemSnippet.label = "uvm_sequence_item (snippet)";
+    uvmSeqItemSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmSeqItemSnippet.detail = "UVM sequence item class template";
+    uvmSeqItemSnippet.insertText =
+        "class ${1:my_item} extends uvm_sequence_item;\n"
+        "  `uvm_object_utils_begin(${1:my_item})\n"
+        "    ${2:// field macros}\n"
+        "  `uvm_object_utils_end\n"
+        "\n"
+        "  rand ${3:bit [7:0]} ${4:data};\n"
+        "\n"
+        "  function new(string name = \"${1:my_item}\");\n"
+        "    super.new(name);\n"
+        "  endfunction\n"
+        "\n"
+        "  ${0:// constraints and methods}\n"
+        "endclass";
+    uvmSeqItemSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmSeqItemSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_sequence").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmSequenceSnippet;
+    uvmSequenceSnippet.label = "uvm_sequence (snippet)";
+    uvmSequenceSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmSequenceSnippet.detail = "UVM sequence class template";
+    uvmSequenceSnippet.insertText =
+        "class ${1:my_sequence} extends uvm_sequence #(${2:my_item});\n"
+        "  `uvm_object_utils(${1:my_sequence})\n"
+        "\n"
+        "  function new(string name = \"${1:my_sequence}\");\n"
+        "    super.new(name);\n"
+        "  endfunction\n"
+        "\n"
+        "  task body();\n"
+        "    ${0:// sequence body}\n"
+        "  endtask\n"
+        "endclass";
+    uvmSequenceSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmSequenceSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_driver").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmDriverSnippet;
+    uvmDriverSnippet.label = "uvm_driver (snippet)";
+    uvmDriverSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmDriverSnippet.detail = "UVM driver class template";
+    uvmDriverSnippet.insertText =
+        "class ${1:my_driver} extends uvm_driver #(${2:my_item});\n"
+        "  `uvm_component_utils(${1:my_driver})\n"
+        "\n"
+        "  function new(string name, uvm_component parent);\n"
+        "    super.new(name, parent);\n"
+        "  endfunction\n"
+        "\n"
+        "  task run_phase(uvm_phase phase);\n"
+        "    forever begin\n"
+        "      seq_item_port.get_next_item(req);\n"
+        "      ${0:// drive transaction}\n"
+        "      seq_item_port.item_done();\n"
+        "    end\n"
+        "  endtask\n"
+        "endclass";
+    uvmDriverSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmDriverSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_monitor").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmMonitorSnippet;
+    uvmMonitorSnippet.label = "uvm_monitor (snippet)";
+    uvmMonitorSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmMonitorSnippet.detail = "UVM monitor class template";
+    uvmMonitorSnippet.insertText =
+        "class ${1:my_monitor} extends uvm_monitor;\n"
+        "  `uvm_component_utils(${1:my_monitor})\n"
+        "\n"
+        "  uvm_analysis_port #(${2:my_item}) ap;\n"
+        "\n"
+        "  function new(string name, uvm_component parent);\n"
+        "    super.new(name, parent);\n"
+        "  endfunction\n"
+        "\n"
+        "  function void build_phase(uvm_phase phase);\n"
+        "    super.build_phase(phase);\n"
+        "    ap = new(\"ap\", this);\n"
+        "  endfunction\n"
+        "\n"
+        "  task run_phase(uvm_phase phase);\n"
+        "    ${0:// monitoring logic}\n"
+        "  endtask\n"
+        "endclass";
+    uvmMonitorSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmMonitorSnippet));
+  }
+
+  if (prefix.empty() ||
+      llvm::StringRef("uvm_test").starts_with_insensitive(prefix)) {
+    llvm::lsp::CompletionItem uvmTestSnippet;
+    uvmTestSnippet.label = "uvm_test (snippet)";
+    uvmTestSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
+    uvmTestSnippet.detail = "UVM test class template";
+    uvmTestSnippet.insertText =
+        "class ${1:my_test} extends uvm_test;\n"
+        "  `uvm_component_utils(${1:my_test})\n"
+        "\n"
+        "  ${2:my_env} env;\n"
+        "\n"
+        "  function new(string name, uvm_component parent);\n"
+        "    super.new(name, parent);\n"
+        "  endfunction\n"
+        "\n"
+        "  function void build_phase(uvm_phase phase);\n"
+        "    super.build_phase(phase);\n"
+        "    env = ${2:my_env}::type_id::create(\"env\", this);\n"
+        "  endfunction\n"
+        "\n"
+        "  task run_phase(uvm_phase phase);\n"
+        "    phase.raise_objection(this);\n"
+        "    ${0:// test body}\n"
+        "    phase.drop_objection(this);\n"
+        "  endtask\n"
+        "endclass";
+    uvmTestSnippet.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+    completions.items.push_back(std::move(uvmTestSnippet));
   }
 
   // Add symbols from compilation
