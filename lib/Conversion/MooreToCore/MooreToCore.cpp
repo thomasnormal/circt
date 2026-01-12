@@ -860,6 +860,49 @@ private:
   ClassTypeCache &cache; // shared, owned by the pass
 };
 
+/// moore.class.null lowering: create a null pointer constant.
+struct ClassNullOpConversion : public OpConversionPattern<ClassNullOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ClassNullOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // ClassHandleType converts to !llvm.ptr, so we just need a null pointer.
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+    rewriter.replaceOpWithNewOp<LLVM::ZeroOp>(op, ptrTy);
+    return success();
+  }
+};
+
+/// moore.class_handle_cmp lowering: compare two class handles using icmp.
+struct ClassHandleCmpOpConversion
+    : public OpConversionPattern<ClassHandleCmpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ClassHandleCmpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Map the moore predicate to LLVM icmp predicate.
+    LLVM::ICmpPredicate pred;
+    switch (op.getPredicate()) {
+    case ClassHandleCmpPredicate::eq:
+      pred = LLVM::ICmpPredicate::eq;
+      break;
+    case ClassHandleCmpPredicate::ne:
+      pred = LLVM::ICmpPredicate::ne;
+      break;
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, resultType, pred,
+                                              adaptor.getLhs(), adaptor.getRhs());
+    return success();
+  }
+};
+
 struct VariableOpConversion : public OpConversionPattern<VariableOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -2373,6 +2416,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // clang-format off
   patterns.add<
     ClassUpcastOpConversion,
+    ClassNullOpConversion,
+    ClassHandleCmpOpConversion,
     // Patterns of declaration operations.
     VariableOpConversion,
     NetOpConversion,
