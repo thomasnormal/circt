@@ -242,7 +242,8 @@ struct ExprVisitor {
     }
 
     if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
-             moore::QueueType, moore::AssocArrayType>(derefType)) {
+             moore::QueueType, moore::AssocArrayType,
+             moore::OpenUnpackedArrayType>(derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";
       return {};
@@ -251,10 +252,11 @@ struct ExprVisitor {
     auto resultType =
         isLvalue ? moore::RefType::get(cast<moore::UnpackedType>(type)) : type;
 
-    // For queue types, associative arrays, and other dynamically-sized types,
-    // we use the index directly without translation since they are 0-based
-    // or use non-integer keys.
-    bool isDynamicType = isa<moore::QueueType, moore::AssocArrayType>(derefType);
+    // For queue types, associative arrays, dynamic arrays, and other
+    // dynamically-sized types, we use the index directly without translation
+    // since they are 0-based or use non-integer keys.
+    bool isDynamicType = isa<moore::QueueType, moore::AssocArrayType,
+                            moore::OpenUnpackedArrayType>(derefType);
 
     if (isDynamicType) {
       // Dynamic types (queues) use the index directly - always use dynamic
