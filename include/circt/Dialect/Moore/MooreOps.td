@@ -4494,6 +4494,38 @@ def AssocArrayExistsOp : AssocArrayBuiltin<"exists"> {
   let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }
 
+def AssocArrayDeleteOp : AssocArrayBuiltin<"delete"> {
+  let summary = "Delete all elements from an associative array";
+  let description = [{
+    Removes all elements from an associative array, leaving it empty. This
+    corresponds to the SystemVerilog `.delete()` built-in method on associative
+    arrays when called with no arguments.
+
+    Example:
+    ```mlir
+    moore.assoc.delete %array : !moore.ref<!moore.assoc<i32, string>>
+    ```
+  }];
+  let arguments = (ins RefType:$array);
+  let assemblyFormat = "$array `:` type($array) attr-dict";
+}
+
+def AssocArrayDeleteKeyOp : AssocArrayBuiltin<"delete_key"> {
+  let summary = "Delete a specific key from an associative array";
+  let description = [{
+    Removes the element with the specified key from an associative array. This
+    corresponds to the SystemVerilog `.delete(index)` built-in method on
+    associative arrays when called with a key argument.
+
+    Example:
+    ```mlir
+    moore.assoc.delete_key %array, %key : !moore.ref<!moore.assoc<i32, string>>, string
+    ```
+  }];
+  let arguments = (ins RefType:$array, UnpackedType:$key);
+  let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//
