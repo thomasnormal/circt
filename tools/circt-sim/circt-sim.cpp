@@ -36,6 +36,7 @@
 #include "circt/Dialect/SV/SVDialect.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqPasses.h"
+#include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "circt/Dialect/Sim/ParallelScheduler.h"
 #include "circt/Dialect/Sim/PerformanceProfiler.h"
@@ -184,7 +185,7 @@ static llvm::cl::opt<int>
               llvm::cl::init(1), llvm::cl::cat(debugCategory));
 
 static llvm::cl::opt<bool>
-    printStats("stats", llvm::cl::desc("Print simulation statistics"),
+    printStats("sim-stats", llvm::cl::desc("Print simulation statistics"),
                llvm::cl::init(false), llvm::cl::cat(debugCategory));
 
 static llvm::cl::opt<bool>
@@ -442,15 +443,23 @@ hw::HWModuleOp SimulationContext::findTopModule(mlir::ModuleOp module,
 LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
   // Register signals for all ports
   for (auto portInfo : hwModule.getPortList()) {
+    // Determine bit width - clock types are treated as 1-bit signals
+    unsigned bitWidth;
+    if (isa<seq::ClockType>(portInfo.type)) {
+      bitWidth = 1;
+    } else {
+      bitWidth = portInfo.type.getIntOrFloatBitWidth();
+    }
+
     auto signalId = scheduler.registerSignal(portInfo.getName().str(),
-                                              portInfo.type.getIntOrFloatBitWidth());
+                                              bitWidth);
     nameToSignal[portInfo.getName()] = signalId;
 
     // Set up tracing if enabled
     if (traceAll || traceSignals.empty()) {
       if (vcdWriter && nextVCDId <= '~') {
         vcdWriter->declareSignal(portInfo.getName().str(),
-                                 portInfo.type.getIntOrFloatBitWidth(),
+                                 bitWidth,
                                  nextVCDId);
         tracedSignals.push_back({signalId, nextVCDId++});
       }
