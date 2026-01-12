@@ -2181,8 +2181,12 @@ struct RvalueExprVisitor : public ExprVisitor {
         mlir::emitWarning(operandLoc)
             << "streaming concatenation of dynamic arrays/queues "
             << "is not fully supported; returning empty string";
-        auto strTy = moore::StringType::get(context.getContext());
-        return moore::ConstantStringOp::create(builder, loc, strTy, "");
+        // Create an empty string constant by creating a 0-width integer and
+        // converting it to a string. ConstantStringOp requires IntType result.
+        auto intTy = moore::IntType::getInt(context.getContext(), 0);
+        auto intVal =
+            moore::ConstantStringOp::create(builder, loc, intTy, "").getResult();
+        return moore::IntToStringOp::create(builder, loc, intVal);
       }
 
       value = context.convertToSimpleBitVector(value);
