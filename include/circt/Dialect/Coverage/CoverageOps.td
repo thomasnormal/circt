@@ -132,6 +132,190 @@ def BranchCoverageOp : CoverageOp<"branch"> {
 }
 
 //===----------------------------------------------------------------------===//
+// FSM State Coverage
+//===----------------------------------------------------------------------===//
+
+def FSMStateCoverageOp : CoverageOp<"fsm.state"> {
+  let summary = "Record FSM state coverage information";
+  let description = [{
+    Tracks which states of a finite state machine have been visited during
+    simulation. This is essential for verifying that all FSM states are
+    reachable and have been exercised.
+
+    Example:
+    ```mlir
+    coverage.fsm.state %current_state name "protocol_fsm" num_states 8 : i4
+    ```
+
+    The operation records hits for each state value observed. The num_states
+    attribute indicates the total number of expected states for coverage
+    percentage calculation.
+  }];
+
+  let arguments = (ins
+    AnySignlessInteger:$state,
+    StrAttr:$name,
+    I32Attr:$num_states,
+    OptionalAttr<StrAttr>:$hierarchy,
+    OptionalAttr<StrArrayAttr>:$state_names
+  );
+
+  let assemblyFormat = [{
+    $state `name` $name `num_states` $num_states
+    (`hierarchy` $hierarchy^)? (`state_names` $state_names^)?
+    attr-dict `:` type($state)
+  }];
+
+  let extraClassDeclaration = [{
+    /// Get the bit width of the state signal
+    unsigned getStateWidth() {
+      return llvm::cast<mlir::IntegerType>(getState().getType()).getWidth();
+    }
+
+    /// Get a unique identifier for this coverage point
+    std::string getCoveragePointId() {
+      return ("fsm_state:" + getName()).str();
+    }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// FSM Transition Coverage
+//===----------------------------------------------------------------------===//
+
+def FSMTransitionCoverageOp : CoverageOp<"fsm.transition"> {
+  let summary = "Record FSM state transition coverage";
+  let description = [{
+    Tracks state transitions in a finite state machine. Records which
+    state-to-state transitions have been exercised during simulation.
+
+    Example:
+    ```mlir
+    coverage.fsm.transition %prev_state, %next_state name "protocol_fsm"
+        num_states 8 : i4
+    ```
+
+    The operation records hits for each (from_state, to_state) pair observed.
+    This helps verify that all expected state transitions are exercised.
+  }];
+
+  let arguments = (ins
+    AnySignlessInteger:$prev_state,
+    AnySignlessInteger:$next_state,
+    StrAttr:$name,
+    I32Attr:$num_states,
+    OptionalAttr<StrAttr>:$hierarchy
+  );
+
+  let assemblyFormat = [{
+    $prev_state `,` $next_state `name` $name `num_states` $num_states
+    (`hierarchy` $hierarchy^)? attr-dict `:` type($prev_state)
+  }];
+
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Get the bit width of the state signals
+    unsigned getStateWidth() {
+      return llvm::cast<mlir::IntegerType>(getPrevState().getType()).getWidth();
+    }
+
+    /// Get a unique identifier for this coverage point
+    std::string getCoveragePointId() {
+      return ("fsm_transition:" + getName()).str();
+    }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Expression Coverage (Condition Coverage)
+//===----------------------------------------------------------------------===//
+
+def ExpressionCoverageOp : CoverageOp<"expression"> {
+  let summary = "Record expression/condition coverage";
+  let description = [{
+    Tracks coverage for boolean expressions with multiple conditions.
+    This supports condition coverage (each condition evaluated to both
+    true and false) and modified condition/decision coverage (MC/DC).
+
+    Example:
+    ```mlir
+    coverage.expression %a, %b, %c name "complex_cond" : i1, i1, i1
+    ```
+
+    For MC/DC coverage, each condition should independently affect the
+    decision outcome. The operation tracks all combinations of condition
+    values that have been observed.
+  }];
+
+  let arguments = (ins
+    Variadic<I1>:$conditions,
+    StrAttr:$name,
+    OptionalAttr<StrAttr>:$hierarchy,
+    OptionalAttr<StrArrayAttr>:$condition_names
+  );
+
+  let assemblyFormat = [{
+    $conditions `name` $name
+    (`hierarchy` $hierarchy^)? (`condition_names` $condition_names^)?
+    attr-dict `:` type($conditions)
+  }];
+
+  let extraClassDeclaration = [{
+    /// Get the number of conditions in this expression
+    unsigned getNumConditions() {
+      return getConditions().size();
+    }
+
+    /// Get a unique identifier for this coverage point
+    std::string getCoveragePointId() {
+      return ("expression:" + getName()).str();
+    }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Assertion Coverage
+//===----------------------------------------------------------------------===//
+
+def AssertionCoverageOp : CoverageOp<"assertion"> {
+  let summary = "Record assertion coverage information";
+  let description = [{
+    Tracks coverage of assertions. Records how many times an assertion
+    was evaluated and whether it passed or failed.
+
+    Example:
+    ```mlir
+    coverage.assertion %check name "data_valid_check" : i1
+    ```
+
+    This helps track which assertions have been exercised during
+    simulation and identify dead or unreachable assertions.
+  }];
+
+  let arguments = (ins
+    I1:$check,
+    StrAttr:$name,
+    OptionalAttr<StrAttr>:$hierarchy,
+    OptionalAttr<StrAttr>:$filename,
+    OptionalAttr<I32Attr>:$line
+  );
+
+  let assemblyFormat = [{
+    $check `name` $name
+    (`hierarchy` $hierarchy^)? (`at` $filename^ `:` $line)?
+    attr-dict `:` type($check)
+  }];
+
+  let extraClassDeclaration = [{
+    /// Get a unique identifier for this coverage point
+    std::string getCoveragePointId() {
+      return ("assertion:" + getName()).str();
+    }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Group
 //===----------------------------------------------------------------------===//
 

@@ -669,10 +669,10 @@ void ConstantOp::build(OpBuilder &builder, OperationState &result, IntType type,
   build(builder, result, type, FVInt(value));
 }
 
-/// This builder allows construction of small signed integers like 0, 1, -1
-/// matching a specified MLIR type. This shouldn't be used for general constant
-/// folding because it only works with values that can be expressed in an
-/// `int64_t`.
+/// This builder allows construction of small integers like 0, 1, -1 matching a
+/// specified MLIR type. This shouldn't be used for general constant folding
+/// because it only works with values that can be expressed in an `int64_t`.
+/// The isSigned parameter defaults to false for safety with small bit widths.
 void ConstantOp::build(OpBuilder &builder, OperationState &result, IntType type,
                        int64_t value, bool isSigned) {
   build(builder, result, type,
@@ -1453,13 +1453,15 @@ LogicalResult ClassDeclOp::verify() {
   auto &block = body.front();
   for (mlir::Operation &op : block) {
 
-    // allow only property and method decls and terminator
+    // allow property decls, method decls, and constraint blocks
     if (llvm::isa<circt::moore::ClassPropertyDeclOp,
-                  circt::moore::ClassMethodDeclOp>(&op))
+                  circt::moore::ClassMethodDeclOp,
+                  circt::moore::ConstraintBlockOp>(&op))
       continue;
 
     return emitOpError()
-           << "body may only contain 'moore.class.propertydecl' operations";
+           << "body may only contain 'moore.class.propertydecl', "
+              "'moore.class.methoddecl', or 'moore.constraint.block' operations";
   }
   return mlir::success();
 }
@@ -1749,125 +1751,181 @@ VTableEntryOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
-// Process Control: Fork/Join Operations
+// InterfaceInstanceOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult ForkOp::verify() {
-  // Verify we have at least one branch
-  if (getBranches().empty()) {
-    return emitOpError("must have at least one branch");
-  }
+void InterfaceInstanceOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
+  setNameFn(getResult(), getName());
+}
 
+LogicalResult
+InterfaceInstanceOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto *symbol =
+      symbolTable.lookupNearestSymbolFrom(*this, getInterfaceNameAttr());
+  if (!symbol)
+    return emitOpError("references unknown interface @") << getInterfaceName();
+  if (!isa<InterfaceDeclOp>(symbol))
+    return emitOpError("must reference a 'moore.interface', but @")
+           << getInterfaceName() << " is a " << symbol->getName();
   return success();
 }
 
-void ForkOp::print(OpAsmPrinter &p) {
-  p << " ";
-  // Print join type (join is default, only print others)
-  if (getJoinType() != JoinType::JoinAll) {
-    p << stringifyJoinType(getJoinType()) << " ";
-  }
-  if (auto name = getName()) {
-    p << "name \"" << name.value() << "\" ";
-  }
+//===----------------------------------------------------------------------===//
+// VirtualInterfaceGetOp
+//===----------------------------------------------------------------------===//
 
-  // Print branches
-  bool first = true;
-  for (auto &region : getBranches()) {
-    if (!first)
-      p << ", ";
-    p.printRegion(region, /*printEntryBlockArgs=*/false,
-                  /*printBlockTerminators=*/false);
-    first = false;
-  }
+LogicalResult
+VirtualInterfaceGetOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
 
-  p.printOptionalAttrDict((*this)->getAttrs(), {"joinType", "name"});
-}
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
 
-ParseResult ForkOp::parse(OpAsmParser &parser, OperationState &result) {
-  auto &builder = parser.getBuilder();
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
 
-  // Parse optional join_type (join, join_any, join_none)
-  JoinType joinType = JoinType::JoinAll;
-  if (succeeded(parser.parseOptionalKeyword("join_any"))) {
-    joinType = JoinType::JoinAny;
-  } else if (succeeded(parser.parseOptionalKeyword("join_none"))) {
-    joinType = JoinType::JoinNone;
-  } else {
-    // Default is "join", which may or may not be present
-    (void)parser.parseOptionalKeyword("join");
-    joinType = JoinType::JoinAll;
-  }
-  result.addAttribute("joinType", JoinTypeAttr::get(builder.getContext(), joinType));
-
-  // Parse optional name
-  if (succeeded(parser.parseOptionalKeyword("name"))) {
-    StringAttr nameAttr;
-    if (parser.parseAttribute(nameAttr))
-      return failure();
-    result.addAttribute("name", nameAttr);
-  }
-
-  // Parse branches (regions separated by commas)
-  SmallVector<Region *> branches;
-  do {
-    Region *branch = result.addRegion();
-    branches.push_back(branch);
-    if (parser.parseRegion(*branch, /*arguments=*/{}, /*argTypes=*/{}))
-      return failure();
-    // Ensure the region has at least one block
-    if (branch->empty())
-      branch->emplaceBlock();
-  } while (succeeded(parser.parseOptionalComma()));
-
-  // Parse optional attributes
-  if (parser.parseOptionalAttrDict(result.attributes))
-    return failure();
-
-  // Add implicit terminators to each branch
-  for (Region *branch : branches)
-    ensureTerminator(*branch, builder, result.location);
+  // Look up the modport within the interface
+  auto modportName = getModport();
+  auto *modportSymbol = ifaceOp.lookupSymbol(modportName);
+  if (!modportSymbol)
+    return emitOpError("references unknown modport @")
+           << modportName << " in interface @" << ifaceOp.getSymName();
+  if (!isa<ModportDeclOp>(modportSymbol))
+    return emitOpError("@") << modportName << " is not a modport declaration";
 
   return success();
 }
 
 //===----------------------------------------------------------------------===//
-// Process Control: Named Blocks
+// VirtualInterfaceSignalRefOp
 //===----------------------------------------------------------------------===//
 
-void NamedBlockOp::print(OpAsmPrinter &p) {
-  p << " ";
-  p.printAttributeWithoutType(getBlockNameAttr());
-  p << " ";
-  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(), {"blockName"});
-  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
-                /*printBlockTerminators=*/false);
+LogicalResult VirtualInterfaceSignalRefOp::verifySymbolUses(
+    SymbolTableCollection &symbolTable) {
+  // Get the interface type from the input
+  auto vifType = getVif().getType();
+  auto ifaceRef = vifType.getInterface();
+
+  // Look up the interface
+  auto *ifaceSymbol = symbolTable.lookupNearestSymbolFrom(
+      *this, ifaceRef.getRootReference());
+  if (!ifaceSymbol)
+    return emitOpError("references unknown interface @")
+           << ifaceRef.getRootReference();
+
+  auto ifaceOp = dyn_cast<InterfaceDeclOp>(ifaceSymbol);
+  if (!ifaceOp)
+    return emitOpError("must reference a 'moore.interface', but @")
+           << ifaceRef.getRootReference() << " is a " << ifaceSymbol->getName();
+
+  // Look up the signal within the interface
+  auto signalName = getSignal();
+  auto *signalSymbol = ifaceOp.lookupSymbol(signalName);
+  if (!signalSymbol)
+    return emitOpError("references unknown signal @")
+           << signalName << " in interface @" << ifaceOp.getSymName();
+  if (!isa<InterfaceSignalDeclOp>(signalSymbol))
+    return emitOpError("@") << signalName << " is not a signal declaration";
+
+  return success();
 }
 
-ParseResult NamedBlockOp::parse(OpAsmParser &parser, OperationState &result) {
-  auto &builder = parser.getBuilder();
+//===----------------------------------------------------------------------===//
+// ModportDeclOp custom parser/printer
+//===----------------------------------------------------------------------===//
 
-  // Parse block name
-  StringAttr blockNameAttr;
-  if (parser.parseAttribute(blockNameAttr))
+static ParseResult parseModportPorts(OpAsmParser &parser,
+                                     ArrayAttr &portsAttr) {
+  auto *context = parser.getBuilder().getContext();
+
+  SmallVector<Attribute, 8> ports;
+  auto parseElement = [&]() -> ParseResult {
+    // Parse direction keyword
+    StringRef dirStr;
+    if (parser.parseKeyword(&dirStr))
+      return failure();
+    auto dir = symbolizeModportDir(dirStr);
+    if (!dir) {
+      parser.emitError(parser.getCurrentLocation())
+          << "expected modport direction (input, output, inout, or ref)";
+      return failure();
+    }
+
+    FlatSymbolRefAttr signal;
+    if (parser.parseAttribute(signal))
+      return failure();
+
+    ports.push_back(ModportPortAttr::get(
+        context, ModportDirAttr::get(context, *dir), signal));
+    return success();
+  };
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Paren,
+                                     parseElement))
     return failure();
-  result.addAttribute("blockName", blockNameAttr);
 
-  // Parse optional attributes
-  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
-    return failure();
+  portsAttr = ArrayAttr::get(context, ports);
+  return success();
+}
 
-  // Parse body region
-  Region *body = result.addRegion();
-  if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}))
-    return failure();
+static void printModportPorts(OpAsmPrinter &p, Operation *,
+                              ArrayAttr portsAttr) {
+  p << "(";
+  llvm::interleaveComma(portsAttr, p, [&](Attribute attr) {
+    auto port = cast<ModportPortAttr>(attr);
+    p << stringifyEnum(port.getDirection().getValue());
+    p << ' ';
+    p.printSymbolName(port.getSignal().getRootReference().getValue());
+  });
+  p << ')';
+}
 
-  // Ensure the region has at least one block
-  if (body->empty())
-    body->emplaceBlock();
+//===----------------------------------------------------------------------===//
+// Constraint Operations
+//===----------------------------------------------------------------------===//
 
-  // Add implicit terminator
-  ensureTerminator(*body, builder, result.location);
+LogicalResult ConstraintDistOp::verify() {
+  // Verify that the number of weights matches the per_range array
+  auto weights = getWeights();
+  auto perRange = getPerRange();
+
+  if (weights.size() != perRange.size())
+    return emitOpError() << "weights array size (" << weights.size()
+                         << ") must match per_range array size ("
+                         << perRange.size() << ")";
+
+  // Verify that all per_range values are 0 or 1
+  for (size_t i = 0; i < perRange.size(); ++i) {
+    if (perRange[i] != 0 && perRange[i] != 1)
+      return emitOpError() << "per_range[" << i
+                           << "] must be 0 (:=) or 1 (:/); got " << perRange[i];
+  }
+
+  return success();
+}
+
+LogicalResult ConstraintInsideOp::verify() {
+  // Verify that ranges array has even number of elements (pairs of low, high)
+  auto ranges = getRanges();
+  if (ranges.size() % 2 != 0)
+    return emitOpError()
+           << "ranges array must have even number of elements (pairs of "
+              "[low, high]); got "
+           << ranges.size() << " elements";
+
+  // Verify that low <= high for each pair
+  for (size_t i = 0; i < ranges.size(); i += 2) {
+    if (ranges[i] > ranges[i + 1])
+      return emitOpError() << "range at index " << (i / 2) << " has low ("
+                           << ranges[i] << ") > high (" << ranges[i + 1] << ")";
+  }
 
   return success();
 }

@@ -39,6 +39,12 @@ StringRef circt::getCoverageTypeName(CoverageType type) {
     return "condition";
   case CoverageType::FSM:
     return "fsm";
+  case CoverageType::FSMState:
+    return "fsm_state";
+  case CoverageType::FSMTransition:
+    return "fsm_transition";
+  case CoverageType::Expression:
+    return "expression";
   case CoverageType::Assertion:
     return "assertion";
   case CoverageType::Coverpoint:
@@ -58,6 +64,12 @@ std::optional<CoverageType> circt::parseCoverageType(StringRef name) {
     return CoverageType::Condition;
   if (name == "fsm")
     return CoverageType::FSM;
+  if (name == "fsm_state")
+    return CoverageType::FSMState;
+  if (name == "fsm_transition")
+    return CoverageType::FSMTransition;
+  if (name == "expression")
+    return CoverageType::Expression;
   if (name == "assertion")
     return CoverageType::Assertion;
   if (name == "coverpoint")
@@ -92,6 +104,9 @@ bool CoveragePoint::isCovered() const {
 
   case CoverageType::Condition:
   case CoverageType::FSM:
+  case CoverageType::FSMState:
+  case CoverageType::FSMTransition:
+  case CoverageType::Expression:
     return hits >= goal;
   }
   return false;

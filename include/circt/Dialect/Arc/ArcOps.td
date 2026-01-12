@@ -954,26 +954,6 @@ def VectorizeReturnOp : ArcOp<"vectorize.return", [
   let assemblyFormat = "operands attr-dict `:` qualified(type(operands))";
 }
 
-
-def RuntimeModelOp : ArcOp<"runtime.model", [
-  HasParent<"::mlir::ModuleOp">, Pure, Symbol
-]> {
-  let summary = "Provides static metadata of an Arc model used by the runtime";
-  let description = [{
-    Collection of static metadata for a specific Arc model accessed by the
-    arcilator runtime library:
-    - name: Name of the model
-    - numStateBytes: Number of bytes required to store the model's internal
-        state
-  }];
-  let arguments = (ins SymbolNameAttr:$sym_name,
-                       StrAttr:$name,
-                       I64Attr:$numStateBytes);
-  let assemblyFormat = [{
-    $sym_name $name `numStateBytes` $numStateBytes attr-dict
-  }];
-}
-
 //===----------------------------------------------------------------------===//
 // 4-State Logic Operations
 //===----------------------------------------------------------------------===//
@@ -1427,7 +1407,29 @@ def FourStateMuxOp : ArcOp<"fourstate.mux", [Pure,
   }];
   let hasVerifier = 1;
   let hasFolder = 1;
+}
 
+//===----------------------------------------------------------------------===//
+// Runtime Model
+//===----------------------------------------------------------------------===//
+
+def RuntimeModelOp : ArcOp<"runtime.model", [
+  HasParent<"::mlir::ModuleOp">, Pure, Symbol
+]> {
+  let summary = "Provides static metadata of an Arc model used by the runtime";
+  let description = [{
+    Collection of static metadata for a specific Arc model accessed by the
+    arcilator runtime library:
+    - name: Name of the model
+    - numStateBytes: Number of bytes required to store the model's internal
+        state
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       StrAttr:$name,
+                       I64Attr:$numStateBytes);
+  let assemblyFormat = [{
+    $sym_name $name `numStateBytes` $numStateBytes attr-dict
+  }];
 }
 
 #endif // CIRCT_DIALECT_ARC_ARCOPS_TD
