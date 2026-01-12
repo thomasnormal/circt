@@ -4386,6 +4386,40 @@ def QueueSortOp : QueueBuiltin<"sort"> {
   let assemblyFormat = "$queue `:` type($queue) attr-dict";
 }
 
+def QueueMaxOp : QueueBuiltin<"max"> {
+  let summary = "Find the maximum element(s) in a queue or array";
+  let description = [{
+    Returns a queue containing the element(s) with the maximum value.
+    This corresponds to the SystemVerilog `.max()` built-in method on arrays
+    and queues (IEEE 1800-2017 Section 7.12.3).
+
+    Example:
+    ```mlir
+    %max_vals = moore.queue.max %array : !moore.open_uarray<i32> -> !moore.queue<i32, 0>
+    ```
+  }];
+  let arguments = (ins UnpackedType:$array);
+  let results = (outs QueueType:$result);
+  let assemblyFormat = "$array `:` type($array) `->` type($result) attr-dict";
+}
+
+def QueueMinOp : QueueBuiltin<"min"> {
+  let summary = "Find the minimum element(s) in a queue or array";
+  let description = [{
+    Returns a queue containing the element(s) with the minimum value.
+    This corresponds to the SystemVerilog `.min()` built-in method on arrays
+    and queues (IEEE 1800-2017 Section 7.12.3).
+
+    Example:
+    ```mlir
+    %min_vals = moore.queue.min %array : !moore.open_uarray<i32> -> !moore.queue<i32, 0>
+    ```
+  }];
+  let arguments = (ins UnpackedType:$array);
+  let results = (outs QueueType:$result);
+  let assemblyFormat = "$array `:` type($array) `->` type($result) attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // Associative Array Builtins
 //===----------------------------------------------------------------------===//
@@ -4499,6 +4533,17 @@ def StringGetCOp : StringBuiltin<"getc"> {
   let arguments = (ins StringType:$str, TwoValuedI32:$index);
   let results = (outs TwoValuedI8:$result);
   let assemblyFormat = "$str `[` $index `]` attr-dict";
+}
+
+def StringItoaOp : StringBuiltin<"itoa"> {
+  let summary = "Convert an integer to a decimal string";
+  let description = [{
+    Converts the given integer value to its decimal string representation
+    and stores the result in the destination string reference.
+    This corresponds to the SystemVerilog `str.itoa(i)` method.
+  }];
+  let arguments = (ins RefType:$dest, IntType:$value);
+  let assemblyFormat = "$dest `,` $value `:` type($dest) `,` type($value) attr-dict";
 }
 
 #endif // CIRCT_DIALECT_MOORE_MOOREOPS

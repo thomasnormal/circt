@@ -406,6 +406,8 @@ endmodule
 // CHECK-SAME: [[STR:%.+]]: !moore.string
 // CHECK-SAME: [[INT:%.+]]: !moore.i32
 function void StringBuiltins(string string_in, int int_in);
+  // CHECK: [[STRVAR:%.+]] = moore.variable
+  string result;
   // CHECK: [[LEN:%.+]] = moore.string.len [[STR]]
   dummyA(string_in.len());
   // CHECK: [[LEN:%.+]] = moore.string.toupper [[STR]]
@@ -414,4 +416,7 @@ function void StringBuiltins(string string_in, int int_in);
   dummyD(string_in.tolower());
   // CHECK: [[CHAR:%.+]] = moore.string.getc [[STR]]{{\[}}[[INT]]]
   dummyE(string_in.getc(int_in));
+  // CHECK: [[INTCONV:%.+]] = moore.int_to_logic [[INT]] : i32
+  // CHECK: moore.string.itoa [[STRVAR]], [[INTCONV]] : <!moore.string>, !moore.l32
+  result.itoa(int_in);
 endfunction
