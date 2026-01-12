@@ -2703,6 +2703,23 @@ def AtanhBIOp : RealMathFunc<"atanh"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Bit Vector System Functions
+//===----------------------------------------------------------------------===//
+
+def IsUnknownBIOp : Builtin<"isunknown"> {
+  let summary = "Check if any bit is X or Z";
+  let description = [{
+    Returns 1 if any bit in the input expression is X or Z, otherwise returns 0.
+    This is commonly used for checking for unknown values in verification.
+
+    See IEEE 1800-2017 Section 20.9 "Bit vector system functions".
+  }];
+  let arguments = (ins SimpleBitVectorType:$value);
+  let results = (outs TwoValuedI1:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
+//===----------------------------------------------------------------------===//
 // Classes
 //===----------------------------------------------------------------------===//
 

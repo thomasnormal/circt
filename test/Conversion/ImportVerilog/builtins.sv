@@ -10,6 +10,7 @@ function void dummyB(real x); endfunction
 function void dummyC(shortreal x); endfunction
 function void dummyD(string x); endfunction
 function void dummyE(byte x); endfunction
+function void dummyF(bit x); endfunction
 
 // IEEE 1800-2017 § 20.2 "Simulation control system tasks"
 // CHECK-LABEL: func.func private @SimulationControlBuiltins(
@@ -283,6 +284,17 @@ function void MathBuiltins(int x, logic [41:0] y, real r);
   // CHECK:  moore.builtin.atanh [[R]] : f64
   dummyB($atanh(r));
 
+endfunction
+
+// IEEE 1800-2017 Section 20.9 "Bit vector system functions"
+// CHECK-LABEL: func.func private @BitVectorBuiltins(
+// CHECK-SAME: [[X:%.+]]: !moore.i32
+// CHECK-SAME: [[Y:%.+]]: !moore.l42
+function void BitVectorBuiltins(int x, logic [41:0] y);
+  // CHECK: [[ISUNK_X:%.+]] = moore.builtin.isunknown [[X]] : i32
+  dummyF($isunknown(x));
+  // CHECK: [[ISUNK_Y:%.+]] = moore.builtin.isunknown [[Y]] : l42
+  dummyF($isunknown(y));
 endfunction
 
 // CHECK-LABEL: func.func private @RandomBuiltins(
