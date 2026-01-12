@@ -4505,6 +4505,40 @@ def AssocArrayNextOp : AssocArrayBuiltin<"next"> {
   let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }
 
+def AssocArrayLastOp : AssocArrayBuiltin<"last"> {
+  let summary = "Get the last key of an associative array";
+  let description = [{
+    Returns true and sets the key reference to the last key of the associative
+    array if it is non-empty. Returns false if the array is empty.
+    This corresponds to the SystemVerilog `.last(ref index)` built-in method.
+
+    Example:
+    ```mlir
+    %found = moore.assoc.last %array, %key : !moore.ref<!moore.assoc<i32, string>>, !moore.ref<string>
+    ```
+  }];
+  let arguments = (ins RefType:$array, RefType:$key);
+  let results = (outs TwoValuedI1:$found);
+  let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
+}
+
+def AssocArrayPrevOp : AssocArrayBuiltin<"prev"> {
+  let summary = "Get the previous key of an associative array";
+  let description = [{
+    Returns true and sets the key reference to the previous key of the associative
+    array before the current key. Returns false if there are no previous keys.
+    This corresponds to the SystemVerilog `.prev(ref index)` built-in method.
+
+    Example:
+    ```mlir
+    %found = moore.assoc.prev %array, %key : !moore.ref<!moore.assoc<i32, string>>, !moore.ref<string>
+    ```
+  }];
+  let arguments = (ins RefType:$array, RefType:$key);
+  let results = (outs TwoValuedI1:$found);
+  let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
+}
+
 def AssocArrayExistsOp : AssocArrayBuiltin<"exists"> {
   let summary = "Check if a key exists in an associative array";
   let description = [{

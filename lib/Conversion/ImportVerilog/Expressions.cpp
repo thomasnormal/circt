@@ -1806,6 +1806,37 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle associative array iterator methods: first, next, last, prev
+    // These take 2 args: array ref + key ref, and return int (1 if found)
+    bool isAssocIterMethod = (subroutine.name == "first" ||
+                              subroutine.name == "next" ||
+                              subroutine.name == "last" ||
+                              subroutine.name == "prev");
+    if (isAssocIterMethod && args.size() == 2) {
+      Value arrayRef = context.convertLvalueExpression(*args[0]);
+      Value keyRef = context.convertLvalueExpression(*args[1]);
+      if (!arrayRef || !keyRef)
+        return {};
+      // Check if it's an associative array
+      auto refType = dyn_cast<moore::RefType>(arrayRef.getType());
+      if (refType && isa<moore::AssocArrayType>(refType.getNestedType())) {
+        Value found;
+        if (subroutine.name == "first")
+          found = moore::AssocArrayFirstOp::create(builder, loc, arrayRef,
+                                                   keyRef);
+        else if (subroutine.name == "next")
+          found =
+              moore::AssocArrayNextOp::create(builder, loc, arrayRef, keyRef);
+        else if (subroutine.name == "last")
+          found =
+              moore::AssocArrayLastOp::create(builder, loc, arrayRef, keyRef);
+        else // prev
+          found =
+              moore::AssocArrayPrevOp::create(builder, loc, arrayRef, keyRef);
+        return found;
+      }
+    }
+
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
@@ -2629,8 +2660,15 @@ Value Context::convertToSimpleBitVector(Value value) {
     if (auto sbvType = packed.getSimpleBitVector())
       return materializeConversion(sbvType, value, false, value.getLoc());
 
-  mlir::emitError(value.getLoc()) << "expression of type " << value.getType()
-                                  << " cannot be cast to a simple bit vector";
+  // For unpacked types like queues and dynamic arrays that require runtime
+  // iteration to convert to a bit vector, emit a warning and skip. This
+  // commonly occurs with streaming concatenation of string queues like
+  // {>>{string_queue}}, which is used for string joining but requires runtime
+  // support not yet implemented.
+  mlir::emitWarning(value.getLoc())
+      << "expression of type " << value.getType()
+      << " cannot be cast to a simple bit vector; "
+      << "this operation is not yet supported and will be skipped";
   return {};
 }
 
