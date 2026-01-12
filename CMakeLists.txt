@@ -567,6 +567,7 @@ if(CIRCT_SLANG_FRONTEND_ENABLED)
       GIT_REPOSITORY https://github.com/MikePopoloski/slang.git
       GIT_TAG v9.1
       GIT_SHALLOW ON
+      PATCH_COMMAND git apply --ignore-whitespace ${CMAKE_CURRENT_SOURCE_DIR}/patches/slang-class-handle-bool-conversion.patch || true
     )
     set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE "NEVER")
 
