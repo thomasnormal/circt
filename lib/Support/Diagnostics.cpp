@@ -11,8 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Support/Diagnostics.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <algorithm>
@@ -185,9 +187,8 @@ void DiagnosticPrinter::suggestReplacement(SourceSpan span, StringRef oldText,
                                             StringRef newText) {
   RichDiagnostic diag(DiagSeverity::Hint, "suggested replacement");
   diag.addPrimarySpan(span);
-  diag.addFix(SuggestedFix(
-      llvm::formatv("replace `{0}` with `{1}`", oldText, newText), span,
-      newText));
+  std::string message = llvm::formatv("replace `{0}` with `{1}`", oldText, newText);
+  diag.addFix(SuggestedFix(message, span, newText));
   print(diag);
 }
 

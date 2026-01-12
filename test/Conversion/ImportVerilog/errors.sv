@@ -169,9 +169,9 @@ function void foo();
 endfunction
 
 // -----
+// Associative array element select is now supported
 function void foo;
   int a[string];
-  // expected-error @below {{unsupported expression: element select into}}
   a["foo"] = 1;
 endfunction
 

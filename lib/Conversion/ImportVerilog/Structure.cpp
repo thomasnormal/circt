@@ -1020,7 +1020,10 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
   ValueSymbolScope scope(valueSymbols);
 
   // Two-pass conversion:
-  // Pass 1: Convert global variables first so they're available for classes
+  // Pass 1: Convert global variables first so they're available for classes.
+  // Note: Some variables may not appear in members() due to how Slang handles
+  // symbols declared after forward typedefs. Those are handled via on-demand
+  // conversion in Expressions.cpp when they're first referenced.
   for (auto &member : package.members()) {
     if (member.kind == slang::ast::SymbolKind::Variable) {
       auto loc = convertLocation(member.location);
@@ -1913,7 +1916,18 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
                                      SymbolTable::Visibility::Public);
     orderedRootOps.insert(it, {cls.location, classDeclOp});
     lowering->op = classDeclOp;
-    symbolTable.insert(classDeclOp);
+    // insert() may rename the symbol if there's a conflict
+    mlir::StringAttr actualSymName = symbolTable.insert(classDeclOp);
+
+    // If this class is a specialization of a generic class, record the mapping
+    // from specialized name to generic class name. This allows us to recognize
+    // when two class types (e.g., uvm_pool_18 and uvm_pool) are related through
+    // the same generic class template. Use actualSymName since insert() may
+    // have renamed the symbol.
+    if (cls.genericClass) {
+      auto genericSymName = fullyQualifiedSymbolName(*this, *cls.genericClass);
+      classSpecializationToGeneric[actualSymName] = genericSymName;
+    }
   }
 
   // Always ensure base class is converted if present
@@ -1965,6 +1979,10 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
 /// Convert a variable to a `moore.global_variable` operation.
 LogicalResult
 Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
+  // Check if already converted (for on-demand conversion).
+  if (globalVariables.count(&var))
+    return success();
+
   auto loc = convertLocation(var.location);
 
   // Pick an insertion point for this variable according to the source file
@@ -2034,5 +2052,39 @@ mlir::StringAttr circt::ImportVerilog::fullyQualifiedClassName(
     name += "::";
   }
   name += ty.name; // class's own name
+  return mlir::StringAttr::get(ctx.getContext(), name);
+}
+
+/// Construct a fully qualified symbol name for generic class definitions
+mlir::StringAttr circt::ImportVerilog::fullyQualifiedSymbolName(
+    Context &ctx, const slang::ast::Symbol &sym) {
+  SmallString<64> name;
+  SmallVector<llvm::StringRef, 8> parts;
+
+  const slang::ast::Scope *scope = sym.getParentScope();
+  while (scope) {
+    const auto &parentSym = scope->asSymbol();
+    switch (parentSym.kind) {
+    case slang::ast::SymbolKind::Root:
+      scope = nullptr; // stop at $root
+      continue;
+    case slang::ast::SymbolKind::InstanceBody:
+    case slang::ast::SymbolKind::Instance:
+    case slang::ast::SymbolKind::Package:
+    case slang::ast::SymbolKind::ClassType:
+      if (!parentSym.name.empty())
+        parts.push_back(parentSym.name); // keep packages + outer classes
+      break;
+    default:
+      break;
+    }
+    scope = parentSym.getParentScope();
+  }
+
+  for (auto p : llvm::reverse(parts)) {
+    name += p;
+    name += "::";
+  }
+  name += sym.name; // symbol's own name
   return mlir::StringAttr::get(ctx.getContext(), name);
 }

@@ -972,6 +972,7 @@ def RuntimeModelOp : ArcOp<"runtime.model", [
   let assemblyFormat = [{
     $sym_name $name `numStateBytes` $numStateBytes attr-dict
   }];
+}
 
 //===----------------------------------------------------------------------===//
 // 4-State Logic Operations
