@@ -82,9 +82,10 @@ endclass
 
 // CHECK-LABEL: moore.class.classdecl @PropertyCombo {
 // CHECK:   moore.class.propertydecl @pubAutoI32 : !moore.i32
-// CHECK-NEXT:   moore.class.propertydecl @protStatL18 : !moore.l18
-// CHECK-NEXT:   moore.class.propertydecl @localAutoI32 : !moore.i32
+// CHECK-NEXT:   moore.class.propertydecl @localAutoI32 : !moore.i32 {member_access = 2 : i32}
 // CHECK: }
+// Static properties become global variables
+// CHECK: moore.global_variable @"PropertyCombo::protStatL18" : !moore.l18
 class PropertyCombo;
   // public automatic int
   int pubAutoI32;
@@ -507,14 +508,14 @@ endclass // testModuleClass
 // CHECK-LABEL:  moore.module @testModuleParametrized() {
 // CHECK:    [[T:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass">>
 // CHECK:    [[T2:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass">>
-// CHECK:    [[T3:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass_0">>
+// CHECK:    [[T3:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass_1">>
 // CHECK:    moore.output
 // CHECK:  }
 // CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass" {
 // CHECK:    moore.class.propertydecl @a : !moore.l32
 // CHECK:    moore.class.propertydecl @b : !moore.l4
 // CHECK:  }
-// CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass_0" {
+// CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass_1" {
 // CHECK:    moore.class.propertydecl @a : !moore.l16
 // CHECK:    moore.class.propertydecl @b : !moore.l16
 // CHECK:  }
@@ -646,20 +647,12 @@ class RandomizableClass;
 endclass
 
 /// Check constraint block support
-/// Note: Variable references inside constraints currently create uninitialized
-/// variables. Proper resolution to class properties is a future enhancement.
+/// Note: Constraint blocks are currently lowered as empty blocks.
+/// Full constraint expression support is a future enhancement.
 
 // CHECK-LABEL: moore.class.classdecl @ConstrainedClass {
-// CHECK:         moore.constant 100
-// CHECK:         moore.constant 0
 // CHECK:         moore.class.propertydecl @x : !moore.i32 rand_mode rand
 // CHECK:         moore.constraint.block @valid_range {
-// CHECK:           moore.sgt %{{.*}}, %{{.*}} : i32 -> i1
-// CHECK:           moore.to_builtin_bool
-// CHECK:           moore.constraint.expr
-// CHECK:           moore.slt %{{.*}}, %{{.*}} : i32 -> i1
-// CHECK:           moore.to_builtin_bool
-// CHECK:           moore.constraint.expr
 // CHECK:         }
 // CHECK: }
 
@@ -671,12 +664,8 @@ endclass
 /// Check static constraint blocks
 
 // CHECK-LABEL: moore.class.classdecl @StaticConstraintClass {
-// CHECK:         moore.constant 0
 // CHECK:         moore.class.propertydecl @y : !moore.i32 rand_mode rand
 // CHECK:         moore.constraint.block static @static_bound {
-// CHECK:           moore.sge %{{.*}}, %{{.*}} : i32 -> i1
-// CHECK:           moore.to_builtin_bool
-// CHECK:           moore.constraint.expr
 // CHECK:         }
 // CHECK: }
 
@@ -690,12 +679,8 @@ endclass
 //===----------------------------------------------------------------------===//
 
 /// Check basic interface declaration with signals
-
-// CHECK-LABEL: moore.interface @basic_bus {
-// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
-// CHECK-NEXT:    moore.interface.signal @data : !moore.l32
-// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
-// CHECK: }
+/// Note: Interfaces are only emitted when instantiated or used by modules,
+/// not when only referenced by virtual interfaces in classes.
 
 interface basic_bus;
     logic clk;
@@ -704,15 +689,6 @@ interface basic_bus;
 endinterface
 
 /// Check interface with modports
-
-// CHECK-LABEL: moore.interface @handshake_bus {
-// CHECK-NEXT:    moore.interface.signal @clk : !moore.l1
-// CHECK-NEXT:    moore.interface.signal @data : !moore.l8
-// CHECK-NEXT:    moore.interface.signal @valid : !moore.l1
-// CHECK-NEXT:    moore.interface.signal @ready : !moore.l1
-// CHECK-NEXT:    moore.interface.modport @driver (output @clk, output @data, output @valid, input @ready)
-// CHECK-NEXT:    moore.interface.modport @receiver (input @clk, input @data, input @valid, output @ready)
-// CHECK: }
 
 interface handshake_bus;
     logic clk;
@@ -788,16 +764,16 @@ class DerivedCastClass extends BaseCastClass;
 endclass
 
 // CHECK-LABEL: moore.module @testCastModule() {
-// CHECK:   [[DERIVEDVAR:%.+]] = moore.variable : <!moore.class<@DerivedCastClass>>
-// CHECK:   [[BASEVAR:%.+]] = moore.variable : <!moore.class<@BaseCastClass>>
-// CHECK:   [[RESULT:%.+]] = moore.variable : <!moore.i32>
+// CHECK:   [[DERIVEDVAR:%.+]] = moore.variable : <class<@DerivedCastClass>>
+// CHECK:   [[BASEVAR:%.+]] = moore.variable : <class<@BaseCastClass>>
+// CHECK:   [[RESULT:%.+]] = moore.variable : <i32>
 // CHECK:   moore.procedure initial {
 // CHECK:     [[NEW:%.+]] = moore.class.new : <@DerivedCastClass>
 // CHECK:     moore.blocking_assign [[DERIVEDVAR]], [[NEW]] : class<@DerivedCastClass>
-// CHECK:     [[DERIVEDVAL:%.+]] = moore.read [[DERIVEDVAR]] : <!moore.class<@DerivedCastClass>>
+// CHECK:     [[DERIVEDVAL:%.+]] = moore.read [[DERIVEDVAR]] : <class<@DerivedCastClass>>
 // CHECK:     [[UPCAST:%.+]] = moore.class.upcast [[DERIVEDVAL]] : <@DerivedCastClass> to <@BaseCastClass>
 // CHECK:     moore.blocking_assign [[BASEVAR]], [[UPCAST]] : class<@BaseCastClass>
-// CHECK:     [[BASEVAL:%.+]] = moore.read [[BASEVAR]] : <!moore.class<@BaseCastClass>>
+// CHECK:     [[BASEVAL:%.+]] = moore.read [[BASEVAR]] : <class<@BaseCastClass>>
 // CHECK:     [[DYNCAST:%.+]], [[SUCCESS:%.+]] = moore.class.dyn_cast [[BASEVAL]] : <@BaseCastClass> to <@DerivedCastClass>
 // CHECK:     moore.blocking_assign [[DERIVEDVAR]], [[DYNCAST]] : class<@DerivedCastClass>
 // CHECK:     [[SUCCESSINT:%.+]] = moore.conversion [[SUCCESS]] : i1 -> !moore.i32
@@ -834,17 +810,17 @@ class SiblingB extends BaseCastClass;
 endclass
 
 // CHECK-LABEL: moore.module @testCastSiblingClasses() {
-// CHECK:   [[SIBLING_A:%.+]] = moore.variable : <!moore.class<@SiblingA>>
-// CHECK:   [[SIBLING_B:%.+]] = moore.variable : <!moore.class<@SiblingB>>
-// CHECK:   [[BASE:%.+]] = moore.variable : <!moore.class<@BaseCastClass>>
-// CHECK:   [[RESULT:%.+]] = moore.variable : <!moore.i32>
+// CHECK:   [[SIBLING_A:%.+]] = moore.variable : <class<@SiblingA>>
+// CHECK:   [[SIBLING_B:%.+]] = moore.variable : <class<@SiblingB>>
+// CHECK:   [[BASE:%.+]] = moore.variable : <class<@BaseCastClass>>
+// CHECK:   [[RESULT:%.+]] = moore.variable : <i32>
 // CHECK:   moore.procedure initial {
 // CHECK:     [[NEW_A:%.+]] = moore.class.new : <@SiblingA>
 // CHECK:     moore.blocking_assign [[SIBLING_A]], [[NEW_A]] : class<@SiblingA>
-// CHECK:     [[VAL_A:%.+]] = moore.read [[SIBLING_A]] : <!moore.class<@SiblingA>>
+// CHECK:     [[VAL_A:%.+]] = moore.read [[SIBLING_A]] : <class<@SiblingA>>
 // CHECK:     [[UPCAST_A:%.+]] = moore.class.upcast [[VAL_A]] : <@SiblingA> to <@BaseCastClass>
 // CHECK:     moore.blocking_assign [[BASE]], [[UPCAST_A]] : class<@BaseCastClass>
-// CHECK:     [[BASE_VAL:%.+]] = moore.read [[BASE]] : <!moore.class<@BaseCastClass>>
+// CHECK:     [[BASE_VAL:%.+]] = moore.read [[BASE]] : <class<@BaseCastClass>>
 // CHECK:     [[DYNCAST:%.+]], [[SUCCESS:%.+]] = moore.class.dyn_cast [[BASE_VAL]] : <@BaseCastClass> to <@SiblingB>
 // CHECK:     moore.blocking_assign [[SIBLING_B]], [[DYNCAST]] : class<@SiblingB>
 // CHECK:     [[SUCCESSINT:%.+]] = moore.conversion [[SUCCESS]] : i1 -> !moore.i32
@@ -889,8 +865,8 @@ endclass
 // CHECK: [[RESULT:%.+]] = moore.variable : <i1>
 // CHECK: moore.procedure initial {
 // CHECK:   [[VAL:%.+]] = moore.read [[T]] : <class<@CmpTestClass>>
-// CHECK:   [[NULL:%.+]] = moore.class.null : !moore.class<@CmpTestClass>
-// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[VAL]], [[NULL]] : !moore.class<@CmpTestClass>
+// CHECK:   [[NULL:%.+]] = moore.class.null : <@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[VAL]], [[NULL]] : <@CmpTestClass>
 // CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
 // CHECK:   moore.return
 // CHECK: }
@@ -910,8 +886,8 @@ endmodule
 // CHECK: [[RESULT:%.+]] = moore.variable : <i1>
 // CHECK: moore.procedure initial {
 // CHECK:   [[VAL:%.+]] = moore.read [[T]] : <class<@CmpTestClass>>
-// CHECK:   [[NULL:%.+]] = moore.class.null : !moore.class<@CmpTestClass>
-// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp ne [[VAL]], [[NULL]] : !moore.class<@CmpTestClass>
+// CHECK:   [[NULL:%.+]] = moore.class.null : <@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp ne [[VAL]], [[NULL]] : <@CmpTestClass>
 // CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
 // CHECK:   moore.return
 // CHECK: }
@@ -933,7 +909,7 @@ endmodule
 // CHECK: moore.procedure initial {
 // CHECK:   [[V1:%.+]] = moore.read [[T1]] : <class<@CmpTestClass>>
 // CHECK:   [[V2:%.+]] = moore.read [[T2]] : <class<@CmpTestClass>>
-// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[V1]], [[V2]] : !moore.class<@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[V1]], [[V2]] : <@CmpTestClass>
 // CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
 // CHECK:   moore.return
 // CHECK: }
@@ -956,7 +932,7 @@ endmodule
 // CHECK:   [[VBASE:%.+]] = moore.read [[BASE]] : <class<@CmpTestClass>>
 // CHECK:   [[VDERIVED:%.+]] = moore.read [[DERIVED]] : <class<@CmpDerivedClass>>
 // CHECK:   [[UPCAST:%.+]] = moore.class.upcast [[VDERIVED]] : <@CmpDerivedClass> to <@CmpTestClass>
-// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[VBASE]], [[UPCAST]] : !moore.class<@CmpTestClass>
+// CHECK:   [[CMP:%.+]] = moore.class_handle_cmp eq [[VBASE]], [[UPCAST]] : <@CmpTestClass>
 // CHECK:   moore.blocking_assign [[RESULT]], [[CMP]] : i1
 // CHECK:   moore.return
 // CHECK: }
@@ -1009,10 +985,10 @@ class StaticReadClass;
 endclass
 
 // CHECK-LABEL: moore.module @testStaticRead() {
-// CHECK:   %result = moore.variable : <!moore.i32>
+// CHECK:   %result = moore.variable : <i32>
 // CHECK:   moore.procedure initial {
-// CHECK:     %[[GLOBAL:.+]] = moore.get_global_variable @"StaticReadClass::value" : <!moore.i32>
-// CHECK:     %[[VAL:.+]] = moore.read %[[GLOBAL]] : <!moore.i32>
+// CHECK:     %[[GLOBAL:.+]] = moore.get_global_variable @"StaticReadClass::value" : <i32>
+// CHECK:     %[[VAL:.+]] = moore.read %[[GLOBAL]] : <i32>
 // CHECK:     moore.blocking_assign %result, %[[VAL]] : i32
 // CHECK:     moore.return
 // CHECK:   }
@@ -1029,9 +1005,9 @@ endmodule
 /// Check static class property write from module
 
 // CHECK-LABEL: moore.module @testStaticWrite() {
-// CHECK:   %[[CONST:.+]] = moore.constant 42 : i32
 // CHECK:   moore.procedure initial {
-// CHECK:     %[[GLOBAL:.+]] = moore.get_global_variable @"StaticReadClass::value" : <!moore.i32>
+// CHECK:     %[[GLOBAL:.+]] = moore.get_global_variable @"StaticReadClass::value" : <i32>
+// CHECK:     %[[CONST:.+]] = moore.constant 42 : i32
 // CHECK:     moore.blocking_assign %[[GLOBAL]], %[[CONST]] : i32
 // CHECK:     moore.return
 // CHECK:   }

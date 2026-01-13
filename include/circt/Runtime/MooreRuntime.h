@@ -378,6 +378,22 @@ MooreQueue __moore_array_find_cmp(MooreQueue *array, int64_t elementSize,
                                   void *value, int32_t cmpMode,
                                   int32_t locatorMode, bool returnIndices);
 
+/// Find elements by comparing a field within each element to a given value.
+/// Used for predicates like `arr.find(item) with (item.field == val)`.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @param fieldOffset Byte offset of the field within each element
+/// @param fieldSize Size of the field in bytes
+/// @param value Pointer to the value to compare against
+/// @param cmpMode Comparison mode (0=eq, 1=ne, 2=sgt, 3=sge, 4=slt, 5=sle)
+/// @param locatorMode 0=all, 1=first, 2=last
+/// @param returnIndices If true, return indices instead of elements
+/// @return A new queue with matching elements or indices
+MooreQueue __moore_array_find_field_cmp(MooreQueue *array, int64_t elementSize,
+                                        int64_t fieldOffset, int64_t fieldSize,
+                                        void *value, int32_t cmpMode,
+                                        int32_t locatorMode, bool returnIndices);
+
 /// Find the minimum element(s) in an array.
 /// Implements SystemVerilog min() array locator method.
 /// @param array Pointer to the input array/queue

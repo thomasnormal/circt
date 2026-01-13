@@ -12,6 +12,7 @@
 
 #include "circt/Runtime/MooreRuntime.h"
 #include "gtest/gtest.h"
+#include <cstddef>
 
 namespace {
 
@@ -1000,6 +1001,188 @@ TEST(MooreRuntimeArrayLocatorTest, FindCmpNotFound) {
   // No elements > 10
   MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
                                              &value, MOORE_CMP_SGT, 0, false);
+
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
+//===----------------------------------------------------------------------===//
+// Array Field Locator Tests (field-based predicates)
+//===----------------------------------------------------------------------===//
+
+// Simple struct to simulate a class object with a field
+struct TestItem {
+  int32_t x;
+  int32_t y;
+};
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpEqual) {
+  // Simulate an array of class handles (pointers to objects)
+  TestItem item1 = {10, 100};
+  TestItem item2 = {20, 200};
+  TestItem item3 = {10, 300};
+  TestItem item4 = {30, 400};
+
+  TestItem *items[] = {&item1, &item2, &item3, &item4};
+  MooreQueue queue = {items, 4};
+
+  // Find items where item.x == 10
+  int32_t searchValue = 10;
+  int64_t fieldOffset = offsetof(TestItem, x);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &searchValue,
+      MOORE_CMP_EQ, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 2);
+
+  auto **found = static_cast<TestItem **>(result.data);
+  EXPECT_EQ(found[0]->x, 10);
+  EXPECT_EQ(found[1]->x, 10);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpFirstEqual) {
+  TestItem item1 = {10, 100};
+  TestItem item2 = {20, 200};
+  TestItem item3 = {10, 300};
+  TestItem item4 = {30, 400};
+
+  TestItem *items[] = {&item1, &item2, &item3, &item4};
+  MooreQueue queue = {items, 4};
+
+  // Find first item where item.x == 10
+  int32_t searchValue = 10;
+  int64_t fieldOffset = offsetof(TestItem, x);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &searchValue,
+      MOORE_CMP_EQ, 1, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+
+  auto **found = static_cast<TestItem **>(result.data);
+  EXPECT_EQ(found[0]->y, 100); // First item with x==10
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpLastEqual) {
+  TestItem item1 = {10, 100};
+  TestItem item2 = {20, 200};
+  TestItem item3 = {10, 300};
+  TestItem item4 = {30, 400};
+
+  TestItem *items[] = {&item1, &item2, &item3, &item4};
+  MooreQueue queue = {items, 4};
+
+  // Find last item where item.x == 10
+  int32_t searchValue = 10;
+  int64_t fieldOffset = offsetof(TestItem, x);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &searchValue,
+      MOORE_CMP_EQ, 2, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+
+  auto **found = static_cast<TestItem **>(result.data);
+  EXPECT_EQ(found[0]->y, 300); // Last item with x==10
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpGreater) {
+  TestItem item1 = {10, 100};
+  TestItem item2 = {25, 200};
+  TestItem item3 = {15, 300};
+  TestItem item4 = {30, 400};
+
+  TestItem *items[] = {&item1, &item2, &item3, &item4};
+  MooreQueue queue = {items, 4};
+
+  // Find items where item.x > 20
+  int32_t threshold = 20;
+  int64_t fieldOffset = offsetof(TestItem, x);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &threshold,
+      MOORE_CMP_SGT, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 2); // items with x=25 and x=30
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpWithSecondField) {
+  TestItem item1 = {10, 100};
+  TestItem item2 = {20, 250};
+  TestItem item3 = {10, 300};
+  TestItem item4 = {30, 150};
+
+  TestItem *items[] = {&item1, &item2, &item3, &item4};
+  MooreQueue queue = {items, 4};
+
+  // Find items where item.y >= 200
+  int32_t threshold = 200;
+  int64_t fieldOffset = offsetof(TestItem, y);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &threshold,
+      MOORE_CMP_SGE, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 2); // items with y=250 and y=300
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpIndices) {
+  TestItem item1 = {10, 100};
+  TestItem item2 = {20, 200};
+  TestItem item3 = {10, 300};
+  TestItem item4 = {30, 400};
+
+  TestItem *items[] = {&item1, &item2, &item3, &item4};
+  MooreQueue queue = {items, 4};
+
+  // Find indices where item.x == 10
+  int32_t searchValue = 10;
+  int64_t fieldOffset = offsetof(TestItem, x);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &searchValue,
+      MOORE_CMP_EQ, 0, true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 2);
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 0);
+  EXPECT_EQ(indices[1], 2);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpNotFound) {
+  TestItem item1 = {10, 100};
+  TestItem item2 = {20, 200};
+
+  TestItem *items[] = {&item1, &item2};
+  MooreQueue queue = {items, 2};
+
+  // Find items where item.x == 99 (none exist)
+  int32_t searchValue = 99;
+  int64_t fieldOffset = offsetof(TestItem, x);
+
+  MooreQueue result = __moore_array_find_field_cmp(
+      &queue, sizeof(TestItem *), fieldOffset, sizeof(int32_t), &searchValue,
+      MOORE_CMP_EQ, 0, false);
 
   EXPECT_EQ(result.data, nullptr);
   EXPECT_EQ(result.len, 0);
