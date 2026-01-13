@@ -155,7 +155,7 @@ moore.module @Expressions(
   // CHECK-SAME: in [[REF_D:%[^:]+]] : !moore.ref<l32>
   in %refD: !moore.ref<l32>,
   // CHECK-SAME: in [[REF_ARRAY1:%[^:]+]] : !moore.ref<uarray<4 x i8>>
-  in %refArray1: !moore.ref<!moore.uarray<4 x i8>>,
+  in %refArray1: !moore.ref<uarray<4 x i8>>,
   // CHECK-SAME: in [[REF_ARRAY2:%[^:]+]] : !moore.ref<uarray<2 x uarray<4 x i8>>>
   in %refArray2: !moore.ref<uarray<2 x uarray<4 x i8>>>,
 

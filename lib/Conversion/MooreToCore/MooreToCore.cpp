@@ -1198,10 +1198,18 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
     if (!resultType)
       return rewriter.notifyMatchFailure(op.getLoc(), "invalid variable type");
 
+    // For dynamic container types (queues, dynamic arrays, associative arrays),
+    // the converted type is an LLVM pointer, not llhd.ref. These are handled
+    // differently since they don't fit the llhd signal model.
+    auto refType = dyn_cast<llhd::RefType>(resultType);
+    if (!refType)
+      return rewriter.notifyMatchFailure(
+          op.getLoc(), "variable type not supported for conversion");
+
     // Determine the initial value of the signal.
     Value init = adaptor.getInitial();
     if (!init) {
-      auto elementType = cast<llhd::RefType>(resultType).getNestedType();
+      auto elementType = refType.getNestedType();
       init = createZeroValue(elementType, loc, rewriter);
       if (!init)
         return failure();
@@ -2976,9 +2984,8 @@ struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
     auto *ctx = rewriter.getContext();
     auto mod = op->getParentOfType<ModuleOp>();
 
-    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto stringStructTy = getStringStructType(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
-    auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     auto value = adaptor.getValue();
     auto valueWidth = value.getType().getIntOrFloatBitWidth();
@@ -2992,13 +2999,23 @@ struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
       valueI64 = value;
     }
 
-    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+    // __moore_string_itoa returns a new string (ptr, len) struct
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
     auto runtimeFn =
         getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_itoa", fnTy);
 
-    LLVM::CallOp::create(rewriter, loc, TypeRange{},
-                         SymbolRefAttr::get(runtimeFn),
-                         ValueRange{adaptor.getDest(), valueI64});
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{valueI64});
+    Value resultString = call.getResult();
+
+    // Drive the result to the destination ref
+    auto delay = llhd::ConstantTimeOp::create(
+        rewriter, loc,
+        llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
+    llhd::DriveOp::create(rewriter, loc, adaptor.getDest(), resultString, delay,
+                          Value{});
+
     rewriter.eraseOp(op);
     return success();
   }

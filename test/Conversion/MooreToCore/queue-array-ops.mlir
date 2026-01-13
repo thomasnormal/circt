@@ -16,8 +16,8 @@ moore.global_variable @testAssoc : !moore.assoc_array<!moore.i32, !moore.i8>
 // CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
 // CHECK: llvm.call @__moore_queue_max({{.*}}) : (!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 func.func @test_queue_max() {
-  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<!moore.queue<!moore.i32, 0>>
-  %queue = moore.read %queue_ref : <!moore.queue<!moore.i32, 0>>
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
   %max = moore.queue.max %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0>
   return
 }
@@ -25,8 +25,8 @@ func.func @test_queue_max() {
 // CHECK-LABEL: func @test_queue_min
 // CHECK: llvm.call @__moore_queue_min({{.*}}) : (!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 func.func @test_queue_min() {
-  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<!moore.queue<!moore.i32, 0>>
-  %queue = moore.read %queue_ref : <!moore.queue<!moore.i32, 0>>
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
   %min = moore.queue.min %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0>
   return
 }
@@ -52,8 +52,8 @@ func.func @test_dyn_array_new() {
 // CHECK: [[ADDR:%.+]] = llvm.mlir.addressof @testAssoc : !llvm.ptr
 // CHECK: llvm.call @__moore_assoc_delete([[ADDR]]) : (!llvm.ptr) -> ()
 func.func @test_assoc_delete() {
-  %assoc_ref = moore.get_global_variable @testAssoc : !moore.ref<!moore.assoc_array<!moore.i32, !moore.i8>>
-  moore.assoc.delete %assoc_ref : !moore.ref<!moore.assoc_array<!moore.i32, !moore.i8>>
+  %assoc_ref = moore.get_global_variable @testAssoc : !moore.ref<assoc_array<!moore.i32, !moore.i8>>
+  moore.assoc.delete %assoc_ref : !moore.ref<assoc_array<!moore.i32, !moore.i8>>
   return
 }
 
@@ -64,9 +64,9 @@ func.func @test_assoc_delete() {
 // CHECK: llvm.store [[KEY]], {{.*}} : i8, !llvm.ptr
 // CHECK: llvm.call @__moore_assoc_delete_key([[ADDR]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> ()
 func.func @test_assoc_delete_key() {
-  %assoc_ref = moore.get_global_variable @testAssoc : !moore.ref<!moore.assoc_array<!moore.i32, !moore.i8>>
+  %assoc_ref = moore.get_global_variable @testAssoc : !moore.ref<assoc_array<!moore.i32, !moore.i8>>
   %key = moore.constant 42 : i8
-  moore.assoc.delete_key %assoc_ref, %key : !moore.ref<!moore.assoc_array<!moore.i32, !moore.i8>>, !moore.i8
+  moore.assoc.delete_key %assoc_ref, %key : !moore.ref<assoc_array<!moore.i32, !moore.i8>>, !moore.i8
   return
 }
 
