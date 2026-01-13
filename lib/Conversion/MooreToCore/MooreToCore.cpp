@@ -3691,6 +3691,11 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return LLVM::LLVMPointerType::get(type.getContext());
   });
 
+  // EventType -> i1 (tracks whether the event has been triggered).
+  typeConverter.addConversion([&](EventType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 1);
+  });
+
   typeConverter.addConversion([&](RefType type) -> std::optional<Type> {
     auto nestedType = type.getNestedType();
     if (auto innerType = typeConverter.convertType(nestedType)) {
