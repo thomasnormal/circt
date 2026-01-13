@@ -388,6 +388,11 @@ struct Context {
   /// reference
   Value currentThisRef = {};
 
+  /// The function currently being converted (if any). Used to propagate
+  /// captures from callee functions to the caller when the caller is also
+  /// a function that captures variables.
+  FunctionLowering *currentFunctionLowering = nullptr;
+
 private:
   /// Helper function to extract the commonalities in lowering of functions and
   /// methods

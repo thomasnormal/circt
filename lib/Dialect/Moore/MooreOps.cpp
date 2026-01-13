@@ -1453,10 +1453,17 @@ LogicalResult ClassDeclOp::verify() {
   auto &block = body.front();
   for (mlir::Operation &op : block) {
 
-    // allow property decls, method decls, and constraint blocks
+    // Allow property decls, method decls, and constraint blocks
     if (llvm::isa<circt::moore::ClassPropertyDeclOp,
                   circt::moore::ClassMethodDeclOp,
                   circt::moore::ConstraintBlockOp>(&op))
+      continue;
+
+    // Allow pure operations that may be hoisted from constraint blocks.
+    // Constants and type conversions can be shared across constraint blocks
+    // and thus get placed at the class body level for efficiency.
+    if (op.hasTrait<mlir::OpTrait::ConstantLike>() ||
+        llvm::isa<circt::moore::ConstantOp>(&op))
       continue;
 
     return emitOpError()

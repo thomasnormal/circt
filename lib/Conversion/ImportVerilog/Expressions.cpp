@@ -1819,7 +1819,28 @@ struct RvalueExprVisitor : public ExprVisitor {
           }
         }
 
-        // Otherwise we can’t legally rematerialize this capture here.
+        // If we're inside a function that's being converted, propagate the
+        // capture to that function. The capture will be replaced with a block
+        // argument when the caller function is finalized.
+        if (auto *callerLowering = context.currentFunctionLowering) {
+          // Check if the caller already has this capture
+          auto it = callerLowering->captureIndex.find(cap);
+          if (it != callerLowering->captureIndex.end()) {
+            // The caller already captures this value, use it directly.
+            // It will be replaced with a block arg during finalization.
+            return cap;
+          }
+          // Add this capture to the caller's capture list
+          auto [newIt, inserted] = callerLowering->captureIndex.try_emplace(
+              cap, callerLowering->captures.size());
+          if (inserted)
+            callerLowering->captures.push_back(cap);
+          // Return the capture value; it will be replaced with a block arg
+          // when the caller is finalized.
+          return cap;
+        }
+
+        // Otherwise we can't legally rematerialize this capture here.
         lowering->op.emitError()
             << "cannot materialize captured ref at call site; non-symbol "
             << "source: "
@@ -3545,6 +3566,12 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   return moore::UrandomBIOp::create(builder, loc, value);
                 })
+          .Case("$urandom_range",
+                [&]() -> Value {
+                  // $urandom_range(max) returns a value in [0, max]
+                  return moore::UrandomRangeBIOp::create(builder, loc, value,
+                                                         nullptr);
+                })
           .Case("$random",
                 [&]() -> Value {
                   return moore::RandomBIOp::create(builder, loc, value);
@@ -3709,6 +3736,13 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                     return moore::AssocArrayExistsOp::create(builder, loc,
                                                              value1, value2);
                   return {};
+                })
+          .Case("$urandom_range",
+                [&]() -> Value {
+                  // $urandom_range(max, min) returns a value in [min, max]
+                  // Note: IEEE 1800-2017 says if min > max, they are swapped
+                  return moore::UrandomRangeBIOp::create(builder, loc, value1,
+                                                         value2);
                 })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
