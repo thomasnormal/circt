@@ -431,4 +431,7 @@ function void StringBuiltins(string string_in, int int_in);
   // CHECK: [[INTCONV:%.+]] = moore.int_to_logic [[INT]] : i32
   // CHECK: moore.string.itoa [[STRVAR]], [[INTCONV]] : <!moore.string>, !moore.l32
   result.itoa(int_in);
+  // CHECK: [[CHARVAL:%.+]] = moore.constant 65 : i8
+  // CHECK: moore.string.putc [[STRVAR]]{{\[}}[[INT]]], [[CHARVAL]] : <string>
+  result[int_in] = 8'd65;
 endfunction

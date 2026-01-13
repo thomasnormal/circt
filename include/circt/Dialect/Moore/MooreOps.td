@@ -4676,6 +4676,17 @@ def StringGetCOp : StringBuiltin<"getc"> {
   let assemblyFormat = "$str `[` $index `]` attr-dict";
 }
 
+def StringPutCOp : StringBuiltin<"putc"> {
+  let summary = "Set a character in a string";
+  let description = [{
+    Sets the character at the specified index in the given string reference.
+    This corresponds to the SystemVerilog `str.putc(i, c)` method and also
+    supports the indexed assignment syntax `str[i] = c`.
+  }];
+  let arguments = (ins RefType:$str, TwoValuedI32:$index, TwoValuedI8:$character);
+  let assemblyFormat = "$str `[` $index `]` `,` $character `:` type($str) attr-dict";
+}
+
 def StringItoaOp : StringBuiltin<"itoa"> {
   let summary = "Convert an integer to a decimal string";
   let description = [{
