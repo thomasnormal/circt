@@ -2977,6 +2977,222 @@ struct QueueDeleteOpConversion
   }
 };
 
+/// Conversion for moore.queue.push_back -> runtime function call.
+struct QueuePushBackOpConversion
+    : public RuntimeCallConversionBase<QueuePushBackOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueuePushBackOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Function signature: void push_back(queue_ptr, element_ptr, element_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_queue_push_back", fnTy);
+
+    // Store queue to alloca and pass pointer
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto queueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // Store element to alloca and pass pointer
+    auto elemType = typeConverter->convertType(op.getElement().getType());
+    auto elemAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getElement(), elemAlloca);
+
+    // Calculate element size
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getI64IntegerAttr(
+            elemType.getIntOrFloatBitWidth() / 8 > 0
+                ? elemType.getIntOrFloatBitWidth() / 8
+                : 1));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{queueAlloca, elemAlloca, elemSize});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.push_front -> runtime function call.
+struct QueuePushFrontOpConversion
+    : public RuntimeCallConversionBase<QueuePushFrontOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueuePushFrontOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Function signature: void push_front(queue_ptr, element_ptr, element_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_queue_push_front", fnTy);
+
+    // Store queue to alloca and pass pointer
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto queueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // Store element to alloca and pass pointer
+    auto elemType = typeConverter->convertType(op.getElement().getType());
+    auto elemAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getElement(), elemAlloca);
+
+    // Calculate element size
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getI64IntegerAttr(
+            elemType.getIntOrFloatBitWidth() / 8 > 0
+                ? elemType.getIntOrFloatBitWidth() / 8
+                : 1));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{queueAlloca, elemAlloca, elemSize});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.pop_back -> runtime function call.
+struct QueuePopBackOpConversion
+    : public RuntimeCallConversionBase<QueuePopBackOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueuePopBackOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Function signature: i64 pop_back(queue_ptr, element_size)
+    // Returns the element as i64 (caller truncates/extends as needed)
+    auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_queue_pop_back", fnTy);
+
+    // Store queue to alloca and pass pointer
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto queueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // Calculate element size
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getI64IntegerAttr(
+            resultType.getIntOrFloatBitWidth() / 8 > 0
+                ? resultType.getIntOrFloatBitWidth() / 8
+                : 1));
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{queueAlloca, elemSize});
+
+    // Convert result to the expected type
+    Value result = call.getResult();
+    auto resultWidth = resultType.getIntOrFloatBitWidth();
+    if (resultWidth < 64) {
+      result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+    } else if (resultWidth > 64) {
+      result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.pop_front -> runtime function call.
+struct QueuePopFrontOpConversion
+    : public RuntimeCallConversionBase<QueuePopFrontOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueuePopFrontOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Function signature: i64 pop_front(queue_ptr, element_size)
+    // Returns the element as i64 (caller truncates/extends as needed)
+    auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_queue_pop_front", fnTy);
+
+    // Store queue to alloca and pass pointer
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto queueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // Calculate element size
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getI64IntegerAttr(
+            resultType.getIntOrFloatBitWidth() / 8 > 0
+                ? resultType.getIntOrFloatBitWidth() / 8
+                : 1));
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{queueAlloca, elemSize});
+
+    // Convert result to the expected type
+    Value result = call.getResult();
+    auto resultWidth = resultType.getIntOrFloatBitWidth();
+    if (resultWidth < 64) {
+      result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+    } else if (resultWidth > 64) {
+      result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// Conversion for moore.queue.unique -> runtime function call.
 struct QueueUniqueOpConversion
     : public RuntimeCallConversionBase<QueueUniqueOp> {
@@ -4368,6 +4584,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueUniqueOpConversion,
     QueueConcatOpConversion,
     QueueDeleteOpConversion,
+    QueuePushBackOpConversion,
+    QueuePushFrontOpConversion,
+    QueuePopBackOpConversion,
+    QueuePopFrontOpConversion,
     StreamConcatOpConversion,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,

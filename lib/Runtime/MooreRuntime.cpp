@@ -85,6 +85,115 @@ extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index) {
   (void)index;
 }
 
+extern "C" void __moore_queue_push_back(MooreQueue *queue, void *element,
+                                        int64_t element_size) {
+  if (!queue || !element || element_size <= 0)
+    return;
+
+  // Allocate new storage with space for one more element
+  int64_t newLen = queue->len + 1;
+  void *newData = std::malloc(newLen * element_size);
+  if (!newData)
+    return;
+
+  // Copy existing elements
+  if (queue->data && queue->len > 0) {
+    std::memcpy(newData, queue->data, queue->len * element_size);
+  }
+
+  // Copy new element to the end
+  std::memcpy(static_cast<char *>(newData) + queue->len * element_size,
+              element, element_size);
+
+  // Free old data and update queue
+  if (queue->data)
+    std::free(queue->data);
+  queue->data = newData;
+  queue->len = newLen;
+}
+
+extern "C" void __moore_queue_push_front(MooreQueue *queue, void *element,
+                                         int64_t element_size) {
+  if (!queue || !element || element_size <= 0)
+    return;
+
+  // Allocate new storage with space for one more element
+  int64_t newLen = queue->len + 1;
+  void *newData = std::malloc(newLen * element_size);
+  if (!newData)
+    return;
+
+  // Copy new element to the front
+  std::memcpy(newData, element, element_size);
+
+  // Copy existing elements after the new one
+  if (queue->data && queue->len > 0) {
+    std::memcpy(static_cast<char *>(newData) + element_size,
+                queue->data, queue->len * element_size);
+  }
+
+  // Free old data and update queue
+  if (queue->data)
+    std::free(queue->data);
+  queue->data = newData;
+  queue->len = newLen;
+}
+
+extern "C" int64_t __moore_queue_pop_back(MooreQueue *queue,
+                                          int64_t element_size) {
+  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0)
+    return 0;
+
+  // Read the last element
+  int64_t result = 0;
+  void *lastElem = static_cast<char *>(queue->data) +
+                   (queue->len - 1) * element_size;
+  // Copy up to 8 bytes (size of int64_t)
+  std::memcpy(&result, lastElem,
+              element_size < 8 ? element_size : 8);
+
+  // Reduce the queue size
+  queue->len--;
+
+  // If queue is now empty, free the data
+  if (queue->len == 0) {
+    std::free(queue->data);
+    queue->data = nullptr;
+  }
+  // Otherwise, we could reallocate to save memory, but for now we keep
+  // the existing allocation for simplicity
+
+  return result;
+}
+
+extern "C" int64_t __moore_queue_pop_front(MooreQueue *queue,
+                                           int64_t element_size) {
+  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0)
+    return 0;
+
+  // Read the first element
+  int64_t result = 0;
+  // Copy up to 8 bytes (size of int64_t)
+  std::memcpy(&result, queue->data,
+              element_size < 8 ? element_size : 8);
+
+  // Reduce the queue size and shift elements
+  queue->len--;
+
+  if (queue->len == 0) {
+    // Queue is now empty
+    std::free(queue->data);
+    queue->data = nullptr;
+  } else {
+    // Shift remaining elements to the front
+    std::memmove(queue->data,
+                 static_cast<char *>(queue->data) + element_size,
+                 queue->len * element_size);
+  }
+
+  return result;
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//

@@ -220,17 +220,14 @@ Context::convertTimingControl(const slang::ast::TimingControl &ctrl,
   // `WaitEventOp` and assign it to `implicitWaitOp`. This op will be populated
   // further down.
   moore::WaitEventOp implicitWaitOp;
-  {
-    auto previousCallback = rvalueReadCallback;
-    auto done =
-        llvm::make_scope_exit([&] { rvalueReadCallback = previousCallback; });
-    // Reads happening as part of the event control should not be added to a
-    // surrounding implicit event control's list of implicitly observed
-    // variables.
-    rvalueReadCallback = nullptr;
-    if (failed(handleRoot(*this, ctrl, &implicitWaitOp)))
-      return failure();
-  }
+  // Note: We don't clear rvalueReadCallback here (as was done previously) to
+  // ensure that any outer capture callback (e.g., for subroutine captures)
+  // still gets notified of reads in the event control expression. The implicit
+  // event observation callback (which adds reads to readValues) is only set up
+  // further down for the statement following the timing control, so there's no
+  // concern about event control reads polluting an implicit event's list.
+  if (failed(handleRoot(*this, ctrl, &implicitWaitOp)))
+    return failure();
 
   // Convert the statement. In case `implicitWaitOp` is set, we register a
   // callback to collect all the variables read by the statement into

@@ -72,6 +72,32 @@ MooreQueue __moore_queue_max(MooreQueue *queue);
 /// @return A new queue containing only the minimum element
 MooreQueue __moore_queue_min(MooreQueue *queue);
 
+/// Push an element to the back of a queue.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param element Pointer to the element to push
+/// @param element_size Size of the element in bytes
+void __moore_queue_push_back(MooreQueue *queue, void *element,
+                             int64_t element_size);
+
+/// Push an element to the front of a queue.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param element Pointer to the element to push
+/// @param element_size Size of the element in bytes
+void __moore_queue_push_front(MooreQueue *queue, void *element,
+                              int64_t element_size);
+
+/// Pop an element from the back of a queue.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param element_size Size of the element in bytes
+/// @return The popped element value (as 64-bit integer)
+int64_t __moore_queue_pop_back(MooreQueue *queue, int64_t element_size);
+
+/// Pop an element from the front of a queue.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param element_size Size of the element in bytes
+/// @return The popped element value (as 64-bit integer)
+int64_t __moore_queue_pop_front(MooreQueue *queue, int64_t element_size);
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//

@@ -2103,6 +2103,109 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // $typename returns the type of its argument as a string.
+    // IEEE 1800-2017 Section 20.6.1: $typename returns a string representation
+    // of the data type of its argument. This is evaluated at compile time.
+    if (!subroutine.name.compare("$typename") && args.size() == 1) {
+      // Get the type of the argument from slang and convert it to a string
+      std::string typeName = args[0]->type->toString();
+      auto stringType = moore::StringType::get(context.getContext());
+      return moore::ConstantStringOp::create(builder, loc, stringType, typeName);
+    }
+
+    // Handle .name() method on enum types.
+    // IEEE 1800-2017 Section 6.19.5.5: Returns the string representation of
+    // the enum value's name, or empty string if value is not a member.
+    if (!subroutine.name.compare("name") && args.size() == 1) {
+      const slang::ast::Type *slangType = args[0]->type;
+      // Get the canonical type to handle typedefs
+      const auto &canonicalType = slangType->getCanonicalType();
+      if (canonicalType.kind == slang::ast::SymbolKind::EnumType) {
+        const auto &enumType =
+            static_cast<const slang::ast::EnumType &>(canonicalType);
+        Value enumValue = context.convertRvalueExpression(*args[0]);
+        if (!enumValue)
+          return {};
+
+        auto stringType = moore::StringType::get(context.getContext());
+
+        // Helper to create a string constant from a string literal
+        auto createStringConstant = [&](const std::string &str) -> Value {
+          if (str.empty()) {
+            // For empty string, use a 1-bit integer
+            auto intTy = moore::IntType::getInt(context.getContext(), 8);
+            auto immInt = moore::ConstantStringOp::create(builder, loc, intTy, "")
+                              .getResult();
+            return moore::IntToStringOp::create(builder, loc, immInt).getResult();
+          }
+          auto intTy = moore::IntType::getInt(context.getContext(), str.size() * 8);
+          auto immInt = moore::ConstantStringOp::create(builder, loc, intTy, str)
+                            .getResult();
+          return moore::IntToStringOp::create(builder, loc, immInt).getResult();
+        };
+
+        // Collect enum value-name pairs
+        SmallVector<std::pair<FVInt, std::string>> enumValues;
+        for (const auto &member : enumType.values()) {
+          const auto &cv = member.getValue();
+          if (cv)
+            enumValues.emplace_back(convertSVIntToFVInt(cv.integer()),
+                                    std::string(member.name));
+        }
+
+        // Build a chain of conditional expressions: if value == enum1 then
+        // "enum1" else if value == enum2 then "enum2" else ... else ""
+        // Start with the default empty string result
+        Value result = createStringConstant("");
+
+        // Get the integer type for enum value comparison
+        auto enumIntType = dyn_cast<moore::IntType>(enumValue.getType());
+        if (!enumIntType) {
+          // Enum type might not have been converted to IntType directly
+          // Try to get the underlying type
+          mlir::emitError(loc) << "enum value has non-integer type: "
+                               << enumValue.getType();
+          return {};
+        }
+
+        // Build conditional chain from last to first
+        for (auto it = enumValues.rbegin(); it != enumValues.rend(); ++it) {
+          auto &[fvint, memberName] = *it;
+          // Create constant for this enum value with matching width
+          auto constFvint = fvint;
+          if (constFvint.getBitWidth() != enumIntType.getWidth()) {
+            constFvint = constFvint.zext(enumIntType.getWidth());
+          }
+          auto constVal = moore::ConstantOp::create(
+              builder, loc, enumIntType, constFvint);
+          // Compare enum value with this constant
+          Value cond = moore::EqOp::create(builder, loc, enumValue, constVal);
+          cond = context.convertToBool(cond);
+          // Create the conditional op with regions
+          auto conditionalOp = moore::ConditionalOp::create(
+              builder, loc, stringType, cond);
+          auto &trueBlock = conditionalOp.getTrueRegion().emplaceBlock();
+          auto &falseBlock = conditionalOp.getFalseRegion().emplaceBlock();
+
+          {
+            OpBuilder::InsertionGuard g(builder);
+            // True branch: return the enum member name
+            builder.setInsertionPointToStart(&trueBlock);
+            auto nameStr = createStringConstant(memberName);
+            moore::YieldOp::create(builder, loc, nameStr);
+
+            // False branch: return the accumulated result
+            builder.setInsertionPointToStart(&falseBlock);
+            moore::YieldOp::create(builder, loc, result);
+          }
+
+          result = conditionalOp.getResult();
+        }
+
+        return result;
+      }
+    }
+
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
