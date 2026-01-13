@@ -5,6 +5,7 @@
 // CHECK-DAG: llvm.func @__moore_urandom_range(i32, i32) -> i32
 // CHECK-DAG: llvm.func @__moore_random() -> i32
 // CHECK-DAG: llvm.func @__moore_random_seeded(i32) -> i32
+// CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
 
 //===----------------------------------------------------------------------===//
 // $urandom Operation
@@ -71,4 +72,25 @@ moore.module @test_random_seeded(in %seed: !moore.i32, out result: !moore.i32) {
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_random_seeded(%{{.*}}) : (i32) -> i32
   %random = moore.builtin.random %seed
   moore.output %random : !moore.i32
+}
+
+//===----------------------------------------------------------------------===//
+// randomize() Operation
+//===----------------------------------------------------------------------===//
+
+// Class declaration for testing randomize
+moore.class.classdecl @TestClass {
+  moore.class.propertydecl @field1 : !moore.i32
+  moore.class.propertydecl @field2 : !moore.l64
+}
+
+// CHECK-LABEL: func.func @test_randomize
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_randomize(%obj: !moore.class<@TestClass>) -> i1 {
+  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(16 : i64) : i64
+  // CHECK: %[[RESULT:.*]] = llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
+  // CHECK: %[[SUCCESS:.*]] = arith.trunci %[[RESULT]] : i32 to i1
+  // CHECK: return %[[SUCCESS]] : i1
+  %success = moore.randomize %obj : !moore.class<@TestClass>
+  return %success : i1
 }

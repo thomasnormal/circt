@@ -296,6 +296,21 @@ int32_t __moore_random(void);
 int32_t __moore_random_seeded(int32_t seed);
 
 //===----------------------------------------------------------------------===//
+// Randomization Operations
+//===----------------------------------------------------------------------===//
+
+/// Basic randomization - fills class memory with random values.
+/// This is a simplified implementation of SystemVerilog's randomize() method
+/// that fills the entire object with random bytes. A more sophisticated
+/// implementation would use class metadata to identify which fields are marked
+/// with `rand` and only randomize those.
+///
+/// @param classPtr Pointer to the class instance to randomize
+/// @param classSize Size of the class in bytes
+/// @return 1 on success, 0 on failure (e.g., null pointer)
+int32_t __moore_randomize_basic(void *classPtr, int64_t classSize);
+
+//===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Operations
 //===----------------------------------------------------------------------===//
 

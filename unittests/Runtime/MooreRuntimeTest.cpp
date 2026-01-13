@@ -13,6 +13,7 @@
 #include "circt/Runtime/MooreRuntime.h"
 #include "gtest/gtest.h"
 #include <cstddef>
+#include <cstring>
 
 namespace {
 
@@ -430,6 +431,114 @@ TEST(MooreRuntimeRandomTest, RandomSeeded) {
 
   // Re-seeding with the same value should produce the same first random number
   EXPECT_EQ(val1, val2);
+}
+
+//===----------------------------------------------------------------------===//
+// Randomization Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicSuccess) {
+  // Test basic randomization of a struct
+  struct TestClass {
+    int32_t field1;
+    int32_t field2;
+    int64_t field3;
+  };
+
+  TestClass obj = {0, 0, 0};
+
+  // Randomize should return 1 for success
+  int32_t result = __moore_randomize_basic(&obj, sizeof(TestClass));
+  EXPECT_EQ(result, 1);
+
+  // It's statistically unlikely all fields remain zero after randomization
+  // (but not impossible - we just check the function ran without crashing)
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicNullPointer) {
+  // Null pointer should return 0 (failure)
+  int32_t result = __moore_randomize_basic(nullptr, 100);
+  EXPECT_EQ(result, 0);
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicZeroSize) {
+  // Zero size should return 0 (failure)
+  int32_t value = 42;
+  int32_t result = __moore_randomize_basic(&value, 0);
+  EXPECT_EQ(result, 0);
+
+  // Value should remain unchanged
+  EXPECT_EQ(value, 42);
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicNegativeSize) {
+  // Negative size should return 0 (failure)
+  int32_t value = 42;
+  int32_t result = __moore_randomize_basic(&value, -1);
+  EXPECT_EQ(result, 0);
+
+  // Value should remain unchanged
+  EXPECT_EQ(value, 42);
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicModifiesMemory) {
+  // Test that randomization actually modifies memory
+  // We use a large buffer to make it statistically unlikely all bytes stay zero
+  uint8_t buffer[256];
+  std::memset(buffer, 0, sizeof(buffer));
+
+  int32_t result = __moore_randomize_basic(buffer, sizeof(buffer));
+  EXPECT_EQ(result, 1);
+
+  // Count non-zero bytes - should have some
+  int nonZeroCount = 0;
+  for (size_t i = 0; i < sizeof(buffer); ++i) {
+    if (buffer[i] != 0)
+      ++nonZeroCount;
+  }
+
+  // With 256 random bytes, probability of all being zero is (1/256)^256
+  // which is essentially impossible. We check for at least some non-zero.
+  EXPECT_GT(nonZeroCount, 0);
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicOddSize) {
+  // Test randomization with sizes not divisible by 4 (tests remainder handling)
+  uint8_t buffer1[1] = {0};
+  uint8_t buffer2[3] = {0, 0, 0};
+  uint8_t buffer5[5] = {0, 0, 0, 0, 0};
+
+  EXPECT_EQ(__moore_randomize_basic(buffer1, 1), 1);
+  EXPECT_EQ(__moore_randomize_basic(buffer2, 3), 1);
+  EXPECT_EQ(__moore_randomize_basic(buffer5, 5), 1);
+
+  // Functions completed without crash - success
+}
+
+TEST(MooreRuntimeRandomizeTest, RandomizeBasicSeededConsistency) {
+  // Test that seeding the RNG produces consistent randomization results
+  struct TestClass {
+    int32_t a;
+    int32_t b;
+    int32_t c;
+    int32_t d;
+  };
+
+  TestClass obj1, obj2;
+
+  // Seed, then randomize
+  __moore_urandom_seeded(12345);
+  __moore_randomize_basic(&obj1, sizeof(TestClass));
+
+  // Re-seed with same value, then randomize again
+  __moore_urandom_seeded(12345);
+  __moore_randomize_basic(&obj2, sizeof(TestClass));
+
+  // Both objects should have identical random values
+  EXPECT_EQ(obj1.a, obj2.a);
+  EXPECT_EQ(obj1.b, obj2.b);
+  EXPECT_EQ(obj1.c, obj2.c);
+  EXPECT_EQ(obj1.d, obj2.d);
 }
 
 //===----------------------------------------------------------------------===//
