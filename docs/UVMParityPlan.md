@@ -41,6 +41,7 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - ✅ **Implemented randomize() method handler** (ImportVerilog)
 - ✅ **Added RandomizeOp lowering to runtime** (MooreToCore)
 - ✅ **Added __moore_randomize_basic runtime function**
+- ✅ **Fixed silent UVM failure** - Added error messages (2fe8ea6d2)
 
 ### Current Limitations (Xcelium Parity Gaps)
 
@@ -52,10 +53,10 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 2. **Constraint solving** - Constraints parsed but not solved
    - Need: External solver integration (Z3/SMT)
 
-3. **Silent UVM conversion failure** - Full UVM returns exit 1 with no error
-   - Lint-only mode works
-   - UVM-style code without library works
-   - Full library has undiagnosed issue
+3. **~~Silent UVM conversion failure~~** - ✅ FIXED (2fe8ea6d2)
+   - Root cause: MLIR blocks without terminators during folding/verification
+   - Fix: Added explicit error messages when conversion or verification fails
+   - Now shows "error: failed to convert Verilog to MLIR" with hint to use --debug
 
 4. **Coverage/Covergroups** - Parsing skipped with remark
    - Moore dialect has coverage ops
@@ -220,12 +221,14 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 ## Next Steps by Priority
 
 ### P0 - Critical (Blocks UVM Execution)
-1. **Implement randomize()** - Most critical missing feature
-   - ImportVerilog handler in Expressions.cpp
-   - MooreToCore lowering pattern
-   - Runtime `__moore_randomize_basic`
+1. **~~Implement randomize()~~** - ✅ DONE
+   - ImportVerilog handler in Expressions.cpp ✅
+   - MooreToCore lowering pattern ✅
+   - Runtime `__moore_randomize_basic` ✅
 
-2. **Debug silent UVM failure** - Find root cause of exit 1 with no error
+2. **~~Debug silent UVM failure~~** - ✅ DONE (2fe8ea6d2)
+   - Root cause: MLIR blocks without terminators
+   - Fix: Added explicit error messages with hints
 
 ### P1 - High (Blocks Full Simulation)
 1. **Interface lowering** - InterfaceSignalDeclOp, InterfaceInstanceOp
@@ -270,7 +273,7 @@ xrun -compile -uvm \
 | Track 1 | Implement randomize() handler | P0 | ✅ Done (58001e3be) |
 | Track 2 | Add RandomizeOp lowering | P0 | ✅ Done (dd2b06349) |
 | Track 3 | Implement __moore_randomize_basic | P0 | ✅ Done (dd2b06349) |
-| Track 4 | Debug silent UVM failure | P0 | 🔄 In progress |
+| Track 4 | Debug silent UVM failure | P0 | ✅ Done (2fe8ea6d2) |
 
 ### Next Sprint Tasks
 | Track | Next Task | Priority | Notes |
