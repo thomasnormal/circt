@@ -368,9 +368,9 @@ moore.interface @handshake_if {
 
 // Test interface instance and virtual interface type
 // CHECK-LABEL: moore.module @test_interface_instance
-// CHECK:         %[[INST:.*]] = moore.interface.instance @handshake_if : !moore.ref<!moore.virtual_interface<@handshake_if>>
+// CHECK:         %[[INST:.*]] = moore.interface.instance @handshake_if : !moore.ref<virtual_interface<@handshake_if>>
 moore.module @test_interface_instance() {
-  %bus = moore.interface.instance @handshake_if : !moore.ref<!moore.virtual_interface<@handshake_if>>
+  %bus = moore.interface.instance @handshake_if : !moore.ref<virtual_interface<@handshake_if>>
   moore.output
 }
 
@@ -386,11 +386,11 @@ func.func @test_vif_modport(%vif: !moore.virtual_interface<@handshake_if>) {
 // Test virtual interface signal reference
 // CHECK-LABEL: func.func @test_vif_signal_ref
 // CHECK-SAME:    (%[[VIF:.*]]: !moore.virtual_interface<@handshake_if>)
-// CHECK:         %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[VIF]][@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<!moore.l8>
-// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : !moore.ref<!moore.l8>
+// CHECK:         %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[VIF]][@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<l8>
+// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : !moore.ref<l8>
 func.func @test_vif_signal_ref(%vif: !moore.virtual_interface<@handshake_if>) {
-  %data_ref = moore.virtual_interface.signal_ref %vif[@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<!moore.l8>
-  %data = moore.read %data_ref : !moore.ref<!moore.l8>
+  %data_ref = moore.virtual_interface.signal_ref %vif[@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<l8>
+  %data = moore.read %data_ref : !moore.ref<l8>
   return
 }
 

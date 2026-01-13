@@ -357,9 +357,16 @@ std::optional<uint32_t> RefType::getFieldIndex(StringAttr nameField) {
 }
 
 Type RefType::parse(AsmParser &parser) {
+  if (parser.parseLess())
+    return {};
+
+  // Parse the nested type using Moore's custom format.
+  // This handles abbreviated forms like 'i32', 'uarray<...>', etc.
   Type nestedType;
-  if (parser.parseLess() || parser.parseType(nestedType) ||
-      parser.parseGreater())
+  if (parseMooreType(parser, nestedType))
+    return {};
+
+  if (parser.parseGreater())
     return {};
 
   auto unpackedType = llvm::dyn_cast<UnpackedType>(nestedType);
@@ -373,7 +380,9 @@ Type RefType::parse(AsmParser &parser) {
 
 void RefType::print(AsmPrinter &printer) const {
   printer << "<";
-  printer.printType(getNestedType());
+  // Print the nested type using Moore's custom format (without !moore. prefix)
+  // so that the abbreviated form like 'i32' is used instead of '!moore.i32'.
+  printMooreType(getNestedType(), printer);
   printer << ">";
 }
 

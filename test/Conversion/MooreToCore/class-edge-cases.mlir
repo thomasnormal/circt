@@ -99,9 +99,9 @@ func.func private @test_multiple_new() {
 // CHECK:   return [[CONV]] : !llhd.ref<i64>
 // CHECK-NOT: moore.class.property_ref
 
-func.func private @test_own_property_level1(%obj: !moore.class<@Level1>) -> !moore.ref<!moore.i64> {
-  %ref = moore.class.property_ref %obj[@level1Val] : <@Level1> -> !moore.ref<!moore.i64>
-  return %ref : !moore.ref<!moore.i64>
+func.func private @test_own_property_level1(%obj: !moore.class<@Level1>) -> !moore.ref<i64> {
+  %ref = moore.class.property_ref %obj[@level1Val] : <@Level1> -> !moore.ref<i64>
+  return %ref : !moore.ref<i64>
 }
 
 // CHECK-LABEL: func.func private @test_own_property_level2
@@ -112,9 +112,9 @@ func.func private @test_own_property_level1(%obj: !moore.class<@Level1>) -> !moo
 // CHECK:   return [[CONV]] : !llhd.ref<i16>
 // CHECK-NOT: moore.class.property_ref
 
-func.func private @test_own_property_level2(%obj: !moore.class<@Level2>) -> !moore.ref<!moore.i16> {
-  %ref = moore.class.property_ref %obj[@level2Val] : <@Level2> -> !moore.ref<!moore.i16>
-  return %ref : !moore.ref<!moore.i16>
+func.func private @test_own_property_level2(%obj: !moore.class<@Level2>) -> !moore.ref<i16> {
+  %ref = moore.class.property_ref %obj[@level2Val] : <@Level2> -> !moore.ref<i16>
+  return %ref : !moore.ref<i16>
 }
 
 // CHECK-LABEL: func.func private @test_own_property_level3
@@ -125,9 +125,9 @@ func.func private @test_own_property_level2(%obj: !moore.class<@Level2>) -> !moo
 // CHECK:   return [[CONV]] : !llhd.ref<i8>
 // CHECK-NOT: moore.class.property_ref
 
-func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moore.ref<!moore.i8> {
-  %ref = moore.class.property_ref %obj[@level3Val] : <@Level3> -> !moore.ref<!moore.i8>
-  return %ref : !moore.ref<!moore.i8>
+func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moore.ref<i8> {
+  %ref = moore.class.property_ref %obj[@level3Val] : <@Level3> -> !moore.ref<i8>
+  return %ref : !moore.ref<i8>
 }
 
 /// Test accessing base property via upcast then property_ref
@@ -141,11 +141,11 @@ func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moo
 // CHECK-NOT: moore.class.property_ref
 // CHECK-NOT: moore.class.upcast
 
-func.func private @test_upcast_then_property(%obj: !moore.class<@Level3>) -> !moore.ref<!moore.i32> {
+func.func private @test_upcast_then_property(%obj: !moore.class<@Level3>) -> !moore.ref<i32> {
   // Upcast to base, then access base property
   %base = moore.class.upcast %obj : <@Level3> to <@Base>
-  %ref = moore.class.property_ref %base[@baseVal] : <@Base> -> !moore.ref<!moore.i32>
-  return %ref : !moore.ref<!moore.i32>
+  %ref = moore.class.property_ref %base[@baseVal] : <@Base> -> !moore.ref<i32>
+  return %ref : !moore.ref<i32>
 }
 
 //===----------------------------------------------------------------------===//
@@ -222,7 +222,7 @@ func.func private @test_full_workflow() -> !moore.i1 {
   // Create a Level1 object
   %obj = moore.class.new : <@Level1>
   // Access its own property
-  %propRef = moore.class.property_ref %obj[@level1Val] : <@Level1> -> !moore.ref<!moore.i64>
+  %propRef = moore.class.property_ref %obj[@level1Val] : <@Level1> -> !moore.ref<i64>
   // Upcast to base
   %base = moore.class.upcast %obj : <@Level1> to <@Base>
   // Compare with null

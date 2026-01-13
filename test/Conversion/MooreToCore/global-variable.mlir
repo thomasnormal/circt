@@ -24,7 +24,7 @@ moore.global_variable @assocArrayGlobal : !moore.assoc_array<!moore.i32, !moore.
 // CHECK-LABEL: func @testGetGlobalQueue
 func.func @testGetGlobalQueue() {
   // CHECK: llvm.mlir.addressof @queueGlobal : !llvm.ptr
-  %0 = moore.get_global_variable @queueGlobal : !moore.ref<!moore.queue<!moore.i8, 0>>
+  %0 = moore.get_global_variable @queueGlobal : !moore.ref<queue<!moore.i8, 0>>
   return
 }
 
@@ -32,6 +32,6 @@ func.func @testGetGlobalQueue() {
 // CHECK-LABEL: func @testGetGlobalInt
 func.func @testGetGlobalInt() {
   // CHECK: llvm.mlir.addressof @intGlobal : !llvm.ptr
-  %0 = moore.get_global_variable @intGlobal : !moore.ref<!moore.i32>
+  %0 = moore.get_global_variable @intGlobal : !moore.ref<i32>
   return
 }
