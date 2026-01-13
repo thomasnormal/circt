@@ -52,8 +52,14 @@ struct StmtVisitor {
       return failure();
 
     // Create a variable to hold the iterator key
+    auto unpackedIterType = dyn_cast<moore::UnpackedType>(iterType);
+    if (!unpackedIterType) {
+      mlir::emitError(loc) << "foreach iterator '" << iter->name
+                           << "' has non-unpacked type: " << iterType;
+      return failure();
+    }
     Value keyVar = moore::VariableOp::create(
-        builder, loc, moore::RefType::get(cast<moore::UnpackedType>(iterType)),
+        builder, loc, moore::RefType::get(unpackedIterType),
         builder.getStringAttr(iter->name), Value{});
     context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
                                          iter, keyVar);
@@ -168,7 +174,9 @@ struct StmtVisitor {
     Value cond = moore::SleOp::create(builder, loc, var, upperBound);
     if (!cond)
       return failure();
-    cond = builder.createOrFold<moore::BoolCastOp>(loc, cond);
+    cond = context.convertToBool(cond);
+    if (!cond)
+      return failure();
     cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
     cf::CondBranchOp::create(builder, loc, cond, &bodyBlock, &exitBlock);
 
@@ -198,6 +206,11 @@ struct StmtVisitor {
 
     // add one to loop variable
     var = moore::ReadOp::create(builder, loc, varOp);
+    if (!isa<moore::IntType>(var.getType())) {
+      mlir::emitError(loc) << "foreach loop variable read produced non-integer type: "
+                           << var.getType() << " (expected IntType)";
+      return failure();
+    }
     auto one = moore::ConstantOp::create(builder, loc, intType, 1);
     auto postValue = moore::AddOp::create(builder, loc, var, one).getResult();
     moore::BlockingAssignOp::create(builder, loc, varOp, postValue);
@@ -369,8 +382,14 @@ struct StmtVisitor {
     }
 
     // Collect local temporary variables.
+    auto unpackedType = dyn_cast<moore::UnpackedType>(type);
+    if (!unpackedType) {
+      mlir::emitError(loc) << "variable '" << var.name
+                           << "' has non-unpacked type: " << type;
+      return failure();
+    }
     auto varOp = moore::VariableOp::create(
-        builder, loc, moore::RefType::get(cast<moore::UnpackedType>(type)),
+        builder, loc, moore::RefType::get(unpackedType),
         builder.getStringAttr(var.name), initial);
     context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
                                          &var, varOp);
@@ -389,7 +408,9 @@ struct StmtVisitor {
       auto cond = context.convertRvalueExpression(*condition.expr);
       if (!cond)
         return failure();
-      cond = builder.createOrFold<moore::BoolCastOp>(loc, cond);
+      cond = context.convertToBool(cond);
+      if (!cond)
+        return failure();
       if (allConds)
         allConds = moore::AndOp::create(builder, loc, allConds, cond);
       else
@@ -604,7 +625,9 @@ struct StmtVisitor {
     auto cond = context.convertRvalueExpression(*stmt.stopExpr);
     if (!cond)
       return failure();
-    cond = builder.createOrFold<moore::BoolCastOp>(loc, cond);
+    cond = context.convertToBool(cond);
+    if (!cond)
+      return failure();
     cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
     cf::CondBranchOp::create(builder, loc, cond, &bodyBlock, &exitBlock);
 
@@ -648,6 +671,15 @@ struct StmtVisitor {
     if (!count)
       return failure();
 
+    // Verify the count is an integer type before proceeding.
+    auto countIntType = dyn_cast<moore::IntType>(count.getType());
+    if (!countIntType) {
+      mlir::emitError(count.getLoc())
+          << "repeat loop count must have integer type, but got "
+          << count.getType();
+      return failure();
+    }
+
     // Create the blocks for the loop condition, body, step, and exit.
     auto &exitBlock = createBlock();
     auto &stepBlock = createBlock();
@@ -662,7 +694,9 @@ struct StmtVisitor {
 
     // Generate the loop condition check.
     builder.setInsertionPointToEnd(&checkBlock);
-    auto cond = builder.createOrFold<moore::BoolCastOp>(loc, currentCount);
+    auto cond = context.convertToBool(currentCount);
+    if (!cond)
+      return failure();
     cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
     cf::CondBranchOp::create(builder, loc, cond, &bodyBlock, &exitBlock);
 
@@ -675,13 +709,6 @@ struct StmtVisitor {
 
     // Decrement the current count and branch back to the check block.
     builder.setInsertionPointToEnd(&stepBlock);
-    auto countIntType = dyn_cast<moore::IntType>(count.getType());
-    if (!countIntType) {
-      mlir::emitError(count.getLoc())
-          << "repeat loop count must have integer type, but got "
-          << count.getType();
-      return failure();
-    }
     auto one = moore::ConstantOp::create(builder, count.getLoc(), countIntType, 1);
     Value nextCount =
         moore::SubOp::create(builder, count.getLoc(), currentCount, one);
@@ -719,7 +746,9 @@ struct StmtVisitor {
     auto cond = context.convertRvalueExpression(condExpr);
     if (!cond)
       return failure();
-    cond = builder.createOrFold<moore::BoolCastOp>(loc, cond);
+    cond = context.convertToBool(cond);
+    if (!cond)
+      return failure();
     cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
     cf::CondBranchOp::create(builder, loc, cond, &bodyBlock, &exitBlock);
 
@@ -788,7 +817,9 @@ struct StmtVisitor {
     auto cond = context.convertRvalueExpression(stmt.cond);
     if (!cond)
       return failure();
-    cond = builder.createOrFold<moore::BoolCastOp>(loc, cond);
+    cond = context.convertToBool(cond);
+    if (!cond)
+      return failure();
     moore::WaitConditionOp::create(builder, loc, cond);
     // Execute the body statement if any
     return context.convertStatement(stmt.stmt);
@@ -1104,6 +1135,13 @@ struct StmtVisitor {
     // Read and invert the current value of the signal. Writing this inverted
     // value to the signal is our event signaling mechanism.
     Value inverted = moore::ReadOp::create(builder, loc, target);
+
+    // Verify the read value is an integer type before attempting bitwise NOT.
+    if (!isa<moore::IntType>(inverted.getType())) {
+      mlir::emitError(loc) << "event target must have integer type, but got "
+                           << inverted.getType();
+      return failure();
+    }
     inverted = moore::NotOp::create(builder, loc, inverted);
 
     if (stmt.isNonBlocking)

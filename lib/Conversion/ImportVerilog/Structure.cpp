@@ -1274,8 +1274,13 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
   moore::ClassDeclOp ownerDecl;
 
   if (auto *classTy = thisTy.as_if<slang::ast::ClassType>()) {
-    auto &ownerLowering = classes[classTy];
-    ownerDecl = ownerLowering->op;
+    auto it = classes.find(classTy);
+    if (it == classes.end() || !it->second) {
+      mlir::emitError(loc) << "class '" << classTy->name
+                           << "' has not been lowered yet";
+      return {};
+    }
+    ownerDecl = it->second->op;
   } else {
     mlir::emitError(loc) << "expected 'this' to be a class type, got "
                          << thisTy.toString();
@@ -1319,8 +1324,13 @@ getFunctionSignature(Context &context,
     if (arg->direction == ArgumentDirection::In) {
       inputTypes.push_back(type);
     } else {
-      inputTypes.push_back(
-          moore::RefType::get(cast<moore::UnpackedType>(type)));
+      auto unpackedType = dyn_cast<moore::UnpackedType>(type);
+      if (!unpackedType) {
+        mlir::emitError(context.convertLocation(arg->location))
+            << "argument type " << type << " is not an unpacked type";
+        return {};
+      }
+      inputTypes.push_back(moore::RefType::get(unpackedType));
     }
   }
 

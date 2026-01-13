@@ -197,7 +197,7 @@ struct TypeVisitor {
     if (failed(context.convertClassDeclaration(type)))
       return {};
     auto *lowering = context.declareClass(type);
-    if (!lowering) {
+    if (!lowering || !lowering->op) {
       mlir::emitError(loc) << "no lowering generated for class type `"
                            << type.toString() << "`";
       return {};
