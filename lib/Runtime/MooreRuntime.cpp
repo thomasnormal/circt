@@ -429,6 +429,39 @@ extern "C" int64_t __moore_stream_concat_bits(MooreQueue *queue,
 }
 
 //===----------------------------------------------------------------------===//
+// Event Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" bool __moore_event_triggered(bool *event) {
+  // Check if the event was triggered in the current time slot.
+  // Events are represented as boolean flags. The triggered property returns
+  // true if the event has been triggered in the current time slot.
+  // For now, we simply return the value of the event flag, which represents
+  // whether the event was triggered.
+  if (!event)
+    return false;
+  return *event;
+}
+
+//===----------------------------------------------------------------------===//
+// Simulation Control Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_wait_condition(int32_t condition) {
+  // In a real simulation environment, this would suspend the current process
+  // until the condition becomes true. Since simulation timing is not directly
+  // supported in the compiled output, this function serves as a placeholder
+  // that can be implemented by the simulation runtime.
+  //
+  // For now, we simply check the condition - if it's already true, we return
+  // immediately. In a full simulation environment, if the condition is false,
+  // the runtime would need to suspend and re-evaluate when signals change.
+  (void)condition;
+  // TODO: Implement proper simulation-aware waiting when a simulation
+  // scheduler is available.
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

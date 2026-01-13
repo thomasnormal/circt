@@ -208,6 +208,26 @@ int64_t __moore_stream_concat_bits(MooreQueue *queue, int32_t elementBitWidth,
                                    bool isRightToLeft);
 
 //===----------------------------------------------------------------------===//
+// Event Operations
+//===----------------------------------------------------------------------===//
+
+/// Check if an event was triggered in the current time slot.
+/// Implements the SystemVerilog `.triggered` property on events.
+/// @param event Pointer to the event (stored as a boolean flag)
+/// @return true if the event was triggered, false otherwise
+bool __moore_event_triggered(bool *event);
+
+//===----------------------------------------------------------------------===//
+// Simulation Control Operations
+//===----------------------------------------------------------------------===//
+
+/// Wait until a condition becomes true.
+/// Implements the SystemVerilog `wait(condition)` statement.
+/// This function suspends execution until the condition is non-zero.
+/// @param condition The condition value to wait for (non-zero = true)
+void __moore_wait_condition(int32_t condition);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

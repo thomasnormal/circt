@@ -138,8 +138,15 @@ struct StmtVisitor {
     if (!type)
       return failure();
 
+    auto intType = dyn_cast<moore::IntType>(type);
+    if (!intType) {
+      mlir::emitError(loc) << "foreach loop variable must have integer type, "
+                           << "but got " << type;
+      return failure();
+    }
+
     Value initial = moore::ConstantOp::create(
-        builder, loc, cast<moore::IntType>(type), loopDim.range->lower(),
+        builder, loc, intType, loopDim.range->lower(),
         /*isSigned=*/loopDim.range->lower() < 0);
 
     // Create loop varirable in this dimension
@@ -154,7 +161,7 @@ struct StmtVisitor {
 
     // When the loop variable is greater than the upper bound, goto exit
     auto upperBound = moore::ConstantOp::create(
-        builder, loc, cast<moore::IntType>(type), loopDim.range->upper(),
+        builder, loc, intType, loopDim.range->upper(),
         /*isSigned=*/loopDim.range->upper() < 0);
 
     auto var = moore::ReadOp::create(builder, loc, varOp);
@@ -191,8 +198,7 @@ struct StmtVisitor {
 
     // add one to loop variable
     var = moore::ReadOp::create(builder, loc, varOp);
-    auto one =
-        moore::ConstantOp::create(builder, loc, cast<moore::IntType>(type), 1);
+    auto one = moore::ConstantOp::create(builder, loc, intType, 1);
     auto postValue = moore::AddOp::create(builder, loc, var, one).getResult();
     moore::BlockingAssignOp::create(builder, loc, varOp, postValue);
     cf::BranchOp::create(builder, loc, &checkBlock);
@@ -669,8 +675,14 @@ struct StmtVisitor {
 
     // Decrement the current count and branch back to the check block.
     builder.setInsertionPointToEnd(&stepBlock);
-    auto one = moore::ConstantOp::create(
-        builder, count.getLoc(), cast<moore::IntType>(count.getType()), 1);
+    auto countIntType = dyn_cast<moore::IntType>(count.getType());
+    if (!countIntType) {
+      mlir::emitError(count.getLoc())
+          << "repeat loop count must have integer type, but got "
+          << count.getType();
+      return failure();
+    }
+    auto one = moore::ConstantOp::create(builder, count.getLoc(), countIntType, 1);
     Value nextCount =
         moore::SubOp::create(builder, count.getLoc(), currentCount, one);
     cf::BranchOp::create(builder, loc, &checkBlock, nextCount);

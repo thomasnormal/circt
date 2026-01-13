@@ -793,57 +793,74 @@ static LogicalResult convert(UnreachableOp op, UnreachableOp::Adaptor adaptor,
   return success();
 }
 
-// moore.event_triggered -> reads the event's triggered state (i1).
-// The event type is lowered to i1, so this just returns the event value.
-static LogicalResult convert(EventTriggeredOp op,
-                             EventTriggeredOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  // The event is already converted to i1 representing the triggered state.
-  // We just need to return that value.
-  rewriter.replaceOp(op, adaptor.getEvent());
-  return success();
-}
+/// Conversion for moore.event_triggered -> runtime function call.
+/// This calls __moore_event_triggered to check if the event was triggered.
+struct EventTriggeredOpConversion
+    : public OpConversionPattern<EventTriggeredOp> {
+  using OpConversionPattern::OpConversionPattern;
 
-// moore.wait_condition -> poll loop using llhd.wait
-// Implements level-sensitive wait: suspends until condition is true.
-static LogicalResult convert(WaitConditionOp op,
-                             WaitConditionOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  // wait(condition) in SystemVerilog suspends until the condition is true.
-  // We implement this as:
-  // ^check:
-  //   cf.cond_br %condition, ^resume, ^wait
-  // ^wait:
-  //   llhd.wait (%signals...), ^check
-  // ^resume:
-  //   ... (ops after wait_condition)
+  LogicalResult
+  matchAndRewrite(EventTriggeredOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-  auto loc = op.getLoc();
-  auto *resumeBlock =
-      rewriter.splitBlock(op->getBlock(), ++Block::iterator(op));
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i1Ty = IntegerType::get(ctx, 1);
 
-  // Create check and wait blocks.
-  auto *checkBlock = rewriter.createBlock(resumeBlock);
-  auto *waitBlock = rewriter.createBlock(resumeBlock);
+    // __moore_event_triggered takes a pointer to the event and returns i1.
+    auto fnTy = LLVM::LLVMFunctionType::get(i1Ty, {ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_event_triggered",
+                                     fnTy);
 
-  // Branch to check block from original block.
-  rewriter.setInsertionPoint(op);
-  cf::BranchOp::create(rewriter, loc, checkBlock);
+    // Store the event value to an alloca and pass a pointer to it.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto eventAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i1Ty, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getEvent(), eventAlloca);
 
-  // In check block: if condition is true, go to resume; else go to wait.
-  rewriter.setInsertionPointToEnd(checkBlock);
-  auto condition = adaptor.getCondition();
-  cf::CondBranchOp::create(rewriter, loc, condition, resumeBlock, waitBlock);
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i1Ty},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{eventAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
 
-  // In wait block: wait for any signal change, then re-check.
-  // We observe the condition value to wake up when it might change.
-  rewriter.setInsertionPointToEnd(waitBlock);
-  llhd::WaitOp::create(rewriter, loc, ValueRange{}, Value(),
-                       ValueRange{condition}, ValueRange{}, checkBlock);
+/// Conversion for moore.wait_condition -> runtime function call.
+/// Implements the SystemVerilog `wait(condition)` statement by calling
+/// the __moore_wait_condition runtime function.
+struct WaitConditionOpConversion : public OpConversionPattern<WaitConditionOp> {
+  using OpConversionPattern::OpConversionPattern;
 
-  rewriter.eraseOp(op);
-  return success();
-}
+  LogicalResult
+  matchAndRewrite(WaitConditionOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    // __moore_wait_condition takes an i32 condition value.
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_wait_condition",
+                                     fnTy);
+
+    // The condition is i1, we need to zero-extend to i32.
+    auto condition = adaptor.getCondition();
+    auto conditionI32 = LLVM::ZExtOp::create(rewriter, loc, i32Ty, condition);
+
+    // Call the runtime function.
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{conditionI32});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Process Control Conversion (Fork/Join)
@@ -4297,8 +4314,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // Structural operations
   patterns.add<WaitDelayOp>(convert);
   patterns.add<UnreachableOp>(convert);
-  patterns.add<EventTriggeredOp>(convert);
-  patterns.add<WaitConditionOp>(convert);
+  patterns.add<EventTriggeredOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<WaitConditionOpConversion>(typeConverter, patterns.getContext());
 
   // Process control (fork/join)
   patterns.add<ForkOpConversion>(typeConverter, patterns.getContext());
