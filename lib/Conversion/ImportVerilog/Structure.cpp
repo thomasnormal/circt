@@ -288,6 +288,31 @@ struct ModuleVisitor : public BaseVisitor {
     using slang::ast::MultiPortSymbol;
     using slang::ast::PortSymbol;
 
+    // Check if this is an interface instance
+    auto kind = instNode.body.getDefinition().definitionKind;
+    if (kind == slang::ast::DefinitionKind::Interface) {
+      // Handle interface instantiation
+      auto *ifaceLowering = context.convertInterfaceHeader(&instNode.body);
+      if (!ifaceLowering)
+        return failure();
+
+      // Create a virtual interface type referencing this interface
+      auto ifaceRef =
+          mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                       ifaceLowering->op.getSymName());
+      auto vifType = moore::VirtualInterfaceType::get(
+          builder.getContext(), ifaceRef);
+      auto vifRefType = moore::RefType::get(vifType);
+
+      // Create the interface instance op
+      moore::InterfaceInstanceOp::create(
+          builder, loc, vifRefType,
+          builder.getStringAttr(Twine(blockNamePrefix) + instNode.name),
+          ifaceRef);
+
+      return success();
+    }
+
     auto *moduleLowering = context.convertModuleHeader(&instNode.body);
     if (!moduleLowering)
       return failure();
@@ -529,8 +554,20 @@ struct ModuleVisitor : public BaseVisitor {
     if (!lhs)
       return failure();
 
-    auto rhs = context.convertRvalueExpression(
-        expr.right(), cast<moore::RefType>(lhs.getType()).getNestedType());
+    // Get the nested type from the lvalue. This handles both RefType (for
+    // regular variables) and ClassHandleType (for class handles).
+    Type lhsNestedType;
+    if (auto refType = dyn_cast<moore::RefType>(lhs.getType()))
+      lhsNestedType = refType.getNestedType();
+    else if (isa<moore::ClassHandleType>(lhs.getType()))
+      lhsNestedType = lhs.getType();
+    else {
+      mlir::emitError(loc) << "unsupported lvalue type in continuous assign: "
+                           << lhs.getType();
+      return failure();
+    }
+
+    auto rhs = context.convertRvalueExpression(expr.right(), lhsNestedType);
     if (!rhs)
       return failure();
 
@@ -1072,6 +1109,10 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   auto ifaceOp = moore::InterfaceDeclOp::create(
       builder, loc, iface->getDefinition().name);
   orderedRootOps.insert(it, {iface->location, ifaceOp});
+
+  // Create the body block for the interface
+  ifaceOp.getBody().emplaceBlock();
+
   lowering.op = ifaceOp;
 
   // Add the interface to the symbol table

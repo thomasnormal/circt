@@ -278,9 +278,13 @@ struct StmtVisitor {
           if (!lhs)
             return failure();
 
+          auto refType = dyn_cast<moore::RefType>(lhs.getType());
+          if (!refType) {
+            mlir::emitError(loc) << "expected reference type for $sformat destination";
+            return failure();
+          }
           auto convertedValue = context.materializeConversion(
-              cast<moore::RefType>(lhs.getType()).getNestedType(), strValue,
-              false, loc);
+              refType.getNestedType(), strValue, false, loc);
           moore::BlockingAssignOp::create(builder, loc, lhs, convertedValue);
           return success();
         } else {
@@ -316,9 +320,13 @@ struct StmtVisitor {
           if (!lhs)
             return failure();
 
+          auto refType = dyn_cast<moore::RefType>(lhs.getType());
+          if (!refType) {
+            mlir::emitError(loc) << "expected reference type for $swrite destination";
+            return failure();
+          }
           auto convertedValue = context.materializeConversion(
-              cast<moore::RefType>(lhs.getType()).getNestedType(), strValue,
-              false, loc);
+              refType.getNestedType(), strValue, false, loc);
           moore::BlockingAssignOp::create(builder, loc, lhs, convertedValue);
           return success();
         } else {
