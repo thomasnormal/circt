@@ -2035,10 +2035,13 @@ private:
 
 ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
   // Check if there already is a declaration for this class.
-  auto &lowering = classes[&cls];
-  bool isNewDecl = !lowering;
+  // IMPORTANT: Do NOT hold a reference to classes[&cls] across operations that
+  // may modify the map (like recursive calls to convertClassDeclaration),
+  // because DenseMap can rehash and invalidate references.
+  bool isNewDecl = !classes.contains(&cls);
   if (isNewDecl) {
-    lowering = std::make_unique<ClassLowering>();
+    // Create the ClassLowering entry first.
+    classes[&cls] = std::make_unique<ClassLowering>();
     auto loc = convertLocation(cls.location);
 
     // Pick an insertion point for this function according to the source file
@@ -2062,7 +2065,8 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
     SymbolTable::setSymbolVisibility(classDeclOp,
                                      SymbolTable::Visibility::Public);
     orderedRootOps.insert(it, {cls.location, classDeclOp});
-    lowering->op = classDeclOp;
+    // Re-fetch from map after potential modifications.
+    classes[&cls]->op = classDeclOp;
     // insert() may rename the symbol if there's a conflict
     mlir::StringAttr actualSymName = symbolTable.insert(classDeclOp);
 
@@ -2093,6 +2097,15 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
         (void)convertClassDeclaration(*baseClass);
       }
     }
+  }
+
+  // Re-fetch the lowering pointer after potential map modifications from
+  // recursive base class processing.
+  auto &lowering = classes[&cls];
+  if (!lowering || !lowering->op) {
+    // This should not happen - the class should have been fully initialized
+    // above. Return null to signal an error.
+    return nullptr;
   }
 
   // Always update the base and implements attributes.
