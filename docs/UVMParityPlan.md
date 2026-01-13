@@ -10,7 +10,7 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 **Overall Progress:** UVM core library parses without crashes. Mini-UVM testbenches work.
 Full UVM testbenches have a silent conversion failure being investigated.
 
-### Session Progress (12 commits)
+### Session Progress (15 commits)
 - ✅ Fixed `cast<TypedValue<IntType>>` crash in class hierarchy
 - ✅ Added `EventTriggerOp` for `->event` syntax
 - ✅ Added `QueueConcatOp` for queue concatenation
@@ -25,11 +25,16 @@ Full UVM testbenches have a silent conversion failure being investigated.
 - ✅ Added `wait fork` statement support
 - ✅ Added `%m` format specifier (hierarchical module path)
 - ✅ Added `$cast` dynamic casting with RTTI
+- ✅ Added `FormatClassOp` for class handle formatting
+- ✅ Fixed static member redefinition for parameterized classes
+- ✅ Added semaphore/mailbox `new()` construction support
+- ✅ Added `disable fork` statement support
+- ✅ Fixed `$swrite` with class handles (no format specifier)
 
 ### Current Blockers
-1. **Static member redefinition in parameterized classes** - When `this_type` typedef
-   creates specializations, static members get registered multiple times
-2. **Silent conversion failure** - Full UVM conversion fails without error message
+1. **Array locator methods with predicate** - `find`, `find_first_index` with `with` clause
+   (e.g., `arr.find(item) with (item.x == 1)`) - used in uvm_sequencer_base.svh
+2. **Silent conversion failure** - Full UVM conversion may fail without error message
 3. **Task capture of module variables** - Architectural issue with func.func/moore.module
 
 ## Track 1: ImportVerilog (Parsing & AST Conversion)
@@ -50,16 +55,18 @@ Full UVM testbenches have a silent conversion failure being investigated.
 - [x] `$typename` system call
 - [x] `$urandom`, `$urandom_range`
 - [x] Constraint block parsing (rand, randc, constraint)
+- [x] `disable fork` statement support
+- [x] Semaphore/mailbox `new()` construction syntax
 
 ### In Progress
-- [ ] Fix static member redefinition bug
+- [ ] Array locator methods with predicates (find, find_first, etc.)
 - [ ] Add diagnostic output for conversion failures
 - [ ] Covergroups and coverage
 
 ### TODO - High Priority (UVM Blockers)
 - [x] `wait fork` statement support (blocks UVM objection mechanism)
 - [x] `%m` format specifier (hierarchical module path)
-- [ ] Class object to string conversion in $swrite/$sformat
+- [x] Class object to string conversion in $swrite/$sformat
 - [x] `$cast` dynamic casting
 - [ ] Full constraint solving (requires external solver)
 
@@ -200,7 +207,7 @@ Full UVM testbenches have a silent conversion failure being investigated.
 | rand/constraint parse | ✅ | ✅ | - | - |
 | wait fork | ✅ | ✅ | - | - |
 | %m format | ✅ | ✅ | - | - |
-| Class $swrite | ✅ | ❌ | High | P1 |
+| Class $swrite | ✅ | ✅ | - | - |
 | Constraint solving | ✅ | ❌ | High | P1 |
 | Coverage | ✅ | ❌ | High | P1 |
 | $cast | ✅ | ✅ | - | - |

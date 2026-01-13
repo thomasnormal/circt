@@ -386,6 +386,18 @@ struct FormatStringParser {
 
   /// Emit an expression argument with the appropriate default formatting.
   LogicalResult emitDefault(const slang::ast::Expression &expr) {
+    // First try converting to get the value's type
+    auto value = context.convertRvalueExpression(expr);
+    if (!value)
+      return failure();
+
+    // Class handles get formatted using FormatClassOp (produces placeholder)
+    if (isa<moore::ClassHandleType>(value.getType())) {
+      fragments.push_back(moore::FormatClassOp::create(builder, loc, value));
+      return success();
+    }
+
+    // For other types, use default integer formatting
     FormatOptions options;
     return emitInteger(expr, options, defaultFormat);
   }
