@@ -743,6 +743,43 @@ struct RvalueExprVisitor : public ExprVisitor {
 
   // Handle blocking and non-blocking assignments.
   Value visit(const slang::ast::AssignmentExpression &expr) {
+    // Handle string character assignment: str[i] = c
+    // String indexing cannot return a reference type, so we handle this
+    // specially by generating a StringPutCOp.
+    if (auto *elemSelect =
+            expr.left().as_if<slang::ast::ElementSelectExpression>()) {
+      auto valueType = context.convertType(*elemSelect->value().type);
+      if (valueType && isa<moore::StringType>(valueType)) {
+        // Get the string reference (lvalue)
+        auto strRef = context.convertLvalueExpression(elemSelect->value());
+        if (!strRef)
+          return {};
+        // Get the index (rvalue)
+        auto index = context.convertRvalueExpression(elemSelect->selector());
+        if (!index)
+          return {};
+        // Get the character value (rvalue)
+        auto charType = moore::IntType::getInt(context.getContext(), 8);
+        auto rhs = context.convertRvalueExpression(expr.right(), charType);
+        if (!rhs)
+          return {};
+        // Handle timing control for blocking assignments
+        if (!expr.isNonBlocking()) {
+          if (expr.timingControl)
+            if (failed(context.convertTimingControl(*expr.timingControl)))
+              return {};
+        } else {
+          // Non-blocking string character assignment is not supported
+          mlir::emitError(loc)
+              << "non-blocking string character assignment not supported";
+          return {};
+        }
+        // Generate the putc operation
+        moore::StringPutCOp::create(builder, loc, strRef, index, rhs);
+        return rhs;
+      }
+    }
+
     auto lhs = context.convertLvalueExpression(expr.left());
     if (!lhs)
       return {};

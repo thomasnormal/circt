@@ -2939,6 +2939,56 @@ struct StringGetCOpConversion : public OpConversionPattern<StringGetCOp> {
   }
 };
 
+// moore.string.putc -> call to __moore_string_putc runtime function
+// The runtime function takes a string by-pointer (for reading), index, character,
+// and returns a new string with the modified character.
+struct StringPutCOpConversion : public OpConversionPattern<StringPutCOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringPutCOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i8Ty = IntegerType::get(ctx, 8);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    // __moore_string_putc(str_ptr, index, char) -> new_string
+    // The function returns a new string with the character at index replaced.
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i32Ty, i8Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_putc", fnTy);
+
+    // Read the current string value from the ref.
+    Value strValue = llhd::ProbeOp::create(rewriter, loc, adaptor.getStr());
+
+    // Allocate space on the stack to pass the string by pointer to the runtime.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, strValue, strAlloca);
+
+    // Call the runtime function.
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
+        ValueRange{strAlloca, adaptor.getIndex(), adaptor.getCharacter()});
+
+    // Drive the new string back to the ref.
+    auto delay = llhd::ConstantTimeOp::create(
+        rewriter, loc, llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
+    llhd::DriveOp::create(rewriter, loc, adaptor.getStr(), call.getResult(),
+                          delay, Value{});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // moore.string.substr -> call to __moore_string_substr runtime function
 struct StringSubstrOpConversion : public OpConversionPattern<StringSubstrOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -3751,6 +3801,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringToUpperOpConversion,
     StringToLowerOpConversion,
     StringGetCOpConversion,
+    StringPutCOpConversion,
     StringSubstrOpConversion,
     StringItoaOpConversion,
     StringConcatOpConversion,
