@@ -287,9 +287,12 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
   auto conversionTimer = ts.nest("Verilog to dialect mapping");
   Context context(options, *compilation, module, driver.sourceManager);
   if (failed(context.convertCompilation())) {
-    // Conversion failed but may not have emitted a diagnostic - add one now
-    llvm::errs() << "error: failed to convert Verilog to MLIR\n";
-    llvm::errs() << "hint: use --debug to see detailed conversion logs\n";
+    // Conversion failed. If no error diagnostic was emitted, emit one now.
+    // Note: This is a fallback - ideally the specific conversion step that
+    // failed should have emitted a more specific diagnostic.
+    mlir::emitError(UnknownLoc::get(mlirContext))
+        << "failed to convert Verilog to MLIR; "
+           "use --debug-only=import-verilog to see detailed conversion logs";
     return failure();
   }
   conversionTimer.stop();
@@ -299,9 +302,9 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
   if (failed(verify(module))) {
     // The verifier should have emitted diagnostics, but add a summary message
     // in case it didn't for some reason.
-    llvm::errs() << "error: generated MLIR module failed to verify; "
-                    "this is likely a bug in circt-verilog\n";
-    llvm::errs() << "hint: use --debug to see verification failure details\n";
+    mlir::emitError(UnknownLoc::get(mlirContext))
+        << "generated MLIR module failed to verify; "
+           "this is likely a bug in circt-verilog";
     return failure();
   }
   return success();
