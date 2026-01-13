@@ -134,9 +134,69 @@ func.func @test_stream_concat_int_queue_rtl() -> !moore.i32 {
   return %result : !moore.i32
 }
 
+//===----------------------------------------------------------------------===//
+// Queue Push/Pop Operations
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @test_queue_push_back
+// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
+// CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: llvm.alloca {{.*}} x i32
+// CHECK: llvm.store {{.*}} : i32, !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
+// CHECK: llvm.call @__moore_queue_push_back({{.*}}, {{.*}}, [[SIZE]]) : (!llvm.ptr, !llvm.ptr, i64) -> ()
+func.func @test_queue_push_back() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %elem = moore.constant 42 : i32
+  moore.queue.push_back %queue_ref, %elem : !moore.ref<queue<!moore.i32, 0>>, !moore.i32
+  return
+}
+
+// CHECK-LABEL: func @test_queue_push_front
+// CHECK: llvm.call @__moore_queue_push_front({{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, i64) -> ()
+func.func @test_queue_push_front() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %elem = moore.constant 42 : i32
+  moore.queue.push_front %queue_ref, %elem : !moore.ref<queue<!moore.i32, 0>>, !moore.i32
+  return
+}
+
+// CHECK-LABEL: func @test_queue_pop_back
+// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
+// CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
+// CHECK: [[RESULT:%.+]] = llvm.call @__moore_queue_pop_back({{.*}}, [[SIZE]]) : (!llvm.ptr, i64) -> i64
+// CHECK: arith.trunci [[RESULT]] : i64 to i32
+func.func @test_queue_pop_back() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %elem = moore.queue.pop_back %queue_ref : !moore.ref<queue<!moore.i32, 0>> -> !moore.i32
+  return %elem : !moore.i32
+}
+
+// CHECK-LABEL: func @test_queue_pop_front
+// CHECK: [[RESULT:%.+]] = llvm.call @__moore_queue_pop_front({{.*}}, {{.*}}) : (!llvm.ptr, i64) -> i64
+// CHECK: arith.trunci [[RESULT]] : i64 to i32
+func.func @test_queue_pop_front() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %elem = moore.queue.pop_front %queue_ref : !moore.ref<queue<!moore.i32, 0>> -> !moore.i32
+  return %elem : !moore.i32
+}
+
 // CHECK-DAG: llvm.func @__moore_queue_max(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_min(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_unique(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_queue_push_back(!llvm.ptr, !llvm.ptr, i64)
+// CHECK-DAG: llvm.func @__moore_queue_push_front(!llvm.ptr, !llvm.ptr, i64)
+// CHECK-DAG: llvm.func @__moore_queue_pop_back(!llvm.ptr, i64) -> i64
+// CHECK-DAG: llvm.func @__moore_queue_pop_front(!llvm.ptr, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_stream_concat_strings(!llvm.ptr, i1) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_stream_concat_bits(!llvm.ptr, i32, i1) -> i64
 // CHECK-DAG: llvm.func @__moore_dyn_array_new(i32) -> !llvm.struct<(ptr, i64)>

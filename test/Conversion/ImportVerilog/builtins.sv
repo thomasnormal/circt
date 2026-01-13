@@ -441,3 +441,62 @@ function void StringBuiltins(string string_in, int int_in);
   // CHECK: moore.string.putc [[STRVAR]]{{\[}}[[INT]]], [[CHARVAL]] : <string>
   result[int_in] = 8'd65;
 endfunction
+
+// IEEE 1800-2017 Section 6.19.5.5 "Enum .name() method"
+typedef enum logic [2:0] {
+  ENUM_RED = 3'd0,
+  ENUM_GREEN = 3'd1,
+  ENUM_BLUE = 3'd2
+} color_enum_t;
+
+// CHECK-LABEL: func.func private @EnumNameBuiltin(
+// CHECK-SAME: [[COLOR:%.+]]: !moore.l3
+function void EnumNameBuiltin(color_enum_t color);
+  // CHECK: moore.constant_string "" : i8
+  // CHECK: moore.int_to_string
+  // CHECK: moore.constant 2 : l3
+  // CHECK: moore.eq [[COLOR]], %{{.+}} : l3
+  // CHECK: moore.conditional %{{.+}} : l1 -> string {
+  // CHECK:   moore.constant_string "ENUM_BLUE" : i72
+  // CHECK:   moore.int_to_string
+  // CHECK:   moore.yield %{{.+}} : string
+  // CHECK: } {
+  // CHECK:   moore.yield %{{.+}} : string
+  // CHECK: }
+  // CHECK: call @dummyD
+  dummyD(color.name());
+endfunction
+
+// IEEE 1800-2017 Section 20.6.1 "$typename"
+// CHECK-LABEL: func.func private @TypenameBuiltin(
+// CHECK-SAME: [[INT_ARG:%.+]]: !moore.i32
+// CHECK-SAME: [[REAL_ARG:%.+]]: !moore.f64
+// CHECK-SAME: [[STR_ARG:%.+]]: !moore.string
+// CHECK-SAME: [[BYTE_ARG:%.+]]: !moore.i8
+// CHECK-SAME: [[LOGIC_ARG:%.+]]: !moore.l8
+function void TypenameBuiltin(int int_arg, real real_arg, string str_arg, byte byte_arg, logic [7:0] logic_arg);
+  // CHECK: [[INT_TYPE:%.+]] = moore.constant_string "\22int\22"
+  // CHECK: [[INT_STR:%.+]] = moore.int_to_string [[INT_TYPE]]
+  // CHECK: call @dummyD([[INT_STR]]) : (!moore.string) -> ()
+  dummyD($typename(int_arg));
+
+  // CHECK: [[REAL_TYPE:%.+]] = moore.constant_string "\22real\22"
+  // CHECK: [[REAL_STR:%.+]] = moore.int_to_string [[REAL_TYPE]]
+  // CHECK: call @dummyD([[REAL_STR]]) : (!moore.string) -> ()
+  dummyD($typename(real_arg));
+
+  // CHECK: [[STR_TYPE:%.+]] = moore.constant_string "\22string\22"
+  // CHECK: [[STR_STR:%.+]] = moore.int_to_string [[STR_TYPE]]
+  // CHECK: call @dummyD([[STR_STR]]) : (!moore.string) -> ()
+  dummyD($typename(str_arg));
+
+  // CHECK: [[BYTE_TYPE:%.+]] = moore.constant_string "\22byte\22"
+  // CHECK: [[BYTE_STR:%.+]] = moore.int_to_string [[BYTE_TYPE]]
+  // CHECK: call @dummyD([[BYTE_STR]]) : (!moore.string) -> ()
+  dummyD($typename(byte_arg));
+
+  // CHECK: [[LOGIC_TYPE:%.+]] = moore.constant_string "\22logic[7:0]\22"
+  // CHECK: [[LOGIC_STR:%.+]] = moore.int_to_string [[LOGIC_TYPE]]
+  // CHECK: call @dummyD([[LOGIC_STR]]) : (!moore.string) -> ()
+  dummyD($typename(logic_arg));
+endfunction
