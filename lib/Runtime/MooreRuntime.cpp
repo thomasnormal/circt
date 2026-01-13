@@ -711,6 +711,363 @@ extern "C" bool __moore_dyn_cast_check(int32_t srcTypeId, int32_t targetTypeId,
 }
 
 //===----------------------------------------------------------------------===//
+// Array Locator Methods
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Helper to read an element value as a 64-bit integer.
+/// Handles elements up to 8 bytes (64 bits).
+int64_t readElementValue(void *element, int64_t elementSize) {
+  int64_t value = 0;
+  if (elementSize > 0 && elementSize <= 8) {
+    std::memcpy(&value, element,
+                static_cast<size_t>(elementSize));
+  }
+  return value;
+}
+
+/// Helper to read an element value as an unsigned 64-bit integer.
+uint64_t readElementValueUnsigned(void *element, int64_t elementSize) {
+  uint64_t value = 0;
+  if (elementSize > 0 && elementSize <= 8) {
+    std::memcpy(&value, element,
+                static_cast<size_t>(elementSize));
+  }
+  return value;
+}
+
+/// Helper to add an element to a result queue.
+/// Returns the new queue with the element appended.
+MooreQueue appendToResult(MooreQueue result, void *element,
+                          int64_t elementSize) {
+  int64_t newLen = result.len + 1;
+  void *newData = std::realloc(result.data, newLen * elementSize);
+  if (!newData) {
+    // Allocation failed, return unchanged
+    return result;
+  }
+  std::memcpy(static_cast<char *>(newData) + result.len * elementSize,
+              element, elementSize);
+  result.data = newData;
+  result.len = newLen;
+  return result;
+}
+
+/// Helper to add an index to a result queue (indices are stored as int64_t).
+MooreQueue appendIndexToResult(MooreQueue result, int64_t index) {
+  int64_t newLen = result.len + 1;
+  void *newData = std::realloc(result.data, newLen * sizeof(int64_t));
+  if (!newData) {
+    return result;
+  }
+  static_cast<int64_t *>(newData)[result.len] = index;
+  result.data = newData;
+  result.len = newLen;
+  return result;
+}
+
+} // anonymous namespace
+
+extern "C" MooreQueue __moore_array_locator(MooreQueue *array,
+                                            int64_t elementSize,
+                                            MooreLocatorPredicate predicate,
+                                            void *userData, int32_t mode,
+                                            bool returnIndices) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      !predicate) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Mode: 0=all, 1=first, 2=last
+  if (mode == 2) {
+    // Last: iterate backwards
+    for (int64_t i = numElements - 1; i >= 0; --i) {
+      void *element = data + i * elementSize;
+      if (predicate(element, userData)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        // For "last", we only want one result
+        break;
+      }
+    }
+  } else if (mode == 1) {
+    // First: iterate forwards, stop at first match
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (predicate(element, userData)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else {
+    // All: iterate forwards, collect all matches
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (predicate(element, userData)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+extern "C" MooreQueue __moore_array_find_eq(MooreQueue *array,
+                                            int64_t elementSize, void *value,
+                                            int32_t mode, bool returnIndices) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      !value) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Mode: 0=all, 1=first, 2=last
+  if (mode == 2) {
+    // Last: iterate backwards
+    for (int64_t i = numElements - 1; i >= 0; --i) {
+      void *element = data + i * elementSize;
+      if (std::memcmp(element, value, elementSize) == 0) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else if (mode == 1) {
+    // First: iterate forwards, stop at first match
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (std::memcmp(element, value, elementSize) == 0) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else {
+    // All: iterate forwards, collect all matches
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (std::memcmp(element, value, elementSize) == 0) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+extern "C" MooreQueue __moore_array_min(MooreQueue *array, int64_t elementSize,
+                                        bool isSigned) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Find the minimum value
+  int64_t minIndex = 0;
+  if (isSigned) {
+    int64_t minValue = readElementValue(data, elementSize);
+    // Sign-extend if needed
+    if (elementSize < 8) {
+      int shift = (8 - elementSize) * 8;
+      minValue = (minValue << shift) >> shift;
+    }
+    for (int64_t i = 1; i < numElements; ++i) {
+      int64_t value = readElementValue(data + i * elementSize, elementSize);
+      if (elementSize < 8) {
+        int shift = (8 - elementSize) * 8;
+        value = (value << shift) >> shift;
+      }
+      if (value < minValue) {
+        minValue = value;
+        minIndex = i;
+      }
+    }
+  } else {
+    uint64_t minValue = readElementValueUnsigned(data, elementSize);
+    for (int64_t i = 1; i < numElements; ++i) {
+      uint64_t value =
+          readElementValueUnsigned(data + i * elementSize, elementSize);
+      if (value < minValue) {
+        minValue = value;
+        minIndex = i;
+      }
+    }
+  }
+
+  // Return the minimum element
+  result = appendToResult(result, data + minIndex * elementSize, elementSize);
+  return result;
+}
+
+extern "C" MooreQueue __moore_array_max(MooreQueue *array, int64_t elementSize,
+                                        bool isSigned) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Find the maximum value
+  int64_t maxIndex = 0;
+  if (isSigned) {
+    int64_t maxValue = readElementValue(data, elementSize);
+    // Sign-extend if needed
+    if (elementSize < 8) {
+      int shift = (8 - elementSize) * 8;
+      maxValue = (maxValue << shift) >> shift;
+    }
+    for (int64_t i = 1; i < numElements; ++i) {
+      int64_t value = readElementValue(data + i * elementSize, elementSize);
+      if (elementSize < 8) {
+        int shift = (8 - elementSize) * 8;
+        value = (value << shift) >> shift;
+      }
+      if (value > maxValue) {
+        maxValue = value;
+        maxIndex = i;
+      }
+    }
+  } else {
+    uint64_t maxValue = readElementValueUnsigned(data, elementSize);
+    for (int64_t i = 1; i < numElements; ++i) {
+      uint64_t value =
+          readElementValueUnsigned(data + i * elementSize, elementSize);
+      if (value > maxValue) {
+        maxValue = value;
+        maxIndex = i;
+      }
+    }
+  }
+
+  // Return the maximum element
+  result = appendToResult(result, data + maxIndex * elementSize, elementSize);
+  return result;
+}
+
+extern "C" MooreQueue __moore_array_unique(MooreQueue *array,
+                                           int64_t elementSize) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // For each element, check if it's already in the result
+  for (int64_t i = 0; i < numElements; ++i) {
+    void *element = data + i * elementSize;
+    bool found = false;
+
+    // Check if this element is already in the result
+    auto *resultData = static_cast<char *>(result.data);
+    for (int64_t j = 0; j < result.len; ++j) {
+      if (std::memcmp(resultData + j * elementSize, element, elementSize) ==
+          0) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      result = appendToResult(result, element, elementSize);
+    }
+  }
+
+  return result;
+}
+
+extern "C" MooreQueue __moore_array_unique_index(MooreQueue *array,
+                                                 int64_t elementSize) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Track which unique values we've seen (using a simple list approach)
+  // For better performance with large arrays, a hash set would be preferred
+  MooreQueue seenElements = {nullptr, 0};
+
+  for (int64_t i = 0; i < numElements; ++i) {
+    void *element = data + i * elementSize;
+    bool found = false;
+
+    // Check if this element value has been seen before
+    auto *seenData = static_cast<char *>(seenElements.data);
+    for (int64_t j = 0; j < seenElements.len; ++j) {
+      if (std::memcmp(seenData + j * elementSize, element, elementSize) == 0) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      // Add the index to result and the element to seen list
+      result = appendIndexToResult(result, i);
+      seenElements = appendToResult(seenElements, element, elementSize);
+    }
+  }
+
+  // Free the temporary seen elements storage
+  if (seenElements.data) {
+    std::free(seenElements.data);
+  }
+
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

@@ -473,4 +473,333 @@ TEST(MooreRuntimeRTTITest, DynCastCheckSiblingTypes) {
   EXPECT_FALSE(__moore_dyn_cast_check(2, 3, 1)); // A(2) to B(3) - fail
 }
 
+//===----------------------------------------------------------------------===//
+// Array Locator Method Tests
+//===----------------------------------------------------------------------===//
+
+// Predicate that returns true for values greater than a threshold
+static bool greaterThanPredicate(void *element, void *userData) {
+  int32_t value = *static_cast<int32_t *>(element);
+  int32_t threshold = *static_cast<int32_t *>(userData);
+  return value > threshold;
+}
+
+// Predicate that returns true for even values
+static bool isEvenPredicate(void *element, void * /*userData*/) {
+  int32_t value = *static_cast<int32_t *>(element);
+  return (value % 2) == 0;
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindAllWithPredicate) {
+  int32_t data[] = {1, 5, 3, 8, 2, 9, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t threshold = 4;
+  MooreQueue result = __moore_array_locator(&queue, sizeof(int32_t),
+                                            greaterThanPredicate, &threshold,
+                                            0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // 5, 8, 9 are > 4
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 5);
+  EXPECT_EQ(values[1], 8);
+  EXPECT_EQ(values[2], 9);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFirstWithPredicate) {
+  int32_t data[] = {1, 5, 3, 8, 2, 9, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t threshold = 4;
+  MooreQueue result = __moore_array_locator(&queue, sizeof(int32_t),
+                                            greaterThanPredicate, &threshold,
+                                            1, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 5); // First value > 4
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindLastWithPredicate) {
+  int32_t data[] = {1, 5, 3, 8, 2, 9, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t threshold = 4;
+  MooreQueue result = __moore_array_locator(&queue, sizeof(int32_t),
+                                            greaterThanPredicate, &threshold,
+                                            2, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 9); // Last value > 4
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindIndices) {
+  int32_t data[] = {2, 5, 4, 8, 1, 6};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_locator(&queue, sizeof(int32_t),
+                                            isEvenPredicate, nullptr,
+                                            0, true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 4); // indices 0, 2, 3, 5 are even
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 0);
+  EXPECT_EQ(indices[1], 2);
+  EXPECT_EQ(indices[2], 3);
+  EXPECT_EQ(indices[3], 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindFirstIndex) {
+  int32_t data[] = {1, 3, 4, 8, 5, 6};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_locator(&queue, sizeof(int32_t),
+                                            isEvenPredicate, nullptr,
+                                            1, true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 2); // First even at index 2
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindLastIndex) {
+  int32_t data[] = {2, 3, 4, 8, 5, 6};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_locator(&queue, sizeof(int32_t),
+                                            isEvenPredicate, nullptr,
+                                            2, true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 5); // Last even at index 5
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindEqAll) {
+  int32_t data[] = {1, 5, 3, 5, 2, 5, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 5;
+  MooreQueue result = __moore_array_find_eq(&queue, sizeof(int32_t),
+                                            &value, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // Three 5s
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 5);
+  EXPECT_EQ(values[1], 5);
+  EXPECT_EQ(values[2], 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindEqFirst) {
+  int32_t data[] = {1, 5, 3, 5, 2, 5, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 5;
+  MooreQueue result = __moore_array_find_eq(&queue, sizeof(int32_t),
+                                            &value, 1, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindEqLast) {
+  int32_t data[] = {1, 5, 3, 5, 2, 5, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 5;
+  MooreQueue result = __moore_array_find_eq(&queue, sizeof(int32_t),
+                                            &value, 2, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindEqIndices) {
+  int32_t data[] = {1, 5, 3, 5, 2, 5, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 5;
+  MooreQueue result = __moore_array_find_eq(&queue, sizeof(int32_t),
+                                            &value, 0, true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // Indices 1, 3, 5
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 1);
+  EXPECT_EQ(indices[1], 3);
+  EXPECT_EQ(indices[2], 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindEqNotFound) {
+  int32_t data[] = {1, 2, 3, 4, 5};
+  MooreQueue queue = {data, 5};
+
+  int32_t value = 10;
+  MooreQueue result = __moore_array_find_eq(&queue, sizeof(int32_t),
+                                            &value, 0, false);
+
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, ArrayMinUnsigned) {
+  int32_t data[] = {5, 2, 8, 1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_min(&queue, sizeof(int32_t), false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 1);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, ArrayMaxUnsigned) {
+  int32_t data[] = {5, 2, 8, 1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_max(&queue, sizeof(int32_t), false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 9);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, ArrayMinSigned) {
+  int32_t data[] = {5, -2, 8, -10, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_min(&queue, sizeof(int32_t), true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), -10);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, ArrayMaxSigned) {
+  int32_t data[] = {5, -2, 8, -10, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  MooreQueue result = __moore_array_max(&queue, sizeof(int32_t), true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 9);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, ArrayUnique) {
+  int32_t data[] = {1, 2, 3, 2, 1, 4, 3, 5};
+  MooreQueue queue = {data, 8};
+
+  MooreQueue result = __moore_array_unique(&queue, sizeof(int32_t));
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 5); // 1, 2, 3, 4, 5
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 1);
+  EXPECT_EQ(values[1], 2);
+  EXPECT_EQ(values[2], 3);
+  EXPECT_EQ(values[3], 4);
+  EXPECT_EQ(values[4], 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, ArrayUniqueIndex) {
+  int32_t data[] = {1, 2, 3, 2, 1, 4, 3, 5};
+  MooreQueue queue = {data, 8};
+
+  MooreQueue result = __moore_array_unique_index(&queue, sizeof(int32_t));
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 5); // Indices 0, 1, 2, 5, 7
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 0); // First occurrence of 1
+  EXPECT_EQ(indices[1], 1); // First occurrence of 2
+  EXPECT_EQ(indices[2], 2); // First occurrence of 3
+  EXPECT_EQ(indices[3], 5); // First occurrence of 4
+  EXPECT_EQ(indices[4], 7); // First occurrence of 5
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, EmptyArrayHandling) {
+  MooreQueue empty = {nullptr, 0};
+
+  // All locator functions should handle empty arrays gracefully
+  MooreQueue result = __moore_array_locator(&empty, sizeof(int32_t),
+                                            isEvenPredicate, nullptr,
+                                            0, false);
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+
+  int32_t value = 5;
+  result = __moore_array_find_eq(&empty, sizeof(int32_t), &value, 0, false);
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+
+  result = __moore_array_min(&empty, sizeof(int32_t), false);
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+
+  result = __moore_array_max(&empty, sizeof(int32_t), false);
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+
+  result = __moore_array_unique(&empty, sizeof(int32_t));
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+
+  result = __moore_array_unique_index(&empty, sizeof(int32_t));
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
 } // namespace
