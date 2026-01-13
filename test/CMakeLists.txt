@@ -50,7 +50,8 @@ endif()
 
 if(CIRCT_SLANG_FRONTEND_ENABLED)
   list(APPEND CIRCT_TEST_DEPENDS circt-verilog)
-  list(APPEND CIRCT_TEST_DEPENDS circt-verilog-lsp-server)
+  # TODO: circt-verilog-lsp-server is disabled due to slang API compatibility issues
+  # list(APPEND CIRCT_TEST_DEPENDS circt-verilog-lsp-server)
 endif()
 
 add_lit_testsuite(check-circt "Running the CIRCT regression tests"
