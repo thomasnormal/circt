@@ -353,6 +353,31 @@ MooreQueue __moore_array_locator(MooreQueue *array, int64_t elementSize,
 MooreQueue __moore_array_find_eq(MooreQueue *array, int64_t elementSize,
                                  void *value, int32_t mode, bool returnIndices);
 
+/// Comparison mode for __moore_array_find_cmp.
+/// These values match the order expected by the MooreToCore lowering.
+enum MooreCmpMode {
+  MOORE_CMP_EQ = 0,  ///< Equal (==)
+  MOORE_CMP_NE = 1,  ///< Not equal (!=)
+  MOORE_CMP_SGT = 2, ///< Signed greater than (>)
+  MOORE_CMP_SGE = 3, ///< Signed greater than or equal (>=)
+  MOORE_CMP_SLT = 4, ///< Signed less than (<)
+  MOORE_CMP_SLE = 5  ///< Signed less than or equal (<=)
+};
+
+/// Find elements matching a comparison predicate against a given value.
+/// This is a generalized version of __moore_array_find_eq that supports
+/// multiple comparison predicates for array locator methods.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @param value Pointer to the value to compare against
+/// @param cmpMode Comparison mode (0=eq, 1=ne, 2=sgt, 3=sge, 4=slt, 5=sle)
+/// @param locatorMode 0=all, 1=first, 2=last
+/// @param returnIndices If true, return indices instead of elements
+/// @return A new queue with matching elements or indices
+MooreQueue __moore_array_find_cmp(MooreQueue *array, int64_t elementSize,
+                                  void *value, int32_t cmpMode,
+                                  int32_t locatorMode, bool returnIndices);
+
 /// Find the minimum element(s) in an array.
 /// Implements SystemVerilog min() array locator method.
 /// @param array Pointer to the input array/queue

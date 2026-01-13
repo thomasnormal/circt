@@ -802,4 +802,207 @@ TEST(MooreRuntimeArrayLocatorTest, EmptyArrayHandling) {
   EXPECT_EQ(result.len, 0);
 }
 
+//===----------------------------------------------------------------------===//
+// Array Find with Comparison Predicate Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpEqual) {
+  int32_t data[] = {1, 5, 3, 5, 2, 5, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 5;
+  // cmpMode 0 = equal
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_EQ, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // Three 5s
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 5);
+  EXPECT_EQ(values[1], 5);
+  EXPECT_EQ(values[2], 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpNotEqual) {
+  int32_t data[] = {1, 5, 3, 5, 2, 5, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 5;
+  // cmpMode 1 = not equal
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_NE, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 4); // 1, 3, 2, 4 are != 5
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 1);
+  EXPECT_EQ(values[1], 3);
+  EXPECT_EQ(values[2], 2);
+  EXPECT_EQ(values[3], 4);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpSignedGreaterThan) {
+  int32_t data[] = {-5, 2, 8, -1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  int32_t value = 2;
+  // cmpMode 2 = signed greater than
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SGT, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // 8, 9, 3 are > 2
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 8);
+  EXPECT_EQ(values[1], 9);
+  EXPECT_EQ(values[2], 3);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpSignedGreaterOrEqual) {
+  int32_t data[] = {-5, 2, 8, -1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  int32_t value = 2;
+  // cmpMode 3 = signed greater than or equal
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SGE, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 4); // 2, 8, 9, 3 are >= 2
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], 2);
+  EXPECT_EQ(values[1], 8);
+  EXPECT_EQ(values[2], 9);
+  EXPECT_EQ(values[3], 3);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpSignedLessThan) {
+  int32_t data[] = {-5, 2, 8, -1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  int32_t value = 2;
+  // cmpMode 4 = signed less than
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SLT, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 2); // -5, -1 are < 2
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], -5);
+  EXPECT_EQ(values[1], -1);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpSignedLessOrEqual) {
+  int32_t data[] = {-5, 2, 8, -1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  int32_t value = 2;
+  // cmpMode 5 = signed less than or equal
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SLE, 0, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // -5, 2, -1 are <= 2
+
+  auto *values = static_cast<int32_t *>(result.data);
+  EXPECT_EQ(values[0], -5);
+  EXPECT_EQ(values[1], 2);
+  EXPECT_EQ(values[2], -1);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpFirstMode) {
+  int32_t data[] = {1, 5, 3, 8, 2, 9, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 4;
+  // locatorMode 1 = first
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SGT, 1, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1); // First > 4 is 5
+
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 5);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpLastMode) {
+  int32_t data[] = {1, 5, 3, 8, 2, 9, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 4;
+  // locatorMode 2 = last
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SGT, 2, false);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1); // Last > 4 is 9
+
+  EXPECT_EQ(*static_cast<int32_t *>(result.data), 9);
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpReturnIndices) {
+  int32_t data[] = {1, 5, 3, 8, 2, 9, 4};
+  MooreQueue queue = {data, 7};
+
+  int32_t value = 4;
+  // returnIndices = true
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SGT, 0, true);
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3); // Indices of 5, 8, 9 which are 1, 3, 5
+
+  auto *indices = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(indices[0], 1); // Index of 5
+  EXPECT_EQ(indices[1], 3); // Index of 8
+  EXPECT_EQ(indices[2], 5); // Index of 9
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpEmpty) {
+  MooreQueue empty = {nullptr, 0};
+
+  int32_t value = 5;
+  MooreQueue result = __moore_array_find_cmp(&empty, sizeof(int32_t),
+                                             &value, MOORE_CMP_EQ, 0, false);
+
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
+TEST(MooreRuntimeArrayLocatorTest, FindCmpNotFound) {
+  int32_t data[] = {1, 2, 3, 4, 5};
+  MooreQueue queue = {data, 5};
+
+  int32_t value = 10;
+  // No elements > 10
+  MooreQueue result = __moore_array_find_cmp(&queue, sizeof(int32_t),
+                                             &value, MOORE_CMP_SGT, 0, false);
+
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
 } // namespace
