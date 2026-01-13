@@ -983,6 +983,119 @@ extern "C" MooreQueue __moore_array_find_cmp(MooreQueue *array,
   return result;
 }
 
+extern "C" MooreQueue __moore_array_find_field_cmp(MooreQueue *array,
+                                                   int64_t elementSize,
+                                                   int64_t fieldOffset,
+                                                   int64_t fieldSize,
+                                                   void *value, int32_t cmpMode,
+                                                   int32_t locatorMode,
+                                                   bool returnIndices) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  // Note: elementSize is the size of the class handle (pointer), typically 8 bytes.
+  // fieldOffset is the offset within the object pointed to by the class handle.
+  // We don't validate fieldOffset against elementSize since they refer to
+  // different things (pointer size vs object layout).
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      !value || fieldSize <= 0 || fieldSize > 8 || fieldOffset < 0) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Read the comparison value as a signed 64-bit integer
+  int64_t cmpValue = readElementValue(value, fieldSize);
+  // Sign-extend if needed
+  if (fieldSize < 8) {
+    int shift = (8 - fieldSize) * 8;
+    cmpValue = (cmpValue << shift) >> shift;
+  }
+
+  // Helper lambda to check if an element's field matches the comparison predicate.
+  // For class handles, the element is a pointer to an object. We need to:
+  // 1. Read the pointer value from the array element
+  // 2. Dereference to get the object
+  // 3. Access the field at the specified offset within the object
+  auto matchesPredicate = [&](void *elementPtr) -> bool {
+    // elementPtr points to the class handle (pointer) stored in the array.
+    // Read the pointer value to get the object address.
+    void *objectPtr = *static_cast<void **>(elementPtr);
+    if (!objectPtr)
+      return false; // Null class handle
+
+    // Access the field at the specified offset within the object
+    void *fieldPtr = static_cast<char *>(objectPtr) + fieldOffset;
+    int64_t fieldValue = readElementValue(fieldPtr, fieldSize);
+    // Sign-extend if needed
+    if (fieldSize < 8) {
+      int shift = (8 - fieldSize) * 8;
+      fieldValue = (fieldValue << shift) >> shift;
+    }
+
+    switch (cmpMode) {
+    case MOORE_CMP_EQ:  // Equal
+      return fieldValue == cmpValue;
+    case MOORE_CMP_NE:  // Not equal
+      return fieldValue != cmpValue;
+    case MOORE_CMP_SGT: // Signed greater than
+      return fieldValue > cmpValue;
+    case MOORE_CMP_SGE: // Signed greater than or equal
+      return fieldValue >= cmpValue;
+    case MOORE_CMP_SLT: // Signed less than
+      return fieldValue < cmpValue;
+    case MOORE_CMP_SLE: // Signed less than or equal
+      return fieldValue <= cmpValue;
+    default:
+      return false;
+    }
+  };
+
+  // locatorMode: 0=all, 1=first, 2=last
+  if (locatorMode == 2) {
+    // Last: iterate backwards
+    for (int64_t i = numElements - 1; i >= 0; --i) {
+      void *element = data + i * elementSize;
+      if (matchesPredicate(element)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else if (locatorMode == 1) {
+    // First: iterate forwards, stop at first match
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (matchesPredicate(element)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else {
+    // All: iterate forwards, collect all matches
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (matchesPredicate(element)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 extern "C" MooreQueue __moore_array_min(MooreQueue *array, int64_t elementSize,
                                         bool isSigned) {
   MooreQueue result = {nullptr, 0};

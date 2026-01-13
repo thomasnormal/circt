@@ -3571,13 +3571,26 @@ private:
 /// Conversion for moore.array.locator -> runtime function call.
 /// This pattern-matches the predicate region to detect common patterns
 /// (comparison operations) and uses specialized runtime functions.
-/// Supports: eq, ne, sgt, sge, slt, sle predicates with constants.
+/// Supports:
+/// - Simple predicates: `item == constant`, `item > constant`, etc.
+/// - Field access predicates: `item.field == val`, `item.field > val`, etc.
 /// For simple equality predicates (`item == constant`), we use
 /// `__moore_array_find_eq`. For other comparison predicates, we use
 /// `__moore_array_find_cmp` with the appropriate comparison mode.
-struct ArrayLocatorOpConversion
-    : public RuntimeCallConversionBase<ArrayLocatorOp> {
-  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+/// For field access predicates, we use `__moore_array_find_field_cmp`.
+struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
+  ArrayLocatorOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                           ClassTypeCache &cache)
+      : OpConversionPattern(tc, ctx), classCache(cache) {}
+
+  using OpAdaptor = typename ArrayLocatorOp::Adaptor;
+
+  /// Get the LLVM struct type for a queue: {ptr, i64}.
+  static LLVM::LLVMStructType getQueueStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
 
   /// Comparison mode enum matching MooreCmpMode in MooreRuntime.h.
   enum CmpMode {
@@ -3626,6 +3639,132 @@ struct ArrayLocatorOpConversion
     return false;
   }
 
+  /// Information about a field access pattern.
+  struct FieldAccessInfo {
+    ClassPropertyRefOp propRefOp; // The property ref operation
+    SymbolRefAttr classSym;       // The class symbol
+    StringRef fieldName;          // The field name
+    Type fieldType;               // The Moore type of the field
+  };
+
+  /// Try to detect if a value comes from reading a field of the block argument.
+  /// Pattern: read(class.property_ref(blockArg))
+  static std::optional<FieldAccessInfo> tryMatchFieldAccess(Value value,
+                                                            Value blockArg) {
+    // The value should come from a read operation
+    auto readOp = value.getDefiningOp<ReadOp>();
+    if (!readOp)
+      return std::nullopt;
+
+    // The read operand should be a class.property_ref
+    auto propRefOp = readOp.getInput().getDefiningOp<ClassPropertyRefOp>();
+    if (!propRefOp)
+      return std::nullopt;
+
+    // The property ref instance should be the block argument
+    if (propRefOp.getInstance() != blockArg)
+      return std::nullopt;
+
+    // Extract class and field information
+    auto classHandleType =
+        dyn_cast<ClassHandleType>(propRefOp.getInstance().getType());
+    if (!classHandleType)
+      return std::nullopt;
+
+    FieldAccessInfo info;
+    info.propRefOp = propRefOp;
+    info.classSym = classHandleType.getClassSym();
+    info.fieldName = propRefOp.getProperty();
+    // Get the field type from the property ref result (which is a RefType)
+    if (auto refType = dyn_cast<RefType>(propRefOp.getPropertyRef().getType()))
+      info.fieldType = refType.getNestedType();
+    else
+      return std::nullopt;
+
+    return info;
+  }
+
+  /// Try to extract comparison info for field access patterns.
+  /// Returns true if one operand is a field access and sets fieldInfo and
+  /// cmpValue.
+  template <typename OpTy>
+  static bool tryExtractFieldComparisonInfo(OpTy cmpOp, Value blockArg,
+                                            CmpMode mode,
+                                            std::optional<FieldAccessInfo> &fieldInfo,
+                                            Value &cmpValue, CmpMode &cmpMode) {
+    // Try lhs as field access
+    if (auto info = tryMatchFieldAccess(cmpOp.getLhs(), blockArg)) {
+      fieldInfo = info;
+      cmpValue = cmpOp.getRhs();
+      cmpMode = mode;
+      return true;
+    }
+    // Try rhs as field access (swap comparison direction for relational ops)
+    if (auto info = tryMatchFieldAccess(cmpOp.getRhs(), blockArg)) {
+      fieldInfo = info;
+      cmpValue = cmpOp.getLhs();
+      // Swap comparison direction for relational ops
+      switch (mode) {
+      case CMP_SGT:
+        cmpMode = CMP_SLT;
+        break;
+      case CMP_SGE:
+        cmpMode = CMP_SLE;
+        break;
+      case CMP_SLT:
+        cmpMode = CMP_SGT;
+        break;
+      case CMP_SLE:
+        cmpMode = CMP_SGE;
+        break;
+      default:
+        cmpMode = mode;
+        break;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /// Compute field offset in bytes from GEP indices using the LLVM struct type.
+  /// This is a simplified calculation that works for common cases.
+  static int64_t computeFieldOffset(LLVM::LLVMStructType structTy,
+                                    ArrayRef<unsigned> gepPath) {
+    int64_t offset = 0;
+    Type currentType = structTy;
+
+    for (unsigned idx : gepPath) {
+      if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
+        // Sum sizes of all fields before this index
+        for (unsigned i = 0; i < idx; ++i) {
+          Type fieldType = structType.getBody()[i];
+          offset += getTypeSize(fieldType);
+        }
+        currentType = structType.getBody()[idx];
+      } else {
+        // Unsupported type in path
+        return -1;
+      }
+    }
+    return offset;
+  }
+
+  /// Get the size in bytes of an LLVM type (simplified).
+  static int64_t getTypeSize(Type type) {
+    if (auto intType = dyn_cast<IntegerType>(type))
+      return (intType.getWidth() + 7) / 8;
+    if (isa<LLVM::LLVMPointerType>(type))
+      return 8; // Assume 64-bit pointers
+    if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+      int64_t size = 0;
+      for (Type fieldType : structType.getBody())
+        size += getTypeSize(fieldType);
+      return size;
+    }
+    // Default to 8 bytes for unknown types
+    return 8;
+  }
+
   LogicalResult
   matchAndRewrite(ArrayLocatorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -3634,10 +3773,18 @@ struct ArrayLocatorOpConversion
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
     // Check if predicate is a simple comparison: `item <op> constant`
+    // or a field comparison: `item.field <op> value`
     // The region has format:
     //   ^bb0(%item):
     //     %const = moore.constant ...
     //     %cond = moore.<cmpop> %item, %const (or %const, %item)
+    //     moore.array.locator.yield %cond
+    // Or for field access:
+    //   ^bb0(%item):
+    //     %ref = moore.class.property_ref %item[@field]
+    //     %fieldVal = moore.read %ref
+    //     %cmpVal = moore.read %someVar  (or moore.constant)
+    //     %cond = moore.<cmpop> %fieldVal, %cmpVal
     //     moore.array.locator.yield %cond
     Block &body = op.getBody().front();
     if (body.getNumArguments() != 1)
@@ -3654,43 +3801,99 @@ struct ArrayLocatorOpConversion
     Value constValue = nullptr;
     CmpMode cmpMode = CMP_EQ;
     bool foundComparison = false;
+    bool isFieldAccess = false;
+    std::optional<FieldAccessInfo> fieldInfo;
+    Value fieldCmpValue = nullptr;
 
     Value condValue = yieldOp.getCondition();
 
-    // Try EqOp
+    // First try to match field access patterns (item.field <op> value)
+    // Try EqOp with field access
     if (auto cmpOp = condValue.getDefiningOp<EqOp>()) {
-      foundComparison =
-          tryExtractComparisonInfo(cmpOp, blockArg, CMP_EQ, constValue, cmpMode);
+      if (tryExtractFieldComparisonInfo(cmpOp, blockArg, CMP_EQ, fieldInfo,
+                                        fieldCmpValue, cmpMode)) {
+        isFieldAccess = true;
+        foundComparison = true;
+      }
     }
-    // Try NeOp
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<NeOp>()) {
+        if (tryExtractFieldComparisonInfo(cmpOp, blockArg, CMP_NE, fieldInfo,
+                                          fieldCmpValue, cmpMode)) {
+          isFieldAccess = true;
+          foundComparison = true;
+        }
+      }
+    }
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SgtOp>()) {
+        if (tryExtractFieldComparisonInfo(cmpOp, blockArg, CMP_SGT, fieldInfo,
+                                          fieldCmpValue, cmpMode)) {
+          isFieldAccess = true;
+          foundComparison = true;
+        }
+      }
+    }
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SgeOp>()) {
+        if (tryExtractFieldComparisonInfo(cmpOp, blockArg, CMP_SGE, fieldInfo,
+                                          fieldCmpValue, cmpMode)) {
+          isFieldAccess = true;
+          foundComparison = true;
+        }
+      }
+    }
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SltOp>()) {
+        if (tryExtractFieldComparisonInfo(cmpOp, blockArg, CMP_SLT, fieldInfo,
+                                          fieldCmpValue, cmpMode)) {
+          isFieldAccess = true;
+          foundComparison = true;
+        }
+      }
+    }
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SleOp>()) {
+        if (tryExtractFieldComparisonInfo(cmpOp, blockArg, CMP_SLE, fieldInfo,
+                                          fieldCmpValue, cmpMode)) {
+          isFieldAccess = true;
+          foundComparison = true;
+        }
+      }
+    }
+
+    // If not a field access pattern, try simple item comparison
+    if (!foundComparison) {
+      // Try EqOp
+      if (auto cmpOp = condValue.getDefiningOp<EqOp>()) {
+        foundComparison =
+            tryExtractComparisonInfo(cmpOp, blockArg, CMP_EQ, constValue, cmpMode);
+      }
+    }
     if (!foundComparison) {
       if (auto cmpOp = condValue.getDefiningOp<NeOp>()) {
         foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_NE,
                                                    constValue, cmpMode);
       }
     }
-    // Try SgtOp (signed greater than)
     if (!foundComparison) {
       if (auto cmpOp = condValue.getDefiningOp<SgtOp>()) {
         foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SGT,
                                                    constValue, cmpMode);
       }
     }
-    // Try SgeOp (signed greater than or equal)
     if (!foundComparison) {
       if (auto cmpOp = condValue.getDefiningOp<SgeOp>()) {
         foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SGE,
                                                    constValue, cmpMode);
       }
     }
-    // Try SltOp (signed less than)
     if (!foundComparison) {
       if (auto cmpOp = condValue.getDefiningOp<SltOp>()) {
         foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SLT,
                                                    constValue, cmpMode);
       }
     }
-    // Try SleOp (signed less than or equal)
     if (!foundComparison) {
       if (auto cmpOp = condValue.getDefiningOp<SleOp>()) {
         foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SLE,
@@ -3702,6 +3905,122 @@ struct ArrayLocatorOpConversion
       return rewriter.notifyMatchFailure(
           op, "only eq, ne, sgt, sge, slt, sle predicates are supported");
 
+    // Handle field access predicates
+    if (isFieldAccess) {
+      if (!fieldInfo)
+        return rewriter.notifyMatchFailure(op, "failed to extract field info");
+
+      // Resolve class struct info
+      if (failed(resolveClassStructBody(mod, fieldInfo->classSym,
+                                        *getTypeConverter(), classCache)))
+        return rewriter.notifyMatchFailure(
+            op, "failed to resolve class struct for field access");
+
+      auto structInfo = classCache.getStructInfo(fieldInfo->classSym);
+      if (!structInfo)
+        return rewriter.notifyMatchFailure(op, "class struct info not found");
+
+      auto gepPath = structInfo->getFieldPath(fieldInfo->fieldName);
+      if (!gepPath)
+        return rewriter.notifyMatchFailure(op, "field path not found");
+
+      // Compute field offset
+      int64_t fieldOffset =
+          computeFieldOffset(structInfo->classBody, *gepPath);
+      if (fieldOffset < 0)
+        return rewriter.notifyMatchFailure(op,
+                                           "failed to compute field offset");
+
+      // Get field size
+      int64_t fieldSizeBytes = 4; // Default to 4 bytes
+      if (auto intType = dyn_cast<IntType>(fieldInfo->fieldType))
+        fieldSizeBytes = (intType.getWidth() + 7) / 8;
+
+      // Set up types
+      auto queueTy = getQueueStructType(ctx);
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto i32Ty = IntegerType::get(ctx, 32);
+      auto i1Ty = IntegerType::get(ctx, 1);
+
+      // Store input array to alloca and pass pointer
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto inputAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+      // Convert and store comparison value
+      auto convertedFieldType =
+          getTypeConverter()->convertType(fieldInfo->fieldType);
+      if (!convertedFieldType)
+        return rewriter.notifyMatchFailure(op,
+                                           "failed to convert field type");
+
+      auto cmpValueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, convertedFieldType, one);
+
+      // Get the comparison value - it may come from a read op or constant
+      Value llvmCmpValue;
+      if (auto readOp = fieldCmpValue.getDefiningOp<ReadOp>()) {
+        // The value comes from reading a variable - we need to handle this
+        // For now, we'll inline the read and get the converted value
+        // The conversion infrastructure should have already converted reads
+        // Look for already-converted value in the adaptor
+        // Since the read is inside the region, we need to handle it specially
+        return rewriter.notifyMatchFailure(
+            op, "field comparison with variable read not yet supported - "
+                "use constants");
+      } else if (auto constOp = fieldCmpValue.getDefiningOp<ConstantOp>()) {
+        APInt constAPInt = constOp.getValue().toAPInt(false);
+        llvmCmpValue = LLVM::ConstantOp::create(rewriter, loc, convertedFieldType,
+                                                constAPInt.getSExtValue());
+      } else {
+        return rewriter.notifyMatchFailure(
+            op, "field comparison value must be a constant");
+      }
+
+      LLVM::StoreOp::create(rewriter, loc, llvmCmpValue, cmpValueAlloca);
+
+      // For class handles, element size is pointer size (8 bytes)
+      auto elementSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(8));
+
+      // Field offset and size constants
+      auto fieldOffsetConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(fieldOffset));
+      auto fieldSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(fieldSizeBytes));
+
+      // Locator mode and indexed flag
+      int32_t locatorModeValue = static_cast<int32_t>(op.getMode());
+      auto locatorModeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(locatorModeValue));
+      bool returnIndices = op.getIndexed();
+      auto indicesConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getIntegerAttr(i1Ty, returnIndices ? 1 : 0));
+
+      // Comparison mode
+      auto cmpModeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(static_cast<int32_t>(cmpMode)));
+
+      // Call __moore_array_find_field_cmp
+      // Signature: MooreQueue(MooreQueue*, i64, i64, i64, void*, i32, i32, i1)
+      auto fnTy = LLVM::LLVMFunctionType::get(
+          queueTy, {ptrTy, i64Ty, i64Ty, i64Ty, ptrTy, i32Ty, i32Ty, i1Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_array_find_field_cmp", fnTy);
+
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
+          ValueRange{inputAlloca, elementSizeConst, fieldOffsetConst,
+                     fieldSizeConst, cmpValueAlloca, cmpModeConst,
+                     locatorModeConst, indicesConst});
+      rewriter.replaceOp(op, call.getResult());
+      return success();
+    }
+
+    // Handle simple item comparison (existing code path)
     if (!constValue)
       return rewriter.notifyMatchFailure(
           op, "comparison must compare block argument with a value");
@@ -3813,6 +4132,9 @@ struct ArrayLocatorOpConversion
 
     return success();
   }
+
+private:
+  ClassTypeCache &classCache;
 };
 
 /// Conversion for moore.dyn_array.new -> runtime function call.
@@ -5142,7 +5464,6 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueuePopBackOpConversion,
     QueuePopFrontOpConversion,
     StreamConcatOpConversion,
-    ArrayLocatorOpConversion,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
@@ -5162,6 +5483,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     IsUnknownBIOpConversion
   >(typeConverter, patterns.getContext());
   // clang-format on
+
+  // Array locator operations (need class cache for field access support).
+  patterns.add<ArrayLocatorOpConversion>(typeConverter, patterns.getContext(),
+                                         classCache);
 
   // Associative array iterator operations (need explicit constructor).
   patterns.add<AssocArrayFirstOpConversion>(typeConverter, patterns.getContext());

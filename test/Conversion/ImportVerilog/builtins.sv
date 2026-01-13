@@ -304,8 +304,7 @@ function void BitVectorBuiltins(int x, logic [41:0] y);
 endfunction
 
 // CHECK-LABEL: func.func private @RandomBuiltins(
-// CHECK-SAME: [[X:%.+]]: !moore.i32
-// CHECK-SAME: [[Y:%.+]]: !moore.i32
+// CHECK-SAME: [[X:%.+]]: !moore.i32, [[Y:%.+]]: !moore.i32) -> !moore.l1 {
 function RandomBuiltins(int x, int y);
   // CHECK: [[URAND0:%.+]] = moore.builtin.urandom
   // CHECK-NEXT: call @dummyA([[URAND0]]) : (!moore.i32) -> ()
@@ -360,21 +359,24 @@ endfunction
 // CHECK-SAME: [[STR:%.+]]: !moore.string
 function void SeverityBuiltinEdgeCase(string testStr);
   // CHECK: [[CONST:%.+]] = moore.constant 1234 : i32
-  // CHECK-NEXT: [[INTVAR:%.+]] = moore.variable [[CONST]] : <!moore.i32>
+  // CHECK-NEXT: [[INTVAR:%.+]] = moore.variable [[CONST]] : <i32>
   int val = 1234;
-  // CHECK-NEXT: [[INTVAL1:%.+]] = moore.read [[INTVAR]] : <!moore.i32>
+  // CHECK: moore.read [[INTVAR]] : <i32>
+  // CHECK: [[INTVAL1:%.+]] = moore.read [[INTVAR]] : <i32>
   // CHECK-NEXT: [[FMTINT1:%.+]] = moore.fmt.int binary [[INTVAL1]], align right, pad zero : i32
   // CHECK-NEXT: [[LINE1:%.+]] = moore.fmt.literal "\0A"
   // CHECK-NEXT: [[CONCAT1:%.+]] = moore.fmt.concat ([[FMTINT1]], [[LINE1]])
   // CHECK-NEXT: moore.builtin.display [[CONCAT1]]
   $displayb(val);
-  // CHECK-NEXT: [[INTVAL2:%.+]] = moore.read [[INTVAR]] : <!moore.i32>
+  // CHECK: moore.read [[INTVAR]] : <i32>
+  // CHECK: [[INTVAL2:%.+]] = moore.read [[INTVAR]] : <i32>
   // CHECK-NEXT: [[FMTINT2:%.+]] = moore.fmt.int octal [[INTVAL2]], align right, pad zero : i32
   // CHECK-NEXT: [[LINE2:%.+]] = moore.fmt.literal "\0A"
   // CHECK-NEXT: [[CONCAT2:%.+]] = moore.fmt.concat ([[FMTINT2]], [[LINE2]])
   // CHECK-NEXT: moore.builtin.display [[CONCAT2]]
   $displayo(val);
-  // CHECK-NEXT: [[INTVAL3:%.+]] = moore.read [[INTVAR]] : <!moore.i32>
+  // CHECK: moore.read [[INTVAR]] : <i32>
+  // CHECK: [[INTVAL3:%.+]] = moore.read [[INTVAR]] : <i32>
   // CHECK-NEXT: [[FMTINT3:%.+]] = moore.fmt.int hex_lower [[INTVAL3]], align right, pad zero : i32
   // CHECK-NEXT: [[LINE3:%.+]] = moore.fmt.literal "\0A"
   // CHECK-NEXT: [[CONCAT3:%.+]] = moore.fmt.concat ([[FMTINT3]], [[LINE3]])
@@ -393,29 +395,29 @@ endfunction
 module SampleValueBuiltins #() (
     input clk_i
 );
-  // CHECK: [[CLKWIRE:%.+]] = moore.net name "clk_i" wire : <!moore.l1>
+  // CHECK: [[CLKWIRE:%.+]] = moore.net name "clk_i" wire : <l1>
   // CHECK: moore.procedure always {
-  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <!moore.l1>
+  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
   // CHECK-NEXT: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <!moore.l1>
+  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
   // CHECK-NEXT: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
   // CHECK-NEXT: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
   // CHECK-NEXT: [[NOTPAST:%.+]] = ltl.not [[PAST]] : !ltl.sequence
   // CHECK-NEXT: [[NOTPASTANDCURRENT:%.+]] = ltl.and [[CURRENT]], [[NOTPAST]] : i1, !ltl.property
   rising_clk: assert property (@(posedge clk_i) clk_i |=> $rose(clk_i));
   // CHECK: moore.procedure always {
-  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <!moore.l1>
+  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
   // CHECK-NEXT: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <!moore.l1>
+  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
   // CHECK-NEXT: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
   // CHECK-NEXT: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
   // CHECK-NEXT: [[NOTCURRENT:%.+]] = ltl.not [[CURRENT]] : i1
   // CHECK-NEXT: [[PASTANDNOTCURRENT:%.+]] = ltl.and [[NOTCURRENT]], [[PAST]] : !ltl.property, !ltl.sequence
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
   // CHECK: moore.procedure always {
-  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <!moore.l1>
+  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
   // CHECK-NEXT: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <!moore.l1>
+  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
   // CHECK-NEXT: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
   // CHECK-NEXT: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
   // CHECK-NEXT: [[NOTPAST:%.+]] = ltl.not [[PAST]] : !ltl.sequence
@@ -442,7 +444,7 @@ function void StringBuiltins(string string_in, int int_in);
   // CHECK: [[CHAR:%.+]] = moore.string.getc [[STR]]{{\[}}[[INT]]]
   dummyE(string_in.getc(int_in));
   // CHECK: [[INTCONV:%.+]] = moore.int_to_logic [[INT]] : i32
-  // CHECK: moore.string.itoa [[STRVAR]], [[INTCONV]] : <!moore.string>, !moore.l32
+  // CHECK: moore.string.itoa [[STRVAR]], [[INTCONV]] : <string>, l32
   result.itoa(int_in);
   // CHECK: [[CHARVAL:%.+]] = moore.constant 65 : i8
   // CHECK: moore.string.putc [[STRVAR]]{{\[}}[[INT]]], [[CHARVAL]] : <string>

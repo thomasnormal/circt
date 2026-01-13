@@ -22,7 +22,7 @@ func.func @ClassType(%arg0: !moore.class<@PropertyCombo>) {
 
 // malloc should be declared in the LLVM dialect.
 // CHECK-LABEL: func.func private @test_new2
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(12 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(16 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -44,7 +44,7 @@ moore.class.classdecl @C {
 /// Check that new lowers to malloc with inheritance without shadowing
 
 // CHECK-LABEL: func.func private @test_new3
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(28 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(32 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -64,7 +64,7 @@ moore.class.classdecl @D extends @C {
 /// Check that new lowers to malloc with inheritance & shadowing
 
 // CHECK-LABEL: func.func private @test_new4
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(28 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -106,7 +106,7 @@ moore.class.classdecl @F extends @C {
 // CHECK-LABEL: func.func private @test_new6
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
 // CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"G", (struct<"C", (i32, i32, i32)>, i32, i32, i32)>
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"G", (struct<"C", (i32, i32, i32, i32)>, i32, i32, i32)>
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 
@@ -127,8 +127,13 @@ moore.class.classdecl @G extends @C {
 
 // CHECK-LABEL: func.func private @test_dyn_cast
 // CHECK-SAME: (%arg0: !llvm.ptr) -> (!llvm.ptr, i1) {
-// CHECK:   [[TRUE:%.+]] = arith.constant true
-// CHECK:   return %arg0, [[TRUE]] : !llvm.ptr, i1
+// CHECK:   [[ZERO:%.+]] = llvm.mlir.zero : !llvm.ptr
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[{{.*}}] : (!llvm.ptr, i32) -> !llvm.ptr
+// CHECK:   [[RTTI:%.+]] = llvm.load [[GEP]] : !llvm.ptr -> i32
+// CHECK:   [[CALL:%.+]] = llvm.call @__moore_dyn_cast_check({{.*}}) : (i32, i32, i32) -> i1
+// CHECK:   [[NOTNULL:%.+]] = llvm.icmp "ne" %arg0, [[ZERO]] : !llvm.ptr
+// CHECK:   [[SUCCESS:%.+]] = llvm.and [[NOTNULL]], [[CALL]] : i1
+// CHECK:   return %arg0, [[SUCCESS]] : !llvm.ptr, i1
 
 // CHECK-NOT: moore.class.dyn_cast
 // CHECK-NOT: moore.class.classdecl

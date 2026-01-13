@@ -1,10 +1,14 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
+// CHECK-DAG: llvm.func @__moore_urandom() -> i32
+// CHECK-DAG: llvm.func @__moore_urandom_seeded(i32) -> i32
+// CHECK-DAG: llvm.func @__moore_urandom_range(i32, i32) -> i32
+// CHECK-DAG: llvm.func @__moore_random() -> i32
+// CHECK-DAG: llvm.func @__moore_random_seeded(i32) -> i32
+
 //===----------------------------------------------------------------------===//
 // $urandom Operation
 //===----------------------------------------------------------------------===//
-
-// CHECK: llvm.func @__moore_urandom() -> i32
 
 // CHECK-LABEL: hw.module @test_urandom
 moore.module @test_urandom(out result: !moore.i32) {
@@ -17,8 +21,6 @@ moore.module @test_urandom(out result: !moore.i32) {
 // $urandom with seed Operation
 //===----------------------------------------------------------------------===//
 
-// CHECK: llvm.func @__moore_urandom_seeded(i32) -> i32
-
 // CHECK-LABEL: hw.module @test_urandom_seeded
 moore.module @test_urandom_seeded(in %seed: !moore.i32, out result: !moore.i32) {
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_urandom_seeded(%{{.*}}) : (i32) -> i32
@@ -29,8 +31,6 @@ moore.module @test_urandom_seeded(in %seed: !moore.i32, out result: !moore.i32) 
 //===----------------------------------------------------------------------===//
 // $urandom_range Operation (with max only)
 //===----------------------------------------------------------------------===//
-
-// CHECK: llvm.func @__moore_urandom_range(i32, i32) -> i32
 
 // CHECK-LABEL: hw.module @test_urandom_range_max
 moore.module @test_urandom_range_max(in %maxval: !moore.i32, out result: !moore.i32) {
@@ -55,8 +55,6 @@ moore.module @test_urandom_range_max_min(in %maxval: !moore.i32, in %minval: !mo
 // $random Operation
 //===----------------------------------------------------------------------===//
 
-// CHECK: llvm.func @__moore_random() -> i32
-
 // CHECK-LABEL: hw.module @test_random
 moore.module @test_random(out result: !moore.i32) {
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_random() : () -> i32
@@ -67,8 +65,6 @@ moore.module @test_random(out result: !moore.i32) {
 //===----------------------------------------------------------------------===//
 // $random with seed Operation
 //===----------------------------------------------------------------------===//
-
-// CHECK: llvm.func @__moore_random_seeded(i32) -> i32
 
 // CHECK-LABEL: hw.module @test_random_seeded
 moore.module @test_random_seeded(in %seed: !moore.i32, out result: !moore.i32) {
