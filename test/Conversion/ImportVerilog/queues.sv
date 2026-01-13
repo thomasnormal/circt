@@ -193,6 +193,31 @@ module QueueInClassTest;
 endmodule
 
 //===----------------------------------------------------------------------===//
+// Queue Concatenation Tests (UVM Pattern)
+//===----------------------------------------------------------------------===//
+
+/// Test queue concatenation with curly braces
+/// This is the pattern used in UVM: all_callbacks = { all_callbacks, unique_callbacks };
+// CHECK-LABEL: moore.module @QueueConcatTest() {
+module QueueConcatTest;
+    int q1[$];
+    int q2[$];
+    int result[$];
+
+    initial begin
+        q1.push_back(1);
+        q1.push_back(2);
+        q2.push_back(3);
+        q2.push_back(4);
+        // CHECK: [[Q1:%.+]] = moore.read %q1 : <queue<i32, 0>>
+        // CHECK: [[Q2:%.+]] = moore.read %q2 : <queue<i32, 0>>
+        // CHECK: [[CONCAT:%.+]] = moore.queue.concat [[Q1]], [[Q2]] : !moore.queue<i32, 0>, !moore.queue<i32, 0>
+        // CHECK: moore.blocking_assign %result, [[CONCAT]] : queue<i32, 0>
+        result = { q1, q2 };
+    end
+endmodule
+
+//===----------------------------------------------------------------------===//
 // Streaming Concatenation with Queue (UVM Pattern)
 //===----------------------------------------------------------------------===//
 

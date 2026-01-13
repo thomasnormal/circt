@@ -1270,17 +1270,23 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
   auto loc = convertLocation(subroutine.location);
 
   // Extract 'this' type and ensure it's a class.
-  const slang::ast::Type &thisTy = subroutine.thisVar->getType();
+  // Use getCanonicalType() to unwrap type aliases so we get the same ClassType
+  // pointer that's used in the 'classes' map.
+  const slang::ast::Type &thisTy = subroutine.thisVar->getType().getCanonicalType();
   moore::ClassDeclOp ownerDecl;
 
   if (auto *classTy = thisTy.as_if<slang::ast::ClassType>()) {
-    auto it = classes.find(classTy);
-    if (it == classes.end() || !it->second) {
+    // If the class is not yet in the map, declare it now. This handles cases
+    // where a class method references its own class type (self-reference) before
+    // the class declaration is fully processed. declareClass will return the
+    // existing lowering if the class was already declared.
+    auto *lowering = declareClass(*classTy);
+    if (!lowering || !lowering->op) {
       mlir::emitError(loc) << "class '" << classTy->name
                            << "' has not been lowered yet";
       return {};
     }
-    ownerDecl = it->second->op;
+    ownerDecl = lowering->op;
   } else {
     mlir::emitError(loc) << "expected 'this' to be a class type, got "
                          << thisTy.toString();

@@ -828,6 +828,40 @@ struct EventTriggeredOpConversion
   }
 };
 
+/// Conversion for moore.event_trigger -> runtime function call.
+/// This calls __moore_event_trigger to trigger the event.
+struct EventTriggerOpConversion : public OpConversionPattern<EventTriggerOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(EventTriggerOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto i1Ty = IntegerType::get(ctx, 1);
+
+    // __moore_event_trigger takes a pointer to the event and returns void.
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_event_trigger", fnTy);
+
+    // Store the event value to an alloca and pass a pointer to it.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto eventAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i1Ty, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getEvent(), eventAlloca);
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{eventAlloca});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.wait_condition -> runtime function call.
 /// Implements the SystemVerilog `wait(condition)` statement by calling
 /// the __moore_wait_condition runtime function.
@@ -2976,6 +3010,55 @@ struct QueueUniqueOpConversion
   }
 };
 
+/// Conversion for moore.queue.concat -> runtime function call.
+/// Concatenates multiple queues into a single queue.
+struct QueueConcatOpConversion
+    : public RuntimeCallConversionBase<QueueConcatOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueConcatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // Function signature: queue concat(ptr to array of queues, count)
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_concat", fnTy);
+
+    auto inputs = adaptor.getInputs();
+    auto numInputs = inputs.size();
+
+    // Create an array to hold all input queues.
+    auto count = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(numInputs));
+    auto arrayAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, count);
+
+    // Store each input queue into the array.
+    for (size_t i = 0; i < numInputs; ++i) {
+      auto idx = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(i));
+      auto elemPtr =
+          LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy, arrayAlloca,
+                              ValueRange{idx});
+      LLVM::StoreOp::create(rewriter, loc, inputs[i], elemPtr);
+    }
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{arrayAlloca, count});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 /// Conversion for moore.stream_concat -> runtime function call.
 /// This handles streaming concatenation of queues/dynamic arrays.
 /// For string queues, concatenates all strings into a single string.
@@ -4283,6 +4366,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueMaxOpConversion,
     QueueMinOpConversion,
     QueueUniqueOpConversion,
+    QueueConcatOpConversion,
     QueueDeleteOpConversion,
     StreamConcatOpConversion,
     DynArrayNewOpConversion,
@@ -4315,6 +4399,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<WaitDelayOp>(convert);
   patterns.add<UnreachableOp>(convert);
   patterns.add<EventTriggeredOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<EventTriggerOpConversion>(typeConverter, patterns.getContext());
   patterns.add<WaitConditionOpConversion>(typeConverter, patterns.getContext());
 
   // Process control (fork/join)

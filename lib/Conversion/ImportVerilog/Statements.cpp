@@ -1126,23 +1126,28 @@ struct StmtVisitor {
       return failure();
     }
 
-    // Events are lowered to `i1` signals. Get an lvalue ref to the signal such
-    // that we can assign to it.
+    // Get an lvalue ref to the event target.
     auto target = context.convertLvalueExpression(stmt.target);
     if (!target)
       return failure();
 
-    // Read and invert the current value of the signal. Writing this inverted
-    // value to the signal is our event signaling mechanism.
-    Value inverted = moore::ReadOp::create(builder, loc, target);
+    // Read the current value of the target.
+    Value readValue = moore::ReadOp::create(builder, loc, target);
 
-    // Verify the read value is an integer type before attempting bitwise NOT.
-    if (!isa<moore::IntType>(inverted.getType())) {
-      mlir::emitError(loc) << "event target must have integer type, but got "
-                           << inverted.getType();
+    // Check if this is an event type - if so, use EventTriggerOp.
+    if (isa<moore::EventType>(readValue.getType())) {
+      moore::EventTriggerOp::create(builder, loc, readValue);
+      return success();
+    }
+
+    // For integer types, use the toggle mechanism: invert the current value
+    // and write it back to signal the event.
+    if (!isa<moore::IntType>(readValue.getType())) {
+      mlir::emitError(loc) << "event target must have event or integer type, "
+                           << "but got " << readValue.getType();
       return failure();
     }
-    inverted = moore::NotOp::create(builder, loc, inverted);
+    Value inverted = moore::NotOp::create(builder, loc, readValue);
 
     if (stmt.isNonBlocking)
       moore::NonBlockingAssignOp::create(builder, loc, target, inverted);

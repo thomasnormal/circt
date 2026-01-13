@@ -504,8 +504,10 @@ struct ExprVisitor {
   /// Handle concatenations.
   Value visit(const slang::ast::ConcatenationExpression &expr) {
     // Check if this is a string concatenation by looking at the result type.
-    // SystemVerilog has two kinds of concatenation: bit vector and string.
+    // SystemVerilog has several kinds of concatenation: bit vector, string,
+    // and queue.
     bool isStringConcat = expr.type->isString();
+    bool isQueueConcat = expr.type->isQueue();
 
     SmallVector<Value> operands;
     for (auto *operand : expr.operands()) {
@@ -517,7 +519,7 @@ struct ExprVisitor {
       auto value = convertLvalueOrRvalueExpression(*operand);
       if (!value)
         return {};
-      if (!isLvalue && !isStringConcat)
+      if (!isLvalue && !isStringConcat && !isQueueConcat)
         value = context.convertToSimpleBitVector(value);
       if (!value)
         return {};
@@ -527,7 +529,12 @@ struct ExprVisitor {
       return moore::ConcatRefOp::create(builder, loc, operands);
     else if (isStringConcat)
       return moore::StringConcatOp::create(builder, loc, operands);
-    else
+    else if (isQueueConcat) {
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+      return moore::QueueConcatOp::create(builder, loc, resultType, operands);
+    } else
       return moore::ConcatOp::create(builder, loc, operands);
   }
 

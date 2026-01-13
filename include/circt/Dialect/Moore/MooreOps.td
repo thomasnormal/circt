@@ -581,6 +581,24 @@ def EventTriggeredOp : MooreOp<"event_triggered", [Pure]> {
   let assemblyFormat = [{ $event attr-dict `:` type($event) }];
 }
 
+def EventTriggerOp : MooreOp<"event_trigger"> {
+  let summary = "Trigger an event";
+  let description = [{
+    The `moore.event_trigger` op triggers the given event, waking up any
+    processes waiting on it. This corresponds to the SystemVerilog `->event`
+    named event trigger statement.
+
+    Example:
+    ```mlir
+    moore.event_trigger %event : !moore.event
+    ```
+
+    See IEEE 1800-2017 Section 15.5 "Event trigger".
+  }];
+  let arguments = (ins EventType:$event);
+  let assemblyFormat = [{ $event attr-dict `:` type($event) }];
+}
+
 def WaitConditionOp : MooreOp<"wait_condition"> {
   let summary = "Suspend execution until a condition becomes true";
   let description = [{
@@ -4592,6 +4610,29 @@ def QueueUniqueOp : QueueBuiltin<"unique"> {
   let arguments = (ins UnpackedType:$array);
   let results = (outs QueueType:$result);
   let assemblyFormat = "$array `:` type($array) `->` type($result) attr-dict";
+}
+
+def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
+  let summary = "Concatenate queues";
+  let description = [{
+    Concatenates an arbitrary number of queues into one larger queue.
+    The elements are concatenated from left to right, with the first
+    operand's elements appearing at the beginning of the result queue, and the
+    last operand's elements appearing at the end. This corresponds to the
+    SystemVerilog queue concatenation syntax `{queue1, queue2}`.
+
+    Example:
+    ```mlir
+    %result = moore.queue.concat %a, %b : !moore.queue<i32, 0>, !moore.queue<i32, 0> -> !moore.queue<i32, 0>
+    ```
+
+    See IEEE 1800-2017 Section 7.10.4 "Queue operators".
+  }];
+  let arguments = (ins Variadic<QueueType>:$inputs);
+  let results = (outs QueueType:$result);
+  let assemblyFormat = [{
+    $inputs attr-dict `:` type($inputs) `->` type($result)
+  }];
 }
 
 //===----------------------------------------------------------------------===//
