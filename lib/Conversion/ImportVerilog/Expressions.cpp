@@ -1690,31 +1690,98 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (failed(convertedFunction))
       return {};
 
+    // For method calls, get the receiver `this` reference first. This is needed
+    // before converting arguments because default argument expressions may
+    // contain method calls with implicit `this` that should refer to the
+    // receiver, not the caller's `this`.
+    Value methodReceiver;
+    moore::ClassHandleType methodReceiverTy;
+    if (isMethod) {
+      auto [thisRef, tyHandle] = getMethodReceiverTypeHandle(expr);
+      if (!thisRef)
+        return {};
+      methodReceiver = thisRef;
+      methodReceiverTy = tyHandle;
+    }
+
     // Convert the call arguments. Input arguments are converted to an rvalue.
     // All other arguments are converted to lvalues and passed into the function
     // by reference.
+    //
+    // For method calls, default argument expressions (which contain method calls
+    // with implicit `this`) should use the receiver's `this`, not the caller's.
+    // We detect default arguments by checking if the argument expression's
+    // source location is within the subroutine's location range.
     SmallVector<Value> arguments;
+    auto subroutineLoc = subroutine->location;
     for (auto [callArg, declArg] :
          llvm::zip(expr.arguments(), subroutine->getArguments())) {
 
       // Unpack the `<expr> = EmptyArgument` pattern emitted by Slang for output
       // and inout arguments.
-      auto *expr = callArg;
-      if (const auto *assign = expr->as_if<slang::ast::AssignmentExpression>())
-        expr = &assign->left();
+      auto *argExpr = callArg;
+      if (const auto *assign = argExpr->as_if<slang::ast::AssignmentExpression>())
+        argExpr = &assign->left();
+
+      // Check if this argument is from a default value by comparing source
+      // locations. Default argument expressions have source locations within
+      // the function definition (same buffer as subroutine, after subroutine
+      // location). Explicit arguments have source locations from the call site
+      // (same buffer as expr, near expr's location).
+      bool isDefaultArg = false;
+      if (isMethod && methodReceiver) {
+        auto argLoc = argExpr->sourceRange.start();
+        auto callLoc = expr.sourceRange.start();
+        // An argument is from a default value if:
+        // 1. Its source location is in the same buffer as the subroutine
+        //    definition (not the call site), AND
+        // 2. Its source location is NOT in the same buffer as the call
+        //    expression, or is far from the call site.
+        // This distinguishes between:
+        // - Default args: defined where the subroutine is defined
+        // - Explicit args: defined where the call is made
+        if (argLoc.buffer() == subroutineLoc.buffer() &&
+            argLoc.buffer() != callLoc.buffer()) {
+          // Argument is in subroutine's file but not call's file
+          isDefaultArg = true;
+        } else if (argLoc.buffer() == subroutineLoc.buffer() &&
+                   argLoc.buffer() == callLoc.buffer()) {
+          // Both in the same file - check if arg is near subroutine or call
+          // If arg is closer to subroutine than to call, it's a default
+          auto argOffset = argLoc.offset();
+          auto subOffset = subroutineLoc.offset();
+          auto callOffset = callLoc.offset();
+          // Default args should be between subroutine start and call site,
+          // and specifically in the subroutine's parameter list area.
+          // A simple heuristic: if the arg location is before the call
+          // location and after/at the subroutine location, it's a default.
+          if (argOffset >= subOffset && argOffset < callOffset) {
+            isDefaultArg = true;
+          }
+        }
+      }
+
+      // For default arguments in method calls, temporarily set the implicit
+      // `this` to the receiver so that method calls with implicit `this` use
+      // the correct receiver object.
+      auto savedThis = context.currentThisRef;
+      if (isDefaultArg)
+        context.currentThisRef = methodReceiver;
+      auto restoreThis =
+          llvm::make_scope_exit([&] { context.currentThisRef = savedThis; });
 
       Value value;
       auto type = context.convertType(declArg->getType());
       if (declArg->direction == slang::ast::ArgumentDirection::In) {
-        value = context.convertRvalueExpression(*expr, type);
+        value = context.convertRvalueExpression(*argExpr, type);
       } else {
-        Value lvalue = context.convertLvalueExpression(*expr);
+        Value lvalue = context.convertLvalueExpression(*argExpr);
         auto unpackedType = dyn_cast<moore::UnpackedType>(type);
         if (!unpackedType)
           return {};
         value =
             context.materializeConversion(moore::RefType::get(unpackedType),
-                                          lvalue, expr->type->isSigned(), loc);
+                                          lvalue, argExpr->type->isSigned(), loc);
       }
       if (!value)
         return {};
@@ -1778,10 +1845,9 @@ struct RvalueExprVisitor : public ExprVisitor {
     mlir::CallOpInterface callOp;
     if (isMethod) {
       // Class functions -> build func.call / func.indirect_call with implicit
-      // this argument
-      auto [thisRef, tyHandle] = getMethodReceiverTypeHandle(expr);
-      callOp = buildMethodCall(subroutine, lowering, tyHandle, thisRef,
-                               arguments, resultTypes);
+      // this argument. Use the already-computed receiver from earlier.
+      callOp = buildMethodCall(subroutine, lowering, methodReceiverTy,
+                               methodReceiver, arguments, resultTypes);
     } else {
       // Free function -> func.call
       callOp =
