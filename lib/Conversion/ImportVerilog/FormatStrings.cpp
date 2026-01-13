@@ -8,6 +8,7 @@
 
 #include "ImportVerilogInternals.h"
 #include "slang/ast/SFormat.h"
+#include "slang/ast/Symbol.h"
 
 using namespace mlir;
 using namespace circt;
@@ -17,6 +18,38 @@ using moore::IntFormat;
 using moore::IntPadding;
 using moore::RealFormat;
 using slang::ast::SFormat::FormatOptions;
+
+/// Build the hierarchical path string for a given scope, using "." as separator.
+/// This produces paths like "top.sub.block" for use with the %m format specifier.
+static void buildHierarchicalPath(const slang::ast::Scope *scope,
+                                  SmallVectorImpl<char> &path) {
+  if (!scope)
+    return;
+
+  // Get the symbol for this scope
+  const auto &sym = scope->asSymbol();
+
+  // Stop at root/compilation unit
+  if (sym.kind == slang::ast::SymbolKind::Root ||
+      sym.kind == slang::ast::SymbolKind::CompilationUnit)
+    return;
+
+  // Recursively build parent path first
+  buildHierarchicalPath(sym.getParentScope(), path);
+
+  // Add separator if we already have content
+  if (!path.empty())
+    path.push_back('.');
+
+  // Add this scope's name
+  StringRef name = sym.name;
+  if (!name.empty()) {
+    path.append(name.begin(), name.end());
+  } else {
+    // For anonymous scopes, use a placeholder or the symbol kind
+    path.append("$unit", "$unit" + 5);
+  }
+}
 
 namespace {
 struct FormatStringParser {
@@ -32,12 +65,20 @@ struct FormatStringParser {
   /// The interpolated string fragments that will be concatenated using a
   /// `moore.fmt.concat` op.
   SmallVector<Value> fragments;
+  /// The scope where the format string is being evaluated (for %m).
+  const slang::ast::Scope *scope;
 
   FormatStringParser(Context &context,
                      ArrayRef<const slang::ast::Expression *> arguments,
-                     Location loc, IntFormat defaultFormat)
+                     Location loc, IntFormat defaultFormat,
+                     const slang::ast::Scope *scope = nullptr)
       : context(context), builder(context.builder), arguments(arguments),
-        loc(loc), defaultFormat(defaultFormat) {}
+        loc(loc), defaultFormat(defaultFormat), scope(scope) {
+    // If no scope was explicitly provided, use the context's current scope.
+    // This is set when entering a module body and is used for %m.
+    if (!this->scope)
+      this->scope = context.currentScope;
+  }
 
   /// Entry point to the format string parser.
   FailureOr<Value> parse(bool appendNewline) {
@@ -103,8 +144,14 @@ struct FormatStringParser {
                              const FormatOptions &options) {
     auto specifierLower = std::tolower(specifier);
 
-    // Special handling for format specifiers that consume no argument.
-    if (specifierLower == 'm' || specifierLower == 'l')
+    // Special handling for %m - hierarchical name (consumes no argument).
+    // See IEEE 1800-2017 Section 21.2.1.3 "Hierarchical name format".
+    if (specifierLower == 'm') {
+      return emitHierarchicalName(options);
+    }
+
+    // Special handling for %l - library binding (unsupported).
+    if (specifierLower == 'l')
       return mlir::emitError(loc)
              << "unsupported format specifier `" << fullSpecifier << "`";
 
@@ -306,6 +353,22 @@ struct FormatStringParser {
     return success();
   }
 
+  /// Emit the hierarchical name with the %m format specifier.
+  /// Per IEEE 1800-2017 section 21.2.1.3, %m displays the hierarchical name
+  /// of the scope where the format string is being evaluated. This does not
+  /// consume an argument.
+  LogicalResult emitHierarchicalName(const FormatOptions &options) {
+    SmallString<64> path;
+    buildHierarchicalPath(scope, path);
+
+    // If we couldn't determine the path, emit a placeholder
+    if (path.empty())
+      path = "<unknown>";
+
+    emitLiteral(path);
+    return success();
+  }
+
   /// Emit an expression argument with the appropriate default formatting.
   LogicalResult emitDefault(const slang::ast::Expression &expr) {
     FormatOptions options;
@@ -316,8 +379,9 @@ struct FormatStringParser {
 
 FailureOr<Value> Context::convertFormatString(
     std::span<const slang::ast::Expression *const> arguments, Location loc,
-    IntFormat defaultFormat, bool appendNewline) {
+    IntFormat defaultFormat, bool appendNewline,
+    const slang::ast::Scope *scope) {
   FormatStringParser parser(*this, ArrayRef(arguments.data(), arguments.size()),
-                            loc, defaultFormat);
+                            loc, defaultFormat, scope);
   return parser.parse(appendNewline);
 }

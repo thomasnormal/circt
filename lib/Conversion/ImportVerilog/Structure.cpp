@@ -975,6 +975,11 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
 
   ValueSymbolScope scope(valueSymbols);
 
+  // Keep track of the current scope for %m format specifier.
+  auto prevScope = currentScope;
+  currentScope = module;
+  auto scopeGuard = llvm::make_scope_exit([&] { currentScope = prevScope; });
+
   // Keep track of the local time scale. `getTimeScale` automatically looks
   // through parent scopes to find the time scale effective locally.
   auto prevTimeScale = timeScale;

@@ -825,6 +825,12 @@ struct StmtVisitor {
     return context.convertStatement(stmt.stmt);
   }
 
+  // Handle wait fork statements: wait fork
+  LogicalResult visit(const slang::ast::WaitForkStatement &stmt) {
+    moore::WaitForkOp::create(builder, loc);
+    return success();
+  }
+
   // Handle return statements.
   LogicalResult visit(const slang::ast::ReturnStatement &stmt) {
     if (stmt.expr) {
