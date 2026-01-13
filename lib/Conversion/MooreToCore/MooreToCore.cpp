@@ -114,6 +114,21 @@ static LLVM::LLVMFuncOp getOrCreateMalloc(ModuleOp mod, OpBuilder &b) {
   return fn;
 }
 
+/// Helper to get or create an external runtime function declaration.
+static LLVM::LLVMFuncOp getOrCreateRuntimeFunc(ModuleOp mod, OpBuilder &b,
+                                                StringRef name,
+                                                LLVM::LLVMFunctionType fnTy) {
+  if (auto f = mod.lookupSymbol<LLVM::LLVMFuncOp>(name))
+    return f;
+
+  OpBuilder::InsertionGuard g(b);
+  b.setInsertionPointToStart(mod.getBody());
+
+  auto fn = LLVM::LLVMFuncOp::create(b, mod.getLoc(), name, fnTy);
+  fn.setLinkage(LLVM::Linkage::External);
+  return fn;
+}
+
 /// Helper function to create an opaque LLVM Struct Type which corresponds
 /// to the sym
 static LLVM::LLVMStructType getOrCreateOpaqueStruct(MLIRContext *ctx,
@@ -2236,7 +2251,15 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
   LogicalResult
   matchAndRewrite(ReadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<llhd::ProbeOp>(op, adaptor.getInput());
+    // If the input was converted to an LLVM pointer (for queues, dynamic
+    // arrays, etc.), use LLVM load instead of llhd.probe.
+    if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
+      auto resultType = typeConverter->convertType(op.getResult().getType());
+      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, resultType,
+                                                 adaptor.getInput());
+    } else {
+      rewriter.replaceOpWithNewOp<llhd::ProbeOp>(op, adaptor.getInput());
+    }
     return success();
   }
 };
@@ -2502,6 +2525,717 @@ struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Queue and Array Operation Conversions
+//===----------------------------------------------------------------------===//
+
+/// Base class for queue/array operations that lower to runtime function calls.
+template <typename SourceOp>
+struct RuntimeCallConversionBase : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+protected:
+  /// Get the LLVM struct type for a queue: {ptr, i64}.
+  static LLVM::LLVMStructType getQueueStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
+
+  /// Get the LLVM struct type for a dynamic array: {ptr, i64}.
+  static LLVM::LLVMStructType getDynArrayStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
+};
+
+/// Conversion for moore.queue.max -> runtime function call.
+struct QueueMaxOpConversion : public RuntimeCallConversionBase<QueueMaxOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueMaxOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_max", fnTy);
+
+    // Store input to alloca and pass pointer.
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{inputAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.min -> runtime function call.
+struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueMinOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_min", fnTy);
+
+    // Store input to alloca and pass pointer.
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{inputAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.dyn_array.new -> runtime function call.
+struct DynArrayNewOpConversion
+    : public RuntimeCallConversionBase<DynArrayNewOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(DynArrayNewOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto dynArrayTy = getDynArrayStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    // Two variants: with and without init array.
+    if (adaptor.getInit()) {
+      // __moore_dyn_array_new_copy(size, init_ptr) -> {ptr, i64}
+      auto fnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_dyn_array_new_copy", fnTy);
+
+      // Store init array to alloca and pass pointer.
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto initAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, dynArrayTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getInit(), initAlloca);
+
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{dynArrayTy}, SymbolRefAttr::get(fn),
+          ValueRange{adaptor.getSize(), initAlloca});
+      rewriter.replaceOp(op, call.getResult());
+    } else {
+      // __moore_dyn_array_new(size) -> {ptr, i64}
+      auto fnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_dyn_array_new", fnTy);
+
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{dynArrayTy},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{adaptor.getSize()});
+      rewriter.replaceOp(op, call.getResult());
+    }
+    return success();
+  }
+};
+
+/// Conversion for moore.assoc.delete -> runtime function call.
+struct AssocArrayDeleteOpConversion
+    : public OpConversionPattern<AssocArrayDeleteOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AssocArrayDeleteOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_delete", fnTy);
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getArray()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.assoc.delete_key -> runtime function call.
+struct AssocArrayDeleteKeyOpConversion
+    : public OpConversionPattern<AssocArrayDeleteKeyOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AssocArrayDeleteKeyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    // The key is passed by pointer for genericity.
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_delete_key",
+                                     fnTy);
+
+    // Store key to alloca and pass pointer.
+    auto keyType = adaptor.getKey().getType();
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto keyAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getKey(), keyAlloca);
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getArray(), keyAlloca});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Base class for associative array iterator operations (first, next, last,
+/// prev).
+template <typename SourceOp>
+struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  AssocArrayIteratorOpConversion(TypeConverter &typeConverter,
+                                 MLIRContext *context, StringRef funcName)
+      : OpConversionPattern<SourceOp>(typeConverter, context),
+        funcName(funcName) {}
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->template getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i1Ty = IntegerType::get(ctx, 1);
+    // All iterator functions: (array_ptr, key_ref_ptr) -> i1
+    auto fnTy = LLVM::LLVMFunctionType::get(i1Ty, {ptrTy, ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, funcName, fnTy);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i1Ty}, SymbolRefAttr::get(fn),
+        ValueRange{adaptor.getArray(), adaptor.getKey()});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+
+private:
+  StringRef funcName;
+};
+
+/// Conversion for moore.assoc.first -> runtime function call.
+struct AssocArrayFirstOpConversion
+    : public AssocArrayIteratorOpConversion<AssocArrayFirstOp> {
+  AssocArrayFirstOpConversion(TypeConverter &typeConverter, MLIRContext *context)
+      : AssocArrayIteratorOpConversion(typeConverter, context,
+                                       "__moore_assoc_first") {}
+};
+
+/// Conversion for moore.assoc.next -> runtime function call.
+struct AssocArrayNextOpConversion
+    : public AssocArrayIteratorOpConversion<AssocArrayNextOp> {
+  AssocArrayNextOpConversion(TypeConverter &typeConverter, MLIRContext *context)
+      : AssocArrayIteratorOpConversion(typeConverter, context,
+                                       "__moore_assoc_next") {}
+};
+
+/// Conversion for moore.assoc.last -> runtime function call.
+struct AssocArrayLastOpConversion
+    : public AssocArrayIteratorOpConversion<AssocArrayLastOp> {
+  AssocArrayLastOpConversion(TypeConverter &typeConverter, MLIRContext *context)
+      : AssocArrayIteratorOpConversion(typeConverter, context,
+                                       "__moore_assoc_last") {}
+};
+
+/// Conversion for moore.assoc.prev -> runtime function call.
+struct AssocArrayPrevOpConversion
+    : public AssocArrayIteratorOpConversion<AssocArrayPrevOp> {
+  AssocArrayPrevOpConversion(TypeConverter &typeConverter, MLIRContext *context)
+      : AssocArrayIteratorOpConversion(typeConverter, context,
+                                       "__moore_assoc_prev") {}
+};
+
+//===----------------------------------------------------------------------===//
+// String Operations Conversion
+//===----------------------------------------------------------------------===//
+
+/// Get the LLVM struct type used to represent strings: {ptr, i64}
+static LLVM::LLVMStructType getStringStructType(MLIRContext *ctx) {
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+}
+
+// moore.string.len -> call to __moore_string_len runtime function
+struct StringLenOpConversion : public OpConversionPattern<StringLenOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringLenOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_len", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.toupper -> call to __moore_string_toupper runtime function
+struct StringToUpperOpConversion : public OpConversionPattern<StringToUpperOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringToUpperOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_toupper", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.tolower -> call to __moore_string_tolower runtime function
+struct StringToLowerOpConversion : public OpConversionPattern<StringToLowerOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringToLowerOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_tolower", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.getc -> call to __moore_string_getc runtime function
+struct StringGetCOpConversion : public OpConversionPattern<StringGetCOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringGetCOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i8Ty = IntegerType::get(ctx, 8);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i8Ty, {ptrTy, i32Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_getc", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i8Ty}, SymbolRefAttr::get(runtimeFn),
+        ValueRange{strAlloca, adaptor.getIndex()});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.substr -> call to __moore_string_substr runtime function
+struct StringSubstrOpConversion : public OpConversionPattern<StringSubstrOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringSubstrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy =
+        LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i32Ty, i32Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_substr", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
+        ValueRange{strAlloca, adaptor.getStart(), adaptor.getLen()});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.itoa -> call to __moore_string_itoa runtime function
+struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringItoaOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    auto value = adaptor.getValue();
+    auto valueWidth = value.getType().getIntOrFloatBitWidth();
+
+    Value valueI64;
+    if (valueWidth < 64) {
+      valueI64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, value);
+    } else if (valueWidth > 64) {
+      valueI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, value);
+    } else {
+      valueI64 = value;
+    }
+
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_itoa", fnTy);
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                         SymbolRefAttr::get(runtimeFn),
+                         ValueRange{adaptor.getDest(), valueI64});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// moore.string_concat -> call to __moore_string_concat runtime function
+struct StringConcatOpConversion : public OpConversionPattern<StringConcatOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringConcatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto inputs = adaptor.getInputs();
+
+    if (inputs.empty()) {
+      Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      Value zero = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                             rewriter.getI64IntegerAttr(0));
+      Value result = LLVM::UndefOp::create(rewriter, loc, stringStructTy);
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, nullPtr,
+                                           ArrayRef<int64_t>{0});
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, zero,
+                                           ArrayRef<int64_t>{1});
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    if (inputs.size() == 1) {
+      rewriter.replaceOp(op, inputs[0]);
+      return success();
+    }
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_concat", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+
+    Value result = inputs[0];
+    for (size_t i = 1; i < inputs.size(); ++i) {
+      auto lhsAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+      LLVM::StoreOp::create(rewriter, loc, result, lhsAlloca);
+
+      auto rhsAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+      LLVM::StoreOp::create(rewriter, loc, inputs[i], rhsAlloca);
+
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{stringStructTy},
+          SymbolRefAttr::get(runtimeFn), ValueRange{lhsAlloca, rhsAlloca});
+      result = call.getResult();
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+// moore.string_cmp -> call to __moore_string_cmp runtime function
+struct StringCmpOpConversion : public OpConversionPattern<StringCmpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringCmpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_cmp", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto lhsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getLhs(), lhsAlloca);
+
+    auto rhsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getRhs(), rhsAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{lhsAlloca, rhsAlloca});
+    Value cmpResult = call.getResult();
+
+    Value zero = arith::ConstantOp::create(rewriter, loc, i32Ty,
+                                           rewriter.getI32IntegerAttr(0));
+
+    Value result;
+    switch (op.getPredicate()) {
+    case StringCmpPredicate::eq:
+      result = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                     cmpResult, zero);
+      break;
+    case StringCmpPredicate::ne:
+      result = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                     cmpResult, zero);
+      break;
+    case StringCmpPredicate::lt:
+      result = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                     cmpResult, zero);
+      break;
+    case StringCmpPredicate::le:
+      result = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sle,
+                                     cmpResult, zero);
+      break;
+    case StringCmpPredicate::gt:
+      result = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
+                                     cmpResult, zero);
+      break;
+    case StringCmpPredicate::ge:
+      result = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
+                                     cmpResult, zero);
+      break;
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+// moore.int_to_string -> call to __moore_int_to_string runtime function
+struct IntToStringOpConversion : public OpConversionPattern<IntToStringOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(IntToStringOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto input = adaptor.getInput();
+    auto inputWidth = input.getType().getIntOrFloatBitWidth();
+
+    Value inputI64;
+    if (inputWidth < 64) {
+      inputI64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, input);
+    } else if (inputWidth > 64) {
+      inputI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, input);
+    } else {
+      inputI64 = input;
+    }
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_int_to_string", fnTy);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{inputI64});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string_to_int -> call to __moore_string_to_int runtime function
+struct StringToIntOpConversion : public OpConversionPattern<StringToIntOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringToIntOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+    auto resultWidth = resultType.getIntOrFloatBitWidth();
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_to_int", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    Value result = call.getResult();
+
+    if (resultWidth < 64) {
+      result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+    } else if (resultWidth > 64) {
+      result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// IsUnknownBIOp Conversion
+//===----------------------------------------------------------------------===//
+
+// moore.builtin.isunknown -> constant false (since we only support two-valued)
+struct IsUnknownBIOpConversion : public OpConversionPattern<IsUnknownBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(IsUnknownBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // In the current two-valued lowering, there are no X or Z bits,
+    // so $isunknown always returns 0.
+    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, APInt(1, 0));
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -2706,6 +3440,14 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
   });
 
+  // StringType -> LLVM struct {ptr, i64} representing a dynamic string.
+  typeConverter.addConversion([&](StringType type) -> std::optional<Type> {
+    auto *ctx = type.getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  });
+
   // OpenUnpackedArrayType (dynamic array) -> LLVM struct {ptr, i64}.
   typeConverter.addConversion(
       [&](OpenUnpackedArrayType type) -> std::optional<Type> {
@@ -2725,9 +3467,11 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return LLVM::LLVMPointerType::get(type.getContext());
   });
 
-  // Explicitly mark LLVMPointerType as a legal target
+  // Explicitly mark LLVM types as legal targets
   typeConverter.addConversion(
       [](LLVM::LLVMPointerType t) -> std::optional<Type> { return t; });
+  typeConverter.addConversion(
+      [](LLVM::LLVMStructType t) -> std::optional<Type> { return t; });
 
   // ClassHandleType  ->  !llvm.ptr
   typeConverter.addConversion([&](ClassHandleType type) -> std::optional<Type> {
@@ -2735,8 +3479,16 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   });
 
   typeConverter.addConversion([&](RefType type) -> std::optional<Type> {
-    if (auto innerType = typeConverter.convertType(type.getNestedType()))
+    auto nestedType = type.getNestedType();
+    if (auto innerType = typeConverter.convertType(nestedType)) {
+      // For dynamic container types (queues, dynamic arrays, and associative
+      // arrays), return an LLVM pointer instead of llhd.ref. These are dynamic
+      // container types that don't fit the llhd signal/probe model.
+      // Check the original Moore type to distinguish from other pointer types.
+      if (isa<QueueType, OpenUnpackedArrayType, AssocArrayType>(nestedType))
+        return LLVM::LLVMPointerType::get(type.getContext());
       return llhd::RefType::get(innerType);
+    }
     return {};
   });
 
@@ -2968,9 +3720,35 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatConcatOpConversion,
     FormatIntOpConversion,
     FormatRealOpConversion,
-    DisplayBIOpConversion
+    DisplayBIOpConversion,
+
+    // Patterns for queue and dynamic array operations.
+    QueueMaxOpConversion,
+    QueueMinOpConversion,
+    DynArrayNewOpConversion,
+    AssocArrayDeleteOpConversion,
+    AssocArrayDeleteKeyOpConversion,
+
+    // Patterns for string operations.
+    StringLenOpConversion,
+    StringToUpperOpConversion,
+    StringToLowerOpConversion,
+    StringGetCOpConversion,
+    StringSubstrOpConversion,
+    StringItoaOpConversion,
+    StringConcatOpConversion,
+    StringCmpOpConversion,
+    IntToStringOpConversion,
+    StringToIntOpConversion,
+    IsUnknownBIOpConversion
   >(typeConverter, patterns.getContext());
   // clang-format on
+
+  // Associative array iterator operations (need explicit constructor).
+  patterns.add<AssocArrayFirstOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<AssocArrayNextOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<AssocArrayLastOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<AssocArrayPrevOpConversion>(typeConverter, patterns.getContext());
 
   // Structural operations
   patterns.add<WaitDelayOp>(convert);
