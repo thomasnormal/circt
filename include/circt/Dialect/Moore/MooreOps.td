@@ -2247,6 +2247,19 @@ def FormatStringOp : MooreOp<"fmt.string", [Pure]> {
   }];
 }
 
+def FormatClassOp : MooreOp<"fmt.class", [Pure]> {
+  let summary = "Format a class handle value";
+  let description = [{
+    Format a class handle (object reference) as a string. Since actual
+    object addresses are simulator-specific and meaningless in MLIR,
+    this operation produces a placeholder representation.
+    See IEEE 1800-2017 § 21.2.1.2 "Format specifications".
+  }];
+  let arguments = (ins ClassHandleType:$value);
+  let results = (outs FormatStringType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 //===----------------------------------------------------------------------===//
 // Builtin System Tasks and Functions
 //===----------------------------------------------------------------------===//

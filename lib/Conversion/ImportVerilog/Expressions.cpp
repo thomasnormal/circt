@@ -2710,8 +2710,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (const auto *subroutine =
               std::get_if<const slang::ast::SubroutineSymbol *>(
                   &callConstructor->subroutine)) {
-        // Bit paranoid, but virtually free checks that new is a class method
-        // and the subroutine has already been converted.
+        // Built-in class constructors (e.g., semaphore, mailbox) don't have a
+        // thisVar because they're created programmatically, not from source.
+        // For these, we skip the constructor call - the runtime handles
+        // initialization. Just return the allocated object.
+        if ((*subroutine)->flags & slang::ast::MethodFlags::BuiltIn) {
+          // TODO: Pass constructor arguments to runtime for initialization
+          // (e.g., semaphore keyCount, mailbox bound)
+          return newObj;
+        }
+        // For user-defined classes, verify that the constructor has a thisVar.
         if (!(*subroutine)->thisVar) {
           mlir::emitError(loc) << "Expected subroutine called by new to use an "
                                   "implicit this reference";

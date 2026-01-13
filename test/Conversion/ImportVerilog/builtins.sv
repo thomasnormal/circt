@@ -526,3 +526,19 @@ module HierarchicalNameModule;
   // CHECK: moore.builtin.display
   initial $display("Path: %m");
 endmodule
+
+// IEEE 1800-2017 Section 21.2.1.2 "Format specifications"
+// Test %p format specifier for class handles
+class FormatTestClass;
+  int value;
+endclass
+
+// CHECK-LABEL: func.func private @ClassFormatBuiltin(
+// CHECK-SAME: [[OBJ:%.+]]: !moore.class<@FormatTestClass>
+function void ClassFormatBuiltin(FormatTestClass obj);
+  // CHECK: moore.fmt.class [[OBJ]] : <@FormatTestClass>
+  // CHECK: moore.fmt.literal "\0A"
+  // CHECK: moore.fmt.concat
+  // CHECK: moore.builtin.display
+  $display("%p", obj);
+endfunction

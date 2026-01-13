@@ -1818,6 +1818,15 @@ struct ClassDeclVisitor {
       if (context.globalVariables.count(&prop))
         return success();
 
+      // Check by fully qualified name (handles multiple specializations of
+      // parameterized classes that share the same static member).
+      auto symName = fullyQualifiedSymbolName(context, prop);
+      if (context.globalVariablesByName.count(symName)) {
+        // Reuse the existing global variable for this symbol pointer.
+        context.globalVariables[&prop] = context.globalVariablesByName[symName];
+        return success();
+      }
+
       // Pick an insertion point for this variable at the module level.
       OpBuilder::InsertionGuard g(builder);
       auto it = context.orderedRootOps.upper_bound(prop.location);
@@ -1826,14 +1835,12 @@ struct ClassDeclVisitor {
       else
         builder.setInsertionPoint(it->second);
 
-      // Use fully qualified name: Class::property
-      auto symName = fullyQualifiedSymbolName(context, prop);
-
-      // Create the global variable op.
+      // Create the global variable op (symName already computed above).
       auto varOp = moore::GlobalVariableOp::create(
           builder, loc, symName, cast<moore::UnpackedType>(ty));
       context.orderedRootOps.insert({prop.location, varOp});
-      context.globalVariables.insert({&prop, varOp});
+      context.globalVariables[&prop] = varOp;
+      context.globalVariablesByName[symName] = varOp;
 
       // If the property has an initializer expression, remember it for later.
       if (prop.getInitializer())
@@ -2207,6 +2214,15 @@ LogicalResult Context::convertStaticClassProperty(
   if (globalVariables.count(&prop))
     return success();
 
+  // Check by fully qualified name (handles multiple specializations of
+  // parameterized classes that share the same static member).
+  auto symName = fullyQualifiedSymbolName(*this, prop);
+  if (globalVariablesByName.count(symName)) {
+    // Reuse the existing global variable for this symbol pointer.
+    globalVariables[&prop] = globalVariablesByName[symName];
+    return success();
+  }
+
   // Check if we're already in the process of converting this property.
   // This can happen with recursive class type conversions where a property's
   // type triggers conversion of classes whose methods reference the property.
@@ -2233,19 +2249,17 @@ LogicalResult Context::convertStaticClassProperty(
   else
     builder.setInsertionPoint(it->second);
 
-  // Use fully qualified name: Class::property
-  auto symName = fullyQualifiedSymbolName(*this, prop);
-
   // Determine the type of the property.
   auto ty = convertType(prop.getType());
   if (!ty)
     return failure();
 
-  // Create the global variable op.
+  // Create the global variable op (symName already computed above).
   auto varOp = moore::GlobalVariableOp::create(builder, loc, symName,
                                                cast<moore::UnpackedType>(ty));
   orderedRootOps.insert({prop.location, varOp});
-  globalVariables.insert({&prop, varOp});
+  globalVariables[&prop] = varOp;
+  globalVariablesByName[symName] = varOp;
 
   // If the property has an initializer expression, remember it for later.
   if (prop.getInitializer())
