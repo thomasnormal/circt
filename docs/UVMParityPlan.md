@@ -53,7 +53,7 @@ The UVM package parses successfully but fails during MLIR lowering with ~1,684
 | Feature | Status | Gap | Fix Required |
 |---------|--------|-----|--------------|
 | Block terminators | ❌ BROKEN | ~1,684 errors | Statements.cpp control flow |
-| std::randomize() | ❌ Missing | Standalone var randomization | New handler in Expressions.cpp |
+| std::randomize() | ⚠️ IR WIP | StdRandomizeOp added, lowering needed | MooreToCore.cpp lowering pattern |
 
 ### P1 - High Priority (Blocks Full Simulation)
 
@@ -146,7 +146,31 @@ constructs (if/else, foreach, loops) generate proper MLIR block terminators.
 - [ ] Four-valued logic (X/Z) support (P2)
 - [ ] Process/thread management for fork/join (P2)
 
-### ~120 Moore Ops Still Missing Lowering
+### MooreToCore Op Audit (2026-01-13) - COMPLETE
+
+**Summary: 70 ops missing lowering patterns out of 233 total (163 have patterns)**
+
+#### P0 - Critical: UVM Ops (31 ops)
+All UVM-specific operations need lowering:
+- Factory: `UVMObjectCreateOp`, `UVMComponentCreateOp`, `UVMTypeOverrideOp`
+- Config: `UVMConfigDbSetOp`, `UVMConfigDbGetOp`
+- Sequences: `UVMSequenceStartOp`, `UVMSequenceItemStartOp/FinishOp`
+- TLM: `UVMTLMPutOp`, `UVMTLMGetOp`, `UVMTLMTryPutOp/TryGetOp`
+- Messaging: `UVMReportOp`
+
+#### P1 - High Priority: Data Structures (8 ops)
+- `ArraySizeOp`, `AssocArrayExistsOp`
+- Union ops: `UnionCreateOp`, `UnionExtractOp`, `UnionExtractRefOp`
+- `StructInjectOp`, `ConcatRefOp`, `NegRealOp`
+
+#### P2 - Medium Priority: Math Builtins (27 ops)
+- Trigonometric: `SinBIOp`, `CosBIOp`, `TanBIOp`, etc.
+- Exponential: `ExpBIOp`, `LnBIOp`, `Log10BIOp`, `SqrtBIOp`
+- Conversion: `Clog2BIOp`, `RealtobitsBIOp`, `BitstorealBIOp`
+
+#### P3 - Already Handled Internally (4 ops)
+- `DetectEventOp`, `ForkTerminatorOp`, `NamedBlockTerminatorOp`, `ReturnOp`
+
 Based on audit, categorized by priority:
 - **P0**: None remaining (interfaces done!)
 - **P1**: ~15 class ops (property access, method calls)
