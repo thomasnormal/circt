@@ -888,6 +888,101 @@ extern "C" MooreQueue __moore_array_find_eq(MooreQueue *array,
   return result;
 }
 
+extern "C" MooreQueue __moore_array_find_cmp(MooreQueue *array,
+                                             int64_t elementSize, void *value,
+                                             int32_t cmpMode,
+                                             int32_t locatorMode,
+                                             bool returnIndices) {
+  MooreQueue result = {nullptr, 0};
+
+  // Validate inputs
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      !value || elementSize > 8) {
+    return result;
+  }
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  // Read the comparison value as a signed 64-bit integer
+  int64_t cmpValue = readElementValue(value, elementSize);
+  // Sign-extend if needed
+  if (elementSize < 8) {
+    int shift = (8 - elementSize) * 8;
+    cmpValue = (cmpValue << shift) >> shift;
+  }
+
+  // Helper lambda to check if an element matches the comparison predicate
+  auto matchesPredicate = [&](void *element) -> bool {
+    int64_t elemValue = readElementValue(element, elementSize);
+    // Sign-extend if needed
+    if (elementSize < 8) {
+      int shift = (8 - elementSize) * 8;
+      elemValue = (elemValue << shift) >> shift;
+    }
+
+    switch (cmpMode) {
+    case MOORE_CMP_EQ:  // Equal
+      return elemValue == cmpValue;
+    case MOORE_CMP_NE:  // Not equal
+      return elemValue != cmpValue;
+    case MOORE_CMP_SGT: // Signed greater than
+      return elemValue > cmpValue;
+    case MOORE_CMP_SGE: // Signed greater than or equal
+      return elemValue >= cmpValue;
+    case MOORE_CMP_SLT: // Signed less than
+      return elemValue < cmpValue;
+    case MOORE_CMP_SLE: // Signed less than or equal
+      return elemValue <= cmpValue;
+    default:
+      return false;
+    }
+  };
+
+  // locatorMode: 0=all, 1=first, 2=last
+  if (locatorMode == 2) {
+    // Last: iterate backwards
+    for (int64_t i = numElements - 1; i >= 0; --i) {
+      void *element = data + i * elementSize;
+      if (matchesPredicate(element)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else if (locatorMode == 1) {
+    // First: iterate forwards, stop at first match
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (matchesPredicate(element)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+        break;
+      }
+    }
+  } else {
+    // All: iterate forwards, collect all matches
+    for (int64_t i = 0; i < numElements; ++i) {
+      void *element = data + i * elementSize;
+      if (matchesPredicate(element)) {
+        if (returnIndices) {
+          result = appendIndexToResult(result, i);
+        } else {
+          result = appendToResult(result, element, elementSize);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 extern "C" MooreQueue __moore_array_min(MooreQueue *array, int64_t elementSize,
                                         bool isSigned) {
   MooreQueue result = {nullptr, 0};

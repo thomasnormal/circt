@@ -3556,12 +3556,61 @@ private:
 
 /// Conversion for moore.array.locator -> runtime function call.
 /// This pattern-matches the predicate region to detect common patterns
-/// (like equality comparison) and uses specialized runtime functions.
+/// (comparison operations) and uses specialized runtime functions.
+/// Supports: eq, ne, sgt, sge, slt, sle predicates with constants.
 /// For simple equality predicates (`item == constant`), we use
-/// `__moore_array_find_eq`. More complex predicates are not yet supported.
+/// `__moore_array_find_eq`. For other comparison predicates, we use
+/// `__moore_array_find_cmp` with the appropriate comparison mode.
 struct ArrayLocatorOpConversion
     : public RuntimeCallConversionBase<ArrayLocatorOp> {
   using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  /// Comparison mode enum matching MooreCmpMode in MooreRuntime.h.
+  enum CmpMode {
+    CMP_EQ = 0,  // Equal (==)
+    CMP_NE = 1,  // Not equal (!=)
+    CMP_SGT = 2, // Signed greater than (>)
+    CMP_SGE = 3, // Signed greater than or equal (>=)
+    CMP_SLT = 4, // Signed less than (<)
+    CMP_SLE = 5  // Signed less than or equal (<=)
+  };
+
+  /// Try to extract comparison info from a binary comparison operation.
+  /// Returns true if successful, setting constValue and cmpMode.
+  /// The blockArg must be one of the operands.
+  template <typename OpTy>
+  static bool tryExtractComparisonInfo(OpTy cmpOp, Value blockArg,
+                                       CmpMode mode, Value &constValue,
+                                       CmpMode &cmpMode) {
+    if (cmpOp.getLhs() == blockArg) {
+      constValue = cmpOp.getRhs();
+      cmpMode = mode;
+      return true;
+    } else if (cmpOp.getRhs() == blockArg) {
+      constValue = cmpOp.getLhs();
+      // For relational ops, swap the comparison direction when operands swap
+      // e.g., if we have `const > item`, that's equivalent to `item < const`
+      switch (mode) {
+      case CMP_SGT:
+        cmpMode = CMP_SLT;
+        break;
+      case CMP_SGE:
+        cmpMode = CMP_SLE;
+        break;
+      case CMP_SLT:
+        cmpMode = CMP_SGT;
+        break;
+      case CMP_SLE:
+        cmpMode = CMP_SGE;
+        break;
+      default:
+        cmpMode = mode; // eq and ne are symmetric
+        break;
+      }
+      return true;
+    }
+    return false;
+  }
 
   LogicalResult
   matchAndRewrite(ArrayLocatorOp op, OpAdaptor adaptor,
@@ -3570,11 +3619,11 @@ struct ArrayLocatorOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    // Check if predicate is a simple equality comparison: `item == constant`
+    // Check if predicate is a simple comparison: `item <op> constant`
     // The region has format:
     //   ^bb0(%item):
     //     %const = moore.constant ...
-    //     %cond = moore.eq %item, %const (or %const, %item)
+    //     %cond = moore.<cmpop> %item, %const (or %const, %item)
     //     moore.array.locator.yield %cond
     Block &body = op.getBody().front();
     if (body.getNumArguments() != 1)
@@ -3587,22 +3636,61 @@ struct ArrayLocatorOpConversion
     if (!yieldOp)
       return rewriter.notifyMatchFailure(op, "expected array.locator.yield");
 
-    // Check if the yielded value comes from an equality comparison
-    auto eqOp = yieldOp.getCondition().getDefiningOp<EqOp>();
-    if (!eqOp)
-      return rewriter.notifyMatchFailure(
-          op, "only equality predicates are currently supported");
-
-    // Find which operand is the block argument and which is the constant
+    // Try to match various comparison operations
     Value constValue = nullptr;
-    if (eqOp.getLhs() == blockArg) {
-      constValue = eqOp.getRhs();
-    } else if (eqOp.getRhs() == blockArg) {
-      constValue = eqOp.getLhs();
-    } else {
-      return rewriter.notifyMatchFailure(
-          op, "equality must compare block argument with a value");
+    CmpMode cmpMode = CMP_EQ;
+    bool foundComparison = false;
+
+    Value condValue = yieldOp.getCondition();
+
+    // Try EqOp
+    if (auto cmpOp = condValue.getDefiningOp<EqOp>()) {
+      foundComparison =
+          tryExtractComparisonInfo(cmpOp, blockArg, CMP_EQ, constValue, cmpMode);
     }
+    // Try NeOp
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<NeOp>()) {
+        foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_NE,
+                                                   constValue, cmpMode);
+      }
+    }
+    // Try SgtOp (signed greater than)
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SgtOp>()) {
+        foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SGT,
+                                                   constValue, cmpMode);
+      }
+    }
+    // Try SgeOp (signed greater than or equal)
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SgeOp>()) {
+        foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SGE,
+                                                   constValue, cmpMode);
+      }
+    }
+    // Try SltOp (signed less than)
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SltOp>()) {
+        foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SLT,
+                                                   constValue, cmpMode);
+      }
+    }
+    // Try SleOp (signed less than or equal)
+    if (!foundComparison) {
+      if (auto cmpOp = condValue.getDefiningOp<SleOp>()) {
+        foundComparison = tryExtractComparisonInfo(cmpOp, blockArg, CMP_SLE,
+                                                   constValue, cmpMode);
+      }
+    }
+
+    if (!foundComparison)
+      return rewriter.notifyMatchFailure(
+          op, "only eq, ne, sgt, sge, slt, sle predicates are supported");
+
+    if (!constValue)
+      return rewriter.notifyMatchFailure(
+          op, "comparison must compare block argument with a value");
 
     // The constant value must be defined by a moore.constant op
     auto constOp = constValue.getDefiningOp<ConstantOp>();
@@ -3637,14 +3725,6 @@ struct ArrayLocatorOpConversion
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i1Ty = IntegerType::get(ctx, 1);
 
-    // Get or create the runtime function
-    // Signature: MooreQueue __moore_array_find_eq(MooreQueue*, i64, void*, i32,
-    // i1)
-    auto fnTy =
-        LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, ptrTy, i32Ty, i1Ty});
-    auto fn =
-        getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_find_eq", fnTy);
-
     // Store input array to alloca and pass pointer
     auto one =
         LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
@@ -3672,23 +3752,51 @@ struct ArrayLocatorOpConversion
     auto elementSizeConst = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(elementSizeBytes));
 
-    // Create mode constant: All=0, First=1, Last=2
-    int32_t modeValue = static_cast<int32_t>(op.getMode());
-    auto modeConst = LLVM::ConstantOp::create(
-        rewriter, loc, rewriter.getI32IntegerAttr(modeValue));
+    // Create locator mode constant: All=0, First=1, Last=2
+    int32_t locatorModeValue = static_cast<int32_t>(op.getMode());
+    auto locatorModeConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(locatorModeValue));
 
     // Create indexed flag constant
     bool returnIndices = op.getIndexed();
     auto indicesConst = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(i1Ty, returnIndices ? 1 : 0));
 
-    // Call the runtime function
-    auto call = LLVM::CallOp::create(
-        rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
-        ValueRange{inputAlloca, elementSizeConst, constAlloca, modeConst,
-                   indicesConst});
+    // Choose runtime function based on comparison mode
+    // For simple equality, use the optimized __moore_array_find_eq
+    // For other comparisons, use __moore_array_find_cmp
+    if (cmpMode == CMP_EQ) {
+      // Signature: MooreQueue __moore_array_find_eq(MooreQueue*, i64, void*,
+      // i32, i1)
+      auto fnTy = LLVM::LLVMFunctionType::get(
+          queueTy, {ptrTy, i64Ty, ptrTy, i32Ty, i1Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_find_eq", fnTy);
 
-    rewriter.replaceOp(op, call.getResult());
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
+          ValueRange{inputAlloca, elementSizeConst, constAlloca,
+                     locatorModeConst, indicesConst});
+      rewriter.replaceOp(op, call.getResult());
+    } else {
+      // Signature: MooreQueue __moore_array_find_cmp(MooreQueue*, i64, void*,
+      // i32, i32, i1)
+      auto fnTy = LLVM::LLVMFunctionType::get(
+          queueTy, {ptrTy, i64Ty, ptrTy, i32Ty, i32Ty, i1Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_find_cmp", fnTy);
+
+      // Create comparison mode constant
+      auto cmpModeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(static_cast<int32_t>(cmpMode)));
+
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
+          ValueRange{inputAlloca, elementSizeConst, constAlloca, cmpModeConst,
+                     locatorModeConst, indicesConst});
+      rewriter.replaceOp(op, call.getResult());
+    }
+
     return success();
   }
 };
