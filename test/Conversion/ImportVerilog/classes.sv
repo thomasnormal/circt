@@ -1091,3 +1091,90 @@ module testNullComparison;
         end
     end
 endmodule
+
+//===----------------------------------------------------------------------===//
+// Built-in Class Tests (semaphore, mailbox)
+//===----------------------------------------------------------------------===//
+
+/// Check semaphore new() construction
+
+// CHECK-LABEL: moore.module @testSemaphoreNew() {
+// CHECK:   %sem = moore.variable : <class<@"std::semaphore">>
+// CHECK:   moore.procedure initial {
+// Default new (no args)
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::semaphore">
+// CHECK:     moore.blocking_assign %sem, %{{[0-9]+}} : class<@"std::semaphore">
+// new with keyCount argument
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::semaphore">
+// CHECK:     moore.blocking_assign %sem, %{{[0-9]+}} : class<@"std::semaphore">
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testSemaphoreNew;
+    semaphore sem;
+    initial begin
+        // Test default constructor (no args)
+        sem = new;
+        // Test constructor with initial key count
+        sem = new(1);
+    end
+endmodule
+
+/// Check mailbox new() construction
+
+// CHECK-LABEL: moore.module @testMailboxNew() {
+// CHECK:   %typedMb = moore.variable : <class<@"std::mailbox">>
+// CHECK:   %untypedMb = moore.variable : <class<@"std::mailbox_0">>
+// CHECK:   moore.procedure initial {
+// Default new for typed mailbox
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox">
+// CHECK:     moore.blocking_assign %typedMb, %{{[0-9]+}} : class<@"std::mailbox">
+// new with bound argument for typed mailbox
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox">
+// CHECK:     moore.blocking_assign %typedMb, %{{[0-9]+}} : class<@"std::mailbox">
+// Default new for untyped mailbox
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox_0">
+// CHECK:     moore.blocking_assign %untypedMb, %{{[0-9]+}} : class<@"std::mailbox_0">
+// new with bound argument for untyped mailbox
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox_0">
+// CHECK:     moore.blocking_assign %untypedMb, %{{[0-9]+}} : class<@"std::mailbox_0">
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testMailboxNew;
+    mailbox #(int) typedMb;
+    mailbox untypedMb;
+    initial begin
+        // Test default constructor for typed mailbox
+        typedMb = new;
+        // Test constructor with bound for typed mailbox
+        typedMb = new(10);
+        // Test default constructor for untyped mailbox
+        untypedMb = new;
+        // Test constructor with bound for untyped mailbox
+        untypedMb = new(5);
+    end
+endmodule
+
+/// Check semaphore in class (UVM pattern)
+
+// CHECK-LABEL: moore.class.classdecl @UvmSequenceBase {
+// CHECK:   moore.class.propertydecl @m_mutex : !moore.class<@"std::semaphore">
+// CHECK: }
+// CHECK: func.func private @"UvmSequenceBase::new"(%arg0: !moore.class<@UvmSequenceBase>) {
+// CHECK:   %{{[0-9]+}} = moore.class.property_ref %arg0[@m_mutex] : <@UvmSequenceBase> -> <class<@"std::semaphore">>
+// CHECK:   %{{[0-9]+}} = moore.class.new : <@"std::semaphore">
+// CHECK:   moore.blocking_assign %{{[0-9]+}}, %{{[0-9]+}} : class<@"std::semaphore">
+// CHECK:   return
+// CHECK: }
+
+class UvmSequenceBase;
+    semaphore m_mutex;
+    function new();
+        m_mutex = new(1);
+    endfunction
+endclass

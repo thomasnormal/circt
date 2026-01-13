@@ -338,6 +338,9 @@ struct Context {
   /// expressions.
   DenseMap<const slang::ast::ValueSymbol *, moore::GlobalVariableOp>
       globalVariables;
+  /// Global variables indexed by their fully qualified symbol name for
+  /// deduplication across parameterized class specializations.
+  DenseMap<mlir::StringAttr, moore::GlobalVariableOp> globalVariablesByName;
   /// A set of static class properties that are currently being converted.
   /// This is used to detect and handle recursive conversions when a property's
   /// type conversion triggers conversion of classes whose methods reference

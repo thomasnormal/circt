@@ -330,6 +330,14 @@ struct FormatStringParser {
       return success();
     }
 
+    // Try converting without target type to see if it's a class handle
+    if (auto value = context.convertRvalueExpression(arg)) {
+      if (isa<moore::ClassHandleType>(value.getType())) {
+        fragments.push_back(moore::FormatClassOp::create(builder, loc, value));
+        return success();
+      }
+    }
+
     return mlir::emitError(context.convertLocation(arg.sourceRange))
            << "expression cannot be formatted as string";
   }
@@ -347,8 +355,15 @@ struct FormatStringParser {
     if (!value)
       return failure();
 
-    // Emit a placeholder literal representing the pointer format.
-    // The actual pointer value would be determined at simulation runtime.
+    // For class handles, use FormatClassOp to represent the formatting.
+    if (isa<moore::ClassHandleType>(value.getType())) {
+      fragments.push_back(moore::FormatClassOp::create(builder, loc, value));
+      return success();
+    }
+
+    // For other pointer types, emit a placeholder literal representing the
+    // pointer format. The actual pointer value would be determined at
+    // simulation runtime.
     emitLiteral("<ptr>");
     return success();
   }

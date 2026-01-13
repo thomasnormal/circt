@@ -2921,6 +2921,18 @@ struct FormatIntOpConversion : public OpConversionPattern<FormatIntOp> {
   }
 };
 
+struct FormatClassOpConversion : public OpConversionPattern<FormatClassOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FormatClassOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Emit a placeholder since actual object addresses are runtime-specific
+    rewriter.replaceOpWithNewOp<sim::FormatLiteralOp>(op, "<object>");
+    return success();
+  }
+};
+
 struct FormatRealOpConversion : public OpConversionPattern<FormatRealOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -4852,6 +4864,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatLiteralOpConversion,
     FormatConcatOpConversion,
     FormatIntOpConversion,
+    FormatClassOpConversion,
     FormatRealOpConversion,
     DisplayBIOpConversion,
 
