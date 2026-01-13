@@ -1252,6 +1252,9 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
           case slang::ast::ArgumentDirection::Ref:
             dir = moore::ModportDir::Ref;
             break;
+          default:
+            dir = moore::ModportDir::InOut;
+            break;
           }
 
           // Get the signal name from the internal symbol
@@ -1892,6 +1895,9 @@ struct ClassDeclVisitor {
     case slang::ast::Visibility::Local:
       memberAccess = moore::MemberAccess::Local;
       break;
+    default:
+      memberAccess = moore::MemberAccess::Public;
+      break;
     }
 
     // Convert slang's RandMode to Moore's RandMode
@@ -1905,6 +1911,9 @@ struct ClassDeclVisitor {
       break;
     case slang::ast::RandMode::RandC:
       randMode = moore::RandMode::RandC;
+      break;
+    default:
+      randMode = moore::RandMode::None;
       break;
     }
 
