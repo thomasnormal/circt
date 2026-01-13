@@ -142,6 +142,9 @@ struct FormatStringParser {
     case 's':
       return emitString(arg, options);
 
+    case 'p':
+      return emitPointer(arg, options);
+
     default:
       return mlir::emitError(loc)
              << "unsupported format specifier `" << fullSpecifier << "`";
@@ -282,6 +285,25 @@ struct FormatStringParser {
 
     return mlir::emitError(context.convertLocation(arg.sourceRange))
            << "expression cannot be formatted as string";
+  }
+
+  /// Emit a pointer/handle value with the %p format specifier.
+  /// Per IEEE 1800-2017 section 21.2.1.2, %p prints class handles in a
+  /// pointer format. Since actual pointer values are simulator-specific,
+  /// we emit a placeholder string representation.
+  LogicalResult emitPointer(const slang::ast::Expression &arg,
+                            const FormatOptions &options) {
+    // Consume the argument but emit a placeholder since actual pointer
+    // values are runtime/simulator-specific. This allows code using %p
+    // to be parsed and lowered without error.
+    auto value = context.convertRvalueExpression(arg);
+    if (!value)
+      return failure();
+
+    // Emit a placeholder literal representing the pointer format.
+    // The actual pointer value would be determined at simulation runtime.
+    emitLiteral("<ptr>");
+    return success();
   }
 
   /// Emit an expression argument with the appropriate default formatting.

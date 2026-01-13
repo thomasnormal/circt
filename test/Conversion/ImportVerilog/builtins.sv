@@ -147,6 +147,12 @@ function void DisplayAndSeverityBuiltins(int x, real r);
   // CHECK: moore.fmt.int hex_lower [[X]], align left, pad zero width 19 : i32
   $write("%-019h", x);
 
+  // Test %p format specifier (pointer/handle format)
+  // CHECK: moore.fmt.literal "<ptr>"
+  $write("%p", x);
+  // CHECK: moore.fmt.literal "<ptr>"
+  $write("%0p", x);
+
   // CHECK: [[TMP:%.+]] = moore.fmt.int decimal [[X]], align right, pad space signed : i32
   // CHECK: moore.builtin.display [[TMP]]
   $write(x);
