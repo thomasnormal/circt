@@ -10,7 +10,7 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 **Overall Progress:** UVM core library parses completely without errors!
 Array locator methods with field-based predicates now work. Main focus: MooreToCore lowering and randomize() support.
 
-### Session Progress (26+ commits)
+### Session Progress (28+ commits)
 - ✅ Fixed `cast<TypedValue<IntType>>` crash in class hierarchy
 - ✅ Added `EventTriggerOp` for `->event` syntax
 - ✅ Added `QueueConcatOp` for queue concatenation
@@ -36,15 +36,18 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - ✅ Added covergroup skip with remark
 - ✅ Fixed DPI-C crash (emits remark instead)
 - ✅ Fixed enum .name() lowering with FormatDynStringOp
-- ✅ **Added field-based array predicates (`item.field == val`)**
-- ✅ **Fixed lit test regressions (type formats, struct sizes)**
+- ✅ Added field-based array predicates (`item.field == val`)
+- ✅ Fixed lit test regressions (type formats, struct sizes)
+- ✅ **Implemented randomize() method handler** (ImportVerilog)
+- ✅ **Added RandomizeOp lowering to runtime** (MooreToCore)
+- ✅ **Added __moore_randomize_basic runtime function**
 
 ### Current Limitations (Xcelium Parity Gaps)
 
-1. **randomize() method** - Not yet implemented
-   - Moore dialect has RandomizeOp defined
-   - ImportVerilog handler needed
-   - MooreToCore lowering needed
+1. **~~randomize() method~~** - ✅ IMPLEMENTED!
+   - ImportVerilog handler: `58001e3be`
+   - MooreToCore lowering: `dd2b06349`
+   - Runtime function: `__moore_randomize_basic`
 
 2. **Constraint solving** - Constraints parsed but not solved
    - Need: External solver integration (Z3/SMT)
@@ -89,9 +92,7 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - [x] `$cast` dynamic casting
 - [x] Covergroup skip/remark (graceful degradation)
 - [x] DPI-C skip/remark (no crash)
-
-### TODO - High Priority
-- [ ] **Implement randomize() handler** - Detect and convert to moore.randomize
+- [x] **randomize() method handler** - Generates moore.randomize ops
 
 ### TODO - Medium Priority
 - [ ] Full covergroup conversion (not just skip)
@@ -116,9 +117,9 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - [x] FormatClassOp, FormatStringOp → sim dialect
 - [x] WaitForkOp, DisableForkOp
 - [x] DynCastCheckOp → runtime RTTI check
+- [x] **RandomizeOp → __moore_randomize_basic runtime call**
 
 ### TODO - High Priority (Blocks End-to-End)
-- [ ] **RandomizeOp** - Basic lowering to runtime call
 - [ ] InterfaceSignalDeclOp, InterfaceInstanceOp, ModportDeclOp
 - [ ] Full class virtual dispatch (complete vTable)
 - [ ] Debug silent UVM conversion failure
@@ -128,11 +129,9 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - [ ] Process/thread management for fork/join
 - [ ] AssocArrayExistsOp
 
-**Next Agent Task:** Add RandomizeOp lowering pattern
-
 ## Track 3: Moore Runtime Library
 
-**Status: ✅ Comprehensive - Ready for randomize()**
+**Status: ✅ Comprehensive - randomize() complete!**
 
 ### Completed ✅
 - [x] Event operations (`__moore_event_*`)
@@ -145,14 +144,14 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - [x] Array min/max/unique functions
 - [x] Dynamic cast check (`__moore_dyn_cast_check`)
 - [x] Comprehensive unit tests
+- [x] **`__moore_randomize_basic`** - Basic field randomization
 
 ### TODO
-- [ ] **`__moore_randomize_basic`** - Basic field randomization
 - [ ] `__moore_queue_sort` with comparator
 - [ ] Constraint solver integration (future)
 - [ ] Process management functions
 
-**Next Agent Task:** Implement __moore_randomize_basic runtime function
+**Next Agent Task:** Debug silent UVM conversion failure
 
 ## Track 4: Testing & Integration
 
@@ -266,9 +265,17 @@ xrun -compile -uvm \
 
 ## Agent Task Assignments
 
-| Track | Agent Task | Priority | Notes |
+| Track | Agent Task | Priority | Status |
+|-------|-----------|----------|--------|
+| Track 1 | Implement randomize() handler | P0 | ✅ Done (58001e3be) |
+| Track 2 | Add RandomizeOp lowering | P0 | ✅ Done (dd2b06349) |
+| Track 3 | Implement __moore_randomize_basic | P0 | ✅ Done (dd2b06349) |
+| Track 4 | Debug silent UVM failure | P0 | 🔄 In progress |
+
+### Next Sprint Tasks
+| Track | Next Task | Priority | Notes |
 |-------|-----------|----------|-------|
-| Track 1 | Implement randomize() handler | P0 | In Expressions.cpp visitCall() |
-| Track 2 | Add RandomizeOp lowering | P0 | Basic runtime call |
-| Track 3 | Implement __moore_randomize_basic | P0 | Iterate rand fields |
-| Track 4 | Debug silent UVM failure | P0 | Find root cause |
+| Track 1 | Covergroup support | P1 | Full conversion |
+| Track 2 | Interface lowering | P1 | InterfaceSignalDeclOp |
+| Track 3 | Constraint solver | P2 | Z3/SMT integration |
+| Track 4 | Fix verifier failures | P0 | Blocks without terminators |
