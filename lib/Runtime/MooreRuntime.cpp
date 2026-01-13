@@ -313,6 +313,122 @@ extern "C" int64_t __moore_string_to_int(MooreString *str) {
 }
 
 //===----------------------------------------------------------------------===//
+// Streaming Concatenation Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreString __moore_stream_concat_strings(MooreQueue *queue,
+                                                      bool isRightToLeft) {
+  if (!queue || !queue->data || queue->len <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  // Queue contains MooreString elements
+  auto *strings = static_cast<MooreString *>(queue->data);
+  int64_t numStrings = queue->len;
+
+  // Calculate total length
+  int64_t totalLen = 0;
+  for (int64_t i = 0; i < numStrings; ++i) {
+    if (strings[i].data && strings[i].len > 0)
+      totalLen += strings[i].len;
+  }
+
+  if (totalLen == 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  MooreString result = allocateString(totalLen);
+  char *dst = result.data;
+
+  if (isRightToLeft) {
+    // Right-to-left: iterate in reverse order
+    for (int64_t i = numStrings - 1; i >= 0; --i) {
+      if (strings[i].data && strings[i].len > 0) {
+        std::memcpy(dst, strings[i].data, strings[i].len);
+        dst += strings[i].len;
+      }
+    }
+  } else {
+    // Left-to-right: iterate in normal order
+    for (int64_t i = 0; i < numStrings; ++i) {
+      if (strings[i].data && strings[i].len > 0) {
+        std::memcpy(dst, strings[i].data, strings[i].len);
+        dst += strings[i].len;
+      }
+    }
+  }
+
+  return result;
+}
+
+extern "C" int64_t __moore_stream_concat_bits(MooreQueue *queue,
+                                               int32_t elementBitWidth,
+                                               bool isRightToLeft) {
+  if (!queue || !queue->data || queue->len <= 0 || elementBitWidth <= 0)
+    return 0;
+
+  int64_t numElements = queue->len;
+  int64_t result = 0;
+
+  // Calculate bytes per element (round up to whole bytes)
+  int32_t bytesPerElement = (elementBitWidth + 7) / 8;
+
+  auto *data = static_cast<uint8_t *>(queue->data);
+
+  if (isRightToLeft) {
+    // Right-to-left streaming: pack elements from last to first
+    // Each element occupies elementBitWidth bits in the result
+    int bitPos = 0;
+    for (int64_t i = numElements - 1; i >= 0 && bitPos < 64; --i) {
+      // Read the element value (little-endian)
+      int64_t elemVal = 0;
+      for (int32_t b = 0; b < bytesPerElement && b < 8; ++b) {
+        elemVal |= static_cast<int64_t>(data[i * bytesPerElement + b]) << (b * 8);
+      }
+      // Mask to the actual bit width
+      if (elementBitWidth < 64)
+        elemVal &= (1LL << elementBitWidth) - 1;
+
+      // Insert into result at current position
+      if (bitPos + elementBitWidth <= 64) {
+        result |= elemVal << bitPos;
+      } else {
+        // Partial fit - truncate what doesn't fit
+        result |= elemVal << bitPos;
+      }
+      bitPos += elementBitWidth;
+    }
+  } else {
+    // Left-to-right streaming: pack elements from first to last
+    // Elements are placed from MSB to LSB in the result
+    int bitPos = 0;
+    for (int64_t i = 0; i < numElements && bitPos < 64; ++i) {
+      // Read the element value (little-endian)
+      int64_t elemVal = 0;
+      for (int32_t b = 0; b < bytesPerElement && b < 8; ++b) {
+        elemVal |= static_cast<int64_t>(data[i * bytesPerElement + b]) << (b * 8);
+      }
+      // Mask to the actual bit width
+      if (elementBitWidth < 64)
+        elemVal &= (1LL << elementBitWidth) - 1;
+
+      // Insert into result at current position
+      if (bitPos + elementBitWidth <= 64) {
+        result |= elemVal << bitPos;
+      } else {
+        // Partial fit
+        result |= elemVal << bitPos;
+      }
+      bitPos += elementBitWidth;
+    }
+  }
+
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

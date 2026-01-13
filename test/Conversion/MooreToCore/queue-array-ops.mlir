@@ -79,9 +79,66 @@ func.func @test_assoc_delete_key() {
   return
 }
 
+//===----------------------------------------------------------------------===//
+// Stream Concatenation Operations
+//===----------------------------------------------------------------------===//
+
+moore.global_variable @testStringQueue : !moore.queue<!moore.string, 0>
+
+// CHECK-LABEL: func @test_stream_concat_string_queue
+// CHECK: llvm.mlir.addressof @testStringQueue : !llvm.ptr
+// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
+// CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: [[FALSE:%.+]] = llvm.mlir.constant(false) : i1
+// CHECK: llvm.call @__moore_stream_concat_strings({{.*}}, [[FALSE]]) : (!llvm.ptr, i1) -> !llvm.struct<(ptr, i64)>
+func.func @test_stream_concat_string_queue() -> !moore.string {
+  %queue_ref = moore.get_global_variable @testStringQueue : !moore.ref<queue<!moore.string, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.string, 0>>
+  %result = moore.stream_concat %queue : !moore.queue<!moore.string, 0> -> !moore.string
+  return %result : !moore.string
+}
+
+// CHECK-LABEL: func @test_stream_concat_string_queue_rtl
+// CHECK: [[TRUE:%.+]] = llvm.mlir.constant(true) : i1
+// CHECK: llvm.call @__moore_stream_concat_strings({{.*}}, [[TRUE]]) : (!llvm.ptr, i1) -> !llvm.struct<(ptr, i64)>
+func.func @test_stream_concat_string_queue_rtl() -> !moore.string {
+  %queue_ref = moore.get_global_variable @testStringQueue : !moore.ref<queue<!moore.string, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.string, 0>>
+  %result = moore.stream_concat %queue {isRightToLeft = true} : !moore.queue<!moore.string, 0> -> !moore.string
+  return %result : !moore.string
+}
+
+// CHECK-LABEL: func @test_stream_concat_int_queue
+// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
+// CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: [[FALSE:%.+]] = llvm.mlir.constant(false) : i1
+// CHECK: [[WIDTH:%.+]] = llvm.mlir.constant(32 : i32) : i32
+// CHECK: [[RESULT:%.+]] = llvm.call @__moore_stream_concat_bits({{.*}}, [[WIDTH]], [[FALSE]]) : (!llvm.ptr, i32, i1) -> i64
+// CHECK: arith.trunci [[RESULT]] : i64 to i32
+func.func @test_stream_concat_int_queue() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.stream_concat %queue : !moore.queue<!moore.i32, 0> -> !moore.i32
+  return %result : !moore.i32
+}
+
+// CHECK-LABEL: func @test_stream_concat_int_queue_rtl
+// CHECK: [[TRUE:%.+]] = llvm.mlir.constant(true) : i1
+// CHECK: [[WIDTH:%.+]] = llvm.mlir.constant(32 : i32) : i32
+// CHECK: llvm.call @__moore_stream_concat_bits({{.*}}, [[WIDTH]], [[TRUE]]) : (!llvm.ptr, i32, i1) -> i64
+func.func @test_stream_concat_int_queue_rtl() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.stream_concat %queue {isRightToLeft = true} : !moore.queue<!moore.i32, 0> -> !moore.i32
+  return %result : !moore.i32
+}
+
 // CHECK-DAG: llvm.func @__moore_queue_max(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_min(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_unique(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_stream_concat_strings(!llvm.ptr, i1) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_stream_concat_bits(!llvm.ptr, i32, i1) -> i64
 // CHECK-DAG: llvm.func @__moore_dyn_array_new(i32) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_assoc_delete(!llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_assoc_delete_key(!llvm.ptr, !llvm.ptr)
