@@ -2129,6 +2129,37 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ConstantOp::create(builder, loc, intTy, 0);
     }
 
+    // Handle randomize() method on class objects.
+    // IEEE 1800-2017 Section 18.6 "Randomization methods".
+    // randomize() returns 1 on success, 0 on failure.
+    if (subroutine.name == "randomize" && args.size() == 1) {
+      // The first argument is the class object to randomize
+      Value classObj = context.convertRvalueExpression(*args[0]);
+      if (!classObj)
+        return {};
+
+      // Verify that the argument is a class handle type
+      auto classHandleTy = dyn_cast<moore::ClassHandleType>(classObj.getType());
+      if (!classHandleTy) {
+        mlir::emitError(loc) << "randomize() requires a class object, got "
+                             << classObj.getType();
+        return {};
+      }
+
+      // Create the randomize operation which returns i1 (success/failure)
+      auto randomizeOp =
+          moore::RandomizeOp::create(builder, loc, classObj);
+
+      // The result is i1, but the expression type from slang is typically int.
+      // Convert to the expected type.
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+
+      return context.materializeConversion(resultType, randomizeOp.getSuccess(),
+                                           false, loc);
+    }
+
     // Handle queue methods that need special treatment (lvalue for queue).
     // push_back, push_front need queue as lvalue + element as rvalue.
     // pop_back, pop_front need queue as lvalue, no additional args.
