@@ -247,6 +247,82 @@ TEST(MooreRuntimeStringTest, StringToInt) {
 }
 
 //===----------------------------------------------------------------------===//
+// Queue Sort Tests
+//===----------------------------------------------------------------------===//
+
+// Comparison function for sorting int32_t in ascending order
+static int compareInt32Asc(const void *a, const void *b) {
+  int32_t va = *static_cast<const int32_t *>(a);
+  int32_t vb = *static_cast<const int32_t *>(b);
+  return (va > vb) - (va < vb);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortIntegers) {
+  // Create a queue with unsorted integers
+  int32_t data[] = {5, 2, 8, 1, 9, 3};
+  MooreQueue queue = {data, 6};
+
+  auto *result = static_cast<MooreQueue *>(
+      __moore_queue_sort(&queue, sizeof(int32_t), compareInt32Asc));
+
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(result->data, nullptr);
+  EXPECT_EQ(result->len, 6);
+
+  auto *sorted = static_cast<int32_t *>(result->data);
+  EXPECT_EQ(sorted[0], 1);
+  EXPECT_EQ(sorted[1], 2);
+  EXPECT_EQ(sorted[2], 3);
+  EXPECT_EQ(sorted[3], 5);
+  EXPECT_EQ(sorted[4], 8);
+  EXPECT_EQ(sorted[5], 9);
+
+  // Verify original queue is unchanged
+  EXPECT_EQ(data[0], 5);
+  EXPECT_EQ(data[1], 2);
+
+  __moore_free(result->data);
+  __moore_free(result);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortEmpty) {
+  // Test with empty queue
+  MooreQueue empty = {nullptr, 0};
+
+  auto *result = static_cast<MooreQueue *>(
+      __moore_queue_sort(&empty, sizeof(int32_t), compareInt32Asc));
+
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_EQ(result->len, 0);
+
+  __moore_free(result);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortAlreadySorted) {
+  // Test with already sorted queue
+  int32_t data[] = {1, 2, 3, 4, 5};
+  MooreQueue queue = {data, 5};
+
+  auto *result = static_cast<MooreQueue *>(
+      __moore_queue_sort(&queue, sizeof(int32_t), compareInt32Asc));
+
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(result->data, nullptr);
+  EXPECT_EQ(result->len, 5);
+
+  auto *sorted = static_cast<int32_t *>(result->data);
+  EXPECT_EQ(sorted[0], 1);
+  EXPECT_EQ(sorted[1], 2);
+  EXPECT_EQ(sorted[2], 3);
+  EXPECT_EQ(sorted[3], 4);
+  EXPECT_EQ(sorted[4], 5);
+
+  __moore_free(result->data);
+  __moore_free(result);
+}
+
+//===----------------------------------------------------------------------===//
 // Dynamic Array Tests
 //===----------------------------------------------------------------------===//
 

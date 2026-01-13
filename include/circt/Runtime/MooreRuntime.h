@@ -98,6 +98,14 @@ int64_t __moore_queue_pop_back(MooreQueue *queue, int64_t element_size);
 /// @return The popped element value (as 64-bit integer)
 int64_t __moore_queue_pop_front(MooreQueue *queue, int64_t element_size);
 
+/// Sort a queue and return a new sorted queue.
+/// @param queue Pointer to the queue structure
+/// @param elem_size Size of each element in bytes
+/// @param compare Comparison function (same signature as qsort compare)
+/// @return A new queue with sorted elements
+void *__moore_queue_sort(void *queue, int64_t elem_size,
+                         int (*compare)(const void *, const void *));
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//

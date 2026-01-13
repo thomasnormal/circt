@@ -195,6 +195,39 @@ extern "C" int64_t __moore_queue_pop_front(MooreQueue *queue,
   return result;
 }
 
+extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
+                                    int (*compare)(const void *, const void *)) {
+  auto *q = static_cast<MooreQueue *>(queue);
+
+  // Allocate result queue
+  auto *result = static_cast<MooreQueue *>(std::malloc(sizeof(MooreQueue)));
+  if (!result)
+    return nullptr;
+
+  // Handle empty or invalid queue
+  if (!q || !q->data || q->len <= 0 || elem_size <= 0) {
+    result->data = nullptr;
+    result->len = 0;
+    return result;
+  }
+
+  // Allocate and copy elements to new queue
+  int64_t totalSize = q->len * elem_size;
+  result->data = std::malloc(totalSize);
+  if (!result->data) {
+    result->len = 0;
+    return result;
+  }
+
+  std::memcpy(result->data, q->data, totalSize);
+  result->len = q->len;
+
+  // Sort the copied elements using qsort
+  std::qsort(result->data, result->len, elem_size, compare);
+
+  return result;
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//

@@ -1931,8 +1931,15 @@ struct ClassDeclVisitor {
     if (failed(context.convertFunction(fn)))
       return failure();
 
-    if (!lowering->capturesFinalized)
+    // If the function is still being converted (recursive call scenario),
+    // capturesFinalized will be false but this is expected - the conversion
+    // will complete when the recursion unwinds. Only fail if the function
+    // is not being converted and captures still aren't finalized.
+    if (!lowering->capturesFinalized && !lowering->isConverting) {
+      mlir::emitError(loc)
+          << "function '" << fn.name << "' conversion did not complete";
       return failure();
+    }
 
     // We only emit methoddecls for virtual methods.
     if (!isVirtual)
