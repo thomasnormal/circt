@@ -1211,6 +1211,111 @@ private:
   InterfaceTypeCache &cache;
 };
 
+/// Lowering for InterfaceSignalDeclOp.
+/// Signal declarations within interfaces are processed by resolveInterfaceStructBody
+/// and then erased - they become part of the interface struct type.
+struct InterfaceSignalDeclOpConversion
+    : public OpConversionPattern<InterfaceSignalDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(InterfaceSignalDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Signal declarations are metadata used to build the interface struct.
+    // They have already been processed by resolveInterfaceStructBody.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for ModportDeclOp.
+/// Modport declarations are directional views that are resolved at compile time.
+/// They don't produce runtime code; their information is used during signal access.
+struct ModportDeclOpConversion : public OpConversionPattern<ModportDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ModportDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Modports are metadata describing signal directions.
+    // They don't generate runtime code.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for InterfaceInstanceOp.
+/// Creates an interface instance by allocating memory for the interface struct.
+struct InterfaceInstanceOpConversion
+    : public OpConversionPattern<InterfaceInstanceOp> {
+  InterfaceInstanceOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                                InterfaceTypeCache &cache)
+      : OpConversionPattern(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(InterfaceInstanceOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    // Get the interface symbol.
+    auto ifaceSym = op.getInterfaceName();
+    auto ifaceSymRef = SymbolRefAttr::get(ctx, ifaceSym);
+
+    // Resolve the interface struct body.
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    if (failed(resolveInterfaceStructBody(mod, ifaceSymRef, *typeConverter,
+                                          cache)))
+      return op.emitError()
+             << "Could not resolve interface struct for " << ifaceSym;
+
+    auto structInfo = cache.getStructInfo(ifaceSymRef);
+    assert(structInfo && "interface struct info must exist");
+    auto structTy = structInfo->interfaceBody;
+
+    // Calculate the size of the interface struct.
+    DataLayout dl(mod);
+    uint64_t byteSize = dl.getTypeSize(structTy);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto cSize = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(byteSize));
+
+    // Get or declare malloc and call it.
+    auto mallocFn = getOrCreateMalloc(mod, rewriter);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto call =
+        LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
+                             SymbolRefAttr::get(mallocFn), ValueRange{cSize});
+
+    Value ifacePtr = call.getResult();
+
+    // Replace the instance op with the allocated pointer.
+    rewriter.replaceOp(op, ifacePtr);
+    return success();
+  }
+
+private:
+  InterfaceTypeCache &cache;
+};
+
+/// Lowering for VirtualInterfaceGetOp.
+/// Extracts a modport view from a virtual interface. Since modports are just
+/// directional metadata, this is a pass-through - the underlying pointer is the same.
+struct VirtualInterfaceGetOpConversion
+    : public OpConversionPattern<VirtualInterfaceGetOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VirtualInterfaceGetOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Modport views share the same underlying interface pointer.
+    // The modport just restricts which signals can be accessed and their directions.
+    // At runtime, we just pass through the same pointer.
+    rewriter.replaceOp(op, adaptor.getVif());
+    return success();
+  }
+};
+
 struct ClassUpcastOpConversion : public OpConversionPattern<ClassUpcastOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -5370,6 +5475,14 @@ static void populateOpConversion(ConversionPatternSet &patterns,
                                           interfaceCache);
   patterns.add<VirtualInterfaceSignalRefOpConversion>(
       typeConverter, patterns.getContext(), interfaceCache);
+  patterns.add<InterfaceInstanceOpConversion>(typeConverter,
+                                              patterns.getContext(),
+                                              interfaceCache);
+  patterns.add<InterfaceSignalDeclOpConversion>(typeConverter,
+                                                patterns.getContext());
+  patterns.add<ModportDeclOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<VirtualInterfaceGetOpConversion>(typeConverter,
+                                                patterns.getContext());
 
   // Patterns of vtable operations (with explicit benefits for ordering).
   patterns.add<VTableOpConversion>(typeConverter, patterns.getContext());
