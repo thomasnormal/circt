@@ -7,32 +7,27 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 
 ### 🎉 MILESTONE: UVM Core Library Parses Successfully!
 
-**Overall Progress:** UVM core library now parses completely without errors or crashes.
-The only output is warnings and a remark about class builtins (expected).
+**Overall Progress:** UVM core library parses without crashes. Mini-UVM testbenches work.
+Full UVM testbenches have a silent conversion failure being investigated.
 
-```bash
-$ ./build/bin/circt-verilog -I/home/thomas-ahle/uvm-core/src /home/thomas-ahle/uvm-core/src/uvm_pkg.sv
-<unknown>:0: warning: no top-level modules found in design [-Wmissing-top]
-../uvm-core/src/base/uvm_misc.svh:56:15: remark: Class builtin functions...
-```
-
-The "no top-level modules" warning is expected - UVM is a package, not a synthesizable design.
-
-### Recent Fixes (This Session - 8 commits)
-- ✅ Fixed `cast<TypedValue<IntType>>` crash in class hierarchy processing
+### Session Progress (10 commits)
+- ✅ Fixed `cast<TypedValue<IntType>>` crash in class hierarchy
 - ✅ Added `EventTriggerOp` for `->event` syntax
-- ✅ Added `QueueConcatOp` for queue concatenation `{q1, q2}`
+- ✅ Added `QueueConcatOp` for queue concatenation
 - ✅ Fixed default argument `this` reference resolution
 - ✅ Fixed dangling reference in recursive class declaration
 - ✅ Implemented enum `.name()` method
 - ✅ Implemented `$typename` system call
-- ✅ Added QueuePushBack/Front, QueuePopBack/Front with lowering & runtime
+- ✅ Added QueuePushBack/Front, QueuePopBack/Front
+- ✅ Added `$urandom`, `$urandom_range` with runtime
+- ✅ Added constraint block parsing (rand, constraint)
+- ✅ Added runtime unit tests
 
-### Next Phase: Run UVM Testbenches
-Now that UVM parses, we need to test actual UVM testbenches that:
-1. Import uvm_pkg
-2. Define test classes extending uvm_test
-3. Use UVM macros and utilities
+### Current Blockers
+1. **Static member redefinition in parameterized classes** - When `this_type` typedef
+   creates specializations, static members get registered multiple times
+2. **Silent conversion failure** - Full UVM conversion fails without error message
+3. **Task capture of module variables** - Architectural issue with func.func/moore.module
 
 ## Track 1: ImportVerilog (Parsing & AST Conversion)
 
@@ -42,77 +37,73 @@ Now that UVM parses, we need to test actual UVM testbenches that:
 - [x] Static class properties
 - [x] Virtual methods and method overriding
 - [x] Event type support
-- [x] Queue operations (push, pop, delete, unique, min, max)
+- [x] Queue operations (push, pop, delete, unique, min, max, concat)
 - [x] Associative array operations (first, next, last, prev, delete)
 - [x] String operations (len, toupper, tolower, getc, putc, substr)
 - [x] Dynamic array support
 - [x] Format strings (%s, %d, %h, %b, %p, etc.)
 - [x] Event triggers (`->event`)
-- [x] Queue concatenation
 - [x] Enum `.name()` method
 - [x] `$typename` system call
+- [x] `$urandom`, `$urandom_range`
+- [x] Constraint block parsing (rand, randc, constraint)
 
 ### In Progress
-- [ ] Constraint blocks (randomize, rand, randc) - Critical for UVM
+- [ ] Fix static member redefinition bug
+- [ ] Add diagnostic output for conversion failures
 - [ ] Covergroups and coverage
-- [ ] `$urandom`, `$urandom_range` random generation
 
 ### TODO - High Priority
 - [ ] `$cast` dynamic casting
-- [ ] Assertion system functions (`$rose`, `$fell`, `$stable`, `$past`)
-- [ ] Clocking blocks
-- [ ] Program blocks
+- [ ] Full constraint solving (requires external solver)
+- [ ] Assertion functions (`$rose`, `$fell`, `$stable`, `$past`)
 
 ### TODO - Medium Priority
-- [ ] Sequence/property declarations
-- [ ] `fork`/`join` parallel blocks (partial)
-- [ ] `disable fork` statement
-- [ ] `wait fork` statement
-- [ ] Mailbox operations
-- [ ] Semaphore operations
+- [ ] Clocking blocks
+- [ ] Program blocks
+- [ ] `fork`/`join` parallel blocks
+- [ ] Mailbox/Semaphore operations
+
+**Next Agent Task:** Fix static member redefinition for parameterized class specializations
 
 ## Track 2: MooreToCore (Lowering to LLVM)
 
 ### Completed ✅
-- [x] EventTriggeredOp → runtime call
-- [x] WaitConditionOp → runtime call
-- [x] EventTriggerOp → runtime call
-- [x] QueueConcatOp → runtime call
-- [x] QueueUniqueOp, QueueMinOp, QueueMaxOp → runtime calls
-- [x] QueuePushBackOp, QueuePushFrontOp → runtime calls
-- [x] QueuePopBackOp, QueuePopFrontOp → runtime calls
+- [x] EventTriggeredOp, WaitConditionOp, EventTriggerOp
+- [x] QueueConcatOp, QueuePushBackOp, QueuePushFrontOp
+- [x] QueuePopBackOp, QueuePopFrontOp
+- [x] QueueUniqueOp, QueueMinOp, QueueMaxOp
+- [x] UrandomOp, UrandomRangeOp → runtime calls
 - [x] String operations lowering
-- [x] Class allocation (malloc-based)
-- [x] Virtual method dispatch (basic)
+- [x] Class allocation and virtual dispatch (basic)
 
 ### TODO - High Priority
 - [ ] QueueSortOp
 - [ ] AssocArrayExistsOp
 - [ ] Full vTable generation for polymorphism
-- [ ] Constraint solving integration
 
 ### TODO - Medium Priority
 - [ ] Four-valued logic (X/Z) support
-- [ ] Out-of-bounds array access handling
 - [ ] Process/thread management
+
+**Next Agent Task:** Add QueueSortOp lowering
 
 ## Track 3: Moore Runtime Library
 
 ### Completed ✅
-- [x] `__moore_event_triggered`
-- [x] `__moore_wait_condition`
-- [x] `__moore_event_trigger`
-- [x] `__moore_queue_push_back`, `__moore_queue_push_front`
-- [x] `__moore_queue_pop_back`, `__moore_queue_pop_front`
-- [x] `__moore_queue_delete`, `__moore_queue_unique`, `__moore_queue_min`, `__moore_queue_max`
-- [x] `__moore_assoc_*` operations
-- [x] `__moore_string_*` operations
-- [x] `__moore_dyn_array_new`
+- [x] Event operations (`__moore_event_*`)
+- [x] Queue operations (`__moore_queue_push/pop/delete/unique/min/max`)
+- [x] Associative array operations (`__moore_assoc_*`)
+- [x] String operations (`__moore_string_*`)
+- [x] Random number generation (`__moore_urandom`, `__moore_urandom_range`)
+- [x] Unit tests for runtime functions
 
 ### TODO
 - [ ] `__moore_queue_sort`
-- [ ] Random number generation runtime
-- [ ] Constraint solver runtime
+- [ ] Constraint solver integration
+- [ ] Process management functions
+
+**Next Agent Task:** Add `__moore_queue_sort` implementation
 
 ## Track 4: Testing & Integration
 
@@ -121,23 +112,26 @@ Now that UVM parses, we need to test actual UVM testbenches that:
 - [x] Event operation tests
 - [x] Queue operation tests (including push/pop)
 - [x] String operation tests
-- [x] Builtin tests ($typename, enum .name())
+- [x] Builtin tests ($typename, $urandom, enum .name())
+- [x] Runtime unit tests (MooreRuntimeTest.cpp)
+- [x] Random ops lowering tests
 
 ### AVIP Testing Results (~/mbit/*)
 | Category | Status | Notes |
 |----------|--------|-------|
 | Global packages | ✅ 8/8 pass | All AVIP globals compile |
-| Interface files | ✅ 6/7 pass | Work with deps |
+| Interface files | ✅ 6/7 pass | Work with dependencies |
 | Assertion files | ✅ Pass | Non-UVM assertions work |
-| HVL/Testbench | ❌ Blocked | Need UVM + capture fix |
+| HVL/Testbench | ⚠️ Partial | Need capture fix |
 
-**Architectural Issue Found:** Tasks containing `@(posedge clk)` cannot capture
-module-level variables because `func.func` and `moore.module` are siblings, not
-nested. This needs architectural work to fix properly.
+### UVM Testbench Testing
+| Test Type | Status | Notes |
+|-----------|--------|-------|
+| UVM package alone | ✅ Pass | Parses without errors |
+| Mini-UVM pattern | ✅ Pass | Basic UVM-like classes work |
+| Full UVM testbench | ❌ Fail | Silent conversion failure |
 
-### UVM Core Testing
-- ✅ UVM package parses completely without errors
-- Next: Test with actual UVM testbench
+**Next Agent Task:** Debug and fix silent UVM conversion failure
 
 ## Xcelium Feature Comparison
 
@@ -147,46 +141,46 @@ nested. This needs architectural work to fix properly.
 | Classes | ✅ | ✅ | - | - |
 | Queues | ✅ | ✅ | - | - |
 | Events | ✅ | ✅ | - | - |
-| UVM Parsing | ✅ | ✅ | - | - |
+| $urandom | ✅ | ✅ | - | - |
 | $typename | ✅ | ✅ | - | - |
-| Constraints | ✅ | ❌ | High | P0 |
+| UVM Parsing | ✅ | ✅ | - | - |
+| rand/constraint parse | ✅ | ✅ | - | - |
+| Constraint solving | ✅ | ❌ | High | P0 |
 | Coverage | ✅ | ❌ | High | P1 |
-| $urandom | ✅ | ❌ | High | P0 |
+| $cast | ✅ | ❌ | Medium | P1 |
 | Assertions | ✅ | Partial | Medium | P2 |
 | fork/join | ✅ | Partial | Medium | P2 |
-| Mailbox/Semaphore | ✅ | ❌ | Medium | P2 |
 
 ## Next Steps
 
-### Immediate (Next 4 Agents)
-1. **Agent 1:** Implement `$urandom`, `$urandom_range` for randomization
-2. **Agent 2:** Start basic constraint block support (parse `rand`, `constraint`)
-3. **Agent 3:** Create simple UVM testbench and test end-to-end
-4. **Agent 4:** Fix module-level variable capture for tasks
+### Immediate (4 Parallel Agents)
+1. **Track 1:** Fix static member redefinition for this_type pattern
+2. **Track 2:** Add QueueSortOp lowering
+3. **Track 3:** Add `__moore_queue_sort` runtime
+4. **Track 4:** Debug silent UVM conversion failure
 
 ### Short Term
-- Complete randomization support (`$urandom`, basic constraints)
-- Test actual UVM testbenches end-to-end
-- Fix task/module capture architecture
+- Fix all blockers for UVM testbench compilation
+- Complete constraint parsing (expressions)
+- Add `$cast` dynamic casting
 
 ### Medium Term
-- Full constraint solving with external solver
+- Integrate external constraint solver
 - Coverage collection
-- Assertion checking
+- Full assertion support
 
 ## Commands
 
-Test UVM:
 ```bash
-./build/bin/circt-verilog -I/home/thomas-ahle/uvm-core/src /home/thomas-ahle/uvm-core/src/uvm_pkg.sv 2>&1 | head -50
-```
+# Test UVM parsing
+./build/bin/circt-verilog -I/home/thomas-ahle/uvm-core/src /home/thomas-ahle/uvm-core/src/uvm_pkg.sv
 
-Test AVIP:
-```bash
-./build/bin/circt-verilog -I~/mbit/axi4_avip/src ~/mbit/axi4_avip/src/globals/axi4_globals_pkg.sv ~/mbit/axi4_avip/src/hdl_top/axi4_if.sv
-```
+# Test AVIP
+./build/bin/circt-verilog -I~/mbit/axi4_avip/src ~/mbit/axi4_avip/src/globals/axi4_globals_pkg.sv
 
-Build:
-```bash
+# Build
 ninja -C build circt-verilog
+
+# Run runtime tests
+ninja -C build check-circt-unit
 ```
