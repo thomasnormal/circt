@@ -188,6 +188,26 @@ MooreString __moore_int_to_string(int64_t value);
 int64_t __moore_string_to_int(MooreString *str);
 
 //===----------------------------------------------------------------------===//
+// Streaming Concatenation Operations
+//===----------------------------------------------------------------------===//
+
+/// Concatenate all strings in a queue into a single string.
+/// Used for streaming concatenation of string queues: {>>{string_queue}}
+/// @param queue Pointer to the queue of strings
+/// @param isRightToLeft If true, concatenate right-to-left; otherwise left-to-right
+/// @return A new string containing the concatenation of all queue elements
+MooreString __moore_stream_concat_strings(MooreQueue *queue, bool isRightToLeft);
+
+/// Pack all elements of a queue/dynamic array into a single integer value.
+/// Used for streaming concatenation of non-string types: {>>{int_queue}}
+/// @param queue Pointer to the queue/array
+/// @param elementBitWidth Bit width of each element
+/// @param isRightToLeft If true, pack right-to-left; otherwise left-to-right
+/// @return The packed bits as a 64-bit integer
+int64_t __moore_stream_concat_bits(MooreQueue *queue, int32_t elementBitWidth,
+                                   bool isRightToLeft);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

@@ -96,6 +96,48 @@ private:
   DenseMap<Attribute, ClassStructInfo> classToStructMap;
 };
 
+/// Cache for identified structs and signal GEP paths keyed by interface symbol.
+struct InterfaceTypeCache {
+  struct InterfaceStructInfo {
+    LLVM::LLVMStructType interfaceBody;
+
+    // signal name -> GEP index inside the struct
+    DenseMap<StringRef, unsigned> signalIndex;
+
+    /// Record the index for a signal.
+    void setSignalIndex(StringRef signalName, unsigned index) {
+      this->signalIndex[signalName] = index;
+    }
+
+    /// Lookup the GEP index for a signal.
+    std::optional<unsigned> getSignalIndex(StringRef signalName) const {
+      if (auto it = this->signalIndex.find(signalName);
+          it != this->signalIndex.end())
+        return it->second;
+      return std::nullopt;
+    }
+  };
+
+  /// Record the identified struct body for an interface.
+  void setInterfaceInfo(SymbolRefAttr ifaceSym,
+                        const InterfaceStructInfo &info) {
+    auto &dst = interfaceToStructMap[ifaceSym];
+    dst = info;
+  }
+
+  /// Lookup the identified struct body for an interface.
+  std::optional<InterfaceStructInfo>
+  getStructInfo(SymbolRefAttr ifaceSym) const {
+    if (auto it = interfaceToStructMap.find(ifaceSym);
+        it != interfaceToStructMap.end())
+      return it->second;
+    return std::nullopt;
+  }
+
+private:
+  DenseMap<Attribute, InterfaceStructInfo> interfaceToStructMap;
+};
+
 /// Ensure we have `declare i8* @malloc(i64)` (opaque ptr prints as !llvm.ptr).
 static LLVM::LLVMFuncOp getOrCreateMalloc(ModuleOp mod, OpBuilder &b) {
   if (auto f = mod.lookupSymbol<LLVM::LLVMFuncOp>("malloc"))
@@ -215,6 +257,68 @@ static LogicalResult resolveClassStructBody(ModuleOp mod, SymbolRefAttr op,
                                             ClassTypeCache &cache) {
   auto classDeclOp = cast<ClassDeclOp>(*mod.lookupSymbol(op));
   return resolveClassStructBody(classDeclOp, typeConverter, cache);
+}
+
+/// Resolve the struct body for an interface declaration.
+/// This creates an LLVM struct type with fields for each signal in the
+/// interface and caches the signal name to GEP index mapping.
+static LogicalResult resolveInterfaceStructBody(InterfaceDeclOp op,
+                                                TypeConverter const &typeConverter,
+                                                InterfaceTypeCache &cache) {
+  auto ifaceSym = SymbolRefAttr::get(op.getSymNameAttr());
+  auto structInfo = cache.getStructInfo(ifaceSym);
+  if (structInfo)
+    // We already have a resolved interface struct body.
+    return success();
+
+  // Otherwise we need to resolve.
+  InterfaceTypeCache::InterfaceStructInfo structBody;
+  SmallVector<Type> structBodyMembers;
+
+  // Iterate over all signals in the interface.
+  unsigned idx = 0;
+  auto &block = op.getBody().front();
+  for (Operation &child : block) {
+    if (auto signal = dyn_cast<InterfaceSignalDeclOp>(child)) {
+      Type mooreTy = signal.getSignalType();
+      Type llvmTy = typeConverter.convertType(mooreTy);
+      if (!llvmTy)
+        return signal.emitOpError()
+               << "failed to convert signal type " << mooreTy;
+
+      structBodyMembers.push_back(llvmTy);
+      structBody.setSignalIndex(signal.getSymName(), idx);
+      ++idx;
+    }
+  }
+
+  // Create the identified struct type for this interface.
+  auto llvmStructTy = LLVM::LLVMStructType::getIdentified(
+      op.getContext(), ("interface." + op.getSymName()).str());
+
+  // Empty structs may be kept opaque.
+  if (!structBodyMembers.empty() &&
+      failed(llvmStructTy.setBody(structBodyMembers, false)))
+    return op.emitOpError() << "Failed to set LLVM Struct body for interface";
+
+  structBody.interfaceBody = llvmStructTy;
+  cache.setInterfaceInfo(ifaceSym, structBody);
+
+  return success();
+}
+
+/// Convenience overload that looks up InterfaceDeclOp.
+static LogicalResult resolveInterfaceStructBody(ModuleOp mod,
+                                                SymbolRefAttr ifaceSym,
+                                                TypeConverter const &typeConverter,
+                                                InterfaceTypeCache &cache) {
+  auto *opSym = mod.lookupSymbol(ifaceSym.getRootReference());
+  if (!opSym)
+    return failure();
+  auto ifaceDeclOp = dyn_cast<InterfaceDeclOp>(opSym);
+  if (!ifaceDeclOp)
+    return failure();
+  return resolveInterfaceStructBody(ifaceDeclOp, typeConverter, cache);
 }
 
 /// Returns the passed value if the integer width is already correct.
@@ -948,6 +1052,80 @@ private:
   ClassTypeCache &cache;
 };
 
+/// Lowering for VirtualInterfaceSignalRefOp.
+/// Converts a virtual interface signal reference to a GEP operation that
+/// extracts the signal field from the interface struct.
+struct VirtualInterfaceSignalRefOpConversion
+    : public OpConversionPattern<VirtualInterfaceSignalRefOp> {
+  VirtualInterfaceSignalRefOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                                        InterfaceTypeCache &cache)
+      : OpConversionPattern(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(VirtualInterfaceSignalRefOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    // Convert result type; we expect !llhd.ref<someT>.
+    Type dstTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (!dstTy)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Operand is a !llvm.ptr (the virtual interface).
+    Value vifRef = adaptor.getVif();
+
+    // Get the interface symbol from the virtual interface type.
+    auto vifType = op.getVif().getType();
+    auto ifaceRef = vifType.getInterface();
+    auto ifaceSym = SymbolRefAttr::get(
+        rewriter.getContext(),
+        ifaceRef.getRootReference());
+
+    // Resolve the interface struct body.
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    if (failed(resolveInterfaceStructBody(mod, ifaceSym, *typeConverter, cache)))
+      return rewriter.notifyMatchFailure(
+          op, "Could not resolve interface struct for " +
+                  ifaceSym.getRootReference().str());
+
+    auto structInfo = cache.getStructInfo(ifaceSym);
+    assert(structInfo && "interface struct info must exist");
+    auto structTy = structInfo->interfaceBody;
+
+    // Look up the signal index.
+    auto signalName = op.getSignal();
+    auto idxOpt = structInfo->getSignalIndex(signalName);
+    if (!idxOpt)
+      return rewriter.notifyMatchFailure(
+          op, "no GEP index for signal " + signalName);
+
+    // Build GEP indices: [0, signalIndex] to access the signal field.
+    auto i32Ty = IntegerType::get(ctx, 32);
+    SmallVector<Value> idxVals;
+    idxVals.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+    idxVals.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(*idxOpt)));
+
+    // GEP to the signal field (opaque ptr mode requires element type).
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto gep =
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy, vifRef, idxVals);
+
+    // Wrap pointer back to !llhd.ref<someT>.
+    Value signalRef = UnrealizedConversionCastOp::create(rewriter, loc, dstTy,
+                                                         gep.getResult())
+                          .getResult(0);
+
+    rewriter.replaceOp(op, signalRef);
+    return success();
+  }
+
+private:
+  InterfaceTypeCache &cache;
+};
+
 struct ClassUpcastOpConversion : public OpConversionPattern<ClassUpcastOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -1090,6 +1268,27 @@ struct ClassNullOpConversion : public OpConversionPattern<ClassNullOp> {
     rewriter.replaceOpWithNewOp<LLVM::ZeroOp>(op, ptrTy);
     return success();
   }
+};
+
+/// Lowering for InterfaceDeclOp.
+/// The interface declaration is resolved to an LLVM struct and then erased.
+struct InterfaceDeclOpConversion : public OpConversionPattern<InterfaceDeclOp> {
+  InterfaceDeclOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                            InterfaceTypeCache &cache)
+      : OpConversionPattern<InterfaceDeclOp>(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(InterfaceDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (failed(resolveInterfaceStructBody(op, *typeConverter, cache)))
+      return failure();
+    // The declaration itself is a no-op; erase it.
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  InterfaceTypeCache &cache;
 };
 
 /// moore.vtable lowering: erase the vtable declaration.
@@ -2760,6 +2959,115 @@ struct QueueUniqueOpConversion
   }
 };
 
+/// Conversion for moore.stream_concat -> runtime function call.
+/// This handles streaming concatenation of queues/dynamic arrays.
+/// For string queues, concatenates all strings into a single string.
+/// For other types, packs element bits into an integer.
+struct StreamConcatOpConversion
+    : public RuntimeCallConversionBase<StreamConcatOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(StreamConcatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto inputType = op.getInput().getType();
+    auto resultType = op.getResult().getType();
+    bool isRightToLeft = op.getIsRightToLeft();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // Store input queue to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), inputAlloca);
+
+    // Create boolean constant for direction
+    auto directionConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(i1Ty, isRightToLeft ? 1 : 0));
+
+    // Check if input is a queue/array of strings
+    Type elementType;
+    if (auto queueType = dyn_cast<QueueType>(inputType)) {
+      elementType = queueType.getElementType();
+    } else if (auto dynArrayType = dyn_cast<OpenUnpackedArrayType>(inputType)) {
+      elementType = dynArrayType.getElementType();
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported input type");
+    }
+
+    if (isa<StringType>(elementType)) {
+      // String queue: call __moore_stream_concat_strings
+      auto stringStructTy = getStringStructType(ctx);
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i1Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_stream_concat_strings", fnTy);
+
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{inputAlloca, directionConst});
+      rewriter.replaceOp(op, call.getResult());
+    } else {
+      // Non-string type: call __moore_stream_concat_bits
+      // Determine element bit width
+      int64_t elementBitWidth = 32; // default
+      if (auto intType = dyn_cast<IntType>(elementType)) {
+        elementBitWidth = intType.getWidth();
+      } else if (auto packedType = dyn_cast<PackedType>(elementType)) {
+        elementBitWidth = packedType.getBitSize().value_or(32);
+      }
+
+      auto bitWidthConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(elementBitWidth));
+
+      auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i32Ty, i1Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_stream_concat_bits", fnTy);
+
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(fn),
+          ValueRange{inputAlloca, bitWidthConst, directionConst});
+
+      // Convert result to the expected type
+      auto convertedResultType = typeConverter->convertType(resultType);
+      if (!convertedResultType)
+        return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+      Value result = call.getResult();
+      if (convertedResultType != i64Ty) {
+        auto resultWidth = convertedResultType.getIntOrFloatBitWidth();
+        if (resultWidth < 64) {
+          result = arith::TruncIOp::create(rewriter, loc, convertedResultType,
+                                           result);
+        } else if (resultWidth > 64) {
+          result = arith::ExtUIOp::create(rewriter, loc, convertedResultType,
+                                          result);
+        }
+      }
+      rewriter.replaceOp(op, result);
+    }
+
+    return success();
+  }
+
+private:
+  /// Get the LLVM struct type for a string: {ptr, i64}.
+  static LLVM::LLVMStructType getStringStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
+};
+
 /// Conversion for moore.dyn_array.new -> runtime function call.
 struct DynArrayNewOpConversion
     : public RuntimeCallConversionBase<DynArrayNewOp> {
@@ -3691,6 +3999,13 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return LLVM::LLVMPointerType::get(type.getContext());
   });
 
+  // VirtualInterfaceType -> !llvm.ptr
+  // Virtual interfaces are pointers to interface struct instances.
+  typeConverter.addConversion(
+      [&](VirtualInterfaceType type) -> std::optional<Type> {
+        return LLVM::LLVMPointerType::get(type.getContext());
+      });
+
   // EventType -> i1 (tracks whether the event has been triggered).
   typeConverter.addConversion([&](EventType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 1);
@@ -3786,7 +4101,8 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
 
 static void populateOpConversion(ConversionPatternSet &patterns,
                                  TypeConverter &typeConverter,
-                                 ClassTypeCache &classCache) {
+                                 ClassTypeCache &classCache,
+                                 InterfaceTypeCache &interfaceCache) {
 
   patterns.add<ClassDeclOpConversion>(typeConverter, patterns.getContext(),
                                       classCache);
@@ -3794,6 +4110,12 @@ static void populateOpConversion(ConversionPatternSet &patterns,
                                      classCache);
   patterns.add<ClassPropertyRefOpConversion>(typeConverter,
                                              patterns.getContext(), classCache);
+
+  // Virtual interface patterns.
+  patterns.add<InterfaceDeclOpConversion>(typeConverter, patterns.getContext(),
+                                          interfaceCache);
+  patterns.add<VirtualInterfaceSignalRefOpConversion>(
+      typeConverter, patterns.getContext(), interfaceCache);
 
   // Patterns of vtable operations (with explicit benefits for ordering).
   patterns.add<VTableOpConversion>(typeConverter, patterns.getContext());
@@ -3945,6 +4267,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueMinOpConversion,
     QueueUniqueOpConversion,
     QueueDeleteOpConversion,
+    StreamConcatOpConversion,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
@@ -4024,6 +4347,7 @@ void MooreToCorePass::runOnOperation() {
   MLIRContext &context = getContext();
   ModuleOp module = getOperation();
   ClassTypeCache classCache;
+  InterfaceTypeCache interfaceCache;
 
   IRRewriter rewriter(module);
   (void)mlir::eraseUnreachableBlocks(rewriter, module->getRegions());
@@ -4035,7 +4359,7 @@ void MooreToCorePass::runOnOperation() {
   populateLegality(target, typeConverter);
 
   ConversionPatternSet patterns(&context, typeConverter);
-  populateOpConversion(patterns, typeConverter, classCache);
+  populateOpConversion(patterns, typeConverter, classCache, interfaceCache);
   mlir::cf::populateCFStructuralTypeConversionsAndLegality(typeConverter,
                                                            patterns, target);
 

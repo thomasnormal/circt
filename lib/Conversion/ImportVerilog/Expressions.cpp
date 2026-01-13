@@ -855,10 +855,8 @@ struct RvalueExprVisitor : public ExprVisitor {
     // negating is equivalent to incrementing.
     if (moore::isIntType(preValue.getType(), 1)) {
       postValue = moore::NotOp::create(builder, loc, preValue).getResult();
-    } else {
-
-      auto one = moore::ConstantOp::create(
-          builder, loc, cast<moore::IntType>(preValue.getType()), 1);
+    } else if (auto intType = dyn_cast<moore::IntType>(preValue.getType())) {
+      auto one = moore::ConstantOp::create(builder, loc, intType, 1);
       postValue =
           isInc ? moore::AddOp::create(builder, loc, preValue, one).getResult()
                 : moore::SubOp::create(builder, loc, preValue, one).getResult();
@@ -866,6 +864,10 @@ struct RvalueExprVisitor : public ExprVisitor {
           moore::BlockingAssignOp::create(builder, loc, arg, postValue);
       if (context.variableAssignCallback)
         context.variableAssignCallback(assignOp);
+    } else {
+      // Non-integer type (event, class handle, etc.) - cannot be incremented
+      mlir::emitError(loc, "cannot apply increment/decrement to non-integer type");
+      return {};
     }
 
     if (isPost)
@@ -2377,7 +2379,12 @@ struct RvalueExprVisitor : public ExprVisitor {
       return value;
     }
 
-    auto type = cast<moore::IntType>(value.getType());
+    auto type = dyn_cast<moore::IntType>(value.getType());
+    if (!type) {
+      mlir::emitError(loc) << "streaming concatenation expected IntType, got "
+                           << value.getType();
+      return {};
+    }
     SmallVector<Value> slicedOperands;
     auto iterMax = type.getWidth() / expr.getSliceSize();
     auto remainSize = type.getWidth() % expr.getSliceSize();
@@ -2638,8 +2645,18 @@ struct LvalueExprVisitor : public ExprVisitor {
       return value;
     }
 
-    auto type = cast<moore::IntType>(
-        cast<moore::RefType>(value.getType()).getNestedType());
+    auto refType = dyn_cast<moore::RefType>(value.getType());
+    if (!refType) {
+      mlir::emitError(loc) << "lvalue streaming expected RefType, got "
+                           << value.getType();
+      return {};
+    }
+    auto type = dyn_cast<moore::IntType>(refType.getNestedType());
+    if (!type) {
+      mlir::emitError(loc) << "lvalue streaming expected IntType, got "
+                           << refType.getNestedType();
+      return {};
+    }
     SmallVector<Value> slicedOperands;
     auto widthSum = type.getWidth();
     auto domain = type.getDomain();
@@ -2931,8 +2948,13 @@ static Value materializeSBVToPackedConversion(Context &context,
     return value;
 
   auto &builder = context.builder;
-  auto intType = cast<moore::IntType>(value.getType());
-  assert(intType && intType == packedType.getSimpleBitVector());
+  auto intType = dyn_cast<moore::IntType>(value.getType());
+  if (!intType) {
+    mlir::emitError(loc) << "expected IntType for SBV to packed conversion, got "
+                         << value.getType();
+    return {};
+  }
+  assert(intType == packedType.getSimpleBitVector());
 
   // If we are converting from an integer to a time, multiply the integer by the
   // timescale.
