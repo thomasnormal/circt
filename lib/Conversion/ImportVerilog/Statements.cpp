@@ -831,6 +831,12 @@ struct StmtVisitor {
     return success();
   }
 
+  // Handle disable fork statements: disable fork
+  LogicalResult visit(const slang::ast::DisableForkStatement &stmt) {
+    moore::DisableForkOp::create(builder, loc);
+    return success();
+  }
+
   // Handle return statements.
   LogicalResult visit(const slang::ast::ReturnStatement &stmt) {
     if (stmt.expr) {
