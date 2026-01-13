@@ -286,13 +286,25 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
                     debug::DebugDialect>();
   auto conversionTimer = ts.nest("Verilog to dialect mapping");
   Context context(options, *compilation, module, driver.sourceManager);
-  if (failed(context.convertCompilation()))
+  if (failed(context.convertCompilation())) {
+    // Conversion failed but may not have emitted a diagnostic - add one now
+    llvm::errs() << "error: failed to convert Verilog to MLIR\n";
+    llvm::errs() << "hint: use --debug to see detailed conversion logs\n";
     return failure();
+  }
   conversionTimer.stop();
 
   // Run the verifier on the constructed module to ensure it is clean.
   auto verifierTimer = ts.nest("Post-parse verification");
-  return verify(module);
+  if (failed(verify(module))) {
+    // The verifier should have emitted diagnostics, but add a summary message
+    // in case it didn't for some reason.
+    llvm::errs() << "error: generated MLIR module failed to verify; "
+                    "this is likely a bug in circt-verilog\n";
+    llvm::errs() << "hint: use --debug to see verification failure details\n";
+    return failure();
+  }
+  return success();
 }
 
 /// Preprocess the prepared source files and print them to the given output
