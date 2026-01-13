@@ -1910,6 +1910,98 @@ struct RvalueExprVisitor : public ExprVisitor {
     Value value;
     Value value2;
 
+    // Handle array locator methods (find, find_index, find_first, find_first_index,
+    // find_last, find_last_index). These have IteratorCallInfo with the predicate.
+    // IEEE 1800-2017 Section 7.12.2 "Array locator methods".
+    bool isArrayLocatorMethod =
+        llvm::StringSwitch<bool>(subroutine.name)
+            .Cases({"find", "find_index"}, true)
+            .Cases({"find_first", "find_first_index"}, true)
+            .Cases({"find_last", "find_last_index"}, true)
+            .Default(false);
+
+    if (isArrayLocatorMethod) {
+      // Get the iterator info from extraInfo
+      auto [iterExpr, iterVar] = info.getIteratorInfo();
+      if (!iterExpr || !iterVar) {
+        mlir::emitError(loc) << "array locator method requires a 'with' clause";
+        return {};
+      }
+
+      // The array is the first argument
+      if (args.empty()) {
+        mlir::emitError(loc) << "array locator method requires an array argument";
+        return {};
+      }
+
+      // Convert the array as rvalue
+      Value arrayVal = context.convertRvalueExpression(*args[0]);
+      if (!arrayVal)
+        return {};
+
+      // Determine the mode and whether indexed
+      moore::LocatorMode mode;
+      bool indexed = false;
+      if (subroutine.name == "find" || subroutine.name == "find_index") {
+        mode = moore::LocatorMode::All;
+        indexed = (subroutine.name == "find_index");
+      } else if (subroutine.name == "find_first" ||
+                 subroutine.name == "find_first_index") {
+        mode = moore::LocatorMode::First;
+        indexed = (subroutine.name == "find_first_index");
+      } else {
+        mode = moore::LocatorMode::Last;
+        indexed = (subroutine.name == "find_last_index");
+      }
+
+      // Get the result type (a queue)
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+      auto queueType = dyn_cast<moore::QueueType>(resultType);
+      if (!queueType) {
+        mlir::emitError(loc) << "array locator method result must be a queue type";
+        return {};
+      }
+
+      // Get the element type for the iterator variable
+      Type iterVarType = context.convertType(iterVar->getType());
+      if (!iterVarType)
+        return {};
+
+      // Create the array locator operation
+      auto locatorOp = moore::ArrayLocatorOp::create(
+          builder, loc, queueType, mode, indexed, arrayVal);
+
+      // Create the body region with a block argument for the iterator variable
+      Block *bodyBlock = &locatorOp.getBody().emplaceBlock();
+      bodyBlock->addArgument(iterVarType, loc);
+      Value iterArg = bodyBlock->getArgument(0);
+
+      // Set up the value symbol for the iterator variable within the region
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(bodyBlock);
+
+      // Temporarily bind the iterator variable to the block argument
+      Context::ValueSymbolScope scope(context.valueSymbols);
+      context.valueSymbols.insert(iterVar, iterArg);
+
+      // Convert the predicate expression inside the region
+      Value predResult = context.convertRvalueExpression(*iterExpr);
+      if (!predResult)
+        return {};
+
+      // Convert predicate to bool if necessary
+      predResult = context.convertToBool(predResult);
+      if (!predResult)
+        return {};
+
+      // Create the yield terminator
+      moore::ArrayLocatorYieldOp::create(builder, loc, predResult);
+
+      return locatorOp.getResult();
+    }
+
     // $sformatf() and $sformat look like system tasks, but we handle string
     // formatting differently from expression evaluation, so handle them
     // separately.

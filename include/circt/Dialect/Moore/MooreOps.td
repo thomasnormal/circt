@@ -4669,6 +4669,94 @@ def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Array Locator Methods
+//===----------------------------------------------------------------------===//
+
+// Locator method mode: All (find/find_index), First (find_first/find_first_index),
+// or Last (find_last/find_last_index)
+def LocatorAll : I32EnumAttrCase<"All", 0, "all">;
+def LocatorFirst : I32EnumAttrCase<"First", 1, "first">;
+def LocatorLast : I32EnumAttrCase<"Last", 2, "last">;
+
+def LocatorModeAttr : I32EnumAttr<"LocatorMode", "Array locator method mode",
+                               [LocatorAll, LocatorFirst, LocatorLast]> {
+  let cppNamespace = "circt::moore";
+}
+
+def ArrayLocatorYieldOp : MooreOp<"array.locator.yield", [
+  Pure,
+  Terminator,
+  ParentOneOf<["ArrayLocatorOp"]>,
+]> {
+  let summary = "Yield a predicate result from an array locator body";
+  let description = [{
+    `moore.array.locator.yield` terminates the predicate region of an
+    `moore.array.locator` operation. It yields a boolean value that determines
+    whether the current element matches the search criteria.
+  }];
+  let arguments = (ins AnySingleBitType:$condition);
+  let assemblyFormat = "attr-dict $condition `:` type($condition)";
+}
+
+def ArrayLocatorOp : MooreOp<"array.locator", [
+  RecursiveMemoryEffects,
+]> {
+  let summary = "Find elements in an array matching a predicate";
+  let description = [{
+    This operation implements the SystemVerilog array locator methods: `find`,
+    `find_index`, `find_first`, `find_first_index`, `find_last`, and
+    `find_last_index`. These methods search an array for elements that match
+    a user-defined predicate.
+
+    The operation takes an array input and contains a single-block region that
+    defines the predicate. The region has a block argument representing the
+    current element being evaluated. The predicate region must terminate with
+    an `moore.array.locator.yield` operation that yields a boolean value.
+
+    The `mode` attribute specifies the search behavior:
+    - `all`: Return all matching elements/indices (find/find_index)
+    - `first`: Return only the first matching element/index (find_first/find_first_index)
+    - `last`: Return only the last matching element/index (find_last/find_last_index)
+
+    The `indexed` attribute specifies what to return:
+    - `false`: Return the matching elements themselves (find/find_first/find_last)
+    - `true`: Return the indices of matching elements (find_index/find_first_index/find_last_index)
+
+    Example:
+    ```mlir
+    // arr.find(x) with (x > 5) - returns queue of elements > 5
+    %result = moore.array.locator all, elements %arr : !moore.queue<i32, 0> -> !moore.queue<i32, 0> {
+    ^bb0(%item: !moore.i32):
+      %five = moore.constant 5 : i32
+      %cond = moore.sgt %item, %five : i32
+      moore.array.locator.yield %cond : i1
+    }
+
+    // arr.find_first_index(x) with (x == 0) - returns queue with first index where element == 0
+    %idx = moore.array.locator first, indices %arr : !moore.queue<i32, 0> -> !moore.queue<i32, 0> {
+    ^bb0(%item: !moore.i32):
+      %zero = moore.constant 0 : i32
+      %cond = moore.eq %item, %zero : i32
+      moore.array.locator.yield %cond : i1
+    }
+    ```
+
+    See IEEE 1800-2017 Section 7.12.2 "Array locator methods".
+  }];
+  let arguments = (ins
+    LocatorModeAttr:$mode,
+    UnitAttr:$indexed,
+    UnpackedType:$array
+  );
+  let results = (outs QueueType:$result);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $mode `,` (`indices` $indexed^) : (`elements`)? $array `:` type($array)
+    `->` type($result) $body attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Associative Array Builtins
 //===----------------------------------------------------------------------===//
 
