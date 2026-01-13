@@ -42,6 +42,8 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - ✅ **Added RandomizeOp lowering to runtime** (MooreToCore)
 - ✅ **Added __moore_randomize_basic runtime function**
 - ✅ **Fixed silent UVM failure** - Added error messages (2fe8ea6d2)
+- ✅ **Interface lowering patterns** - 4 conversion patterns (ca0c82996)
+- ✅ **Added debug logging** - Structure.cpp, Types.cpp for UVM debugging
 
 ### Current Limitations (Xcelium Parity Gaps)
 
@@ -120,10 +122,16 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 - [x] DynCastCheckOp → runtime RTTI check
 - [x] **RandomizeOp → __moore_randomize_basic runtime call**
 
+### Completed ✅ (Interface Lowering - ca0c82996)
+- [x] InterfaceSignalDeclOp → erase (metadata only)
+- [x] ModportDeclOp → erase (metadata only)
+- [x] InterfaceInstanceOp → malloc allocation
+- [x] VirtualInterfaceGetOp → pass-through pointer
+
 ### TODO - High Priority (Blocks End-to-End)
-- [ ] InterfaceSignalDeclOp, InterfaceInstanceOp, ModportDeclOp
+- [ ] VirtualInterfaceSignalRefOp (signal access through vif)
 - [ ] Full class virtual dispatch (complete vTable)
-- [ ] Debug silent UVM conversion failure
+- [ ] Debug UVM conversion failure (debug logging added)
 
 ### TODO - Medium Priority
 - [ ] Four-valued logic (X/Z) support
