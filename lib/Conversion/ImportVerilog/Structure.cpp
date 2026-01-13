@@ -9,6 +9,7 @@
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/symbols/ClassSymbols.h"
+#include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "llvm/ADT/ScopeExit.h"
 
@@ -690,6 +691,36 @@ struct ModuleVisitor : public BaseVisitor {
   // Handle functions and tasks.
   LogicalResult visit(const slang::ast::SubroutineSymbol &subroutine) {
     return context.convertFunction(subroutine);
+  }
+
+  // Skip covergroup type definitions - not yet generating coverage ops
+  LogicalResult visit(const slang::ast::CovergroupType &cg) {
+    static bool remarked = false;
+    if (!remarked) {
+      mlir::emitRemark(loc)
+          << "Covergroup definitions found but coverage is not yet fully "
+             "supported. Covergroups will be dropped during lowering.";
+      remarked = true;
+    }
+    return success();
+  }
+
+  // Skip covergroup body
+  LogicalResult visit(const slang::ast::CovergroupBodySymbol &) {
+    return success();
+  }
+
+  // Skip individual coverage symbols
+  LogicalResult visit(const slang::ast::CoverpointSymbol &) {
+    return success();
+  }
+
+  LogicalResult visit(const slang::ast::CoverCrossSymbol &) {
+    return success();
+  }
+
+  LogicalResult visit(const slang::ast::CoverCrossBodySymbol &) {
+    return success();
   }
 
   /// Emit an error for all other members.

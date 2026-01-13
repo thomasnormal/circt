@@ -424,6 +424,23 @@ def FormatCharOp : SimOp<"fmt.char", [Pure]> {
   let assemblyFormat = "$value attr-dict `:` qualified(type($value))";
 }
 
+def FormatDynStringOp : SimOp<"fmt.dyn_string", [Pure]> {
+  let summary = "Format a dynamic string as a format string";
+  let description = [{
+    Convert a dynamic string value to a format string for use in formatted
+    printing operations. This is used to format dynamic string values such as
+    enum names returned by `.name()` method calls.
+
+    The input can be a `sim::DynamicStringType` or an LLVM struct `{ptr, i64}`
+    representing a dynamic string (pointer to character data and length).
+  }];
+
+  let arguments = (ins AnyType:$value);
+  let results = (outs FormatStringType:$result);
+
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 def FormatStringConcatOp : SimOp<"fmt.concat", [Pure]> {
   let summary = "Concatenate format strings";
   let description = [{
