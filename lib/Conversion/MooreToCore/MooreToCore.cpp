@@ -5017,6 +5017,71 @@ struct RandomBIOpConversion : public OpConversionPattern<RandomBIOp> {
   }
 };
 
+/// Conversion for moore.randomize -> runtime function call.
+/// Implements the SystemVerilog randomize() method on class objects.
+struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
+  RandomizeOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                        ClassTypeCache &cache)
+      : OpConversionPattern<RandomizeOp>(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(RandomizeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    // Get the class handle type and resolve the class struct info
+    auto handleTy = cast<ClassHandleType>(op.getObject().getType());
+    auto classSym = handleTy.getClassSym();
+
+    if (failed(resolveClassStructBody(mod, classSym, *typeConverter, cache)))
+      return op.emitError() << "Could not resolve class struct for " << classSym;
+
+    auto structInfo = cache.getStructInfo(classSym);
+    if (!structInfo)
+      return op.emitError() << "No struct info for class " << classSym;
+
+    auto structTy = structInfo->classBody;
+
+    // Calculate the class size using DataLayout
+    DataLayout dl(mod);
+    uint64_t byteSize = dl.getTypeSize(structTy);
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    // Create the class size constant
+    auto classSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
+
+    // Get the class instance pointer from the adaptor
+    Value classPtr = adaptor.getObject();
+
+    // __moore_randomize_basic(void *classPtr, int64_t classSize) -> i32
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_randomize_basic", fnTy);
+
+    auto result = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{classPtr, classSizeConst});
+
+    // The runtime returns i32 (1 for success, 0 for failure), but the op
+    // returns i1. Truncate the result to i1.
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto truncResult =
+        arith::TruncIOp::create(rewriter, loc, i1Ty, result.getResult());
+
+    rewriter.replaceOp(op, truncResult);
+    return success();
+  }
+
+private:
+  ClassTypeCache &cache;
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -5523,6 +5588,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<UrandomBIOpConversion>(typeConverter, patterns.getContext());
   patterns.add<UrandomRangeBIOpConversion>(typeConverter, patterns.getContext());
   patterns.add<RandomBIOpConversion>(typeConverter, patterns.getContext());
+
+  // Randomization (needs class cache for struct info)
+  patterns.add<RandomizeOpConversion>(typeConverter, patterns.getContext(),
+                                      classCache);
 
   mlir::populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                             typeConverter);

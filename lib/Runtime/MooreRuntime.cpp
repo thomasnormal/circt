@@ -658,6 +658,39 @@ extern "C" int32_t __moore_random_seeded(int32_t seed) {
 }
 
 //===----------------------------------------------------------------------===//
+// Randomization Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" int32_t __moore_randomize_basic(void *classPtr, int64_t classSize) {
+  // Validate inputs
+  if (!classPtr || classSize <= 0)
+    return 0;
+
+  // Fill the class memory with random values using __moore_urandom.
+  // Process in 4-byte chunks for efficiency, then handle remaining bytes.
+  auto *data = static_cast<uint8_t *>(classPtr);
+  int64_t fullWords = classSize / 4;
+  int64_t remainingBytes = classSize % 4;
+
+  // Fill 4-byte words
+  auto *wordPtr = reinterpret_cast<uint32_t *>(data);
+  for (int64_t i = 0; i < fullWords; ++i) {
+    wordPtr[i] = __moore_urandom();
+  }
+
+  // Fill remaining bytes (if any)
+  if (remainingBytes > 0) {
+    uint32_t lastWord = __moore_urandom();
+    uint8_t *remainingPtr = data + fullWords * 4;
+    for (int64_t i = 0; i < remainingBytes; ++i) {
+      remainingPtr[i] = static_cast<uint8_t>((lastWord >> (i * 8)) & 0xFF);
+    }
+  }
+
+  return 1; // Success
+}
+
+//===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Operations
 //===----------------------------------------------------------------------===//
 
