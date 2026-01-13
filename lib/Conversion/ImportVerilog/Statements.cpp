@@ -771,6 +771,17 @@ struct StmtVisitor {
     return context.convertTimingControl(stmt.timing, stmt.stmt);
   }
 
+  // Handle wait statements: wait(condition)
+  LogicalResult visit(const slang::ast::WaitStatement &stmt) {
+    auto cond = context.convertRvalueExpression(stmt.cond);
+    if (!cond)
+      return failure();
+    cond = builder.createOrFold<moore::BoolCastOp>(loc, cond);
+    moore::WaitConditionOp::create(builder, loc, cond);
+    // Execute the body statement if any
+    return context.convertStatement(stmt.stmt);
+  }
+
   // Handle return statements.
   LogicalResult visit(const slang::ast::ReturnStatement &stmt) {
     if (stmt.expr) {

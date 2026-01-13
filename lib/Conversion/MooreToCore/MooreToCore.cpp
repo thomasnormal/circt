@@ -2621,6 +2621,60 @@ struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
   }
 };
 
+/// Conversion for moore.queue.delete -> runtime function call or erase op.
+struct QueueDeleteOpConversion
+    : public RuntimeCallConversionBase<QueueDeleteOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueDeleteOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    if (adaptor.getIndex()) {
+      // delete(index) - remove element at specific index
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_queue_delete_index", fnTy);
+
+      // Queue is passed by pointer, index by value
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca, adaptor.getIndex()});
+    } else {
+      // delete() - clear all elements
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_clear", fnTy);
+
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca});
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.dyn_array.new -> runtime function call.
 struct DynArrayNewOpConversion
     : public RuntimeCallConversionBase<DynArrayNewOp> {
@@ -3792,6 +3846,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for queue and dynamic array operations.
     QueueMaxOpConversion,
     QueueMinOpConversion,
+    QueueDeleteOpConversion,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,

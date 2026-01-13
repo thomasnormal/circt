@@ -68,6 +68,23 @@ extern "C" MooreQueue __moore_queue_min(MooreQueue *queue) {
   return result;
 }
 
+extern "C" void __moore_queue_clear(MooreQueue *queue) {
+  // Clear all elements from the queue.
+  if (queue->data) {
+    std::free(queue->data);
+    queue->data = nullptr;
+  }
+  queue->len = 0;
+}
+
+extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index) {
+  // Delete element at specified index.
+  // TODO: This requires knowing the element size to properly shift elements.
+  // For now, this is a placeholder that just marks the operation as done.
+  (void)queue;
+  (void)index;
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//

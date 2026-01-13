@@ -562,6 +562,43 @@ def DetectEventOp : MooreOp<"detect_event", [
   }];
 }
 
+def EventTriggeredOp : MooreOp<"event_triggered", [Pure]> {
+  let summary = "Check if an event was triggered in the current time slot";
+  let description = [{
+    The `moore.event_triggered` op checks if the given event has been triggered
+    in the current time slot. Returns 1 if the event was triggered, 0 otherwise.
+    This corresponds to the SystemVerilog `.triggered` property on events.
+
+    Example:
+    ```mlir
+    %triggered = moore.event_triggered %event : !moore.event
+    ```
+
+    See IEEE 1800-2017 § 15.5.3 "Event sequencing: triggered".
+  }];
+  let arguments = (ins EventType:$event);
+  let results = (outs BitType:$result);
+  let assemblyFormat = [{ $event attr-dict `:` type($event) }];
+}
+
+def WaitConditionOp : MooreOp<"wait_condition"> {
+  let summary = "Suspend execution until a condition becomes true";
+  let description = [{
+    The `moore.wait_condition` op suspends execution of the current process
+    until the given condition evaluates to true. Corresponds to the SystemVerilog
+    `wait(condition)` statement.
+
+    Example:
+    ```mlir
+    moore.wait_condition %cond : i1
+    ```
+
+    See IEEE 1800-2017 § 9.4.3 "Level-sensitive event control".
+  }];
+  let arguments = (ins BitType:$condition);
+  let assemblyFormat = [{ $condition attr-dict `:` type($condition) }];
+}
+
 def WaitDelayOp : MooreOp<"wait_delay"> {
   let summary = "Suspend execution for a given amount of time";
   let description = [{
@@ -4432,18 +4469,25 @@ def QueuePopFrontOp : QueueBuiltin<"pop_front"> {
 }
 
 def QueueDeleteOp : QueueBuiltin<"delete"> {
-  let summary = "Delete all elements from a queue";
+  let summary = "Delete elements from a queue";
   let description = [{
-    Removes all elements from a queue, leaving it empty. This corresponds to the
-    SystemVerilog `.delete()` built-in method on queues.
+    Removes elements from a queue. If an index is provided, removes only the
+    element at that index (and shifts remaining elements). If no index is
+    provided, removes all elements. This corresponds to the SystemVerilog
+    `.delete()` and `.delete(index)` built-in methods on queues.
 
     Example:
     ```mlir
+    // Delete all elements
     moore.queue.delete %queue : !moore.ref<!moore.queue<i32, 0>>
+    // Delete element at index
+    moore.queue.delete %queue[%idx] : !moore.ref<!moore.queue<i32, 0>>, i32
     ```
   }];
-  let arguments = (ins RefType:$queue);
-  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+  let arguments = (ins RefType:$queue, Optional<IntType>:$index);
+  let assemblyFormat = [{
+    $queue (`[` $index^ `]`)? `:` type($queue) (`,` type($index)^)? attr-dict
+  }];
 }
 
 def QueueSortOp : QueueBuiltin<"sort"> {
@@ -4488,6 +4532,24 @@ def QueueMinOp : QueueBuiltin<"min"> {
     Example:
     ```mlir
     %min_vals = moore.queue.min %array : !moore.open_uarray<i32> -> !moore.queue<i32, 0>
+    ```
+  }];
+  let arguments = (ins UnpackedType:$array);
+  let results = (outs QueueType:$result);
+  let assemblyFormat = "$array `:` type($array) `->` type($result) attr-dict";
+}
+
+def QueueUniqueOp : QueueBuiltin<"unique"> {
+  let summary = "Return unique elements from a queue or array";
+  let description = [{
+    Returns a queue containing only the unique elements from the input array
+    or queue. Duplicate elements are removed, keeping only the first occurrence.
+    This corresponds to the SystemVerilog `.unique()` built-in method on arrays
+    and queues (IEEE 1800-2017 Section 7.12.1).
+
+    Example:
+    ```mlir
+    %unique_vals = moore.queue.unique %array : !moore.open_uarray<i32> -> !moore.queue<i32, 0>
     ```
   }];
   let arguments = (ins UnpackedType:$array);
