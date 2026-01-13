@@ -447,13 +447,25 @@ struct ExprVisitor {
 
       // Adjust the offset such that it matches the right bound of the range.
       if (offsetAdd != 0) {
-        if (offsetDyn)
+        if (offsetDyn) {
+          // Convert offsetDyn to a simple bit vector (IntType) if needed.
+          // This handles cases where the index expression is an enum or other
+          // packed type that needs conversion before arithmetic.
+          offsetDyn = context.convertToSimpleBitVector(offsetDyn);
+          if (!offsetDyn)
+            return {};
+          auto offsetIntType = dyn_cast<moore::IntType>(offsetDyn.getType());
+          if (!offsetIntType) {
+            mlir::emitError(loc)
+                << "indexed range select requires integer index type, got "
+                << offsetDyn.getType();
+            return {};
+          }
           offsetDyn = moore::AddOp::create(
               builder, loc, offsetDyn,
-              moore::ConstantOp::create(
-                  builder, loc, cast<moore::IntType>(offsetDyn.getType()),
-                  offsetAdd,
-                  /*isSigned=*/offsetAdd < 0));
+              moore::ConstantOp::create(builder, loc, offsetIntType, offsetAdd,
+                                        /*isSigned=*/offsetAdd < 0));
+        }
         else
           offsetConst += offsetAdd;
       }
