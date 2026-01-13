@@ -2965,6 +2965,20 @@ struct FormatRealOpConversion : public OpConversionPattern<FormatRealOp> {
   }
 };
 
+struct FormatStringOpConversion : public OpConversionPattern<FormatStringOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FormatStringOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // The input is a dynamic string (converted from moore::StringType to
+    // LLVM struct {ptr, i64}). We convert it to sim::FormatDynStringOp
+    // which produces a format string that can be used in display operations.
+    rewriter.replaceOpWithNewOp<sim::FormatDynStringOp>(op, adaptor.getString());
+    return success();
+  }
+};
+
 struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -5113,6 +5127,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatIntOpConversion,
     FormatClassOpConversion,
     FormatRealOpConversion,
+    FormatStringOpConversion,
     DisplayBIOpConversion,
 
     // Patterns for queue and dynamic array operations.

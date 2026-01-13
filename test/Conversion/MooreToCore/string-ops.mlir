@@ -112,3 +112,16 @@ func.func @IsUnknown(%val: !moore.i32) -> !moore.i1 {
   %result = moore.builtin.isunknown %val : !moore.i32
   return %result : !moore.i1
 }
+
+// CHECK-LABEL: hw.module @FormatStringTest
+moore.module @FormatStringTest() {
+  moore.procedure initial {
+    %0 = moore.constant_string "IDLE" : i32
+    %1 = moore.int_to_string %0 : i32
+    // CHECK: sim.fmt.dyn_string %{{.*}} : !llvm.struct<(ptr, i64)>
+    %2 = moore.fmt.string %1
+    moore.builtin.display %2
+    moore.return
+  }
+  moore.output
+}

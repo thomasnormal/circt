@@ -1681,6 +1681,27 @@ struct RvalueExprVisitor : public ExprVisitor {
   Value visitCall(const slang::ast::CallExpression &expr,
                   const slang::ast::SubroutineSymbol *subroutine) {
 
+    // DPI-C imports are not yet supported. Emit a remark and return a dummy
+    // value to allow compilation to continue.
+    if (subroutine->flags & slang::ast::MethodFlags::DPIImport) {
+      mlir::emitRemark(loc) << "DPI-C imports not yet supported; call to '"
+                            << subroutine->name << "' skipped";
+      // Return a dummy value for the result type, or a void cast for void
+      // functions.
+      if (expr.type->isVoid()) {
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, moore::VoidType::get(context.getContext()),
+                   ValueRange{})
+            .getResult(0);
+      }
+      auto type = context.convertType(*expr.type);
+      if (!type)
+        return {};
+      return mlir::UnrealizedConversionCastOp::create(builder, loc, type,
+                                                      ValueRange{})
+          .getResult(0);
+    }
+
     const bool isMethod = (subroutine->thisVar != nullptr);
 
     auto *lowering = context.declareFunction(*subroutine);
