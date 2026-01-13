@@ -730,6 +730,35 @@ class VifHolder;
     virtual basic_bus bus;
 endclass
 
+/// Check interface with ports (like SPI interface)
+
+// CHECK-LABEL: moore.interface @SpiInterface {
+// CHECK-NEXT:    moore.interface.signal @pclk : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @areset : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @mosi : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @miso : !moore.l1
+// CHECK-NEXT:    moore.interface.signal @sclk : !moore.l1
+// CHECK-NEXT:    moore.interface.modport @master (output @mosi, input @miso, output @sclk)
+// CHECK-NEXT:    moore.interface.modport @slave (input @mosi, output @miso, input @sclk)
+// CHECK: }
+
+interface SpiInterface(input pclk, input areset);
+    logic mosi;
+    logic miso;
+    logic sclk;
+    modport master(output mosi, input miso, output sclk);
+    modport slave(input mosi, output miso, input sclk);
+endinterface
+
+/// Check interface instantiation inside a module
+
+// CHECK-LABEL: moore.module @interface_inst_test
+// CHECK:         %spi = moore.interface.instance @SpiInterface : <virtual_interface<@SpiInterface>>
+
+module interface_inst_test(input clk);
+    SpiInterface spi(clk, 1'b0);
+endmodule
+
 /// Check $cast dynamic type checking for class downcasts
 
 // CHECK-LABEL: moore.class.classdecl @BaseCastClass {
