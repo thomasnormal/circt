@@ -128,6 +128,8 @@ struct Context {
   LogicalResult convertClassDeclaration(const slang::ast::ClassType &classdecl);
   ClassLowering *declareClass(const slang::ast::ClassType &cls);
   LogicalResult convertGlobalVariable(const slang::ast::VariableSymbol &var);
+  LogicalResult
+  convertStaticClassProperty(const slang::ast::ClassPropertySymbol &prop);
 
   /// Convert interface declarations
   InterfaceLowering *
@@ -333,6 +335,11 @@ struct Context {
   /// expressions.
   DenseMap<const slang::ast::ValueSymbol *, moore::GlobalVariableOp>
       globalVariables;
+  /// A set of static class properties that are currently being converted.
+  /// This is used to detect and handle recursive conversions when a property's
+  /// type conversion triggers conversion of classes whose methods reference
+  /// the property.
+  DenseSet<const slang::ast::ValueSymbol *> staticPropertyInProgress;
   /// A list of global variables that still need their initializers to be
   /// converted.
   SmallVector<const slang::ast::ValueSymbol *> globalVariableWorklist;

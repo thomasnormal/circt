@@ -152,20 +152,13 @@ static Value visitClassProperty(Context &context,
       return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
     }
 
-    // If the global variable hasn't been created yet (e.g., forward reference),
-    // try on-demand conversion. This is needed when a static method of a class
-    // is converted before the class's static properties are visited.
-    // We need to find the parent class and ensure it's converted.
-    const auto *parentScope = expr.getParentScope();
-    if (parentScope) {
-      if (const auto *classType =
-              parentScope->asSymbol().as_if<slang::ast::ClassType>()) {
-        // Trigger class conversion which will create the global variable
-        (void)context.convertClassDeclaration(*classType);
-        // Now try to look up the global variable again
-        if (auto globalOp = context.globalVariables.lookup(&expr)) {
-          return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
-        }
+    // If the global variable hasn't been created yet (e.g., forward reference
+    // or recursive class conversion), try on-demand conversion of just this
+    // property. This handles cases where a method body references a static
+    // property before the property has been processed during class conversion.
+    if (succeeded(context.convertStaticClassProperty(expr))) {
+      if (auto globalOp = context.globalVariables.lookup(&expr)) {
+        return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
       }
     }
 
@@ -2322,20 +2315,44 @@ struct RvalueExprVisitor : public ExprVisitor {
         value = context.convertRvalueExpression(*stream.operand);
       }
 
-      // Check if this is a dynamic array or queue type that cannot be
-      // converted to a simple bit vector. These require runtime iteration
-      // which is not yet supported.
+      // Handle dynamic array or queue types using runtime streaming operation.
+      // These cannot be converted to simple bit vectors at compile time.
       if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(value.getType())) {
-        mlir::emitWarning(operandLoc)
-            << "streaming concatenation of dynamic arrays/queues is not fully "
-            << "supported; returning empty string";
-        // Return an empty string as a placeholder to allow compilation to
-        // continue. This matches the expected behavior for string streaming.
-        auto intType =
-            moore::IntType::get(context.getContext(), 0, Domain::TwoValued);
-        auto emptyConst =
-            moore::ConstantStringOp::create(builder, loc, intType, "");
-        return moore::IntToStringOp::create(builder, loc, emptyConst);
+        // Determine the result type based on the element type of the
+        // queue/dynamic array. String queues produce strings, other types
+        // produce integers based on element bit size.
+        Type resultType;
+        Type elementType;
+        if (auto queueType = dyn_cast<moore::QueueType>(value.getType()))
+          elementType = queueType.getElementType();
+        else if (auto arrayType =
+                     dyn_cast<moore::OpenUnpackedArrayType>(value.getType()))
+          elementType = arrayType.getElementType();
+
+        if (isa<moore::StringType>(elementType)) {
+          // String queue streaming produces a string
+          resultType = moore::StringType::get(context.getContext());
+        } else {
+          // For other element types, produce an integer matching element size
+          // The actual size is determined at runtime, but we use element size
+          // as the base type for the streaming operation.
+          auto unpackedElem = cast<moore::UnpackedType>(elementType);
+          if (auto bitSize = unpackedElem.getBitSize()) {
+            resultType = moore::IntType::get(context.getContext(), *bitSize,
+                                             unpackedElem.getDomain());
+          } else {
+            // For types without known bit size, use a dynamic result
+            resultType = moore::StringType::get(context.getContext());
+          }
+        }
+
+        // Determine streaming direction from slice size:
+        // getSliceSize() == 0 means right-to-left ({>>{}}), otherwise
+        // left-to-right ({<<{}}).
+        bool isRightToLeft = expr.getSliceSize() != 0;
+
+        return moore::StreamConcatOp::create(builder, loc, resultType, value,
+                                             isRightToLeft);
       }
 
       value = context.convertToSimpleBitVector(value);
