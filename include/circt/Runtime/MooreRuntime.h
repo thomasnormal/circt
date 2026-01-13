@@ -318,6 +318,74 @@ bool __moore_dyn_cast_check(int32_t srcTypeId, int32_t targetTypeId,
                             int32_t inheritanceDepth);
 
 //===----------------------------------------------------------------------===//
+// Array Locator Methods
+//===----------------------------------------------------------------------===//
+
+/// Predicate function type for array locator methods.
+/// @param element Pointer to the current element being tested
+/// @param userData User-provided context data
+/// @return true if the element matches the predicate, false otherwise
+typedef bool (*MooreLocatorPredicate)(void *element, void *userData);
+
+/// Find elements in an array that match a predicate.
+/// Implements SystemVerilog array locator methods: find, find_first, find_last,
+/// find_index, find_first_index, find_last_index.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @param predicate Function pointer for the predicate (returns bool for each element)
+/// @param userData User data to pass to the callback
+/// @param mode 0=all, 1=first, 2=last
+/// @param returnIndices If true, return indices instead of elements
+/// @return A new queue with matching elements or indices
+MooreQueue __moore_array_locator(MooreQueue *array, int64_t elementSize,
+                                 MooreLocatorPredicate predicate,
+                                 void *userData, int32_t mode,
+                                 bool returnIndices);
+
+/// Find elements equal to a given value (simpler case without callback).
+/// Useful when the comparison can be done by simple memory comparison.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @param value Pointer to the value to search for
+/// @param mode 0=all, 1=first, 2=last
+/// @param returnIndices If true, return indices instead of elements
+/// @return A new queue with matching elements or indices
+MooreQueue __moore_array_find_eq(MooreQueue *array, int64_t elementSize,
+                                 void *value, int32_t mode, bool returnIndices);
+
+/// Find the minimum element(s) in an array.
+/// Implements SystemVerilog min() array locator method.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @param isSigned If true, compare as signed integers; otherwise unsigned
+/// @return A new queue containing the minimum element(s)
+MooreQueue __moore_array_min(MooreQueue *array, int64_t elementSize,
+                             bool isSigned);
+
+/// Find the maximum element(s) in an array.
+/// Implements SystemVerilog max() array locator method.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @param isSigned If true, compare as signed integers; otherwise unsigned
+/// @return A new queue containing the maximum element(s)
+MooreQueue __moore_array_max(MooreQueue *array, int64_t elementSize,
+                             bool isSigned);
+
+/// Find unique elements in an array.
+/// Implements SystemVerilog unique() array locator method.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return A new queue containing unique elements (first occurrence of each)
+MooreQueue __moore_array_unique(MooreQueue *array, int64_t elementSize);
+
+/// Find indices of unique elements in an array.
+/// Implements SystemVerilog unique_index() array locator method.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return A new queue containing indices of unique elements
+MooreQueue __moore_array_unique_index(MooreQueue *array, int64_t elementSize);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

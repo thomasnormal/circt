@@ -199,6 +199,63 @@ func.func @test_queue_pop_front() -> !moore.i32 {
   return %elem : !moore.i32
 }
 
+//===----------------------------------------------------------------------===//
+// Array Locator Operations
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @test_array_locator_find_all_eq
+// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
+// CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
+// CHECK: llvm.alloca {{.*}} x i32
+// CHECK: llvm.store {{.*}} : i32, !llvm.ptr
+// CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
+// CHECK: [[MODE:%.+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: [[INDICES:%.+]] = llvm.mlir.constant(false) : i1
+// CHECK: llvm.call @__moore_array_find_eq({{.*}}, [[SIZE]], {{.*}}, [[MODE]], [[INDICES]]) : (!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
+func.func @test_array_locator_find_all_eq() -> !moore.queue<!moore.i32, 0> {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.array.locator all, elements %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0> {
+  ^bb0(%item: !moore.i32):
+    %five = moore.constant 5 : i32
+    %cond = moore.eq %item, %five : i32 -> i1
+    moore.array.locator.yield %cond : i1
+  }
+  return %result : !moore.queue<!moore.i32, 0>
+}
+
+// CHECK-LABEL: func @test_array_locator_find_first_index_eq
+// CHECK: [[MODE:%.+]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK: [[INDICES:%.+]] = llvm.mlir.constant(true) : i1
+// CHECK: llvm.call @__moore_array_find_eq({{.*}}, {{.*}}, {{.*}}, [[MODE]], [[INDICES]]) : (!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
+func.func @test_array_locator_find_first_index_eq() -> !moore.queue<!moore.i32, 0> {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.array.locator first, indices %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0> {
+  ^bb0(%item: !moore.i32):
+    %zero = moore.constant 0 : i32
+    %cond = moore.eq %item, %zero : i32 -> i1
+    moore.array.locator.yield %cond : i1
+  }
+  return %result : !moore.queue<!moore.i32, 0>
+}
+
+// CHECK-LABEL: func @test_array_locator_find_last_eq
+// CHECK: [[MODE:%.+]] = llvm.mlir.constant(2 : i32) : i32
+// CHECK: [[INDICES:%.+]] = llvm.mlir.constant(false) : i1
+// CHECK: llvm.call @__moore_array_find_eq({{.*}}, {{.*}}, {{.*}}, [[MODE]], [[INDICES]]) : (!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
+func.func @test_array_locator_find_last_eq() -> !moore.queue<!moore.i32, 0> {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.array.locator last, elements %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0> {
+  ^bb0(%item: !moore.i32):
+    %ten = moore.constant 10 : i32
+    %cond = moore.eq %item, %ten : i32 -> i1
+    moore.array.locator.yield %cond : i1
+  }
+  return %result : !moore.queue<!moore.i32, 0>
+}
+
 // CHECK-DAG: llvm.func @__moore_queue_max(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_min(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_unique(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
@@ -212,3 +269,4 @@ func.func @test_queue_pop_front() -> !moore.i32 {
 // CHECK-DAG: llvm.func @__moore_dyn_array_new(i32) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_assoc_delete(!llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_assoc_delete_key(!llvm.ptr, !llvm.ptr)
+// CHECK-DAG: llvm.func @__moore_array_find_eq(!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>

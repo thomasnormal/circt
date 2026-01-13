@@ -3554,6 +3554,145 @@ private:
   }
 };
 
+/// Conversion for moore.array.locator -> runtime function call.
+/// This pattern-matches the predicate region to detect common patterns
+/// (like equality comparison) and uses specialized runtime functions.
+/// For simple equality predicates (`item == constant`), we use
+/// `__moore_array_find_eq`. More complex predicates are not yet supported.
+struct ArrayLocatorOpConversion
+    : public RuntimeCallConversionBase<ArrayLocatorOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(ArrayLocatorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    // Check if predicate is a simple equality comparison: `item == constant`
+    // The region has format:
+    //   ^bb0(%item):
+    //     %const = moore.constant ...
+    //     %cond = moore.eq %item, %const (or %const, %item)
+    //     moore.array.locator.yield %cond
+    Block &body = op.getBody().front();
+    if (body.getNumArguments() != 1)
+      return rewriter.notifyMatchFailure(op, "expected single block argument");
+
+    Value blockArg = body.getArgument(0);
+
+    // Find the yield op
+    auto yieldOp = dyn_cast<ArrayLocatorYieldOp>(body.getTerminator());
+    if (!yieldOp)
+      return rewriter.notifyMatchFailure(op, "expected array.locator.yield");
+
+    // Check if the yielded value comes from an equality comparison
+    auto eqOp = yieldOp.getCondition().getDefiningOp<EqOp>();
+    if (!eqOp)
+      return rewriter.notifyMatchFailure(
+          op, "only equality predicates are currently supported");
+
+    // Find which operand is the block argument and which is the constant
+    Value constValue = nullptr;
+    if (eqOp.getLhs() == blockArg) {
+      constValue = eqOp.getRhs();
+    } else if (eqOp.getRhs() == blockArg) {
+      constValue = eqOp.getLhs();
+    } else {
+      return rewriter.notifyMatchFailure(
+          op, "equality must compare block argument with a value");
+    }
+
+    // The constant value must be defined by a moore.constant op
+    auto constOp = constValue.getDefiningOp<ConstantOp>();
+    if (!constOp)
+      return rewriter.notifyMatchFailure(
+          op, "comparison value must be a constant");
+
+    // Get element type and size
+    Type elementType;
+    if (auto queueType = dyn_cast<QueueType>(op.getArray().getType())) {
+      elementType = queueType.getElementType();
+    } else if (auto arrayType =
+                   dyn_cast<UnpackedArrayType>(op.getArray().getType())) {
+      elementType = arrayType.getElementType();
+    } else if (auto dynArrayType =
+                   dyn_cast<OpenUnpackedArrayType>(op.getArray().getType())) {
+      elementType = dynArrayType.getElementType();
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported array type");
+    }
+
+    // Get element size in bytes
+    int64_t elementSizeBytes = 4; // default to 4 bytes (32 bits)
+    if (auto intType = dyn_cast<IntType>(elementType)) {
+      elementSizeBytes = (intType.getWidth() + 7) / 8;
+    }
+
+    // Set up types
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i1Ty = IntegerType::get(ctx, 1);
+
+    // Get or create the runtime function
+    // Signature: MooreQueue __moore_array_find_eq(MooreQueue*, i64, void*, i32,
+    // i1)
+    auto fnTy =
+        LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, ptrTy, i32Ty, i1Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_find_eq", fnTy);
+
+    // Store input array to alloca and pass pointer
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+    // Store constant value to alloca and pass pointer
+    auto convertedConstType = typeConverter->convertType(constValue.getType());
+    if (!convertedConstType)
+      return rewriter.notifyMatchFailure(op, "failed to convert constant type");
+
+    auto constAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, convertedConstType, one);
+
+    // Get the converted constant value
+    // The constant op is still in Moore dialect; we need to convert it
+    // Use toAPInt(false) to convert FVInt to APInt, mapping X/Z bits to 0
+    APInt constAPInt = constOp.getValue().toAPInt(false);
+    auto llvmConstValue = LLVM::ConstantOp::create(
+        rewriter, loc, convertedConstType, constAPInt.getSExtValue());
+    LLVM::StoreOp::create(rewriter, loc, llvmConstValue, constAlloca);
+
+    // Create element size constant
+    auto elementSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(elementSizeBytes));
+
+    // Create mode constant: All=0, First=1, Last=2
+    int32_t modeValue = static_cast<int32_t>(op.getMode());
+    auto modeConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(modeValue));
+
+    // Create indexed flag constant
+    bool returnIndices = op.getIndexed();
+    auto indicesConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(i1Ty, returnIndices ? 1 : 0));
+
+    // Call the runtime function
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
+        ValueRange{inputAlloca, elementSizeConst, constAlloca, modeConst,
+                   indicesConst});
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 /// Conversion for moore.dyn_array.new -> runtime function call.
 struct DynArrayNewOpConversion
     : public RuntimeCallConversionBase<DynArrayNewOp> {
@@ -4880,6 +5019,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueuePopBackOpConversion,
     QueuePopFrontOpConversion,
     StreamConcatOpConversion,
+    ArrayLocatorOpConversion,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
