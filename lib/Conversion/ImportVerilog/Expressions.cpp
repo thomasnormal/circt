@@ -106,6 +106,18 @@ static bool isNullHandleType(moore::ClassHandleType handleTy) {
          handleTy.getClassSym().getRootReference() == "__null__";
 }
 
+/// Get the value type from an lvalue type. For RefType, this returns the nested
+/// type. For ClassHandleType (class handles), this returns the type itself
+/// since class handles are assigned directly without dereferencing. Returns
+/// null if the type is neither.
+static Type getLvalueNestedType(Type lvalueType) {
+  if (auto refType = dyn_cast<moore::RefType>(lvalueType))
+    return refType.getNestedType();
+  if (isa<moore::ClassHandleType>(lvalueType))
+    return lvalueType;
+  return {};
+}
+
 static Value visitClassProperty(Context &context,
                                 const slang::ast::ClassPropertySymbol &expr) {
   auto loc = context.convertLocation(expr.location);
@@ -736,9 +748,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       return {};
 
     // Determine the right-hand side value of the assignment.
+    // The lhs can be either a RefType (for variables, array elements, etc.)
+    // or a ClassHandleType (for class handle assignments).
+    auto lhsNestedType = getLvalueNestedType(lhs.getType());
+    if (!lhsNestedType) {
+      mlir::emitError(loc) << "unsupported lvalue type in assignment: "
+                           << lhs.getType();
+      return {};
+    }
     context.lvalueStack.push_back(lhs);
-    auto rhs = context.convertRvalueExpression(
-        expr.right(), cast<moore::RefType>(lhs.getType()).getNestedType());
+    auto rhs = context.convertRvalueExpression(expr.right(), lhsNestedType);
     context.lvalueStack.pop_back();
     if (!rhs)
       return {};
@@ -1798,9 +1817,15 @@ struct RvalueExprVisitor : public ExprVisitor {
         return {};
 
       // Check if both are class handle types - this is the common case for
-      // dynamic downcasting in OOP
-      auto destRefTy = cast<moore::RefType>(destLvalue.getType());
-      auto destTy = destRefTy.getNestedType();
+      // dynamic downcasting in OOP.
+      // The destination can be either a RefType (for variables holding class
+      // handles) or a ClassHandleType directly (for class properties).
+      auto destTy = getLvalueNestedType(destLvalue.getType());
+      if (!destTy) {
+        mlir::emitError(loc) << "unsupported destination type in $cast: "
+                             << destLvalue.getType();
+        return {};
+      }
       auto srcTy = srcRvalue.getType();
 
       bool isClassDowncast =
