@@ -10,7 +10,7 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 **Overall Progress:** UVM core library parses completely without errors!
 All major parsing features are now supported. Focus shifts to MooreToCore lowering.
 
-### Session Progress (18+ commits)
+### Session Progress (22+ commits)
 - ✅ Fixed `cast<TypedValue<IntType>>` crash in class hierarchy
 - ✅ Added `EventTriggerOp` for `->event` syntax
 - ✅ Added `QueueConcatOp` for queue concatenation
@@ -33,11 +33,14 @@ All major parsing features are now supported. Focus shifts to MooreToCore loweri
 - ✅ Added array locator methods (find, find_index, find_first, etc.)
 - ✅ Added ArrayLocatorOp MooreToCore lowering (equality predicates)
 - ✅ Added runtime array locator functions
+- ✅ Extended ArrayLocatorOp for all comparison operators (>, <, >=, <=, !=)
+- ✅ Added covergroup skip with remark (allows UVM code with covergroups)
+- ✅ Fixed DPI-C crash (now emits remark instead of segfault)
+- ✅ Fixed enum .name() lowering with FormatDynStringOp
 
 ### Current Limitations (Xcelium Parity Gaps)
 
-1. **Complex array locator predicates** - Only `item == constant` supported
-   - Need: `item > constant`, `item.field == val`, complex expressions
+1. **Field-based array locator predicates** - Need `item.field == val` support
 
 2. **Constraint solving** - Constraints parsed but not solved
    - Need: External solver integration (Z3/SMT)
