@@ -1124,16 +1124,58 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   return &lowering;
 }
 
-/// Convert an interface body - signals and modports.
+/// Convert an interface body - signals, modports, and ports.
 LogicalResult
 Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
   auto &lowering = *interfaces[iface];
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToStart(&lowering.op.getBody().front());
 
+  // Track internal symbols from interface ports so we can skip them when
+  // iterating through members (they would otherwise appear as duplicate
+  // variables/nets).
+  llvm::DenseSet<const slang::ast::Symbol *> portInternalSymbols;
+
+  // Handle interface ports as signals.
+  // Interface ports (like `interface foo(input clk, input reset)`) are
+  // essentially external signals that get connected when the interface is
+  // instantiated.
+  for (auto *symbol : iface->getPortList()) {
+    if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+      auto portLoc = convertLocation(port->location);
+      auto type = convertType(port->getType());
+      if (!type)
+        return failure();
+      moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type);
+      // Track the internal symbol so we skip it in member iteration
+      if (port->internalSymbol)
+        portInternalSymbols.insert(port->internalSymbol);
+    } else if (const auto *multiPort =
+                   symbol->as_if<slang::ast::MultiPortSymbol>()) {
+      for (auto *port : multiPort->ports) {
+        auto portLoc = convertLocation(port->location);
+        auto type = convertType(port->getType());
+        if (!type)
+          return failure();
+        moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type);
+        if (port->internalSymbol)
+          portInternalSymbols.insert(port->internalSymbol);
+      }
+    }
+  }
+
   // Convert all members of the interface
   for (auto &member : iface->members()) {
     auto loc = convertLocation(member.location);
+
+    // Skip ports - they are already handled above through getPortList()
+    if (member.as_if<slang::ast::PortSymbol>() ||
+        member.as_if<slang::ast::MultiPortSymbol>())
+      continue;
+
+    // Skip internal symbols that correspond to interface ports
+    if (portInternalSymbols.count(&member))
+      continue;
 
     // Handle variables/nets as interface signals
     if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
