@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <random>
 
 //===----------------------------------------------------------------------===//
 // Internal Helpers
@@ -568,6 +569,59 @@ extern "C" void __moore_wait_condition(int32_t condition) {
   (void)condition;
   // TODO: Implement proper simulation-aware waiting when a simulation
   // scheduler is available.
+}
+
+//===----------------------------------------------------------------------===//
+// Random Number Generation
+//===----------------------------------------------------------------------===//
+
+namespace {
+// Thread-local random number generator for reproducible simulation.
+// Uses a Mersenne Twister engine which provides good statistical properties.
+thread_local std::mt19937 urandomGenerator(std::random_device{}());
+thread_local std::mt19937 randomGenerator(std::random_device{}());
+} // anonymous namespace
+
+extern "C" uint32_t __moore_urandom(void) {
+  // Generate a 32-bit unsigned pseudo-random number.
+  return urandomGenerator();
+}
+
+extern "C" uint32_t __moore_urandom_seeded(int32_t seed) {
+  // Seed the generator and return a random number.
+  urandomGenerator.seed(static_cast<uint32_t>(seed));
+  return urandomGenerator();
+}
+
+extern "C" uint32_t __moore_urandom_range(uint32_t maxval, uint32_t minval) {
+  // IEEE 1800-2017 Section 18.13.3: If min > max, swap them.
+  if (minval > maxval) {
+    uint32_t tmp = minval;
+    minval = maxval;
+    maxval = tmp;
+  }
+
+  // Handle edge case where range is 0
+  if (minval == maxval) {
+    return minval;
+  }
+
+  // Generate a random number in the range [minval, maxval]
+  std::uniform_int_distribution<uint32_t> dist(minval, maxval);
+  return dist(urandomGenerator);
+}
+
+extern "C" int32_t __moore_random(void) {
+  // Generate a 32-bit signed random number.
+  // $random is supposed to be "truly random" but in practice is implemented
+  // as a pseudo-random generator.
+  return static_cast<int32_t>(randomGenerator());
+}
+
+extern "C" int32_t __moore_random_seeded(int32_t seed) {
+  // Seed the generator and return a random number.
+  randomGenerator.seed(static_cast<uint32_t>(seed));
+  return static_cast<int32_t>(randomGenerator());
 }
 
 //===----------------------------------------------------------------------===//

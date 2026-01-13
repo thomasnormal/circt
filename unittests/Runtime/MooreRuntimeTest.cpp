@@ -283,4 +283,76 @@ TEST(MooreRuntimeArrayTest, DynArrayEmpty) {
   EXPECT_EQ(arr.len, 0);
 }
 
+//===----------------------------------------------------------------------===//
+// Random Number Generation Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeRandomTest, Urandom) {
+  // Just verify it returns without crashing and produces values
+  uint32_t val1 = __moore_urandom();
+  uint32_t val2 = __moore_urandom();
+
+  // It's statistically unlikely that two random numbers are the same
+  // (but not impossible), so we just check they're valid uint32_t values
+  (void)val1;
+  (void)val2;
+}
+
+TEST(MooreRuntimeRandomTest, UrandomSeeded) {
+  // Verify seeded random produces consistent results
+  uint32_t val1 = __moore_urandom_seeded(42);
+  uint32_t val2 = __moore_urandom_seeded(42);
+
+  // Re-seeding with the same value should produce the same first random number
+  EXPECT_EQ(val1, val2);
+
+  // Different seed should produce different value (with high probability)
+  uint32_t val3 = __moore_urandom_seeded(123);
+  EXPECT_NE(val1, val3);
+}
+
+TEST(MooreRuntimeRandomTest, UrandomRange) {
+  // Test range [0, 10]
+  for (int i = 0; i < 100; ++i) {
+    uint32_t val = __moore_urandom_range(10, 0);
+    EXPECT_GE(val, 0u);
+    EXPECT_LE(val, 10u);
+  }
+
+  // Test range [50, 100]
+  for (int i = 0; i < 100; ++i) {
+    uint32_t val = __moore_urandom_range(100, 50);
+    EXPECT_GE(val, 50u);
+    EXPECT_LE(val, 100u);
+  }
+
+  // Test with min > max (should swap automatically per IEEE 1800-2017)
+  for (int i = 0; i < 100; ++i) {
+    uint32_t val = __moore_urandom_range(10, 100); // min=100, max=10, swapped
+    EXPECT_GE(val, 10u);
+    EXPECT_LE(val, 100u);
+  }
+
+  // Test single value range
+  uint32_t val = __moore_urandom_range(42, 42);
+  EXPECT_EQ(val, 42u);
+}
+
+TEST(MooreRuntimeRandomTest, Random) {
+  // Just verify it returns without crashing
+  int32_t val1 = __moore_random();
+  int32_t val2 = __moore_random();
+  (void)val1;
+  (void)val2;
+}
+
+TEST(MooreRuntimeRandomTest, RandomSeeded) {
+  // Verify seeded random produces consistent results
+  int32_t val1 = __moore_random_seeded(42);
+  int32_t val2 = __moore_random_seeded(42);
+
+  // Re-seeding with the same value should produce the same first random number
+  EXPECT_EQ(val1, val2);
+}
+
 } // namespace

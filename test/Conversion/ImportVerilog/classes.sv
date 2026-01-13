@@ -646,11 +646,21 @@ class RandomizableClass;
 endclass
 
 /// Check constraint block support
+/// Note: Variable references inside constraints currently create uninitialized
+/// variables. Proper resolution to class properties is a future enhancement.
 
 // CHECK-LABEL: moore.class.classdecl @ConstrainedClass {
-// CHECK-NEXT:    moore.class.propertydecl @x : !moore.i32 rand_mode rand
-// CHECK-NEXT:    moore.constraint.block @valid_range {
-// CHECK-NEXT:    }
+// CHECK:         moore.constant 100
+// CHECK:         moore.constant 0
+// CHECK:         moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK:         moore.constraint.block @valid_range {
+// CHECK:           moore.sgt %{{.*}}, %{{.*}} : i32 -> i1
+// CHECK:           moore.to_builtin_bool
+// CHECK:           moore.constraint.expr
+// CHECK:           moore.slt %{{.*}}, %{{.*}} : i32 -> i1
+// CHECK:           moore.to_builtin_bool
+// CHECK:           moore.constraint.expr
+// CHECK:         }
 // CHECK: }
 
 class ConstrainedClass;
@@ -661,9 +671,13 @@ endclass
 /// Check static constraint blocks
 
 // CHECK-LABEL: moore.class.classdecl @StaticConstraintClass {
-// CHECK-NEXT:    moore.class.propertydecl @y : !moore.i32 rand_mode rand
-// CHECK-NEXT:    moore.constraint.block static @static_bound {
-// CHECK-NEXT:    }
+// CHECK:         moore.constant 0
+// CHECK:         moore.class.propertydecl @y : !moore.i32 rand_mode rand
+// CHECK:         moore.constraint.block static @static_bound {
+// CHECK:           moore.sge %{{.*}}, %{{.*}} : i32 -> i1
+// CHECK:           moore.to_builtin_bool
+// CHECK:           moore.constraint.expr
+// CHECK:         }
 // CHECK: }
 
 class StaticConstraintClass;

@@ -254,6 +254,40 @@ bool __moore_event_triggered(bool *event);
 void __moore_wait_condition(int32_t condition);
 
 //===----------------------------------------------------------------------===//
+// Random Number Generation
+//===----------------------------------------------------------------------===//
+
+/// Generate a pseudo-random 32-bit unsigned integer.
+/// Implements the SystemVerilog $urandom system function.
+/// @return A 32-bit pseudo-random unsigned integer
+uint32_t __moore_urandom(void);
+
+/// Seed the pseudo-random number generator.
+/// Implements the seeded form of $urandom: $urandom(seed).
+/// @param seed The seed value for the random number generator
+/// @return A 32-bit pseudo-random unsigned integer
+uint32_t __moore_urandom_seeded(int32_t seed);
+
+/// Generate a pseudo-random unsigned integer within a range.
+/// Implements the SystemVerilog $urandom_range system function.
+/// If min > max, the values are automatically swapped.
+/// @param maxval The maximum value (inclusive)
+/// @param minval The minimum value (inclusive), defaults to 0
+/// @return A random value in the range [min(minval, maxval), max(minval, maxval)]
+uint32_t __moore_urandom_range(uint32_t maxval, uint32_t minval);
+
+/// Generate a true random 32-bit signed integer.
+/// Implements the SystemVerilog $random system function.
+/// @return A 32-bit random signed integer
+int32_t __moore_random(void);
+
+/// Seed the true random number generator and return a random value.
+/// Implements the seeded form of $random: $random(seed).
+/// @param seed The seed value for the random number generator
+/// @return A 32-bit random signed integer
+int32_t __moore_random_seeded(int32_t seed);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

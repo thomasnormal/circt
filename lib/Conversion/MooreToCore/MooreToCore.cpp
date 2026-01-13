@@ -4150,6 +4150,123 @@ static LogicalResult convert(TimeToLogicOp op, TimeToLogicOp::Adaptor adaptor,
 }
 
 //===----------------------------------------------------------------------===//
+// Random Number Generation Conversion
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Conversion for moore.builtin.urandom -> runtime function call.
+/// Implements the SystemVerilog $urandom system function.
+struct UrandomBIOpConversion : public OpConversionPattern<UrandomBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UrandomBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    if (adaptor.getSeed()) {
+      // Seeded version: __moore_urandom_seeded(seed) -> u32
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_urandom_seeded", fnTy);
+      auto result = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                         SymbolRefAttr::get(fn),
+                                         ValueRange{adaptor.getSeed()});
+      rewriter.replaceOp(op, result.getResult());
+    } else {
+      // Non-seeded version: __moore_urandom() -> u32
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_urandom", fnTy);
+      auto result = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                         SymbolRefAttr::get(fn), ValueRange{});
+      rewriter.replaceOp(op, result.getResult());
+    }
+
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.urandom_range -> runtime function call.
+/// Implements the SystemVerilog $urandom_range system function.
+struct UrandomRangeBIOpConversion
+    : public OpConversionPattern<UrandomRangeBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UrandomRangeBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    // __moore_urandom_range(max, min) -> u32
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_urandom_range",
+                                     fnTy);
+
+    Value maxval = adaptor.getMaxval();
+    Value minval = adaptor.getMinval();
+
+    // If minval is not provided, use 0
+    if (!minval) {
+      minval = arith::ConstantOp::create(rewriter, loc, i32Ty,
+                                         rewriter.getI32IntegerAttr(0));
+    }
+
+    auto result = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{maxval, minval});
+    rewriter.replaceOp(op, result.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.random -> runtime function call.
+/// Implements the SystemVerilog $random system function.
+struct RandomBIOpConversion : public OpConversionPattern<RandomBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(RandomBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    if (adaptor.getSeed()) {
+      // Seeded version: __moore_random_seeded(seed) -> i32
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_random_seeded", fnTy);
+      auto result = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                         SymbolRefAttr::get(fn),
+                                         ValueRange{adaptor.getSeed()});
+      rewriter.replaceOp(op, result.getResult());
+    } else {
+      // Non-seeded version: __moore_random() -> i32
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_random", fnTy);
+      auto result = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                         SymbolRefAttr::get(fn), ValueRange{});
+      rewriter.replaceOp(op, result.getResult());
+    }
+
+    return success();
+  }
+};
+
+} // namespace
+
+//===----------------------------------------------------------------------===//
 // Conversion Infrastructure
 //===----------------------------------------------------------------------===//
 
@@ -4639,6 +4756,11 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<TimeBIOp>(convert);
   patterns.add<LogicToTimeOp>(convert);
   patterns.add<TimeToLogicOp>(convert);
+
+  // Random number generation
+  patterns.add<UrandomBIOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<UrandomRangeBIOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<RandomBIOpConversion>(typeConverter, patterns.getContext());
 
   mlir::populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                             typeConverter);
