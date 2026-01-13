@@ -1964,16 +1964,25 @@ struct RvalueExprVisitor : public ExprVisitor {
         return *result;
     }
 
-    // Handle associative array delete(key) method - 2 args: array ref + key
+    // Handle array/queue delete(key/index) method - 2 args: array ref + key/index
     if (subroutine.name == "delete" && args.size() == 2) {
       Value arrayRef = context.convertLvalueExpression(*args[0]);
-      Value key = context.convertRvalueExpression(*args[1]);
-      if (!arrayRef || !key)
+      Value keyOrIndex = context.convertRvalueExpression(*args[1]);
+      if (!arrayRef || !keyOrIndex)
         return {};
-      // Check if it's an associative array
       auto refType = dyn_cast<moore::RefType>(arrayRef.getType());
-      if (refType && isa<moore::AssocArrayType>(refType.getNestedType())) {
-        moore::AssocArrayDeleteKeyOp::create(builder, loc, arrayRef, key);
+      if (refType) {
+        auto nestedType = refType.getNestedType();
+        if (isa<moore::AssocArrayType>(nestedType)) {
+          // Associative array delete(key)
+          moore::AssocArrayDeleteKeyOp::create(builder, loc, arrayRef,
+                                               keyOrIndex);
+        } else if (isa<moore::QueueType>(nestedType)) {
+          // Queue delete(index)
+          moore::QueueDeleteOp::create(builder, loc, arrayRef, keyOrIndex);
+        } else {
+          return {};
+        }
         // delete returns void, return a dummy value
         auto intTy = moore::IntType::getInt(context.getContext(), 1);
         return moore::ConstantOp::create(builder, loc, intTy, 0);
@@ -3337,6 +3346,13 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return (Value)moore::IsUnknownBIOp::create(builder, loc,
                                                              value);
                 })
+          // Event triggered property (IEEE 1800-2017 Section 15.5.3)
+          .Case("triggered",
+                [&]() -> Value {
+                  if (isa<moore::EventType>(value.getType()))
+                    return moore::EventTriggeredOp::create(builder, loc, value);
+                  return {};
+                })
           .Case("len",
                 [&]() -> Value {
                   if (isa<moore::StringType>(value.getType()))
@@ -3415,6 +3431,30 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                         cast<moore::UnpackedType>(elementType), 0);
                     return moore::QueueMinOp::create(builder, loc, resultType,
                                                      value);
+                  }
+                  return {};
+                })
+          .Case("unique",
+                [&]() -> Value {
+                  // unique() returns a queue with unique elements
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
+                    // Get the element type of the array
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
+                    // Result is a queue of the element type
+                    auto resultType = moore::QueueType::get(
+                        cast<moore::UnpackedType>(elementType), 0);
+                    return moore::QueueUniqueOp::create(builder, loc, resultType,
+                                                        value);
                   }
                   return {};
                 })
@@ -3501,7 +3541,9 @@ Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subrouti
                   if (isAssocArray) {
                     moore::AssocArrayDeleteOp::create(builder, loc, arrayRef);
                   } else {
-                    moore::QueueDeleteOp::create(builder, loc, arrayRef);
+                    // Queue delete() without index - deletes all elements
+                    moore::QueueDeleteOp::create(builder, loc, arrayRef,
+                                                 /*index=*/nullptr);
                   }
                   // delete returns void, return a dummy value
                   auto intTy = moore::IntType::getInt(getContext(), 1);

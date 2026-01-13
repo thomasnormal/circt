@@ -209,9 +209,7 @@ struct TypeVisitor {
   }
 
   Type visit(const slang::ast::EventType &type) {
-    // Treat `event` types as simple `i1` values where an event is signaled by
-    // toggling the value.
-    return moore::IntType::getInt(context.getContext(), 1);
+    return moore::EventType::get(context.getContext());
   }
 
   Type visit(const slang::ast::VirtualInterfaceType &type) {
