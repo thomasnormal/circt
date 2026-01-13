@@ -196,8 +196,7 @@ endmodule
 // Streaming Concatenation with Queue (UVM Pattern)
 //===----------------------------------------------------------------------===//
 
-/// Test streaming concatenation with queue - should emit warning and return
-/// empty string (queues cannot be streamed to bit vectors)
+/// Test streaming concatenation with string queue - concatenates all strings
 // CHECK-LABEL: moore.module @StreamingConcatWithQueue() {
 module StreamingConcatWithQueue;
     string queue[$];
@@ -206,9 +205,8 @@ module StreamingConcatWithQueue;
     initial begin
         queue.push_back("hello");
         queue.push_back("world");
-        // expected-warning @below {{streaming concatenation of dynamic arrays/queues is not fully supported; returning empty string}}
-        // CHECK: [[CONST:%.+]] = moore.constant_string "" : i0
-        // CHECK: [[STR:%.+]] = moore.int_to_string [[CONST]] : i0
+        // CHECK: [[Q:%.+]] = moore.read %queue : <queue<string, 0>>
+        // CHECK: [[STR:%.+]] = moore.stream_concat [[Q]] : queue<string, 0> -> string
         // CHECK: moore.blocking_assign %result, [[STR]] : string
         result = {>>{queue}};
     end

@@ -1391,6 +1391,43 @@ def StringConcatOp : MooreOp<"string_concat", [Pure]> {
   let assemblyFormat = "` ` `(` $inputs `)` attr-dict `:` type($result)";
 }
 
+def StreamConcatOp : MooreOp<"stream_concat", [Pure]> {
+  let summary = "Streaming concatenation of a dynamic array or queue";
+  let description = [{
+    Performs streaming concatenation on a dynamic array or queue, iterating
+    over all elements at runtime. This corresponds to the SystemVerilog
+    streaming concatenation operator `{>>{array}}` or `{<<{array}}` when
+    applied to dynamic-sized types like queues or dynamic arrays.
+
+    For queues/arrays of strings, this concatenates all string elements into
+    a single string. For queues/arrays of other types, this packs the element
+    bits into a single bit vector.
+
+    The `isRightToLeft` attribute controls the direction:
+    - false (default): left-to-right streaming (`{>>{array}}`)
+    - true: right-to-left streaming (`{<<{array}}`)
+
+    Example:
+    ```mlir
+    // String queue streaming: concatenates all strings
+    %result = moore.stream_concat %str_queue : !moore.queue<string, 0> -> !moore.string
+
+    // Integer queue streaming: packs bits into vector
+    %bits = moore.stream_concat %int_queue : !moore.queue<i32, 0> -> !moore.i32
+    ```
+
+    See IEEE 1800-2017 Section 11.4.14 "Streaming operators (pack/unpack)".
+  }];
+  let arguments = (ins
+    UnpackedType:$input,
+    DefaultValuedAttr<BoolAttr, "false">:$isRightToLeft
+  );
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = [{
+    $input (`right_to_left` $isRightToLeft^)? attr-dict `:` type($input) `->` type($result)
+  }];
+}
+
 class LogicalEqOpBase<string mnemonic> : MooreOp<mnemonic, [
   Pure,
   Commutative,
