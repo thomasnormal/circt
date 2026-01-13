@@ -40,6 +40,15 @@ func.func @test_queue_unique() {
   return
 }
 
+// CHECK-LABEL: func @test_queue_sort
+// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: llvm.call @__moore_queue_sort({{.*}}) : (!llvm.ptr) -> ()
+func.func @test_queue_sort() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  moore.queue.sort %queue_ref : !moore.ref<queue<!moore.i32, 0>>
+  return
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array New Operation
 //===----------------------------------------------------------------------===//
@@ -193,6 +202,7 @@ func.func @test_queue_pop_front() -> !moore.i32 {
 // CHECK-DAG: llvm.func @__moore_queue_max(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_min(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_unique(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_queue_sort(!llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_queue_push_back(!llvm.ptr, !llvm.ptr, i64)
 // CHECK-DAG: llvm.func @__moore_queue_push_front(!llvm.ptr, !llvm.ptr, i64)
 // CHECK-DAG: llvm.func @__moore_queue_pop_back(!llvm.ptr, i64) -> i64

@@ -3226,6 +3226,34 @@ struct QueueUniqueOpConversion
   }
 };
 
+/// Conversion for moore.queue.sort -> runtime function call.
+/// Sorts the queue in-place.
+struct QueueSortOpConversion : public RuntimeCallConversionBase<QueueSortOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueSortOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Function signature: void sort(queue_ptr)
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_sort", fnTy);
+
+    // Pass queue reference pointer directly
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getQueue()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.queue.concat -> runtime function call.
 /// Concatenates multiple queues into a single queue.
 struct QueueConcatOpConversion
@@ -4699,6 +4727,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueMaxOpConversion,
     QueueMinOpConversion,
     QueueUniqueOpConversion,
+    QueueSortOpConversion,
     QueueConcatOpConversion,
     QueueDeleteOpConversion,
     QueuePushBackOpConversion,
