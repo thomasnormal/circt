@@ -1,6 +1,26 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 //===----------------------------------------------------------------------===//
+// Event Trigger Operation
+//===----------------------------------------------------------------------===//
+
+// CHECK: llvm.func @__moore_event_trigger(!llvm.ptr)
+
+// CHECK-LABEL: hw.module @test_event_trigger
+moore.module @test_event_trigger(in %event: !moore.event) {
+  // CHECK: llhd.process
+  moore.procedure initial {
+    // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i64) : i64
+    // CHECK: %[[ALLOCA:.*]] = llvm.alloca %[[ONE]] x i1 : (i64) -> !llvm.ptr
+    // CHECK: llvm.store %{{.*}}, %[[ALLOCA]] : i1, !llvm.ptr
+    // CHECK: llvm.call @__moore_event_trigger(%[[ALLOCA]]) : (!llvm.ptr) -> ()
+    moore.event_trigger %event : !moore.event
+    moore.return
+  }
+  moore.output
+}
+
+//===----------------------------------------------------------------------===//
 // Event Triggered Operation
 //===----------------------------------------------------------------------===//
 
