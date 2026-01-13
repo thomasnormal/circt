@@ -55,10 +55,12 @@ Array locator methods with field-based predicates now work. Main focus: MooreToC
 2. **Constraint solving** - Constraints parsed but not solved
    - Need: External solver integration (Z3/SMT)
 
-3. **~~Silent UVM conversion failure~~** - ✅ FIXED (2fe8ea6d2)
-   - Root cause: MLIR blocks without terminators during folding/verification
-   - Fix: Added explicit error messages when conversion or verification fails
-   - Now shows "error: failed to convert Verilog to MLIR" with hint to use --debug
+3. **Block Terminator Issue** - ⚠️ ROOT CAUSE IDENTIFIED
+   - Root cause: MLIR func.func blocks without proper terminators
+   - ~1,684 "block with no terminator" errors in UVM conversion
+   - First failing class: `uvm_cmdline_set_verbosity`
+   - Cascade effect: uvm_queue → uvm_callbacks_base → uvm_object
+   - Files to fix: Statements.cpp (control flow/return handling)
 
 4. **Coverage/Covergroups** - Parsing skipped with remark
    - Moore dialect has coverage ops
