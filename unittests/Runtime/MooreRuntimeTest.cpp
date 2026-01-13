@@ -431,4 +431,46 @@ TEST(MooreRuntimeRandomTest, RandomSeeded) {
   EXPECT_EQ(val1, val2);
 }
 
+//===----------------------------------------------------------------------===//
+// Dynamic Cast / RTTI Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeRTTITest, DynCastCheckSameType) {
+  // Cast to the same type should always succeed
+  EXPECT_TRUE(__moore_dyn_cast_check(1, 1, 0));
+  EXPECT_TRUE(__moore_dyn_cast_check(5, 5, 2));
+}
+
+TEST(MooreRuntimeRTTITest, DynCastCheckDerived) {
+  // Derived type (higher ID) casting to base type (lower ID) should succeed
+  // Type IDs are assigned topologically: base classes get lower IDs
+  EXPECT_TRUE(__moore_dyn_cast_check(2, 1, 0)); // derived(2) to base(1)
+  EXPECT_TRUE(__moore_dyn_cast_check(5, 1, 0)); // deeper derived to base
+}
+
+TEST(MooreRuntimeRTTITest, DynCastCheckBaseToDeriveFails) {
+  // Base type (lower ID) casting to derived type (higher ID) should fail
+  // You can't upcast - a base object is not an instance of its derived class
+  EXPECT_FALSE(__moore_dyn_cast_check(1, 2, 0)); // base(1) to derived(2)
+  EXPECT_FALSE(__moore_dyn_cast_check(1, 5, 0)); // base to deeper derived
+}
+
+TEST(MooreRuntimeRTTITest, DynCastCheckNullTypeIds) {
+  // Null type IDs (0) should always fail
+  EXPECT_FALSE(__moore_dyn_cast_check(0, 1, 0)); // null src
+  EXPECT_FALSE(__moore_dyn_cast_check(1, 0, 0)); // null target
+  EXPECT_FALSE(__moore_dyn_cast_check(0, 0, 0)); // both null
+}
+
+TEST(MooreRuntimeRTTITest, DynCastCheckSiblingTypes) {
+  // Sibling types (same base but different derived) should fail
+  // In a class hierarchy like: Base(1) -> A(2), Base(1) -> B(3)
+  // Casting A to B should fail because A is not B
+  // Note: With simple ID comparison (>=), this would incorrectly succeed
+  // if A(2) is cast to B(3) where B > A. But casting A(2) to B(3) correctly
+  // fails because 2 < 3.
+  // This tests that src < target fails (can't downcast to sibling)
+  EXPECT_FALSE(__moore_dyn_cast_check(2, 3, 1)); // A(2) to B(3) - fail
+}
+
 } // namespace

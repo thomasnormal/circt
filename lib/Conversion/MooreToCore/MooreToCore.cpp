@@ -58,6 +58,16 @@ struct ClassTypeCache {
     // field name -> GEP path inside ident (excluding the leading pointer index)
     DenseMap<StringRef, SmallVector<unsigned, 2>> propertyPath;
 
+    // Type ID for RTTI support (used by $cast for dynamic type checking).
+    // Each class gets a unique type ID assigned in topological order (base
+    // classes get lower IDs than derived classes). The type ID is stored
+    // as the first field in root class structs; derived classes access it
+    // through their base class prefix.
+    int32_t typeId = 0;
+
+    // Inheritance depth (0 for root classes, 1 for direct derived, etc.)
+    int32_t inheritanceDepth = 0;
+
     // TODO: Add classVTable in here.
     /// Record/overwrite the field path to a single property for a class.
     void setFieldPath(StringRef propertyName, ArrayRef<unsigned> path) {
@@ -74,6 +84,13 @@ struct ClassTypeCache {
       return std::nullopt;
     }
   };
+
+  // Counter for assigning unique type IDs to classes.
+  // Type IDs are assigned in resolution order (base classes first).
+  int32_t nextTypeId = 1;
+
+  /// Allocate and return the next unique type ID for a class.
+  int32_t allocateTypeId() { return nextTypeId++; }
 
   /// Record the identified struct body for a class.
   /// Implicitly finalizes the class to struct conversion.
@@ -194,6 +211,7 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
 
   // Base-first (prefix) layout for single inheritance.
   unsigned derivedStartIdx = 0;
+  MLIRContext *ctx = op.getContext();
 
   if (auto baseClass = op.getBaseAttr()) {
 
@@ -216,7 +234,23 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
       path.append(kv.second.begin(), kv.second.end());
       structBody.setFieldPath(kv.first, path);
     }
+
+    // Derived class inherits from base, so increment depth
+    structBody.inheritanceDepth = baseClassStruct->inheritanceDepth + 1;
+  } else {
+    // Root class: add type ID field as the first member.
+    // This field stores the runtime type ID for RTTI support ($cast).
+    // Layout: { i32 typeId, ... properties ... }
+    auto i32Ty = IntegerType::get(ctx, 32);
+    structBodyMembers.push_back(i32Ty);
+    derivedStartIdx = 1; // Properties start after typeId field
+
+    // Root class has inheritance depth 0
+    structBody.inheritanceDepth = 0;
   }
+
+  // Assign a unique type ID to this class
+  structBody.typeId = cache.allocateTypeId();
 
   // Properties in source order.
   unsigned iterator = derivedStartIdx;
@@ -239,7 +273,7 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
   }
 
   // TODO: Handle vtable generation over ClassMethodDeclOp here.
-  auto llvmStructTy = getOrCreateOpaqueStruct(op.getContext(), classSym);
+  auto llvmStructTy = getOrCreateOpaqueStruct(ctx, classSym);
   // Empty structs may be kept opaque
   if (!structBodyMembers.empty() &&
       failed(llvmStructTy.setBody(structBodyMembers, false)))
@@ -1201,15 +1235,18 @@ struct ClassUpcastOpConversion : public OpConversionPattern<ClassUpcastOp> {
 };
 
 /// moore.class.dyn_cast lowering: runtime type check and downcast.
-/// For now, this optimistically assumes the cast succeeds (returns true).
-/// A full implementation would need runtime type information (RTTI).
+/// Performs proper RTTI check by loading the source object's type ID and
+/// comparing it against the target type ID using the runtime function.
 struct ClassDynCastOpConversion : public OpConversionPattern<ClassDynCastOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ClassDynCastOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                           ClassTypeCache &cache)
+      : OpConversionPattern<ClassDynCastOp>(tc, ctx), cache(cache) {}
 
   LogicalResult
   matchAndRewrite(ClassDynCastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
 
     // Convert the result type (should be an LLVM pointer)
     Type dstTy = getTypeConverter()->convertType(op.getResult().getType());
@@ -1218,30 +1255,93 @@ struct ClassDynCastOpConversion : public OpConversionPattern<ClassDynCastOp> {
     if (!dstTy)
       return rewriter.notifyMatchFailure(op, "failed to convert result type");
 
-    // For opaque pointer mode, the cast is a no-op at the pointer level.
-    // The actual type check happens at runtime. For now, we optimistically
-    // assume success (true) since we don't have RTTI yet.
-    // A full implementation would:
-    // 1. Load the vtable pointer from the object
-    // 2. Compare against the expected vtable for the target type
-    // 3. Return the result of that comparison
+    if (!(dstTy == srcTy && isa<LLVM::LLVMPointerType>(srcTy)))
+      return rewriter.notifyMatchFailure(
+          op, "DynCast applied to non-opaque pointers!");
 
-    if (dstTy == srcTy && isa<LLVM::LLVMPointerType>(srcTy)) {
-      // Create a constant true for the success flag
-      Value successFlag =
-          arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
+    // Get the target class type info to obtain its type ID
+    auto targetHandleTy = cast<ClassHandleType>(op.getResult().getType());
+    auto targetSym = targetHandleTy.getClassSym();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-      // The casted pointer is the same as the input (pointer bit-cast)
-      rewriter.replaceOp(op, {adaptor.getSource(), successFlag});
-      return success();
+    if (failed(resolveClassStructBody(mod, targetSym, *typeConverter, cache)))
+      return op.emitError() << "Could not resolve target class struct for "
+                            << targetSym;
+
+    auto targetInfo = cache.getStructInfo(targetSym);
+    if (!targetInfo)
+      return op.emitError() << "No struct info for target class " << targetSym;
+
+    // Get the source class type info to determine inheritance depth
+    auto srcHandleTy = cast<ClassHandleType>(op.getSource().getType());
+    auto srcSym = srcHandleTy.getClassSym();
+
+    if (failed(resolveClassStructBody(mod, srcSym, *typeConverter, cache)))
+      return op.emitError() << "Could not resolve source class struct for "
+                            << srcSym;
+
+    auto srcInfo = cache.getStructInfo(srcSym);
+    if (!srcInfo)
+      return op.emitError() << "No struct info for source class " << srcSym;
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i1Ty = IntegerType::get(ctx, 1);
+
+    Value srcPtr = adaptor.getSource();
+
+    // Create a null pointer for comparison
+    Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+
+    // Load the type ID from the source object.
+    // The type ID is stored at the beginning of the root class struct.
+    // Build GEP path: one 0 per inheritance level + 0 for typeId field.
+    SmallVector<Value> gepIndices;
+    for (int32_t i = 0; i <= srcInfo->inheritanceDepth; ++i) {
+      gepIndices.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
     }
 
-    return rewriter.notifyMatchFailure(
-        op, "DynCast applied to non-opaque pointers!");
+    auto typeIdPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                         srcInfo->classBody, srcPtr, gepIndices);
+    Value srcTypeId = LLVM::LoadOp::create(rewriter, loc, i32Ty, typeIdPtr);
+
+    // Get or declare the __moore_dyn_cast_check runtime function
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        i1Ty, {i32Ty, i32Ty, i32Ty}, /*isVarArg=*/false);
+    auto dynCastFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_dyn_cast_check", fnTy);
+
+    // Call the runtime function to check type compatibility
+    Value targetTypeId = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(targetInfo->typeId));
+    Value inheritanceDepth = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty,
+        rewriter.getI32IntegerAttr(targetInfo->inheritanceDepth));
+
+    auto checkCall = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i1Ty}, SymbolRefAttr::get(dynCastFn),
+        ValueRange{srcTypeId, targetTypeId, inheritanceDepth});
+
+    // Final success flag: cast succeeds if pointer is not null AND type check passes
+    Value typeCheckResult = checkCall.getResult();
+    Value notNull = LLVM::ICmpOp::create(rewriter, loc, i1Ty,
+                                         LLVM::ICmpPredicate::ne, srcPtr, nullPtr);
+    Value successFlag =
+        LLVM::AndOp::create(rewriter, loc, notNull, typeCheckResult);
+
+    // The casted pointer is the same as the input (pointer bit-cast)
+    // The success flag indicates whether the cast was valid
+    rewriter.replaceOp(op, {srcPtr, successFlag});
+    return success();
   }
+
+private:
+  ClassTypeCache &cache;
 };
 
 /// moore.class.new lowering: heap-allocate storage for the class object.
+/// After allocation, initializes the type ID field for RTTI support.
 struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
   ClassNewOpConversion(TypeConverter &tc, MLIRContext *ctx,
                        ClassTypeCache &cache)
@@ -1261,12 +1361,14 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
     if (failed(resolveClassStructBody(mod, sym, *typeConverter, cache)))
       return op.emitError() << "Could not resolve class struct for " << sym;
 
-    auto structTy = cache.getStructInfo(sym)->classBody;
+    auto structInfo = cache.getStructInfo(sym);
+    auto structTy = structInfo->classBody;
 
     DataLayout dl(mod);
     // DataLayout::getTypeSize gives a byte count for LLVM types.
     uint64_t byteSize = dl.getTypeSize(structTy);
     auto i64Ty = IntegerType::get(ctx, 64);
+    auto i32Ty = IntegerType::get(ctx, 32);
     auto cSize = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                                           rewriter.getI64IntegerAttr(byteSize));
 
@@ -1277,9 +1379,37 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
         LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
                              SymbolRefAttr::get(mallocFn), ValueRange{cSize});
 
-    // Replace the new op with the malloc pointer (no cast needed with opaque
-    // ptrs).
-    rewriter.replaceOp(op, call.getResult());
+    Value objPtr = call.getResult();
+
+    // Initialize the type ID field for RTTI support.
+    // The type ID is stored at the beginning of the object (either directly
+    // for root classes, or nested in the base class prefix for derived classes).
+    // We need to drill down through the base class chain to find the root's
+    // typeId field at offset 0.
+    //
+    // For a class hierarchy A -> B -> C, the layout is:
+    //   C: { B: { A: { i32 typeId, ...A fields }, ...B fields }, ...C fields }
+    // So we GEP through indices [0, 0, ...0, 0] to reach the typeId.
+
+    // Build the GEP path to the typeId field: one 0 per inheritance level,
+    // then 0 for the typeId field itself.
+    SmallVector<Value> gepIndices;
+    for (int32_t i = 0; i <= structInfo->inheritanceDepth; ++i) {
+      gepIndices.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+    }
+
+    // GEP to the typeId field
+    auto typeIdPtr =
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy, objPtr, gepIndices);
+
+    // Store the type ID value
+    auto typeIdConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(structInfo->typeId));
+    LLVM::StoreOp::create(rewriter, loc, typeIdConst, typeIdPtr);
+
+    // Replace the new op with the malloc pointer
+    rewriter.replaceOp(op, objPtr);
     return success();
   }
 
@@ -4571,6 +4701,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
                                      classCache);
   patterns.add<ClassPropertyRefOpConversion>(typeConverter,
                                              patterns.getContext(), classCache);
+  // ClassDynCastOpConversion needs cache for RTTI type ID lookup
+  patterns.add<ClassDynCastOpConversion>(typeConverter, patterns.getContext(),
+                                         classCache);
 
   // Virtual interface patterns.
   patterns.add<InterfaceDeclOpConversion>(typeConverter, patterns.getContext(),
@@ -4586,7 +4719,6 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // clang-format off
   patterns.add<
     ClassUpcastOpConversion,
-    ClassDynCastOpConversion,
     ClassNullOpConversion,
     ClassHandleCmpOpConversion,
     // Patterns of declaration operations.

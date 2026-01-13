@@ -818,6 +818,58 @@ module testCastModule;
     end
 endmodule
 
+/// Check $cast with sibling classes (expected to fail at runtime)
+/// This tests the RTTI infrastructure - casting between unrelated types should fail
+
+// CHECK-LABEL: moore.class.classdecl @SiblingA extends @BaseCastClass {
+// CHECK: }
+
+class SiblingA extends BaseCastClass;
+endclass
+
+// CHECK-LABEL: moore.class.classdecl @SiblingB extends @BaseCastClass {
+// CHECK: }
+
+class SiblingB extends BaseCastClass;
+endclass
+
+// CHECK-LABEL: moore.module @testCastSiblingClasses() {
+// CHECK:   [[SIBLING_A:%.+]] = moore.variable : <!moore.class<@SiblingA>>
+// CHECK:   [[SIBLING_B:%.+]] = moore.variable : <!moore.class<@SiblingB>>
+// CHECK:   [[BASE:%.+]] = moore.variable : <!moore.class<@BaseCastClass>>
+// CHECK:   [[RESULT:%.+]] = moore.variable : <!moore.i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     [[NEW_A:%.+]] = moore.class.new : <@SiblingA>
+// CHECK:     moore.blocking_assign [[SIBLING_A]], [[NEW_A]] : class<@SiblingA>
+// CHECK:     [[VAL_A:%.+]] = moore.read [[SIBLING_A]] : <!moore.class<@SiblingA>>
+// CHECK:     [[UPCAST_A:%.+]] = moore.class.upcast [[VAL_A]] : <@SiblingA> to <@BaseCastClass>
+// CHECK:     moore.blocking_assign [[BASE]], [[UPCAST_A]] : class<@BaseCastClass>
+// CHECK:     [[BASE_VAL:%.+]] = moore.read [[BASE]] : <!moore.class<@BaseCastClass>>
+// CHECK:     [[DYNCAST:%.+]], [[SUCCESS:%.+]] = moore.class.dyn_cast [[BASE_VAL]] : <@BaseCastClass> to <@SiblingB>
+// CHECK:     moore.blocking_assign [[SIBLING_B]], [[DYNCAST]] : class<@SiblingB>
+// CHECK:     [[SUCCESSINT:%.+]] = moore.conversion [[SUCCESS]] : i1 -> !moore.i32
+// CHECK:     moore.blocking_assign [[RESULT]], [[SUCCESSINT]] : i32
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testCastSiblingClasses;
+    SiblingA siblingA;
+    SiblingB siblingB;
+    BaseCastClass base;
+    int result;
+    initial begin
+        // Create a SiblingA object and upcast to base
+        siblingA = new;
+        base = siblingA;
+        // Try to cast to SiblingB - this should return 0 (fail) at runtime
+        // because SiblingA is not a SiblingB
+        result = $cast(siblingB, base);
+        // At runtime, result should be 0 (cast failed)
+    end
+endmodule
+
 /// Check class handle comparison with null
 
 // CHECK-LABEL: moore.class.classdecl @CmpTestClass {

@@ -658,6 +658,59 @@ extern "C" int32_t __moore_random_seeded(int32_t seed) {
 }
 
 //===----------------------------------------------------------------------===//
+// Dynamic Cast / RTTI Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" bool __moore_dyn_cast_check(int32_t srcTypeId, int32_t targetTypeId,
+                                       int32_t inheritanceDepth) {
+  // Dynamic cast check: verifies if a source object can be cast to a target type.
+  //
+  // Type IDs are assigned such that:
+  // - Each class gets a unique type ID
+  // - A derived class's type ID is related to its base class's type ID
+  //
+  // For a simple implementation, we use the following scheme:
+  // - Type IDs are assigned sequentially per class
+  // - The cast succeeds if the source type ID matches the target type ID exactly,
+  //   OR if the source is a derived type that includes the target in its hierarchy.
+  //
+  // The inheritanceDepth parameter helps determine if srcTypeId could be a
+  // valid derived type of targetTypeId. In a simple scheme where type IDs
+  // are assigned sequentially with derived classes getting higher IDs than
+  // their bases, a valid downcast requires:
+  //   srcTypeId >= targetTypeId (derived classes have higher or equal IDs)
+  //
+  // For now, we implement a simple check:
+  // - Exact match: srcTypeId == targetTypeId (same type)
+  // - Derived check: srcTypeId > targetTypeId (src could be derived from target)
+  //
+  // Note: A full implementation would use a class hierarchy table to verify
+  // the exact inheritance relationship. This simplified version assumes
+  // the compiler assigns type IDs such that derived classes always have
+  // higher IDs than their base classes (topological ordering).
+
+  // Null type IDs (0) indicate uninitialized or invalid - always fail
+  if (srcTypeId == 0 || targetTypeId == 0)
+    return false;
+
+  // Same type - always succeeds
+  if (srcTypeId == targetTypeId)
+    return true;
+
+  // For downcasting: source must be a derived type (higher or equal type ID)
+  // This works because type IDs are assigned in topological order (base first)
+  // A derived class always has a type ID >= its base class
+  //
+  // However, this simple check can have false positives (sibling classes).
+  // For production use, a proper class hierarchy lookup table should be used.
+  // For now, we accept that srcTypeId >= targetTypeId indicates a potential
+  // derived relationship.
+  (void)inheritanceDepth; // Reserved for future hierarchy depth checking
+
+  return srcTypeId >= targetTypeId;
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 

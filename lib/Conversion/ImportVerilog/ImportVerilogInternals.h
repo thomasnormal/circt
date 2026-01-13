@@ -235,10 +235,13 @@ struct Context {
   /// arguments to be interpolated into a `!moore.format_string` value. Returns
   /// failure if an error occurs. Returns a null value if the formatted string
   /// is trivially empty. Otherwise returns the formatted string.
+  /// The optional scope parameter is used for %m format specifier to determine
+  /// the hierarchical path.
   FailureOr<Value> convertFormatString(
       std::span<const slang::ast::Expression *const> arguments, Location loc,
       moore::IntFormat defaultFormat = moore::IntFormat::Decimal,
-      bool appendNewline = false);
+      bool appendNewline = false,
+      const slang::ast::Scope *scope = nullptr);
 
   /// Convert system function calls only have arity-0.
   FailureOr<Value>
@@ -392,6 +395,10 @@ struct Context {
   /// captures from callee functions to the caller when the caller is also
   /// a function that captures variables.
   FunctionLowering *currentFunctionLowering = nullptr;
+
+  /// The current scope being processed. This is used by the %m format
+  /// specifier to determine the hierarchical path.
+  const slang::ast::Scope *currentScope = nullptr;
 
 private:
   /// Helper function to extract the commonalities in lowering of functions and

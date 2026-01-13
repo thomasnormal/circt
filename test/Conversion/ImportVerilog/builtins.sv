@@ -507,3 +507,22 @@ function void TypenameBuiltin(int int_arg, real real_arg, string str_arg, byte b
   // CHECK: call @dummyD([[LOGIC_STR]]) : (!moore.string) -> ()
   dummyD($typename(logic_arg));
 endfunction
+
+// IEEE 1800-2017 Section 21.2.1.3 "Hierarchical name format"
+// Test %m format specifier for hierarchical names
+// CHECK-LABEL: moore.module @HierarchicalNameModule
+module HierarchicalNameModule;
+  int x;
+  // CHECK: moore.fmt.literal "HierarchicalNameModule"
+  // CHECK: moore.fmt.literal "\0A"
+  // CHECK: moore.fmt.concat
+  // CHECK: moore.builtin.display
+  initial $display("%m");
+
+  // CHECK: moore.fmt.literal "Path: "
+  // CHECK: moore.fmt.literal "HierarchicalNameModule"
+  // CHECK: moore.fmt.literal "\0A"
+  // CHECK: moore.fmt.concat
+  // CHECK: moore.builtin.display
+  initial $display("Path: %m");
+endmodule

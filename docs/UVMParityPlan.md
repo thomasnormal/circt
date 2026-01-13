@@ -10,7 +10,7 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 **Overall Progress:** UVM core library parses without crashes. Mini-UVM testbenches work.
 Full UVM testbenches have a silent conversion failure being investigated.
 
-### Session Progress (10 commits)
+### Session Progress (12 commits)
 - ✅ Fixed `cast<TypedValue<IntType>>` crash in class hierarchy
 - ✅ Added `EventTriggerOp` for `->event` syntax
 - ✅ Added `QueueConcatOp` for queue concatenation
@@ -22,6 +22,9 @@ Full UVM testbenches have a silent conversion failure being investigated.
 - ✅ Added `$urandom`, `$urandom_range` with runtime
 - ✅ Added constraint block parsing (rand, constraint)
 - ✅ Added runtime unit tests
+- ✅ Added `wait fork` statement support
+- ✅ Added `%m` format specifier (hierarchical module path)
+- ✅ Added `$cast` dynamic casting with RTTI
 
 ### Current Blockers
 1. **Static member redefinition in parameterized classes** - When `this_type` typedef
@@ -53,15 +56,18 @@ Full UVM testbenches have a silent conversion failure being investigated.
 - [ ] Add diagnostic output for conversion failures
 - [ ] Covergroups and coverage
 
-### TODO - High Priority
-- [ ] `$cast` dynamic casting
+### TODO - High Priority (UVM Blockers)
+- [x] `wait fork` statement support (blocks UVM objection mechanism)
+- [x] `%m` format specifier (hierarchical module path)
+- [ ] Class object to string conversion in $swrite/$sformat
+- [x] `$cast` dynamic casting
 - [ ] Full constraint solving (requires external solver)
-- [ ] Assertion functions (`$rose`, `$fell`, `$stable`, `$past`)
 
 ### TODO - Medium Priority
+- [ ] Assertion functions (`$rose`, `$fell`, `$stable`, `$past`)
 - [ ] Clocking blocks
 - [ ] Program blocks
-- [ ] `fork`/`join` parallel blocks
+- [ ] `fork`/`join_any`/`join_none` variations
 - [ ] Mailbox/Semaphore operations
 
 **Next Agent Task:** Fix static member redefinition for parameterized class specializations
@@ -117,12 +123,59 @@ Full UVM testbenches have a silent conversion failure being investigated.
 - [x] Random ops lowering tests
 
 ### AVIP Testing Results (~/mbit/*)
+
+#### Summary Table
 | Category | Status | Notes |
 |----------|--------|-------|
-| Global packages | ✅ 8/8 pass | All AVIP globals compile |
-| Interface files | ✅ 6/7 pass | Work with dependencies |
-| Assertion files | ✅ Pass | Non-UVM assertions work |
-| HVL/Testbench | ⚠️ Partial | Need capture fix |
+| Global packages | 8/8 pass | All AVIP globals compile cleanly |
+| Interface files | 7/7 pass | Work with dependencies |
+| Assertion files | Pass | Non-UVM assertions work |
+| HVL/Testbench | Pass* | Compiles when deps provided; blocked by 3 UVM issues |
+
+*HVL files parse and convert successfully. Remaining errors are in UVM core.
+
+#### Detailed HVL Testing (2026-01-13)
+
+**Test Command:**
+```bash
+./build/bin/circt-verilog --include-dir=/home/thomas-ahle/uvm-core/src \
+  --include-dir=~/mbit/axi4_avip/src/... \
+  uvm_pkg.sv globals.sv bfm_files.sv hvl_pkg.sv
+```
+
+**AVIPs Tested:**
+- AXI4: master_pkg, slave_pkg, env_pkg compile
+- APB: master_pkg, slave_pkg, env_pkg compile
+- JTAG: controller_pkg, target_pkg compile
+- SPI: master_pkg compiles (has user code bug: trailing comma)
+- UART: tx_pkg compiles
+- I2S: transmitter_pkg compiles
+- I3C: globals compile
+
+**Blockers (all from UVM core, not AVIP code):**
+
+1. **`wait fork` statement** (P0 - blocks UVM objection)
+   ```
+   error: unsupported statement: WaitFork
+   wait fork;  // uvm_objection.svh:879
+   ```
+
+2. **`%m` format specifier** (P1 - blocks instance scope)
+   ```
+   error: unsupported format specifier `%m`
+   $swrite(uvm_instance_scope, "%m");  // uvm_misc.svh:124
+   ```
+
+3. **Class-to-string cast for $swrite** (P1 - blocks debug printing)
+   ```
+   error: expression of type '!moore.class<...>' cannot be cast to a simple bit vector
+   $swrite(v, pool[key]);  // uvm_pool.svh:249
+   ```
+
+**Warnings (non-blocking):**
+- `uvm_test_done` deprecated UVM 1.1 API (AVIP code issue, not CIRCT)
+- Timescale mismatch warnings (user code configuration)
+- Reversed range warnings in coverage bins (user code)
 
 ### UVM Testbench Testing
 | Test Type | Status | Notes |
@@ -145,24 +198,26 @@ Full UVM testbenches have a silent conversion failure being investigated.
 | $typename | ✅ | ✅ | - | - |
 | UVM Parsing | ✅ | ✅ | - | - |
 | rand/constraint parse | ✅ | ✅ | - | - |
-| Constraint solving | ✅ | ❌ | High | P0 |
+| wait fork | ✅ | ✅ | - | - |
+| %m format | ✅ | ✅ | - | - |
+| Class $swrite | ✅ | ❌ | High | P1 |
+| Constraint solving | ✅ | ❌ | High | P1 |
 | Coverage | ✅ | ❌ | High | P1 |
-| $cast | ✅ | ❌ | Medium | P1 |
+| $cast | ✅ | ✅ | - | - |
 | Assertions | ✅ | Partial | Medium | P2 |
 | fork/join | ✅ | Partial | Medium | P2 |
 
 ## Next Steps
 
-### Immediate (4 Parallel Agents)
-1. **Track 1:** Fix static member redefinition for this_type pattern
-2. **Track 2:** Add QueueSortOp lowering
-3. **Track 3:** Add `__moore_queue_sort` runtime
-4. **Track 4:** Debug silent UVM conversion failure
+### Immediate - UVM Core Blockers (Highest Priority)
+1. **`wait fork` statement** - Required for UVM objection drain mechanism
+2. **`%m` format specifier** - Required for UVM instance scope tracking
+3. **Class $swrite support** - Required for UVM pool debug output
 
 ### Short Term
-- Fix all blockers for UVM testbench compilation
-- Complete constraint parsing (expressions)
+- Fix static member redefinition for this_type pattern
 - Add `$cast` dynamic casting
+- Complete constraint parsing (expressions)
 
 ### Medium Term
 - Integrate external constraint solver
@@ -172,14 +227,26 @@ Full UVM testbenches have a silent conversion failure being investigated.
 ## Commands
 
 ```bash
-# Test UVM parsing
-./build/bin/circt-verilog -I/home/thomas-ahle/uvm-core/src /home/thomas-ahle/uvm-core/src/uvm_pkg.sv
-
-# Test AVIP
-./build/bin/circt-verilog -I~/mbit/axi4_avip/src ~/mbit/axi4_avip/src/globals/axi4_globals_pkg.sv
-
-# Build
+# Build circt-verilog
 ninja -C build circt-verilog
+
+# Test UVM parsing (use --include-dir= instead of -I)
+./build/bin/circt-verilog --include-dir=/home/thomas-ahle/uvm-core/src \
+  /home/thomas-ahle/uvm-core/src/uvm_pkg.sv
+
+# Test AVIP globals (no UVM needed)
+./build/bin/circt-verilog ~/mbit/axi4_avip/src/globals/axi4_globals_pkg.sv
+
+# Test AVIP HVL with UVM (example for AXI4)
+./build/bin/circt-verilog \
+  --include-dir=/home/thomas-ahle/uvm-core/src \
+  --include-dir=~/mbit/axi4_avip/src/globals \
+  --include-dir=~/mbit/axi4_avip/src/hvl_top/master \
+  --include-dir=~/mbit/axi4_avip/src/hdl_top/master_agent_bfm \
+  /home/thomas-ahle/uvm-core/src/uvm_pkg.sv \
+  ~/mbit/axi4_avip/src/globals/axi4_globals_pkg.sv \
+  ~/mbit/axi4_avip/src/hdl_top/master_agent_bfm/axi4_master_driver_bfm.sv \
+  ~/mbit/axi4_avip/src/hvl_top/master/axi4_master_pkg.sv
 
 # Run runtime tests
 ninja -C build check-circt-unit

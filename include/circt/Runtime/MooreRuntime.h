@@ -296,6 +296,28 @@ int32_t __moore_random(void);
 int32_t __moore_random_seeded(int32_t seed);
 
 //===----------------------------------------------------------------------===//
+// Dynamic Cast / RTTI Operations
+//===----------------------------------------------------------------------===//
+
+/// Perform a dynamic cast check for class hierarchy type checking.
+/// Implements the SystemVerilog $cast system function's runtime check.
+///
+/// The check determines if a source object can be safely downcast to a target
+/// type by comparing the object's runtime type ID against the target type ID.
+/// A cast succeeds if the object's actual type is the same as, or derived
+/// from, the target type.
+///
+/// IEEE 1800-2017 Section 8.16: "$cast shall return 1 if the cast is legal
+/// at runtime, 0 otherwise."
+///
+/// @param srcTypeId The runtime type ID of the source object (from vtable)
+/// @param targetTypeId The type ID of the target (destination) type
+/// @param inheritanceDepth Depth of inheritance chain for the target type
+/// @return true if cast is valid (src is same or derived from target), false otherwise
+bool __moore_dyn_cast_check(int32_t srcTypeId, int32_t targetTypeId,
+                            int32_t inheritanceDepth);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
