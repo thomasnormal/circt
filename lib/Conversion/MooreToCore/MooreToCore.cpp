@@ -689,6 +689,58 @@ static LogicalResult convert(UnreachableOp op, UnreachableOp::Adaptor adaptor,
   return success();
 }
 
+// moore.event_triggered -> reads the event's triggered state (i1).
+// The event type is lowered to i1, so this just returns the event value.
+static LogicalResult convert(EventTriggeredOp op,
+                             EventTriggeredOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // The event is already converted to i1 representing the triggered state.
+  // We just need to return that value.
+  rewriter.replaceOp(op, adaptor.getEvent());
+  return success();
+}
+
+// moore.wait_condition -> poll loop using llhd.wait
+// Implements level-sensitive wait: suspends until condition is true.
+static LogicalResult convert(WaitConditionOp op,
+                             WaitConditionOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // wait(condition) in SystemVerilog suspends until the condition is true.
+  // We implement this as:
+  // ^check:
+  //   cf.cond_br %condition, ^resume, ^wait
+  // ^wait:
+  //   llhd.wait (%signals...), ^check
+  // ^resume:
+  //   ... (ops after wait_condition)
+
+  auto loc = op.getLoc();
+  auto *resumeBlock =
+      rewriter.splitBlock(op->getBlock(), ++Block::iterator(op));
+
+  // Create check and wait blocks.
+  auto *checkBlock = rewriter.createBlock(resumeBlock);
+  auto *waitBlock = rewriter.createBlock(resumeBlock);
+
+  // Branch to check block from original block.
+  rewriter.setInsertionPoint(op);
+  cf::BranchOp::create(rewriter, loc, checkBlock);
+
+  // In check block: if condition is true, go to resume; else go to wait.
+  rewriter.setInsertionPointToEnd(checkBlock);
+  auto condition = adaptor.getCondition();
+  cf::CondBranchOp::create(rewriter, loc, condition, resumeBlock, waitBlock);
+
+  // In wait block: wait for any signal change, then re-check.
+  // We observe the condition value to wake up when it might change.
+  rewriter.setInsertionPointToEnd(waitBlock);
+  llhd::WaitOp::create(rewriter, loc, ValueRange{}, Value(),
+                       ValueRange{condition}, ValueRange{}, checkBlock);
+
+  rewriter.eraseOp(op);
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Process Control Conversion (Fork/Join)
 //===----------------------------------------------------------------------===//
@@ -2675,6 +2727,39 @@ struct QueueDeleteOpConversion
   }
 };
 
+/// Conversion for moore.queue.unique -> runtime function call.
+struct QueueUniqueOpConversion
+    : public RuntimeCallConversionBase<QueueUniqueOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueUniqueOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_unique", fnTy);
+
+    // Store input to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{inputAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 /// Conversion for moore.dyn_array.new -> runtime function call.
 struct DynArrayNewOpConversion
     : public RuntimeCallConversionBase<DynArrayNewOp> {
@@ -3500,6 +3585,13 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   typeConverter.addConversion(
       [&](TimeType type) { return llhd::TimeType::get(type.getContext()); });
 
+  // EventType -> i1 (tracks whether the event has been triggered).
+  // In simulation, events are tracked as boolean flags indicating their
+  // triggered state within the current time slot.
+  typeConverter.addConversion([&](EventType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 1);
+  });
+
   typeConverter.addConversion([&](FormatStringType type) {
     return sim::FormatStringType::get(type.getContext());
   });
@@ -3846,6 +3938,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for queue and dynamic array operations.
     QueueMaxOpConversion,
     QueueMinOpConversion,
+    QueueUniqueOpConversion,
     QueueDeleteOpConversion,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,
@@ -3876,6 +3969,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // Structural operations
   patterns.add<WaitDelayOp>(convert);
   patterns.add<UnreachableOp>(convert);
+  patterns.add<EventTriggeredOp>(convert);
+  patterns.add<WaitConditionOp>(convert);
 
   // Process control (fork/join)
   patterns.add<ForkOpConversion>(typeConverter, patterns.getContext());

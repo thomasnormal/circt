@@ -31,6 +31,15 @@ func.func @test_queue_min() {
   return
 }
 
+// CHECK-LABEL: func @test_queue_unique
+// CHECK: llvm.call @__moore_queue_unique({{.*}}) : (!llvm.ptr) -> !llvm.struct<(ptr, i64)>
+func.func @test_queue_unique() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %unique = moore.queue.unique %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0>
+  return
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array New Operation
 //===----------------------------------------------------------------------===//
@@ -72,6 +81,7 @@ func.func @test_assoc_delete_key() {
 
 // CHECK-DAG: llvm.func @__moore_queue_max(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_min(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_queue_unique(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_dyn_array_new(i32) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_assoc_delete(!llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_assoc_delete_key(!llvm.ptr, !llvm.ptr)
