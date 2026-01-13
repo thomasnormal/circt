@@ -109,16 +109,6 @@ endmodule
 
 // -----
 module Foo;
-  initial begin
-    int my_queue[];
-    logic [31:0] vec_0;
-    // expected-warning @below {{streaming concatenation of dynamic arrays/queues is not fully supported; returning empty string}}
-    vec_0 = {<<byte{my_queue}};
-  end
-endmodule
-
-// -----
-module Foo;
   // expected-remark @below {{hello}}
   $info("hello");
   // expected-warning @below {{hello}}

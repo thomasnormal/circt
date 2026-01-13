@@ -696,6 +696,66 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (auto value = context.materializeConstant(constant, *expr.type, loc))
       return value;
 
+    // Check if this is a virtual interface signal access (e.g., vif.data).
+    // For virtual interface access, slang generates a NamedValueExpression
+    // pointing directly to the interface signal without hierarchical info.
+    // We detect this by checking if the symbol's parent is an interface
+    // instance body.
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto *parentScope = var->getParentScope();
+      if (parentScope) {
+        auto *instBody =
+            parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+        if (instBody &&
+            instBody->getDefinition().definitionKind ==
+                slang::ast::DefinitionKind::Interface) {
+          // This is a signal inside an interface. We need to find the virtual
+          // interface that provides access to it. Search through all virtual
+          // interface variables in the current scope to find one that matches
+          // this interface instance.
+          for (auto &[sym, val] : context.valueSymbols) {
+            if (!val)
+              continue;
+            // Get the type of the value
+            auto valType = val.getType();
+            if (auto refType = dyn_cast<moore::RefType>(valType))
+              valType = refType.getNestedType();
+            auto vifType = dyn_cast<moore::VirtualInterfaceType>(valType);
+            if (!vifType)
+              continue;
+
+            // Check if this virtual interface matches the interface instance
+            // containing the signal
+            auto ifaceName = instBody->getDefinition().name;
+            auto symRefAttr = vifType.getInterfaceSym();
+            // Get the root reference name
+            StringRef rootName = symRefAttr.getRootReference().getValue();
+            if (rootName == ifaceName) {
+              // Found the matching virtual interface
+              Value vifValue = val;
+              if (isa<moore::RefType>(vifValue.getType()))
+                vifValue = moore::ReadOp::create(builder, loc, vifValue);
+
+              auto signalType = context.convertType(expr.symbol.getType());
+              if (!signalType)
+                return {};
+
+              auto signalSym = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                            expr.symbol.name);
+              auto signalRefTy =
+                  moore::RefType::get(cast<moore::UnpackedType>(signalType));
+
+              Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, signalRefTy, vifValue, signalSym);
+
+              return isLvalue ? signalRef
+                              : moore::ReadOp::create(builder, loc, signalRef);
+            }
+          }
+        }
+      }
+    }
+
     // Otherwise some other part of ImportVerilog should have added an MLIR
     // value for this expression's symbol to the `context.valueSymbols` table.
     auto d = mlir::emitError(loc, "unknown name `") << expr.symbol.name << "`";
@@ -2568,6 +2628,53 @@ struct LvalueExprVisitor : public ExprVisitor {
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
       return visitClassProperty(context, *property);
+    }
+
+    // Check if this is a virtual interface signal access (e.g., vif.data).
+    // For virtual interface access, slang generates a NamedValueExpression
+    // pointing directly to the interface signal without hierarchical info.
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto *parentScope = var->getParentScope();
+      if (parentScope) {
+        auto *instBody =
+            parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+        if (instBody &&
+            instBody->getDefinition().definitionKind ==
+                slang::ast::DefinitionKind::Interface) {
+          // This is a signal inside an interface.
+          for (auto &[sym, val] : context.valueSymbols) {
+            if (!val)
+              continue;
+            auto valType = val.getType();
+            if (auto refType = dyn_cast<moore::RefType>(valType))
+              valType = refType.getNestedType();
+            auto vifType = dyn_cast<moore::VirtualInterfaceType>(valType);
+            if (!vifType)
+              continue;
+
+            auto ifaceName = instBody->getDefinition().name;
+            auto symRefAttr = vifType.getInterfaceSym();
+            StringRef rootName = symRefAttr.getRootReference().getValue();
+            if (rootName == ifaceName) {
+              Value vifValue = val;
+              if (isa<moore::RefType>(vifValue.getType()))
+                vifValue = moore::ReadOp::create(builder, loc, vifValue);
+
+              auto signalType = context.convertType(expr.symbol.getType());
+              if (!signalType)
+                return {};
+
+              auto signalSym = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                            expr.symbol.name);
+              auto signalRefTy =
+                  moore::RefType::get(cast<moore::UnpackedType>(signalType));
+
+              return moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, signalRefTy, vifValue, signalSym);
+            }
+          }
+        }
+      }
     }
 
     auto d = mlir::emitError(loc, "unknown name `") << expr.symbol.name << "`";
