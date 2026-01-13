@@ -2157,6 +2157,62 @@ Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
   return success();
 }
 
+/// Convert a static class property to a `moore.global_variable` operation.
+/// This allows on-demand conversion of static properties that may not have
+/// been converted yet due to recursive class type conversion.
+LogicalResult Context::convertStaticClassProperty(
+    const slang::ast::ClassPropertySymbol &prop) {
+  // Check if already converted (for on-demand conversion).
+  if (globalVariables.count(&prop))
+    return success();
+
+  // Check if we're already in the process of converting this property.
+  // This can happen with recursive class type conversions where a property's
+  // type triggers conversion of classes whose methods reference the property.
+  // In this case, we'll defer to the caller to handle the incomplete state.
+  if (staticPropertyInProgress.count(&prop))
+    return failure();
+
+  // Verify this is actually a static property.
+  if (prop.lifetime != slang::ast::VariableLifetime::Static)
+    return failure();
+
+  // Mark this property as being converted to prevent infinite recursion.
+  staticPropertyInProgress.insert(&prop);
+  auto progressGuard =
+      llvm::make_scope_exit([&] { staticPropertyInProgress.erase(&prop); });
+
+  auto loc = convertLocation(prop.location);
+
+  // Pick an insertion point for this variable at the module level.
+  OpBuilder::InsertionGuard g(builder);
+  auto it = orderedRootOps.upper_bound(prop.location);
+  if (it == orderedRootOps.end())
+    builder.setInsertionPointToEnd(intoModuleOp.getBody());
+  else
+    builder.setInsertionPoint(it->second);
+
+  // Use fully qualified name: Class::property
+  auto symName = fullyQualifiedSymbolName(*this, prop);
+
+  // Determine the type of the property.
+  auto ty = convertType(prop.getType());
+  if (!ty)
+    return failure();
+
+  // Create the global variable op.
+  auto varOp = moore::GlobalVariableOp::create(builder, loc, symName,
+                                               cast<moore::UnpackedType>(ty));
+  orderedRootOps.insert({prop.location, varOp});
+  globalVariables.insert({&prop, varOp});
+
+  // If the property has an initializer expression, remember it for later.
+  if (prop.getInitializer())
+    globalVariableWorklist.push_back(&prop);
+
+  return success();
+}
+
 /// Construct a fully qualified class name containing the instance hierarchy
 /// and the class name formatted as H1::H2::@C
 mlir::StringAttr circt::ImportVerilog::fullyQualifiedClassName(
