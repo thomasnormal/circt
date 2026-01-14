@@ -19,11 +19,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <random>
+#include <vector>
 
 //===----------------------------------------------------------------------===//
 // Internal Helpers
@@ -1306,6 +1308,271 @@ extern "C" MooreQueue __moore_array_unique_index(MooreQueue *array,
   }
 
   return result;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Collection Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for SystemVerilog coverage
+// collection. Covergroups track which values have been observed during
+// simulation, enabling functional coverage analysis.
+//
+
+namespace {
+
+/// Global list of all registered covergroups for reporting.
+/// Thread-local to avoid synchronization issues in multi-threaded simulations.
+thread_local std::vector<MooreCovergroup *> registeredCovergroups;
+
+/// Helper to track unique values seen by a coverpoint using a simple set.
+/// For production use, this could be replaced with a more efficient data
+/// structure like a hash set or bit vector.
+struct CoverpointTracker {
+  std::map<int64_t, int64_t> valueCounts; // value -> hit count
+};
+
+/// Map from coverpoint to its value tracker.
+/// This is separate from the MooreCoverpoint struct to keep the C API simple.
+thread_local std::map<MooreCoverpoint *, CoverpointTracker> coverpointTrackers;
+
+} // anonymous namespace
+
+extern "C" void *__moore_covergroup_create(const char *name,
+                                            int32_t num_coverpoints) {
+  // Validate inputs
+  if (num_coverpoints < 0)
+    return nullptr;
+
+  // Allocate the covergroup structure
+  auto *cg = static_cast<MooreCovergroup *>(std::malloc(sizeof(MooreCovergroup)));
+  if (!cg)
+    return nullptr;
+
+  // Initialize the covergroup
+  cg->name = name;
+  cg->num_coverpoints = num_coverpoints;
+
+  // Allocate the coverpoints array
+  if (num_coverpoints > 0) {
+    cg->coverpoints = static_cast<MooreCoverpoint **>(
+        std::calloc(num_coverpoints, sizeof(MooreCoverpoint *)));
+    if (!cg->coverpoints) {
+      std::free(cg);
+      return nullptr;
+    }
+  } else {
+    cg->coverpoints = nullptr;
+  }
+
+  // Register this covergroup for reporting
+  registeredCovergroups.push_back(cg);
+
+  return cg;
+}
+
+extern "C" void __moore_coverpoint_init(void *cg, int32_t cp_index,
+                                         const char *name) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  // Allocate a new coverpoint
+  auto *cp = static_cast<MooreCoverpoint *>(std::malloc(sizeof(MooreCoverpoint)));
+  if (!cp)
+    return;
+
+  // Initialize the coverpoint with auto bins (no explicit bins)
+  cp->name = name;
+  cp->bins = nullptr;
+  cp->num_bins = 0;
+  cp->hits = 0;
+  cp->min_val = INT64_MAX; // Will be updated on first sample
+  cp->max_val = INT64_MIN; // Will be updated on first sample
+
+  // Store the coverpoint in the covergroup
+  covergroup->coverpoints[cp_index] = cp;
+
+  // Initialize the value tracker for this coverpoint
+  coverpointTrackers[cp] = CoverpointTracker();
+}
+
+extern "C" void __moore_covergroup_destroy(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  // Remove from registered list
+  auto it = std::find(registeredCovergroups.begin(),
+                      registeredCovergroups.end(), covergroup);
+  if (it != registeredCovergroups.end()) {
+    registeredCovergroups.erase(it);
+  }
+
+  // Free each coverpoint
+  for (int32_t i = 0; i < covergroup->num_coverpoints; ++i) {
+    if (covergroup->coverpoints[i]) {
+      // Remove from tracker map
+      coverpointTrackers.erase(covergroup->coverpoints[i]);
+
+      // Free bin array if present
+      if (covergroup->coverpoints[i]->bins) {
+        std::free(covergroup->coverpoints[i]->bins);
+      }
+      std::free(covergroup->coverpoints[i]);
+    }
+  }
+
+  // Free the coverpoints array
+  if (covergroup->coverpoints) {
+    std::free(covergroup->coverpoints);
+  }
+
+  // Free the covergroup itself
+  std::free(covergroup);
+}
+
+extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
+                                           int64_t value) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  // Update hit count
+  cp->hits++;
+
+  // Update min/max tracking
+  if (value < cp->min_val)
+    cp->min_val = value;
+  if (value > cp->max_val)
+    cp->max_val = value;
+
+  // Track unique values
+  auto trackerIt = coverpointTrackers.find(cp);
+  if (trackerIt != coverpointTrackers.end()) {
+    trackerIt->second.valueCounts[value]++;
+  }
+}
+
+extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 0.0;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp || cp->hits == 0)
+    return 0.0;
+
+  // For auto bins, calculate coverage as the ratio of unique values seen
+  // to the theoretical range. Since we don't know the type's range at runtime,
+  // we use the actual range of values seen plus some margin.
+  auto trackerIt = coverpointTrackers.find(cp);
+  if (trackerIt == coverpointTrackers.end())
+    return 0.0;
+
+  int64_t uniqueValues = static_cast<int64_t>(trackerIt->second.valueCounts.size());
+
+  // If we have explicit bins, use those
+  if (cp->bins && cp->num_bins > 0) {
+    int64_t hitBins = 0;
+    for (int32_t i = 0; i < cp->num_bins; ++i) {
+      if (cp->bins[i] > 0)
+        hitBins++;
+    }
+    return (100.0 * hitBins) / cp->num_bins;
+  }
+
+  // For auto bins, estimate coverage based on unique values seen.
+  // We assume the goal is to cover the range [min_val, max_val].
+  // If the range is 0 (single value), coverage is 100%.
+  if (cp->min_val > cp->max_val)
+    return 0.0; // No valid samples
+
+  int64_t range = cp->max_val - cp->min_val + 1;
+  if (range <= 0)
+    return 100.0; // Single value = 100% coverage
+
+  // Calculate coverage percentage
+  // Cap at 100% since unique values might exceed expected range
+  double coverage = (100.0 * uniqueValues) / range;
+  return coverage > 100.0 ? 100.0 : coverage;
+}
+
+extern "C" double __moore_covergroup_get_coverage(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || covergroup->num_coverpoints == 0)
+    return 0.0;
+
+  // Calculate average coverage across all coverpoints
+  double totalCoverage = 0.0;
+  int32_t validCoverpoints = 0;
+
+  for (int32_t i = 0; i < covergroup->num_coverpoints; ++i) {
+    if (covergroup->coverpoints[i]) {
+      totalCoverage += __moore_coverpoint_get_coverage(cg, i);
+      validCoverpoints++;
+    }
+  }
+
+  if (validCoverpoints == 0)
+    return 0.0;
+
+  return totalCoverage / validCoverpoints;
+}
+
+extern "C" void __moore_coverage_report(void) {
+  std::printf("\n");
+  std::printf("=================================================\n");
+  std::printf("          Coverage Report\n");
+  std::printf("=================================================\n\n");
+
+  if (registeredCovergroups.empty()) {
+    std::printf("No covergroups registered.\n");
+    std::printf("\n=================================================\n");
+    return;
+  }
+
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+    std::printf("Covergroup: %s\n", cg->name ? cg->name : "(unnamed)");
+    std::printf("  Overall coverage: %.2f%%\n", cgCoverage);
+    std::printf("  Coverpoints: %d\n", cg->num_coverpoints);
+
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      std::printf("    - %s: %ld hits, %.2f%% coverage",
+                  cp->name ? cp->name : "(unnamed)",
+                  static_cast<long>(cp->hits), cpCoverage);
+
+      // Show value range if we have samples
+      if (cp->hits > 0 && cp->min_val <= cp->max_val) {
+        auto trackerIt = coverpointTrackers.find(cp);
+        int64_t uniqueVals = 0;
+        if (trackerIt != coverpointTrackers.end()) {
+          uniqueVals = static_cast<int64_t>(trackerIt->second.valueCounts.size());
+        }
+        std::printf(" [range: %ld..%ld, %ld unique values]",
+                    static_cast<long>(cp->min_val),
+                    static_cast<long>(cp->max_val),
+                    static_cast<long>(uniqueVals));
+      }
+      std::printf("\n");
+    }
+    std::printf("\n");
+  }
+
+  std::printf("=================================================\n");
 }
 
 //===----------------------------------------------------------------------===//

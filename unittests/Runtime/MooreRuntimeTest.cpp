@@ -1420,4 +1420,227 @@ TEST(MooreRuntimeConstraintTest, RandomizeWithModuloNegativeRemainder) {
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Coverage Collection Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, CovergroupCreateDestroy) {
+  // Test basic create and destroy
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  // Destroy should not crash
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupCreateZeroCoverpoints) {
+  // Test with zero coverpoints
+  void *cg = __moore_covergroup_create("empty_cg", 0);
+  ASSERT_NE(cg, nullptr);
+
+  // Should have 0% coverage with no coverpoints
+  double cov = __moore_covergroup_get_coverage(cg);
+  EXPECT_DOUBLE_EQ(cov, 0.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupCreateNegative) {
+  // Test with negative coverpoints (invalid)
+  void *cg = __moore_covergroup_create("bad_cg", -1);
+  EXPECT_EQ(cg, nullptr);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointInit) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  // Initialize coverpoints
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Verify we can get coverage (should be 0% initially)
+  double cov0 = __moore_coverpoint_get_coverage(cg, 0);
+  double cov1 = __moore_coverpoint_get_coverage(cg, 1);
+  EXPECT_DOUBLE_EQ(cov0, 0.0);
+  EXPECT_DOUBLE_EQ(cov1, 0.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointInitInvalidIndex) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  // These should not crash (invalid indices are ignored)
+  __moore_coverpoint_init(cg, -1, "bad");
+  __moore_coverpoint_init(cg, 5, "bad");
+  __moore_coverpoint_init(nullptr, 0, "bad");
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointSample) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample some values
+  __moore_coverpoint_sample(cg, 0, 10);
+  __moore_coverpoint_sample(cg, 0, 20);
+  __moore_coverpoint_sample(cg, 0, 15);
+
+  // Coverage should be non-zero after sampling
+  // With values 10, 15, 20, range is 10-20 (11 values), 3 unique values
+  // Coverage = 3/11 * 100 = 27.27%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(cov, 0.0);
+  EXPECT_LE(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointSampleSingleValue) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample the same value multiple times
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Coverage should be 100% (single value = full coverage of range)
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointSampleFullRange) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample all values in a small range
+  for (int i = 0; i <= 10; ++i) {
+    __moore_coverpoint_sample(cg, 0, i);
+  }
+
+  // Coverage should be 100% (all values in range covered)
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointSampleInvalidIndex) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // These should not crash (invalid indices are ignored)
+  __moore_coverpoint_sample(cg, -1, 100);
+  __moore_coverpoint_sample(cg, 5, 100);
+  __moore_coverpoint_sample(nullptr, 0, 100);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupGetCoverage) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Sample different amounts for each coverpoint
+  // cp0: single value (100% coverage)
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // cp1: sparse coverage (3 values in range 0-100)
+  __moore_coverpoint_sample(cg, 1, 0);
+  __moore_coverpoint_sample(cg, 1, 50);
+  __moore_coverpoint_sample(cg, 1, 100);
+
+  // Overall coverage should be average of individual coverpoints
+  double cov = __moore_covergroup_get_coverage(cg);
+  EXPECT_GT(cov, 0.0);
+  EXPECT_LE(cov, 100.0);
+
+  // cp0 = 100%, cp1 = 3/101 * 100 = ~2.97%, average = ~51.49%
+  // Just verify it's in a reasonable range
+  EXPECT_GT(cov, 40.0);
+  EXPECT_LT(cov, 60.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupDestroyNull) {
+  // Should not crash when destroying null
+  __moore_covergroup_destroy(nullptr);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverageReportNoGroups) {
+  // Should not crash when no covergroups are registered
+  // Note: This test assumes registeredCovergroups is empty after
+  // destroying all previously created covergroups.
+  // Just verify it doesn't crash - output goes to stdout
+  __moore_coverage_report();
+}
+
+TEST(MooreRuntimeCoverageTest, MultipleCovergroups) {
+  // Create multiple covergroups
+  void *cg1 = __moore_covergroup_create("cg1", 1);
+  void *cg2 = __moore_covergroup_create("cg2", 2);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp1_0");
+  __moore_coverpoint_init(cg2, 0, "cp2_0");
+  __moore_coverpoint_init(cg2, 1, "cp2_1");
+
+  // Sample values
+  __moore_coverpoint_sample(cg1, 0, 1);
+  __moore_coverpoint_sample(cg2, 0, 2);
+  __moore_coverpoint_sample(cg2, 1, 3);
+
+  // Both covergroups should have valid coverage
+  double cov1 = __moore_covergroup_get_coverage(cg1);
+  double cov2 = __moore_covergroup_get_coverage(cg2);
+  EXPECT_GT(cov1, 0.0);
+  EXPECT_GT(cov2, 0.0);
+
+  // Cleanup
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageTest, NegativeValuesSample) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample negative values
+  __moore_coverpoint_sample(cg, 0, -10);
+  __moore_coverpoint_sample(cg, 0, -5);
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 5);
+  __moore_coverpoint_sample(cg, 0, 10);
+
+  // Coverage should be calculable for negative ranges
+  // Range is -10 to 10 (21 values), 5 unique values
+  // Coverage = 5/21 * 100 = ~23.8%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(cov, 0.0);
+  EXPECT_LT(cov, 30.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
 } // namespace
