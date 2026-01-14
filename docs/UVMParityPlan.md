@@ -3,12 +3,18 @@
 This document tracks the progress toward bringing CIRCT's SystemVerilog support
 to parity with commercial simulators like Cadence Xcelium for running UVM testbenches.
 
-## Current Status (2026-01-13)
+## Current Status (2026-01-14)
 
 ### Overall Progress
 
 **Parsing: ✅ COMPLETE** - UVM core library parses without errors!
 **Lowering: ⚠️ BLOCKED** - func.func block terminator issue prevents full conversion
+
+### Session Progress (2026-01-14)
+
+- ✅ All 9 AVIPs parse successfully with UVM
+- ⚠️ Test files created for math builtins, covergroup, std::randomize
+- 🔄 4 parallel agents working on next sprint tasks
 
 ### Critical Blocker: Block Terminator Issue
 
@@ -286,23 +292,24 @@ from uvm_cmdline_set_verbosity that triggers the block terminator error.
 **Files:** `lib/Conversion/ImportVerilog/Statements.cpp`
 **Test:** UVM package should convert without "block with no terminator" errors
 
-### Agent 2: std::randomize() Implementation (P0)
-**Track:** 1 (ImportVerilog)
-**Task:** Add std::randomize(variable) handler for standalone randomization
-**Files:** `lib/Conversion/ImportVerilog/Expressions.cpp`
-**Test:** APB AVIP should parse without unsupported expression error
+### Agent 2: Math Builtins Lowering (P2)
+**Track:** 2 (MooreToCore)
+**Task:** Add lowering patterns for trigonometric/exponential/rounding ops
+**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Test:** `test/Conversion/MooreToCore/math-builtins.mlir` (created)
+**Ops:** sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh, exp, ln, log10, sqrt, floor, ceil
 
 ### Agent 3: Covergroup Ops Definition (P1)
 **Track:** 1+2 (ImportVerilog + MooreToCore)
-**Task:** Define CovergroupDeclOp, CoverpointDeclOp in Moore dialect
-**Files:** `include/circt/Dialect/Moore/MooreOps.td`, `lib/Dialect/Moore/MooreOps.cpp`
-**Test:** Create covergroup.sv lit test
+**Task:** Define CovergroupDeclOp, CoverpointDeclOp, CoverCrossDeclOp in Moore dialect
+**Files:** `include/circt/Dialect/Moore/MooreOps.td`, `lib/Conversion/ImportVerilog/Structure.cpp`
+**Test:** `test/Conversion/ImportVerilog/covergroup.sv` (created)
 
-### Agent 4: Moore Op Audit (P1)
-**Track:** 2 (MooreToCore)
-**Task:** Run MooreToCore on UVM IR, identify unlowered ops
-**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Test:** Document which ops need lowering patterns
+### Agent 4: std::randomize() Parsing (P0)
+**Track:** 1 (ImportVerilog)
+**Task:** Add std::randomize(variable) handler for standalone randomization
+**Files:** `lib/Conversion/ImportVerilog/Expressions.cpp`
+**Test:** `test/Conversion/ImportVerilog/std-randomize.sv` (created)
 
 ---
 
