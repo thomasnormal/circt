@@ -386,6 +386,12 @@ struct FormatStringParser {
 
   /// Emit an expression argument with the appropriate default formatting.
   LogicalResult emitDefault(const slang::ast::Expression &expr) {
+    // String types should be displayed as strings by default per IEEE 1800-2017.
+    if (expr.type->isString()) {
+      FormatOptions options;
+      return emitString(expr, options);
+    }
+
     // First try converting to get the value's type
     auto value = context.convertRvalueExpression(expr);
     if (!value)
