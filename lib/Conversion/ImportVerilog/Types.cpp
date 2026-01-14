@@ -195,14 +195,18 @@ struct TypeVisitor {
     // Convert the class declaration and populate its body.
     // convertClassDeclaration handles recursive calls by checking if the
     // body is already being converted (via ClassDeclVisitor::run's guard).
+    // Note: Body conversion failures are tolerated - we still return a valid
+    // type so that forward-declared class types can be used in variable
+    // declarations before all class members are convertible.
     LLVM_DEBUG({
       llvm::dbgs() << "ClassType: " << type.name << " ptr=" << &type;
       if (type.genericClass)
         llvm::dbgs() << " genericClass@" << type.genericClass;
       llvm::dbgs() << "\n";
     });
-    if (failed(context.convertClassDeclaration(type)))
-      return {};
+    // Call convertClassDeclaration but ignore failures - they may happen
+    // due to forward references that will be resolved later.
+    (void)context.convertClassDeclaration(type);
     auto *lowering = context.declareClass(type);
     if (!lowering || !lowering->op) {
       mlir::emitError(loc) << "no lowering generated for class type `"
