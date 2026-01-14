@@ -46,6 +46,13 @@ func.func @test_atan(%arg0: !moore.f64) -> !moore.f64 {
   return %0 : !moore.f64
 }
 
+// CHECK-LABEL: func.func @test_atan2
+func.func @test_atan2(%arg0: !moore.f64, %arg1: !moore.f64) -> !moore.f64 {
+  // CHECK: math.atan2 %arg0, %arg1 : f64
+  %0 = moore.builtin.atan2 %arg0, %arg1 : !moore.f64
+  return %0 : !moore.f64
+}
+
 //===----------------------------------------------------------------------===//
 // Hyperbolic Functions (IEEE 1800-2017 Section 20.8.2)
 //===----------------------------------------------------------------------===//
@@ -158,4 +165,29 @@ func.func @test_clog2(%arg0: !moore.i32) -> !moore.i32 {
   // CHECK: comb.mux %[[CMP]], %[[C0]], %[[RESULT]] : i32
   %0 = moore.builtin.clog2 %arg0 : !moore.i32
   return %0 : !moore.i32
+}
+
+//===----------------------------------------------------------------------===//
+// Binary Real Math Functions (IEEE 1800-2017 Section 20.8.2)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @test_hypot
+func.func @test_hypot(%arg0: !moore.f64, %arg1: !moore.f64) -> !moore.f64 {
+  // CHECK: %[[X2:.*]] = arith.mulf %arg0, %arg0 : f64
+  // CHECK: %[[Y2:.*]] = arith.mulf %arg1, %arg1 : f64
+  // CHECK: %[[SUM:.*]] = arith.addf %[[X2]], %[[Y2]] : f64
+  // CHECK: math.sqrt %[[SUM]] : f64
+  %0 = moore.builtin.hypot %arg0, %arg1 : !moore.f64
+  return %0 : !moore.f64
+}
+
+//===----------------------------------------------------------------------===//
+// Unary Real Operations (IEEE 1800-2017 Section 11.4.3)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @test_fneg
+func.func @test_fneg(%arg0: !moore.f64) -> !moore.f64 {
+  // CHECK: arith.negf %arg0 : f64
+  %0 = moore.fneg %arg0 : !moore.f64
+  return %0 : !moore.f64
 }
