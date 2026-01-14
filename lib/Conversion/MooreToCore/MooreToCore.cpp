@@ -2343,6 +2343,49 @@ struct StructExtractRefOpConversion
   }
 };
 
+struct UnionCreateOpConversion : public OpConversionPattern<UnionCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UnionCreateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    rewriter.replaceOpWithNewOp<hw::UnionCreateOp>(
+        op, resultType, adaptor.getFieldNameAttr(), adaptor.getInput());
+    return success();
+  }
+};
+
+struct UnionExtractOpConversion : public OpConversionPattern<UnionExtractOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UnionExtractOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<hw::UnionExtractOp>(
+        op, adaptor.getInput(), adaptor.getFieldNameAttr());
+    return success();
+  }
+};
+
+struct UnionExtractRefOpConversion
+    : public OpConversionPattern<UnionExtractRefOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UnionExtractRefOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For union references, all members share the same memory location.
+    // We use an UnrealizedConversionCastOp to change the reference type,
+    // since LLHD doesn't have a native union extract ref operation.
+    // This is semantically correct as unions are overlaid in memory.
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
+        op, resultType, adaptor.getInput());
+    return success();
+  }
+};
+
 struct ReduceAndOpConversion : public OpConversionPattern<ReduceAndOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult
@@ -5546,7 +5589,6 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
         return hw::StructType::get(type.getContext(), fields);
       });
 
-
   // QueueType -> LLVM struct {ptr, i64} representing a dynamic queue.
   typeConverter.addConversion([&](QueueType type) -> std::optional<Type> {
     auto *ctx = type.getContext();
@@ -5576,6 +5618,37 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   typeConverter.addConversion([&](AssocArrayType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(type.getContext());
   });
+
+  // Convert packed union type to hw::UnionType
+  typeConverter.addConversion([&](UnionType type) -> std::optional<Type> {
+    SmallVector<hw::UnionType::FieldInfo> fields;
+    for (auto field : type.getMembers()) {
+      hw::UnionType::FieldInfo info;
+      info.type = typeConverter.convertType(field.type);
+      if (!info.type)
+        return {};
+      info.name = field.name;
+      info.offset = 0; // All union members share the same offset
+      fields.push_back(info);
+    }
+    return hw::UnionType::get(type.getContext(), fields);
+  });
+
+  // Convert unpacked union type to hw::UnionType
+  typeConverter.addConversion(
+      [&](UnpackedUnionType type) -> std::optional<Type> {
+        SmallVector<hw::UnionType::FieldInfo> fields;
+        for (auto field : type.getMembers()) {
+          hw::UnionType::FieldInfo info;
+          info.type = typeConverter.convertType(field.type);
+          if (!info.type)
+            return {};
+          info.name = field.name;
+          info.offset = 0; // All union members share the same offset
+          fields.push_back(info);
+        }
+        return hw::UnionType::get(type.getContext(), fields);
+      });
 
   // Conversion of CHandle to LLVMPointerType
   typeConverter.addConversion([&](ChandleType type) -> std::optional<Type> {
@@ -5771,6 +5844,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StructExtractRefOpConversion,
     ExtractRefOpConversion,
     StructCreateOpConversion,
+    UnionCreateOpConversion,
+    UnionExtractOpConversion,
+    UnionExtractRefOpConversion,
     ConditionalOpConversion,
     ArrayCreateOpConversion,
     YieldOpConversion,
