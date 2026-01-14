@@ -1578,7 +1578,21 @@ private:
 };
 
 /// Lowering for CovergroupDeclOp.
-/// Coverage constructs are not yet lowered to hardware; simply erase.
+/// Currently erases the declaration since full coverage support requires:
+/// 1. CovergroupInstanceOp to instantiate covergroups (creates runtime handle)
+/// 2. CoverpointSampleOp to sample values at coverpoints
+///
+/// When those ops are added, this lowering will:
+/// - Create a global to store the covergroup handle
+/// - Generate __moore_covergroup_create call in an init function
+/// - Generate __moore_coverpoint_init calls for each coverpoint
+///
+/// Runtime functions available:
+/// - __moore_covergroup_create(name, num_coverpoints) -> void*
+/// - __moore_coverpoint_init(cg, index, name)
+/// - __moore_coverpoint_sample(cg, index, value)
+/// - __moore_covergroup_destroy(cg)
+/// - __moore_coverage_report()
 struct CovergroupDeclOpConversion
     : public OpConversionPattern<CovergroupDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1586,13 +1600,17 @@ struct CovergroupDeclOpConversion
   LogicalResult
   matchAndRewrite(CovergroupDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: When CovergroupInstanceOp is added, generate runtime calls here.
+    // For now, just erase the declaration.
     rewriter.eraseOp(op);
     return success();
   }
 };
 
 /// Lowering for CoverpointDeclOp.
-/// Coverage constructs are not yet lowered to hardware; simply erase.
+/// Currently erases the declaration. When full coverage support is added,
+/// coverpoint info will be captured during CovergroupDeclOp lowering to
+/// generate __moore_coverpoint_init calls.
 struct CoverpointDeclOpConversion
     : public OpConversionPattern<CoverpointDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1600,13 +1618,15 @@ struct CoverpointDeclOpConversion
   LogicalResult
   matchAndRewrite(CoverpointDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Coverpoint info is used by parent CovergroupDeclOp.
+    // This op is erased after the parent processes it.
     rewriter.eraseOp(op);
     return success();
   }
 };
 
 /// Lowering for CoverCrossDeclOp.
-/// Coverage constructs are not yet lowered to hardware; simply erase.
+/// Currently erases the declaration. Cross coverage support is future work.
 struct CoverCrossDeclOpConversion
     : public OpConversionPattern<CoverCrossDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1614,6 +1634,7 @@ struct CoverCrossDeclOpConversion
   LogicalResult
   matchAndRewrite(CoverCrossDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Cross coverage requires additional runtime support.
     rewriter.eraseOp(op);
     return success();
   }
