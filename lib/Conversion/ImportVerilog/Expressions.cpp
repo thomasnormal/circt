@@ -2129,35 +2129,74 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ConstantOp::create(builder, loc, intTy, 0);
     }
 
-    // Handle randomize() method on class objects.
-    // IEEE 1800-2017 Section 18.6 "Randomization methods".
+    // Handle randomize() - both class method and std::randomize().
+    // IEEE 1800-2017 Section 18.6 "Randomization methods" (class method)
+    // IEEE 1800-2017 Section 18.12 "Scope randomize function" (std::randomize)
     // randomize() returns 1 on success, 0 on failure.
-    if (subroutine.name == "randomize" && args.size() == 1) {
-      // The first argument is the class object to randomize
-      Value classObj = context.convertRvalueExpression(*args[0]);
-      if (!classObj)
-        return {};
+    if (subroutine.name == "randomize" && !args.empty()) {
+      // Detect std::randomize() by checking if args are wrapped in
+      // AssignmentExpression (slang wraps lvalue args this way for
+      // std::randomize).
+      bool isStdRandomize =
+          args[0]->as_if<slang::ast::AssignmentExpression>() != nullptr;
 
-      // Verify that the argument is a class handle type
-      auto classHandleTy = dyn_cast<moore::ClassHandleType>(classObj.getType());
-      if (!classHandleTy) {
-        mlir::emitError(loc) << "randomize() requires a class object, got "
-                             << classObj.getType();
-        return {};
+      if (isStdRandomize) {
+        // std::randomize(var1, var2, ...) - randomize standalone variables
+        SmallVector<Value> varRefs;
+        for (auto *arg : args) {
+          const auto *assignExpr =
+              arg->as_if<slang::ast::AssignmentExpression>();
+          if (!assignExpr) {
+            mlir::emitError(loc)
+                << "std::randomize argument must be a variable";
+            return {};
+          }
+          // The left side of the AssignmentExpression is the actual variable
+          Value varRef = context.convertLvalueExpression(assignExpr->left());
+          if (!varRef)
+            return {};
+          varRefs.push_back(varRef);
+        }
+
+        auto stdRandomizeOp =
+            moore::StdRandomizeOp::create(builder, loc, varRefs);
+
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+
+        return context.materializeConversion(
+            resultType, stdRandomizeOp.getSuccess(), false, loc);
       }
 
-      // Create the randomize operation which returns i1 (success/failure)
-      auto randomizeOp =
-          moore::RandomizeOp::create(builder, loc, classObj);
+      // Class randomize: obj.randomize()
+      if (args.size() == 1) {
+        // The first argument is the class object to randomize
+        Value classObj = context.convertRvalueExpression(*args[0]);
+        if (!classObj)
+          return {};
 
-      // The result is i1, but the expression type from slang is typically int.
-      // Convert to the expected type.
-      auto resultType = context.convertType(*expr.type);
-      if (!resultType)
-        return {};
+        // Verify that the argument is a class handle type
+        auto classHandleTy =
+            dyn_cast<moore::ClassHandleType>(classObj.getType());
+        if (!classHandleTy) {
+          mlir::emitError(loc) << "randomize() requires a class object, got "
+                               << classObj.getType();
+          return {};
+        }
 
-      return context.materializeConversion(resultType, randomizeOp.getSuccess(),
-                                           false, loc);
+        // Create the randomize operation which returns i1 (success/failure)
+        auto randomizeOp = moore::RandomizeOp::create(builder, loc, classObj);
+
+        // The result is i1, but the expression type from slang is typically
+        // int. Convert to the expected type.
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+
+        return context.materializeConversion(
+            resultType, randomizeOp.getSuccess(), false, loc);
+      }
     }
 
     // Handle queue methods that need special treatment (lvalue for queue).
@@ -3895,6 +3934,18 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   // Note: IEEE 1800-2017 says if min > max, they are swapped
                   return moore::UrandomRangeBIOp::create(builder, loc, value1,
                                                          value2);
+                })
+          .Case("$atan2",
+                [&]() -> Value {
+                  // $atan2(y, x) returns arc-tangent of y/x in radians
+                  // IEEE 1800-2017 section 20.8.2 "Real math functions"
+                  return moore::Atan2BIOp::create(builder, loc, value1, value2);
+                })
+          .Case("$hypot",
+                [&]() -> Value {
+                  // $hypot(x, y) returns sqrt(x^2 + y^2)
+                  // IEEE 1800-2017 section 20.8.2 "Real math functions"
+                  return moore::HypotBIOp::create(builder, loc, value1, value2);
                 })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
