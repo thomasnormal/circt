@@ -1577,22 +1577,51 @@ private:
   InterfaceTypeCache &cache;
 };
 
+/// Helper to create a global string constant for covergroup/coverpoint names.
+/// Creates the global if it doesn't exist, but does NOT create the AddressOfOp
+/// (caller should create AddressOfOp at the correct insertion point).
+static void ensureGlobalStringConstant(Location loc, ModuleOp mod,
+                                       ConversionPatternRewriter &rewriter,
+                                       StringRef name, StringRef globalName) {
+  auto *ctx = rewriter.getContext();
+
+  // Check if we already created this global
+  if (mod.lookupSymbol<LLVM::GlobalOp>(globalName))
+    return;
+
+  // Create array type for the string (including null terminator)
+  auto i8Ty = IntegerType::get(ctx, 8);
+  auto strTy = LLVM::LLVMArrayType::get(i8Ty, name.size() + 1);
+
+  // Create null-terminated string value
+  std::string strWithNull = (name + StringRef("\0", 1)).str();
+  auto strAttr = rewriter.getStringAttr(strWithNull);
+
+  // Insert global at module level
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(mod.getBody());
+
+  auto global = LLVM::GlobalOp::create(rewriter, loc, strTy,
+                                       /*isConstant=*/true,
+                                       LLVM::Linkage::Private, globalName,
+                                       strAttr);
+  global.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+}
+
 /// Lowering for CovergroupDeclOp.
-/// Currently erases the declaration since full coverage support requires:
-/// 1. CovergroupInstanceOp to instantiate covergroups (creates runtime handle)
-/// 2. CoverpointSampleOp to sample values at coverpoints
+/// Generates runtime calls to register the covergroup and its coverpoints:
+/// 1. Creates a global variable to store the covergroup handle
+/// 2. Generates an initialization function that:
+///    - Calls __moore_covergroup_create(name, num_coverpoints) -> void*
+///    - Calls __moore_coverpoint_init(cg, index, name) for each coverpoint
+///    - Stores the handle to the global variable
 ///
-/// When those ops are added, this lowering will:
-/// - Create a global to store the covergroup handle
-/// - Generate __moore_covergroup_create call in an init function
-/// - Generate __moore_coverpoint_init calls for each coverpoint
-///
-/// Runtime functions available:
+/// Runtime functions used:
 /// - __moore_covergroup_create(name, num_coverpoints) -> void*
 /// - __moore_coverpoint_init(cg, index, name)
-/// - __moore_coverpoint_sample(cg, index, value)
-/// - __moore_covergroup_destroy(cg)
-/// - __moore_coverage_report()
+/// - __moore_coverpoint_sample(cg, index, value) (called from sample sites)
+/// - __moore_covergroup_destroy(cg) (future: cleanup at end of simulation)
+/// - __moore_coverage_report() (future: called at $finish)
 struct CovergroupDeclOpConversion
     : public OpConversionPattern<CovergroupDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1600,17 +1629,122 @@ struct CovergroupDeclOpConversion
   LogicalResult
   matchAndRewrite(CovergroupDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: When CovergroupInstanceOp is added, generate runtime calls here.
-    // For now, just erase the declaration.
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Get covergroup name
+    StringRef cgName = op.getSymName();
+
+    // Count coverpoints in this covergroup
+    SmallVector<CoverpointDeclOp> coverpoints;
+    for (auto &bodyOp : op.getBody().front()) {
+      if (auto cp = dyn_cast<CoverpointDeclOp>(&bodyOp))
+        coverpoints.push_back(cp);
+    }
+    int32_t numCoverpoints = coverpoints.size();
+
+    // Create a global variable to hold the covergroup handle
+    std::string globalHandleName = ("__cg_handle_" + cgName).str();
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(mod.getBody());
+
+      // Check if global already exists
+      if (!mod.lookupSymbol<LLVM::GlobalOp>(globalHandleName)) {
+        auto nullAttr = rewriter.getZeroAttr(
+            IntegerType::get(ctx, 64)); // Pointer-sized null
+        LLVM::GlobalOp::create(rewriter, loc, ptrTy,
+                               /*isConstant=*/false, LLVM::Linkage::Internal,
+                               globalHandleName, nullAttr);
+      }
+    }
+
+    // Create an initialization function for this covergroup
+    std::string initFuncName = ("__cg_init_" + cgName).str();
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(mod.getBody());
+
+      // Check if init function already exists
+      if (!mod.lookupSymbol<LLVM::LLVMFuncOp>(initFuncName)) {
+        auto initFnTy = LLVM::LLVMFunctionType::get(voidTy, {});
+        auto initFn =
+            LLVM::LLVMFuncOp::create(rewriter, loc, initFuncName, initFnTy);
+        initFn.setLinkage(LLVM::Linkage::Internal);
+
+        // Create the function body
+        Block *entryBlock = rewriter.createBlock(&initFn.getBody());
+        rewriter.setInsertionPointToStart(entryBlock);
+
+        // Get or create __moore_covergroup_create function
+        auto createFnTy = LLVM::LLVMFunctionType::get(ptrTy, {ptrTy, i32Ty});
+        auto createFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                               "__moore_covergroup_create",
+                                               createFnTy);
+
+        // Get or create __moore_coverpoint_init function
+        auto initCpFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy});
+        auto initCpFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_init", initCpFnTy);
+
+        // Create string constant for covergroup name
+        std::string cgNameGlobal = ("__cg_name_" + cgName).str();
+        Value cgNamePtr = createGlobalStringConstant(loc, mod, rewriter, cgName,
+                                                     cgNameGlobal);
+
+        // Call __moore_covergroup_create(name, num_coverpoints)
+        auto numCpConst = LLVM::ConstantOp::create(
+            rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numCoverpoints));
+        auto createCall = LLVM::CallOp::create(
+            rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(createFn),
+            ValueRange{cgNamePtr, numCpConst});
+        Value cgHandle = createCall.getResult();
+
+        // Initialize each coverpoint
+        int32_t cpIndex = 0;
+        for (auto cp : coverpoints) {
+          StringRef cpName = cp.getSymName();
+          std::string cpNameGlobal =
+              ("__cp_name_" + cgName + "_" + cpName).str();
+          Value cpNamePtr = createGlobalStringConstant(loc, mod, rewriter,
+                                                       cpName, cpNameGlobal);
+
+          auto idxConst = LLVM::ConstantOp::create(
+              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIndex));
+
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(initCpFn),
+                               ValueRange{cgHandle, idxConst, cpNamePtr});
+          ++cpIndex;
+        }
+
+        // Store the handle to the global variable
+        auto handleGlobalPtr =
+            LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalHandleName);
+        LLVM::StoreOp::create(rewriter, loc, cgHandle, handleGlobalPtr);
+
+        // Return from init function
+        LLVM::ReturnOp::create(rewriter, loc, ValueRange{});
+      }
+    }
+
+    // Erase the original covergroup declaration
     rewriter.eraseOp(op);
     return success();
   }
 };
 
 /// Lowering for CoverpointDeclOp.
-/// Currently erases the declaration. When full coverage support is added,
-/// coverpoint info will be captured during CovergroupDeclOp lowering to
-/// generate __moore_coverpoint_init calls.
+/// Coverpoints are processed by the parent CovergroupDeclOp during its
+/// conversion. This pattern just erases the declaration after the parent has
+/// processed it. The coverpoint initialization calls are generated by
+/// CovergroupDeclOpConversion.
 struct CoverpointDeclOpConversion
     : public OpConversionPattern<CoverpointDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -1618,8 +1752,8 @@ struct CoverpointDeclOpConversion
   LogicalResult
   matchAndRewrite(CoverpointDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: Coverpoint info is used by parent CovergroupDeclOp.
-    // This op is erased after the parent processes it.
+    // Coverpoints are handled by the parent CovergroupDeclOp conversion.
+    // Just erase this op.
     rewriter.eraseOp(op);
     return success();
   }
@@ -4631,6 +4765,40 @@ struct AssocArrayPrevOpConversion
                                        "__moore_assoc_prev") {}
 };
 
+/// Conversion for moore.assoc.exists -> runtime function call.
+struct AssocArrayExistsOpConversion
+    : public OpConversionPattern<AssocArrayExistsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AssocArrayExistsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    // The key is passed by pointer for genericity.
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_exists", fnTy);
+
+    // Store key to alloca and pass pointer.
+    auto keyType = adaptor.getKey().getType();
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto keyAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getKey(), keyAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{adaptor.getArray(), keyAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // String Operations Conversion
 //===----------------------------------------------------------------------===//
@@ -6013,6 +6181,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     DynArrayNewOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
+    AssocArrayExistsOpConversion,
 
     // Patterns for string operations.
     StringLenOpConversion,
