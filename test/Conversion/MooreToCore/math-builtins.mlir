@@ -46,6 +46,13 @@ func.func @test_atan(%arg0: !moore.f64) -> !moore.f64 {
   return %0 : !moore.f64
 }
 
+// CHECK-LABEL: func.func @test_atan2
+func.func @test_atan2(%arg0: !moore.f64, %arg1: !moore.f64) -> !moore.f64 {
+  // CHECK: math.atan2 %arg0, %arg1 : f64
+  %0 = moore.builtin.atan2 %arg0, %arg1 : !moore.f64
+  return %0 : !moore.f64
+}
+
 //===----------------------------------------------------------------------===//
 // Hyperbolic Functions (IEEE 1800-2017 Section 20.8.2)
 //===----------------------------------------------------------------------===//
@@ -140,4 +147,22 @@ func.func @test_ceil(%arg0: !moore.f64) -> !moore.f64 {
   // CHECK: math.ceil %arg0 : f64
   %0 = moore.builtin.ceil %arg0 : !moore.f64
   return %0 : !moore.f64
+}
+
+//===----------------------------------------------------------------------===//
+// Integer Math Functions (IEEE 1800-2017 Section 20.8.1)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @test_clog2
+func.func @test_clog2(%arg0: !moore.i32) -> !moore.i32 {
+  // CHECK: %[[C0:.*]] = hw.constant 0 : i32
+  // CHECK: %[[C1:.*]] = hw.constant 1 : i32
+  // CHECK: %[[CWIDTH:.*]] = hw.constant 32 : i32
+  // CHECK: %[[SUB:.*]] = comb.sub %arg0, %[[C1]] : i32
+  // CHECK: %[[CTLZ:.*]] = llvm.intr.ctlz(%[[SUB]]) <is_zero_poison = false> : (i32) -> i32
+  // CHECK: %[[RESULT:.*]] = comb.sub %[[CWIDTH]], %[[CTLZ]] : i32
+  // CHECK: %[[CMP:.*]] = comb.icmp ule %arg0, %[[C1]] : i32
+  // CHECK: comb.mux %[[CMP]], %[[C0]], %[[RESULT]] : i32
+  %0 = moore.builtin.clog2 %arg0 : !moore.i32
+  return %0 : !moore.i32
 }

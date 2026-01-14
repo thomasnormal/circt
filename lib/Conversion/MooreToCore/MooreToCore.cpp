@@ -2468,6 +2468,52 @@ struct UnaryRealOpConversion : public OpConversionPattern<SourceOp> {
   }
 };
 
+/// Conversion pattern for $clog2(n) - ceiling of log base 2.
+/// Implements IEEE 1800-2017 Section 20.8.1:
+/// - $clog2(0) = 0
+/// - $clog2(1) = 0
+/// - $clog2(n) = ceil(log2(n)) for n > 1
+///
+/// Algorithm: clog2(n) = n <= 1 ? 0 : bitwidth - ctlz(n - 1)
+struct Clog2BIOpConversion : public OpConversionPattern<Clog2BIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(Clog2BIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value input = adaptor.getValue();
+    auto inputType = cast<IntegerType>(input.getType());
+    unsigned bitWidth = inputType.getWidth();
+
+    // Create constants
+    Value zero = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 0));
+    Value one = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 1));
+    Value bitWidthVal =
+        hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, bitWidth));
+
+    // Compute n - 1
+    Value nMinus1 = comb::SubOp::create(rewriter, loc, input, one);
+
+    // Compute ctlz(n - 1) using LLVM intrinsic.
+    // is_zero_poison = false because we handle the n <= 1 case with a mux.
+    Value ctlz = LLVM::CountLeadingZerosOp::create(
+        rewriter, loc, inputType, nMinus1, rewriter.getBoolAttr(false));
+
+    // Compute bitwidth - ctlz(n - 1)
+    Value result = comb::SubOp::create(rewriter, loc, bitWidthVal, ctlz);
+
+    // Check if n <= 1 (i.e., n == 0 or n == 1)
+    Value isZeroOrOne = comb::ICmpOp::create(
+        rewriter, loc, comb::ICmpPredicate::ule, input, one, false);
+
+    // Select: n <= 1 ? 0 : (bitwidth - ctlz(n - 1))
+    rewriter.replaceOpWithNewOp<comb::MuxOp>(op, isZeroOrOne, zero, result,
+                                             false);
+    return success();
+  }
+};
+
 template <typename SourceOp, ICmpPredicate pred>
 struct ICmpOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -5640,6 +5686,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     UnaryRealOpConversion<SqrtBIOp, math::SqrtOp>,
     UnaryRealOpConversion<FloorBIOp, math::FloorOp>,
     UnaryRealOpConversion<CeilBIOp, math::CeilOp>,
+
+    // Patterns for integer math functions.
+    Clog2BIOpConversion,
 
     // Patterns of power operations.
     PowUOpConversion, PowSOpConversion,
