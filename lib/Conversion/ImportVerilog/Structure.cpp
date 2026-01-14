@@ -1290,10 +1290,16 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
   }
 
   if (!subroutine.thisVar) {
-
     SmallString<64> name;
-    guessNamespacePrefix(subroutine.getParentScope()->asSymbol(), name);
-    name += subroutine.name;
+
+    // DPI-C imports should use just the function name (for C linkage),
+    // not a namespace-prefixed name.
+    if (subroutine.flags & slang::ast::MethodFlags::DPIImport) {
+      name = subroutine.name;
+    } else {
+      guessNamespacePrefix(subroutine.getParentScope()->asSymbol(), name);
+      name += subroutine.name;
+    }
 
     SmallVector<Type, 1> noThis = {};
     return declareCallableImpl(subroutine, name, noThis);
