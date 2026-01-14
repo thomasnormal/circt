@@ -442,6 +442,132 @@ MooreQueue __moore_array_unique(MooreQueue *array, int64_t elementSize);
 MooreQueue __moore_array_unique_index(MooreQueue *array, int64_t elementSize);
 
 //===----------------------------------------------------------------------===//
+// Coverage Collection Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for SystemVerilog coverage
+// collection. Covergroups track which values have been observed during
+// simulation, enabling functional coverage analysis.
+//
+// Note: This is basic coverage collection. Full SystemVerilog coverage
+// semantics (bins, crosses, options) is future work.
+//
+
+/// Coverpoint data structure for tracking sampled values.
+/// @member name Name of the coverpoint
+/// @member bins Array of bin hit counts (NULL for auto bins)
+/// @member num_bins Number of explicit bins (0 for auto bins)
+/// @member hits Total number of samples
+/// @member min_val Minimum sampled value (for auto bins)
+/// @member max_val Maximum sampled value (for auto bins)
+typedef struct {
+  const char *name;
+  int64_t *bins;
+  int32_t num_bins;
+  int64_t hits;
+  int64_t min_val;
+  int64_t max_val;
+} MooreCoverpoint;
+
+/// Covergroup data structure for grouping coverpoints.
+/// @member name Name of the covergroup
+/// @member coverpoints Array of coverpoint pointers
+/// @member num_coverpoints Number of coverpoints in this group
+typedef struct {
+  const char *name;
+  MooreCoverpoint **coverpoints;
+  int32_t num_coverpoints;
+} MooreCovergroup;
+
+/// Create a new covergroup instance.
+/// Allocates and initializes a covergroup with the specified number of
+/// coverpoints. The coverpoints array is allocated but not initialized;
+/// use __moore_coverpoint_init to set up each coverpoint.
+///
+/// @param name Name of the covergroup (for reporting)
+/// @param num_coverpoints Number of coverpoints to allocate
+/// @return Pointer to the new covergroup, or NULL on allocation failure
+void *__moore_covergroup_create(const char *name, int32_t num_coverpoints);
+
+/// Initialize a coverpoint within a covergroup.
+/// Sets up a coverpoint with the given name at the specified index.
+/// The coverpoint uses automatic bins (tracking min/max values seen).
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint to initialize
+/// @param name Name of the coverpoint (for reporting)
+void __moore_coverpoint_init(void *cg, int32_t cp_index, const char *name);
+
+/// Destroy a covergroup and free all associated memory.
+/// Frees the covergroup, all its coverpoints, and their bin arrays.
+///
+/// @param cg Pointer to the covergroup to destroy
+void __moore_covergroup_destroy(void *cg);
+
+/// Sample a value for a coverpoint.
+/// Records that the specified value was observed at the given coverpoint.
+/// This increments the hit count and updates min/max tracking.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint within the covergroup
+/// @param value The value that was sampled
+void __moore_coverpoint_sample(void *cg, int32_t cp_index, int64_t value);
+
+/// Get the coverage percentage for a coverpoint.
+/// For auto bins, returns the percentage of the value range that was hit.
+/// For explicit bins, returns the percentage of bins that were hit.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index);
+
+/// Get the overall coverage percentage for a covergroup.
+/// Returns the average coverage across all coverpoints.
+///
+/// @param cg Pointer to the covergroup
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_covergroup_get_coverage(void *cg);
+
+/// Print a coverage report for all registered covergroups.
+/// Outputs coverage statistics to stdout, including:
+/// - Each covergroup name and overall coverage
+/// - Each coverpoint name, hit count, and coverage percentage
+///
+/// This function should be called at the end of simulation (e.g., in $finish).
+void __moore_coverage_report(void);
+
+//===----------------------------------------------------------------------===//
+// Constraint Solving Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide basic constraint-aware randomization support.
+// They are stubs for future Z3/SMT solver integration. Currently they
+// implement simple bounds-based randomization without full constraint solving.
+//
+
+/// Check if a value satisfies a range constraint.
+/// @param value The value to check
+/// @param min Minimum allowed value (inclusive)
+/// @param max Maximum allowed value (inclusive)
+/// @return 1 if value is within [min, max], 0 otherwise
+int __moore_constraint_check_range(int64_t value, int64_t min, int64_t max);
+
+/// Randomize with a range constraint.
+/// Generates a random value within the specified range [min, max].
+/// @param min Minimum value (inclusive)
+/// @param max Maximum value (inclusive)
+/// @return A random value in the range [min, max]
+int64_t __moore_randomize_with_range(int64_t min, int64_t max);
+
+/// Randomize with a modulo constraint.
+/// Generates a random value that satisfies: value % mod == remainder.
+/// @param mod The modulo divisor (must be positive)
+/// @param remainder The required remainder (must be in range [0, mod-1])
+/// @return A random value satisfying the modulo constraint
+int64_t __moore_randomize_with_modulo(int64_t mod, int64_t remainder);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
