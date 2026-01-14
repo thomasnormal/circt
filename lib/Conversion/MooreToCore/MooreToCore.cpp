@@ -1577,6 +1577,48 @@ private:
   InterfaceTypeCache &cache;
 };
 
+/// Lowering for CovergroupDeclOp.
+/// Coverage constructs are not yet lowered to hardware; simply erase.
+struct CovergroupDeclOpConversion
+    : public OpConversionPattern<CovergroupDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CovergroupDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for CoverpointDeclOp.
+/// Coverage constructs are not yet lowered to hardware; simply erase.
+struct CoverpointDeclOpConversion
+    : public OpConversionPattern<CoverpointDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CoverpointDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for CoverCrossDeclOp.
+/// Coverage constructs are not yet lowered to hardware; simply erase.
+struct CoverCrossDeclOpConversion
+    : public OpConversionPattern<CoverCrossDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CoverCrossDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// moore.vtable lowering: erase the vtable declaration.
 /// The vtable entries are resolved at load time via symbol lookup.
 /// Note: This pattern has a lower benefit than VTableLoadMethodOpConversion
@@ -5496,6 +5538,11 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<ModportDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<VirtualInterfaceGetOpConversion>(typeConverter,
                                                 patterns.getContext());
+
+  // Coverage patterns (erased during lowering).
+  patterns.add<CovergroupDeclOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CoverpointDeclOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CoverCrossDeclOpConversion>(typeConverter, patterns.getContext());
 
   // Patterns of vtable operations (with explicit benefits for ordering).
   patterns.add<VTableOpConversion>(typeConverter, patterns.getContext());

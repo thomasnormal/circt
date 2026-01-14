@@ -65,6 +65,11 @@ struct InterfaceLowering {
   circt::moore::InterfaceDeclOp op;
 };
 
+// Covergroup lowering information.
+struct CovergroupLowering {
+  circt::moore::CovergroupDeclOp op;
+};
+
 /// Information about a loops continuation and exit blocks relevant while
 /// lowering the loop's body statements.
 struct LoopFrame {
@@ -135,6 +140,9 @@ struct Context {
   InterfaceLowering *
   convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface);
   LogicalResult convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface);
+
+  /// Convert covergroup declarations
+  LogicalResult convertCovergroup(const slang::ast::CovergroupType &covergroup);
 
   /// Checks whether one class (actualTy) is derived from another class
   /// (baseTy). True if it's a subclass, false otherwise.
@@ -325,6 +333,11 @@ struct Context {
   /// A list of interfaces for which the header has been created, but the body
   /// has not been converted yet.
   std::queue<const slang::ast::InstanceBodySymbol *> interfaceWorklist;
+
+  /// Covergroups that have already been converted.
+  DenseMap<const slang::ast::CovergroupType *,
+           std::unique_ptr<CovergroupLowering>>
+      covergroups;
 
   /// A table of defined values, such as variables, that may be referred to by
   /// name in expressions. The expressions use this table to lookup the MLIR

@@ -2966,6 +2966,33 @@ def ConstraintBlockOp
 }
 
 //===----------------------------------------------------------------------===//
+// Coverage Operations
+//===----------------------------------------------------------------------===//
+
+def CovergroupDeclOp
+    : MooreOp<"covergroup.decl", [Symbol, SymbolTable, IsolatedFromAbove,
+                                  NoTerminator, SingleBlock]> {
+  let summary = "Covergroup declaration";
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{ $sym_name attr-dict-with-keyword $body }];
+}
+
+def CoverpointDeclOp
+    : MooreOp<"coverpoint.decl", [Symbol, HasParent<"CovergroupDeclOp">]> {
+  let summary = "Coverpoint declaration";
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type);
+  let assemblyFormat = [{ $sym_name `:` $type attr-dict }];
+}
+
+def CoverCrossDeclOp
+    : MooreOp<"covercross.decl", [Symbol, HasParent<"CovergroupDeclOp">]> {
+  let summary = "Cross coverage declaration";
+  let arguments = (ins SymbolNameAttr:$sym_name, SymbolRefArrayAttr:$targets);
+  let assemblyFormat = [{ $sym_name `targets` $targets attr-dict }];
+}
+
+//===----------------------------------------------------------------------===//
 // Constraint Expression Operations
 //===----------------------------------------------------------------------===//
 
