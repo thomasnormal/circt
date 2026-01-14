@@ -1810,8 +1810,19 @@ struct ClassDeclVisitor {
       : context(ctx), builder(ctx.builder), classLowering(lowering) {}
 
   LogicalResult run(const slang::ast::ClassType &classAST) {
-    if (!classLowering.op.getBody().empty())
+    LLVM_DEBUG(llvm::dbgs() << "=== ClassDeclVisitor::run: " << classAST.name
+                            << " ===\n");
+
+    if (!classLowering.op.getBody().empty()) {
+      LLVM_DEBUG(llvm::dbgs() << "  Body already populated, skipping\n");
       return success();
+    }
+
+    // Log base class if present
+    if (classAST.getBaseClass()) {
+      LLVM_DEBUG(llvm::dbgs() << "  Base class: "
+                              << classAST.getBaseClass()->name << "\n");
+    }
 
     OpBuilder::InsertionGuard ig(builder);
 
@@ -1823,38 +1834,59 @@ struct ClassDeclVisitor {
     // since method bodies may reference properties.
 
     // Pass 1: Convert properties, parameters, type aliases, and constraints
+    LLVM_DEBUG(llvm::dbgs() << "  Pass 1: Properties, parameters, aliases, constraints\n");
     for (const auto &mem : classAST.members()) {
       if (mem.kind == slang::ast::SymbolKind::ClassProperty ||
           mem.kind == slang::ast::SymbolKind::Parameter ||
           mem.kind == slang::ast::SymbolKind::TypeAlias ||
           mem.kind == slang::ast::SymbolKind::TypeParameter ||
           mem.kind == slang::ast::SymbolKind::ConstraintBlock) {
-        if (failed(mem.visit(*this)))
+        LLVM_DEBUG(llvm::dbgs() << "    Processing member: " << mem.name
+                                << " (kind: " << slang::ast::toString(mem.kind)
+                                << ")\n");
+        if (failed(mem.visit(*this))) {
+          LLVM_DEBUG(llvm::dbgs() << "    FAILED at member: " << mem.name
+                                  << " (kind: "
+                                  << slang::ast::toString(mem.kind) << ")\n");
           return failure();
+        }
       }
     }
 
     // Pass 2: Convert methods and other members
+    LLVM_DEBUG(llvm::dbgs() << "  Pass 2: Methods and other members\n");
     for (const auto &mem : classAST.members()) {
       if (mem.kind != slang::ast::SymbolKind::ClassProperty &&
           mem.kind != slang::ast::SymbolKind::Parameter &&
           mem.kind != slang::ast::SymbolKind::TypeAlias &&
           mem.kind != slang::ast::SymbolKind::TypeParameter &&
           mem.kind != slang::ast::SymbolKind::ConstraintBlock) {
-        if (failed(mem.visit(*this)))
+        LLVM_DEBUG(llvm::dbgs() << "    Processing member: " << mem.name
+                                << " (kind: " << slang::ast::toString(mem.kind)
+                                << ")\n");
+        if (failed(mem.visit(*this))) {
+          LLVM_DEBUG(llvm::dbgs() << "    FAILED at member: " << mem.name
+                                  << " (kind: "
+                                  << slang::ast::toString(mem.kind) << ")\n");
           return failure();
+        }
       }
     }
 
+    LLVM_DEBUG(llvm::dbgs() << "  ClassDeclVisitor::run completed successfully\n");
     return success();
   }
 
   // Properties: ClassPropertySymbol
   LogicalResult visit(const slang::ast::ClassPropertySymbol &prop) {
+    LLVM_DEBUG(llvm::dbgs() << "      ClassPropertySymbol: " << prop.name
+                            << "\n");
     auto loc = convertLocation(prop.location);
     auto ty = context.convertType(prop.getType());
-    if (!ty)
+    if (!ty) {
+      LLVM_DEBUG(llvm::dbgs() << "        FAILED: Could not convert type\n");
       return failure();
+    }
 
     // Check if this is a static property.
     bool isStatic = prop.lifetime == slang::ast::VariableLifetime::Static;
@@ -1951,7 +1983,9 @@ struct ClassDeclVisitor {
 
   // Fully-fledged functions - SubroutineSymbol
   LogicalResult visit(const slang::ast::SubroutineSymbol &fn) {
+    LLVM_DEBUG(llvm::dbgs() << "      SubroutineSymbol: " << fn.name << "\n");
     if (fn.flags & slang::ast::MethodFlags::BuiltIn) {
+      LLVM_DEBUG(llvm::dbgs() << "        Skipping builtin method\n");
       static bool remarkEmitted = false;
       if (remarkEmitted)
         return success();
@@ -1974,6 +2008,7 @@ struct ClassDeclVisitor {
     // They don't emit any code, so we don't need to convert them, we only need
     // to register them for the purpose of stable VTable construction.
     if (fn.flags & slang::ast::MethodFlags::Pure) {
+      LLVM_DEBUG(llvm::dbgs() << "        Pure virtual method\n");
       // Add an extra %this argument.
       SmallVector<Type, 1> extraParams;
       auto classSym =
@@ -1983,18 +2018,27 @@ struct ClassDeclVisitor {
       extraParams.push_back(handleTy);
 
       auto funcTy = getFunctionSignature(context, fn, extraParams);
-      if (!funcTy)
+      if (!funcTy) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "        FAILED: Could not get function signature\n");
         return failure();
+      }
       moore::ClassMethodDeclOp::create(builder, loc, fn.name, funcTy, nullptr);
       return success();
     }
 
+    LLVM_DEBUG(llvm::dbgs() << "        Declaring function\n");
     auto *lowering = context.declareFunction(fn);
-    if (!lowering)
+    if (!lowering) {
+      LLVM_DEBUG(llvm::dbgs() << "        FAILED: declareFunction returned null\n");
       return failure();
+    }
 
-    if (failed(context.convertFunction(fn)))
+    LLVM_DEBUG(llvm::dbgs() << "        Converting function body\n");
+    if (failed(context.convertFunction(fn))) {
+      LLVM_DEBUG(llvm::dbgs() << "        FAILED: convertFunction failed\n");
       return failure();
+    }
 
     // If the function is still being converted (recursive call scenario),
     // capturesFinalized will be false but this is expected - the conversion
@@ -2032,15 +2076,20 @@ struct ClassDeclVisitor {
   // unit, we can simply return a failure if we can't find a unique
   // implementation until we implement support for interface methods.
   LogicalResult visit(const slang::ast::MethodPrototypeSymbol &fn) {
+    LLVM_DEBUG(llvm::dbgs() << "      MethodPrototypeSymbol: " << fn.name
+                            << "\n");
     const auto *externImpl = fn.getSubroutine();
     // We needn't convert a forward declaration without a unique implementation.
     if (!externImpl) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "      FAILED: No implementation for forward declaration\n");
       mlir::emitError(convertLocation(fn.location))
           << "Didn't find an implementation matching the forward declaration "
              "of "
           << fn.name;
       return failure();
     }
+    LLVM_DEBUG(llvm::dbgs() << "      Found implementation, visiting\n");
     return visit(*externImpl);
   }
 
@@ -2051,7 +2100,13 @@ struct ClassDeclVisitor {
 
   // Nested class definition, convert
   LogicalResult visit(const slang::ast::ClassType &cls) {
-    return context.convertClassDeclaration(cls);
+    LLVM_DEBUG(llvm::dbgs() << "      Nested ClassType: " << cls.name << "\n");
+    auto result = context.convertClassDeclaration(cls);
+    if (failed(result)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "        FAILED: convertClassDeclaration failed\n");
+    }
+    return result;
   }
 
   // Transparent members: ignore (inherited names pulled in by slang)
