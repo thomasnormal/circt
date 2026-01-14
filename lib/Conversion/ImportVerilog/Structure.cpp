@@ -693,24 +693,17 @@ struct ModuleVisitor : public BaseVisitor {
     return context.convertFunction(subroutine);
   }
 
-  // Skip covergroup type definitions - not yet generating coverage ops
+  // Handle covergroup type definitions
   LogicalResult visit(const slang::ast::CovergroupType &cg) {
-    static bool remarked = false;
-    if (!remarked) {
-      mlir::emitRemark(loc)
-          << "Covergroup definitions found but coverage is not yet fully "
-             "supported. Covergroups will be dropped during lowering.";
-      remarked = true;
-    }
-    return success();
+    return context.convertCovergroup(cg);
   }
 
-  // Skip covergroup body
+  // Skip covergroup body - handled by convertCovergroup
   LogicalResult visit(const slang::ast::CovergroupBodySymbol &) {
     return success();
   }
 
-  // Skip individual coverage symbols
+  // Skip individual coverage symbols - handled by convertCovergroup
   LogicalResult visit(const slang::ast::CoverpointSymbol &) {
     return success();
   }
@@ -2304,6 +2297,115 @@ LogicalResult Context::convertStaticClassProperty(
   // If the property has an initializer expression, remember it for later.
   if (prop.getInitializer())
     globalVariableWorklist.push_back(&prop);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Covergroup Conversion
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
+  // Check if already converted.
+  if (covergroups.count(&covergroup))
+    return success();
+
+  auto loc = convertLocation(covergroup.location);
+
+  // Pick an insertion point according to the source file location.
+  OpBuilder::InsertionGuard g(builder);
+  auto it = orderedRootOps.upper_bound(covergroup.location);
+  if (it == orderedRootOps.end())
+    builder.setInsertionPointToEnd(intoModuleOp.getBody());
+  else
+    builder.setInsertionPoint(it->second);
+
+  // Create the covergroup declaration op.
+  auto covergroupOp =
+      moore::CovergroupDeclOp::create(builder, loc, covergroup.name);
+  orderedRootOps.insert({covergroup.location, covergroupOp});
+  symbolTable.insert(covergroupOp);
+
+  // Store the lowering info.
+  auto lowering = std::make_unique<CovergroupLowering>();
+  lowering->op = covergroupOp;
+  covergroups[&covergroup] = std::move(lowering);
+
+  // Create the covergroup body block.
+  auto &body = covergroupOp.getBody();
+  body.emplaceBlock();
+
+  // Build a map of coverpoint names to their symbol refs for cross references.
+  llvm::StringMap<mlir::FlatSymbolRefAttr> coverpointSymbols;
+
+  // Convert coverpoints and crosses from the covergroup body.
+  OpBuilder::InsertionGuard bodyGuard(builder);
+  builder.setInsertionPointToStart(&body.front());
+
+  const auto &cgBody = covergroup.getBody();
+  for (const auto &member : cgBody.members()) {
+    if (auto *cp = member.as_if<slang::ast::CoverpointSymbol>()) {
+      auto cpLoc = convertLocation(cp->location);
+
+      // Get the coverpoint expression type.
+      auto exprType = convertType(cp->declaredType.getType());
+      if (!exprType)
+        return failure();
+
+      // Determine the coverpoint name. Slang provides a name even for unlabeled
+      // coverpoints (using the expression text). For labeled coverpoints, we use
+      // the label directly. For unlabeled ones, we append "_cp" to make it clear
+      // this is an auto-generated coverpoint name.
+      std::string cpName;
+      if (!cp->name.empty()) {
+        // Check if this is a user-provided label or auto-generated name.
+        // User labels typically match the name exactly, while auto-generated
+        // names for unlabeled coverpoints may need the _cp suffix.
+        // For simplicity, we check if there's an explicit label by looking
+        // at the expression - if the name matches the expression variable name,
+        // it's auto-generated.
+        const auto &coverExpr = cp->getCoverageExpr();
+        if (const auto *nameExpr =
+                coverExpr.as_if<slang::ast::NamedValueExpression>()) {
+          if (cp->name == nameExpr->symbol.name) {
+            // Auto-generated name from expression, append _cp
+            cpName = std::string(cp->name) + "_cp";
+          } else {
+            // User-provided label
+            cpName = std::string(cp->name);
+          }
+        } else {
+          // Non-simple expression, use the name as-is
+          cpName = std::string(cp->name);
+        }
+      } else {
+        cpName = "cp";
+      }
+
+      auto cpOp = moore::CoverpointDeclOp::create(
+          builder, cpLoc, builder.getStringAttr(cpName),
+          mlir::TypeAttr::get(exprType));
+
+      // Store the symbol ref for cross references.
+      coverpointSymbols[cpName] =
+          mlir::FlatSymbolRefAttr::get(cpOp.getSymNameAttr());
+    } else if (auto *cross = member.as_if<slang::ast::CoverCrossSymbol>()) {
+      auto crossLoc = convertLocation(cross->location);
+
+      // Collect the target coverpoint references.
+      SmallVector<mlir::Attribute> targets;
+      for (const auto *target : cross->targets) {
+        auto it = coverpointSymbols.find(target->name);
+        if (it != coverpointSymbols.end()) {
+          targets.push_back(it->second);
+        }
+      }
+
+      moore::CoverCrossDeclOp::create(builder, crossLoc, cross->name,
+                                      builder.getArrayAttr(targets));
+    }
+  }
 
   return success();
 }
