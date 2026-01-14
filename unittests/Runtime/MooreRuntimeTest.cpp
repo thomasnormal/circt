@@ -1297,4 +1297,127 @@ TEST(MooreRuntimeArrayLocatorTest, FindFieldCmpNotFound) {
   EXPECT_EQ(result.len, 0);
 }
 
+//===----------------------------------------------------------------------===//
+// Constraint Solving Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeConstraintTest, ConstraintCheckRangeValid) {
+  // Value within range
+  EXPECT_EQ(__moore_constraint_check_range(5, 0, 10), 1);
+  EXPECT_EQ(__moore_constraint_check_range(0, 0, 10), 1);   // At min
+  EXPECT_EQ(__moore_constraint_check_range(10, 0, 10), 1);  // At max
+  EXPECT_EQ(__moore_constraint_check_range(5, 5, 5), 1);    // Single value range
+}
+
+TEST(MooreRuntimeConstraintTest, ConstraintCheckRangeInvalid) {
+  // Value outside range
+  EXPECT_EQ(__moore_constraint_check_range(-1, 0, 10), 0);  // Below min
+  EXPECT_EQ(__moore_constraint_check_range(11, 0, 10), 0);  // Above max
+  EXPECT_EQ(__moore_constraint_check_range(100, 0, 10), 0); // Way above
+}
+
+TEST(MooreRuntimeConstraintTest, ConstraintCheckRangeNegative) {
+  // Negative ranges
+  EXPECT_EQ(__moore_constraint_check_range(-5, -10, 0), 1);
+  EXPECT_EQ(__moore_constraint_check_range(-10, -10, -5), 1);
+  EXPECT_EQ(__moore_constraint_check_range(-5, -10, -5), 1);
+  EXPECT_EQ(__moore_constraint_check_range(-11, -10, -5), 0);
+  EXPECT_EQ(__moore_constraint_check_range(-4, -10, -5), 0);
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithRangeBasic) {
+  // Test that randomized values are within range
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_range(10, 20);
+    EXPECT_GE(val, 10);
+    EXPECT_LE(val, 20);
+  }
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithRangeNegative) {
+  // Test with negative range
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_range(-100, -50);
+    EXPECT_GE(val, -100);
+    EXPECT_LE(val, -50);
+  }
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithRangeMixed) {
+  // Test with range spanning zero
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_range(-10, 10);
+    EXPECT_GE(val, -10);
+    EXPECT_LE(val, 10);
+  }
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithRangeSingleValue) {
+  // When min >= max, should return min
+  EXPECT_EQ(__moore_randomize_with_range(42, 42), 42);
+  EXPECT_EQ(__moore_randomize_with_range(50, 40), 50); // min > max
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithRangeSeeded) {
+  // Test reproducibility with seeding
+  __moore_urandom_seeded(12345);
+  int64_t val1 = __moore_randomize_with_range(0, 1000);
+
+  __moore_urandom_seeded(12345);
+  int64_t val2 = __moore_randomize_with_range(0, 1000);
+
+  EXPECT_EQ(val1, val2);
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithModuloBasic) {
+  // Test that result satisfies the modulo constraint
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_modulo(7, 3);
+    EXPECT_EQ(val % 7, 3);
+  }
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithModuloZeroRemainder) {
+  // Test with zero remainder (value % mod == 0)
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_modulo(5, 0);
+    EXPECT_EQ(val % 5, 0);
+  }
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithModuloLargeModulo) {
+  // Test with larger modulo values
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_modulo(1000, 123);
+    EXPECT_EQ(val % 1000, 123);
+  }
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithModuloInvalidMod) {
+  // Invalid modulo (mod <= 0) should return remainder
+  EXPECT_EQ(__moore_randomize_with_modulo(0, 5), 5);
+  EXPECT_EQ(__moore_randomize_with_modulo(-1, 5), 5);
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithModuloSeeded) {
+  // Test reproducibility with seeding
+  __moore_urandom_seeded(54321);
+  int64_t val1 = __moore_randomize_with_modulo(13, 7);
+
+  __moore_urandom_seeded(54321);
+  int64_t val2 = __moore_randomize_with_modulo(13, 7);
+
+  EXPECT_EQ(val1, val2);
+  EXPECT_EQ(val1 % 13, 7);
+}
+
+TEST(MooreRuntimeConstraintTest, RandomizeWithModuloNegativeRemainder) {
+  // Test with negative remainder (should be normalized)
+  for (int i = 0; i < 100; ++i) {
+    int64_t val = __moore_randomize_with_modulo(10, -3);
+    // -3 mod 10 = 7 (normalized)
+    EXPECT_EQ(val % 10, 7);
+  }
+}
+
 } // namespace

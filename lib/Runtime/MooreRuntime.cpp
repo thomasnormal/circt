@@ -1309,6 +1309,74 @@ extern "C" MooreQueue __moore_array_unique_index(MooreQueue *array,
 }
 
 //===----------------------------------------------------------------------===//
+// Constraint Solving Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide basic constraint-aware randomization support.
+// They are placeholder stubs for future Z3/SMT solver integration.
+// Currently they implement simple bounds-based randomization.
+//
+
+extern "C" int __moore_constraint_check_range(int64_t value, int64_t min,
+                                               int64_t max) {
+  // Check if value is within the inclusive range [min, max].
+  // Returns 1 if the constraint is satisfied, 0 otherwise.
+  return (value >= min && value <= max) ? 1 : 0;
+}
+
+extern "C" int64_t __moore_randomize_with_range(int64_t min, int64_t max) {
+  // Generate a random value within the range [min, max].
+  // Handle edge cases where min >= max.
+  if (min >= max)
+    return min;
+
+  // Use the existing random generator for consistency.
+  // Calculate the range size carefully to avoid overflow.
+  uint64_t range = static_cast<uint64_t>(max - min) + 1;
+
+  // Generate a random value in [0, range-1] and add min.
+  // For ranges larger than UINT32_MAX, we need multiple random calls,
+  // but for now we use a single 32-bit random value which covers most cases.
+  uint64_t randomVal = __moore_urandom();
+
+  // For large ranges, combine two 32-bit values to get 64 bits
+  if (range > UINT32_MAX) {
+    randomVal = (static_cast<uint64_t>(__moore_urandom()) << 32) |
+                __moore_urandom();
+  }
+
+  return min + static_cast<int64_t>(randomVal % range);
+}
+
+extern "C" int64_t __moore_randomize_with_modulo(int64_t mod, int64_t remainder) {
+  // Generate a random value that satisfies: value % mod == remainder.
+  // For basic implementation, we generate a random base value and compute
+  // base * mod + remainder.
+  //
+  // Note: This is a simplified implementation. A full constraint solver
+  // would handle more complex modulo constraints in combination with
+  // other constraints.
+
+  // Handle invalid inputs
+  if (mod <= 0)
+    return remainder; // Invalid modulo, just return the remainder
+
+  // Normalize remainder to be in valid range [0, mod-1]
+  int64_t normalizedRemainder = remainder % mod;
+  if (normalizedRemainder < 0)
+    normalizedRemainder += mod;
+
+  // Generate a random multiplier and compute the result.
+  // We use a 32-bit random value for the multiplier to avoid overflow
+  // while still providing reasonable randomness.
+  uint32_t multiplier = __moore_urandom() & 0x7FFFFFFF; // Keep positive
+
+  // Compute result = multiplier * mod + normalizedRemainder
+  // This guarantees result % mod == normalizedRemainder
+  return static_cast<int64_t>(multiplier) * mod + normalizedRemainder;
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
