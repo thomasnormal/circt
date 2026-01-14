@@ -3,30 +3,24 @@
 ## Goal
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-## Current Status: UVM Parsing - CRASH (TypedValue<IntType> assertion)
+## Current Status: String Format Fix Complete (January 14, 2026)
 
-**Issue**: UVM compilation crashes with `cast<TypedValue<IntType>>` assertion failure.
-This is a persistent issue that was present throughout the development session.
-The crash occurs somewhere in class method body processing.
+**Progress**: Fixed string-to-bitvector cast errors in format strings.
 
-### Session Summary (January 13, 2026)
-1. Fixed build errors from agent commits (ScopedHashTable iteration)
-2. Added EventType to MooreToCore type converter
-3. Fixed QueueDeleteOp IntType conversion
-4. Removed problematic virtual interface signal access code
-5. Identified crash is pre-existing (not from recent changes)
+### Session Summary (January 14, 2026)
+1. Fixed string format handling in emitDefault() - strings now route to emitString()
+2. All 4 tracks had work committed to their worktrees
+3. Main branch already had two-pass class ordering fix
+4. Cherry-pick/merge attempts hit conflicts due to extensive code changes
 
-### Recent Commits (40+ this session)
-- `d70b34306` - Fix build errors and EventType conversion (THIS SESSION)
-- `bb0aab454` - MooreToCore lowering for EventTriggeredOp, WaitConditionOp, QueueUniqueOp
-- `72fa5faa0` - Streaming concatenation for queues (HAS BUGS - removed)
-- `fe922d3c9` - queue delete(index), triggered, unique, wait
-- `da49e34b3` - %p format specifier
-- `a7a396879` - string character assignment
-- `4a039b04d` - SystemVerilog interface support
-- `e56e0f30c` - Moore runtime library
-- `7a5e7d892` - MooreToCore queue/array lowering
-- And many more...
+### Key Commit This Session
+- `9be6c6c4c` - [ImportVerilog] Handle string types in emitDefault format function
+
+### Worktree Commits (need manual merge)
+- Track A: Two-pass class property ordering (main already has this)
+- Track B: String format fix (merged to main above)
+- Track C (a30e1484d): File I/O ($fclose, $fwrite) + assoc array iterators
+- Track D (01057fb37): MooreToCore lowering for math ops, real conversions, unions
 
 ## Remaining UVM Warnings (Informational)
 1. `no top-level modules found` - Expected, UVM is a package
