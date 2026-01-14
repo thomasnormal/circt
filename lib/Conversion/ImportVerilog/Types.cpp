@@ -111,20 +111,23 @@ struct TypeVisitor {
     // where we need to get the specialized class type (e.g., registry_0)
     // rather than the generic class type (e.g., registry).
     auto &targetType = type.targetType.getType();
+    auto &canonicalType = type.getCanonicalType();
     if (auto *classType = targetType.as_if<slang::ast::ClassType>()) {
       LLVM_DEBUG(llvm::dbgs() << "TypeAliasType: " << type.name
                               << " -> targetType: " << targetType.name
                               << " (ClassType, genericClass: "
                               << (classType->genericClass ? classType->genericClass->name : "none")
                               << ")"
-                              << " -> canonical: " << type.getCanonicalType().name << "\n");
+                              << " -> canonical: " << canonicalType.name
+                              << " (kind: " << slang::ast::toString(canonicalType.kind) << ")\n");
     } else {
       LLVM_DEBUG(llvm::dbgs() << "TypeAliasType: " << type.name
                               << " -> targetType: " << targetType.name
                               << " (kind: " << slang::ast::toString(targetType.kind) << ")"
-                              << " -> canonical: " << type.getCanonicalType().name << "\n");
+                              << " -> canonical: " << canonicalType.name
+                              << " (kind: " << slang::ast::toString(canonicalType.kind) << ")\n");
     }
-    return type.getCanonicalType().visit(*this);
+    return canonicalType.visit(*this);
   }
 
   // Handle enums.
@@ -156,9 +159,13 @@ struct TypeVisitor {
   }
 
   Type visit(const slang::ast::UnpackedStructType &type) {
+    LLVM_DEBUG(llvm::dbgs() << "Visiting UnpackedStructType: " << type.name << "\n");
     SmallVector<moore::StructLikeMember> members;
-    if (failed(collectMembers(type, members)))
+    if (failed(collectMembers(type, members))) {
+      LLVM_DEBUG(llvm::dbgs() << "  collectMembers failed for UnpackedStructType\n");
       return {};
+    }
+    LLVM_DEBUG(llvm::dbgs() << "  UnpackedStructType has " << members.size() << " members\n");
     return moore::UnpackedStructType::get(context.getContext(), members);
   }
 

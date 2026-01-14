@@ -742,20 +742,27 @@ LogicalResult Context::convertCompilation() {
   auto timeScaleGuard =
       llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
 
+  LLVM_DEBUG(llvm::dbgs() << "=== convertCompilation: traversing topInstances ===\n");
   // First only to visit the whole AST to collect the hierarchical names without
   // any operation creating.
   for (auto *inst : root.topInstances)
-    if (failed(traverseInstanceBody(inst->body)))
+    if (failed(traverseInstanceBody(inst->body))) {
+      LLVM_DEBUG(llvm::dbgs() << "=== convertCompilation: FAILED at traverseInstanceBody ===\n");
       return failure();
+    }
 
+  LLVM_DEBUG(llvm::dbgs() << "=== convertCompilation: visiting compilationUnits ===\n");
   // Visit all top-level declarations in all compilation units. This does not
   // include instantiable constructs like modules, interfaces, and programs,
   // which are listed separately as top instances.
   for (auto *unit : root.compilationUnits) {
     for (const auto &member : unit->members()) {
       auto loc = convertLocation(member.location);
-      if (failed(member.visit(RootVisitor(*this, loc))))
+      if (failed(member.visit(RootVisitor(*this, loc)))) {
+        LLVM_DEBUG(llvm::dbgs() << "=== convertCompilation: FAILED at RootVisitor member: "
+                                << member.name << " (kind: " << slang::ast::toString(member.kind) << ")\n");
         return failure();
+      }
     }
   }
 
@@ -1090,20 +1097,27 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
   // Note: Some variables may not appear in members() due to how Slang handles
   // symbols declared after forward typedefs. Those are handled via on-demand
   // conversion in Expressions.cpp when they're first referenced.
+  LLVM_DEBUG(llvm::dbgs() << "=== convertPackage Pass 1: Variables ===\n");
   for (auto &member : package.members()) {
     if (member.kind == slang::ast::SymbolKind::Variable) {
       auto loc = convertLocation(member.location);
-      if (failed(member.visit(PackageVisitor(*this, loc))))
+      if (failed(member.visit(PackageVisitor(*this, loc)))) {
+        LLVM_DEBUG(llvm::dbgs() << "=== convertPackage FAILED at Variable: " << member.name << "\n");
         return failure();
+      }
     }
   }
 
   // Pass 2: Convert remaining members (classes, functions, etc.)
+  LLVM_DEBUG(llvm::dbgs() << "=== convertPackage Pass 2: Non-variables ===\n");
   for (auto &member : package.members()) {
     if (member.kind != slang::ast::SymbolKind::Variable) {
       auto loc = convertLocation(member.location);
-      if (failed(member.visit(PackageVisitor(*this, loc))))
+      LLVM_DEBUG(llvm::dbgs() << "  Processing member: " << member.name << " (kind: " << slang::ast::toString(member.kind) << ")\n");
+      if (failed(member.visit(PackageVisitor(*this, loc)))) {
+        LLVM_DEBUG(llvm::dbgs() << "=== convertPackage FAILED at member: " << member.name << " (kind: " << slang::ast::toString(member.kind) << ")\n");
         return failure();
+      }
     }
   }
   return success();
