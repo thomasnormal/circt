@@ -21,26 +21,44 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 - ✅ `f727d5708` - 18 math builtin lowerings (trig, hyperbolic, exp, rounding)
 - ✅ `82e8b2e57` - UVM Parity Plan update
 
-### Current Blocker: TypeAlias→Struct Resolution
+### Sprint 2 Completed (6 commits)
 
-The UVM package parses but fails during conversion when a TypeAlias points to
-a struct type within a generic class. Specifically:
+- ✅ `996e7f04d` - Typedef struct generic class test
+- ✅ `51c2c466b` - DPI-C function stubs instead of skipping
+- ✅ `20fc75150` - Union operation lowering patterns
+- ✅ `cd4322c52` - Class property access lowering tests
+- ✅ `17f1fa0e8` - Improved debug output for type/package conversion
 
+### Current Blocker: Forward-Declared Class Queue Type
+
+The UVM package conversion fails when processing the `uvm_deferred_init` variable
+which uses a forward-declared class type in a queue:
+
+```systemverilog
+// uvm_object_globals.svh
+typedef class uvm_object_wrapper;            // forward declaration
+uvm_object_wrapper uvm_deferred_init[$];     // queue of forward-declared class
 ```
-uvm_queue#(uvm_acs_name_struct) names;  // fails
+
+**Debug Trace:**
+```
+=== convertPackage Pass 1: Variables ===
+=== convertPackage FAILED at Variable: uvm_deferred_init
 ```
 
 **Root Cause:**
-- `uvm_acs_name_struct` is a typedef to a struct in `uvm_object_globals.svh`
-- When used as a generic class parameter, `getCanonicalType()` returns empty
-- This cascades through uvm_component and uvm_queue
+- Package variables are converted before classes (Pass 1 vs Pass 2)
+- `uvm_deferred_init` needs `uvm_object_wrapper` type, which is forward-declared
+- Forward class type conversion triggers full class body conversion
+- Some dependency in the class body conversion chain is failing
 
-**Debug Evidence:**
-```
-TypeAliasType: T -> targetType: uvm_acs_name_struct (kind: TypeAlias) -> canonical:
-```
+**Investigation Findings:**
+- TypeAlias→Struct resolution is actually WORKING correctly
+- The canonical type IS being resolved to `UnpackedStructType`
+- The failure is specifically in forward-declared class type conversion
+- Need to trace the `convertClassDeclaration` path for `uvm_object_wrapper`
 
-**Fix Location:** `lib/Conversion/ImportVerilog/Types.cpp:108-128`
+**Fix Location:** `lib/Conversion/ImportVerilog/Structure.cpp:convertClassDeclaration`
 
 ### Previous Sprint Commits (35+)
 
@@ -60,7 +78,8 @@ TypeAliasType: T -> targetType: uvm_acs_name_struct (kind: TypeAlias) -> canonic
 
 | Feature | Status | Gap | Fix Required |
 |---------|--------|-----|--------------|
-| TypeAlias→Struct | ❌ BROKEN | Generic class param fails | Types.cpp TypeAliasType visitor |
+| Forward class types | ❌ BROKEN | Queue of forward class fails | Structure.cpp class conversion |
+| TypeAlias→Struct | ✅ Fixed | Tests pass | Types.cpp verified |
 | Block terminators | ✅ Fixed | Tests added | Statements.cpp verified |
 | std::randomize() | ✅ Done | Parsing + lowering complete | f5f2882a4 |
 
@@ -70,9 +89,10 @@ TypeAliasType: T -> targetType: uvm_acs_name_struct (kind: TypeAlias) -> canonic
 |---------|--------|-----|--------------|
 | Constraint solving | Parse only | No actual solving | Z3/SMT solver integration |
 | Covergroups | ✅ IR Done | Runtime collection needed | CovergroupDeclOp committed |
-| DPI-C calls | ⚠️ Skip | No external C linking | Stub generation or FFI |
+| DPI-C calls | ✅ Stubs | External func declarations | 51c2c466b |
 | Virtual interfaces | ✅ Done | ca0c82996 | Complete |
-| Class property access | Partial | Lowering incomplete | MooreToCore patterns |
+| Union ops | ✅ Done | Lowering complete | 20fc75150 |
+| Class property access | ✅ Tests | Lowering verified | cd4322c52 |
 
 ### P2 - Medium Priority (Quality of Life)
 
@@ -268,48 +288,46 @@ from uvm_cmdline_set_verbosity that triggers the block terminator error.
 | $cast | ✅ | ✅ | ✅ | Done |
 | Array locators | ✅ | ✅ | ✅ | Done |
 | **randomize()** | ✅ | ✅ | ✅ | **Done!** |
-| std::randomize() | ✅ | ❌ | ❌ | P0 |
+| std::randomize() | ✅ | ✅ | ✅ | **Done!** |
 | Constraint solving | ✅ | ✅ Parse | ❌ | P1 |
-| Coverage | ✅ | ⚠️ Skip | ❌ | P1 |
-| DPI-C | ✅ | ⚠️ Skip | ❌ | P2 |
+| Coverage | ✅ | ✅ IR | ❌ | P1 |
+| DPI-C | ✅ | ✅ Stubs | ⚠️ | P2 |
 | Assertions | ✅ | Partial | ❌ | P2 |
 | Interfaces | ✅ | ✅ | ✅ | **Done!** |
 
 ---
 
-## Next Sprint Tasks (Sprint 2 - 4 Agents)
+## Next Sprint Tasks (Sprint 3 - 4 Agents)
 
-### Agent 1: TypeAlias→Struct Fix (P0 - CRITICAL)
+### Agent 1: Forward Class Type Fix (P0 - CRITICAL)
 **Track:** 1 (ImportVerilog)
 **Worktree:** track-a-sim
-**Task:** Fix TypeAliasType visitor to handle struct typedefs in generic class parameters
-**Files:** `lib/Conversion/ImportVerilog/Types.cpp`
-**Test:** Create test with `typedef struct { ... } my_struct; class C#(type T); T data; endclass`
-**Bug:** `uvm_queue#(uvm_acs_name_struct)` fails with empty canonical type
+**Task:** Fix forward-declared class type conversion in package variables
+**Files:** `lib/Conversion/ImportVerilog/Structure.cpp`
+**Bug:** `uvm_object_wrapper uvm_deferred_init[$]` fails - queue of forward class
+**Approach:** Delay variable type resolution or reorder package conversion passes
 
-### Agent 2: Class Property Access Lowering (P1)
-**Track:** 2 (MooreToCore)
-**Worktree:** track-b-uvm
-**Task:** Implement PropertyRefOp and InstancePropertyRefOp lowering
-**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Test:** `test/Conversion/MooreToCore/class-property.mlir`
-**Approach:** Use LLVM GEP to access class struct fields
-
-### Agent 3: DPI-C Stub Generation (P1)
+### Agent 2: ClassDeclVisitor Debug (P0)
 **Track:** 1 (ImportVerilog)
-**Worktree:** track-c-types
-**Task:** Generate stub functions for DPI-C imports instead of skipping
-**Files:** `lib/Conversion/ImportVerilog/Expressions.cpp`, `Structure.cpp`
-**Test:** `test/Conversion/ImportVerilog/dpi-stub.sv`
-**Approach:** Create external func declarations that can be linked later
+**Worktree:** track-b-uvm
+**Task:** Add debug tracing to ClassDeclVisitor::run to find class body failure
+**Files:** `lib/Conversion/ImportVerilog/Structure.cpp`
+**Test:** Run with `--debug-only=import-verilog` on UVM
+**Output:** Identify which class member or base class causes the failure
 
-### Agent 4: Union Ops Lowering (P1)
-**Track:** 2 (MooreToCore)
+### Agent 3: Constraint Runtime Stubs (P1)
+**Track:** 3 (Runtime)
+**Worktree:** track-c-types
+**Task:** Add runtime stubs for constraint solving (placeholder for future Z3)
+**Files:** `lib/Runtime/moore_runtime.cpp`
+**Approach:** Generate random values satisfying basic constraints (bounds only)
+
+### Agent 4: Coverage Runtime (P1)
+**Track:** 3 (Runtime)
 **Worktree:** track-d-devex
-**Task:** Implement UnionCreateOp, UnionExtractOp, UnionExtractRefOp
-**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Test:** `test/Conversion/MooreToCore/union-ops.mlir`
-**Approach:** Union as largest-member-sized allocation with bitcast
+**Task:** Add runtime collection for covergroup/coverpoint data
+**Files:** `lib/Runtime/moore_runtime.cpp`, `MooreToCore.cpp`
+**Approach:** Store coverage bins in runtime data structures, emit report
 
 ---
 
