@@ -2827,6 +2827,33 @@ def AtanhBIOp : RealMathFunc<"atanh"> {
   let summary = "Arc-hyperbolic tangent";
 }
 
+// Binary real math functions
+def Atan2BIOp : Builtin<"atan2", [SameOperandsAndResultType]> {
+  let summary = "Two-argument arc-tangent";
+  let description = [{
+    The `$atan2(y, x)` system function returns the arc-tangent of y/x in radians,
+    using the signs of both arguments to determine the quadrant of the return value.
+
+    See IEEE 1800-2017 section 20.8.2 "Real math functions".
+  }];
+  let arguments = (ins RealF64:$y, RealF64:$x);
+  let results = (outs RealF64:$result);
+  let assemblyFormat = "$y `,` $x attr-dict `:` type($result)";
+}
+
+def HypotBIOp : Builtin<"hypot", [SameOperandsAndResultType]> {
+  let summary = "Hypotenuse function";
+  let description = [{
+    The `$hypot(x, y)` system function returns `sqrt(x^2 + y^2)`, the length
+    of the hypotenuse of a right triangle with sides of length x and y.
+
+    See IEEE 1800-2017 section 20.8.2 "Real math functions".
+  }];
+  let arguments = (ins RealF64:$x, RealF64:$y);
+  let results = (outs RealF64:$result);
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($result)";
+}
+
 //===----------------------------------------------------------------------===//
 // Bit Vector System Functions
 //===----------------------------------------------------------------------===//
@@ -3268,6 +3295,31 @@ def RandomizeOp
   let results = (outs I1:$success);
   let assemblyFormat = [{
     $object `:` type($object) attr-dict
+  }];
+}
+
+def StdRandomizeOp
+    : MooreOp<"std_randomize", []> {
+  let summary = "Scope randomize function (std::randomize)";
+  let description = [{
+    Randomizes one or more variables passed by reference. This is the
+    standalone randomization function `std::randomize()` as opposed to
+    the class method `obj.randomize()`.
+
+    The result is a 1-bit value indicating success (1) or failure (0).
+
+    Example:
+    ```mlir
+    %success = moore.std_randomize %x, %y : !moore.ref<i32>, !moore.ref<i32>
+    ```
+
+    See IEEE 1800-2017 Section 18.12 "Scope randomize function".
+  }];
+
+  let arguments = (ins Variadic<RefType>:$variables);
+  let results = (outs I1:$success);
+  let assemblyFormat = [{
+    $variables `:` type($variables) attr-dict
   }];
 }
 

@@ -2427,6 +2427,16 @@ struct NegOpConversion : public OpConversionPattern<NegOp> {
   }
 };
 
+struct NegRealOpConversion : public OpConversionPattern<NegRealOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(NegRealOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<arith::NegFOp>(op, adaptor.getInput());
+    return success();
+  }
+};
+
 template <typename SourceOp, typename TargetOp>
 struct BinaryOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -2510,6 +2520,45 @@ struct Clog2BIOpConversion : public OpConversionPattern<Clog2BIOp> {
     // Select: n <= 1 ? 0 : (bitwidth - ctlz(n - 1))
     rewriter.replaceOpWithNewOp<comb::MuxOp>(op, isZeroOrOne, zero, result,
                                              false);
+    return success();
+  }
+};
+
+/// Conversion pattern for $atan2(y, x) - two-argument arc-tangent.
+/// Maps directly to math::Atan2Op.
+struct Atan2BIOpConversion : public OpConversionPattern<Atan2BIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(Atan2BIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<math::Atan2Op>(op, adaptor.getY(),
+                                               adaptor.getX());
+    return success();
+  }
+};
+
+/// Conversion pattern for $hypot(x, y) = sqrt(x^2 + y^2).
+/// MLIR's math dialect doesn't have a native hypot op, so we lower it manually.
+struct HypotBIOpConversion : public OpConversionPattern<HypotBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(HypotBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value x = adaptor.getX();
+    Value y = adaptor.getY();
+
+    // Compute x^2 and y^2
+    Value x2 = arith::MulFOp::create(rewriter, loc, x, x);
+    Value y2 = arith::MulFOp::create(rewriter, loc, y, y);
+
+    // Compute x^2 + y^2
+    Value sum = arith::AddFOp::create(rewriter, loc, x2, y2);
+
+    // Compute sqrt(x^2 + y^2)
+    rewriter.replaceOpWithNewOp<math::SqrtOp>(op, sum);
     return success();
   }
 };
@@ -5288,6 +5337,94 @@ private:
   ClassTypeCache &cache;
 };
 
+/// Conversion for moore.std_randomize -> runtime function call.
+/// Implements the SystemVerilog std::randomize() function for standalone
+/// variable randomization (IEEE 1800-2017 Section 18.12).
+struct StdRandomizeOpConversion : public OpConversionPattern<StdRandomizeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StdRandomizeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    // Get or create runtime function: int __moore_random()
+    // Returns a random 32-bit integer.
+    auto randomFnTy = LLVM::LLVMFunctionType::get(i32Ty, {});
+    auto randomFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_random", randomFnTy);
+
+    // For each variable, generate a random value and drive it to the signal.
+    for (auto [origVar, convertedVar] :
+         llvm::zip(op.getVariables(), adaptor.getVariables())) {
+      // Get the element type of the ref
+      auto refTy = dyn_cast<llhd::RefType>(convertedVar.getType());
+      if (!refTy) {
+        return op.emitError() << "expected llhd.ref type, got "
+                              << convertedVar.getType();
+      }
+      auto elemTy = refTy.getNestedType();
+      auto intTy = dyn_cast<IntegerType>(elemTy);
+      if (!intTy) {
+        return op.emitError()
+               << "std::randomize only supports integer types, got " << elemTy;
+      }
+
+      // Generate random value(s) to fill the integer
+      unsigned bitWidth = intTy.getWidth();
+      Value randomVal;
+
+      if (bitWidth <= 32) {
+        // Single call is sufficient
+        auto callResult =
+            LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                 SymbolRefAttr::get(randomFn), ValueRange{});
+        randomVal = callResult.getResult();
+        if (bitWidth < 32) {
+          randomVal = arith::TruncIOp::create(rewriter, loc, intTy, randomVal);
+        }
+      } else {
+        // Need multiple calls to fill larger integers
+        unsigned numCalls = (bitWidth + 31) / 32;
+        randomVal = hw::ConstantOp::create(rewriter, loc, intTy, 0);
+
+        for (unsigned i = 0; i < numCalls; ++i) {
+          auto callResult =
+              LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                   SymbolRefAttr::get(randomFn), ValueRange{});
+          Value chunk = arith::ExtUIOp::create(rewriter, loc, intTy,
+                                               callResult.getResult());
+          if (i > 0) {
+            auto shiftAmt =
+                hw::ConstantOp::create(rewriter, loc, intTy, i * 32);
+            chunk = comb::ShlOp::create(rewriter, loc, chunk, shiftAmt);
+          }
+          randomVal = comb::OrOp::create(rewriter, loc, randomVal, chunk);
+        }
+      }
+
+      // Create a time delay (0 ns, 0 delta, 1 epsilon) for the drive
+      auto timeAttr =
+          llhd::TimeAttr::get(ctx, 0, "ns", 0, 1);
+      auto timeConst = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+
+      // Drive the random value to the signal (no enable condition)
+      llhd::DriveOp::create(rewriter, loc, convertedVar, randomVal, timeConst,
+                            Value{});
+    }
+
+    // Return success (1)
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto successVal = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
+    rewriter.replaceOp(op, successVal);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -5647,6 +5784,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     BoolCastOpConversion,
     NotOpConversion,
     NegOpConversion,
+    NegRealOpConversion,
 
     // Patterns of binary operations.
     BinaryOpConversion<AddOp, comb::AddOp>,
@@ -5689,6 +5827,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
 
     // Patterns for integer math functions.
     Clog2BIOpConversion,
+
+    // Patterns for binary real math functions.
+    Atan2BIOpConversion,
+    HypotBIOpConversion,
 
     // Patterns of power operations.
     PowUOpConversion, PowSOpConversion,
@@ -5834,6 +5976,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // Randomization (needs class cache for struct info)
   patterns.add<RandomizeOpConversion>(typeConverter, patterns.getContext(),
                                       classCache);
+  patterns.add<StdRandomizeOpConversion>(typeConverter, patterns.getContext());
 
   mlir::populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                             typeConverter);
