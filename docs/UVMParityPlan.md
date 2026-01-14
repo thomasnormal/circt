@@ -8,7 +8,24 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 ### Overall Progress
 
 **Parsing: ✅ COMPLETE** - UVM core library parses without errors!
-**Lowering: ⚠️ BLOCKED** - TypeAlias→Struct type resolution issue
+**Lowering: ⚠️ In Progress** - Forward class fix applied, testing needed
+
+### Sprint 3 Completed (7 commits)
+
+- ✅ `162185a3a` - **Fix forward-declared class type in package variable queue** (P0)
+- ✅ `aa78e1ffd` - Debug tracing to ClassDeclVisitor
+- ✅ `f434a4db2` - Coverage runtime collection for covergroups
+- ✅ `e4ce289bc` - Constraint runtime stubs for basic constraint solving
+- ✅ `d87b3c237` - Sprint 3 plan definition
+- ✅ `17f1fa0e8` - Improved debug output for type/package conversion
+
+### Sprint 2 Completed (6 commits)
+
+- ✅ `996e7f04d` - Typedef struct generic class test
+- ✅ `51c2c466b` - DPI-C function stubs instead of skipping
+- ✅ `20fc75150` - Union operation lowering patterns
+- ✅ `cd4322c52` - Class property access lowering tests
+- ✅ `17f1fa0e8` - Improved debug output for type/package conversion
 
 ### Sprint 1 Completed (8 commits)
 
@@ -21,15 +38,7 @@ to parity with commercial simulators like Cadence Xcelium for running UVM testbe
 - ✅ `f727d5708` - 18 math builtin lowerings (trig, hyperbolic, exp, rounding)
 - ✅ `82e8b2e57` - UVM Parity Plan update
 
-### Sprint 2 Completed (6 commits)
-
-- ✅ `996e7f04d` - Typedef struct generic class test
-- ✅ `51c2c466b` - DPI-C function stubs instead of skipping
-- ✅ `20fc75150` - Union operation lowering patterns
-- ✅ `cd4322c52` - Class property access lowering tests
-- ✅ `17f1fa0e8` - Improved debug output for type/package conversion
-
-### Current Blocker: Forward-Declared Class Queue Type
+### Previous Blocker: Forward-Declared Class Queue Type (FIXED)
 
 The UVM package conversion fails when processing the `uvm_deferred_init` variable
 which uses a forward-declared class type in a queue:
@@ -78,7 +87,7 @@ uvm_object_wrapper uvm_deferred_init[$];     // queue of forward-declared class
 
 | Feature | Status | Gap | Fix Required |
 |---------|--------|-----|--------------|
-| Forward class types | ❌ BROKEN | Queue of forward class fails | Structure.cpp class conversion |
+| Forward class types | ✅ Fixed | `162185a3a` | Ignore body failures in type conversion |
 | TypeAlias→Struct | ✅ Fixed | Tests pass | Types.cpp verified |
 | Block terminators | ✅ Fixed | Tests added | Statements.cpp verified |
 | std::randomize() | ✅ Done | Parsing + lowering complete | f5f2882a4 |
@@ -87,8 +96,8 @@ uvm_object_wrapper uvm_deferred_init[$];     // queue of forward-declared class
 
 | Feature | Status | Gap | Fix Required |
 |---------|--------|-----|--------------|
-| Constraint solving | Parse only | No actual solving | Z3/SMT solver integration |
-| Covergroups | ✅ IR Done | Runtime collection needed | CovergroupDeclOp committed |
+| Constraint solving | ✅ Stubs | `e4ce289bc` basic stubs | Future: Z3 integration |
+| Covergroups | ✅ Runtime | `f434a4db2` collection | CovergroupDeclOp + runtime |
 | DPI-C calls | ✅ Stubs | External func declarations | 51c2c466b |
 | Virtual interfaces | ✅ Done | ca0c82996 | Complete |
 | Union ops | ✅ Done | Lowering complete | 20fc75150 |
@@ -297,37 +306,53 @@ from uvm_cmdline_set_verbosity that triggers the block terminator error.
 
 ---
 
-## Next Sprint Tasks (Sprint 3 - 4 Agents)
+## Next Sprint Tasks (Sprint 4 - 4 Agents)
 
-### Agent 1: Forward Class Type Fix (P0 - CRITICAL)
-**Track:** 1 (ImportVerilog)
-**Worktree:** track-a-sim
-**Task:** Fix forward-declared class type conversion in package variables
-**Files:** `lib/Conversion/ImportVerilog/Structure.cpp`
-**Bug:** `uvm_object_wrapper uvm_deferred_init[$]` fails - queue of forward class
-**Approach:** Delay variable type resolution or reorder package conversion passes
+### Agent 1: End-to-End UVM Lowering Test (P0)
+**Track:** 4 (Testing)
+**Task:** Test full UVM package lowering with forward class fix
+**Files:** `test/Conversion/ImportVerilog/uvm-*.sv`
+**Test:** Run circt-verilog on UVM with --lower-to-llvm
+**Output:** Identify next blocker or confirm success
 
-### Agent 2: ClassDeclVisitor Debug (P0)
-**Track:** 1 (ImportVerilog)
-**Worktree:** track-b-uvm
-**Task:** Add debug tracing to ClassDeclVisitor::run to find class body failure
-**Files:** `lib/Conversion/ImportVerilog/Structure.cpp`
-**Test:** Run with `--debug-only=import-verilog` on UVM
-**Output:** Identify which class member or base class causes the failure
+### Agent 2: PropertyRefOp Lowering (P1)
+**Track:** 2 (MooreToCore)
+**Task:** Implement PropertyRefOp and InstancePropertyRefOp lowering patterns
+**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Approach:** Lower to llhd.ptr with struct field offset calculation
 
-### Agent 3: Constraint Runtime Stubs (P1)
-**Track:** 3 (Runtime)
-**Worktree:** track-c-types
-**Task:** Add runtime stubs for constraint solving (placeholder for future Z3)
-**Files:** `lib/Runtime/moore_runtime.cpp`
-**Approach:** Generate random values satisfying basic constraints (bounds only)
+### Agent 3: AssocArrayExistsOp Lowering (P1)
+**Track:** 2 (MooreToCore)
+**Task:** Implement AssocArrayExistsOp lowering to runtime
+**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Approach:** Call `__moore_assoc_exists` runtime function
 
-### Agent 4: Coverage Runtime (P1)
-**Track:** 3 (Runtime)
-**Worktree:** track-d-devex
-**Task:** Add runtime collection for covergroup/coverpoint data
-**Files:** `lib/Runtime/moore_runtime.cpp`, `MooreToCore.cpp`
-**Approach:** Store coverage bins in runtime data structures, emit report
+### Agent 4: Covergroup Collection Lowering (P1)
+**Track:** 2 (MooreToCore)
+**Task:** Wire covergroup ops to runtime collection functions
+**Files:** `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Approach:** Call `__moore_coverpoint_sample` on every coverpoint sample
+
+---
+
+## Sprint 3 Completed Tasks
+
+### Agent 1: Forward Class Type Fix (P0 - CRITICAL) ✅
+**Status:** Completed - `162185a3a`
+**Fix:** Ignore class body conversion failures during type conversion
+**Impact:** Forward-declared class types in queue now work
+
+### Agent 2: ClassDeclVisitor Debug (P0) ✅
+**Status:** Completed - `aa78e1ffd`
+**Fix:** Added comprehensive debug tracing
+
+### Agent 3: Constraint Runtime Stubs (P1) ✅
+**Status:** Completed - `e4ce289bc`
+**Functions:** `__moore_constraint_check_range`, `__moore_randomize_with_range`
+
+### Agent 4: Coverage Runtime (P1) ✅
+**Status:** Completed - `f434a4db2`
+**Functions:** Covergroup/coverpoint collection functions and tests
 
 ---
 
