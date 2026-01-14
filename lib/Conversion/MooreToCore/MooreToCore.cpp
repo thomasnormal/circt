@@ -2413,6 +2413,19 @@ struct BinaryRealOpConversion : public OpConversionPattern<SourceOp> {
   }
 };
 
+template <typename SourceOp, typename TargetOp>
+struct UnaryRealOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<TargetOp>(op, adaptor.getValue());
+    return success();
+  }
+};
+
 template <typename SourceOp, ICmpPredicate pred>
 struct ICmpOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -5560,6 +5573,26 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     BinaryRealOpConversion<DivRealOp, arith::DivFOp>,
     BinaryRealOpConversion<MulRealOp, arith::MulFOp>,
     BinaryRealOpConversion<PowRealOp, math::PowFOp>,
+
+    // Patterns for unary real math operations.
+    UnaryRealOpConversion<SinBIOp, math::SinOp>,
+    UnaryRealOpConversion<CosBIOp, math::CosOp>,
+    UnaryRealOpConversion<TanBIOp, math::TanOp>,
+    UnaryRealOpConversion<AsinBIOp, math::AsinOp>,
+    UnaryRealOpConversion<AcosBIOp, math::AcosOp>,
+    UnaryRealOpConversion<AtanBIOp, math::AtanOp>,
+    UnaryRealOpConversion<SinhBIOp, math::SinhOp>,
+    UnaryRealOpConversion<CoshBIOp, math::CoshOp>,
+    UnaryRealOpConversion<TanhBIOp, math::TanhOp>,
+    UnaryRealOpConversion<AsinhBIOp, math::AsinhOp>,
+    UnaryRealOpConversion<AcoshBIOp, math::AcoshOp>,
+    UnaryRealOpConversion<AtanhBIOp, math::AtanhOp>,
+    UnaryRealOpConversion<ExpBIOp, math::ExpOp>,
+    UnaryRealOpConversion<LnBIOp, math::LogOp>,
+    UnaryRealOpConversion<Log10BIOp, math::Log10Op>,
+    UnaryRealOpConversion<SqrtBIOp, math::SqrtOp>,
+    UnaryRealOpConversion<FloorBIOp, math::FloorOp>,
+    UnaryRealOpConversion<CeilBIOp, math::CeilOp>,
 
     // Patterns of power operations.
     PowUOpConversion, PowSOpConversion,
