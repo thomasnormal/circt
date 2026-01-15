@@ -1400,8 +1400,46 @@ struct RvalueExprVisitor : public ExprVisitor {
         // Queue equality unsupported - return false to allow compilation.
         auto boolTy = moore::IntType::getInt(context.getContext(), 1);
         return moore::ConstantOp::create(builder, loc, boolTy, 0);
-      }
-      else if (isa<moore::ClassHandleType>(lhs.getType()) ||
+      } else if (isa<moore::VirtualInterfaceType>(lhs.getType()) ||
+                 isa<moore::VirtualInterfaceType>(rhs.getType())) {
+        // Virtual interface comparison (e.g., vif == null, vif1 == vif2).
+        auto lhsVifTy = dyn_cast<moore::VirtualInterfaceType>(lhs.getType());
+        auto rhsVifTy = dyn_cast<moore::VirtualInterfaceType>(rhs.getType());
+
+        // Determine the common type for comparison.
+        // If one is null (represented as ClassHandleType with __null__), use the other's type.
+        moore::VirtualInterfaceType commonTy;
+        Value lhsVal = lhs, rhsVal = rhs;
+
+        if (lhsVifTy && !rhsVifTy) {
+          // RHS is null or incompatible type - create a null with LHS's type
+          commonTy = lhsVifTy;
+          rhsVal = moore::VirtualInterfaceNullOp::create(builder, loc, commonTy);
+        } else if (!lhsVifTy && rhsVifTy) {
+          // LHS is null or incompatible type - create a null with RHS's type
+          commonTy = rhsVifTy;
+          lhsVal = moore::VirtualInterfaceNullOp::create(builder, loc, commonTy);
+        } else if (lhsVifTy && rhsVifTy) {
+          // Both are virtual interfaces - use LHS type
+          commonTy = lhsVifTy;
+          if (lhsVifTy != rhsVifTy) {
+            // Types differ - emit a warning and convert RHS
+            mlir::emitWarning(loc)
+                << "comparing virtual interfaces of different types "
+                << lhsVifTy << " and " << rhsVifTy;
+            rhsVal = moore::ConversionOp::create(builder, loc, commonTy, rhs);
+          }
+        } else {
+          // Neither is a virtual interface - should not happen
+          mlir::emitError(loc) << "virtual interface comparison requires at "
+                               << "least one operand to be a virtual interface";
+          return {};
+        }
+
+        return moore::VirtualInterfaceCmpOp::create(
+            builder, loc, moore::VirtualInterfaceCmpPredicate::eq, lhsVal,
+            rhsVal);
+      } else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
         // Class handle comparison (e.g., obj == null, obj1 == obj2).
         auto lhsHandleTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
@@ -1480,8 +1518,46 @@ struct RvalueExprVisitor : public ExprVisitor {
                  isa<moore::QueueType>(rhs.getType())) {
         auto boolTy = moore::IntType::getInt(context.getContext(), 1);
         return moore::ConstantOp::create(builder, loc, boolTy, 1);
-      }
-      else if (isa<moore::ClassHandleType>(lhs.getType()) ||
+      } else if (isa<moore::VirtualInterfaceType>(lhs.getType()) ||
+                 isa<moore::VirtualInterfaceType>(rhs.getType())) {
+        // Virtual interface comparison (e.g., vif != null, vif1 != vif2).
+        auto lhsVifTy = dyn_cast<moore::VirtualInterfaceType>(lhs.getType());
+        auto rhsVifTy = dyn_cast<moore::VirtualInterfaceType>(rhs.getType());
+
+        // Determine the common type for comparison.
+        // If one is null (represented as ClassHandleType with __null__), use the other's type.
+        moore::VirtualInterfaceType commonTy;
+        Value lhsVal = lhs, rhsVal = rhs;
+
+        if (lhsVifTy && !rhsVifTy) {
+          // RHS is null or incompatible type - create a null with LHS's type
+          commonTy = lhsVifTy;
+          rhsVal = moore::VirtualInterfaceNullOp::create(builder, loc, commonTy);
+        } else if (!lhsVifTy && rhsVifTy) {
+          // LHS is null or incompatible type - create a null with RHS's type
+          commonTy = rhsVifTy;
+          lhsVal = moore::VirtualInterfaceNullOp::create(builder, loc, commonTy);
+        } else if (lhsVifTy && rhsVifTy) {
+          // Both are virtual interfaces - use LHS type
+          commonTy = lhsVifTy;
+          if (lhsVifTy != rhsVifTy) {
+            // Types differ - emit a warning and convert RHS
+            mlir::emitWarning(loc)
+                << "comparing virtual interfaces of different types "
+                << lhsVifTy << " and " << rhsVifTy;
+            rhsVal = moore::ConversionOp::create(builder, loc, commonTy, rhs);
+          }
+        } else {
+          // Neither is a virtual interface - should not happen
+          mlir::emitError(loc) << "virtual interface comparison requires at "
+                               << "least one operand to be a virtual interface";
+          return {};
+        }
+
+        return moore::VirtualInterfaceCmpOp::create(
+            builder, loc, moore::VirtualInterfaceCmpPredicate::ne, lhsVal,
+            rhsVal);
+      } else if (isa<moore::ClassHandleType>(lhs.getType()) ||
                isa<moore::ClassHandleType>(rhs.getType())) {
         // Class handle comparison (e.g., obj != null, obj1 != obj2).
         auto lhsHandleTy = dyn_cast<moore::ClassHandleType>(lhs.getType());
@@ -3027,6 +3103,10 @@ struct RvalueExprVisitor : public ExprVisitor {
     // For class handles, emit a ClassNullOp.
     if (auto classHandleTy = dyn_cast<moore::ClassHandleType>(type))
       return moore::ClassNullOp::create(builder, loc, classHandleTy);
+
+    // For virtual interfaces, emit a VirtualInterfaceNullOp.
+    if (auto vifTy = dyn_cast<moore::VirtualInterfaceType>(type))
+      return moore::VirtualInterfaceNullOp::create(builder, loc, vifTy);
 
     // For other types (like chandle), fall back to uninitialized variable.
     mlir::emitWarning(loc) << "null literal support is incomplete for type "
