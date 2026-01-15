@@ -1934,6 +1934,90 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
     if (!resultType)
       return rewriter.notifyMatchFailure(op.getLoc(), "invalid variable type");
 
+    // Get the original Moore type to detect associative arrays
+    auto mooreRefType = cast<moore::RefType>(op.getResult().getType());
+    auto nestedMooreType = mooreRefType.getNestedType();
+
+    // Handle associative array variables - these need runtime allocation
+    if (auto assocType = dyn_cast<AssocArrayType>(nestedMooreType)) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i32Ty = IntegerType::get(ctx, 32);
+
+      // Get or create __moore_assoc_create function
+      auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {i32Ty, i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
+
+      // Determine key size (0 for string keys)
+      int32_t keySize = 0;
+      auto keyType = assocType.getIndexType();
+      if (!isa<StringType>(keyType)) {
+        // For non-string keys, get the bit width
+        auto convertedKeyType = typeConverter->convertType(keyType);
+        if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
+          keySize = intTy.getWidth() / 8;
+        else
+          keySize = 8; // Default to 64-bit for unknown types
+      }
+
+      // Determine value size
+      auto valueType = assocType.getElementType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      int32_t valueSize = 4; // Default
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+
+      // Create constants for key_size and value_size
+      auto keySizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
+      auto valueSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+      // Call __moore_assoc_create(key_size, value_size)
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(fn),
+          ValueRange{keySizeConst, valueSizeConst});
+
+      rewriter.replaceOp(op, call.getResult());
+      return success();
+    }
+
+    // Handle string variables - these need stack allocation with empty init
+    if (isa<StringType>(nestedMooreType)) {
+      auto *ctx = rewriter.getContext();
+      // Get the struct type by converting the nested string type directly
+      auto structTy = cast<LLVM::LLVMStructType>(
+          typeConverter->convertType(nestedMooreType));
+
+      // Create an alloca for the string struct
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto alloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
+
+      // Initialize with empty string {nullptr, 0}
+      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      auto zeroLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(0));
+
+      // Build the struct value
+      Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
+      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, nullPtr,
+                                              ArrayRef<int64_t>{0});
+      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, zeroLen,
+                                              ArrayRef<int64_t>{1});
+
+      // Store to alloca
+      LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+
+      rewriter.replaceOp(op, alloca.getResult());
+      return success();
+    }
+
     // For dynamic container types (queues, dynamic arrays, associative arrays),
     // the converted type is an LLVM pointer, not llhd.ref. These are handled
     // differently since they don't fit the llhd signal model.
@@ -2368,13 +2452,54 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
   LogicalResult
   matchAndRewrite(DynExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
     Type inputType = adaptor.getInput().getType();
 
+    // Handle associative array element access (by value)
+    // The input is an LLVM pointer (assoc array handle)
+    if (isa<LLVM::LLVMPointerType>(inputType)) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Get or create __moore_assoc_get_ref function
+      auto i32Ty = IntegerType::get(ctx, 32);
+      auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {ptrTy, ptrTy, i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_get_ref", fnTy);
+
+      // Get the value size
+      int32_t valueSize = 4; // Default
+      if (auto intTy = dyn_cast<IntegerType>(resultType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+
+      // Store the key to an alloca and pass its pointer
+      auto keyType = adaptor.getLowBit().getType();
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto keyAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getLowBit(), keyAlloca);
+
+      auto valueSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+      // Call __moore_assoc_get_ref(array, key_ptr, value_size) -> value_ptr
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(fn),
+          ValueRange{adaptor.getInput(), keyAlloca, valueSizeConst});
+
+      // Load the value from the returned pointer
+      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, resultType, call.getResult());
+      return success();
+    }
+
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       Value amount = adjustIntegerWidth(rewriter, adaptor.getLowBit(),
-                                        intType.getWidth(), op->getLoc());
-      Value value = comb::ShrUOp::create(rewriter, op->getLoc(),
+                                        intType.getWidth(), loc);
+      Value value = comb::ShrUOp::create(rewriter, loc,
                                          adaptor.getInput(), amount);
 
       rewriter.replaceOpWithNewOp<comb::ExtractOp>(op, resultType, value, 0);
@@ -2384,7 +2509,7 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
     if (auto arrType = dyn_cast<hw::ArrayType>(inputType)) {
       unsigned idxWidth = llvm::Log2_64_Ceil(arrType.getNumElements());
       Value idx = adjustIntegerWidth(rewriter, adaptor.getLowBit(), idxWidth,
-                                     op->getLoc());
+                                     loc);
 
       bool isSingleElementExtract = arrType.getElementType() == resultType;
 
@@ -2409,7 +2534,52 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
   matchAndRewrite(DynExtractRefOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: properly handle out-of-bounds accesses
+    auto loc = op.getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Handle associative array element access
+    // When input is LLVM pointer (associative array), we need to call runtime
+    if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Get or create __moore_assoc_get_ref function
+      // Signature: (array_ptr, key_ptr, value_size) -> element_ptr
+      auto i32Ty = IntegerType::get(ctx, 32);
+      auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {ptrTy, ptrTy, i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_get_ref", fnTy);
+
+      // Get the value size from the original Moore type
+      auto mooreRefType = cast<moore::RefType>(op.getResult().getType());
+      auto valueType = mooreRefType.getNestedType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      int32_t valueSize = 4; // Default
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+
+      // Store the key to an alloca and pass its pointer
+      auto keyType = adaptor.getLowBit().getType();
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto keyAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getLowBit(), keyAlloca);
+
+      auto valueSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+      // Call __moore_assoc_get_ref(array, key_ptr, value_size)
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(fn),
+          ValueRange{adaptor.getInput(), keyAlloca, valueSizeConst});
+
+      rewriter.replaceOp(op, call.getResult());
+      return success();
+    }
+
     Type inputType =
         cast<llhd::RefType>(adaptor.getInput().getType()).getNestedType();
 
@@ -2420,7 +2590,7 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
 
       Value amount =
           adjustIntegerWidth(rewriter, adaptor.getLowBit(),
-                             llvm::Log2_64_Ceil(width), op->getLoc());
+                             llvm::Log2_64_Ceil(width), loc);
       rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(
           op, resultType, adaptor.getInput(), amount);
       return success();
@@ -2429,7 +2599,7 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
     if (auto arrType = dyn_cast<hw::ArrayType>(inputType)) {
       Value idx = adjustIntegerWidth(
           rewriter, adaptor.getLowBit(),
-          llvm::Log2_64_Ceil(arrType.getNumElements()), op->getLoc());
+          llvm::Log2_64_Ceil(arrType.getNumElements()), loc);
 
       auto resultNestedType = cast<llhd::RefType>(resultType).getNestedType();
       bool isSingleElementExtract =
@@ -3180,6 +3350,29 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
   LogicalResult
   matchAndRewrite(OpTy op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Value dst = adaptor.getDst();
+
+    // Check if destination is LLVM pointer (possibly through unrealized cast)
+    // This handles strings, queues, dynamic arrays, and associative arrays.
+    Value llvmPtrDst;
+    if (isa<LLVM::LLVMPointerType>(dst.getType())) {
+      llvmPtrDst = dst;
+    } else if (auto castOp =
+                   dst.getDefiningOp<UnrealizedConversionCastOp>()) {
+      // Look through unrealized_conversion_cast to find LLVM pointer
+      if (castOp.getInputs().size() == 1 &&
+          isa<LLVM::LLVMPointerType>(castOp.getInputs()[0].getType())) {
+        llvmPtrDst = castOp.getInputs()[0];
+      }
+    }
+
+    if (llvmPtrDst) {
+      LLVM::StoreOp::create(rewriter, op.getLoc(), adaptor.getSrc(),
+                            llvmPtrDst);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     // Determine the delay for the assignment.
     Value delay;
     if constexpr (std::is_same_v<OpTy, ContinuousAssignOp> ||
@@ -3199,7 +3392,7 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     }
 
     rewriter.replaceOpWithNewOp<llhd::DriveOp>(
-        op, adaptor.getDst(), adaptor.getSrc(), delay, Value{});
+        op, dst, adaptor.getSrc(), delay, Value{});
     return success();
   }
 };
@@ -3417,6 +3610,7 @@ struct FormatRealOpConversion : public OpConversionPattern<FormatRealOp> {
           fracDigitsAttr);
       return success();
     }
+    llvm_unreachable("unhandled RealFormat");
   }
 };
 
@@ -4724,9 +4918,46 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
     auto fnTy = LLVM::LLVMFunctionType::get(i1Ty, {ptrTy, ptrTy});
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, funcName, fnTy);
 
+    // Get the key pointer - either directly if LLVM pointer, or create an
+    // alloca for llhd.ref types
+    Value keyArg = adaptor.getKey();
+    Value keyAlloca;
+    bool needsWriteback = false;
+    if (isa<LLVM::LLVMPointerType>(keyArg.getType())) {
+      // String keys are already LLVM pointers (to struct {ptr, i64})
+      keyAlloca = keyArg;
+    } else if (auto refType = dyn_cast<llhd::RefType>(keyArg.getType())) {
+      // Integer keys are llhd.ref - we need to create an alloca and copy the
+      // value to it (the runtime will update it in place for first/next/etc)
+      auto keyValueType = refType.getNestedType();
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      keyAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyValueType, one);
+
+      // Read current key value and store to alloca
+      auto currentKey = llhd::ProbeOp::create(rewriter, loc, keyArg);
+      LLVM::StoreOp::create(rewriter, loc, currentKey, keyAlloca);
+      needsWriteback = true;
+    } else {
+      return rewriter.notifyMatchFailure(loc, "unsupported key type");
+    }
+
     auto call = LLVM::CallOp::create(
         rewriter, loc, TypeRange{i1Ty}, SymbolRefAttr::get(fn),
-        ValueRange{adaptor.getArray(), adaptor.getKey()});
+        ValueRange{adaptor.getArray(), keyAlloca});
+
+    // For non-string keys (llhd.ref), write back the updated key value
+    if (needsWriteback) {
+      auto refType = cast<llhd::RefType>(keyArg.getType());
+      auto keyValueType = refType.getNestedType();
+      auto updatedKey =
+          LLVM::LoadOp::create(rewriter, loc, keyValueType, keyAlloca);
+      auto delay = llhd::ConstantTimeOp::create(
+          rewriter, loc, llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
+      llhd::DriveOp::create(rewriter, loc, keyArg, updatedKey, delay, Value{});
+    }
+
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
@@ -5716,6 +5947,7 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     case moore::RealWidth::f64:
       return mlir::Float64Type::get(ctx);
     }
+    llvm_unreachable("unhandled RealWidth");
   });
 
   typeConverter.addConversion(
@@ -5872,11 +6104,12 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   typeConverter.addConversion([&](RefType type) -> std::optional<Type> {
     auto nestedType = type.getNestedType();
     if (auto innerType = typeConverter.convertType(nestedType)) {
-      // For dynamic container types (queues, dynamic arrays, and associative
-      // arrays), return an LLVM pointer instead of llhd.ref. These are dynamic
-      // container types that don't fit the llhd signal/probe model.
+      // For dynamic container types (queues, dynamic arrays, associative
+      // arrays, and strings), return an LLVM pointer instead of llhd.ref.
+      // These are dynamic types that don't fit the llhd signal/probe model.
       // Check the original Moore type to distinguish from other pointer types.
-      if (isa<QueueType, OpenUnpackedArrayType, AssocArrayType>(nestedType))
+      if (isa<QueueType, OpenUnpackedArrayType, AssocArrayType, StringType>(
+              nestedType))
         return LLVM::LLVMPointerType::get(type.getContext());
       return llhd::RefType::get(innerType);
     }

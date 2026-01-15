@@ -126,6 +126,12 @@ MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init);
 // Associative Array Operations
 //===----------------------------------------------------------------------===//
 
+/// Create a new empty associative array.
+/// @param key_size Size of keys in bytes (0 for string keys)
+/// @param value_size Size of values in bytes
+/// @return Pointer to the new associative array (opaque handle)
+void *__moore_assoc_create(int32_t key_size, int32_t value_size);
+
 /// Delete all entries from an associative array.
 /// @param array Pointer to the associative array
 void __moore_assoc_delete(void *array);
@@ -158,6 +164,14 @@ bool __moore_assoc_last(void *array, void *key_out);
 /// @param key_ref Pointer to current key; updated to previous key on success
 /// @return true if a previous key was found, false otherwise
 bool __moore_assoc_prev(void *array, void *key_ref);
+
+/// Get or create a reference to an element in the associative array.
+/// If the key doesn't exist, creates a new entry with zero-initialized value.
+/// @param array Pointer to the associative array
+/// @param key Pointer to the key
+/// @param value_size Size of the value in bytes
+/// @return Pointer to the value storage
+void *__moore_assoc_get_ref(void *array, void *key, int32_t value_size);
 
 //===----------------------------------------------------------------------===//
 // String Operations
