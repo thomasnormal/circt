@@ -1610,19 +1610,6 @@ static Value createGlobalStringConstant(Location loc, ModuleOp mod,
   return LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalName);
 }
 
-/// Helper to create a global string constant and return an AddressOfOp to it.
-/// This combines ensureGlobalStringConstant + AddressOfOp creation.
-static Value createGlobalStringConstant(Location loc, ModuleOp mod,
-                                        ConversionPatternRewriter &rewriter,
-                                        StringRef name, StringRef globalName) {
-  // Ensure the global exists
-  ensureGlobalStringConstant(loc, mod, rewriter, name, globalName);
-
-  // Create and return the AddressOfOp
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
-  return LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalName);
-}
-
 /// Lowering for CovergroupDeclOp.
 /// Generates runtime calls to register the covergroup and its coverpoints:
 /// 1. Creates a global variable to store the covergroup handle
