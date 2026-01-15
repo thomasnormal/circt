@@ -427,3 +427,45 @@ func.func @test_dyn_array_dyn_extract_ref() -> !moore.i32 {
   %val = moore.read %elem_ref : <i32>
   return %val : !moore.i32
 }
+
+//===----------------------------------------------------------------------===//
+// Array Size Operations
+//===----------------------------------------------------------------------===//
+
+// CHECK-DAG: llvm.func @__moore_assoc_size(!llvm.ptr) -> i64
+
+// CHECK-LABEL: func @test_queue_size
+// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[QUEUE:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[LEN:%.+]] = llvm.extractvalue [[QUEUE]][1] : !llvm.struct<(ptr, i64)>
+// CHECK: [[RESULT:%.+]] = arith.trunci [[LEN]] : i64 to i32
+func.func @test_queue_size() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %size = moore.array.size %queue : !moore.queue<!moore.i32, 0>
+  return %size : !moore.i32
+}
+
+// CHECK-LABEL: func @test_dyn_array_size
+// CHECK: llvm.mlir.addressof @testDynArray : !llvm.ptr
+// CHECK: [[ARR:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[LEN:%.+]] = llvm.extractvalue [[ARR]][1] : !llvm.struct<(ptr, i64)>
+// CHECK: [[RESULT:%.+]] = arith.trunci [[LEN]] : i64 to i32
+func.func @test_dyn_array_size() -> !moore.i32 {
+  %arr_ref = moore.get_global_variable @testDynArray : !moore.ref<open_uarray<!moore.i32>>
+  %arr = moore.read %arr_ref : <open_uarray<!moore.i32>>
+  %size = moore.array.size %arr : !moore.open_uarray<!moore.i32>
+  return %size : !moore.i32
+}
+
+// CHECK-LABEL: func @test_assoc_array_size
+// CHECK: llvm.mlir.addressof @testAssoc : !llvm.ptr
+// CHECK: [[ASSOC:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.ptr
+// CHECK: [[LEN:%.+]] = llvm.call @__moore_assoc_size([[ASSOC]]) : (!llvm.ptr) -> i64
+// CHECK: [[RESULT:%.+]] = arith.trunci [[LEN]] : i64 to i32
+func.func @test_assoc_array_size() -> !moore.i32 {
+  %assoc_ref = moore.get_global_variable @testAssoc : !moore.ref<assoc_array<!moore.i32, !moore.i8>>
+  %assoc = moore.read %assoc_ref : <assoc_array<!moore.i32, !moore.i8>>
+  %size = moore.array.size %assoc : !moore.assoc_array<!moore.i32, !moore.i8>
+  return %size : !moore.i32
+}

@@ -349,6 +349,19 @@ extern "C" void *__moore_assoc_create(int32_t key_size, int32_t value_size) {
   return header;
 }
 
+extern "C" int64_t __moore_assoc_size(void *array) {
+  if (!array)
+    return 0;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    return static_cast<int64_t>(arr->data.size());
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    return static_cast<int64_t>(arr->data.size());
+  }
+}
+
 extern "C" void __moore_assoc_delete(void *array) {
   if (!array)
     return;
