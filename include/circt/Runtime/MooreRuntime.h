@@ -582,6 +582,36 @@ int64_t __moore_randomize_with_range(int64_t min, int64_t max);
 int64_t __moore_randomize_with_modulo(int64_t mod, int64_t remainder);
 
 //===----------------------------------------------------------------------===//
+// File I/O Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for SystemVerilog file I/O
+// operations: $fopen, $fwrite, $fclose. They implement the file I/O
+// system tasks/functions as specified in IEEE 1800-2017 Section 21.3.
+//
+
+/// Open a file and return a file descriptor.
+/// Implements the SystemVerilog $fopen system function.
+/// @param filename Pointer to the filename string structure
+/// @param mode Pointer to the mode string structure (e.g., "w", "r", "a")
+///        If mode is NULL, defaults to "r"
+/// @return A 32-bit file descriptor (MCD), or 0 if the open fails
+int32_t __moore_fopen(MooreString *filename, MooreString *mode);
+
+/// Write a formatted string to a file.
+/// Implements the SystemVerilog $fwrite system task.
+/// The format string has already been evaluated by the Moore dialect's
+/// format string operations; this function just writes the result to file.
+/// @param fd File descriptor from $fopen
+/// @param message Pointer to the message string structure to write
+void __moore_fwrite(int32_t fd, MooreString *message);
+
+/// Close a file.
+/// Implements the SystemVerilog $fclose system task.
+/// @param fd File descriptor to close
+void __moore_fclose(int32_t fd);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
