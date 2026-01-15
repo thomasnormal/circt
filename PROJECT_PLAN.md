@@ -71,17 +71,17 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 **Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
 **Next**: Analyze full vtable IR pattern and implement complete lowering.
 
-### Track C: AVIP+UVM Integration
+### Track C: VTable Create/Store Lowering
 **Status**: 🟡 IN PROGRESS
-**Task**: Now that multi-file parsing works, test full AVIP hdlTop files with UVM imports.
-**Files**: ~/mbit/*_avip/src/hdl_top/
-**Next**: Test `hdl_top.sv` with UVM package for APB, AXI4, SPI AVIPs.
+**Task**: Implement moore.vtable.create and moore.vtable.store_method operations for vtable construction.
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
+**Next**: Analyze vtable IR pattern, implement VTableCreateOp and VTableStoreMethodOp conversions.
 
-### Track D: Run Lit Tests
+### Track D: Unit Tests for VTable Operations
 **Status**: 🟡 IN PROGRESS
-**Task**: Run the new unit tests to verify they pass. Fix any test failures.
-**Files**: test/Dialect/Moore/, test/Conversion/ImportVerilog/
-**Next**: Run llvm-lit on new test files, fix any failures.
+**Task**: Create comprehensive tests for vtable lowering patterns.
+**Files**: test/Conversion/MooreToCore/
+**Next**: Create vtable-ops.mlir with tests for load_method, create, store_method.
 
 ### Previous Track Results (Iteration 3)
 - **Track A**: ✅ array.size lowering implemented (f18154abb) - 349 ops unblocked
