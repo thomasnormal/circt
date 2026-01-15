@@ -1478,6 +1478,22 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto value = context.convertRvalueExpression(expr.concat());
     if (!value)
       return {};
+
+    // String replication {n{str}} produces a string
+    if (isa<moore::StringType>(type)) {
+      // Get the replication count
+      auto countExpr = context.convertRvalueExpression(expr.count());
+      if (!countExpr)
+        return {};
+      // Convert count to i32 if needed
+      auto countType = moore::IntType::getInt(context.getContext(), 32);
+      countExpr = context.convertToSimpleBitVector(
+          context.convertRvalueExpression(expr.count(), countType));
+      if (!countExpr)
+        return {};
+      return moore::StringReplicateOp::create(builder, loc, countExpr, value);
+    }
+
     // ReplicateOp requires an IntType operand, so convert to simple bit vector
     value = context.convertToSimpleBitVector(value);
     if (!value)
