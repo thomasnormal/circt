@@ -1,13 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --split-input-file --verify-diagnostics
 
-func.func @invalidType() {
-  // expected-error @below {{failed to legalize operation 'moore.variable'}}
-  %var = moore.variable : <queue<string, 42>>
-
-  return
-}
-
-// -----
+// Note: queue<string> is now supported, so the previous test case for
+// "invalid type" was removed.
 
 func.func @unsupportedConversion() {
     %0 = moore.constant_string "Test" : i32

@@ -3761,6 +3761,69 @@ def VirtualInterfaceSignalRefOp : MooreOp<"virtual_interface.signal_ref", [
   }];
 }
 
+def VirtualInterfaceCmpPredicateAttr : I64EnumAttr<
+    "VirtualInterfaceCmpPredicate", "",
+    [
+      I64EnumAttrCase<"eq", 0>,
+      I64EnumAttrCase<"ne", 1>
+    ]> {
+  let cppNamespace = "circt::moore";
+}
+
+def VirtualInterfaceNullOp : MooreOp<"virtual_interface.null", [Pure]> {
+  let summary = "Create a null virtual interface handle";
+  let description = [{
+    Creates a null virtual interface value. In SystemVerilog, `null` represents
+    the absence of a valid interface instance reference. Comparing a virtual
+    interface to `null` checks whether the handle points to a valid interface.
+
+    Example:
+    ```mlir
+    %null = moore.virtual_interface.null : !moore.virtual_interface<@my_bus>
+    ```
+
+    See IEEE 1800-2017 Section 25.9 "Virtual interfaces".
+  }];
+
+  let arguments = (ins);
+  let results = (outs VirtualInterfaceType:$result);
+
+  let assemblyFormat = [{
+    `:` type($result) attr-dict
+  }];
+}
+
+def VirtualInterfaceCmpOp : MooreOp<"virtual_interface_cmp", [
+  Pure,
+  Commutative,
+  SameTypeOperands
+]> {
+  let summary = "Compare virtual interfaces for reference equality";
+  let description = [{
+    Compares two virtual interfaces using reference equality. This checks whether
+    two handles point to the same interface instance (or are both null).
+    Supported predicates:
+    - eq : equal (handles point to same interface or both null)
+    - ne : not equal (handles point to different interfaces)
+
+    Example:
+    ```mlir
+    %result = moore.virtual_interface_cmp eq %a, %b : !moore.virtual_interface<@my_bus>
+    ```
+
+    See IEEE 1800-2017 Section 25.9 "Virtual interfaces".
+  }];
+  let arguments = (ins
+    VirtualInterfaceCmpPredicateAttr:$predicate,
+    VirtualInterfaceType:$lhs,
+    VirtualInterfaceType:$rhs
+  );
+  let results = (outs BitType:$result);
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // UVM Factory Support
 //===----------------------------------------------------------------------===//
