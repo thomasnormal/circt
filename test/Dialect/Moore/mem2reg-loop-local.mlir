@@ -36,19 +36,21 @@ func.func @LoopLocalVariable(%arg0: i1) -> !moore.i32 {
 
 // CHECK-LABEL: func.func @VariableOutsideLoop
 // Variable declared OUTSIDE the loop CAN be promoted
-func.func @VariableOutsideLoop(%arg0: i1, %arg1: !moore.i32) -> !moore.i32 {
+func.func @VariableOutsideLoop(%arg0: i1, %arg1: !moore.i32) -> !moore.l32 {
   // CHECK-NOT: moore.variable
-  // CHECK: [[DEFAULT:%.+]] = moore.constant hXXXXXXXX : l32
+  // CHECK: [[INIT:%.+]] = moore.constant 0 : l32
+  // CHECK: cf.br ^[[HEADER:bb[0-9]+]]([[INIT]] : !moore.l32)
   %var = moore.variable : <l32>
   %init = moore.constant 0 : l32
   moore.blocking_assign %var, %init : l32
   cf.br ^bb1
 ^bb1:
   // Loop header - variable defined outside, so it can be promoted
-  // CHECK: ^[[HEADER:bb[0-9]+]]([[ARG:%.+]]: !moore.l32):
+  // CHECK: ^[[HEADER]]([[ARG:%.+]]: !moore.l32):
   cf.cond_br %arg0, ^bb2, ^bb3
 ^bb2:
-  // Loop body
+  // Loop body - uses the block argument instead of reading the variable
+  // CHECK: moore.add [[ARG]],
   %val = moore.read %var : <l32>
   %one = moore.constant 1 : l32
   %newval = moore.add %val, %one : l32
@@ -56,9 +58,9 @@ func.func @VariableOutsideLoop(%arg0: i1, %arg1: !moore.i32) -> !moore.i32 {
   // Back-edge
   cf.br ^bb1
 ^bb3:
-  // Exit
+  // Exit - returns the block argument
+  // CHECK: return [[ARG]]
   %result = moore.read %var : <l32>
-  // CHECK: return
   return %result : !moore.l32
 }
 
