@@ -469,6 +469,12 @@ static LogicalResult execute(MLIRContext *context) {
   llvm::SourceMgr sourceMgr;
   DenseSet<StringRef> seenInputFilenames;
   for (const auto &inputFilename : opts.inputFilenames) {
+    // Skip empty filenames that might result from command line parsing issues.
+    if (inputFilename.empty()) {
+      WithColor::warning() << "ignoring empty input filename\n";
+      continue;
+    }
+
     // Don't add the same file multiple times.
     if (!seenInputFilenames.insert(inputFilename).second) {
       WithColor::warning() << "redundant input file `" << inputFilename
