@@ -4,23 +4,28 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: UVM PARSING - 2 ERRORS REMAINING (January 15, 2026)
+## Current Status: 🎉 UVM PARSING COMPLETE - MILESTONE M1 ACHIEVED (January 15, 2026)
 
 **Test Command**:
 ```bash
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
+# Exit code: 0 (SUCCESS!)
 ```
 
 **Current Blockers / Limitations**:
-1. **Class upcast with parameterized base** - `uvm_reg_mem_hdl_paths_seq extends uvm_reg_sequence #(...)` fails upcast verification because parameterized base class not recognized as base.
-2. **Runtime gaps** - Randomization/coverage not implemented; DPI/VPI still stubs; MooreToCore queue globals lowering pending.
+1. ~~**Mem2Reg dominance errors**~~ ✅ FIXED (b881afe61) - Loop-local variables now excluded from Mem2Reg promotion
+2. **Runtime gaps** - Randomization/coverage not implemented; DPI/VPI still stubs; MooreToCore queue globals lowering pending
+3. **Multiple input files** - Minor issue with parsing multiple SV files together (empty filename error)
 
 **Recent Fixes (This Session)**:
-- **Global variable redefinition** ✅ FIXED (a152e9d35) - Fixed duplicate GlobalVariableOp when class type references the variable in methods (uvm_default_line_printer pattern). Uses placeholder type during recursive conversion, then updates to correct type.
-- **UVM class declaration** ✅ FIXED (555a78350) - ClassDeclOp SymbolTable block requirement, WaitConditionOp 2-state type, func.return for pure virtual methods
-- **String ato* methods** ✅ FIXED (14dfdbe9f + 34ab7a758) - Added atoi, atohex, atooct, atobin support for UVM command-line parsing
-- **Non-integral assoc array keys** ✅ FIXED (f6b79c4c7) - String and class handle keys for UVM pools
-- **Pure virtual method stubbing** ✅ FIXED (f6b79c4c7) - Default returns for TLM methods
+- **Mem2Reg loop-local variable dominance** ✅ FIXED (b881afe61) - Variables inside loops no longer promoted, fixing 4 dominance errors
+- **Static property via instance** ✅ FIXED (a1418d80f) - SystemVerilog allows `obj.static_prop` access. Now correctly generates GetGlobalVariableOp instead of ClassPropertyRefOp.
+- **Static property names in parameterized classes** ✅ FIXED (a1418d80f) - Each specialization now gets unique global variable name (e.g., `uvm_pool_1234::m_prop` not `uvm_pool::m_prop`).
+- **Abstract class vtable** ✅ FIXED (a1418d80f) - Virtual classes with mixed concrete/pure virtual methods now skip vtable generation instead of emitting error.
+- **Time type in Mem2Reg** ✅ FIXED (3c9728047) - `VariableOp::getDefaultValue()` now correctly returns TimeType values instead of l64 constants.
+- **Global variable redefinition** ✅ FIXED (a152e9d35) - Fixed duplicate GlobalVariableOp when class type references the variable in methods.
+- **Method lookup in parameterized classes** ✅ FIXED (71c80f6bb) - Class bodies now populated via convertClassDeclaration in declareFunction.
+- **Property type mismatch** ✅ FIXED - Parameterized class property access uses correct specialized class symbol.
 
 **Previous Blockers FIXED** (Earlier):
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
@@ -54,47 +59,53 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Import Crash Triage
-**Status**: 🔄 IN PROGRESS  
-**Task**: Identify and guard the `cast<IntType>` assertion in call lowering (likely `$right/$high`/queue size or format_string path). Add defensive type checks and repro harness.  
-**Files**: lib/Conversion/ImportVerilog/Expressions.cpp, Structure.cpp
+### Track A: Multi-File Parsing Fix
+**Status**: 🔴 IN PROGRESS
+**Task**: Fix the empty filename error when parsing multiple SV files together. This blocks AVIP+UVM integration testing.
+**Files**: lib/Tools/circt-verilog/, slang integration
+**Next**: Investigate why parsing `uvm_pkg.sv` + `apb_global_pkg.sv` together fails with "cannot open input file ''"
 
-### Track B: String/Format + Queue Compatibility
-**Status**: 🔄 IN PROGRESS  
-**Task**: Normalize `format_string` → `string` in queue push_back/concat and string_concat operands; ensure queue element coercions verified.  
-**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
+### Track B: MooreToCore Lowering Completion
+**Status**: 🟡 IN PROGRESS
+**Task**: Lower remaining 13 Moore ops for simulation. Previous analysis showed 95.4% coverage (268/281 ops).
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
+**Next**: Implement lowering patterns for unlowered ops found when running moore-to-core on UVM IR.
 
-### Track C: Abstract Method Return Stubs
-**Status**: 🔄 IN PROGRESS  
-**Task**: Sweep pure virtual functions (factory/pool/callback classes) to ensure stub returns match signature and verifier passes; adjust return insertions.  
-**Files**: lib/Conversion/ImportVerilog/Structure.cpp, Statements.cpp
+### Track C: AVIP Component Testing
+**Status**: 🟡 IN PROGRESS
+**Task**: Test individual AVIP components (interfaces, BFMs) that don't require UVM imports.
+**Files**: ~/mbit/*_avip/src/hdl_top/
+**Next**: Parse apb_if.sv, master_agent_bfm.sv, slave_agent_bfm.sv individually.
 
-### Track D: AVIP Regression Testing
-**Status**: 🔄 IN PROGRESS  
-**Task**: Keep running `~/mbit/*` interface/global packages after each crash fix; capture new failures.  
-**Files**: test infra/scripts
+### Track D: Unit Test Coverage
+**Status**: 🟡 IN PROGRESS
+**Task**: Add lit tests for recent fixes including Mem2Reg loop-local variable handling.
+**Files**: test/Conversion/ImportVerilog/, test/Dialect/Moore/
+**Next**: Create test for loop-local variable dominance fix (b881afe61).
 
 ---
 
 ## Priority Queue
 
 ### CRITICAL (Blocking UVM Parsing)
-1. **Class upcast with parameterized base** - `uvm_reg_sequence #(...)` not recognized as base of `uvm_reg_mem_hdl_paths_seq`. Need to handle parameterized class inheritance in upcast verification.
+None! UVM parsing complete.
 
-### RECENTLY FIXED ✅
-- ~~**Global variable redefinition**~~ - ✅ Fixed (a152e9d35) - Recursive type conversion duplicate prevention
-- ~~**UVM class declaration issues**~~ - ✅ Fixed (555a78350) - SymbolTable block, 2-state types, pure virtual returns
-- ~~**String ato* methods**~~ - ✅ Fixed (14dfdbe9f + 34ab7a758)
-- ~~**Non-integral assoc array keys**~~ - ✅ Fixed (f6b79c4c7)
-- ~~**Pure virtual method stubbing**~~ - ✅ Fixed (f6b79c4c7)
+### RECENTLY FIXED ✅ (This Session)
+- ~~**Mem2Reg loop-local variable dominance**~~ - ✅ Fixed (b881afe61) - Variables inside loops excluded from promotion
+- ~~**Static property via instance**~~ - ✅ Fixed (a1418d80f) - `obj.static_prop` now uses GetGlobalVariableOp
+- ~~**Static property names in parameterized classes**~~ - ✅ Fixed (a1418d80f) - Unique names per specialization
+- ~~**Abstract class vtable**~~ - ✅ Fixed (a1418d80f) - Mixed concrete/pure virtual methods allowed
+- ~~**Time type in Mem2Reg**~~ - ✅ Fixed (3c9728047) - Default values for time variables
+- ~~**Method lookup in parameterized classes**~~ - ✅ Fixed (71c80f6bb) - Class body conversion
+- ~~**Super.method() dispatch**~~ - ✅ Fixed (09e75ba5a) - Direct dispatch instead of vtable
+- ~~**Class upcast with parameterized base**~~ - ✅ Fixed (fbbc2a876) - Generic class lookup
+- ~~**Global variable redefinition**~~ - ✅ Fixed (a152e9d35) - Recursive type conversion
 
 ### PREVIOUSLY FIXED ✅
-- ~~**$fopen**~~ - ✅ Fixed (ce8d1016a)
-- ~~**$fwrite**~~ - ✅ Fixed (ccfc4f6ca)
-- ~~**$fclose**~~ - ✅ Fixed (b4a18d045)
-- ~~**String assoc array next()**~~ - ✅ Fixed (2fa392a98)
-- ~~**String case IntType crash**~~ - ✅ Fixed (3410de2dc)
-- ~~**%20s format**~~ - ✅ Fixed (88085cbd7)
+- ~~**UVM class declaration issues**~~ - ✅ Fixed (555a78350)
+- ~~**String ato* methods**~~ - ✅ Fixed (14dfdbe9f + 34ab7a758)
+- ~~**Non-integral assoc array keys**~~ - ✅ Fixed (f6b79c4c7)
+- ~~**File I/O ($fopen, $fwrite, $fclose)**~~ - ✅ Fixed
 
 ### HIGH (After UVM Parses)
 3. **Complete MooreToCore lowering** - All ops must lower for simulation (ato* already done; queue globals pending)
@@ -200,7 +211,7 @@ Test files in ~/mbit/*:
 
 | Target | Milestone | Criteria |
 |--------|-----------|----------|
-| Jan 2026 | M1: UVM Parses | Zero errors parsing uvm_pkg.sv |
+| Jan 2026 | M1: UVM Parses | Zero errors parsing uvm_pkg.sv | ✅ ACHIEVED |
 | Feb 2026 | M2: File I/O | $fopen, $fwrite, $fclose work |
 | Mar 2026 | M3: AVIP Parses | All ~/mbit/* AVIPs parse |
 | Q2 2026 | M4: Basic Sim | Simple UVM test runs |
@@ -226,16 +237,17 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
-- `14dfdbe9f` - [ImportVerilog] Add support for string ato* methods (atoi, atohex, atooct, atobin)
-- `2657ceab7` - [ImportVerilog] Add support for $sscanf system function
-- `ab38bd7f5` - [Docs] Update blockers - IntType and string replication fixed
-- `d16609422` - [ImportVerilog] Add StringReplicateOp for string replication
-- `52511fe46` - [MooreToCore] Add lowering for file I/O operations
-- `942537c2a` - [ImportVerilog] Return meaningful stub values for DPI-C imports
-- `76612d5bd` - [ImportVerilog] Fix IntType assertion crash in ReplicateOp
-- `88085cbd7` - [ImportVerilog] Add string format specifier with width support
-- `b4a18d045` - [ImportVerilog] Add $fclose system task support
-- `2fa392a98` - [MooreToCore] Fix string-keyed associative array iteration
+- `b881afe61` - [Moore] Don't promote loop-local variables to avoid Mem2Reg dominance errors
+- `3c9728047` - [Moore] Fix time type handling in Mem2Reg default value generation
+- `a1418d80f` - [ImportVerilog][Moore] Fix static property access and abstract class handling
+- `71c80f6bb` - [ImportVerilog] Fix method lookup in parameterized class specializations
+- `09e75ba5a` - [ImportVerilog] Use direct dispatch for super.method() calls
+- `fbbc2a876` - [ImportVerilog] Fix class upcast with parameterized base classes
+- `a152e9d35` - [ImportVerilog] Fix global variable redefinition during recursive type conversion
+- `555a78350` - [ImportVerilog] Fix UVM class declaration and statement handling issues
+- `34ab7a758` - [MooreToCore] Add lowering for string ato* ops
+- `f6b79c4c7` - [ImportVerilog] Fix non-integral assoc array keys and pure virtual methods
+- `14dfdbe9f` - [ImportVerilog] Add support for string ato* methods
 
 ---
 
