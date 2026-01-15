@@ -5460,6 +5460,142 @@ struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
   }
 };
 
+// moore.string.atoi -> call to __moore_string_atoi runtime function
+struct StringAtoIOpConversion : public OpConversionPattern<StringAtoIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringAtoIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_atoi", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.atohex -> call to __moore_string_atohex runtime function
+struct StringAtoHexOpConversion : public OpConversionPattern<StringAtoHexOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringAtoHexOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_atohex", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.atooct -> call to __moore_string_atooct runtime function
+struct StringAtoOctOpConversion : public OpConversionPattern<StringAtoOctOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringAtoOctOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_atooct", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.atobin -> call to __moore_string_atobin runtime function
+struct StringAtoBinOpConversion : public OpConversionPattern<StringAtoBinOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringAtoBinOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_atobin", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 // moore.string_concat -> call to __moore_string_concat runtime function
 struct StringConcatOpConversion : public OpConversionPattern<StringConcatOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -6584,6 +6720,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringPutCOpConversion,
     StringSubstrOpConversion,
     StringItoaOpConversion,
+    StringAtoIOpConversion,
+    StringAtoHexOpConversion,
+    StringAtoOctOpConversion,
+    StringAtoBinOpConversion,
     StringConcatOpConversion,
     StringCmpOpConversion,
     IntToStringOpConversion,
