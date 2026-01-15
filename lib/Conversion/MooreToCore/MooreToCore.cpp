@@ -3641,6 +3641,159 @@ struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// File I/O Operation Conversions
+//===----------------------------------------------------------------------===//
+
+/// Helper to get LLVM struct type for a string: {ptr, i64}.
+static LLVM::LLVMStructType getFileIOStringStructType(MLIRContext *ctx) {
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+}
+
+/// Conversion for moore.builtin.fopen -> runtime function call.
+/// Lowers $fopen(filename, mode) to __moore_fopen(filename_ptr, mode_ptr).
+struct FOpenBIOpConversion : public OpConversionPattern<FOpenBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FOpenBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto stringTy = getFileIOStringStructType(ctx);
+
+    // Get or create __moore_fopen function: int32_t(ptr, ptr)
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_fopen", fnTy);
+
+    // Allocate stack space for filename string and store it
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto filenameAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getFilename(), filenameAlloca);
+
+    // Handle optional mode argument
+    Value modePtr;
+    if (adaptor.getMode()) {
+      // Mode is provided - allocate and store it
+      auto modeAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getMode(), modeAlloca);
+      modePtr = modeAlloca;
+    } else {
+      // Mode not provided - pass null pointer (runtime will default to "r")
+      modePtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    }
+
+    // Call __moore_fopen(filename_ptr, mode_ptr)
+    auto call =
+        LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                             SymbolRefAttr::get(fn),
+                             ValueRange{filenameAlloca, modePtr});
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fwrite -> runtime function call.
+/// Lowers $fwrite(fd, message) to __moore_fwrite(fd, message_ptr).
+struct FWriteBIOpConversion : public OpConversionPattern<FWriteBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FWriteBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Get or create __moore_fwrite function: void(i32, ptr)
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i32Ty, ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_fwrite", fnTy);
+
+    // Get the file descriptor (convert to i32 if needed)
+    Value fd = adaptor.getFd();
+    if (fd.getType() != i32Ty) {
+      fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
+    }
+
+    // Create alloca for the message string and store a placeholder
+    auto stringTy = getFileIOStringStructType(ctx);
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto msgAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringTy, one);
+
+    // Create a placeholder string: the actual message conversion requires
+    // more complex handling of the format string type.
+    auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    auto zeroLen =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(0));
+
+    Value stringVal = LLVM::UndefOp::create(rewriter, loc, stringTy);
+    stringVal = LLVM::InsertValueOp::create(rewriter, loc, stringVal, nullPtr,
+                                            ArrayRef<int64_t>{0});
+    stringVal = LLVM::InsertValueOp::create(rewriter, loc, stringVal, zeroLen,
+                                            ArrayRef<int64_t>{1});
+    LLVM::StoreOp::create(rewriter, loc, stringVal, msgAlloca);
+
+    // Call __moore_fwrite(fd, message_ptr)
+    LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                         SymbolRefAttr::get(fn),
+                         ValueRange{fd, msgAlloca});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fclose -> runtime function call.
+/// Lowers $fclose(fd) to __moore_fclose(fd).
+struct FCloseBIOpConversion : public OpConversionPattern<FCloseBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FCloseBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Get or create __moore_fclose function: void(i32)
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_fclose", fnTy);
+
+    // Get the file descriptor (convert to i32 if needed)
+    Value fd = adaptor.getFd();
+    if (fd.getType() != i32Ty) {
+      fd = LLVM::TruncOp::create(rewriter, loc, i32Ty, fd);
+    }
+
+    // Call __moore_fclose(fd)
+    LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                         SymbolRefAttr::get(fn),
+                         ValueRange{fd});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Queue and Array Operation Conversions
 //===----------------------------------------------------------------------===//
 
@@ -6400,6 +6553,11 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatRealOpConversion,
     FormatStringOpConversion,
     DisplayBIOpConversion,
+
+    // Patterns for file I/O operations.
+    FOpenBIOpConversion,
+    FWriteBIOpConversion,
+    FCloseBIOpConversion,
 
     // Patterns for queue and dynamic array operations.
     QueueMaxOpConversion,

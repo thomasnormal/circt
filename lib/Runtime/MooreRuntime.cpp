@@ -1895,6 +1895,121 @@ extern "C" int64_t __moore_randomize_with_modulo(int64_t mod, int64_t remainder)
 }
 
 //===----------------------------------------------------------------------===//
+// File I/O Operations
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog file I/O uses multichannel descriptors (MCDs) where the
+// low 32 bits represent different output channels. Bit 0 is stdout,
+// and bits 1-30 are file channels. We implement a simplified version
+// that maps MCDs directly to FILE* handles.
+//
+
+namespace {
+
+/// Maximum number of open files (excluding stdout/stderr).
+/// SystemVerilog supports up to 31 file channels (bits 1-30 of MCD).
+constexpr int32_t kMaxOpenFiles = 31;
+
+/// File handle table: maps file descriptor bits to FILE* handles.
+/// Index 0 is reserved (stdout), indices 1-30 are file channels.
+thread_local FILE *fileHandles[kMaxOpenFiles] = {nullptr};
+
+/// Find the first available file descriptor slot.
+/// Returns the slot index (1-30), or -1 if no slots available.
+int32_t findFreeSlot() {
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if (fileHandles[i] == nullptr)
+      return i;
+  }
+  return -1;
+}
+
+/// Convert MooreString to null-terminated C string.
+/// Caller is responsible for freeing the returned string.
+char *toCString(MooreString *str) {
+  if (!str || !str->data || str->len <= 0)
+    return nullptr;
+  char *cstr = static_cast<char *>(std::malloc(str->len + 1));
+  if (!cstr)
+    return nullptr;
+  std::memcpy(cstr, str->data, str->len);
+  cstr[str->len] = '\0';
+  return cstr;
+}
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_fopen(MooreString *filename, MooreString *mode) {
+  // Validate filename
+  if (!filename || !filename->data || filename->len <= 0)
+    return 0;
+
+  // Find available file descriptor slot
+  int32_t slot = findFreeSlot();
+  if (slot < 0)
+    return 0; // No available slots
+
+  // Convert filename to C string
+  char *fnameStr = toCString(filename);
+  if (!fnameStr)
+    return 0;
+
+  // Determine file mode (default to "r" if not specified)
+  const char *modeStr = "r";
+  char *allocatedMode = nullptr;
+  if (mode && mode->data && mode->len > 0) {
+    allocatedMode = toCString(mode);
+    if (allocatedMode)
+      modeStr = allocatedMode;
+  }
+
+  // Open the file
+  FILE *fp = std::fopen(fnameStr, modeStr);
+
+  // Clean up allocated strings
+  std::free(fnameStr);
+  if (allocatedMode)
+    std::free(allocatedMode);
+
+  if (!fp)
+    return 0;
+
+  // Store the file handle and return the MCD
+  // The MCD for file channel i is (1 << i)
+  fileHandles[slot] = fp;
+  return 1 << slot;
+}
+
+extern "C" void __moore_fwrite(int32_t fd, MooreString *message) {
+  // Validate message
+  if (!message || !message->data || message->len <= 0)
+    return;
+
+  // Handle stdout (bit 0 of MCD)
+  if (fd & 1) {
+    std::fwrite(message->data, 1, message->len, stdout);
+  }
+
+  // Handle file channels (bits 1-30)
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      std::fwrite(message->data, 1, message->len, fileHandles[i]);
+    }
+  }
+}
+
+extern "C" void __moore_fclose(int32_t fd) {
+  // Close all file channels indicated by the MCD
+  // Note: We don't close stdout (bit 0)
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      std::fclose(fileHandles[i]);
+      fileHandles[i] = nullptr;
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
