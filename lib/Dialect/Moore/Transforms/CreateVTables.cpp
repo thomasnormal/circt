@@ -165,17 +165,11 @@ void CreateVTablesPass::emitVTablePerClass(ModuleOp mod, SymbolTable &symTab,
   // Check emission for every top-level class decl
   for (auto [clsDecl, methodMap] : classToMethodMap) {
 
-    // Sanity check that either all methods are implemented or none are.
-    if (!(allHaveImpl(methodMap) || noneHaveImpl(methodMap))) {
-      clsDecl.emitError()
-          << "Class declaration " << clsDecl.getSymName()
-          << " is malformed; some methods are abstract and some are concrete, "
-             "which is not legal in System Verilog.";
-      return;
-    }
-
-    // Skip abstract classes
-    if (noneHaveImpl(methodMap))
+    // Skip abstract classes (classes with any unimplemented/pure virtual
+    // methods). In SystemVerilog, a "virtual class" (abstract class) can have
+    // both concrete methods and pure virtual methods - this is standard OOP.
+    // We only generate vtables for fully concrete classes.
+    if (!allHaveImpl(methodMap))
       continue;
 
     auto vTableName = getVTableName(clsDecl);

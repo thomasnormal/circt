@@ -213,11 +213,20 @@ static Value visitClassProperty(Context &context,
     return {};
   }
 
-  // Get the class symbol name from the declaring class
-  auto declaringClassSym = fullyQualifiedClassName(context, *declaringClass);
+  // Get the actual ClassDeclOp for the declaring class to get its
+  // correct symbol name. For parameterized classes, each specialization
+  // has its own ClassDeclOp with a potentially renamed symbol.
+  // We must call convertClassDeclaration to ensure the class body is
+  // populated (not just declared).
+  (void)context.convertClassDeclaration(*declaringClass);
+  auto *declaringLowering = context.declareClass(*declaringClass);
+  if (!declaringLowering || !declaringLowering->op) {
+    mlir::emitError(loc) << "failed to get ClassDeclOp for declaring class";
+    return {};
+  }
+  auto declaringClassSym = declaringLowering->op.getSymNameAttr();
   auto targetClassHandle = moore::ClassHandleType::get(
-      context.getContext(),
-      mlir::FlatSymbolRefAttr::get(context.getContext(), declaringClassSym));
+      context.getContext(), mlir::FlatSymbolRefAttr::get(declaringClassSym));
 
   moore::ClassHandleType classTy =
       cast<moore::ClassHandleType>(instRef.getType());
@@ -631,6 +640,39 @@ struct ExprVisitor {
         return {};
       auto targetTy = cast<moore::ClassHandleType>(valTy);
 
+      // Check if this is a static property accessed through an instance.
+      // In SystemVerilog, you can write `obj.static_prop` to access a static
+      // property, but static properties are stored as global variables, not
+      // in the class declaration.
+      if (auto *classProp =
+              expr.member.as_if<slang::ast::ClassPropertySymbol>()) {
+        if (classProp->lifetime == slang::ast::VariableLifetime::Static) {
+          // Static properties are stored as global variables.
+          if (auto globalOp = context.globalVariables.lookup(classProp)) {
+            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+            auto symRef =
+                mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+            Value ref =
+                moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+            return isLvalue ? ref : moore::ReadOp::create(builder, loc, ref);
+          }
+          // Try on-demand conversion if not found yet.
+          if (succeeded(context.convertStaticClassProperty(*classProp))) {
+            if (auto globalOp = context.globalVariables.lookup(classProp)) {
+              auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+              auto symRef =
+                  mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+              Value ref = moore::GetGlobalVariableOp::create(builder, loc,
+                                                             refTy, symRef);
+              return isLvalue ? ref : moore::ReadOp::create(builder, loc, ref);
+            }
+          }
+          mlir::emitWarning(loc)
+              << "static class property '" << expr.member.name
+              << "' could not be resolved to a global variable";
+        }
+      }
+
       // Get the class that declares this property from slang's AST.
       // This avoids the need to look up the property in Moore IR, which may not
       // have been fully populated yet due to circular dependencies between
@@ -649,13 +691,21 @@ struct ExprVisitor {
         return {};
       }
 
-      // Get the class symbol name from the declaring class
-      auto declaringClassSym =
-          fullyQualifiedClassName(context, *declaringClass);
+      // Get the actual ClassDeclOp for the declaring class to get its
+      // correct symbol name. For parameterized classes, each specialization
+      // has its own ClassDeclOp with a potentially renamed symbol.
+      // We must call convertClassDeclaration to ensure the class body is
+      // populated (not just declared).
+      (void)context.convertClassDeclaration(*declaringClass);
+      auto *declaringLowering = context.declareClass(*declaringClass);
+      if (!declaringLowering || !declaringLowering->op) {
+        mlir::emitError(loc) << "failed to get ClassDeclOp for declaring class";
+        return {};
+      }
+      auto declaringClassSym = declaringLowering->op.getSymNameAttr();
       auto upcastTargetTy = moore::ClassHandleType::get(
           context.getContext(),
-          mlir::FlatSymbolRefAttr::get(context.getContext(),
-                                       declaringClassSym));
+          mlir::FlatSymbolRefAttr::get(declaringClassSym));
 
       // Convert the class handle to the required target type for property
       // shadowing purposes, if needed.

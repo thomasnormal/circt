@@ -2435,6 +2435,21 @@ LogicalResult Context::convertStaticClassProperty(
   if (globalVariables.count(&prop))
     return success();
 
+  // Ensure the parent class is declared before generating the symbol name.
+  // For parameterized class specializations, this ensures the class has a
+  // unique symbol name (e.g., "uvm_config_db_1234") that distinguishes it
+  // from other specializations. Without this, all specializations would share
+  // the same static variable, causing type mismatches.
+  const auto *parentScope = prop.getParentScope();
+  if (parentScope) {
+    if (auto *classType =
+            parentScope->asSymbol().as_if<slang::ast::ClassType>()) {
+      // This triggers class declaration if not already done, ensuring the
+      // ClassDeclOp exists with its final symbol name.
+      (void)convertClassDeclaration(*classType);
+    }
+  }
+
   // Check by fully qualified name (handles multiple specializations of
   // parameterized classes that share the same static member).
   auto symName = fullyQualifiedSymbolName(*this, prop);
@@ -2649,10 +2664,25 @@ mlir::StringAttr circt::ImportVerilog::fullyQualifiedSymbolName(
     case slang::ast::SymbolKind::InstanceBody:
     case slang::ast::SymbolKind::Instance:
     case slang::ast::SymbolKind::Package:
-    case slang::ast::SymbolKind::ClassType:
       if (!parentSym.name.empty())
-        parts.push_back(parentSym.name); // keep packages + outer classes
+        parts.push_back(parentSym.name);
       break;
+    case slang::ast::SymbolKind::ClassType: {
+      // For parameterized class specializations, use the actual ClassDeclOp
+      // symbol name (which may have been renamed during insertion, e.g.,
+      // "uvm_typed_callbacks_2768") instead of the generic class name.
+      if (auto *classType = parentSym.as_if<slang::ast::ClassType>()) {
+        auto it = ctx.classes.find(classType);
+        if (it != ctx.classes.end() && it->second && it->second->op) {
+          parts.push_back(it->second->op.getSymName());
+          break;
+        }
+      }
+      // Fallback to the symbol name if ClassDeclOp not available yet.
+      if (!parentSym.name.empty())
+        parts.push_back(parentSym.name);
+      break;
+    }
     default:
       break;
     }
