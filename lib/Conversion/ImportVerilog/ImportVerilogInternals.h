@@ -407,6 +407,11 @@ struct Context {
   /// reference
   Value currentThisRef = {};
 
+  /// Temporary override for method receiver selection. Used when emitting
+  /// constructor calls so that argument evaluation continues to use the
+  /// caller's `this`, while the callee still receives the correct new object.
+  Value methodReceiverOverride = {};
+
   /// The function currently being converted (if any). Used to propagate
   /// captures from callee functions to the caller when the caller is also
   /// a function that captures variables.
