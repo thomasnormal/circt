@@ -3904,6 +3904,11 @@ static bool areSameGenericSpecialization(Context &context,
   return false;
 }
 
+// Forward declaration - defined later in the file after helper functions.
+static mlir::SymbolRefAttr
+findActualAncestorSymbol(Context &context, moore::ClassHandleType actualTy,
+                         moore::ClassHandleType expectedTy);
+
 /// Check whether the actual handle is a subclass of another handle type
 /// and return a properly upcast version if so.
 static mlir::Value maybeUpcastHandle(Context &context, mlir::Value actualHandle,
@@ -3960,8 +3965,16 @@ static mlir::Value maybeUpcastHandle(Context &context, mlir::Value actualHandle,
   }
 
   // Only implicit upcasting is allowed - down casting should never be implicit.
+  // Find the actual ancestor symbol that matches the expected class. This
+  // handles parameterized classes where the expected type might be a generic
+  // class name but the actual base is a specialization.
+  auto actualAncestorSym =
+      findActualAncestorSymbol(context, actualHandleTy, expectedHandleTy);
+  auto upcastTy = moore::ClassHandleType::get(actualHandle.getContext(),
+                                              actualAncestorSym);
+
   auto casted = moore::ClassUpcastOp::create(context.builder, loc,
-                                             expectedHandleTy, actualHandle)
+                                             upcastTy, actualHandle)
                     .getResult();
   return casted;
 }
@@ -4737,6 +4750,43 @@ static bool areSameOrRelatedClass(Context &context, mlir::SymbolRefAttr sym1,
     return true;
 
   return false;
+}
+
+/// Find the actual ancestor symbol in the inheritance chain that matches the
+/// expected base class. This handles parameterized classes where the expected
+/// type might be a generic class name (e.g., @uvm_reg_sequence) but the actual
+/// base in the inheritance chain is a specialization (e.g., @uvm_reg_sequence_123).
+/// Returns the actual symbol to use for the upcast, or the expected symbol if
+/// no better match is found.
+static mlir::SymbolRefAttr
+findActualAncestorSymbol(Context &context, moore::ClassHandleType actualTy,
+                         moore::ClassHandleType expectedTy) {
+  mlir::SymbolRefAttr actualSym = actualTy.getClassSym();
+  mlir::SymbolRefAttr expectedSym = expectedTy.getClassSym();
+
+  // If they're already the same, no need to search
+  if (actualSym == expectedSym)
+    return expectedSym;
+
+  // Walk up the inheritance chain to find the actual base symbol
+  auto *op = resolve(context, actualSym);
+  auto decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(op);
+
+  while (decl) {
+    mlir::SymbolRefAttr curBase = decl.getBaseAttr();
+    if (!curBase)
+      break;
+
+    // Check if this base is related to the expected symbol
+    if (areSameOrRelatedClass(context, curBase, expectedSym)) {
+      // Found a match - return the actual symbol in the inheritance chain
+      return curBase;
+    }
+    decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(resolve(context, curBase));
+  }
+
+  // Fallback to expected symbol
+  return expectedSym;
 }
 
 bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
