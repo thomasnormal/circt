@@ -3,30 +3,46 @@
 ## Goal
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-## Current Status: String Format Fix Complete (January 14, 2026)
+## Current Status: UVM Parsing - CRASH + 3 Errors (January 15, 2026)
 
-**Progress**: Fixed string-to-bitvector cast errors in format strings.
+**Test Command**:
+```bash
+./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
+```
 
-### Session Summary (January 14, 2026)
-1. Fixed string format handling in emitDefault() - strings now route to emitString()
-2. All 4 tracks had work committed to their worktrees
-3. Main branch already had two-pass class ordering fix
-4. Cherry-pick/merge attempts hit conflicts due to extensive code changes
+**Current Errors (blocking)**:
+1. `$fwrite` unsupported (uvm_object.svh:893)
+2. `$fopen` unsupported (uvm_text_tr_database.svh:107)
+3. `next` unsupported - string associative array iterator (uvm_report_server.svh:514)
+4. **CRASH** - `cast<TypedValue<IntType>>` assertion failure
 
-### Key Commit This Session
-- `9be6c6c4c` - [ImportVerilog] Handle string types in emitDefault format function
+**Warnings (informational)**:
+- `unknown escape sequence '\.'` - Regex in string literal
+- `no top-level modules found` - Expected, UVM is a package
+- DPI-C imports not yet supported (expected)
+- Unreachable code warnings
 
-### Worktree Commits (need manual merge)
-- Track A: Two-pass class property ordering (main already has this)
-- Track B: String format fix (merged to main above)
-- Track C (a30e1484d): File I/O ($fclose, $fwrite) + assoc array iterators
-- Track D (01057fb37): MooreToCore lowering for math ops, real conversions, unions
+## Active Workstreams (4 Agents)
 
-## Remaining UVM Warnings (Informational)
-1. `no top-level modules found` - Expected, UVM is a package
-2. `unknown escape sequence '\.'` - Regex in string literal
-3. `streaming concatenation not fully supported` - Partial support
-4. `static class property could not be resolved` - Static resolution limitation
+### Track A: Fix IntType Crash (track-a-sim)
+**Goal**: Fix the TypedValue<IntType> assertion failure
+**Status**: Investigating - crash occurs during class method processing
+**Next Task**: Add debug tracing to identify exact location and type mismatch
+
+### Track B: Implement $fopen (track-b-uvm)
+**Goal**: Add $fopen syscall support
+**Status**: Starting fresh
+**Next Task**: Add FOpenBIOp to MooreOps.td and handler in Expressions.cpp
+
+### Track C: Implement $fwrite (track-c-types)
+**Goal**: Add $fwrite syscall support
+**Status**: Had implementation in worktree (a30e1484d) - needs manual merge
+**Next Task**: Cherry-pick or reimplement $fwrite handler in Statements.cpp
+
+### Track D: String Assoc Array next() (track-d-devex)
+**Goal**: Fix string-keyed associative array iteration
+**Status**: Integer key iterators work, string keys fail
+**Next Task**: Add string key support to AssocArrayNextOp
 
 ## Features Completed
 
@@ -48,9 +64,9 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 - [x] size(), max(), min(), unique()
 - [x] sort()
 - [x] Dynamic arrays with new[size]
-- [x] Associative arrays
+- [x] Associative arrays (int keys)
 - [x] exists(), delete(key)
-- [x] first(), next(), last(), prev() iterators
+- [ ] first(), next(), last(), prev() for string keys
 
 ### String Support
 - [x] String type
@@ -58,6 +74,14 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 - [x] toupper(), tolower()
 - [x] putc() character assignment
 - [x] %p format specifier
+- [x] String in format strings (emitDefault fix)
+
+### File I/O (Partial)
+- [ ] $fopen - file open
+- [ ] $fclose - file close
+- [ ] $fwrite - formatted file write
+- [ ] $fdisplay - file display
+- [ ] $fgets - file read line
 
 ### Process Control
 - [x] fork/join, fork/join_any, fork/join_none
@@ -66,7 +90,7 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 - [x] wait(condition) statement
 
 ### Event Support
-- [x] event type (now using moore::EventType)
+- [x] event type (moore::EventType)
 - [x] .triggered property
 - [x] Event trigger (->)
 
@@ -75,84 +99,44 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 - [x] Modports
 - [x] Virtual interfaces (basic)
 
-### Runtime Library
-- [x] Queue operations (__moore_queue_*)
-- [x] Dynamic array operations
-- [x] String operations
-- [x] Built and tested
+### MooreToCore Lowering
+- [x] AssocArrayExistsOp
+- [x] Union operations
+- [x] Math functions (clog2, atan2, hypot, etc.)
+- [x] Real type conversions
+- [ ] File I/O ops (FOpenBIOp, FWriteBIOp, FCloseBIOp)
 
-## Known Limitations / TODO
+## Priority Queue
 
-### CRITICAL: UVM Crash Bug
-**TypedValue<IntType> assertion failure** - UVM compilation crashes during class method
-processing. The crash is in a cast<> to IntType that receives a non-IntType value.
-Likely causes:
-- Some operation expects IntType but receives EventType or another type
-- Missing type conversion in an expression handler
-- The crash happens after processing basic classes (uvm_void, etc.)
+### CRITICAL (Blocking UVM)
+1. **Fix IntType Crash** - Track A
+2. **$fopen** - Track B
+3. **$fwrite** - Track C
+4. **String assoc array next()** - Track D
 
-### High Priority (Blocking AVIP compilation)
-1. **Fix UVM Crash** - The IntType assertion failure must be resolved
-2. **UVM Macro Expansion** - AVIPs use UVM macros (`uvm_component_utils, etc.)
-3. **Interface Hierarchical References** - `intf.signal` access patterns
-4. **Complete Compilation Flow** - Multi-file compilation with dependencies
+### HIGH (Blocking AVIPs)
+5. **$fclose** - File descriptor cleanup
+6. **$fdisplay** - Formatted output to file
+7. **Complete MooreToCore lowering** - All ops must lower
 
-### Medium Priority
-5. **Streaming Concatenation** - Full support for queues/dynamic arrays
-6. **Static Class Property Resolution** - Global variable linkage
-7. **Coverage Groups** - `covergroup`, `coverpoint`, `cross`
-8. **Constraints** - More constraint types
-9. **Randomization** - `randomize()` with constraints
+### MEDIUM
+8. **DPI-C imports** - For full UVM compatibility
+9. **Coverage groups** - covergroup, coverpoint
+10. **Constraints** - Full constraint solver
 
-### Lower Priority
-9. **Assertions** - More assertion types (SVA)
-10. **DPI** - SystemVerilog DPI imports
-11. **Bind** - Module binding
-12. **Program Blocks** - `program` support
+### LOW
+11. **SVA assertions** - Property/sequence support
+12. **Bind statements** - Module binding
+13. **Program blocks** - program support
 
-## Track Status
+## AVIP Testing
 
-### Track A: Process Control (COMPLETE)
-- [x] fork/join operations
-- [x] Named blocks
-- [x] disable statement
-- [x] Merged to main
+Test files in ~/mbit/*:
+- ahb_avip, apb_avip, axi4_avip, axi4Lite_avip
+- i2s_avip, i3c_avip, jtag_avip, spi_avip, uart_avip
 
-### Track B: Class Infrastructure (COMPLETE)
-- [x] Inheritance and vtables
-- [x] Static properties
-- [x] $cast support
-- [x] Merged to main
-
-### Track C: Coverage (PARTIAL)
-- [x] Basic coverage ops
-- [ ] covergroup implementation
-- [ ] Cross coverage
-
-### Track D: LSP Support (DEFERRED)
-- [ ] go-to-definition
-- [ ] API compatibility issues with slang
-
-## AVIP Testing Status
-
-AVIPs in ~/mbit/* require:
-1. UVM package (now 0 errors)
-2. Globals packages per AVIP
-3. HDL interfaces
-4. Proper include paths
-
-Current blockers:
-- Missing interface modules
-- Missing package imports
-- Macro expansion not supported
-
-## Next Steps
-
-1. **Interface Hierarchical Access** - Enable `intf.signal` patterns
-2. **Multi-file Compilation** - Proper dependency resolution
-3. **UVM Macros** - Either preprocess or implement macro expansion
-4. **MooreToCore Completion** - Lower all Moore ops to executable IR
-5. **circt-sim Integration** - Run lowered testbenches
+**Current blocker**: All AVIPs import UVM, which crashes.
+**After crash fix**: Test individual components without UVM macros.
 
 ## Build Commands
 ```bash
@@ -162,10 +146,13 @@ ninja -C build circt-verilog
 # Test UVM
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 
-# Test AVIP (example)
-./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv \
-  -I ~/uvm-core/src \
-  ~/mbit/spi_avip/src/globals/SpiGlobalsPkg.sv \
-  ~/mbit/spi_avip/src/hdlTop/spiInterface/SpiInterface.sv \
-  -I ~/mbit/spi_avip/src
+# Test AVIP interface only (no UVM)
+./build/bin/circt-verilog --ir-moore \
+  ~/mbit/apb_avip/src/globals/apb_global_pkg.sv \
+  ~/mbit/apb_avip/src/hdl_top/apb_if/apb_if.sv
 ```
+
+## Recent Commits
+- `10db8cdd0` - [Docs] Update project plan
+- `9be6c6c4c` - [ImportVerilog] Handle string types in emitDefault
+- `4b9b3441d` - [MooreToCore] Add lowering for AssocArrayExistsOp
