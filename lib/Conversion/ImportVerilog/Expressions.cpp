@@ -1784,13 +1784,72 @@ struct RvalueExprVisitor : public ExprVisitor {
         expr.subroutine);
   }
 
+  /// Check if a call expression is a super.method() call.
+  /// Checks both the call expression's syntax and the receiver expression
+  /// for the super keyword.
+  static bool isSuperCall(const slang::ast::CallExpression &callExpr) {
+    // Check the call expression's own syntax for super keyword.
+    // For `super.method()`, the syntax should be a MemberAccessExpressionSyntax
+    // where the value part contains the super keyword.
+    if (callExpr.syntax) {
+      auto firstToken = callExpr.syntax->getFirstToken();
+      if (firstToken.kind == slang::parsing::TokenKind::SuperKeyword)
+        return true;
+    }
+
+    // Check the receiver expression (thisClass) for super reference.
+    const slang::ast::Expression *recvExpr = callExpr.thisClass();
+    if (!recvExpr)
+      return false;
+
+    // Check for super syntax token in the receiver.
+    if (recvExpr->syntax) {
+      auto firstToken = recvExpr->syntax->getFirstToken();
+      if (firstToken.kind == slang::parsing::TokenKind::SuperKeyword)
+        return true;
+    }
+
+    // Check if the expression is a conversion from `this` to a parent class.
+    // For `super.method()`, slang creates a conversion from `this` to the
+    // parent class type.
+    if (const auto *conv =
+            recvExpr->as_if<slang::ast::ConversionExpression>()) {
+      // Check the operand's syntax for super keyword
+      const auto &operand = conv->operand();
+      if (operand.syntax) {
+        auto firstToken = operand.syntax->getFirstToken();
+        if (firstToken.kind == slang::parsing::TokenKind::SuperKeyword)
+          return true;
+      }
+
+      // Also detect implicit conversion from this to parent class type.
+      // This happens for super.method() calls where slang converts this
+      // to the parent class type.
+      auto *fromClass =
+          operand.type->getCanonicalType().as_if<slang::ast::ClassType>();
+      auto *toClass =
+          conv->type->getCanonicalType().as_if<slang::ast::ClassType>();
+      if (fromClass && toClass && fromClass != toClass) {
+        // It's a conversion from one class type to another.
+        // Check if toClass is actually a base class of fromClass.
+        auto *baseClass = fromClass->getBaseClass();
+        if (baseClass && baseClass == toClass) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   /// Get both the actual `this` argument of a method call and the required
-  /// class type.
-  std::pair<Value, moore::ClassHandleType>
+  /// class type. Also indicates if this is a super call.
+  std::tuple<Value, moore::ClassHandleType, bool>
   getMethodReceiverTypeHandle(const slang::ast::CallExpression &expr) {
 
     moore::ClassHandleType handleTy;
     Value thisRef;
+    bool superCall = isSuperCall(expr);
 
     // Qualified call: t.m(...), extract from thisClass.
     if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
@@ -1810,16 +1869,18 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
     handleTy = cast<moore::ClassHandleType>(thisRef.getType());
-    return {thisRef, handleTy};
+    return {thisRef, handleTy, superCall};
   }
 
   /// Build a method call including implicit this argument.
+  /// If isSuperCall is true, bypasses virtual dispatch and calls the method
+  /// directly (as `super.method()` should do in SystemVerilog).
   mlir::CallOpInterface
   buildMethodCall(const slang::ast::SubroutineSymbol *subroutine,
                   FunctionLowering *lowering,
                   moore::ClassHandleType actualHandleTy, Value actualThisRef,
                   SmallVector<Value> &arguments,
-                  SmallVector<Type> &resultTypes) {
+                  SmallVector<Type> &resultTypes, bool isSuperCall = false) {
 
     // Get the expected receiver type from the lowered method
     auto funcTy = lowering->op.getFunctionType();
@@ -1830,7 +1891,8 @@ struct RvalueExprVisitor : public ExprVisitor {
       llvm::dbgs() << "buildMethodCall: method " << subroutine->name
                    << ", actualHandleTy: " << actualHandleTy
                    << ", expectedHdlTy: " << expectedHdlTy
-                   << ", function: " << lowering->op.getSymName() << "\n";
+                   << ", function: " << lowering->op.getSymName()
+                   << ", isSuperCall: " << isSuperCall << "\n";
     });
 
     // Upcast the handle as necessary.
@@ -1844,12 +1906,14 @@ struct RvalueExprVisitor : public ExprVisitor {
     explicitArguments.append(arguments.begin(), arguments.end());
 
     // Method call: choose direct vs virtual.
+    // For super calls, always use direct dispatch to call the parent's
+    // implementation directly, bypassing virtual dispatch.
     const bool isVirtual =
         (subroutine->flags & slang::ast::MethodFlags::Virtual) != 0;
 
-    if (!isVirtual) {
+    if (!isVirtual || isSuperCall) {
       auto calleeSym = lowering->op.getSymName();
-      // Direct (non-virtual) call -> moore.class.call
+      // Direct (non-virtual) call -> func.call
       return mlir::func::CallOp::create(builder, loc, resultTypes, calleeSym,
                                         explicitArguments);
     }
@@ -1942,12 +2006,14 @@ struct RvalueExprVisitor : public ExprVisitor {
     // receiver, not the caller's `this`.
     Value methodReceiver;
     moore::ClassHandleType methodReceiverTy;
+    bool isSuperCall = false;
     if (isMethod) {
-      auto [thisRef, tyHandle] = getMethodReceiverTypeHandle(expr);
+      auto [thisRef, tyHandle, superCall] = getMethodReceiverTypeHandle(expr);
       if (!thisRef)
         return {};
       methodReceiver = thisRef;
       methodReceiverTy = tyHandle;
+      isSuperCall = superCall;
     }
 
     // Clear the override for nested calls in argument evaluation.
@@ -2116,8 +2182,10 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (isMethod) {
       // Class functions -> build func.call / func.indirect_call with implicit
       // this argument. Use the already-computed receiver from earlier.
+      // For super calls, use direct dispatch to call the parent's method.
       callOp = buildMethodCall(subroutine, lowering, methodReceiverTy,
-                               methodReceiver, arguments, resultTypes);
+                               methodReceiver, arguments, resultTypes,
+                               isSuperCall);
     } else {
       // Free function -> func.call
       callOp =
