@@ -3970,8 +3970,8 @@ static Value materializeSBVToPackedConversion(Context &context,
       moore::isIntType(intType, 64, moore::Domain::FourValued)) {
     auto scale = moore::ConstantOp::create(builder, loc, intType,
                                            getTimeScaleInFemtoseconds(context));
-    value = builder.createOrFold<moore::MulOp>(loc, value, scale);
-    return builder.createOrFold<moore::LogicToTimeOp>(loc, value);
+    value = moore::MulOp::create(builder, loc, value, scale);
+    return moore::LogicToTimeOp::create(builder, loc, value);
   }
 
   // If this is an aggregate type, make sure that it does not contain any
@@ -4217,6 +4217,40 @@ Value Context::materializeConversion(Type type, Value value, bool isSigned,
         builder, loc, type,
         FloatAttr::get(floatType, getTimeScaleInFemtoseconds(*this)));
     return moore::DivRealOp::create(builder, loc, asReal, scale);
+  }
+
+  // Handle int/logic to time conversion
+  if (isa<moore::TimeType>(type)) {
+    if (auto intType = dyn_cast<moore::IntType>(value.getType())) {
+      // Convert to 4-valued 64-bit if needed, then to time.
+      if (intType.getDomain() == moore::Domain::TwoValued)
+        value = moore::IntToLogicOp::create(builder, loc, value);
+      // Resize to 64-bit if needed.
+      auto l64Type =
+          moore::IntType::get(builder.getContext(), 64, moore::Domain::FourValued);
+      if (value.getType() != l64Type) {
+        if (intType.getWidth() < 64) {
+          if (isSigned)
+            value = builder.createOrFold<moore::SExtOp>(loc, l64Type, value);
+          else
+            value = builder.createOrFold<moore::ZExtOp>(loc, l64Type, value);
+        } else if (intType.getWidth() > 64) {
+          value = builder.createOrFold<moore::TruncOp>(loc, l64Type, value);
+        }
+      }
+      return moore::LogicToTimeOp::create(builder, loc, value);
+    }
+  }
+
+  // Handle time to int/logic conversion
+  if (auto intType = dyn_cast<moore::IntType>(type)) {
+    if (isa<moore::TimeType>(value.getType())) {
+      auto asLogic = moore::TimeToLogicOp::create(builder, loc, value);
+      // Convert from 4-valued to 2-valued if target is 2-valued
+      if (intType.getDomain() == moore::Domain::TwoValued)
+        return moore::LogicToIntOp::create(builder, loc, asLogic);
+      return asLogic;
+    }
   }
 
   // Handle Int to String

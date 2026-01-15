@@ -907,6 +907,12 @@ struct StmtVisitor {
           expr = context.materializeConversion(expectedTy, expr,
                                                stmt.expr->type->isSigned(),
                                                expr.getLoc());
+          if (!expr) {
+            mlir::emitError(loc)
+                << "failed to convert return expression to expected type "
+                << expectedTy;
+            return failure();
+          }
         }
       }
       mlir::func::ReturnOp::create(builder, loc, expr);

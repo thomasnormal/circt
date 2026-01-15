@@ -347,8 +347,9 @@ Value VariableOp::getDefaultValue(const MemorySlot &slot, OpBuilder &builder) {
   Value value = ConstantOp::create(
       builder, getLoc(),
       IntType::get(getContext(), *bitWidth, packedType.getDomain()), fvint);
+  // Convert from IntType to the actual packed type if needed (e.g., TimeType).
   if (value.getType() != packedType)
-    SBVToPackedOp::create(builder, getLoc(), packedType, value);
+    value = SBVToPackedOp::create(builder, getLoc(), packedType, value);
   return value;
 }
 
