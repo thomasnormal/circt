@@ -313,33 +313,48 @@ struct FormatStringParser {
 
   LogicalResult emitString(const slang::ast::Expression &arg,
                            const FormatOptions &options) {
-    if (options.width)
-      return mlir::emitError(loc)
-             << "string format specifier with width not supported";
+    // Determine alignment and padding for string formatting with width
+    auto alignment = options.leftJustify ? IntAlign::Left : IntAlign::Right;
+    auto padding = IntPadding::Space;
 
-    // Simplified handling for literals.
-    if (auto *lit = arg.as_if<slang::ast::StringLiteral>()) {
-      emitLiteral(lit->getValue());
-      return success();
-    }
-
-    // Handle expressions
-    if (auto value = context.convertRvalueExpression(
-            arg, builder.getType<moore::FormatStringType>())) {
-      fragments.push_back(value);
-      return success();
-    }
-
-    // Try converting without target type to see if it's a class handle
-    if (auto value = context.convertRvalueExpression(arg)) {
-      if (isa<moore::ClassHandleType>(value.getType())) {
-        fragments.push_back(moore::FormatClassOp::create(builder, loc, value));
+    // Simplified handling for literals without width specifier.
+    if (!options.width) {
+      if (auto *lit = arg.as_if<slang::ast::StringLiteral>()) {
+        emitLiteral(lit->getValue());
         return success();
       }
     }
 
-    return mlir::emitError(context.convertLocation(arg.sourceRange))
-           << "expression cannot be formatted as string";
+    // Handle expressions - convert to string type
+    auto value = context.convertRvalueExpression(
+        arg, builder.getType<moore::StringType>());
+    if (!value) {
+      // Try converting without target type to see if it's a class handle
+      value = context.convertRvalueExpression(arg);
+      if (value && isa<moore::ClassHandleType>(value.getType())) {
+        fragments.push_back(moore::FormatClassOp::create(builder, loc, value));
+        return success();
+      }
+      return mlir::emitError(context.convertLocation(arg.sourceRange))
+             << "expression cannot be formatted as string";
+    }
+
+    // Create FormatStringOp with optional width
+    IntegerAttr widthAttr = options.width
+                                ? builder.getI32IntegerAttr(*options.width)
+                                : IntegerAttr();
+    moore::IntAlignAttr alignAttr =
+        options.width ? moore::IntAlignAttr::get(context.getContext(), alignment)
+                      : moore::IntAlignAttr();
+    moore::IntPaddingAttr padAttr =
+        options.width
+            ? moore::IntPaddingAttr::get(context.getContext(), padding)
+            : moore::IntPaddingAttr();
+
+    fragments.push_back(moore::FormatStringOp::create(builder, loc, value,
+                                                      widthAttr, alignAttr,
+                                                      padAttr));
+    return success();
   }
 
   /// Emit a pointer/handle value with the %p format specifier.
