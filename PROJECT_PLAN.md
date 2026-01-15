@@ -36,6 +36,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | **Coverage** | Coverage dialect exists | Full functional coverage | ⚠️ Partial |
 | **Assertions** | Basic SVA | Full SVA | ✅ SVA dialect |
 | **DPI/VPI** | Basic | Full support | ⚠️ Basic only |
+| **MooreToCore** | All 9 AVIPs lower | Full UVM lowering | ✅ Complete |
 
 ---
 
