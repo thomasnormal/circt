@@ -2276,6 +2276,126 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle enum iteration methods: first, next, last, prev
+    // IEEE 1800-2017 Section 6.19.5: Enum methods for iteration.
+    // These take 1 arg (the enum value) and return the same enum type.
+    bool isEnumIterMethod = (subroutine.name == "first" ||
+                             subroutine.name == "next" ||
+                             subroutine.name == "last" ||
+                             subroutine.name == "prev");
+    if (isEnumIterMethod && args.size() == 1) {
+      const slang::ast::Type *slangType = args[0]->type;
+      const auto &canonicalType = slangType->getCanonicalType();
+      if (canonicalType.kind == slang::ast::SymbolKind::EnumType) {
+        const auto &enumType =
+            static_cast<const slang::ast::EnumType &>(canonicalType);
+        Value enumValue = context.convertRvalueExpression(*args[0]);
+        if (!enumValue)
+          return {};
+
+        // Get the integer type for the enum
+        auto enumIntType = dyn_cast<moore::IntType>(enumValue.getType());
+        if (!enumIntType) {
+          mlir::emitError(loc) << "enum value has non-integer type: "
+                               << enumValue.getType();
+          return {};
+        }
+
+        // Collect enum values in declaration order
+        SmallVector<std::pair<FVInt, std::string>> enumValues;
+        for (const auto &member : enumType.values()) {
+          const auto &cv = member.getValue();
+          if (cv)
+            enumValues.emplace_back(convertSVIntToFVInt(cv.integer()),
+                                    std::string(member.name));
+        }
+
+        if (enumValues.empty()) {
+          mlir::emitError(loc) << "enum type has no values";
+          return {};
+        }
+
+        // Handle the different methods
+        if (subroutine.name == "first") {
+          // first() returns the first declared value
+          auto &firstVal = enumValues.front();
+          auto constFvint = firstVal.first;
+          if (constFvint.getBitWidth() != enumIntType.getWidth())
+            constFvint = constFvint.zext(enumIntType.getWidth());
+          return moore::ConstantOp::create(builder, loc, enumIntType,
+                                           constFvint);
+        } else if (subroutine.name == "last") {
+          // last() returns the last declared value
+          auto &lastVal = enumValues.back();
+          auto constFvint = lastVal.first;
+          if (constFvint.getBitWidth() != enumIntType.getWidth())
+            constFvint = constFvint.zext(enumIntType.getWidth());
+          return moore::ConstantOp::create(builder, loc, enumIntType,
+                                           constFvint);
+        } else {
+          // next() and prev() need runtime lookup
+          // Build a chain of conditionals to find the next/prev value
+          // For next: if value == v[0] return v[1], elif value == v[1] return v[2], ... else return v[0]
+          // For prev: if value == v[n-1] return v[n-2], elif value == v[n-2] return v[n-3], ... else return v[n-1]
+          bool isNext = (subroutine.name == "next");
+
+          // Default value: for next, wrap to first; for prev, wrap to last
+          auto defaultFvint = isNext ? enumValues.front().first : enumValues.back().first;
+          if (defaultFvint.getBitWidth() != enumIntType.getWidth())
+            defaultFvint = defaultFvint.zext(enumIntType.getWidth());
+          Value result = moore::ConstantOp::create(builder, loc, enumIntType,
+                                                   defaultFvint);
+
+          // Build conditional chain (traverse from last to first for proper nesting)
+          size_t n = enumValues.size();
+          for (size_t i = n; i > 0; --i) {
+            size_t idx = i - 1;
+            // For next: if value == enumValues[idx], return enumValues[(idx+1) % n]
+            // For prev: if value == enumValues[idx], return enumValues[(idx+n-1) % n]
+            size_t nextIdx = isNext ? ((idx + 1) % n) : ((idx + n - 1) % n);
+
+            auto constFvint = enumValues[idx].first;
+            if (constFvint.getBitWidth() != enumIntType.getWidth())
+              constFvint = constFvint.zext(enumIntType.getWidth());
+            auto constVal = moore::ConstantOp::create(builder, loc, enumIntType,
+                                                      constFvint);
+
+            // Compare enum value with this constant
+            Value cond = moore::EqOp::create(builder, loc, enumValue, constVal);
+            cond = context.convertToBool(cond);
+
+            // Get the next/prev value
+            auto nextFvint = enumValues[nextIdx].first;
+            if (nextFvint.getBitWidth() != enumIntType.getWidth())
+              nextFvint = nextFvint.zext(enumIntType.getWidth());
+            auto nextVal = moore::ConstantOp::create(builder, loc, enumIntType,
+                                                     nextFvint);
+
+            // Create the conditional op with regions
+            auto conditionalOp = moore::ConditionalOp::create(
+                builder, loc, enumIntType, cond);
+            auto &trueBlock = conditionalOp.getTrueRegion().emplaceBlock();
+            auto &falseBlock = conditionalOp.getFalseRegion().emplaceBlock();
+
+            {
+              OpBuilder::InsertionGuard g(builder);
+              // True branch: return the next/prev enum value
+              builder.setInsertionPointToStart(&trueBlock);
+              moore::YieldOp::create(builder, loc, nextVal);
+
+              // False branch: return the accumulated result
+              builder.setInsertionPointToStart(&falseBlock);
+              moore::YieldOp::create(builder, loc, result);
+            }
+
+            result = conditionalOp.getResult();
+          }
+
+          return result;
+        }
+      }
+    }
+
     // Handle associative array iterator methods: first, next, last, prev
     // These take 2 args: array ref + key ref, and return int (1 if found)
     bool isAssocIterMethod = (subroutine.name == "first" ||
