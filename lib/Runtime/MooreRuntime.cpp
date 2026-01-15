@@ -25,6 +25,7 @@
 #include <cstring>
 #include <map>
 #include <random>
+#include <string>
 #include <vector>
 
 //===----------------------------------------------------------------------===//
@@ -260,44 +261,294 @@ extern "C" MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init) {
 // Associative Array Operations
 //===----------------------------------------------------------------------===//
 
+namespace {
+
+/// Internal structure for associative arrays with string keys.
+/// Uses std::map<std::string, std::vector<uint8_t>> to store the data.
+struct StringKeyAssocArray {
+  std::map<std::string, std::vector<uint8_t>> data;
+  int32_t valueSize;
+  // Iterator state for first/next/last/prev
+  std::map<std::string, std::vector<uint8_t>>::iterator currentIter;
+  bool iterValid = false;
+};
+
+/// Internal structure for associative arrays with integer keys.
+/// Uses std::map<int64_t, std::vector<uint8_t>> to store the data.
+struct IntKeyAssocArray {
+  std::map<int64_t, std::vector<uint8_t>> data;
+  int32_t keySize;
+  int32_t valueSize;
+  // Iterator state for first/next/last/prev
+  std::map<int64_t, std::vector<uint8_t>>::iterator currentIter;
+  bool iterValid = false;
+};
+
+/// Helper to read an integer key from memory based on key size.
+int64_t readIntKey(void *key, int32_t keySize) {
+  switch (keySize) {
+  case 1:
+    return *static_cast<int8_t *>(key);
+  case 2:
+    return *static_cast<int16_t *>(key);
+  case 4:
+    return *static_cast<int32_t *>(key);
+  case 8:
+    return *static_cast<int64_t *>(key);
+  default:
+    return 0;
+  }
+}
+
+/// Helper to write an integer key to memory based on key size.
+void writeIntKey(void *key, int64_t value, int32_t keySize) {
+  switch (keySize) {
+  case 1:
+    *static_cast<int8_t *>(key) = static_cast<int8_t>(value);
+    break;
+  case 2:
+    *static_cast<int16_t *>(key) = static_cast<int16_t>(value);
+    break;
+  case 4:
+    *static_cast<int32_t *>(key) = static_cast<int32_t>(value);
+    break;
+  case 8:
+    *static_cast<int64_t *>(key) = value;
+    break;
+  }
+}
+
+/// Type tag stored at the beginning of the allocation to identify the array
+/// type.
+enum class AssocArrayType : int32_t { StringKey = 0, IntKey = 1 };
+
+/// Wrapper that holds the type tag and pointer to the actual array.
+struct AssocArrayHeader {
+  AssocArrayType type;
+  void *array;
+};
+
+} // anonymous namespace
+
+extern "C" void *__moore_assoc_create(int32_t key_size, int32_t value_size) {
+  auto *header = new AssocArrayHeader;
+  if (key_size == 0) {
+    // String-keyed associative array
+    auto *arr = new StringKeyAssocArray;
+    arr->valueSize = value_size;
+    header->type = AssocArrayType::StringKey;
+    header->array = arr;
+  } else {
+    // Integer-keyed associative array
+    auto *arr = new IntKeyAssocArray;
+    arr->keySize = key_size;
+    arr->valueSize = value_size;
+    header->type = AssocArrayType::IntKey;
+    header->array = arr;
+  }
+  return header;
+}
+
 extern "C" void __moore_assoc_delete(void *array) {
-  // TODO: Implement associative array deletion.
-  // This requires a proper associative array implementation.
-  (void)array; // Suppress unused parameter warning
+  if (!array)
+    return;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    arr->data.clear();
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    arr->data.clear();
+  }
 }
 
 extern "C" void __moore_assoc_delete_key(void *array, void *key) {
-  // TODO: Implement key deletion from associative array.
-  (void)array;
-  (void)key;
+  if (!array || !key)
+    return;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    auto *strKey = static_cast<MooreString *>(key);
+    if (strKey->data) {
+      std::string keyStr(strKey->data, strKey->len);
+      arr->data.erase(keyStr);
+    }
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    int64_t intKey = readIntKey(key, arr->keySize);
+    arr->data.erase(intKey);
+  }
 }
 
 extern "C" bool __moore_assoc_first(void *array, void *key_out) {
-  // TODO: Implement first key retrieval.
-  (void)array;
-  (void)key_out;
-  return false;
+  if (!array || !key_out)
+    return false;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    arr->currentIter = arr->data.begin();
+    arr->iterValid = true;
+    // Copy the key string to the output
+    auto *strOut = static_cast<MooreString *>(key_out);
+    const std::string &keyStr = arr->currentIter->first;
+    // Free existing string data if any
+    if (strOut->data)
+      std::free(strOut->data);
+    strOut->data = static_cast<char *>(std::malloc(keyStr.size()));
+    strOut->len = keyStr.size();
+    std::memcpy(strOut->data, keyStr.data(), keyStr.size());
+    return true;
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    arr->currentIter = arr->data.begin();
+    arr->iterValid = true;
+    writeIntKey(key_out, arr->currentIter->first, arr->keySize);
+    return true;
+  }
 }
 
 extern "C" bool __moore_assoc_next(void *array, void *key_ref) {
-  // TODO: Implement next key iteration.
-  (void)array;
-  (void)key_ref;
-  return false;
+  if (!array || !key_ref)
+    return false;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    // Get current key from key_ref
+    auto *strRef = static_cast<MooreString *>(key_ref);
+    if (!strRef->data)
+      return false;
+    std::string currentKey(strRef->data, strRef->len);
+    // Find the next key after the current one
+    auto it = arr->data.find(currentKey);
+    if (it == arr->data.end())
+      return false;
+    ++it;
+    if (it == arr->data.end())
+      return false;
+    // Update the key_ref with the next key
+    const std::string &nextKey = it->first;
+    if (strRef->data)
+      std::free(strRef->data);
+    strRef->data = static_cast<char *>(std::malloc(nextKey.size()));
+    strRef->len = nextKey.size();
+    std::memcpy(strRef->data, nextKey.data(), nextKey.size());
+    return true;
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    int64_t currentKey = readIntKey(key_ref, arr->keySize);
+    auto it = arr->data.find(currentKey);
+    if (it == arr->data.end())
+      return false;
+    ++it;
+    if (it == arr->data.end())
+      return false;
+    writeIntKey(key_ref, it->first, arr->keySize);
+    return true;
+  }
 }
 
 extern "C" bool __moore_assoc_last(void *array, void *key_out) {
-  // TODO: Implement last key retrieval.
-  (void)array;
-  (void)key_out;
-  return false;
+  if (!array || !key_out)
+    return false;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    auto it = arr->data.end();
+    --it;
+    // Copy the key string to the output
+    auto *strOut = static_cast<MooreString *>(key_out);
+    const std::string &keyStr = it->first;
+    if (strOut->data)
+      std::free(strOut->data);
+    strOut->data = static_cast<char *>(std::malloc(keyStr.size()));
+    strOut->len = keyStr.size();
+    std::memcpy(strOut->data, keyStr.data(), keyStr.size());
+    return true;
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    auto it = arr->data.end();
+    --it;
+    writeIntKey(key_out, it->first, arr->keySize);
+    return true;
+  }
 }
 
 extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
-  // TODO: Implement previous key iteration.
-  (void)array;
-  (void)key_ref;
-  return false;
+  if (!array || !key_ref)
+    return false;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    auto *strRef = static_cast<MooreString *>(key_ref);
+    if (!strRef->data)
+      return false;
+    std::string currentKey(strRef->data, strRef->len);
+    auto it = arr->data.find(currentKey);
+    if (it == arr->data.end() || it == arr->data.begin())
+      return false;
+    --it;
+    const std::string &prevKey = it->first;
+    if (strRef->data)
+      std::free(strRef->data);
+    strRef->data = static_cast<char *>(std::malloc(prevKey.size()));
+    strRef->len = prevKey.size();
+    std::memcpy(strRef->data, prevKey.data(), prevKey.size());
+    return true;
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    if (arr->data.empty())
+      return false;
+    int64_t currentKey = readIntKey(key_ref, arr->keySize);
+    auto it = arr->data.find(currentKey);
+    if (it == arr->data.end() || it == arr->data.begin())
+      return false;
+    --it;
+    writeIntKey(key_ref, it->first, arr->keySize);
+    return true;
+  }
+}
+
+extern "C" void *__moore_assoc_get_ref(void *array, void *key,
+                                       int32_t value_size) {
+  if (!array || !key)
+    return nullptr;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType::StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    auto *strKey = static_cast<MooreString *>(key);
+    std::string keyStr;
+    if (strKey->data && strKey->len > 0)
+      keyStr = std::string(strKey->data, strKey->len);
+    // Insert or find the element
+    auto &valueVec = arr->data[keyStr];
+    if (valueVec.empty()) {
+      // Initialize with zeros
+      valueVec.resize(value_size, 0);
+    }
+    return valueVec.data();
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    int64_t intKey = readIntKey(key, arr->keySize);
+    auto &valueVec = arr->data[intKey];
+    if (valueVec.empty()) {
+      valueVec.resize(value_size, 0);
+    }
+    return valueVec.data();
+  }
 }
 
 //===----------------------------------------------------------------------===//
