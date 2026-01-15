@@ -1409,6 +1409,24 @@ def StringConcatOp : MooreOp<"string_concat", [Pure]> {
   let assemblyFormat = "` ` `(` $inputs `)` attr-dict `:` type($result)";
 }
 
+def StringReplicateOp : MooreOp<"string_replicate", [Pure]> {
+  let summary = "Replicate a string a specified number of times";
+  let description = [{
+    Replicates a string a specified number of times, concatenating the
+    copies together. This corresponds to the SystemVerilog string
+    replication operator `{n{str}}`.
+
+    Example:
+    ```mlir
+    %result = moore.string_replicate %count, %str : i32, !moore.string
+    ```
+    If `%count` is 3 and `%str` is "ab", `%result` will be "ababab".
+  }];
+  let arguments = (ins TwoValuedI32:$count, StringType:$string);
+  let results = (outs StringType:$result);
+  let assemblyFormat = "$count `,` $string attr-dict";
+}
+
 def StreamConcatOp : MooreOp<"stream_concat", [Pure]> {
   let summary = "Streaming concatenation of a dynamic array or queue";
   let description = [{
