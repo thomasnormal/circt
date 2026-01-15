@@ -1686,9 +1686,24 @@ VTableLoadMethodOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     cursor = baseOp ? cast<moore::ClassDeclOp>(baseOp) : moore::ClassDeclOp();
   }
 
-  if (!methodDeclOp)
-    return emitOpError() << "no method `" << methodName << "` found in "
-                         << implClass.getSymName() << " or its bases";
+  if (!methodDeclOp) {
+    // Emit detailed debug info to help diagnose the issue
+    InFlightDiagnostic diag =
+        emitOpError() << "no method `" << methodName << "` found in "
+                      << implClass.getSymName() << " or its bases";
+    // Walk and report the class hierarchy for debugging
+    cursor = implClass;
+    while (cursor) {
+      diag.attachNote(cursor.getLoc())
+          << "checked class '" << cursor.getSymName() << "'";
+      SymbolRefAttr baseSym = cursor.getBaseAttr();
+      if (!baseSym)
+        break;
+      Operation *baseOp = symbolTable.lookupNearestSymbolFrom(op, baseSym);
+      cursor = baseOp ? cast<moore::ClassDeclOp>(baseOp) : moore::ClassDeclOp();
+    }
+    return failure();
+  }
 
   // Make sure method decl is a ClassMethodDeclOp
   auto methodDecl = dyn_cast<moore::ClassMethodDeclOp>(methodDeclOp);
