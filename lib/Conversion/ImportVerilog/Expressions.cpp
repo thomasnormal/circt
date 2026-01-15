@@ -4046,6 +4046,23 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   return moore::StringToLowerOp::create(builder, loc, value);
                 })
+          // String to integer conversion methods (IEEE 1800-2017 Section 6.16.8)
+          .Case("atoi",
+                [&]() -> Value {
+                  return moore::StringAtoIOp::create(builder, loc, value);
+                })
+          .Case("atohex",
+                [&]() -> Value {
+                  return moore::StringAtoHexOp::create(builder, loc, value);
+                })
+          .Case("atooct",
+                [&]() -> Value {
+                  return moore::StringAtoOctOp::create(builder, loc, value);
+                })
+          .Case("atobin",
+                [&]() -> Value {
+                  return moore::StringAtoBinOp::create(builder, loc, value);
+                })
           // Array/queue built-in methods
           .Case("size",
                 [&]() -> Value {
