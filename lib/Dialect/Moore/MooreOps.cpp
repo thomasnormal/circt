@@ -16,6 +16,7 @@
 #include "circt/Dialect/Moore/MooreAttributes.h"
 #include "circt/Support/CustomDirectiveImpl.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Dominance.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -330,6 +331,54 @@ SmallVector<MemorySlot> VariableOp::getPromotableSlots() {
   auto nestedType = dyn_cast<PackedType>(getType().getNestedType());
   if (!nestedType || !nestedType.getBitSize())
     return {};
+
+  // Don't promote variables defined inside loops whose users are in different
+  // blocks. When Mem2Reg promotes such variables, it creates block arguments
+  // at merge points (loop headers). The problem is that for edges entering the
+  // loop from outside, Mem2Reg needs a reaching definition, but the variable
+  // definition is inside the loop and doesn't dominate the entry edge.
+  //
+  // Conservative fix: If the definition block has any predecessor that is
+  // dominated by the definition block (indicating it's reachable via a
+  // back-edge), and there are users in other blocks, don't promote.
+  Block *defBlock = getOperation()->getBlock();
+  if (defBlock) {
+    Region *region = defBlock->getParent();
+    if (region && !region->hasOneBlock()) {
+      // Check if there are any users in different blocks
+      bool hasUsersInOtherBlocks = false;
+      for (Operation *user : getResult().getUsers()) {
+        if (user->getBlock() != defBlock) {
+          hasUsersInOtherBlocks = true;
+          break;
+        }
+      }
+
+      if (hasUsersInOtherBlocks) {
+        // Check if the definition block is inside a loop by looking for
+        // back-edges. A back-edge exists if any predecessor of any block
+        // that dominates the definition is itself dominated by that block.
+        DominanceInfo domInfo(region->getParentOp());
+
+        // Check if defBlock or any of its dominators is a loop header
+        // by checking for back-edges in the CFG
+        for (Block &block : *region) {
+          // Check if this block dominates defBlock
+          if (&block != defBlock && !domInfo.dominates(&block, defBlock))
+            continue;
+
+          // Check if this dominating block has any back-edges to it
+          for (Block *pred : block.getPredecessors()) {
+            if (domInfo.dominates(&block, pred)) {
+              // Found a back-edge to a block that dominates defBlock.
+              // This means defBlock is inside a loop. Don't promote.
+              return {};
+            }
+          }
+        }
+      }
+    }
+  }
 
   return {MemorySlot{getResult(), getType().getNestedType()}};
 }
