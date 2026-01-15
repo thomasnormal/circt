@@ -1923,6 +1923,50 @@ struct ClassHandleCmpOpConversion
   }
 };
 
+/// moore.virtual_interface.null lowering: create a null pointer.
+struct VirtualInterfaceNullOpConversion
+    : public OpConversionPattern<VirtualInterfaceNullOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VirtualInterfaceNullOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Virtual interfaces are represented as pointers - null is a null pointer.
+    auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+    rewriter.replaceOpWithNewOp<LLVM::ZeroOp>(op, ptrType);
+    return success();
+  }
+};
+
+/// moore.virtual_interface_cmp lowering: compare two virtual interfaces using icmp.
+struct VirtualInterfaceCmpOpConversion
+    : public OpConversionPattern<VirtualInterfaceCmpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VirtualInterfaceCmpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Map the moore predicate to LLVM icmp predicate.
+    LLVM::ICmpPredicate pred;
+    switch (op.getPredicate()) {
+    case VirtualInterfaceCmpPredicate::eq:
+      pred = LLVM::ICmpPredicate::eq;
+      break;
+    case VirtualInterfaceCmpPredicate::ne:
+      pred = LLVM::ICmpPredicate::ne;
+      break;
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, resultType, pred,
+                                              adaptor.getLhs(), adaptor.getRhs());
+    return success();
+  }
+};
+
 struct VariableOpConversion : public OpConversionPattern<VariableOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -2907,6 +2951,15 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
           hw::ConstantOp::create(rewriter, op->getLoc(), resultType, 0);
       rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, comb::ICmpPredicate::ne,
                                                 adaptor.getInput(), zero);
+      return success();
+    }
+    // Handle pointer types (virtual interfaces, class handles) - compare to null.
+    if (isa_and_nonnull<LLVM::LLVMPointerType>(resultType)) {
+      auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+      auto nullPtr = LLVM::ZeroOp::create(rewriter, op->getLoc(), ptrTy);
+      auto i1Ty = rewriter.getI1Type();
+      rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
+          op, i1Ty, LLVM::ICmpPredicate::ne, adaptor.getInput(), nullPtr);
       return success();
     }
     return failure();
@@ -4675,6 +4728,57 @@ struct QueueConcatOpConversion
                                      ValueRange{arrayAlloca, count});
     rewriter.replaceOp(op, call.getResult());
     return success();
+  }
+};
+
+/// Conversion for moore.array.size -> extract length from struct or runtime
+/// call. For queues and dynamic arrays, the size is stored as field 1 of the
+/// {ptr, i64} struct. For associative arrays, we call a runtime function.
+struct ArraySizeOpConversion : public RuntimeCallConversionBase<ArraySizeOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(ArraySizeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto inputType = op.getArray().getType();
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // For queues and dynamic arrays, the size is field 1 of the struct
+    if (isa<QueueType, OpenUnpackedArrayType>(inputType)) {
+      // Extract field 1 (length) from the {ptr, i64} struct
+      Value length = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty,
+                                                  adaptor.getArray(),
+                                                  ArrayRef<int64_t>{1});
+      // Truncate to i32 (result type is TwoValuedI32)
+      Value result = arith::TruncIOp::create(rewriter, loc, i32Ty, length);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // For associative arrays, call the runtime function
+    if (isa<AssocArrayType>(inputType)) {
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Function signature: i64 __moore_assoc_size(void* array)
+      auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_size", fnTy);
+
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{adaptor.getArray()});
+      // Truncate to i32
+      Value result =
+          arith::TruncIOp::create(rewriter, loc, i32Ty, call.getResult());
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    return failure();
   }
 };
 
@@ -6966,6 +7070,21 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return hw::StructType::get(type.getContext(), fields);
   });
 
+  // hw::UnionType is a legal target type - recursively convert nested types.
+  typeConverter.addConversion([&](hw::UnionType type) -> std::optional<Type> {
+    SmallVector<hw::UnionType::FieldInfo> fields;
+    for (auto field : type.getElements()) {
+      hw::UnionType::FieldInfo info;
+      info.type = typeConverter.convertType(field.type);
+      if (!info.type)
+        return {};
+      info.name = field.name;
+      info.offset = field.offset;
+      fields.push_back(info);
+    }
+    return hw::UnionType::get(type.getContext(), fields);
+  });
+
   typeConverter.addTargetMaterialization(
       [&](mlir::OpBuilder &builder, mlir::Type resultType,
           mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
@@ -7031,6 +7150,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     ClassUpcastOpConversion,
     ClassNullOpConversion,
     ClassHandleCmpOpConversion,
+    // Virtual interface comparison patterns.
+    VirtualInterfaceNullOpConversion,
+    VirtualInterfaceCmpOpConversion,
     // Patterns of declaration operations.
     VariableOpConversion,
     NetOpConversion,
@@ -7218,6 +7340,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueuePopFrontOpConversion,
     StreamConcatOpConversion,
     DynArrayNewOpConversion,
+    ArraySizeOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
     AssocArrayExistsOpConversion,
