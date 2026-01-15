@@ -4,20 +4,24 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: UVM PARSING - 1 CRASH REMAINING (January 15, 2026)
+## Current Status: UVM PARSING - 2 ERRORS REMAINING (January 15, 2026)
 
 **Test Command**:
 ```bash
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 ```
 
-**Current Blockers**:
+**Current Blockers** (2 remaining):
+1. **`atobin`** - String method to convert binary string to int (uvm_root.svh:1050)
+2. **Class type check** - `uvm_heartbeat_callback` not recognized as derived from `uvm_heartbeat`
+
+**Previous Blockers FIXED** (This Session):
 1. ~~**IntType CRASH**~~ ✅ FIXED (76612d5bd) - ReplicateOp type check
 2. ~~**String replication**~~ ✅ FIXED (d16609422) - Added StringReplicateOp
-3. **$sscanf** - Not supported, used in uvm_get_array_index_int
-4. **DPI-C imports** - Not supported, UVM uses extensively
+3. ~~**$sscanf**~~ ✅ FIXED (2657ceab7) - Added SScanfBIOp
+4. ~~**DPI-C imports**~~ ✅ FIXED (942537c2a) - Return meaningful stub values
 
-**Previous Blockers FIXED**:
+**Previous Blockers FIXED** (Earlier):
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
 2. ~~`$fopen` unsupported~~ ✅ FIXED (ce8d1016a)
 3. ~~`next` unsupported~~ ✅ FIXED (2fa392a98) - string assoc array iteration
@@ -26,7 +30,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 6. ~~String case IntType crash~~ ✅ FIXED (3410de2dc) - String case statement handling
 
 **Note**: Earlier "AVIP passing" tests used wrong UVM path (`~/UVM/distrib/src`).
-Correct path is `~/uvm-core/src`. With correct path, UVM still crashes.
+Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ---
 
@@ -47,33 +51,26 @@ Correct path is `~/uvm-core/src`. With correct path, UVM still crashes.
 
 ---
 
-## Active Workstreams (4 Agents Needed)
+## Active Workstreams (2 Agents Running)
 
-### Track A: IntType Crash (track-a-sim)
-**Status**: 🔄 NEEDS WORK - Another IntType crash in UVM
-**Previous Work**: Enum iteration methods (f8e4b82cf)
-**Next Task**: Debug and fix remaining IntType assertion crash in UVM parsing
-**Test**: `./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src`
-**Files**: Expressions.cpp - likely binary operators or type inference
+### Track A: String atobin Method
+**Status**: 🔄 IN PROGRESS - Agent working on fix
+**Error**: `unsupported system call 'atobin'` in uvm_root.svh:1050
+**Task**: Add StringAtoBinOp similar to atoi/atohex/atooct
+**Files**: MooreOps.td, Expressions.cpp
 
-### Track B: DPI-C Support (track-b-uvm)
-**Status**: 🔄 NEEDS WORK - DPI-C imports not supported
-**Previous Work**: $fclose (b4a18d045)
-**Next Task**: Add stub/placeholder support for DPI-C imports
-**Test**: UVM uses DPI for regex, command line args, tool info
-**Files**: Statements.cpp, new DPI handling
+### Track B: Class Type Check Fix
+**Status**: 🔄 IN PROGRESS - Agent working on fix
+**Error**: `uvm_heartbeat_callback` not recognized as derived from `uvm_heartbeat`
+**Task**: Fix isClassDerivedFrom or callback class handling
+**Files**: Expressions.cpp - class type checking
 
-### Track C: Enum Iteration (track-c-types)
-**Status**: 🔄 NEEDS WORK - enum.first/next/last/prev unsupported
-**Previous Work**: String case fix (3410de2dc)
-**Next Task**: Add enum iteration method support
-**Files**: Expressions.cpp - handle EnumeratedTypeMethods
-
-### Track D: MooreToCore Lowering (track-d-devex)
-**Status**: 🔄 NEEDS WORK - File I/O ops need lowering
-**Previous Work**: String assoc array (2fa392a98)
-**Next Task**: Lower FOpenBIOp, FWriteBIOp, FCloseBIOp to LLVM calls
-**Files**: MooreToCore.cpp, MooreRuntime.cpp
+### Previously Completed Tracks (This Session)
+- **Track A (IntType)**: ✅ FIXED (76612d5bd) - ReplicateOp type check
+- **Track B (DPI-C)**: ✅ FIXED (942537c2a) - Stub values for DPI imports
+- **Track C ($sscanf)**: ✅ FIXED (2657ceab7) - Added SScanfBIOp
+- **Track D (String Rep)**: ✅ FIXED (d16609422) - Added StringReplicateOp
+- **Track D (File I/O)**: ✅ FIXED (52511fe46) - Lowering for $fopen/$fwrite/$fclose
 
 ---
 
@@ -138,11 +135,12 @@ Correct path is `~/uvm-core/src`. With correct path, UVM still crashes.
 - [x] %p format specifier
 - [x] String in format strings (emitDefault fix)
 
-### File I/O (In Progress)
+### File I/O ✅ Complete
 - [x] $fopen - file open (ce8d1016a)
-- [ ] $fclose - file close
+- [x] $fclose - file close (b4a18d045)
 - [x] $fwrite - formatted file write (ccfc4f6ca)
 - [x] $fdisplay - file display (ccfc4f6ca - via $fwrite handler)
+- [x] $sscanf - string scan (2657ceab7)
 - [ ] $fgets - file read line
 
 ### Process Control
@@ -161,12 +159,12 @@ Correct path is `~/uvm-core/src`. With correct path, UVM still crashes.
 - [x] Modports
 - [x] Virtual interfaces (basic)
 
-### MooreToCore Lowering
+### MooreToCore Lowering ✅ Complete
 - [x] AssocArrayExistsOp
 - [x] Union operations
 - [x] Math functions (clog2, atan2, hypot, etc.)
 - [x] Real type conversions
-- [ ] File I/O ops (FOpenBIOp, FWriteBIOp, FCloseBIOp)
+- [x] File I/O ops (52511fe46) - FOpenBIOp, FWriteBIOp, FCloseBIOp
 
 ---
 
@@ -218,12 +216,15 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `2657ceab7` - [ImportVerilog] Add support for $sscanf system function
+- `ab38bd7f5` - [Docs] Update blockers - IntType and string replication fixed
+- `d16609422` - [ImportVerilog] Add StringReplicateOp for string replication
+- `52511fe46` - [MooreToCore] Add lowering for file I/O operations
+- `942537c2a` - [ImportVerilog] Return meaningful stub values for DPI-C imports
+- `76612d5bd` - [ImportVerilog] Fix IntType assertion crash in ReplicateOp
 - `88085cbd7` - [ImportVerilog] Add string format specifier with width support
 - `b4a18d045` - [ImportVerilog] Add $fclose system task support
 - `2fa392a98` - [MooreToCore] Fix string-keyed associative array iteration
-- `f8e4b82cf` - [ImportVerilog] Add enum iteration methods (first, next, last, prev)
-- `ccfc4f6ca` - [ImportVerilog] Add $fwrite system call support
-- `ce8d1016a` - [ImportVerilog] Add $fopen system call support
 
 ---
 
