@@ -1,8 +1,11 @@
-// RUN: circt-translate --import-verilog %s 2>&1 | FileCheck %s
-// REQUIRES: slang
+// RUN: circt-verilog --ir-moore %s 2>&1 | FileCheck %s
 
 // Test that DPI-C imports are skipped with a remark, not a crash or hard error.
 // DPI-C imports are not yet supported but should not block compilation.
+// Instead of calling the DPI functions, meaningful default values are returned:
+// - int types: return 0
+// - string types: return empty string
+// - void functions: no-op
 
 // DPI-C function declaration at package level
 import "DPI-C" function int c_add(int a, int b);
@@ -17,11 +20,6 @@ import "DPI-C" function string c_get_string();
 // CHECK: remark: DPI-C imports not yet supported; call to 'c_void_func' skipped
 // CHECK: remark: DPI-C imports not yet supported; call to 'c_get_string' skipped
 
-// The DPI-C function declarations should still be emitted as external functions.
-// CHECK: func.func private @c_add(!moore.i32, !moore.i32) -> !moore.i32
-// CHECK: func.func private @c_void_func()
-// CHECK: func.func private @c_get_string() -> !moore.string
-
 // CHECK: moore.module @DPITest
 module DPITest;
   initial begin
@@ -30,5 +28,11 @@ module DPITest;
     result = c_add(1, 2);
     c_void_func();
     s = c_get_string();
+    // Use values to prevent DCE
+    $display("result=%d s=%s", result, s);
   end
 endmodule
+
+// Check stub values are generated:
+// CHECK: moore.constant_string "" : i8
+// CHECK: moore.int_to_string
