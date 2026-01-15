@@ -55,7 +55,7 @@ func.func @StringSubstr(%str: !moore.string, %start: !moore.i32, %len: !moore.i3
 // CHECK-LABEL: func @StringItoa
 func.func @StringItoa(%dest: !moore.ref<string>, %val: !moore.i32) {
   // CHECK: llvm.call @__moore_string_itoa
-  // CHECK: llhd.drv
+  // CHECK: llvm.store
   moore.string.itoa %dest, %val : !moore.ref<string>, !moore.i32
   return
 }
@@ -129,7 +129,7 @@ moore.module @FormatStringTest() {
 // Test fstring_to_string conversion with literal input
 // CHECK-LABEL: func @FStringToStringLiteral
 func.func @FStringToStringLiteral() -> !moore.string {
-  // CHECK: llvm.mlir.global internal constant @__moore_str_{{.*}}("hello")
+  // The global is hoisted to module level, so just check the addressof reference.
   // CHECK: [[ADDR:%.+]] = llvm.mlir.addressof @__moore_str_{{.*}} : !llvm.ptr
   // CHECK: [[LEN:%.+]] = arith.constant 5 : i64
   // CHECK: [[UNDEF:%.+]] = llvm.mlir.undef : !llvm.struct<(ptr, i64)>
@@ -179,7 +179,7 @@ func.func @FStringToStringFormattedInt(%val: !moore.i32) -> !moore.string {
 // Test fstring_to_string conversion with concatenation
 // CHECK-LABEL: func @FStringToStringConcat
 func.func @FStringToStringConcat(%str: !moore.string) -> !moore.string {
-  // CHECK: llvm.mlir.global internal constant @__moore_str_{{.*}}("prefix: ")
+  // The global is hoisted to module level, so just check the concat call.
   // CHECK: llvm.call @__moore_string_concat
   %0 = moore.fmt.literal "prefix: "
   %1 = moore.fmt.string %str

@@ -2562,6 +2562,36 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       return success();
     }
 
+    // Handle queue and dynamic array element access (by value)
+    // Both are lowered to {ptr, length} structs
+    if (isa<QueueType, OpenUnpackedArrayType>(op.getInput().getType())) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Extract the data pointer from field 0 of the struct
+      Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy,
+                                                   adaptor.getInput(),
+                                                   ArrayRef<int64_t>{0});
+
+      // Convert index to i64 for GEP
+      auto i64Ty = IntegerType::get(ctx, 64);
+      Value idx = adaptor.getLowBit();
+      if (idx.getType() != i64Ty) {
+        if (cast<IntegerType>(idx.getType()).getWidth() < 64)
+          idx = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
+        else
+          idx = arith::TruncIOp::create(rewriter, loc, i64Ty, idx);
+      }
+
+      // GEP to the i-th element
+      Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, resultType,
+                                          dataPtr, ValueRange{idx});
+
+      // Load and return the element value
+      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, resultType, elemPtr);
+      return success();
+    }
+
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       Value amount = adjustIntegerWidth(rewriter, adaptor.getLowBit(),
                                         intType.getWidth(), loc);
@@ -2603,13 +2633,61 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
     auto loc = op.getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
 
-    // Handle associative array element access
-    // When input is LLVM pointer (associative array), we need to call runtime
+    // Handle dynamic container element access
+    // When input is LLVM pointer, check the original Moore type to determine
+    // the container type (associative array, queue, dynamic array, or string)
     if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
       auto *ctx = rewriter.getContext();
-      ModuleOp mod = op->getParentOfType<ModuleOp>();
-
       auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Get the nested type from the input ref type
+      auto mooreInputRefType = cast<moore::RefType>(op.getInput().getType());
+      auto nestedType = mooreInputRefType.getNestedType();
+
+      // Handle queue and dynamic array element access (ref version)
+      // ref<queue<T>> or ref<open_uarray<T>> -> ptr to {ptr, i64} struct
+      Type elemMooreType;
+      if (auto queueType = dyn_cast<QueueType>(nestedType))
+        elemMooreType = queueType.getElementType();
+      else if (auto dynArrayType = dyn_cast<OpenUnpackedArrayType>(nestedType))
+        elemMooreType = dynArrayType.getElementType();
+
+      if (elemMooreType) {
+        auto i64Ty = IntegerType::get(ctx, 64);
+        auto containerStructTy =
+            LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+        // Load the container struct from the ref
+        Value containerStruct = LLVM::LoadOp::create(
+            rewriter, loc, containerStructTy, adaptor.getInput());
+
+        // Extract the data pointer from field 0
+        Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy,
+                                                     containerStruct,
+                                                     ArrayRef<int64_t>{0});
+
+        // Convert index to i64 for GEP
+        Value idx = adaptor.getLowBit();
+        if (idx.getType() != i64Ty) {
+          if (cast<IntegerType>(idx.getType()).getWidth() < 64)
+            idx = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
+          else
+            idx = arith::TruncIOp::create(rewriter, loc, i64Ty, idx);
+        }
+
+        // Get the element type
+        auto elemType = typeConverter->convertType(elemMooreType);
+
+        // GEP to the i-th element and return the pointer
+        Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                            dataPtr, ValueRange{idx});
+
+        rewriter.replaceOp(op, elemPtr);
+        return success();
+      }
+
+      // Handle associative array element access
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
 
       // Get or create __moore_assoc_get_ref function
       // Signature: (array_ptr, key_ptr, value_size) -> element_ptr
@@ -5687,30 +5765,22 @@ struct StringPutCOpConversion : public OpConversionPattern<StringPutCOp> {
 
     // __moore_string_putc(str_ptr, index, char) -> new_string
     // The function returns a new string with the character at index replaced.
-    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i32Ty, i8Ty});
+    auto fnTy =
+        LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i32Ty, i8Ty});
     auto runtimeFn =
         getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_putc", fnTy);
 
-    // Read the current string value from the ref.
-    Value strValue = llhd::ProbeOp::create(rewriter, loc, adaptor.getStr());
+    // The str operand is a pointer to the string struct (LLVM pointer type)
+    // since moore.ref<string> is converted to LLVM pointer for dynamic types.
+    Value strPtr = adaptor.getStr();
 
-    // Allocate space on the stack to pass the string by pointer to the runtime.
-    auto one =
-        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
-    auto strAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
-    LLVM::StoreOp::create(rewriter, loc, strValue, strAlloca);
-
-    // Call the runtime function.
+    // Call the runtime function directly with the pointer.
     auto call = LLVM::CallOp::create(
         rewriter, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
-        ValueRange{strAlloca, adaptor.getIndex(), adaptor.getCharacter()});
+        ValueRange{strPtr, adaptor.getIndex(), adaptor.getCharacter()});
 
-    // Drive the new string back to the ref.
-    auto delay = llhd::ConstantTimeOp::create(
-        rewriter, loc, llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
-    llhd::DriveOp::create(rewriter, loc, adaptor.getStr(), call.getResult(),
-                          delay, Value{});
+    // Store the new string back to the pointer.
+    LLVM::StoreOp::create(rewriter, loc, call.getResult(), strPtr);
 
     rewriter.eraseOp(op);
     return success();
@@ -5787,12 +5857,9 @@ struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
                                      ValueRange{valueI64});
     Value resultString = call.getResult();
 
-    // Drive the result to the destination ref
-    auto delay = llhd::ConstantTimeOp::create(
-        rewriter, loc,
-        llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
-    llhd::DriveOp::create(rewriter, loc, adaptor.getDest(), resultString, delay,
-                          Value{});
+    // Store the result to the destination pointer.
+    // moore.ref<string> is converted to LLVM pointer for dynamic types.
+    LLVM::StoreOp::create(rewriter, loc, resultString, adaptor.getDest());
 
     rewriter.eraseOp(op);
     return success();
