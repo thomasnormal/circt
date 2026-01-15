@@ -2352,11 +2352,29 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
 /// Convert a variable to a `moore.global_variable` operation.
 LogicalResult
 Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
-  // Check if already converted (for on-demand conversion).
+  // Check if already converted (by pointer).
   if (globalVariables.count(&var))
     return success();
 
   auto loc = convertLocation(var.location);
+
+  // Prefix the variable name with the surrounding namespace to create somewhat
+  // sane names in the IR. Compute this BEFORE type conversion to detect
+  // recursive calls during type conversion.
+  SmallString<64> symName;
+  guessNamespacePrefix(var.getParentScope()->asSymbol(), symName);
+  symName += var.name;
+  auto symNameAttr = builder.getStringAttr(symName);
+
+  // Check if already converted or in progress (by name). This handles
+  // recursive calls during type conversion where the same variable is
+  // referenced from a method body being converted as part of class type
+  // conversion.
+  if (globalVariablesByName.count(symNameAttr)) {
+    // Reuse the existing global variable for this pointer.
+    globalVariables[&var] = globalVariablesByName[symNameAttr];
+    return success();
+  }
 
   // Pick an insertion point for this variable according to the source file
   // location.
@@ -2367,22 +2385,31 @@ Context::convertGlobalVariable(const slang::ast::VariableSymbol &var) {
   else
     builder.setInsertionPoint(it->second);
 
-  // Prefix the variable name with the surrounding namespace to create somewhat
-  // sane names in the IR.
-  SmallString<64> symName;
-  guessNamespacePrefix(var.getParentScope()->asSymbol(), symName);
-  symName += var.name;
-
-  // Determine the type of the variable.
-  auto type = convertType(var.getType());
-  if (!type)
-    return failure();
-
-  // Create the variable op itself.
-  auto varOp = moore::GlobalVariableOp::create(builder, loc, symName,
-                                               cast<moore::UnpackedType>(type));
+  // Create the variable op with a placeholder type first. This allows
+  // recursive type conversion (e.g., class types that reference this variable
+  // in their method bodies) to find the variable in the map and avoid
+  // creating duplicates.
+  auto placeholderType = moore::IntType::getLogic(builder.getContext(), 1);
+  auto varOp = moore::GlobalVariableOp::create(builder, loc, symNameAttr,
+                                               placeholderType);
   orderedRootOps.insert({var.location, varOp});
   globalVariables.insert({&var, varOp});
+  globalVariablesByName[symNameAttr] = varOp;
+
+  // Now convert the actual type. This may trigger recursive calls via class
+  // type conversion, but those calls will find varOp in the maps and return.
+  auto type = convertType(var.getType());
+  if (!type) {
+    // Clean up on failure.
+    globalVariables.erase(&var);
+    globalVariablesByName.erase(symNameAttr);
+    orderedRootOps.erase(var.location);
+    varOp.erase();
+    return failure();
+  }
+
+  // Update the type on the op to the actual type.
+  varOp.setTypeAttr(TypeAttr::get(cast<moore::UnpackedType>(type)));
 
   // If the variable has an initializer expression, remember it for later such
   // that we can convert the initializers once we have seen all global
