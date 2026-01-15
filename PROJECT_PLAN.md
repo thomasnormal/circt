@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: UVM Parsing - CRASH + 2 Errors (January 15, 2026)
+## Current Status: UVM Parsing - 1 CRASH REMAINING (January 15, 2026)
 
 **Test Command**:
 ```bash
@@ -15,8 +15,8 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
 2. ~~`$fopen` unsupported~~ ✅ FIXED (ce8d1016a)
 3. ~~`next` unsupported~~ ✅ FIXED (2fa392a98) - string assoc array iteration
-4. `$fclose` unsupported (uvm_text_tr_database.svh:132) - Track B working
-5. `%20s` width specifier not supported (uvm_report_catcher.svh:364) - NEW
+4. ~~`$fclose` unsupported~~ ✅ FIXED (b4a18d045) - File I/O complete
+5. ~~`%20s` width specifier not supported~~ ✅ FIXED (88085cbd7) - String format width
 6. **CRASH** - `cast<TypedValue<IntType>>` assertion failure - Track C working
 
 ---
@@ -28,7 +28,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | **Classes** | Basic OOP + UVM parsing | Full OOP + factory pattern | ✅ Mostly done |
 | **Interfaces** | Partial | Virtual interfaces, modports | ✅ Complete |
 | **Process Control** | fork/join designed | fork/join, disable, wait | ✅ Designed |
-| **File I/O** | $fopen, $fwrite done | $fopen, $fwrite, $fclose | ⚠️ Need $fclose |
+| **File I/O** | $fopen, $fwrite, $fclose | $fopen, $fwrite, $fclose | ✅ Complete |
 | **Assoc Arrays** | Int keys work | All key types + iterators | ✅ String keys fixed |
 | **Randomization** | Not supported | rand/randc, constraints | ⚠️ Parsing only |
 | **Coverage** | Coverage dialect exists | Full functional coverage | ⚠️ Partial |
@@ -46,8 +46,9 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **Files**: lib/Conversion/ImportVerilog/Expressions.cpp
 
 ### Track B: UVM & File I/O (track-b-uvm)
-**Current Task**: Implement $fclose syscall
-**Agent**: af22fa5 (running)
+**Status**: ✅ MERGED - $fclose system task
+**Agent**: af22fa5 (completed)
+**Commit**: b4a18d045 - [ImportVerilog] Add $fclose system task support
 **Goal**: Complete file I/O support ($fopen, $fwrite, $fclose)
 **Files**: MooreOps.td (FCloseBIOp), Statements.cpp
 
@@ -200,9 +201,10 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `88085cbd7` - [ImportVerilog] Add string format specifier with width support
+- `b4a18d045` - [ImportVerilog] Add $fclose system task support
 - `2fa392a98` - [MooreToCore] Fix string-keyed associative array iteration
 - `f8e4b82cf` - [ImportVerilog] Add enum iteration methods (first, next, last, prev)
-- `fdea04e85` - [Docs] Update project plan with January 15 progress
 - `ccfc4f6ca` - [ImportVerilog] Add $fwrite system call support
 - `ce8d1016a` - [ImportVerilog] Add $fopen system call support
 
