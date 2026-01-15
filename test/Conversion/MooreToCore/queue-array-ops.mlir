@@ -365,3 +365,65 @@ func.func @test_array_locator_find_sgt_swapped() -> !moore.queue<!moore.i32, 0> 
   }
   return %result : !moore.queue<!moore.i32, 0>
 }
+
+//===----------------------------------------------------------------------===//
+// Queue Indexing Operations (dyn_extract)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @test_queue_dyn_extract
+// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[QUEUE:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[PTR:%.+]] = llvm.extractvalue [[QUEUE]][0] : !llvm.struct<(ptr, i64)>
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+// CHECK: llvm.load [[ELEM_PTR]] : !llvm.ptr -> i32
+func.func @test_queue_dyn_extract() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %idx = moore.constant 2 : i32
+  %elem = moore.dyn_extract %queue from %idx : !moore.queue<!moore.i32, 0>, !moore.i32 -> !moore.i32
+  return %elem : !moore.i32
+}
+
+// CHECK-LABEL: func @test_queue_dyn_extract_ref
+// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[QUEUE:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[PTR:%.+]] = llvm.extractvalue [[QUEUE]][0] : !llvm.struct<(ptr, i64)>
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+func.func @test_queue_dyn_extract_ref() -> !moore.i32 {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %idx = moore.constant 2 : i32
+  %elem_ref = moore.dyn_extract_ref %queue_ref from %idx : !moore.ref<queue<!moore.i32, 0>>, !moore.i32 -> !moore.ref<i32>
+  %val = moore.read %elem_ref : <i32>
+  return %val : !moore.i32
+}
+
+// CHECK-LABEL: func @test_dyn_array_dyn_extract
+// CHECK: llvm.mlir.addressof @testDynArray : !llvm.ptr
+// CHECK: [[ARR:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[PTR:%.+]] = llvm.extractvalue [[ARR]][0] : !llvm.struct<(ptr, i64)>
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+// CHECK: llvm.load [[ELEM_PTR]] : !llvm.ptr -> i32
+func.func @test_dyn_array_dyn_extract() -> !moore.i32 {
+  %arr_ref = moore.get_global_variable @testDynArray : !moore.ref<open_uarray<!moore.i32>>
+  %arr = moore.read %arr_ref : <open_uarray<!moore.i32>>
+  %idx = moore.constant 3 : i32
+  %elem = moore.dyn_extract %arr from %idx : !moore.open_uarray<!moore.i32>, !moore.i32 -> !moore.i32
+  return %elem : !moore.i32
+}
+
+// CHECK-LABEL: func @test_dyn_array_dyn_extract_ref
+// CHECK: llvm.mlir.addressof @testDynArray : !llvm.ptr
+// CHECK: [[ARR:%.+]] = llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[PTR:%.+]] = llvm.extractvalue [[ARR]][0] : !llvm.struct<(ptr, i64)>
+// CHECK: [[IDX:%.+]] = arith.extui {{.*}} : i32 to i64
+// CHECK: [[ELEM_PTR:%.+]] = llvm.getelementptr [[PTR]][[[IDX]]] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+func.func @test_dyn_array_dyn_extract_ref() -> !moore.i32 {
+  %arr_ref = moore.get_global_variable @testDynArray : !moore.ref<open_uarray<!moore.i32>>
+  %idx = moore.constant 3 : i32
+  %elem_ref = moore.dyn_extract_ref %arr_ref from %idx : !moore.ref<open_uarray<!moore.i32>>, !moore.i32 -> !moore.ref<i32>
+  %val = moore.read %elem_ref : <i32>
+  return %val : !moore.i32
+}
