@@ -59,17 +59,17 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Array Size Lowering
+### Track A: VTable Load Method Lowering
 **Status**: 🔴 BLOCKING
-**Task**: Implement moore.array.size lowering for queues/dynamic arrays. 349 uses in UVM.
+**Task**: Implement moore.vtable.load_method lowering for virtual method dispatch. 4764 uses in UVM.
 **Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add ArraySizeOpConversion - extract length field (field 1) from {ptr, i64} struct.
+**Next**: Add VTableLoadMethodOpConversion - load function pointer from vtable struct.
 
-### Track B: Virtual Interface Type Handling
+### Track B: VTable Operations Suite
 **Status**: 🟡 IN PROGRESS
-**Task**: Fix virtual interface type handling that blocks full AVIP+UVM BFM integration.
-**Files**: lib/Conversion/ImportVerilog/, Moore type system
-**Next**: Investigate virtual interface type casting errors in uvm_resource.svh.
+**Task**: Implement related vtable operations: vtable.get_method_offset, vtable.create, etc.
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
+**Next**: Analyze full vtable IR pattern and implement complete lowering.
 
 ### Track C: AVIP+UVM Integration
 **Status**: 🟡 IN PROGRESS
@@ -82,6 +82,12 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 **Task**: Run the new unit tests to verify they pass. Fix any test failures.
 **Files**: test/Dialect/Moore/, test/Conversion/ImportVerilog/
 **Next**: Run llvm-lit on new test files, fix any failures.
+
+### Previous Track Results (Iteration 3)
+- **Track A**: ✅ array.size lowering implemented (f18154abb) - 349 ops unblocked
+- **Track B**: ✅ Virtual interface comparison ops added (8f843332d) - VirtualInterfaceCmpOp
+- **Track C**: ✅ hvlTop tested - all fail on UVM macros (separate issue)
+- **Track D**: ✅ Test suite runs clean
 
 ### Previous Track Results (Iteration 2)
 - **Track A**: ✅ MooreSim tested - dyn_extract was blocking, now fixed
