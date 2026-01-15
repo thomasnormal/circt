@@ -1073,6 +1073,19 @@ struct StmtVisitor {
       return true;
     }
 
+    // File I/O Tasks (IEEE 1800-2017 Section 21.3)
+    if (subroutine.name == "$fclose") {
+      if (args.size() != 1) {
+        mlir::emitError(loc) << "$fclose expects exactly one argument";
+        return failure();
+      }
+      auto fd = context.convertRvalueExpression(*args[0]);
+      if (!fd)
+        return failure();
+      moore::FCloseBIOp::create(builder, loc, fd);
+      return true;
+    }
+
     // File Write Tasks (`$fwrite[boh]?` or `$fdisplay[boh]?`)
     // Check for a `$fwrite` or `$fdisplay` prefix.
     bool isFWrite = false;

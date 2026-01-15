@@ -27,10 +27,10 @@ LogicalResult circt::convertAttributeToJSON(llvm::json::OStream &json,
   return TypeSwitch<Attribute, LogicalResult>(attr)
       .Case<DictionaryAttr>([&](auto attr) {
         json.objectBegin();
-        auto guard = make_scope_exit([&] { json.objectEnd(); });
+        auto guard = llvm::make_scope_exit([&] { json.objectEnd(); });
         for (auto subAttr : attr) {
           json.attributeBegin(subAttr.getName());
-          auto guard = make_scope_exit([&] { json.attributeEnd(); });
+          auto guard = llvm::make_scope_exit([&] { json.attributeEnd(); });
           if (failed(convertAttributeToJSON(json, subAttr.getValue())))
             return failure();
         }
@@ -38,7 +38,7 @@ LogicalResult circt::convertAttributeToJSON(llvm::json::OStream &json,
       })
       .Case<ArrayAttr>([&](auto attr) {
         json.arrayBegin();
-        auto guard = make_scope_exit([&] { json.arrayEnd(); });
+        auto guard = llvm::make_scope_exit([&] { json.arrayEnd(); });
         for (auto subAttr : attr)
           if (failed(convertAttributeToJSON(json, subAttr)))
             return failure();
