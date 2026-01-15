@@ -2914,6 +2914,22 @@ def FOpenBIOp : Builtin<"fopen"> {
   let assemblyFormat = "$filename (`,` $mode^)? attr-dict";
 }
 
+def FCloseBIOp : Builtin<"fclose"> {
+  let summary = "Close a file";
+  let description = [{
+    Corresponds to the `$fclose` system task. Closes the file associated with
+    the given file descriptor (fd). After closing, the file descriptor becomes
+    invalid and should not be used for further file I/O operations.
+
+    The fd argument is a 32-bit integer file descriptor previously returned
+    by `$fopen`.
+
+    See IEEE 1800-2017 Section 21.3.2 "Closing files".
+  }];
+  let arguments = (ins TwoValuedI32:$fd);
+  let assemblyFormat = "$fd attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // Classes
 //===----------------------------------------------------------------------===//
