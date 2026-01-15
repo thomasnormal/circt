@@ -1746,10 +1746,19 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // If there was no explicit return statement provided by the user, insert a
   // default one.
   if (builder.getBlock()) {
-    if (returnVar && !subroutine.getReturnType().isVoid()) {
-      Value read =
-          moore::ReadOp::create(builder, returnVar.getLoc(), returnVar);
-      mlir::func::ReturnOp::create(builder, lowering->op.getLoc(), read);
+    if (!subroutine.getReturnType().isVoid()) {
+      Value retVal;
+      if (returnVar) {
+        // Read the return variable that was populated by the function body.
+        retVal = moore::ReadOp::create(builder, returnVar.getLoc(), returnVar);
+      } else {
+        // No return variable was created (e.g., some built-in functions).
+        // Create a default value based on the function's return type.
+        auto funcTy = lowering->op.getFunctionType();
+        auto retTy = funcTy.getResult(0);
+        retVal = getDefaultValue(retTy, lowering->op.getLoc());
+      }
+      mlir::func::ReturnOp::create(builder, lowering->op.getLoc(), retVal);
     } else {
       mlir::func::ReturnOp::create(builder, lowering->op.getLoc(),
                                    ValueRange{});
@@ -1878,10 +1887,15 @@ struct ClassDeclVisitor {
     LLVM_DEBUG(llvm::dbgs() << "=== ClassDeclVisitor::run: " << classAST.name
                             << " ===\n");
 
-    if (!classLowering.op.getBody().empty()) {
-      LLVM_DEBUG(llvm::dbgs() << "  Body already populated, skipping\n");
+    // Check if the body has already been converted (or is being converted).
+    if (classLowering.bodyConverted) {
+      LLVM_DEBUG(llvm::dbgs() << "  Body already converted, skipping\n");
       return success();
     }
+    classLowering.bodyConverted = true;
+
+    // The block is created in declareClass() to satisfy SingleBlock trait.
+    Block &body = classLowering.op.getBody().front();
 
     // Log base class if present
     if (classAST.getBaseClass()) {
@@ -1890,9 +1904,7 @@ struct ClassDeclVisitor {
     }
 
     OpBuilder::InsertionGuard ig(builder);
-
-    Block *body = &classLowering.op.getBody().emplaceBlock();
-    builder.setInsertionPointToEnd(body);
+    builder.setInsertionPointToEnd(&body);
 
     // Two-pass conversion: properties first, then methods.
     // This ensures properties are declared before method bodies are converted,
@@ -2253,6 +2265,9 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
     // parameter types), and we need lowering->op to be valid.
     auto classDeclOp =
         moore::ClassDeclOp::create(builder, loc, symName, nullptr, nullptr);
+    // Emplace a block immediately to satisfy the SingleBlock/SymbolTable
+    // requirements. ClassDeclVisitor::run() will populate this block later.
+    classDeclOp.getBody().emplaceBlock();
 
     SymbolTable::setSymbolVisibility(classDeclOp,
                                      SymbolTable::Visibility::Public);

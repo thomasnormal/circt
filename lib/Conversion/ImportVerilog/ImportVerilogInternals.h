@@ -58,6 +58,7 @@ struct FunctionLowering {
 // Class lowering information.
 struct ClassLowering {
   circt::moore::ClassDeclOp op;
+  bool bodyConverted = false;
 };
 
 // Interface lowering information.

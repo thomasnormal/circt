@@ -872,7 +872,8 @@ struct StmtVisitor {
     auto cond = context.convertRvalueExpression(stmt.cond);
     if (!cond)
       return failure();
-    cond = context.convertToBool(cond);
+    // WaitConditionOp expects a 2-state bit type.
+    cond = context.convertToBool(cond, Domain::TwoValued);
     if (!cond)
       return failure();
     moore::WaitConditionOp::create(builder, loc, cond);
