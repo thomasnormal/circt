@@ -149,7 +149,12 @@ static Value visitClassProperty(Context &context,
     // Static properties are stored as global variables.
     // Look up the global variable that was created for this static property.
     if (auto globalOp = context.globalVariables.lookup(&expr)) {
-      return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+      // Use the expression's type (already converted above) rather than the
+      // GlobalVariableOp's type. During recursive type conversion, the
+      // GlobalVariableOp may temporarily have a placeholder type.
+      auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+      auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+      return moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
     }
 
     // If the global variable hasn't been created yet (e.g., forward reference
@@ -158,7 +163,11 @@ static Value visitClassProperty(Context &context,
     // property before the property has been processed during class conversion.
     if (succeeded(context.convertStaticClassProperty(expr))) {
       if (auto globalOp = context.globalVariables.lookup(&expr)) {
-        return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+        // Use the expression's type (already converted above) rather than the
+        // GlobalVariableOp's type.
+        auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+        auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+        return moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
       }
     }
 
@@ -714,7 +723,16 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Handle global variables.
     if (auto globalOp = context.globalVariables.lookup(&expr.symbol)) {
-      auto value = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+      // Use the expression's type rather than the GlobalVariableOp's type.
+      // During recursive type conversion, the GlobalVariableOp may temporarily
+      // have a placeholder type while the actual type is being determined.
+      auto varType = context.convertType(*expr.type);
+      if (!varType)
+        return {};
+      auto refTy = moore::RefType::get(cast<moore::UnpackedType>(varType));
+      auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+      auto value =
+          moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
       return moore::ReadOp::create(builder, loc, value);
     }
 
@@ -729,8 +747,14 @@ struct RvalueExprVisitor : public ExprVisitor {
           parentKind == slang::ast::SymbolKind::CompilationUnit) {
         if (succeeded(context.convertGlobalVariable(*var))) {
           if (auto globalOp = context.globalVariables.lookup(&expr.symbol)) {
+            // Use the expression's type rather than the GlobalVariableOp's type.
+            auto varType = context.convertType(*expr.type);
+            if (!varType)
+              return {};
+            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(varType));
+            auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
             auto value =
-                moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+                moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
             return moore::ReadOp::create(builder, loc, value);
           }
         }
@@ -3389,8 +3413,17 @@ struct LvalueExprVisitor : public ExprVisitor {
       return value;
 
     // Handle global variables.
-    if (auto globalOp = context.globalVariables.lookup(&expr.symbol))
-      return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    if (auto globalOp = context.globalVariables.lookup(&expr.symbol)) {
+      // Use the expression's type rather than the GlobalVariableOp's type.
+      // During recursive type conversion, the GlobalVariableOp may temporarily
+      // have a placeholder type while the actual type is being determined.
+      auto varType = context.convertType(*expr.type);
+      if (!varType)
+        return {};
+      auto refTy = moore::RefType::get(cast<moore::UnpackedType>(varType));
+      auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+      return moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+    }
 
     // Try on-demand conversion for global variables that haven't been converted
     // yet. This handles forward references where a variable is used before
@@ -3402,8 +3435,15 @@ struct LvalueExprVisitor : public ExprVisitor {
           parentKind == slang::ast::SymbolKind::Root ||
           parentKind == slang::ast::SymbolKind::CompilationUnit) {
         if (succeeded(context.convertGlobalVariable(*var))) {
-          if (auto globalOp = context.globalVariables.lookup(&expr.symbol))
-            return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+          if (auto globalOp = context.globalVariables.lookup(&expr.symbol)) {
+            // Use the expression's type rather than the GlobalVariableOp's type.
+            auto varType = context.convertType(*expr.type);
+            if (!varType)
+              return {};
+            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(varType));
+            auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+            return moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+          }
         }
       }
     }
@@ -3426,8 +3466,15 @@ struct LvalueExprVisitor : public ExprVisitor {
       return value;
 
     // Handle global variables.
-    if (auto globalOp = context.globalVariables.lookup(&expr.symbol))
-      return moore::GetGlobalVariableOp::create(builder, loc, globalOp);
+    if (auto globalOp = context.globalVariables.lookup(&expr.symbol)) {
+      // Use the expression's type rather than the GlobalVariableOp's type.
+      auto varType = context.convertType(*expr.type);
+      if (!varType)
+        return {};
+      auto refTy = moore::RefType::get(cast<moore::UnpackedType>(varType));
+      auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+      return moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+    }
 
     // Emit an error for those hierarchical values not recorded in the
     // `valueSymbols`.
