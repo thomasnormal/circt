@@ -1524,6 +1524,35 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   if (lowering->capturesFinalized || lowering->isConverting)
     return success();
 
+  // Helper to construct a default value for a given type (used for stubbing
+  // pure virtual functions).
+  auto getDefaultValue = [&](Type ty, Location loc) -> Value {
+    if (auto intTy = dyn_cast<moore::IntType>(ty))
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    if (isa<moore::StringType>(ty)) {
+      // Create an empty string by converting a 0-width integer to string
+      auto intTy = moore::IntType::getInt(getContext(), 8);
+      auto emptyInt = moore::ConstantStringOp::create(builder, loc, intTy, "");
+      return moore::IntToStringOp::create(builder, loc, emptyInt);
+    }
+    if (isa<moore::FormatStringType>(ty)) {
+      // Create empty format string from empty string
+      auto intTy = moore::IntType::getInt(getContext(), 8);
+      auto emptyInt = moore::ConstantStringOp::create(builder, loc, intTy, "");
+      auto empty = moore::IntToStringOp::create(builder, loc, emptyInt);
+      return moore::FormatStringOp::create(builder, loc, ty, empty,
+                                           IntegerAttr(), nullptr, nullptr);
+    }
+    if (auto classTy = dyn_cast<moore::ClassHandleType>(ty))
+      return moore::ClassNullOp::create(builder, loc, classTy);
+    if (auto queueTy = dyn_cast<moore::QueueType>(ty))
+      return moore::QueueConcatOp::create(builder, loc, queueTy, {});
+    // Fallback: unrealized cast placeholder.
+    return mlir::UnrealizedConversionCastOp::create(builder, loc, ty,
+                                                    ValueRange{})
+        .getResult(0);
+  };
+
   // DPI-imported functions have no body to convert; just mark them as finalized.
   if (subroutine.flags & slang::ast::MethodFlags::DPIImport) {
     lowering->capturesFinalized = true;
@@ -1537,6 +1566,34 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // Create a function body block and populate it with block arguments.
   SmallVector<moore::VariableOp> argVariables;
   auto &block = lowering->op.getBody().emplaceBlock();
+
+  LLVM_DEBUG(llvm::dbgs() << "convertFunction: "
+                          << lowering->op.getSymName() << "\n");
+
+  // Pure virtual methods: stub out with a default return value.
+  // Do this BEFORE full argument processing to avoid issues with pure virtual
+  // methods that may have incomplete argument info, but we still need to add
+  // block arguments to match the function signature.
+  if (subroutine.flags & slang::ast::MethodFlags::Pure) {
+    // Add block arguments to match function signature
+    auto funcTy = lowering->op.getFunctionType();
+    auto loc = lowering->op.getLoc();
+    for (auto inputTy : funcTy.getInputs()) {
+      block.addArgument(inputTy, loc);
+    }
+
+    OpBuilder::InsertionGuard g(builder);
+    builder.setInsertionPointToEnd(&block);
+    if (funcTy.getNumResults() == 0) {
+      mlir::func::ReturnOp::create(builder, loc);
+    } else {
+      auto retTy = funcTy.getResult(0);
+      auto retVal = getDefaultValue(retTy, loc);
+      mlir::func::ReturnOp::create(builder, loc, retVal);
+    }
+    lowering->capturesFinalized = true;
+    return success();
+  }
 
   // If this is a class method, the first input is %this :
   // !moore.class<@C>
@@ -1575,6 +1632,8 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // Convert the body of the function.
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToEnd(&block);
+
+  // Note: Pure virtual methods are handled above (before argument processing).
 
   Value returnVar;
   if (subroutine.returnValVar) {
@@ -1661,6 +1720,12 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   auto savedThis = currentThisRef;
   currentThisRef = valueSymbols.lookup(subroutine.thisVar);
   auto restoreThis = llvm::make_scope_exit([&] { currentThisRef = savedThis; });
+
+  // Track current function lowering for downstream helpers (returns, captures).
+  auto *savedLowering = currentFunctionLowering;
+  currentFunctionLowering = lowering;
+  auto restoreLowering =
+      llvm::make_scope_exit([&] { currentFunctionLowering = savedLowering; });
 
   lowering->isConverting = true;
   auto convertingGuard =

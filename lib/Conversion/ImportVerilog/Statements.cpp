@@ -360,9 +360,13 @@ struct StmtVisitor {
 
     // Expressions like calls to void functions return a dummy value that has no
     // uses. If the returned value is trivially dead, remove it.
-    if (auto *defOp = value.getDefiningOp())
-      if (isOpTriviallyDead(defOp))
+    if (auto *defOp = value.getDefiningOp()) {
+      if (isOpTriviallyDead(defOp)) {
+        LLVM_DEBUG(llvm::dbgs() << "Erasing dead value-producing op: "
+                                << defOp->getName() << "\n");
         defOp->erase();
+      }
+    }
 
     return success();
   }
@@ -373,6 +377,8 @@ struct StmtVisitor {
     auto type = context.convertType(*var.getDeclaredType());
     if (!type)
       return failure();
+    LLVM_DEBUG(llvm::dbgs() << "VarDecl: " << var.name << " type=" << type
+                            << "\n");
 
     Value initial;
     if (const auto *init = var.getInitializer()) {
@@ -398,6 +404,37 @@ struct StmtVisitor {
 
   // Handle if statements.
   LogicalResult visit(const slang::ast::ConditionalStatement &stmt) {
+    // Try to fold constant conditions up front. If all conditions evaluate to a
+    // compile-time boolean, we can emit only the taken branch and skip the
+    // others (avoids lowering unreachable helper code in large macros).
+    std::optional<bool> constCond;
+    for (const auto &condition : stmt.conditions) {
+      if (condition.pattern)
+        break;
+      auto cv = context.evaluateConstant(*condition.expr);
+      if (cv.bad())
+        break;
+      if (cv.isTrue()) {
+        constCond = constCond ? (*constCond && true) : true;
+      } else if (cv.isFalse()) {
+        constCond = constCond ? (*constCond && false) : false;
+      } else {
+        // Non-boolean constant (e.g., string) - cannot fold.
+        constCond.reset();
+        break;
+      }
+    }
+    if (constCond.has_value()) {
+      if (*constCond) {
+        if (failed(context.convertStatement(stmt.ifTrue)))
+          return failure();
+      } else if (stmt.ifFalse) {
+        if (failed(context.convertStatement(*stmt.ifFalse)))
+          return failure();
+      }
+      return success();
+    }
+
     // Generate the condition. There may be multiple conditions linked with the
     // `&&&` operator.
     Value allConds;
@@ -861,6 +898,16 @@ struct StmtVisitor {
       auto expr = context.convertRvalueExpression(*stmt.expr);
       if (!expr)
         return failure();
+      // Ensure return type matches the function signature.
+      if (auto *lowering = context.currentFunctionLowering) {
+        auto funcTy = lowering->op.getFunctionType();
+        if (funcTy.getNumResults() > 0) {
+          auto expectedTy = funcTy.getResult(0);
+          expr = context.materializeConversion(expectedTy, expr,
+                                               stmt.expr->type->isSigned(),
+                                               expr.getLoc());
+        }
+      }
       mlir::func::ReturnOp::create(builder, loc, expr);
     } else {
       mlir::func::ReturnOp::create(builder, loc);
@@ -1267,6 +1314,10 @@ struct StmtVisitor {
 LogicalResult Context::convertStatement(const slang::ast::Statement &stmt) {
   assert(builder.getInsertionBlock());
   auto loc = convertLocation(stmt.sourceRange);
-  return stmt.visit(StmtVisitor(*this, loc));
+  auto result = stmt.visit(StmtVisitor(*this, loc));
+  if (failed(result))
+    mlir::emitError(loc)
+        << "failed to convert statement " << slang::ast::toString(stmt.kind);
+  return result;
 }
 // NOLINTEND(misc-no-recursion)
