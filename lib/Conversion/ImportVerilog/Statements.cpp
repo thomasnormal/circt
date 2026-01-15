@@ -1073,6 +1073,55 @@ struct StmtVisitor {
       return true;
     }
 
+    // File Write Tasks (`$fwrite[boh]?` or `$fdisplay[boh]?`)
+    // Check for a `$fwrite` or `$fdisplay` prefix.
+    bool isFWrite = false;
+    bool appendNewlineFWrite = false;
+    StringRef remainingNameFWrite = subroutine.name;
+    if (remainingNameFWrite.consume_front("$fdisplay")) {
+      isFWrite = true;
+      appendNewlineFWrite = true;
+    } else if (remainingNameFWrite.consume_front("$fwrite")) {
+      isFWrite = true;
+    }
+
+    // Check for optional `b`, `o`, or `h` suffix indicating default format.
+    using moore::IntFormat;
+    IntFormat defaultFormatFWrite = IntFormat::Decimal;
+    if (isFWrite && !remainingNameFWrite.empty()) {
+      if (remainingNameFWrite == "b")
+        defaultFormatFWrite = IntFormat::Binary;
+      else if (remainingNameFWrite == "o")
+        defaultFormatFWrite = IntFormat::Octal;
+      else if (remainingNameFWrite == "h")
+        defaultFormatFWrite = IntFormat::HexLower;
+      else
+        isFWrite = false;
+    }
+
+    if (isFWrite) {
+      // $fwrite(fd, format, args...) - first arg is file descriptor
+      if (args.empty())
+        return mlir::emitError(loc, "$fwrite requires at least one argument");
+
+      // Convert the file descriptor argument
+      auto fd = context.convertRvalueExpression(*args[0]);
+      if (!fd)
+        return failure();
+
+      // Convert the remaining arguments as format string
+      auto formatArgs = args.subspan(1);
+      auto message = context.convertFormatString(formatArgs, loc,
+                                                 defaultFormatFWrite,
+                                                 appendNewlineFWrite);
+      if (failed(message))
+        return failure();
+      if (*message == Value{})
+        return true;
+      moore::FWriteBIOp::create(builder, loc, fd, *message);
+      return true;
+    }
+
     // Severity Tasks
     using moore::Severity;
     std::optional<Severity> severity;

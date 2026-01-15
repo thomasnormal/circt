@@ -1578,34 +1578,36 @@ private:
 };
 
 /// Helper to create a global string constant for covergroup/coverpoint names.
-/// Creates the global if it doesn't exist, but does NOT create the AddressOfOp
-/// (caller should create AddressOfOp at the correct insertion point).
-static void ensureGlobalStringConstant(Location loc, ModuleOp mod,
-                                       ConversionPatternRewriter &rewriter,
-                                       StringRef name, StringRef globalName) {
+/// Creates the global if it doesn't exist and returns the address.
+static Value createGlobalStringConstant(Location loc, ModuleOp mod,
+                                        ConversionPatternRewriter &rewriter,
+                                        StringRef name, StringRef globalName) {
   auto *ctx = rewriter.getContext();
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
 
   // Check if we already created this global
-  if (mod.lookupSymbol<LLVM::GlobalOp>(globalName))
-    return;
+  if (!mod.lookupSymbol<LLVM::GlobalOp>(globalName)) {
+    // Create array type for the string (including null terminator)
+    auto i8Ty = IntegerType::get(ctx, 8);
+    auto strTy = LLVM::LLVMArrayType::get(i8Ty, name.size() + 1);
 
-  // Create array type for the string (including null terminator)
-  auto i8Ty = IntegerType::get(ctx, 8);
-  auto strTy = LLVM::LLVMArrayType::get(i8Ty, name.size() + 1);
+    // Create null-terminated string value
+    std::string strWithNull = (name + StringRef("\0", 1)).str();
+    auto strAttr = rewriter.getStringAttr(strWithNull);
 
-  // Create null-terminated string value
-  std::string strWithNull = (name + StringRef("\0", 1)).str();
-  auto strAttr = rewriter.getStringAttr(strWithNull);
+    // Insert global at module level
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(mod.getBody());
 
-  // Insert global at module level
-  OpBuilder::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPointToStart(mod.getBody());
+    auto global = LLVM::GlobalOp::create(rewriter, loc, strTy,
+                                         /*isConstant=*/true,
+                                         LLVM::Linkage::Private, globalName,
+                                         strAttr);
+    global.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+  }
 
-  auto global = LLVM::GlobalOp::create(rewriter, loc, strTy,
-                                       /*isConstant=*/true,
-                                       LLVM::Linkage::Private, globalName,
-                                       strAttr);
-  global.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+  // Return the address of the global
+  return LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalName);
 }
 
 /// Helper to create a global string constant and return an AddressOfOp to it.

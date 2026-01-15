@@ -2690,6 +2690,20 @@ def DisplayBIOp : Builtin<"display"> {
   let assemblyFormat = "$message attr-dict";
 }
 
+def FWriteBIOp : Builtin<"fwrite"> {
+  let summary = "Write a formatted message to a file";
+  let description = [{
+    Writes the given format string to the file identified by the file descriptor.
+    This corresponds to the `$fwrite` and `$fdisplay` system tasks. Message
+    formatting is handled by `moore.fmt.*` ops. The file descriptor is typically
+    obtained from `$fopen`.
+
+    See IEEE 1800-2017 Section 21.3 "File I/O tasks and functions".
+  }];
+  let arguments = (ins UnpackedType:$fd, FormatStringType:$message);
+  let assemblyFormat = "$fd `,` $message attr-dict `:` type($fd)";
+}
+
 def SeverityInfo : I32EnumAttrCase<"Info", 0, "info">;
 def SeverityWarning : I32EnumAttrCase<"Warning", 1, "warning">;
 def SeverityError : I32EnumAttrCase<"Error", 2, "error">;
