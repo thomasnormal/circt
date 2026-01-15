@@ -5153,4 +5153,52 @@ def StringItoaOp : StringBuiltin<"itoa"> {
   let assemblyFormat = "$dest `,` $value `:` type($dest) `,` type($value) attr-dict";
 }
 
+def StringAtoIOp : StringBuiltin<"atoi"> {
+  let summary = "Convert a string to a decimal integer";
+  let description = [{
+    Interprets the string as a decimal integer and returns the result.
+    This corresponds to the SystemVerilog `str.atoi()` method
+    (IEEE 1800-2017 Section 6.16.8).
+  }];
+  let arguments = (ins StringType:$str);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$str attr-dict";
+}
+
+def StringAtoHexOp : StringBuiltin<"atohex"> {
+  let summary = "Convert a string to a hexadecimal integer";
+  let description = [{
+    Interprets the string as a hexadecimal integer and returns the result.
+    This corresponds to the SystemVerilog `str.atohex()` method
+    (IEEE 1800-2017 Section 6.16.8).
+  }];
+  let arguments = (ins StringType:$str);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$str attr-dict";
+}
+
+def StringAtoOctOp : StringBuiltin<"atooct"> {
+  let summary = "Convert a string to an octal integer";
+  let description = [{
+    Interprets the string as an octal integer and returns the result.
+    This corresponds to the SystemVerilog `str.atooct()` method
+    (IEEE 1800-2017 Section 6.16.8).
+  }];
+  let arguments = (ins StringType:$str);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$str attr-dict";
+}
+
+def StringAtoBinOp : StringBuiltin<"atobin"> {
+  let summary = "Convert a string to a binary integer";
+  let description = [{
+    Interprets the string as a binary integer and returns the result.
+    This corresponds to the SystemVerilog `str.atobin()` method
+    (IEEE 1800-2017 Section 6.16.8).
+  }];
+  let arguments = (ins StringType:$str);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$str attr-dict";
+}
+
 #endif // CIRCT_DIALECT_MOORE_MOOREOPS

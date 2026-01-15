@@ -449,6 +449,15 @@ function void StringBuiltins(string string_in, int int_in);
   // CHECK: [[CHARVAL:%.+]] = moore.constant 65 : i8
   // CHECK: moore.string.putc [[STRVAR]]{{\[}}[[INT]]], [[CHARVAL]] : <string>
   result[int_in] = 8'd65;
+  // String to integer conversion methods (IEEE 1800-2017 Section 6.16.8)
+  // CHECK: [[ATOI:%.+]] = moore.string.atoi [[STR]]
+  dummyA(string_in.atoi());
+  // CHECK: [[ATOHEX:%.+]] = moore.string.atohex [[STR]]
+  dummyA(string_in.atohex());
+  // CHECK: [[ATOOCT:%.+]] = moore.string.atooct [[STR]]
+  dummyA(string_in.atooct());
+  // CHECK: [[ATOBIN:%.+]] = moore.string.atobin [[STR]]
+  dummyA(string_in.atobin());
 endfunction
 
 // IEEE 1800-2017 Section 6.19.5.5 "Enum .name() method"
