@@ -1478,6 +1478,10 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto value = context.convertRvalueExpression(expr.concat());
     if (!value)
       return {};
+    // ReplicateOp requires an IntType operand, so convert to simple bit vector
+    value = context.convertToSimpleBitVector(value);
+    if (!value)
+      return {};
     return moore::ReplicateOp::create(builder, loc, type, value);
   }
 
