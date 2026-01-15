@@ -2872,6 +2872,35 @@ def IsUnknownBIOp : Builtin<"isunknown"> {
 }
 
 //===----------------------------------------------------------------------===//
+// File I/O System Functions
+//===----------------------------------------------------------------------===//
+
+def FOpenBIOp : Builtin<"fopen"> {
+  let summary = "Open a file and return a file descriptor";
+  let description = [{
+    Corresponds to the `$fopen` system function. Opens a file with the specified
+    filename and mode, and returns a 32-bit integer file descriptor (also known
+    as a multichannel descriptor or MCD).
+
+    The mode argument specifies the file access mode:
+    - "r" or "rb": Open for reading
+    - "w" or "wb": Open for writing (truncate existing file)
+    - "a" or "ab": Open for appending
+    - "r+", "r+b", "rb+": Open for reading and writing
+    - "w+", "w+b", "wb+": Open for reading and writing (truncate)
+    - "a+", "a+b", "ab+": Open for reading and appending
+
+    Returns 0 if the file could not be opened, otherwise returns a non-zero
+    file descriptor that can be used with other file I/O functions.
+
+    See IEEE 1800-2017 Section 21.3 "Opening and closing files".
+  }];
+  let arguments = (ins StringType:$filename, Optional<StringType>:$mode);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$filename (`,` $mode^)? attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
 // Classes
 //===----------------------------------------------------------------------===//
 
