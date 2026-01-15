@@ -12,8 +12,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ```
 
 **Current Blockers**:
-1. **IntType CRASH** - Still occurs when parsing UVM (different location from case statement fix)
-2. **DPI-C imports** - Not supported, UVM uses extensively
+1. ~~**IntType CRASH**~~ ✅ FIXED (76612d5bd) - ReplicateOp type check
+2. ~~**String replication**~~ ✅ FIXED (d16609422) - Added StringReplicateOp
+3. **$sscanf** - Not supported, used in uvm_get_array_index_int
+4. **DPI-C imports** - Not supported, UVM uses extensively
 
 **Previous Blockers FIXED**:
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
