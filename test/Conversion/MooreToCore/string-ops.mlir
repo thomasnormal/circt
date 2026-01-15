@@ -125,3 +125,65 @@ moore.module @FormatStringTest() {
   }
   moore.output
 }
+
+// Test fstring_to_string conversion with literal input
+// CHECK-LABEL: func @FStringToStringLiteral
+func.func @FStringToStringLiteral() -> !moore.string {
+  // CHECK: llvm.mlir.global internal constant @__moore_str_{{.*}}("hello")
+  // CHECK: [[ADDR:%.+]] = llvm.mlir.addressof @__moore_str_{{.*}} : !llvm.ptr
+  // CHECK: [[LEN:%.+]] = arith.constant 5 : i64
+  // CHECK: [[UNDEF:%.+]] = llvm.mlir.undef : !llvm.struct<(ptr, i64)>
+  // CHECK: [[S1:%.+]] = llvm.insertvalue [[ADDR]], [[UNDEF]][0]
+  // CHECK: [[S2:%.+]] = llvm.insertvalue [[LEN]], [[S1]][1]
+  // CHECK: return [[S2]]
+  %0 = moore.fmt.literal "hello"
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
+// Test fstring_to_string conversion with empty literal
+// CHECK-LABEL: func @FStringToStringEmptyLiteral
+func.func @FStringToStringEmptyLiteral() -> !moore.string {
+  // CHECK: [[NULL:%.+]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK: [[ZERO:%.+]] = arith.constant 0 : i64
+  // CHECK: [[UNDEF:%.+]] = llvm.mlir.undef : !llvm.struct<(ptr, i64)>
+  // CHECK: [[S1:%.+]] = llvm.insertvalue [[NULL]], [[UNDEF]][0]
+  // CHECK: [[S2:%.+]] = llvm.insertvalue [[ZERO]], [[S1]][1]
+  // CHECK: return [[S2]]
+  %0 = moore.fmt.literal ""
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
+// Test fstring_to_string conversion with dynamic string input (round-trip)
+// CHECK-LABEL: func @FStringToStringDynamic
+func.func @FStringToStringDynamic(%str: !moore.string) -> !moore.string {
+  // When input is fmt.string (which converts string to format string),
+  // fstring_to_string should return the original string
+  // CHECK: return %arg0
+  %0 = moore.fmt.string %str
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
+// Test fstring_to_string conversion with formatted integer
+// CHECK-LABEL: func @FStringToStringFormattedInt
+func.func @FStringToStringFormattedInt(%val: !moore.i32) -> !moore.string {
+  // CHECK: arith.extsi %arg0 : i32 to i64
+  // CHECK: llvm.call @__moore_int_to_string
+  %0 = moore.fmt.int decimal %val, align right, pad space signed : i32
+  %1 = moore.fstring_to_string %0
+  return %1 : !moore.string
+}
+
+// Test fstring_to_string conversion with concatenation
+// CHECK-LABEL: func @FStringToStringConcat
+func.func @FStringToStringConcat(%str: !moore.string) -> !moore.string {
+  // CHECK: llvm.mlir.global internal constant @__moore_str_{{.*}}("prefix: ")
+  // CHECK: llvm.call @__moore_string_concat
+  %0 = moore.fmt.literal "prefix: "
+  %1 = moore.fmt.string %str
+  %2 = moore.fmt.concat (%0, %1)
+  %3 = moore.fstring_to_string %2
+  return %3 : !moore.string
+}

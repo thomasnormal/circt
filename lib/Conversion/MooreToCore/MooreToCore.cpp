@@ -2018,6 +2018,72 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       return success();
     }
 
+    // Handle queue variables - these need stack allocation with empty init
+    if (isa<QueueType>(nestedMooreType)) {
+      auto *ctx = rewriter.getContext();
+      // Get the struct type by converting the nested queue type directly
+      auto structTy = cast<LLVM::LLVMStructType>(
+          typeConverter->convertType(nestedMooreType));
+
+      // Create an alloca for the queue struct
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto alloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
+
+      // Initialize with empty queue {nullptr, 0}
+      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      auto zeroLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(0));
+
+      // Build the struct value
+      Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
+      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, nullPtr,
+                                              ArrayRef<int64_t>{0});
+      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, zeroLen,
+                                              ArrayRef<int64_t>{1});
+
+      // Store to alloca
+      LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+
+      rewriter.replaceOp(op, alloca.getResult());
+      return success();
+    }
+
+    // Handle dynamic array variables - these need stack allocation with empty init
+    if (isa<OpenUnpackedArrayType>(nestedMooreType)) {
+      auto *ctx = rewriter.getContext();
+      // Get the struct type by converting the nested array type directly
+      auto structTy = cast<LLVM::LLVMStructType>(
+          typeConverter->convertType(nestedMooreType));
+
+      // Create an alloca for the array struct
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto alloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
+
+      // Initialize with empty array {nullptr, 0}
+      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      auto zeroLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(0));
+
+      // Build the struct value
+      Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
+      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, nullPtr,
+                                              ArrayRef<int64_t>{0});
+      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, zeroLen,
+                                              ArrayRef<int64_t>{1});
+
+      // Store to alloca
+      LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+
+      rewriter.replaceOp(op, alloca.getResult());
+      return success();
+    }
+
     // For dynamic container types (queues, dynamic arrays, associative arrays),
     // the converted type is an LLVM pointer, not llhd.ref. These are handled
     // differently since they don't fit the llhd signal model.
@@ -3027,6 +3093,17 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       op.emitError("conversion result type is not currently supported");
       return failure();
     }
+
+    // Handle class handle conversions (e.g., null class to specific class type)
+    // Both the input and result are LLVM pointers, so we can directly use the
+    // converted input value.
+    if (isa<LLVM::LLVMPointerType>(resultType) &&
+        isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
+      // Class handles are all pointers, so the conversion is a no-op
+      rewriter.replaceOp(op, adaptor.getInput());
+      return success();
+    }
+
     int64_t inputBw = hw::getBitWidth(adaptor.getInput().getType());
     int64_t resultBw = hw::getBitWidth(resultType);
     if (inputBw == -1 || resultBw == -1)
@@ -3188,6 +3265,65 @@ struct CallOpConversion : public OpConversionPattern<func::CallOp> {
       return failure();
     rewriter.replaceOpWithNewOp<func::CallOp>(
         op, adaptor.getCallee(), convResTypes, adaptor.getOperands());
+    return success();
+  }
+};
+
+/// Conversion for func.call_indirect to handle type conversion.
+/// The callee function type must be converted to use the converted argument
+/// and result types.
+struct CallIndirectOpConversion
+    : public OpConversionPattern<func::CallIndirectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(func::CallIndirectOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Convert result types
+    SmallVector<Type> convResTypes;
+    if (typeConverter->convertTypes(op.getResultTypes(), convResTypes).failed())
+      return failure();
+
+    // Get the converted callee operands (excluding the callee function itself)
+    auto calleeOperands = adaptor.getCalleeOperands();
+
+    // Build the new function type from converted input/result types
+    SmallVector<Type> inputTypes;
+    for (auto operand : calleeOperands)
+      inputTypes.push_back(operand.getType());
+    auto newFuncType =
+        FunctionType::get(op.getContext(), inputTypes, convResTypes);
+
+    // Get the adapted callee value
+    Value callee = adaptor.getCallee();
+
+    // Check if the callee needs type conversion
+    // The callee may be an UnrealizedConversionCast if the type converter
+    // inserted a materialization. We need to check if the callee's function
+    // type matches our expected type.
+    auto calleeType = dyn_cast<FunctionType>(callee.getType());
+
+    if (calleeType && calleeType == newFuncType) {
+      // Types match, use the callee directly
+      rewriter.replaceOpWithNewOp<func::CallIndirectOp>(op, callee,
+                                                        calleeOperands);
+      return success();
+    }
+
+    // If the callee type doesn't match (which happens when the callee is from
+    // a vtable.load_method that hasn't been converted yet), we need to create
+    // a new function type and cast the callee.
+    //
+    // This can happen because:
+    // 1. The callee comes from a materialization cast
+    // 2. The original function type had Moore types that were converted
+
+    // Create a cast to the correct function type
+    auto castOp = UnrealizedConversionCastOp::create(
+        rewriter, op.getLoc(), TypeRange{newFuncType}, ValueRange{callee});
+
+    rewriter.replaceOpWithNewOp<func::CallIndirectOp>(op, castOp.getResult(0),
+                                                      calleeOperands);
     return success();
   }
 };
@@ -3636,6 +3772,209 @@ struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
         op, adaptor.getMessage());
+    return success();
+  }
+};
+
+/// Conversion for moore.fstring_to_string -> runtime evaluation of format
+/// string. This operation converts a format string (FormatStringType) to a
+/// dynamic string (StringType). The conversion handles different cases:
+/// - Literals: directly create a string from the literal value
+/// - Dynamic strings (from FormatDynStringOp): pass through the input
+/// - Formatted integers: call __moore_int_to_string runtime function
+/// - Concatenations: recursively convert each input and concatenate
+struct FormatStringToStringOpConversion
+    : public OpConversionPattern<FormatStringToStringOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  // Helper to create an empty string
+  static Value createEmptyString(ConversionPatternRewriter &rewriter,
+                                 Location loc, MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+    Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    Value zero = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(0));
+    Value result = LLVM::UndefOp::create(rewriter, loc, stringStructTy);
+    result = LLVM::InsertValueOp::create(rewriter, loc, result, nullPtr,
+                                         ArrayRef<int64_t>{0});
+    result = LLVM::InsertValueOp::create(rewriter, loc, result, zero,
+                                         ArrayRef<int64_t>{1});
+    return result;
+  }
+
+  // Helper to convert a format string value to a dynamic string
+  // Returns the dynamic string value, or nullptr if conversion failed
+  Value convertFormatStringToString(Value fmtValue, Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    ModuleOp mod) const {
+    auto *ctx = rewriter.getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+    auto *defOp = fmtValue.getDefiningOp();
+    if (!defOp)
+      return createEmptyString(rewriter, loc, ctx);
+
+    // Case 1: Format literal - create string from the literal value
+    if (auto literalOp = dyn_cast<sim::FormatLiteralOp>(defOp)) {
+      StringRef literal = literalOp.getLiteral();
+      int64_t len = literal.size();
+
+      if (len == 0)
+        return createEmptyString(rewriter, loc, ctx);
+
+      // Create global string constant
+      auto globalName =
+          "__moore_str_" +
+          std::to_string(reinterpret_cast<uintptr_t>(literalOp.getOperation()));
+      auto i8Ty = IntegerType::get(ctx, 8);
+      auto arrayTy = LLVM::LLVMArrayType::get(i8Ty, len);
+
+      // Check if global already exists
+      if (!mod.lookupSymbol<LLVM::GlobalOp>(globalName)) {
+        // Create global string constant
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(mod.getBody());
+        LLVM::GlobalOp::create(rewriter, loc, arrayTy, /*isConstant=*/true,
+                               LLVM::Linkage::Internal, globalName,
+                               rewriter.getStringAttr(literal));
+      }
+
+      // Get address of global
+      Value globalAddr =
+          LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalName);
+      Value lenVal = arith::ConstantOp::create(
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(len));
+
+      // Create result struct
+      Value result = LLVM::UndefOp::create(rewriter, loc, stringStructTy);
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, globalAddr,
+                                           ArrayRef<int64_t>{0});
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, lenVal,
+                                           ArrayRef<int64_t>{1});
+      return result;
+    }
+
+    // Case 2: Format dynamic string - the input is already a dynamic string
+    if (auto dynStringOp = dyn_cast<sim::FormatDynStringOp>(defOp))
+      return dynStringOp.getValue();
+
+    // Case 3: Formatted integer - call __moore_int_to_string
+    if (auto decOp = dyn_cast<sim::FormatDecOp>(defOp)) {
+      Value intVal = decOp.getValue();
+      auto intWidth = intVal.getType().getIntOrFloatBitWidth();
+
+      // Extend or truncate to i64
+      Value intI64;
+      if (intWidth < 64)
+        intI64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, intVal);
+      else if (intWidth > 64)
+        intI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, intVal);
+      else
+        intI64 = intVal;
+
+      // Call __moore_int_to_string
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_int_to_string", fnTy);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{intI64});
+      return call.getResult();
+    }
+
+    // Case 4: Formatted hex integer
+    if (auto hexOp = dyn_cast<sim::FormatHexOp>(defOp)) {
+      // For now, use int_to_string as a fallback (TODO: implement hex version)
+      Value intVal = hexOp.getValue();
+      auto intWidth = intVal.getType().getIntOrFloatBitWidth();
+
+      Value intI64;
+      if (intWidth < 64)
+        intI64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, intVal);
+      else if (intWidth > 64)
+        intI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, intVal);
+      else
+        intI64 = intVal;
+
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_int_to_string", fnTy);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{intI64});
+      return call.getResult();
+    }
+
+    // Case 5: Format concatenation - recursively convert each input
+    if (auto concatOp = dyn_cast<sim::FormatStringConcatOp>(defOp)) {
+      auto inputs = concatOp.getInputs();
+      if (inputs.empty())
+        return createEmptyString(rewriter, loc, ctx);
+
+      // Convert the first input
+      Value result = convertFormatStringToString(inputs[0], loc, rewriter, mod);
+      if (!result)
+        result = createEmptyString(rewriter, loc, ctx);
+
+      // Concatenate the rest
+      if (inputs.size() > 1) {
+        // Get the string concat runtime function
+        auto fnTy =
+            LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, ptrTy});
+        auto concatFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                               "__moore_string_concat", fnTy);
+
+        auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                            rewriter.getI64IntegerAttr(1));
+
+        for (size_t i = 1; i < inputs.size(); ++i) {
+          Value nextStr =
+              convertFormatStringToString(inputs[i], loc, rewriter, mod);
+          if (!nextStr)
+            nextStr = createEmptyString(rewriter, loc, ctx);
+
+          // Allocate stack space for both strings
+          auto lhsAlloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+          LLVM::StoreOp::create(rewriter, loc, result, lhsAlloca);
+
+          auto rhsAlloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+          LLVM::StoreOp::create(rewriter, loc, nextStr, rhsAlloca);
+
+          // Call __moore_string_concat
+          auto call = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{stringStructTy},
+              SymbolRefAttr::get(concatFn), ValueRange{lhsAlloca, rhsAlloca});
+          result = call.getResult();
+        }
+      }
+      return result;
+    }
+
+    // Unsupported format string type - return empty string
+    return createEmptyString(rewriter, loc, ctx);
+  }
+
+  LogicalResult
+  matchAndRewrite(FormatStringToStringOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto mod = op->getParentOfType<ModuleOp>();
+    Value fmtString = adaptor.getFmtstring();
+
+    Value result = convertFormatStringToString(fmtString, loc, rewriter, mod);
+    if (!result) {
+      auto *ctx = rewriter.getContext();
+      result = createEmptyString(rewriter, loc, ctx);
+    }
+
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -5811,6 +6150,107 @@ struct StringToIntOpConversion : public OpConversionPattern<StringToIntOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// SScanfBIOp Conversion
+//===----------------------------------------------------------------------===//
+
+/// Conversion for moore.builtin.sscanf -> runtime function call.
+/// Lowers $sscanf(input, format, args...) to __moore_sscanf_* calls based on
+/// the format specifier.
+struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SScanfBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto stringStructTy =
+        LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+    // Get format string to determine which runtime function to call
+    StringRef format = op.getFormat();
+
+    // Store input string to stack
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), strAlloca);
+
+    // Handle common single-specifier formats
+    // For now, support %d, %h, %x, %o, %b for integers
+    StringRef runtimeFnName;
+    if (format == "%d")
+      runtimeFnName = "__moore_string_atoi";
+    else if (format == "%h" || format == "%x")
+      runtimeFnName = "__moore_string_atohex";
+    else if (format == "%o")
+      runtimeFnName = "__moore_string_atooct";
+    else if (format == "%b")
+      runtimeFnName = "__moore_string_atobin";
+    else {
+      // For unsupported formats, return 0 (no items parsed)
+      // TODO: Implement full sscanf with multiple format specifiers
+      auto zero = arith::ConstantOp::create(rewriter, loc, i32Ty,
+                                            rewriter.getI32IntegerAttr(0));
+      rewriter.replaceOp(op, zero);
+      return success();
+    }
+
+    // Get the runtime function
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+    auto runtimeFn = getOrCreateRuntimeFunc(mod, rewriter, runtimeFnName, fnTy);
+
+    // Call the runtime function
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    Value parsedValue = call.getResult();
+
+    // Store the result in the first argument if present
+    if (!adaptor.getArgs().empty()) {
+      auto destRef = adaptor.getArgs()[0];
+      // The destination is an llhd.ref (converted from moore.ref)
+      // Get the target type to potentially extend/truncate the result
+      if (auto sigTy = dyn_cast<llhd::RefType>(destRef.getType())) {
+        auto targetTy = sigTy.getNestedType();
+        unsigned targetWidth = targetTy.getIntOrFloatBitWidth();
+
+        // Extend or truncate to match the target type
+        Value valueToStore;
+        if (targetWidth < 32) {
+          valueToStore =
+              arith::TruncIOp::create(rewriter, loc, targetTy, parsedValue);
+        } else if (targetWidth > 32) {
+          // Sign extend for larger types
+          valueToStore =
+              arith::ExtSIOp::create(rewriter, loc, targetTy, parsedValue);
+        } else {
+          valueToStore = parsedValue;
+        }
+
+        // Create llhd.drive to store the value
+        auto timeAttr = llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
+        auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+        llhd::DriveOp::create(rewriter, loc, destRef, valueToStore, time,
+                              Value{});
+      }
+    }
+
+    // Return 1 (one item successfully parsed)
+    auto resultVal = arith::ConstantOp::create(rewriter, loc, i32Ty,
+                                               rewriter.getI32IntegerAttr(1));
+    rewriter.replaceOp(op, resultVal);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // IsUnknownBIOp Conversion
 //===----------------------------------------------------------------------===//
 
@@ -6202,10 +6642,11 @@ static void populateLegality(ConversionTarget &target,
 
   target.addLegalOp<debug::ScopeOp>();
 
-  target.addDynamicallyLegalOp<scf::YieldOp, func::CallOp, func::ReturnOp,
-                               func::ConstantOp, UnrealizedConversionCastOp,
-                               hw::OutputOp, hw::InstanceOp, debug::ArrayOp,
-                               debug::StructOp, debug::VariableOp>(
+  target.addDynamicallyLegalOp<scf::YieldOp, func::CallOp, func::CallIndirectOp,
+                               func::ReturnOp, func::ConstantOp,
+                               UnrealizedConversionCastOp, hw::OutputOp,
+                               hw::InstanceOp, debug::ArrayOp, debug::StructOp,
+                               debug::VariableOp>(
       [&](Operation *op) { return converter.isLegal(op); });
 
   target.addDynamicallyLegalOp<scf::IfOp, scf::ForOp, scf::ExecuteRegionOp,
@@ -6671,6 +7112,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     HWInstanceOpConversion,
     ReturnOpConversion,
     CallOpConversion,
+    CallIndirectOpConversion,
     UnrealizedConversionCastConversion,
     InPlaceOpConversion<debug::ArrayOp>,
     InPlaceOpConversion<debug::StructOp>,
@@ -6688,6 +7130,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatClassOpConversion,
     FormatRealOpConversion,
     FormatStringOpConversion,
+    FormatStringToStringOpConversion,
     DisplayBIOpConversion,
 
     // Patterns for file I/O operations.
@@ -6728,6 +7171,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringCmpOpConversion,
     IntToStringOpConversion,
     StringToIntOpConversion,
+    SScanfBIOpConversion,
     IsUnknownBIOpConversion
   >(typeConverter, patterns.getContext());
   // clang-format on
