@@ -11,15 +11,16 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 ```
 
-**Current Blockers** (2 remaining):
-1. **`atobin`** - String method to convert binary string to int (uvm_root.svh:1050)
-2. **Class type check** - `uvm_heartbeat_callback` not recognized as derived from `uvm_heartbeat`
+**Current Blockers / Limitations**:
+1. **Class upcast with parameterized base** - `uvm_reg_mem_hdl_paths_seq extends uvm_reg_sequence #(...)` fails upcast verification because parameterized base class not recognized as base.
+2. **Runtime gaps** - Randomization/coverage not implemented; DPI/VPI still stubs; MooreToCore queue globals lowering pending.
 
-**Previous Blockers FIXED** (This Session):
-1. ~~**IntType CRASH**~~ ✅ FIXED (76612d5bd) - ReplicateOp type check
-2. ~~**String replication**~~ ✅ FIXED (d16609422) - Added StringReplicateOp
-3. ~~**$sscanf**~~ ✅ FIXED (2657ceab7) - Added SScanfBIOp
-4. ~~**DPI-C imports**~~ ✅ FIXED (942537c2a) - Return meaningful stub values
+**Recent Fixes (This Session)**:
+- **Global variable redefinition** ✅ FIXED (a152e9d35) - Fixed duplicate GlobalVariableOp when class type references the variable in methods (uvm_default_line_printer pattern). Uses placeholder type during recursive conversion, then updates to correct type.
+- **UVM class declaration** ✅ FIXED (555a78350) - ClassDeclOp SymbolTable block requirement, WaitConditionOp 2-state type, func.return for pure virtual methods
+- **String ato* methods** ✅ FIXED (14dfdbe9f + 34ab7a758) - Added atoi, atohex, atooct, atobin support for UVM command-line parsing
+- **Non-integral assoc array keys** ✅ FIXED (f6b79c4c7) - String and class handle keys for UVM pools
+- **Pure virtual method stubbing** ✅ FIXED (f6b79c4c7) - Default returns for TLM methods
 
 **Previous Blockers FIXED** (Earlier):
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
@@ -51,34 +52,41 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ---
 
-## Active Workstreams (2 Agents Running)
+## Active Workstreams (keep 4 agents busy)
 
-### Track A: String atobin Method
-**Status**: 🔄 IN PROGRESS - Agent working on fix
-**Error**: `unsupported system call 'atobin'` in uvm_root.svh:1050
-**Task**: Add StringAtoBinOp similar to atoi/atohex/atooct
-**Files**: MooreOps.td, Expressions.cpp
+### Track A: Import Crash Triage
+**Status**: 🔄 IN PROGRESS  
+**Task**: Identify and guard the `cast<IntType>` assertion in call lowering (likely `$right/$high`/queue size or format_string path). Add defensive type checks and repro harness.  
+**Files**: lib/Conversion/ImportVerilog/Expressions.cpp, Structure.cpp
 
-### Track B: Class Type Check Fix
-**Status**: 🔄 IN PROGRESS - Agent working on fix
-**Error**: `uvm_heartbeat_callback` not recognized as derived from `uvm_heartbeat`
-**Task**: Fix isClassDerivedFrom or callback class handling
-**Files**: Expressions.cpp - class type checking
+### Track B: String/Format + Queue Compatibility
+**Status**: 🔄 IN PROGRESS  
+**Task**: Normalize `format_string` → `string` in queue push_back/concat and string_concat operands; ensure queue element coercions verified.  
+**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
 
-### Previously Completed Tracks (This Session)
-- **Track A (IntType)**: ✅ FIXED (76612d5bd) - ReplicateOp type check
-- **Track B (DPI-C)**: ✅ FIXED (942537c2a) - Stub values for DPI imports
-- **Track C ($sscanf)**: ✅ FIXED (2657ceab7) - Added SScanfBIOp
-- **Track D (String Rep)**: ✅ FIXED (d16609422) - Added StringReplicateOp
-- **Track D (File I/O)**: ✅ FIXED (52511fe46) - Lowering for $fopen/$fwrite/$fclose
+### Track C: Abstract Method Return Stubs
+**Status**: 🔄 IN PROGRESS  
+**Task**: Sweep pure virtual functions (factory/pool/callback classes) to ensure stub returns match signature and verifier passes; adjust return insertions.  
+**Files**: lib/Conversion/ImportVerilog/Structure.cpp, Statements.cpp
+
+### Track D: AVIP Regression Testing
+**Status**: 🔄 IN PROGRESS  
+**Task**: Keep running `~/mbit/*` interface/global packages after each crash fix; capture new failures.  
+**Files**: test infra/scripts
 
 ---
 
 ## Priority Queue
 
 ### CRITICAL (Blocking UVM Parsing)
-1. **Fix remaining IntType Crash** - Another location crashes, not case statements
-2. **DPI-C imports** - UVM uses extensively for regex, command line, etc.
+1. **Class upcast with parameterized base** - `uvm_reg_sequence #(...)` not recognized as base of `uvm_reg_mem_hdl_paths_seq`. Need to handle parameterized class inheritance in upcast verification.
+
+### RECENTLY FIXED ✅
+- ~~**Global variable redefinition**~~ - ✅ Fixed (a152e9d35) - Recursive type conversion duplicate prevention
+- ~~**UVM class declaration issues**~~ - ✅ Fixed (555a78350) - SymbolTable block, 2-state types, pure virtual returns
+- ~~**String ato* methods**~~ - ✅ Fixed (14dfdbe9f + 34ab7a758)
+- ~~**Non-integral assoc array keys**~~ - ✅ Fixed (f6b79c4c7)
+- ~~**Pure virtual method stubbing**~~ - ✅ Fixed (f6b79c4c7)
 
 ### PREVIOUSLY FIXED ✅
 - ~~**$fopen**~~ - ✅ Fixed (ce8d1016a)
@@ -89,9 +97,10 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 - ~~**%20s format**~~ - ✅ Fixed (88085cbd7)
 
 ### HIGH (After UVM Parses)
-3. **Complete MooreToCore lowering** - All ops must lower for simulation
+3. **Complete MooreToCore lowering** - All ops must lower for simulation (ato* already done; queue globals pending)
 4. **Enum iteration methods** - first(), next(), last(), prev()
 5. **MooreSim execution** - Run compiled testbenches
+6. **Factory runtime** - Ensure uvm_pool/callback singleton handling matches specialization typing
 
 ### MEDIUM (Production Quality)
 6. **Coverage groups** - covergroup, coverpoint
@@ -134,6 +143,7 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 - [x] putc() character assignment
 - [x] %p format specifier
 - [x] String in format strings (emitDefault fix)
+- [x] atoi(), atohex(), atooct(), atobin() (14dfdbe9f)
 
 ### File I/O ✅ Complete
 - [x] $fopen - file open (ce8d1016a)
@@ -216,6 +226,7 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `14dfdbe9f` - [ImportVerilog] Add support for string ato* methods (atoi, atohex, atooct, atobin)
 - `2657ceab7` - [ImportVerilog] Add support for $sscanf system function
 - `ab38bd7f5` - [Docs] Update blockers - IntType and string replication fixed
 - `d16609422` - [ImportVerilog] Add StringReplicateOp for string replication
