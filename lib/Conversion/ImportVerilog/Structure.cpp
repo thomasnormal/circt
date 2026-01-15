@@ -1328,10 +1328,16 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
   moore::ClassDeclOp ownerDecl;
 
   if (auto *classTy = thisTy.as_if<slang::ast::ClassType>()) {
-    // If the class is not yet in the map, declare it now. This handles cases
+    // If the class is not yet in the map, convert it now. This handles cases
     // where a class method references its own class type (self-reference) before
-    // the class declaration is fully processed. declareClass will return the
-    // existing lowering if the class was already declared.
+    // the class declaration is fully processed.
+    // Note: We call convertClassDeclaration (not just declareClass) to ensure
+    // the class body is populated with methods. This is important for
+    // parameterized class specializations where the specialization might be
+    // encountered via a method's 'this' type before being explicitly converted.
+    // Failures are tolerated (e.g., for forward references or recursive calls
+    // that will be resolved later), but the class declaration must exist.
+    (void)convertClassDeclaration(*classTy);
     auto *lowering = declareClass(*classTy);
     if (!lowering || !lowering->op) {
       mlir::emitError(loc) << "class '" << classTy->name
