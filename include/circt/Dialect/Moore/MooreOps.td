@@ -2948,6 +2948,44 @@ def FCloseBIOp : Builtin<"fclose"> {
   let assemblyFormat = "$fd attr-dict";
 }
 
+def SScanfBIOp : Builtin<"sscanf"> {
+  let summary = "Read formatted data from a string";
+  let description = [{
+    Corresponds to the `$sscanf` system function. Reads data from the input
+    string according to the format specification and stores the results in
+    the provided output arguments.
+
+    The format string supports the following format specifiers:
+    - %d: Signed decimal integer
+    - %h, %x: Hexadecimal integer
+    - %o: Octal integer
+    - %b: Binary integer
+    - %s: String (whitespace-delimited)
+    - %c: Single character
+
+    Returns the number of items successfully read and assigned, or EOF (-1)
+    if an input failure occurs before any conversion.
+
+    The `args` are references to variables where the parsed values will be
+    stored. The number of format specifiers in the format string should match
+    the number of output arguments.
+
+    Example:
+    ```
+    string s = "42 hello";
+    int x;
+    string str;
+    int n = $sscanf(s, "%d %s", x, str);
+    // n = 2, x = 42, str = "hello"
+    ```
+
+    See IEEE 1800-2017 Section 21.3.4 "Reading data from a string".
+  }];
+  let arguments = (ins StringType:$input, StrAttr:$format, Variadic<RefType>:$args);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$input `,` $format `,` $args attr-dict `:` type($args)";
+}
+
 //===----------------------------------------------------------------------===//
 // Classes
 //===----------------------------------------------------------------------===//
