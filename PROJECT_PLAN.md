@@ -14,9 +14,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **Current Errors (blocking)**:
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
 2. ~~`$fopen` unsupported~~ ✅ FIXED (ce8d1016a)
-3. `$fclose` unsupported (uvm_text_tr_database.svh:132) - NEW
-4. `next` unsupported - string assoc array iterator (uvm_report_server.svh:514) - Track D
-5. **CRASH** - `cast<TypedValue<IntType>>` assertion failure - Track A
+3. ~~`next` unsupported~~ ✅ FIXED (2fa392a98) - string assoc array iteration
+4. `$fclose` unsupported (uvm_text_tr_database.svh:132) - Track B working
+5. `%20s` width specifier not supported (uvm_report_catcher.svh:364) - NEW
+6. **CRASH** - `cast<TypedValue<IntType>>` assertion failure - Track C working
 
 ---
 
@@ -28,7 +29,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | **Interfaces** | Partial | Virtual interfaces, modports | ✅ Complete |
 | **Process Control** | fork/join designed | fork/join, disable, wait | ✅ Designed |
 | **File I/O** | $fopen, $fwrite done | $fopen, $fwrite, $fclose | ⚠️ Need $fclose |
-| **Assoc Arrays** | Int keys work | All key types + iterators | ⚠️ String keys broken |
+| **Assoc Arrays** | Int keys work | All key types + iterators | ✅ String keys fixed |
 | **Randomization** | Not supported | rand/randc, constraints | ⚠️ Parsing only |
 | **Coverage** | Coverage dialect exists | Full functional coverage | ⚠️ Partial |
 | **Assertions** | Basic SVA | Full SVA | ✅ SVA dialect |
@@ -38,29 +39,29 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Active Workstreams (4 Agents Running)
 
-### Track A: Simulation & Process Control (track-a-sim)
-**Current Task**: Fix IntType assertion crash
-**Agent**: a90c570 (running)
-**Goal**: Debug and fix the TypedValue<IntType> crash during UVM parsing
+### Track A: Enum Support (track-a-sim)
+**Status**: ✅ MERGED - Enum iteration methods
+**Agent**: a90c570 (completed)
+**Commit**: f8e4b82cf - [ImportVerilog] Add enum iteration methods (first, next, last, prev)
 **Files**: lib/Conversion/ImportVerilog/Expressions.cpp
 
 ### Track B: UVM & File I/O (track-b-uvm)
-**Status**: ✅ COMPLETED - $fopen implemented
-**Agent**: a6fa14c (completed)
-**Commit**: ce8d1016a - [ImportVerilog] Add $fopen system call support
-**Files**: MooreOps.td (FOpenBIOp), Expressions.cpp
+**Current Task**: Implement $fclose syscall
+**Agent**: af22fa5 (running)
+**Goal**: Complete file I/O support ($fopen, $fwrite, $fclose)
+**Files**: MooreOps.td (FCloseBIOp), Statements.cpp
 
 ### Track C: Types & Coverage (track-c-types)
-**Status**: ✅ COMPLETED - $fwrite implemented
-**Agent**: abd8dc2 (completed)
-**Commit**: ccfc4f6ca - [ImportVerilog] Add $fwrite system call support
-**Files**: MooreOps.td (FWriteBIOp), Statements.cpp
+**Current Task**: Fix IntType assertion crash
+**Agent**: af43110 (running)
+**Goal**: Fix cast<TypedValue<IntType>> crash during UVM parsing
+**Files**: FormatStrings.cpp, FormatIntOp
 
 ### Track D: Developer Experience (track-d-devex)
-**Current Task**: Fix string-keyed associative array next()
-**Agent**: a7f1877 (running)
-**Goal**: Enable string key iteration in assoc arrays
-**Files**: Expressions.cpp, MooreOps.td
+**Status**: ✅ MERGED - String assoc array iteration
+**Agent**: a7f1877 (completed)
+**Commit**: 2fa392a98 - [MooreToCore] Fix string-keyed associative array iteration
+**Files**: MooreRuntime.h/cpp, MooreToCore.cpp
 
 ---
 
@@ -109,7 +110,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 - [x] Dynamic arrays with new[size]
 - [x] Associative arrays (int keys)
 - [x] exists(), delete(key)
-- [ ] first(), next(), last(), prev() for string keys
+- [x] first(), next(), last(), prev() for string keys (2fa392a98)
 
 ### String Support
 - [x] String type
@@ -199,11 +200,11 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `2fa392a98` - [MooreToCore] Fix string-keyed associative array iteration
+- `f8e4b82cf` - [ImportVerilog] Add enum iteration methods (first, next, last, prev)
+- `fdea04e85` - [Docs] Update project plan with January 15 progress
 - `ccfc4f6ca` - [ImportVerilog] Add $fwrite system call support
 - `ce8d1016a` - [ImportVerilog] Add $fopen system call support
-- `10db8cdd0` - [Docs] Update project plan with January 14 session progress
-- `9be6c6c4c` - [ImportVerilog] Handle string types in emitDefault
-- `4b9b3441d` - [MooreToCore] Add lowering for AssocArrayExistsOp
 
 ---
 
