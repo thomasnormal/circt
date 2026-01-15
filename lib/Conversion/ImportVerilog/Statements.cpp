@@ -491,23 +491,41 @@ struct StmtVisitor {
         if (auto defOp = maybeConst.getDefiningOp<moore::ConstantOp>())
           itemConsts.push_back(defOp.getValueAttr());
 
-        // Generate the appropriate equality operator.
+        // Generate the appropriate equality operator based on type.
         Value cond;
-        switch (caseStmt.condition) {
-        case CaseStatementCondition::Normal:
-          cond = moore::CaseEqOp::create(builder, itemLoc, caseExpr, value);
-          break;
-        case CaseStatementCondition::WildcardXOrZ:
-          cond = moore::CaseXZEqOp::create(builder, itemLoc, caseExpr, value);
-          break;
-        case CaseStatementCondition::WildcardJustZ:
-          cond = moore::CaseZEqOp::create(builder, itemLoc, caseExpr, value);
-          break;
-        case CaseStatementCondition::Inside:
-          mlir::emitError(loc, "unsupported set membership case statement");
-          return failure();
+        if (isa<moore::StringType>(caseExpr.getType())) {
+          // String case statement - use string comparison.
+          cond = moore::StringCmpOp::create(
+              builder, itemLoc, moore::StringCmpPredicate::eq, caseExpr, value);
+          cond = context.convertToBool(cond);
+          if (!cond)
+            return failure();
+          cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, cond);
+        } else {
+          // Integer/enum case statement - convert to simple bit vector.
+          auto caseExprSBV = context.convertToSimpleBitVector(caseExpr);
+          auto valueSBV = context.convertToSimpleBitVector(value);
+          if (!caseExprSBV || !valueSBV)
+            return failure();
+          switch (caseStmt.condition) {
+          case CaseStatementCondition::Normal:
+            cond = moore::CaseEqOp::create(builder, itemLoc, caseExprSBV,
+                                           valueSBV);
+            break;
+          case CaseStatementCondition::WildcardXOrZ:
+            cond = moore::CaseXZEqOp::create(builder, itemLoc, caseExprSBV,
+                                             valueSBV);
+            break;
+          case CaseStatementCondition::WildcardJustZ:
+            cond = moore::CaseZEqOp::create(builder, itemLoc, caseExprSBV,
+                                            valueSBV);
+            break;
+          case CaseStatementCondition::Inside:
+            mlir::emitError(loc, "unsupported set membership case statement");
+            return failure();
+          }
+          cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, cond);
         }
-        cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, cond);
 
         // If the condition matches, branch to the match block. Otherwise
         // continue checking the next expression in a new block.
