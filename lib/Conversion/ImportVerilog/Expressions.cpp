@@ -2087,6 +2087,68 @@ struct RvalueExprVisitor : public ExprVisitor {
       return fmtValue.value();
     }
 
+    // $sscanf(str, format, args...) reads formatted data from a string.
+    // IEEE 1800-2017 Section 21.3.4 "Reading data from a string".
+    // The first argument is the input string, the second is the format string,
+    // and the remaining arguments are output variables (wrapped in
+    // AssignmentExpression by slang).
+    // Returns the number of items successfully read.
+    if (!subroutine.name.compare("$sscanf") && args.size() >= 2) {
+      // First argument is the input string
+      Value inputStr = context.convertRvalueExpression(*args[0]);
+      if (!inputStr)
+        return {};
+
+      // Convert to StringType if not already
+      if (!isa<moore::StringType>(inputStr.getType())) {
+        inputStr = moore::ConversionOp::create(
+            builder, loc, moore::StringType::get(context.getContext()),
+            inputStr);
+      }
+
+      // Second argument is the format string - must be a string literal
+      const auto *fmtArg = args[1];
+      std::string formatStr;
+      if (const auto *strLit = fmtArg->as_if<slang::ast::StringLiteral>()) {
+        formatStr = std::string(strLit->getValue());
+      } else {
+        // Try to evaluate as constant
+        auto cv = context.evaluateConstant(*fmtArg);
+        if (cv && cv.isString()) {
+          formatStr = cv.str();
+        } else {
+          mlir::emitError(loc) << "$sscanf format must be a string literal";
+          return {};
+        }
+      }
+
+      // Remaining arguments are output variables
+      SmallVector<Value> outputRefs;
+      for (size_t i = 2; i < args.size(); ++i) {
+        const auto *arg = args[i];
+        // Slang wraps output arguments in AssignmentExpression
+        if (const auto *assignExpr =
+                arg->as_if<slang::ast::AssignmentExpression>()) {
+          Value ref = context.convertLvalueExpression(assignExpr->left());
+          if (!ref)
+            return {};
+          outputRefs.push_back(ref);
+        } else {
+          // Try direct lvalue conversion
+          Value ref = context.convertLvalueExpression(*arg);
+          if (!ref)
+            return {};
+          outputRefs.push_back(ref);
+        }
+      }
+
+      // Create the sscanf operation
+      auto sscanfOp = moore::SScanfBIOp::create(builder, loc, inputStr,
+                                                 builder.getStringAttr(formatStr),
+                                                 outputRefs);
+      return sscanfOp.getResult();
+    }
+
     // Handle string substr method: str.substr(start, len) has 3 args
     if (!subroutine.name.compare("substr") && args.size() == 3) {
       Value str = context.convertRvalueExpression(*args[0]);
