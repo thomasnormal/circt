@@ -4,6 +4,12 @@
 
 **Status**: UVM parsing complete! `uvm_pkg.sv` parses with **zero errors** (exit code 0). All 8 mbit/* AVIP global packages also parse successfully.
 
+### Queue/Dynamic Array Indexing (550949250)
+- **dyn_extract lowering**: Implemented queue and dynamic array indexing via `DynExtractOpConversion`
+- **dyn_extract_ref lowering**: Added ref-based indexing support for write operations
+- **StringPutC/StringItoa fixes**: Fixed to use LLVM store instead of llhd::DriveOp
+- **Impact**: Unblocked 970 queue indexing operations in UVM
+
 ### Mem2Reg Dominance Fix (b881afe61)
 - **Loop-local variable promotion**: Variables declared inside loops (e.g., `int idx;` inside `foreach`) were being incorrectly promoted by MLIR's Mem2Reg pass, causing dominance violations.
 - **Root cause**: When Mem2Reg creates block arguments at loop headers for promoted variables, it needs a reaching definition for edges entering from outside the loop. Loop-local variables don't dominate these entry edges.
