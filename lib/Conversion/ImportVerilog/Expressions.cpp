@@ -1685,13 +1685,26 @@ struct RvalueExprVisitor : public ExprVisitor {
   Value visitCall(const slang::ast::CallExpression &expr,
                   const slang::ast::SubroutineSymbol *subroutine) {
 
-    // DPI-C imports are not yet supported. Emit a remark and return a dummy
-    // value to allow compilation to continue.
+    // DPI-C imports are not yet supported. Emit a remark and return a
+    // meaningful default value to allow compilation to continue.
+    // For UVM compatibility, we return appropriate defaults:
+    // - int/integer types: return 0
+    // - string types: return empty string
+    // - void functions: return a void cast
+    // We still declare the function so it appears in the IR for potential
+    // future linkage with actual DPI implementations.
     if (subroutine->flags & slang::ast::MethodFlags::DPIImport) {
       mlir::emitRemark(loc) << "DPI-C imports not yet supported; call to '"
                             << subroutine->name << "' skipped";
-      // Return a dummy value for the result type, or a void cast for void
-      // functions.
+
+      // Declare the DPI function (creates func.func private declaration)
+      // and mark it as converted so it doesn't get processed again.
+      auto *lowering = context.declareFunction(*subroutine);
+      if (lowering) {
+        (void)context.convertFunction(*subroutine);
+      }
+
+      // Return a meaningful default value based on the result type.
       if (expr.type->isVoid()) {
         return mlir::UnrealizedConversionCastOp::create(
                    builder, loc, moore::VoidType::get(context.getContext()),
@@ -1701,6 +1714,22 @@ struct RvalueExprVisitor : public ExprVisitor {
       auto type = context.convertType(*expr.type);
       if (!type)
         return {};
+
+      // For integer types, return 0
+      if (auto intType = dyn_cast<moore::IntType>(type)) {
+        return moore::ConstantOp::create(builder, loc, intType, 0);
+      }
+
+      // For string types, return empty string
+      if (isa<moore::StringType>(type)) {
+        // Create an empty string by converting a 0-width integer to string
+        auto intTy = moore::IntType::getInt(context.getContext(), 8);
+        auto emptyInt =
+            moore::ConstantStringOp::create(builder, loc, intTy, "");
+        return moore::IntToStringOp::create(builder, loc, emptyInt);
+      }
+
+      // For other types, fall back to unrealized conversion cast
       return mlir::UnrealizedConversionCastOp::create(builder, loc, type,
                                                       ValueRange{})
           .getResult(0);
