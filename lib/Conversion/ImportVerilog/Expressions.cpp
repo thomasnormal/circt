@@ -3906,6 +3906,24 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   }
                   return {};
                 })
+          // File I/O functions (IEEE 1800-2017 Section 21.3)
+          .Case("$fopen",
+                [&]() -> Value {
+                  // $fopen(filename) opens file with default mode "r"
+                  // Convert to string type if needed (handles string literals)
+                  Value filename = value;
+                  if (!isa<moore::StringType>(filename.getType())) {
+                    // String literals may be IntType - convert to string
+                    if (isa<moore::IntType>(filename.getType())) {
+                      filename = moore::IntToStringOp::create(builder, loc,
+                                                              filename);
+                    } else {
+                      return {};
+                    }
+                  }
+                  return moore::FOpenBIOp::create(builder, loc, filename,
+                                                  /*mode=*/nullptr);
+                })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
@@ -3946,6 +3964,30 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   // $hypot(x, y) returns sqrt(x^2 + y^2)
                   // IEEE 1800-2017 section 20.8.2 "Real math functions"
                   return moore::HypotBIOp::create(builder, loc, value1, value2);
+                })
+          // File I/O functions (IEEE 1800-2017 Section 21.3)
+          .Case("$fopen",
+                [&]() -> Value {
+                  // $fopen(filename, mode) opens file with specified mode
+                  // Convert to string type if needed (handles string literals)
+                  Value filename = value1;
+                  Value mode = value2;
+                  if (!isa<moore::StringType>(filename.getType())) {
+                    if (isa<moore::IntType>(filename.getType())) {
+                      filename = moore::IntToStringOp::create(builder, loc,
+                                                              filename);
+                    } else {
+                      return {};
+                    }
+                  }
+                  if (!isa<moore::StringType>(mode.getType())) {
+                    if (isa<moore::IntType>(mode.getType())) {
+                      mode = moore::IntToStringOp::create(builder, loc, mode);
+                    } else {
+                      return {};
+                    }
+                  }
+                  return moore::FOpenBIOp::create(builder, loc, filename, mode);
                 })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
