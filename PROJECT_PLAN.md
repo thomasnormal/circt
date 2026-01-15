@@ -4,20 +4,22 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: UVM Parsing - 1 CRASH REMAINING (January 15, 2026)
+## Current Status: ALL AVIPs PASSING ✅ (January 15, 2026)
 
 **Test Command**:
 ```bash
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 ```
 
-**Current Errors (blocking)**:
+**All 9 MBIT AVIPs Pass**: ahb, apb, axi4, axi4Lite, i2s, i3c, jtag, spi, uart
+
+**All Previous Blockers FIXED**:
 1. ~~`$fwrite` unsupported~~ ✅ FIXED (ccfc4f6ca)
 2. ~~`$fopen` unsupported~~ ✅ FIXED (ce8d1016a)
 3. ~~`next` unsupported~~ ✅ FIXED (2fa392a98) - string assoc array iteration
 4. ~~`$fclose` unsupported~~ ✅ FIXED (b4a18d045) - File I/O complete
 5. ~~`%20s` width specifier not supported~~ ✅ FIXED (88085cbd7) - String format width
-6. **CRASH** - `cast<TypedValue<IntType>>` assertion failure - Track C working
+6. ~~IntType crash~~ ✅ FIXED (3410de2dc) - String case statement handling
 
 ---
 
@@ -53,10 +55,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **Files**: MooreOps.td (FCloseBIOp), Statements.cpp
 
 ### Track C: Types & Coverage (track-c-types)
-**Current Task**: Fix IntType assertion crash
-**Agent**: af43110 (running)
-**Goal**: Fix cast<TypedValue<IntType>> crash during UVM parsing
-**Files**: FormatStrings.cpp, FormatIntOp
+**Status**: ✅ MERGED - IntType crash fixed
+**Agent**: af43110 (completed)
+**Commit**: 3410de2dc - [ImportVerilog] Fix case statement with string expressions
+**Files**: Statements.cpp - String case statements now use StringCmpOp
 
 ### Track D: Developer Experience (track-d-devex)
 **Status**: ✅ MERGED - String assoc array iteration
@@ -68,16 +70,16 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Priority Queue
 
-### CRITICAL (Blocking UVM Parsing)
-1. **Fix IntType Crash** - Track A - Must fix to proceed
-2. **$fopen** - Track B - File I/O needed by UVM
-3. **$fwrite** - Track C - File I/O needed by UVM
-4. **String assoc array next()** - Track D - Used by UVM report server
+### CRITICAL (Blocking UVM Parsing) - ALL FIXED ✅
+1. ~~**Fix IntType Crash**~~ - ✅ Fixed (3410de2dc)
+2. ~~**$fopen**~~ - ✅ Fixed (ce8d1016a)
+3. ~~**$fwrite**~~ - ✅ Fixed (ccfc4f6ca)
+4. ~~**String assoc array next()**~~ - ✅ Fixed (2fa392a98)
 
-### HIGH (Blocking AVIP Runs)
-5. **$fclose** - File descriptor cleanup
+### HIGH (Next Steps - Simulation)
+5. **Complete MooreToCore lowering** - All ops must lower for simulation
 6. **$fdisplay** - Formatted output to file
-7. **Complete MooreToCore lowering** - All ops must lower
+7. **MooreSim execution** - Run compiled testbenches
 
 ### MEDIUM (Production Quality)
 8. **DPI-C imports** - For full UVM compatibility
