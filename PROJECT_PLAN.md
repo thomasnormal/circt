@@ -59,29 +59,41 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Multi-File Parsing Fix
-**Status**: 🔴 IN PROGRESS
-**Task**: Fix the empty filename error when parsing multiple SV files together. This blocks AVIP+UVM integration testing.
-**Files**: lib/Tools/circt-verilog/, slang integration
-**Next**: Investigate why parsing `uvm_pkg.sv` + `apb_global_pkg.sv` together fails with "cannot open input file ''"
-
-### Track B: MooreToCore Lowering Completion
-**Status**: 🟡 IN PROGRESS
-**Task**: Lower remaining 13 Moore ops for simulation. Previous analysis showed 95.4% coverage (268/281 ops).
+### Track A: Array Size Lowering
+**Status**: 🔴 BLOCKING
+**Task**: Implement moore.array.size lowering for queues/dynamic arrays. 349 uses in UVM.
 **Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Implement lowering patterns for unlowered ops found when running moore-to-core on UVM IR.
+**Next**: Add ArraySizeOpConversion - extract length field (field 1) from {ptr, i64} struct.
 
-### Track C: AVIP Component Testing
+### Track B: Virtual Interface Type Handling
 **Status**: 🟡 IN PROGRESS
-**Task**: Test individual AVIP components (interfaces, BFMs) that don't require UVM imports.
+**Task**: Fix virtual interface type handling that blocks full AVIP+UVM BFM integration.
+**Files**: lib/Conversion/ImportVerilog/, Moore type system
+**Next**: Investigate virtual interface type casting errors in uvm_resource.svh.
+
+### Track C: AVIP+UVM Integration
+**Status**: 🟡 IN PROGRESS
+**Task**: Now that multi-file parsing works, test full AVIP hdlTop files with UVM imports.
 **Files**: ~/mbit/*_avip/src/hdl_top/
-**Next**: Parse apb_if.sv, master_agent_bfm.sv, slave_agent_bfm.sv individually.
+**Next**: Test `hdl_top.sv` with UVM package for APB, AXI4, SPI AVIPs.
 
-### Track D: Unit Test Coverage
+### Track D: Run Lit Tests
 **Status**: 🟡 IN PROGRESS
-**Task**: Add lit tests for recent fixes including Mem2Reg loop-local variable handling.
-**Files**: test/Conversion/ImportVerilog/, test/Dialect/Moore/
-**Next**: Create test for loop-local variable dominance fix (b881afe61).
+**Task**: Run the new unit tests to verify they pass. Fix any test failures.
+**Files**: test/Dialect/Moore/, test/Conversion/ImportVerilog/
+**Next**: Run llvm-lit on new test files, fix any failures.
+
+### Previous Track Results (Iteration 2)
+- **Track A**: ✅ MooreSim tested - dyn_extract was blocking, now fixed
+- **Track B**: ✅ dyn_extract/dyn_extract_ref implemented (550949250) - 970 queue ops unblocked
+- **Track C**: ✅ AVIP+UVM tested - interfaces pass, BFMs blocked on virtual interface types
+- **Track D**: ✅ All unit tests pass after fixes (b9335a978)
+
+### Previous Track Results (Iteration 1)
+- **Track A**: ✅ Multi-file parsing fixed (170414961) - empty filename handling added
+- **Track B**: ✅ MooreToCore patterns added (69adaa467) - FormatString, CallIndirect, SScanf, etc.
+- **Track C**: ✅ AVIP testing done - 13/14 components pass (timescale issue with JTAG)
+- **Track D**: ✅ Unit tests added (b27f71047) - Mem2Reg, static properties, time type
 
 ---
 
