@@ -4,6 +4,28 @@
 
 **Status**: UVM parsing complete! `uvm_pkg.sv` parses with **zero errors** (exit code 0). All 8 mbit/* AVIP global packages also parse successfully.
 
+### MooreToCore Lowering Progress
+
+**Current Status**: MooreToCore lowering progressing rapidly. Next blocker: `moore.vtable.load_method` (4764 ops).
+
+| Blocker | Commit | Ops Unblocked | Status |
+|---------|--------|---------------|--------|
+| Mem2Reg dominance | b881afe61 | 4 | ✅ Fixed |
+| dyn_extract (queues) | 550949250 | 970 | ✅ Fixed |
+| array.size | f18154abb | 349 | ✅ Fixed |
+| vtable.load_method | - | 4764 | 🔴 Next |
+
+### Array Size Lowering (f18154abb)
+- **Queue/dynamic array size**: Extract length field (field 1) from `{ptr, i64}` struct
+- **Associative array size**: Added `__moore_assoc_size` runtime function
+- **Impact**: Unblocked 349 array.size operations in UVM
+
+### Virtual Interface Comparison (8f843332d)
+- **VirtualInterfaceNullOp**: Creates null virtual interface value
+- **VirtualInterfaceCmpOp**: Compares virtual interfaces (eq/ne)
+- **BoolCastOp fix**: Now handles pointer types for `if(vif)` checks
+- **Impact**: Fixes "cannot be cast to simple bit vector" errors in UVM config_db
+
 ### Queue/Dynamic Array Indexing (550949250)
 - **dyn_extract lowering**: Implemented queue and dynamic array indexing via `DynExtractOpConversion`
 - **dyn_extract_ref lowering**: Added ref-based indexing support for write operations
