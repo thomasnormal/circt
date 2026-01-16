@@ -1019,26 +1019,27 @@ struct StmtVisitor {
     if (!property)
       return failure();
 
-    // Handle assertion statements that don't have an action block.
-    if (stmt.ifTrue && stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
-      switch (stmt.assertionKind) {
-      case slang::ast::AssertionKind::Assert:
-        verif::AssertOp::create(builder, loc, property, Value(), StringAttr{});
-        return success();
-      case slang::ast::AssertionKind::Assume:
-        verif::AssumeOp::create(builder, loc, property, Value(), StringAttr{});
-        return success();
-      default:
-        break;
-      }
-      mlir::emitError(loc) << "unsupported concurrent assertion kind: "
-                           << slang::ast::toString(stmt.assertionKind);
-      return failure();
+    if (stmt.ifTrue && !stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
+      mlir::emitWarning(loc)
+          << "ignoring concurrent assertion action blocks during import";
     }
 
-    mlir::emitError(loc)
-        << "concurrent assertion statements with action blocks "
-           "are not supported yet";
+    switch (stmt.assertionKind) {
+    case slang::ast::AssertionKind::Assert:
+      verif::AssertOp::create(builder, loc, property, Value(), StringAttr{});
+      return success();
+    case slang::ast::AssertionKind::Assume:
+      verif::AssumeOp::create(builder, loc, property, Value(), StringAttr{});
+      return success();
+    case slang::ast::AssertionKind::CoverProperty:
+      verif::CoverOp::create(builder, loc, property, Value(), StringAttr{});
+      return success();
+    default:
+      break;
+    }
+
+    mlir::emitError(loc) << "unsupported concurrent assertion kind: "
+                         << slang::ast::toString(stmt.assertionKind);
     return failure();
   }
 

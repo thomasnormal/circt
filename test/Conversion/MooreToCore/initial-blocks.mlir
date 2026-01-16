@@ -88,3 +88,73 @@ moore.module @MultipleSimpleInitials() {
   }
   moore.output
 }
+
+// Test initial block with $finish - should use seq.initial with sim.terminate
+// This is the key test for Track D: $finish Handling for seq.initial
+// CHECK-LABEL: hw.module @InitialWithFinish
+moore.module @InitialWithFinish() {
+  // CHECK: seq.initial() {
+  // CHECK:   sim.proc.print
+  // CHECK:   sim.terminate success, quiet
+  // CHECK: } : () -> ()
+  moore.procedure initial {
+    %fmt = moore.fmt.literal "\n"
+    moore.builtin.display %fmt
+    moore.builtin.finish 0
+    moore.unreachable
+  }
+  moore.output
+}
+
+// Test initial block with $finish and $display - should use seq.initial
+// CHECK-LABEL: hw.module @InitialDisplayFinish
+moore.module @InitialDisplayFinish() {
+  // CHECK: seq.initial() {
+  // CHECK:   sim.fmt.literal "Hello
+  // CHECK:   sim.proc.print
+  // CHECK:   sim.terminate success, quiet
+  // CHECK: } : () -> ()
+  moore.procedure initial {
+    %fmt = moore.fmt.literal "Hello\n"
+    moore.builtin.display %fmt
+    moore.builtin.finish 0
+    moore.unreachable
+  }
+  moore.output
+}
+
+// Test initial block with $fatal - should use seq.initial with sim.terminate failure
+// CHECK-LABEL: hw.module @InitialWithFatal
+moore.module @InitialWithFatal() {
+  // CHECK: seq.initial() {
+  // CHECK:   sim.proc.print
+  // CHECK:   sim.terminate failure, quiet
+  // CHECK: } : () -> ()
+  moore.procedure initial {
+    %fmt = moore.fmt.literal "Fatal: test error"
+    moore.builtin.severity fatal %fmt
+    moore.builtin.finish 1
+    moore.unreachable
+  }
+  moore.output
+}
+
+// Test that initial block with both wait and unreachable still uses llhd.process
+// CHECK-LABEL: hw.module @InitialWithWaitAndUnreachable
+moore.module @InitialWithWaitAndUnreachable() {
+  %a = moore.variable : !moore.ref<i1>
+  // CHECK: llhd.process {
+  // CHECK:   llhd.wait
+  // CHECK:   sim.terminate
+  // CHECK:   llhd.halt
+  // CHECK: }
+  moore.procedure initial {
+    moore.wait_event {
+      %0 = moore.read %a : !moore.ref<i1>
+      moore.detect_event any %0 : i1
+    }
+    moore.builtin.finish 0
+    moore.unreachable
+  }
+  moore.output
+}

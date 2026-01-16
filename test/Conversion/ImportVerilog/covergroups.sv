@@ -1,8 +1,7 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
 // REQUIRES: slang
 
-// Test that covergroup definitions are skipped with a remark, not a hard error.
-// Covergroups are not yet fully supported but should not block UVM code import.
+// Test that covergroup definitions and instantiation are properly imported.
 
 module CovergroupTest;
   logic clk;
@@ -10,12 +9,16 @@ module CovergroupTest;
   logic [3:0] addr;
 
   // CHECK: moore.module @CovergroupTest
+  // CHECK: moore.covergroup.decl @cg
+  // CHECK:   moore.coverpoint.decl @data
+  // CHECK:   moore.coverpoint.decl @addr
+  // CHECK:   moore.covercross.decl @data_X_addr
   covergroup cg @(posedge clk);
     coverpoint data;
     coverpoint addr;
     cross data, addr;
   endgroup
 
-  // Note: covergroup instantiation (cg cg_inst = new();) is not yet supported.
-  // This test verifies that the covergroup definition itself doesn't cause errors.
+  // CHECK: moore.covergroup.inst @cg
+  cg cg_inst = new();
 endmodule

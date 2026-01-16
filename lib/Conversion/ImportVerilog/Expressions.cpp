@@ -3837,6 +3837,23 @@ struct RvalueExprVisitor : public ExprVisitor {
     return {};
   }
 
+  // Handle covergroup instantiation: covergroup_type cg_inst = new();
+  Value visit(const slang::ast::NewCovergroupExpression &expr) {
+    // Convert the covergroup type to get the handle type.
+    auto type = context.convertType(*expr.type);
+    auto cgTy = dyn_cast<moore::CovergroupHandleType>(type);
+    if (!cgTy) {
+      mlir::emitError(loc) << "expected covergroup handle type, got " << type;
+      return {};
+    }
+
+    // Get the covergroup symbol from the type.
+    auto cgSym = cgTy.getCovergroupSym();
+
+    // Create the covergroup instantiation op.
+    return moore::CovergroupInstOp::create(builder, loc, cgTy, cgSym);
+  }
+
   /// Emit an error for all other expressions.
   template <typename T>
   Value visit(T &&node) {
