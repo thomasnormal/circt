@@ -966,6 +966,29 @@ struct RvalueExprVisitor : public ExprVisitor {
     return {};
   }
 
+  // Handle arbitrary symbol expressions, such as interface instance references.
+  // When assigning an interface instance to a virtual interface variable,
+  // slang represents the interface instance as an ArbitrarySymbolExpression.
+  Value visit(const slang::ast::ArbitrarySymbolExpression &expr) {
+    // Check if this is an interface instance reference
+    if (auto *instSym = expr.symbol->as_if<slang::ast::InstanceSymbol>()) {
+      // Look up the interface instance in our tracking map
+      auto it = context.interfaceInstances.find(instSym);
+      if (it != context.interfaceInstances.end()) {
+        // Return the reference to the interface instance
+        // The caller will use this to assign to a virtual interface variable
+        return it->second;
+      }
+    }
+
+    // Emit an error for other arbitrary symbol expressions we don't support
+    auto d = mlir::emitError(loc, "unsupported arbitrary symbol reference `")
+             << expr.symbol->name << "`";
+    d.attachNote(context.convertLocation(expr.symbol->location))
+        << "symbol kind: " << slang::ast::toString(expr.symbol->kind);
+    return {};
+  }
+
   // Handle type conversions (explicit and implicit).
   Value visit(const slang::ast::ConversionExpression &expr) {
     auto type = context.convertType(*expr.type);
