@@ -1,12 +1,18 @@
 # Recent Changes (UVM Parity Work)
 
-## January 16, 2026 - UVM MooreToCore 99% Complete!
+## January 16, 2026 - UVM MooreToCore 100% Complete!
 
-**Status**: UVM MooreToCore conversion nearly complete! Only `moore.array.locator` remains.
+**Status**: UVM MooreToCore conversion complete, including `moore.array.locator`.
+
+### Array Locator Inline Predicate Loop (uncommitted)
+- **Problem**: Complex `moore.array.locator` predicates (string comparisons, class handle comparisons, AND/OR, calls) were not lowered.
+- **Solution**: Inline predicate region into an `scf.for` loop, materialize predicate to `i1`, and push matches via `__moore_queue_push_back`.
+- **Impact**: Removes the last MooreToCore blocker for UVM conversion.
+- **Tests**: Added array.locator string predicate coverage in `test/Conversion/MooreToCore/queue-array-ops.mlir`.
 
 ### MooreToCore Lowering Progress
 
-**Current Status**: 99%+ of UVM converts through MooreToCore. Single remaining blocker.
+**Current Status**: 100% of UVM converts through MooreToCore.
 
 | Blocker | Commit | Ops Unblocked | Status |
 |---------|--------|---------------|--------|
@@ -22,7 +28,7 @@
 | StructExtract/Create crash | 59ccc8127 | 129 | ✅ Fixed |
 | Interface tasks/functions | d1cd16f75 | - | ✅ Fixed |
 | Interface task-to-task calls | d1b870e5e | - | ✅ Fixed |
-| **moore.array.locator** | - | 1+ | 🔴 Next |
+| **moore.array.locator** | - | 1+ | ✅ Fixed |
 
 ### Iteration 11 Fixes (January 16, 2026)
 
