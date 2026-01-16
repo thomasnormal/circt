@@ -1,5 +1,97 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 20: Critical Fixes & Simulation Pipeline
+
+**Status**: Major fixes landed - LSP debounce deadlock fixed, sim.proc.print lowering implemented, randomization architecture researched.
+
+### Track A: LSP Debounce Deadlock Fixed ✅
+
+**Commit**: 9f150f33f
+
+**Root Cause**: `abort()` in `PendingChanges.cpp` held mutex while calling `pool.wait()`, but worker tasks needed the same mutex in `debounceAndThen()` callback. Classic deadlock.
+
+**Fix**: Release mutex before `pool.wait()`. Also added fallback for single-threaded LLVM builds (`LLVM_ENABLE_THREADS=OFF`).
+
+**Files Modified**:
+- `lib/Tools/circt-verilog-lsp-server/Utils/PendingChanges.cpp`
+- `unittests/Tools/circt-verilog-lsp-server/Utils/PendingChangesTest.cpp`
+
+Users no longer need `--no-debounce` workaround.
+
+### Track B: sim.proc.print Lowering Implemented ✅
+
+**Commit**: 2be6becf7
+
+Added `PrintFormattedProcOpLowering` pattern in `LowerArcToLLVM.cpp` that:
+- Recursively processes `sim.fmt.*` operations (literal, concat, dec, hex, bin, oct, char, exp, flt, gen)
+- Builds printf-compatible format strings with proper specifiers
+- Generates LLVM globals for format strings and `llvm.call @printf`
+
+**Test Result**:
+```bash
+$ ./build/bin/arcilator integration_test/arcilator/JIT/proc-print.mlir --run
+value =         42
+hex = 0000002a
+Hello, World!
+```
+
+This unblocks behavioral simulation output for MooreToCore-generated IR.
+
+### Track C: Randomization Architecture Research
+
+**Findings**: Current implementation fills class memory with random bytes but ignores constraints.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `RandomizeOp` | Lowered | Calls `__moore_randomize_basic()` |
+| `ConstraintBlockOp` | Parsed | Discarded during lowering |
+| `ConstraintExprOp` | Parsed | Not executed |
+
+**AVIP Analysis** (1,097 randomization calls):
+- Range constraints: 59% (can implement without SMT)
+- Soft defaults: 23% (trivial)
+- Inside constraints: 12% (enumerable)
+- Complex: 6% (needs SMT)
+
+**Proposed Phase 2**: Implement constraint-aware randomization for common patterns (~80% coverage) without full SMT solver.
+
+### Track D: LSP AVIP Testing Results
+
+| Feature | Package Files | Interface Files | BFM Files |
+|---------|--------------|-----------------|-----------|
+| Document Symbols | ✅ Works | ❌ Empty | ❌ Empty (UVM) |
+| Hover | ✅ Works | ❌ Null | ❌ Null |
+| Completion | ✅ Excellent | ✅ Works | ❌ UVM errors |
+| Go-to-Definition | ❌ Empty | ❌ Empty | ❌ Empty |
+
+**Critical Gaps**:
+1. **UVM library not available** - 80%+ of AVIP code unusable
+2. **Interface declarations not supported** - Core to AVIP architecture
+3. **Cross-file navigation broken** - Even with `-y` flag
+
+**Workaround**: Use `-y` flag for package resolution:
+```bash
+circt-verilog-lsp-server -y ~/mbit/apb_avip/src/globals -y $UVM_HOME/src
+```
+
+### Commits This Iteration
+
+| Commit | Description |
+|--------|-------------|
+| `9f150f33f` | [VerilogLSP] Fix debounce deadlock in PendingChanges |
+| `2be6becf7` | [ArcToLLVM] Add sim.proc.print lowering to printf |
+
+### Next Steps by Track
+
+| Track | Priority | Task |
+|-------|----------|------|
+| A | HIGH | Add UVM library support to LSP |
+| B | HIGH | Test full MooreToCore→Arcilator pipeline |
+| C | MEDIUM | Implement Phase 2 constraint-aware randomization |
+| D | MEDIUM | Fix interface declaration support in LSP |
+
+---
+
 ## January 16, 2026 - Iteration 19: Comprehensive Testing & Validation
 
 **Status**: All tracks completed - unit tests 100%, LSP validated, AVIP gaps quantified, simulation path identified.
