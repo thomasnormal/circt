@@ -1,0 +1,48 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test LSP functionality for interface definitions and usage.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///iface.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"interface axi_if #(parameter DATA_WIDTH = 32) (\n  input logic clk,\n  input logic rst_n\n);\n  logic [DATA_WIDTH-1:0] wdata;\n  logic [DATA_WIDTH-1:0] rdata;\n  logic                  valid;\n  logic                  ready;\n  \n  modport master (\n    output wdata, valid,\n    input  rdata, ready\n  );\n  \n  modport slave (\n    input  wdata, valid,\n    output rdata, ready\n  );\nendinterface\n\nmodule axi_master (\n  axi_if.master bus\n);\n  assign bus.wdata = 32'hDEADBEEF;\n  assign bus.valid = 1'b1;\nendmodule"
+}}}
+// -----
+// Document symbols should include interface and module
+{"jsonrpc":"2.0","id":1,"method":"textDocument/documentSymbol","params":{
+  "textDocument":{"uri":"test:///iface.sv"}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:           "name": "axi_if"
+// CHECK:           "name": "axi_master"
+// -----
+// Hover over interface signal 'wdata' (line 4, col 25)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///iface.sv"},
+  "position":{"line":4,"character":25}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:           "value": "```systemverilog
+// CHECK:           logic [31:0] wdata
+// -----
+// Go to definition of 'bus.wdata' usage (line 23, col 14)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///iface.sv"},
+  "position":{"line":22,"character":14}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should navigate to wdata declaration in interface
+// CHECK:         "uri": "test:///iface.sv"
+// -----
+{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

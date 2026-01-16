@@ -1,0 +1,58 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test LSP functionality for procedural blocks (always, initial, tasks, functions).
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///procedural.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module procedural_test (\n  input  logic clk,\n  input  logic rst_n,\n  input  logic [7:0] data_in,\n  output logic [7:0] data_out\n);\n  logic [7:0] state;\n  logic [7:0] next_state;\n  \n  // Sequential logic\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n)\n      state <= 8'h00;\n    else\n      state <= next_state;\n  end\n  \n  // Combinational logic\n  always_comb begin\n    next_state = state + data_in;\n    data_out = state;\n  end\n  \n  // Task definition\n  task automatic compute_result;\n    input  logic [7:0] val;\n    output logic [7:0] result;\n  begin\n    result = val * 2;\n  end\n  endtask\n  \n  // Function definition\n  function automatic logic [7:0] increment;\n    input logic [7:0] val;\n  begin\n    increment = val + 1;\n  end\n  endfunction\nendmodule"
+}}}
+// -----
+// Document symbols should include tasks and functions
+{"jsonrpc":"2.0","id":1,"method":"textDocument/documentSymbol","params":{
+  "textDocument":{"uri":"test:///procedural.sv"}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:           "name": "procedural_test"
+// -----
+// Hover over 'state' variable (line 6, col 14)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///procedural.sv"},
+  "position":{"line":6,"character":14}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:           "value": "```systemverilog
+// CHECK:           logic [7:0] state
+// -----
+// Go to definition of 'state' usage in always_ff (line 12, col 6)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///procedural.sv"},
+  "position":{"line":12,"character":8}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should navigate to state declaration
+// CHECK:         "uri": "test:///procedural.sv"
+// -----
+// Go to definition of 'next_state' in always_comb (line 19, col 4)
+{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///procedural.sv"},
+  "position":{"line":19,"character":6}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should navigate to next_state declaration
+// CHECK:         "uri": "test:///procedural.sv"
+// -----
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

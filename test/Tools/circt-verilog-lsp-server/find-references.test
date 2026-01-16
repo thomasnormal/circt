@@ -1,0 +1,51 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test find references functionality for signals, ports, and parameters.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_refs (\n  input  logic clk,\n  input  logic data_in,\n  output logic data_out\n);\n  logic internal_sig;\n  assign internal_sig = data_in;\n  assign data_out = internal_sig;\nendmodule"
+}}}
+// -----
+// Find references to 'internal_sig' (line 5, col 8)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs.sv"},
+  "position":{"line":5,"character":8},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find the declaration and both usages
+// CHECK:         "uri": "test:///refs.sv"
+// -----
+// Find references to 'data_in' port (line 2, col 15)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs.sv"},
+  "position":{"line":2,"character":15},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find port declaration and usage in assign
+// CHECK:         "uri": "test:///refs.sv"
+// -----
+// Find references to 'clk' (should find only declaration if not used)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs.sv"},
+  "position":{"line":1,"character":15},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs.sv"
+// -----
+{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
