@@ -1321,10 +1321,6 @@ struct StmtVisitor {
 LogicalResult Context::convertStatement(const slang::ast::Statement &stmt) {
   assert(builder.getInsertionBlock());
   auto loc = convertLocation(stmt.sourceRange);
-  auto result = stmt.visit(StmtVisitor(*this, loc));
-  if (failed(result))
-    mlir::emitError(loc)
-        << "failed to convert statement " << slang::ast::toString(stmt.kind);
-  return result;
+  return stmt.visit(StmtVisitor(*this, loc));
 }
 // NOLINTEND(misc-no-recursion)
