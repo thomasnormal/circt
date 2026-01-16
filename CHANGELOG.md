@@ -31,6 +31,45 @@ Fixed JIT runtime linking for Z3 symbols in circt-bmc and circt-lec:
 - `tools/circt-bmc/CMakeLists.txt`
 - `tools/circt-lec/CMakeLists.txt`
 
+#### Comprehensive Test Suite Survey
+
+**sv-tests Coverage** (989 non-UVM tests):
+| Chapter | Pass Rate | Notes |
+|---------|-----------|-------|
+| Ch 5 (Lexical) | 86% | Strong |
+| Ch 11 (Operators) | 87% | Strong |
+| Ch 13 (Tasks/Functions) | 86% | Strong |
+| Ch 14 (Clocking Blocks) | **0%** | NOT IMPLEMENTED |
+| Ch 18 (Random/Constraints) | 25% | RandSequence missing |
+| Overall | **72.1%** (713/989) | Good baseline |
+
+**mbit AVIP Testing**:
+- Global packages: 8/8 (100%) pass
+- Interfaces: 6/8 (75%) pass
+- HVL packages: 0/8 (0%) - requires UVM library
+
+**verilator-verification SVA Tests** (verified):
+- --parse-only: 10/10 (100%)
+- --ir-hw: 9/10 (90%) - `$past(val) == 0` needs conversion pattern
+
+#### Clocking Block Implementation Plan (Research Complete)
+Slang already parses clocking blocks. Implementation needed:
+- `ClockingBlockDeclOp`, `ClockingSignalOp` in Moore dialect
+- Structure.cpp visitor for ClockingBlockSymbol
+- MooreToCore lowering patterns
+- Estimated: ~300-400 lines of code
+
+#### Clocked Assert Lowering for BMC (Research Complete)
+Problem: LTLToCore skips i1-property clocked_assert, leaving it unconverted.
+Solution: New pass to convert `clocked_assert → assert` for BMC pipeline.
+Location: Between LTLToCore and LowerToBMC in circt-bmc.cpp
+
+#### LLHD Process Interpreter (Phase 1A Started)
+Created initial implementation files:
+- `tools/circt-sim/LLHDProcessInterpreter.h` (9.8 KB)
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (21 KB)
+Implements: signal registration, time conversion, llhd.prb/drv/wait/halt handlers
+
 ---
 
 ## Iteration 29 (Complete) - January 16, 2026
