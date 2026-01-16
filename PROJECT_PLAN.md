@@ -23,9 +23,14 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 2. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
 3. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
 4. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
-5. **Performance/scale** ⚠️ NEEDS VALIDATION - Large UVM runs depend on mbit/* AVIP coverage
+5. **vtable.load_method for abstract classes** ⚠️ PARTIAL - Some abstract class method lookups fail (e.g., uvm_resource_base::get_name)
 
-**Recent Fixes (This Session)**:
+**Recent Fixes (This Session - Iteration 12)**:
+- **Array locator inline loop** ✅ FIXED (115316b07) - Complex predicates (string cmp, AND/OR, func calls) now lowered via scf.for loop
+- **llhd.time data layout crash** ✅ FIXED (1a4bf3014) - Structs with time fields now handled via getTypeSizeSafe()
+- **AVIP MooreToCore** ✅ VALIDATED - All 7 AVIPs (APB, AHB, AXI4, UART, I2S, I3C, SPI) pass through MooreToCore
+
+**Recent Fixes (Previous Session)**:
 - **RefType cast crash for structs with dynamic fields** ✅ FIXED (5dd8ce361) - StructExtractRefOp now uses LLVM GEP for structs containing strings/queues instead of crashing on SigStructExtractOp
 - **Mem2Reg loop-local variable dominance** ✅ FIXED (b881afe61) - Variables inside loops no longer promoted, fixing 4 dominance errors
 - **Static property via instance** ✅ FIXED (a1418d80f) - SystemVerilog allows `obj.static_prop` access. Now correctly generates GetGlobalVariableOp instead of ClassPropertyRefOp.
