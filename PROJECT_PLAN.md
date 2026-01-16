@@ -73,35 +73,45 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Array Locator + Predicate Coverage
-**Status**: 🟢 IN PROGRESS
-**Task**: Validate complex predicate lowering via inline loop; add regression tests
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp, test/Conversion/MooreToCore/
-**Next**: Add tests for class_handle_cmp, AND/OR, func.call predicates
-**Priority**: HIGH - Ensure UVM array locator patterns are fully covered
-
-### Track B: Test mbit AVIPs Full Pipeline with BFMs
+### Track A: Fix vtable.load_method for Abstract Classes
 **Status**: 🟡 IN PROGRESS
-**Task**: Test mbit/* AVIPs through complete pipeline including BFMs
-**Files**: ~/mbit/apb_avip/
-**Next**: Run APB, AHB, AXI4, and UART through MooreToCore; log any remaining failures
+**Task**: Fix vtable lookup for abstract class methods (e.g., uvm_resource_base::get_name)
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp (VTableLoadMethodOpConversion)
+**Next**: When class has no vtable, search derived class vtables for the method
+**Priority**: HIGH - Blocks full UVM MooreToCore conversion
 
-### Track C: Implement Basic Randomization Stubs
+### Track B: Test AVIP BFMs with UVM
 **Status**: 🟡 IN PROGRESS
-**Task**: Add stub implementations for randomize() to allow UVM to run
-**Files**: lib/Conversion/MooreToCore/
-**Next**: Return random values from std::rand() for rand fields
+**Task**: Test mbit/* AVIP BFM components (drivers/monitors) through full pipeline with UVM
+**Files**: ~/mbit/apb_avip/src/hvl_top/
+**Next**: Parse and convert APB driver/monitor with UVM library; log failures
+**Priority**: MEDIUM - Validates real-world verification code
 
-### Track D: Test MooreSim with Simple UVM Test
+### Track C: Implement Basic Randomization Runtime
 **Status**: 🟡 IN PROGRESS
-**Task**: Run a minimal UVM test through MooreSim
-**Files**: test/ or ~/uvm-core/
-**Next**: Create minimal UVM testbench and run through full pipeline
+**Task**: Add basic `__moore_randomize_basic` runtime that fills rand fields with random values
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp, include/circt/Support/MooreRuntime.h
+**Next**: Implement runtime function that iterates rand fields and assigns std::rand() values
+**Priority**: MEDIUM - Enables UVM tests to run without constraint solver
+
+### Track D: Test Simple SV Through Full Pipeline
+**Status**: 🟡 IN PROGRESS
+**Task**: Run simple SystemVerilog module through full pipeline (parse → MooreToCore → LLVM → execute)
+**Files**: test/, lib/Conversion/MooreToLLVM/
+**Next**: Create minimal SV testbench, verify LLVM lowering works, test with JIT/AOT
+**Priority**: MEDIUM - Validates end-to-end flow before UVM
 
 ### Operating Guidance
-- Keep 4 agents active: Track A (tests), Track B (AVIPs), Track C (randomization), Track D (MooreSim).
+- Keep 4 agents active: Track A (vtable fix), Track B (AVIP BFMs), Track C (randomization), Track D (pipeline).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
+
+### Previous Track Results (Iteration 12)
+- **Track A**: ✅ Array locator inline loop complete (115316b07) - AND/OR/string predicates work
+- **Track A**: ✅ llhd.time data layout crash fixed (1a4bf3014)
+- **Track B**: ✅ All 7 AVIPs (APB/AHB/AXI4/UART/I2S/I3C/SPI) pass MooreToCore
+- **Track C**: ⚠️ DPI chandle support added; randomization runtime still needed
+- **Track D**: ⚠️ vtable.load_method error found blocking full UVM conversion
 
 ### Previous Track Results (Iteration 11)
 - **Track A**: ✅ BFM nested task calls fixed (d1b870e5e) - Interface tasks calling other interface tasks now work correctly
