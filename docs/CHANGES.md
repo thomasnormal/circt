@@ -1,5 +1,63 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 16: LSP, Testing & Simulation Research
+
+**Status**: LSP investigated, unit tests run, simulation implementation paths identified.
+
+### Track A: LSP Server Investigation (a9fe626)
+
+**Available LSP Tools**:
+| Tool | Status | Purpose |
+|------|--------|---------|
+| `circt-lsp-server` | **BUILT** | MLIR/CIRCT dialects (FIRRTL, HW, Comb, SV) |
+| `circt-verilog-lsp-server` | **DISABLED** | Verilog/SystemVerilog (slang API issues) |
+
+**circt-lsp-server Features**: Go to definition, find references, hover, document symbols, diagnostics, code completion (via MLIR LSP framework).
+
+**circt-verilog-lsp-server** (when fixed): Definition, references, hover, completion, rename, semantic tokens, inlay hints, UVM snippets, project configuration via `circt-project.yaml`.
+
+### Track B: JTAG AVIP Testing (a5bb7c6)
+
+**Result**: `-timescale="1ns/1ps"` flag works correctly
+
+**Remaining Issues** (21 errors, NOT timescale-related):
+| Category | Count | Description |
+|----------|-------|-------------|
+| Implicit enum conversion | 12 | `reg[4:0]` to enum requires explicit cast |
+| Undeclared identifier in bind | 4 | Scope issues with bind statements |
+| Range out of bounds | 2 | Array index mismatches |
+| Virtual interface + bind | 3 | Semantic restrictions |
+
+### Track C: MooreToCore Unit Tests (ab92c7b)
+
+**Result**: 23/27 tests pass (85.19%)
+
+| Status | Count | Tests |
+|--------|-------|-------|
+| **Pass** | 23 | basic.mlir, vtable.mlir, random-ops.mlir, etc. |
+| **Fail** | 4 | Size calculation mismatches in FileCheck |
+
+**Failing Tests** (size calculation differences):
+- `class-edge-cases.mlir`: Expected 24 bytes, got 19
+- `interface-ops.mlir`: Expected 20 bytes, got 16
+- `classes.mlir`: Expected 32 bytes, got 28
+- `unpacked-struct-dynamic.mlir`: Signal naming format mismatch
+
+### Track D: sim.proc.print Implementation (a54bdec)
+
+**Root Cause**: circt-sim has placeholder process execution (TODO at line 469)
+
+**Implementation Options**:
+| Option | Complexity | Effort |
+|--------|------------|--------|
+| A: Event-driven interpretation | HIGH | 2-4 weeks |
+| B: Arcilator path (recommended) | MEDIUM | 1-2 weeks |
+| C: Create SimToLLVM | MEDIUM-HIGH | 1.5-3 weeks |
+
+**Recommendation**: Use arcilator path - leverages existing `arc.sim.emit` printf lowering.
+
+---
+
 ## January 16, 2026 - Iteration 15: AVIP Validation & Simulation Pipeline Research
 
 **Status**: All AVIPs validated through MooreToCore. Simulation pipeline research complete.
