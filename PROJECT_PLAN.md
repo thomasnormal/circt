@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 27)
+## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 28)
 
 **Test Commands**:
 ```bash
@@ -129,14 +129,64 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 ## Active Workstreams (keep 4 agents busy)
 
 ### Track A: LLHD Process Interpretation in circt-sim 🎯 ITERATION 28
-**Status**: 🔴 CRITICAL BLOCKER
+**Status**: 🔴 CRITICAL BLOCKER - DETAILED RESEARCH COMPLETE
 **Problem**: circt-sim doesn't interpret LLHD process bodies - simulation ends at 0fs
-**Discovery** (Iteration 27): ProcessScheduler infrastructure exists but not connected to LLHD IR
-**What's Needed**:
-- Connect ProcessScheduler to LLHD process interpretation
-- Implement llhd.wait, llhd.drv event handling
-- Alternative: Focus on arcilator for RTL-only simulation
-**Files**: `lib/Tools/circt-sim/`, `lib/Dialect/LLHD/`
+
+**Root Cause Analysis (Iteration 28)**:
+The `SimulationContext::buildSimulationModel()` function in `tools/circt-sim/circt-sim.cpp` (lines 443-486)
+has a critical TODO at line 469: "Walk the module body and create processes for each operation"
+
+Currently it:
+1. Registers signals for all ports (lines 444-467)
+2. Creates a PLACEHOLDER process with EMPTY callback (lines 471-474)
+3. Does NOT walk the hw.module body to find llhd.process ops
+4. Does NOT interpret llhd.process, llhd.wait, llhd.drv, llhd.prb operations
+
+**What Exists (Infrastructure)**:
+- `ProcessScheduler` (lib/Dialect/Sim/ProcessScheduler.cpp) - Full IEEE 1800 scheduling semantics
+- `EventScheduler` (lib/Dialect/Sim/EventQueue.cpp) - Time wheel event scheduling
+- `Process` class - State machine (Ready, Running, Suspended, Waiting, Terminated)
+- `SensitivityList` - Edge detection (posedge/negedge/anyedge)
+- `ForkJoinManager` - fork/join_any/join_none semantics
+- `SyncPrimitivesManager` - Semaphores, mailboxes
+
+**What's MISSING (Gap)**:
+1. **LLHD IR Walking**: No code walks hw.module to find llhd.process ops
+2. **LLHD Interpreter**: No interpretation of LLHD operations:
+   - `llhd.process` → Should create Process with ExecuteCallback that interprets body
+   - `llhd.wait` → Should call ProcessScheduler::suspendProcess() or suspendProcessForEvents()
+   - `llhd.drv` → Should call ProcessScheduler::updateSignal() with delay scheduling
+   - `llhd.prb` → Should call ProcessScheduler::getSignalValue()
+   - `llhd.sig` → Should call ProcessScheduler::registerSignal()
+   - `llhd.halt` → Should call ProcessScheduler::terminateProcess()
+3. **Control Flow**: No CF dialect (cf.br, cf.cond_br) interpretation within processes
+4. **Value Tracking**: No SSA value tracking during interpretation
+
+**Verified Test Case**:
+```bash
+# Input: test_llhd_sim.sv with initial block and always block
+./build/bin/circt-verilog --ir-llhd /tmp/test_llhd_sim.sv | ./build/bin/circt-sim --sim-stats
+# Output: "Simulation completed at time 0 fs" with only 1 placeholder process
+# Expected: Should run llhd.process bodies with llhd.wait delays
+```
+
+**Complexity Estimate**: HIGH (2-4 weeks)
+- Need full LLHD operation interpreter
+- Need to handle control flow within processes
+- Need to track SSA values across wait suspensions
+- Alternative: Use MLIR's interpreter infrastructure
+
+**Alternative Approaches**:
+1. **LLHD → Arc lowering**: Convert LLHD processes to Arc dialect for arcilator
+2. **JIT compilation**: Lower LLHD to LLVM and JIT execute
+3. **MLIR interpreter**: Use mlir-cpu-runner style approach
+
+**Files**:
+- `tools/circt-sim/circt-sim.cpp` (SimulationContext::buildSimulationModel needs implementation)
+- `include/circt/Dialect/Sim/ProcessScheduler.h` (infrastructure ready)
+- `lib/Dialect/Sim/ProcessScheduler.cpp` (infrastructure ready)
+- `lib/Dialect/LLHD/IR/LLHDOps.cpp` (operations to interpret)
+
 **Priority**: CRITICAL - Required for behavioral simulation
 
 ### Track B: Direct Interface Member Access 🎯 ITERATION 28
@@ -162,21 +212,78 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 **Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`
 **Priority**: MEDIUM - Incrementally add as needed
 
-### Track D: Coverage Runtime & UVM APIs 🎯 ITERATION 28
-**Status**: 🟡 MEDIUM PRIORITY
-**Problem 1**: Coverage ops exist but no runtime sampling
-**Problem 2**: AVIP code uses deprecated UVM APIs (uvm_test_done)
-**What's Needed**:
-- Coverage sampling via @(posedge clk) events
-- Consider updating AVIP source for UVM 2017+ compatibility
-**Files**: `lib/Conversion/MooreToCore/`, `~/mbit/*/`
-**Priority**: MEDIUM - Quality of life improvements
+### Track D: Coverage Runtime & UVM APIs 🎯 ITERATION 28 - RESEARCH COMPLETE
+**Status**: 🟡 DOCUMENTED - Infrastructure exists, event sampling gap identified
+
+**COVERAGE INFRASTRUCTURE ANALYSIS (Iteration 28)**:
+
+**What's Implemented** (MooreOps.td + MooreToCore.cpp):
+1. `moore.covergroup.decl` - Covergroup type declarations with coverpoints/crosses
+2. `moore.coverpoint.decl` - Coverpoint declarations with type info
+3. `moore.covercross.decl` - Cross coverage declarations
+4. `moore.covergroup.inst` - Instantiation (`new()`) with handle allocation
+5. `moore.covergroup.sample` - Explicit `.sample()` method call
+6. `moore.covergroup.get_coverage` - Get coverage percentage (0.0-100.0)
+7. `CovergroupHandleType` - Runtime handle type (lowers to `!llvm.ptr`)
+
+**MooreToCore Runtime Interface** (expected external functions):
+- `__moore_covergroup_create(name, num_coverpoints) -> void*`
+- `__moore_coverpoint_init(cg, index, name) -> void`
+- `__moore_coverpoint_sample(cg, index, value) -> void`
+- `__moore_covergroup_get_coverage(cg) -> double`
+- (Future) `__moore_covergroup_destroy(cg)`, `__moore_coverage_report()`
+
+**THE SAMPLING GAP**:
+- **Explicit sampling works**: `cg.sample()` calls generate `CovergroupSampleOp` which lowers to runtime calls
+- **Event-driven sampling NOT connected**: SystemVerilog `covergroup cg @(posedge clk)` syntax
+  - Slang parses the timing event but CIRCT doesn't connect it to sampling triggers
+  - The `@(posedge clk)` sampling event is lost during IR generation
+  - Would require: (1) storing event info in CovergroupDeclOp, (2) generating always block to call sample
+
+**AVIP COVERGROUP PATTERNS** (from ~/mbit/* analysis):
+- AVIPs use `covergroup ... with function sample(args)` pattern (explicit sampling)
+- Sample called from `write()` method in uvm_subscriber (UVM callback-based)
+- Example from axi4_master_coverage.sv:
+  ```systemverilog
+  covergroup axi4_master_covergroup with function sample(cfg, packet);
+  ...
+  function void write(axi4_master_tx t);
+    axi4_master_covergroup.sample(axi4_master_agent_cfg_h, t);
+  endfunction
+  ```
+- This pattern IS SUPPORTED by current infrastructure (explicit sample calls work)
+
+**DEPRECATED UVM APIs IN AVIPs** (need source updates for UVM 2017+):
+| AVIP | File | Deprecated API |
+|------|------|----------------|
+| ahb_avip | AhbBaseTest.sv | `uvm_test_done.set_drain_time()` |
+| i2s_avip | I2sBaseTest.sv | `uvm_test_done.set_drain_time()` |
+| axi4_avip | axi4_base_test.sv | `uvm_test_done.set_drain_time()` |
+| apb_avip | apb_base_test.sv | `uvm_test_done.set_drain_time()` |
+| axi4Lite_avip | Multiple tests | `uvm_test_done.set_drain_time()` |
+| i3c_avip | i3c_base_test.sv | `uvm_test_done.set_drain_time()` |
+
+**Modern replacement**: `phase.phase_done.set_drain_time(this, time)` or objection-based
+
+**What's Needed for Full Coverage Support**:
+1. **Runtime library implementation** - C library implementing `__moore_*` functions
+2. **Event-driven sampling** (optional) - Parse and connect @(event) to sampling triggers
+3. **Coverage report generation** - At $finish, call `__moore_coverage_report()`
+4. **Bins and illegal_bins** - Currently declarations only, need runtime bin tracking
+
+**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (lines 1755-2095), `include/circt/Dialect/Moore/MooreOps.td` (lines 3163-3254)
+**Priority**: MEDIUM - Explicit sampling works for AVIP patterns; event-driven sampling is enhancement
 
 ### Operating Guidance
 - Keep 4 agents active: Track A (LLHD interpretation), Track B (interface access), Track C (system calls), Track D (coverage/UVM).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Iteration 28 Results - TEST VALIDATION
+- **Track D**: ✅ ImportVerilog test validation - dpi.sv test fixed (CHECK ordering issue)
+- **Limitation Documented**: Tasks with clocking events referencing module-level variables (region isolation)
+- **Status**: 38/38 ImportVerilog tests now pass (100%)
 
 ### Iteration 27 Results - KEY DISCOVERIES
 - **$onehot/$onehot0**: ✅ IMPLEMENTED (commit 7d5391552) - lowers to llvm.intr.ctpop == 1 / <= 1
