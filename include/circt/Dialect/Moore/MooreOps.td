@@ -5205,6 +5205,36 @@ def QueueSortOp : QueueBuiltin<"sort"> {
   let assemblyFormat = "$queue `:` type($queue) attr-dict";
 }
 
+def QueueRSortOp : QueueBuiltin<"rsort"> {
+  let summary = "Sort the elements of a queue in descending order";
+  let description = [{
+    Sorts the elements of a queue in descending order. This corresponds to the
+    SystemVerilog `.rsort()` built-in method on queues and dynamic arrays.
+
+    Example:
+    ```mlir
+    moore.queue.rsort %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
+def QueueShuffleOp : QueueBuiltin<"shuffle"> {
+  let summary = "Shuffle the elements of a queue";
+  let description = [{
+    Randomly shuffles the elements of a queue. This corresponds to the
+    SystemVerilog `.shuffle()` built-in method on queues and dynamic arrays.
+
+    Example:
+    ```mlir
+    moore.queue.shuffle %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
 def QueueMaxOp : QueueBuiltin<"max"> {
   let summary = "Find the maximum element(s) in a queue or array";
   let description = [{
@@ -5257,6 +5287,56 @@ def QueueUniqueOp : QueueBuiltin<"unique"> {
   let assemblyFormat = "$array `:` type($array) `->` type($result) attr-dict";
 }
 
+def QueueUniqueIndexOp : QueueBuiltin<"unique_index"> {
+  let summary = "Return indices of unique elements from a queue or array";
+  let description = [{
+    Returns a queue containing the indices of the first occurrence of each
+    unique element in the input array or queue. This corresponds to the
+    SystemVerilog `.unique_index()` built-in method on arrays and queues
+    (IEEE 1800-2017 Section 7.12.1).
+
+    Example:
+    ```mlir
+    %idxs = moore.queue.unique_index %array : !moore.open_uarray<i32> -> !moore.queue<i64, 0>
+    ```
+  }];
+  let arguments = (ins UnpackedType:$array);
+  let results = (outs QueueType:$result);
+  let assemblyFormat = "$array `:` type($array) `->` type($result) attr-dict";
+}
+
+def QueueReduceKindSum : I32EnumAttrCase<"Sum", 0, "sum">;
+def QueueReduceKindProduct : I32EnumAttrCase<"Product", 1, "product">;
+def QueueReduceKindAnd : I32EnumAttrCase<"And", 2, "and">;
+def QueueReduceKindOr : I32EnumAttrCase<"Or", 3, "or">;
+def QueueReduceKindXor : I32EnumAttrCase<"Xor", 4, "xor">;
+
+def QueueReduceKindAttr
+    : I32EnumAttr<"QueueReduceKind", "Queue reduction method",
+                  [QueueReduceKindSum, QueueReduceKindProduct,
+                   QueueReduceKindAnd, QueueReduceKindOr,
+                   QueueReduceKindXor]> {
+  let cppNamespace = "circt::moore";
+}
+
+def QueueReduceOp : QueueBuiltin<"reduce", [Pure]> {
+  let summary = "Reduce a queue or array to a single value";
+  let description = [{
+    Reduces all elements of a queue or array into a single value using the
+    specified reduction kind (sum, product, and, or, xor). This corresponds to
+    SystemVerilog `.sum()`, `.product()`, `.and()`, `.or()`, and `.xor()`
+    built-in methods on arrays and queues.
+
+    Example:
+    ```mlir
+    %sum = moore.queue.reduce sum %array : !moore.open_uarray<i32> -> i32
+    ```
+  }];
+  let arguments = (ins QueueReduceKindAttr:$kind, UnpackedType:$array);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$kind $array `:` type($array) `->` type($result) attr-dict";
+}
+
 def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
   let summary = "Concatenate queues";
   let description = [{
@@ -5294,7 +5374,7 @@ def QueueSliceOp : QueueBuiltin<"slice", [Pure]> {
   }];
   let arguments = (ins QueueType:$queue, TwoValuedI32:$start, TwoValuedI32:$end);
   let results = (outs QueueType:$result);
-  let assemblyFormat = "$queue `,` $start `,` $end attr-dict `:` type($queue)";
+  let assemblyFormat = "$queue `,` $start `,` $end attr-dict `:` type($queue) `->` type($result)";
 }
 
 //===----------------------------------------------------------------------===//

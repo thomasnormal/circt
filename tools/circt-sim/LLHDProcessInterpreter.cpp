@@ -55,6 +55,30 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult LLHDProcessInterpreter::registerSignals(hw::HWModuleOp hwModule) {
+  // First, register module ports that are ref types (signal references)
+  for (auto portInfo : hwModule.getPortList()) {
+    if (auto refType = dyn_cast<llhd::RefType>(portInfo.type)) {
+      std::string name = portInfo.getName().str();
+      Type innerType = refType.getNestedType();
+      unsigned width = getTypeWidth(innerType);
+
+      SignalId sigId = scheduler.registerSignal(name, width);
+      signalIdToName[sigId] = name;
+
+      // Map the block argument to the signal
+      if (portInfo.isInput()) {
+        auto &body = hwModule.getBody();
+        if (!body.empty()) {
+          Value arg = body.getArgument(portInfo.argNum);
+          valueToSignal[arg] = sigId;
+          LLVM_DEBUG(llvm::dbgs() << "  Registered port signal '" << name
+                                  << "' with ID " << sigId << " (width=" << width
+                                  << ")\n");
+        }
+      }
+    }
+  }
+
   // Walk the module body to find all llhd.sig operations
   hwModule.walk([&](llhd::SignalOp sigOp) {
     registerSignal(sigOp);
@@ -193,7 +217,9 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   ProcessExecutionState &state = it->second;
 
   // If resuming from a wait, set up the destination block
-  if (state.waiting && state.destBlock) {
+  // Note: waiting flag may already be cleared by resumeProcess, so check destBlock
+  if (state.destBlock) {
+    LLVM_DEBUG(llvm::dbgs() << "  Resuming to destination block\n");
     state.currentBlock = state.destBlock;
     state.currentOp = state.currentBlock->begin();
 
@@ -517,18 +543,35 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
   }
 
   // Handle event-based wait (sensitivity list)
+  // Note: The 'observed' operands are probe results (values), not signal refs.
+  // We need to trace back to find the original signal by looking at the
+  // defining probe operation.
   if (!waitOp.getObserved().empty()) {
     SensitivityList waitList;
     for (Value observed : waitOp.getObserved()) {
-      SignalId sigId = getSignalId(observed);
+      // Try to trace back to the signal through llhd.prb
+      SignalId sigId = 0;
+      if (auto probeOp = observed.getDefiningOp<llhd::ProbeOp>()) {
+        sigId = getSignalId(probeOp.getSignal());
+      } else {
+        // Maybe it's directly a signal reference (shouldn't happen per spec,
+        // but handle it gracefully)
+        sigId = getSignalId(observed);
+      }
+
       if (sigId != 0) {
         waitList.addLevel(sigId);
         LLVM_DEBUG(llvm::dbgs() << "  Waiting on signal " << sigId << "\n");
+      } else {
+        LLVM_DEBUG(llvm::dbgs() << "  Warning: Could not find signal for "
+                                    "observed value\n");
       }
     }
 
     // Register the wait sensitivity with the scheduler
-    scheduler.suspendProcessForEvents(procId, waitList);
+    if (!waitList.empty()) {
+      scheduler.suspendProcessForEvents(procId, waitList);
+    }
   }
 
   return success();
@@ -580,6 +623,30 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return iv;
   }
 
+  // Check if this is a probe operation defined outside the process
+  // These need to be evaluated lazily when their values are needed
+  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
+    SignalId sigId = getSignalId(probeOp.getSignal());
+    if (sigId != 0) {
+      const SignalValue &sv = scheduler.getSignalValue(sigId);
+      InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
+      valueMap[value] = iv;
+      LLVM_DEBUG(llvm::dbgs() << "  Lazy probe of signal " << sigId << " = "
+                              << (sv.isUnknown() ? "X"
+                                                  : std::to_string(sv.getValue()))
+                              << "\n");
+      return iv;
+    }
+  }
+
+  // Check if this is a constant_time operation
+  if (auto constTimeOp = value.getDefiningOp<llhd::ConstantTimeOp>()) {
+    // Return a placeholder - actual time conversion happens in convertTimeValue
+    InterpretedValue iv(0, 64);
+    valueMap[value] = iv;
+    return iv;
+  }
+
   // Check if this is a signal reference
   auto sigIt = valueToSignal.find(value);
   if (sigIt != valueToSignal.end()) {
@@ -589,6 +656,7 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   }
 
   // Unknown value - return X
+  LLVM_DEBUG(llvm::dbgs() << "  Warning: Unknown value, returning X\n");
   return InterpretedValue::makeX(getTypeWidth(value.getType()));
 }
 

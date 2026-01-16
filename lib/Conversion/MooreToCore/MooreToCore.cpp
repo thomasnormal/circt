@@ -5316,19 +5316,38 @@ struct UArrayCmpOpConversion : public OpConversionPattern<UArrayCmpOp> {
   LogicalResult
   matchAndRewrite(UArrayCmpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto i1Ty = rewriter.getI1Type();
-    bool sameValue = adaptor.getLhs() == adaptor.getRhs();
-    bool result = false;
-    switch (op.getPredicate()) {
-    case moore::UArrayCmpPredicate::eq:
-      result = sameValue;
-      break;
-    case moore::UArrayCmpPredicate::ne:
-      result = !sameValue;
-      break;
+    auto loc = op.getLoc();
+    auto resultType =
+        ConversionPattern::typeConverter->convertType(op.getResult().getType());
+
+    auto lhsType = adaptor.getLhs().getType();
+    auto rhsType = adaptor.getRhs().getType();
+    int64_t bitWidth = hw::getBitWidth(lhsType);
+    if (bitWidth <= 0 || lhsType != rhsType) {
+      bool sameValue = adaptor.getLhs() == adaptor.getRhs();
+      bool result = op.getPredicate() == moore::UArrayCmpPredicate::eq
+                        ? sameValue
+                        : !sameValue;
+      rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(
+          op, resultType,
+          rewriter.getIntegerAttr(resultType, result ? 1 : 0));
+      return success();
     }
-    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(
-        op, i1Ty, rewriter.getIntegerAttr(i1Ty, result ? 1 : 0));
+
+    auto intTy = rewriter.getIntegerType(bitWidth);
+    Value lhsBits = adaptor.getLhs();
+    Value rhsBits = adaptor.getRhs();
+    if (lhsType != intTy)
+      lhsBits = hw::BitcastOp::create(rewriter, loc, intTy, lhsBits);
+    if (rhsType != intTy)
+      rhsBits = hw::BitcastOp::create(rewriter, loc, intTy, rhsBits);
+
+    ICmpPredicate pred = ICmpPredicate::eq;
+    if (op.getPredicate() == moore::UArrayCmpPredicate::ne)
+      pred = ICmpPredicate::ne;
+
+    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, resultType, pred, lhsBits,
+                                              rhsBits);
     return success();
   }
 };
@@ -5728,6 +5747,134 @@ struct QueueUniqueOpConversion
   }
 };
 
+/// Conversion for moore.queue.unique_index -> runtime function call.
+struct QueueUniqueIndexOpConversion
+    : public RuntimeCallConversionBase<QueueUniqueIndexOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueUniqueIndexOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto inputType = op.getArray().getType();
+    Type elementType;
+    if (auto queueType = dyn_cast<moore::QueueType>(inputType))
+      elementType = queueType.getElementType();
+    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(inputType))
+      elementType = dynArrayType.getElementType();
+    else
+      return failure();
+
+    // Function signature: queue unique_index(queue_ptr, element_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_array_unique_index", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+    auto elemType = typeConverter->convertType(elementType);
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{inputAlloca, elemSize});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.reduce -> runtime function call.
+struct QueueReduceOpConversion
+    : public RuntimeCallConversionBase<QueueReduceOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto inputType = op.getArray().getType();
+    Type elementType;
+    if (auto queueType = dyn_cast<moore::QueueType>(inputType))
+      elementType = queueType.getElementType();
+    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(inputType))
+      elementType = dynArrayType.getElementType();
+    else
+      return failure();
+
+    // Function signature: i64 reduce(array_ptr, element_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+    StringRef fnName;
+    switch (op.getKind()) {
+    case moore::QueueReduceKind::Sum:
+      fnName = "__moore_array_reduce_sum";
+      break;
+    case moore::QueueReduceKind::Product:
+      fnName = "__moore_array_reduce_product";
+      break;
+    case moore::QueueReduceKind::And:
+      fnName = "__moore_array_reduce_and";
+      break;
+    case moore::QueueReduceKind::Or:
+      fnName = "__moore_array_reduce_or";
+      break;
+    case moore::QueueReduceKind::Xor:
+      fnName = "__moore_array_reduce_xor";
+      break;
+    }
+
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, fnName, fnTy);
+
+    auto queueTy = getQueueStructType(ctx);
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto inputAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+
+    auto elemType = typeConverter->convertType(elementType);
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                     SymbolRefAttr::get(fn),
+                                     ValueRange{inputAlloca, elemSize});
+
+    Type resultType =
+        ConversionPattern::typeConverter->convertType(op.getResult().getType());
+    Value result = call.getResult();
+    if (resultType.isIntOrFloat()) {
+      auto width = resultType.getIntOrFloatBitWidth();
+      if (width < 64)
+        result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+      else if (width > 64)
+        result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+    } else {
+      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// Conversion for moore.queue.sort -> runtime function call.
 /// Sorts the queue in-place.
 struct QueueSortOpConversion : public RuntimeCallConversionBase<QueueSortOp> {
@@ -5751,6 +5898,87 @@ struct QueueSortOpConversion : public RuntimeCallConversionBase<QueueSortOp> {
     // Pass queue reference pointer directly
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{adaptor.getQueue()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.rsort -> runtime function call.
+struct QueueRSortOpConversion : public RuntimeCallConversionBase<QueueRSortOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueRSortOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_rsort", fnTy);
+
+    auto refType = cast<moore::RefType>(op.getQueue().getType());
+    auto nestedType = refType.getNestedType();
+    Type elementType;
+    if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
+      elementType = queueType.getElementType();
+    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+      elementType = dynArrayType.getElementType();
+    else
+      return failure();
+
+    auto elemType = typeConverter->convertType(elementType);
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getQueue(), elemSize});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.shuffle -> runtime function call.
+struct QueueShuffleOpConversion
+    : public RuntimeCallConversionBase<QueueShuffleOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueShuffleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_shuffle", fnTy);
+
+    auto refType = cast<moore::RefType>(op.getQueue().getType());
+    auto nestedType = refType.getNestedType();
+    Type elementType;
+    if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
+      elementType = queueType.getElementType();
+    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+      elementType = dynArrayType.getElementType();
+    else
+      return failure();
+
+    auto elemType = typeConverter->convertType(elementType);
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getQueue(), elemSize});
     rewriter.eraseOp(op);
     return success();
   }
@@ -5800,6 +6028,53 @@ struct QueueConcatOpConversion
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),
                                      ValueRange{arrayAlloca, count});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.slice -> runtime function call.
+struct QueueSliceOpConversion : public RuntimeCallConversionBase<QueueSliceOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // Function signature: queue slice(queue_ptr, start, end, element_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i64Ty, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_slice", fnTy);
+
+    // Store input queue to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto queueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // Extend bounds to i64.
+    auto startI64 =
+        arith::ExtSIOp::create(rewriter, loc, i64Ty, adaptor.getStart());
+    auto endI64 =
+        arith::ExtSIOp::create(rewriter, loc, i64Ty, adaptor.getEnd());
+
+    // Calculate element size in bytes.
+    auto mooreQueueTy = cast<moore::QueueType>(op.getQueue().getType());
+    auto elemType = typeConverter->convertType(mooreQueueTy.getElementType());
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
+        ValueRange{queueAlloca, startI64, endI64, elemSize});
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
@@ -9403,8 +9678,13 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueMaxOpConversion,
     QueueMinOpConversion,
     QueueUniqueOpConversion,
+    QueueUniqueIndexOpConversion,
+    QueueReduceOpConversion,
     QueueSortOpConversion,
+    QueueRSortOpConversion,
+    QueueShuffleOpConversion,
     QueueConcatOpConversion,
+    QueueSliceOpConversion,
     QueueDeleteOpConversion,
     QueuePushBackOpConversion,
     QueuePushFrontOpConversion,

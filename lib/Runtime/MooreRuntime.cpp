@@ -265,6 +265,49 @@ extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
   return result;
 }
 
+namespace {
+thread_local int64_t queueSortElemSize = 0;
+
+int compareQueueElemDesc(const void *a, const void *b) {
+  uint64_t va = readElementValueUnsigned(a, queueSortElemSize);
+  uint64_t vb = readElementValueUnsigned(b, queueSortElemSize);
+  if (va < vb)
+    return 1;
+  if (va > vb)
+    return -1;
+  return 0;
+}
+} // namespace
+
+extern "C" void __moore_queue_rsort(MooreQueue *queue, int64_t elem_size) {
+  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0 ||
+      elem_size > 8)
+    return;
+
+  queueSortElemSize = elem_size;
+  std::qsort(queue->data, queue->len, elem_size, compareQueueElemDesc);
+}
+
+extern "C" void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size) {
+  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0)
+    return;
+
+  auto *data = static_cast<char *>(queue->data);
+  std::vector<char> temp(static_cast<size_t>(elem_size));
+  for (int64_t i = queue->len - 1; i > 0; --i) {
+    int64_t j = std::rand() % (i + 1);
+    if (i == j)
+      continue;
+
+    std::memcpy(temp.data(), data + i * elem_size,
+                static_cast<size_t>(elem_size));
+    std::memcpy(data + i * elem_size, data + j * elem_size,
+                static_cast<size_t>(elem_size));
+    std::memcpy(data + j * elem_size, temp.data(),
+                static_cast<size_t>(elem_size));
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//
@@ -1690,6 +1733,99 @@ extern "C" MooreQueue __moore_array_unique_index(MooreQueue *array,
   }
 
   return result;
+}
+
+extern "C" int64_t __moore_array_reduce_sum(MooreQueue *array,
+                                            int64_t elementSize) {
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8)
+    return 0;
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  uint64_t acc = 0;
+  for (int64_t i = 0; i < numElements; ++i) {
+    uint64_t value = readElementValueUnsigned(data + i * elementSize,
+                                              elementSize);
+    acc += value;
+  }
+  return static_cast<int64_t>(acc);
+}
+
+extern "C" int64_t __moore_array_reduce_product(MooreQueue *array,
+                                                int64_t elementSize) {
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8)
+    return 1;
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  uint64_t acc = 1;
+  for (int64_t i = 0; i < numElements; ++i) {
+    uint64_t value = readElementValueUnsigned(data + i * elementSize,
+                                              elementSize);
+    acc *= value;
+  }
+  return static_cast<int64_t>(acc);
+}
+
+extern "C" int64_t __moore_array_reduce_and(MooreQueue *array,
+                                            int64_t elementSize) {
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8)
+    return 0;
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  uint64_t mask = elementSize >= 8
+                      ? ~static_cast<uint64_t>(0)
+                      : ((static_cast<uint64_t>(1) << (elementSize * 8)) - 1);
+  uint64_t acc = mask;
+  for (int64_t i = 0; i < numElements; ++i) {
+    uint64_t value = readElementValueUnsigned(data + i * elementSize,
+                                              elementSize);
+    acc &= value;
+  }
+  return static_cast<int64_t>(acc);
+}
+
+extern "C" int64_t __moore_array_reduce_or(MooreQueue *array,
+                                           int64_t elementSize) {
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8)
+    return 0;
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  uint64_t acc = 0;
+  for (int64_t i = 0; i < numElements; ++i) {
+    uint64_t value = readElementValueUnsigned(data + i * elementSize,
+                                              elementSize);
+    acc |= value;
+  }
+  return static_cast<int64_t>(acc);
+}
+
+extern "C" int64_t __moore_array_reduce_xor(MooreQueue *array,
+                                            int64_t elementSize) {
+  if (!array || !array->data || array->len <= 0 || elementSize <= 0 ||
+      elementSize > 8)
+    return 0;
+
+  auto *data = static_cast<char *>(array->data);
+  int64_t numElements = array->len;
+
+  uint64_t acc = 0;
+  for (int64_t i = 0; i < numElements; ++i) {
+    uint64_t value = readElementValueUnsigned(data + i * elementSize,
+                                              elementSize);
+    acc ^= value;
+  }
+  return static_cast<int64_t>(acc);
 }
 
 //===----------------------------------------------------------------------===//
