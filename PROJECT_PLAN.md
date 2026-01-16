@@ -53,36 +53,42 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 | **Randomization** | Not supported | rand/randc, constraints | ⚠️ Parsing only |
 | **Coverage** | Coverage dialect exists | Full functional coverage | ⚠️ Partial |
 | **Assertions** | Basic SVA | Full SVA | ✅ SVA dialect |
-| **DPI/VPI** | Basic | Full support | ⚠️ Basic only |
+| **DPI/VPI** | Stub returns (0/empty) | Full support | ⚠️ 22 funcs analyzed, stubs work |
 | **MooreToCore** | All 9 AVIPs lower | Full UVM lowering | ✅ Complete |
 
 ---
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Interface Port Rvalue Handling
+### Track A: Test MooreToCore with BFMs
 **Status**: 🟡 IN PROGRESS
-**Task**: Fix interface port rvalue handling for BFM parsing
-**Files**: lib/Conversion/ImportVerilog/
-**Next**: Handle interface port expressions like `preset_n` as rvalues
+**Task**: Now that interface tasks work, test BFM components through MooreToCore
+**Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
+**Next**: Run BFM files through full pipeline
 
-### Track B: Expand AVIP Coverage
+### Track B: Fix AVIP Source Issues
 **Status**: 🟡 IN PROGRESS
-**Task**: Fix remaining AVIP parsing issues (JTAG, SPI, UART)
+**Task**: Report/fix source-level issues in JTAG/SPI/UART AVIPs
 **Files**: ~/mbit/*_avip/
-**Next**: Investigate source-level fixes needed for AVIPs
+**Issues**: Enum conversions, nested comments, default arg mismatches
 
-### Track C: DPI-C Runtime Implementation
+### Track C: Implement DPI Tool Info Functions
 **Status**: 🟡 IN PROGRESS
-**Task**: Implement DPI-C import stubs for UVM runtime
+**Task**: Implement uvm_dpi_get_tool_name/version runtime functions
 **Files**: lib/Conversion/MooreToCore/
-**Next**: Add actual DPI-C function implementations or stubs
+**Next**: Return "CIRCT" and version string for these functions
 
-### Track D: Queue Global Variable Lowering
+### Track D: Test Full UVM MooreToCore
 **Status**: 🟡 IN PROGRESS
-**Task**: Implement queue global variable lowering in MooreToCore
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add conversion pattern for queue-typed globals
+**Task**: Test complete UVM parsing + MooreToCore pipeline
+**Files**: ~/uvm-core/src/
+**Next**: Run uvm_pkg.sv through circt-verilog | circt-opt -convert-moore-to-core
+
+### Previous Track Results (Iteration 10)
+- **Track A**: ✅ Interface task/function support (d1cd16f75) - BFM patterns now work with implicit iface arg
+- **Track B**: ✅ JTAG/SPI/UART failures documented - all are source code issues, not CIRCT bugs
+- **Track C**: ✅ DPI-C analysis complete - 22 functions documented (see docs/DPI_ANALYSIS.md)
+- **Track D**: ✅ Queue global lowering verified - already works correctly
 
 ### Previous Track Results (Iteration 9)
 - **Track A**: ✅ 5/9 AVIPs pass full pipeline (APB, AHB, AXI4, I2S, I3C) - JTAG/SPI/UART have source issues
@@ -292,6 +298,7 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `d1cd16f75` - [ImportVerilog] Add interface task/function support
 - `99b4fea86` - [MooreToCore] Add tests for StructExtractRefOp with dynamic fields
 - `5dd8ce361` - [MooreToCore] Fix RefType cast crashes for structs with dynamic fields
 - `f4e1cc660` - [ImportVerilog] Add virtual interface assignment support
