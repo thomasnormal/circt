@@ -14,6 +14,6 @@ package test_pkg;
   endclass
 endpackage
 
-// CHECK: moore.class.classdecl @"test_pkg::my_class"
+// CHECK-DAG: moore.global_variable @"test_pkg::items" : !moore.queue<class<@"test_pkg::my_class">, 0>
+// CHECK-DAG: moore.class.classdecl @"test_pkg::my_class"
 // CHECK: moore.class.propertydecl @value : !moore.i32
-// CHECK: moore.global_variable @"test_pkg::items" : !moore.queue<class<@"test_pkg::my_class">, 0>

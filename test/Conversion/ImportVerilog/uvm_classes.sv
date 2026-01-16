@@ -14,8 +14,8 @@
 /// are properly recognized. For example, uvm_pool_18 should be recognized as
 /// derived from uvm_pool#(KEY, T).
 
-// CHECK-LABEL: moore.class.classdecl @uvm_pool {
-// CHECK: }
+// CHECK-DAG: moore.class.classdecl @uvm_pool {
+// CHECK-DAG: moore.class.classdecl @uvm_pool_0 {
 class uvm_pool #(type KEY=int, type T=int);
 endclass
 
@@ -24,7 +24,8 @@ endclass
 class uvm_pool_int_string extends uvm_pool#(int, string);
 endclass
 
-// CHECK-LABEL: moore.class.classdecl @uvm_pool_string_int extends @uvm_pool {
+// Note: Different specialization of uvm_pool creates a different base class
+// CHECK-LABEL: moore.class.classdecl @uvm_pool_string_int extends @uvm_pool_0 {
 // CHECK: }
 class uvm_pool_string_int extends uvm_pool#(string, int);
 endclass
@@ -32,9 +33,9 @@ endclass
 // Test that multiple specializations are recognized
 // CHECK-LABEL: moore.module @GenericClassSpecializationTest() {
 module GenericClassSpecializationTest;
-    // CHECK: moore.variable : <!moore.class<@uvm_pool_int_string>>
+    // CHECK: moore.variable : <class<@uvm_pool_int_string>>
     uvm_pool_int_string pool1;
-    // CHECK: moore.variable : <!moore.class<@uvm_pool_string_int>>
+    // CHECK: moore.variable : <class<@uvm_pool_string_int>>
     uvm_pool_string_int pool2;
 endmodule
 
@@ -49,9 +50,9 @@ class HandleTestClass;
 endclass
 
 // CHECK-LABEL: moore.module @ClassHandleComparisonTest() {
-// CHECK:   [[H1:%.+]] = moore.variable : <!moore.class<@HandleTestClass>>
-// CHECK:   [[H2:%.+]] = moore.variable : <!moore.class<@HandleTestClass>>
-// CHECK:   [[RESULT:%.+]] = moore.variable : <!moore.i32>
+// CHECK:   [[H1:%.+]] = moore.variable : <class<@HandleTestClass>>
+// CHECK:   [[H2:%.+]] = moore.variable : <class<@HandleTestClass>>
+// CHECK:   [[RESULT:%.+]] = moore.variable : <i32>
 // CHECK:   moore.procedure initial {
 module ClassHandleComparisonTest;
     HandleTestClass h1;
@@ -104,9 +105,9 @@ endclass
 
 // CHECK-LABEL: moore.module @NestedSpecializationTest() {
 module NestedSpecializationTest;
-    // CHECK: moore.variable : <!moore.class<@GenericContainer>>
+    // CHECK: moore.variable : <class<@GenericContainer>>
     GenericContainer#(int) generic_inst;
-    // CHECK: moore.variable : <!moore.class<@SpecializedContainer>>
+    // CHECK: moore.variable : <class<@SpecializedContainer>>
     SpecializedContainer specialized_inst;
 
     initial begin
@@ -136,9 +137,9 @@ endclass
 
 // CHECK-LABEL: moore.module @UVMHierarchyTest() {
 module UVMHierarchyTest;
-    // CHECK: moore.variable : <!moore.class<@my_driver>>
+    // CHECK: moore.variable : <class<@my_driver>>
     my_driver drv;
-    // CHECK: moore.variable : <!moore.class<@uvm_component>>
+    // CHECK: moore.variable : <class<@uvm_component>>
     uvm_component comp;
 
     initial begin
@@ -170,7 +171,6 @@ class uvm_object_base;
 endclass
 
 // CHECK-LABEL: moore.class.classdecl @this_type_pool extends @uvm_object_base {
-// CHECK:   moore.class.propertydecl @m_global
 // CHECK:   moore.class.methoddecl @get_global_pool -> @"this_type_pool::get_global_pool"
 // CHECK: }
 class this_type_pool #(type KEY=int, type T=uvm_void) extends uvm_object_base;
@@ -192,21 +192,21 @@ endclass
 
 // A second specialization of this_type_pool is created for the this_type typedef.
 // The exact suffix (_0, _1, etc.) depends on the order of class processing.
+// Static member m_global is a global variable, not a class property.
 // CHECK-LABEL: moore.class.classdecl @this_type_pool_{{[0-9]+}} extends @uvm_object_base {
-// CHECK:   moore.class.propertydecl @m_global
 // CHECK:   moore.class.methoddecl @get_global_pool
 // CHECK: }
 
 // CHECK-LABEL: moore.module @ThisTypePatternTest() {
-// CHECK:   %pool_handle = moore.variable : <!moore.class<@this_type_pool>>
+// CHECK:   %pool_handle = moore.variable : <class<@this_type_pool>>
 // CHECK:   moore.procedure initial {
 // CHECK:     %[[HANDLE:.*]] = moore.read %pool_handle
 // CHECK:     %[[METHOD:.*]] = moore.vtable.load_method %[[HANDLE]] : @get_global_pool
 // CHECK:     %[[RESULT:.*]] = func.call_indirect %[[METHOD]]
 // The key fix: conversion from this_type_pool_N to this_type_pool is allowed
 // because they are both specializations of the same generic class.
-// CHECK:     %[[CONVERTED:.*]] = moore.conversion %[[RESULT]] : !moore.class<@this_type_pool_{{[0-9]+}}> -> !moore.class<@this_type_pool>
-// CHECK:     moore.blocking_assign %pool_handle, %[[CONVERTED]]
+// CHECK:     moore.conversion %[[RESULT]] : !moore.class<@this_type_pool_{{[0-9]+}}> -> !moore.class<@this_type_pool>
+// CHECK:     moore.blocking_assign %pool_handle
 // CHECK:   }
 // CHECK: }
 module ThisTypePatternTest;

@@ -134,8 +134,8 @@ function Foo;
 endfunction
 
 // -----
+// String format specifier with width is now supported
 function Foo;
-  // expected-error @below {{string format specifier with width not supported}}
   $write("%42s", "foo");
 endfunction
 
@@ -154,7 +154,7 @@ endmodule
 // -----
 function void foo();
   int q[$];
-  // expected-error @below {{unsupported expression: range select with non-constant bounds}}
+  // expected-error @below {{unbounded literal ($) used outside of queue or array indexing context}}
   q = q[2:$];
 endfunction
 
@@ -166,17 +166,17 @@ function void foo;
 endfunction
 
 // -----
-function void foo;
+module TimeTypeConversion1;
   struct packed { time t; } a;
   int b;
   // expected-error @below {{contains a time type}}
-  a = b;
-endfunction
+  assign a = b;
+endmodule
 
 // -----
-function void foo;
+module TimeTypeConversion2;
   int a;
   struct packed { time t; } b;
   // expected-error @below {{contains a time type}}
-  a = b;
-endfunction
+  assign a = b;
+endmodule

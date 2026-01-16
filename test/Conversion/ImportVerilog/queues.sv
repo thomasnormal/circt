@@ -12,11 +12,11 @@
 /// Test queue declaration with unbounded size
 // CHECK-LABEL: moore.module @QueueDeclarationTest() {
 module QueueDeclarationTest;
-    // CHECK: [[Q:%.+]] = moore.variable : <!moore.queue<i32, 0>>
+    // CHECK: [[Q:%.+]] = moore.variable : <queue<i32, 0>>
     int q[$];
-    // CHECK: [[Q2:%.+]] = moore.variable : <!moore.queue<l8, 0>>
+    // CHECK: [[Q2:%.+]] = moore.variable : <queue<l8, 0>>
     logic [7:0] q2[$];
-    // CHECK: [[Q3:%.+]] = moore.variable : <!moore.queue<i32, 10>>
+    // CHECK: [[Q3:%.+]] = moore.variable : <queue<i32, 10>>
     int q3[$:10];  // bounded queue
 endmodule
 
@@ -108,13 +108,13 @@ endmodule
 /// Test queue with different element types
 // CHECK-LABEL: moore.module @QueueTypesTest() {
 module QueueTypesTest;
-    // CHECK: moore.variable : <!moore.queue<i8, 0>>
+    // CHECK: moore.variable : <queue<i8, 0>>
     byte byte_q[$];
-    // CHECK: moore.variable : <!moore.queue<i64, 0>>
+    // CHECK: moore.variable : <queue<i64, 0>>
     longint long_q[$];
-    // CHECK: moore.variable : <!moore.queue<string, 0>>
+    // CHECK: moore.variable : <queue<string, 0>>
     string str_q[$];
-    // CHECK: moore.variable : <!moore.queue<l32, 0>>
+    // CHECK: moore.variable : <queue<l32, 0>>
     logic [31:0] logic_q[$];
 
     initial begin

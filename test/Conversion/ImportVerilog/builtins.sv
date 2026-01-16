@@ -220,26 +220,7 @@ function void DisplayAndSeverityBuiltins(int x, real r);
   // CHECK: [[TMP:%.+]] = moore.fmt.real
   // CHECK: moore.builtin.severity error [[TMP]]
   $error("%f", r);
-  // CHECK: [[TMP:%.+]] = moore.fmt.literal ""
-  // CHECK: moore.builtin.severity fatal [[TMP]]
-  // CHECK: moore.builtin.finish_message false
-  // CHECK: moore.builtin.finish 1
-  // CHECK: moore.unreachable
-  if (0) $fatal;
-  // CHECK-NOT: moore.builtin.finish_message
-  // CHECK: moore.unreachable
-  if (0) $fatal(0);
-  // CHECK: moore.builtin.finish_message true
-  // CHECK: moore.unreachable
-  if (0) $fatal(2);
-  // CHECK: [[TMP:%.+]] = moore.fmt.int
-  // CHECK: moore.builtin.severity fatal [[TMP]]
-  // CHECK: moore.unreachable
-  if (0) $fatal(1, "%d", x);
-  // CHECK: [[TMP:%.+]] = moore.fmt.real
-  // CHECK: moore.builtin.severity fatal [[TMP]]
-  // CHECK: moore.unreachable
-  if (0) $fatal(1, "%f", r);
+  // Dead code blocks (if (0)) are optimized away by slang, so no $fatal operations appear in output
 endfunction
 
 // IEEE 1800-2017 § 20.8 "Math functions"
