@@ -191,3 +191,21 @@ func.func @test_fneg(%arg0: !moore.f64) -> !moore.f64 {
   %0 = moore.fneg %arg0 : !moore.f64
   return %0 : !moore.f64
 }
+
+//===----------------------------------------------------------------------===//
+// Conversion Functions (IEEE 1800-2017 Section 20.5)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @test_realtobits
+func.func @test_realtobits(%arg0: !moore.f64) -> !moore.i64 {
+  // CHECK: llvm.bitcast %arg0 : f64 to i64
+  %0 = moore.builtin.realtobits %arg0
+  return %0 : !moore.i64
+}
+
+// CHECK-LABEL: func.func @test_bitstoreal
+func.func @test_bitstoreal(%arg0: !moore.i64) -> !moore.f64 {
+  // CHECK: llvm.bitcast %arg0 : i64 to f64
+  %0 = moore.builtin.bitstoreal %arg0 : !moore.i64
+  return %0 : !moore.f64
+}
