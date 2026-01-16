@@ -44,4 +44,5 @@ module {
     %0 = moore.struct_create %a, %b : !moore.i32, !moore.i32 -> ustruct<{a: i32, b: i32}>
     return %0 : !moore.ustruct<{a: i32, b: i32}>
   }
+
 }
