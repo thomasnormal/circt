@@ -5,6 +5,7 @@
 // Instead of calling the DPI functions, meaningful default values are returned:
 // - int types: return 0
 // - string types: return empty string
+// - chandle types: return null (0 converted to chandle)
 // - void functions: no-op
 
 // DPI-C function declaration at package level
@@ -16,23 +17,32 @@ import "DPI-C" function void c_void_func();
 // DPI-C function with return value
 import "DPI-C" function string c_get_string();
 
+// DPI-C function returning chandle (opaque C pointer)
+// This is commonly used by UVM for regex compilation (uvm_re_comp)
+import "DPI-C" function chandle c_get_handle();
+
 // CHECK: remark: DPI-C imports not yet supported; call to 'c_add' skipped
 // CHECK: remark: DPI-C imports not yet supported; call to 'c_void_func' skipped
 // CHECK: remark: DPI-C imports not yet supported; call to 'c_get_string' skipped
+// CHECK: remark: DPI-C imports not yet supported; call to 'c_get_handle' skipped
 
 // CHECK: moore.module @DPITest
 module DPITest;
   initial begin
     int result;
     string s;
+    chandle h;
     result = c_add(1, 2);
     c_void_func();
     s = c_get_string();
+    h = c_get_handle();
     // Use values to prevent DCE
-    $display("result=%d s=%s", result, s);
+    $display("result=%d s=%s h=%p", result, s, h);
   end
 endmodule
 
 // Check stub values are generated:
 // CHECK: moore.constant_string "" : i8
 // CHECK: moore.int_to_string
+// CHECK: moore.constant 0 : i64
+// CHECK: moore.conversion %{{.*}} : !moore.i64 -> !moore.chandle

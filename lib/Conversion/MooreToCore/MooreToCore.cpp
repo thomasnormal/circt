@@ -5370,6 +5370,198 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     return 8;
   }
 
+  /// Lower array.locator with an inline loop for complex predicates.
+  /// This works for arbitrary predicate expressions because the predicate
+  /// region is cloned into the loop body and converted by existing patterns.
+  LogicalResult
+  lowerWithInlineLoop(ArrayLocatorOp op, OpAdaptor adaptor,
+                      ConversionPatternRewriter &rewriter, Location loc,
+                      MLIRContext *ctx, ModuleOp mod) const {
+    Block &body = op.getBody().front();
+    Value blockArg = body.getArgument(0);
+
+    auto yieldOp = dyn_cast<ArrayLocatorYieldOp>(body.getTerminator());
+    if (!yieldOp)
+      return rewriter.notifyMatchFailure(op, "expected array.locator.yield");
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto i1Ty = IntegerType::get(ctx, 1);
+
+    // Get element type from the input array
+    Type mooreElemType;
+    if (auto queueType = dyn_cast<QueueType>(op.getArray().getType())) {
+      mooreElemType = queueType.getElementType();
+    } else if (auto arrayType =
+                   dyn_cast<UnpackedArrayType>(op.getArray().getType())) {
+      mooreElemType = arrayType.getElementType();
+    } else if (auto dynArrayType =
+                   dyn_cast<OpenUnpackedArrayType>(op.getArray().getType())) {
+      mooreElemType = dynArrayType.getElementType();
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported array type");
+    }
+
+    Type elemType = typeConverter->convertType(mooreElemType);
+    if (!elemType)
+      return rewriter.notifyMatchFailure(op, "failed to convert element type");
+
+    int64_t elemSizeBytes = getTypeSize(elemType);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto resultAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+
+    // Initialize queue to {nullptr, 0}
+    Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    Value zeroLen = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                             rewriter.getI64IntegerAttr(0));
+    Value emptyQueue = LLVM::UndefOp::create(rewriter, loc, queueTy);
+    emptyQueue =
+        LLVM::InsertValueOp::create(rewriter, loc, emptyQueue, nullPtr,
+                                    ArrayRef<int64_t>{0});
+    emptyQueue =
+        LLVM::InsertValueOp::create(rewriter, loc, emptyQueue, zeroLen,
+                                    ArrayRef<int64_t>{1});
+    LLVM::StoreOp::create(rewriter, loc, emptyQueue, resultAlloca);
+
+    // Extract array length and data pointer
+    Value arrayLen = LLVM::ExtractValueOp::create(
+        rewriter, loc, i64Ty, adaptor.getArray(), ArrayRef<int64_t>{1});
+    Value dataPtr = LLVM::ExtractValueOp::create(
+        rewriter, loc, ptrTy, adaptor.getArray(), ArrayRef<int64_t>{0});
+
+    Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                         rewriter.getI64IntegerAttr(0));
+    Value step = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(1));
+
+    auto forOp = scf::ForOp::create(rewriter, loc, lb, arrayLen, step);
+    rewriter.setInsertionPointToStart(forOp.getBody());
+    Value iv = forOp.getInductionVar();
+
+    Value elemPtr =
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType, dataPtr, iv);
+    Value currentElem = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
+
+    // Map the predicate block argument to the current element (with a cast
+    // back to Moore type for the cloned predicate ops).
+    IRMapping mapper;
+    Value currentElemMoore =
+        UnrealizedConversionCastOp::create(rewriter, loc, blockArg.getType(),
+                                           currentElem)
+            .getResult(0);
+    mapper.map(blockArg, currentElemMoore);
+
+    for (Operation &innerOp : body.without_terminator()) {
+      Operation *clonedOp = rewriter.clone(innerOp, mapper);
+      for (auto [oldResult, newResult] :
+           llvm::zip(innerOp.getResults(), clonedOp->getResults()))
+        mapper.map(oldResult, newResult);
+    }
+
+    Value condValue = mapper.lookupOrDefault(yieldOp.getCondition());
+    Value cond = typeConverter->materializeTargetConversion(
+        rewriter, loc, i1Ty, condValue);
+    if (!cond)
+      return rewriter.notifyMatchFailure(op, "failed to convert predicate");
+
+    auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, cond,
+                                  /*withElseRegion=*/false);
+
+    rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto pushFnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+    auto pushFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_push_back",
+                               pushFnTy);
+
+    bool returnIndices = op.getIndexed();
+    if (returnIndices) {
+      auto indexAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, i64Ty, one);
+      LLVM::StoreOp::create(rewriter, loc, iv, indexAlloca);
+      auto indexSize = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(8));
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(pushFn),
+                           ValueRange{resultAlloca, indexAlloca, indexSize});
+    } else {
+      auto elemAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, one);
+      LLVM::StoreOp::create(rewriter, loc, currentElem, elemAlloca);
+      auto elemSize = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(elemSizeBytes));
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(pushFn),
+                           ValueRange{resultAlloca, elemAlloca, elemSize});
+    }
+
+    rewriter.setInsertionPointAfter(forOp);
+
+    Value result = LLVM::LoadOp::create(rewriter, loc, queueTy, resultAlloca);
+
+    auto mode = op.getMode();
+    if (mode != LocatorMode::All) {
+      Value resultLen = LLVM::ExtractValueOp::create(
+          rewriter, loc, i64Ty, result, ArrayRef<int64_t>{1});
+      Value resultDataPtr = LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrTy, result, ArrayRef<int64_t>{0});
+
+      Value isNotEmpty = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::sgt, resultLen, zeroLen);
+      auto modeIfOp =
+          scf::IfOp::create(rewriter, loc, TypeRange{queueTy}, isNotEmpty,
+                            /*withElseRegion=*/true);
+
+      rewriter.setInsertionPointToStart(&modeIfOp.getThenRegion().front());
+      Value extractIdx;
+      if (mode == LocatorMode::First) {
+        extractIdx = zeroLen;
+      } else {
+        extractIdx = arith::SubIOp::create(rewriter, loc, resultLen, step);
+      }
+
+      Type resultElemType = returnIndices ? i64Ty : elemType;
+      int64_t resultElemSize = returnIndices ? 8 : elemSizeBytes;
+
+      Value singleElemPtr =
+          LLVM::GEPOp::create(rewriter, loc, ptrTy, resultElemType,
+                              resultDataPtr, extractIdx);
+      Value singleElem = LLVM::LoadOp::create(rewriter, loc, resultElemType,
+                                              singleElemPtr);
+
+      auto singleResultAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, emptyQueue, singleResultAlloca);
+
+      auto singleElemAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultElemType, one);
+      LLVM::StoreOp::create(rewriter, loc, singleElem, singleElemAlloca);
+      auto singleElemSizeVal = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(resultElemSize));
+      LLVM::CallOp::create(
+          rewriter, loc, TypeRange{}, SymbolRefAttr::get(pushFn),
+          ValueRange{singleResultAlloca, singleElemAlloca, singleElemSizeVal});
+
+      Value singleResult =
+          LLVM::LoadOp::create(rewriter, loc, queueTy, singleResultAlloca);
+      scf::YieldOp::create(rewriter, loc, ValueRange{singleResult});
+
+      rewriter.setInsertionPointToStart(&modeIfOp.getElseRegion().front());
+      scf::YieldOp::create(rewriter, loc, ValueRange{emptyQueue});
+
+      rewriter.setInsertionPointAfter(modeIfOp);
+      result = modeIfOp.getResult(0);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
   LogicalResult
   matchAndRewrite(ArrayLocatorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -5506,9 +5698,11 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       }
     }
 
-    if (!foundComparison)
-      return rewriter.notifyMatchFailure(
-          op, "only eq, ne, sgt, sge, slt, sle predicates are supported");
+    // If simple pattern matching failed, use inline loop approach for complex
+    // predicates (string comparisons, class handle comparisons, AND/OR, etc.)
+    if (!foundComparison) {
+      return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
+    }
 
     // Handle field access predicates
     if (isFieldAccess) {

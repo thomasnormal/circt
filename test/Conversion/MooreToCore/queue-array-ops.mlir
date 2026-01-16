@@ -220,6 +220,20 @@ func.func @test_queue_pop_front() -> !moore.i32 {
 // Array Locator Operations
 //===----------------------------------------------------------------------===//
 
+// CHECK-LABEL: func @test_array_locator_find_string_eq
+// CHECK: llvm.call @__moore_string_cmp
+// CHECK: llvm.call @__moore_queue_push_back
+func.func @test_array_locator_find_string_eq(%target: !moore.string) -> !moore.queue<!moore.string, 0> {
+  %queue_ref = moore.get_global_variable @testStringQueue : !moore.ref<queue<!moore.string, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.string, 0>>
+  %result = moore.array.locator all, elements %queue : !moore.queue<!moore.string, 0> -> !moore.queue<!moore.string, 0> {
+  ^bb0(%item: !moore.string):
+    %cond = moore.string_cmp eq %item, %target : !moore.string -> !moore.i1
+    moore.array.locator.yield %cond : i1
+  }
+  return %result : !moore.queue<!moore.string, 0>
+}
+
 // CHECK-LABEL: func @test_array_locator_find_all_eq
 // CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
 // CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
