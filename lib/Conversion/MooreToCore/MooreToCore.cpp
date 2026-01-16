@@ -2290,7 +2290,11 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
 
     // TODO: Once the core dialects support four-valued integers, this code
     // will additionally need to generate an all-X value for four-valued nets.
-    auto elementType = cast<llhd::RefType>(resultType).getNestedType();
+    auto refType = dyn_cast<llhd::RefType>(resultType);
+    if (!refType)
+      return rewriter.notifyMatchFailure(loc,
+                                         "net type must convert to llhd.ref");
+    auto elementType = refType.getNestedType();
     int64_t width = hw::getBitWidth(elementType);
     if (width == -1)
       return failure();
@@ -2638,8 +2642,14 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: properly handle out-of-bounds accesses
     Type resultType = typeConverter->convertType(op.getResult().getType());
-    Type inputType =
-        cast<llhd::RefType>(adaptor.getInput().getType()).getNestedType();
+
+    // The input must be an llhd.ref type (not LLVM pointer which is used for
+    // dynamic containers like strings, queues, etc.)
+    auto inputRefType = dyn_cast<llhd::RefType>(adaptor.getInput().getType());
+    if (!inputRefType)
+      return rewriter.notifyMatchFailure(
+          op.getLoc(), "input type must be llhd.ref, not LLVM pointer");
+    Type inputType = inputRefType.getNestedType();
 
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       int64_t width = hw::getBitWidth(inputType);
@@ -2663,8 +2673,11 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
 
       // If the result type is not the same as the array's element type, then
       // it has to be a slice.
-      if (arrType.getElementType() !=
-          cast<llhd::RefType>(resultType).getNestedType()) {
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (!resultRefType)
+        return rewriter.notifyMatchFailure(
+            op.getLoc(), "result type must be llhd.ref for array extraction");
+      if (arrType.getElementType() != resultRefType.getNestedType()) {
         rewriter.replaceOpWithNewOp<llhd::SigArraySliceOp>(
             op, resultType, adaptor.getInput(), lowBit);
         return success();
@@ -2891,8 +2904,12 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       return success();
     }
 
-    Type inputType =
-        cast<llhd::RefType>(adaptor.getInput().getType()).getNestedType();
+    // The input must be an llhd.ref type at this point (not LLVM pointer)
+    auto inputRefType = dyn_cast<llhd::RefType>(adaptor.getInput().getType());
+    if (!inputRefType)
+      return rewriter.notifyMatchFailure(
+          loc, "input type must be llhd.ref, not LLVM pointer");
+    Type inputType = inputRefType.getNestedType();
 
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       int64_t width = hw::getBitWidth(inputType);
@@ -2912,7 +2929,11 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
           rewriter, adaptor.getLowBit(),
           llvm::Log2_64_Ceil(arrType.getNumElements()), loc);
 
-      auto resultNestedType = cast<llhd::RefType>(resultType).getNestedType();
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (!resultRefType)
+        return rewriter.notifyMatchFailure(
+            loc, "result type must be llhd.ref for array extraction");
+      auto resultNestedType = resultRefType.getNestedType();
       bool isSingleElementExtract =
           arrType.getElementType() == resultNestedType;
 
@@ -2975,6 +2996,66 @@ struct StructExtractRefOpConversion
   LogicalResult
   matchAndRewrite(StructExtractRefOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Get the original Moore type to determine if LLVM handling is needed.
+    // Check if the struct type converts to LLVM struct (has dynamic fields).
+    // This is more reliable than checking the adaptor type which may not
+    // be converted yet for function block arguments.
+    auto mooreRefType = cast<moore::RefType>(op.getInput().getType());
+    auto nestedType = mooreRefType.getNestedType();
+
+    bool needsLLVMHandling = false;
+    LLVM::LLVMStructType llvmStructType;
+    SmallVector<StringAttr> fieldNames;
+
+    if (auto unpackedStruct = dyn_cast<moore::UnpackedStructType>(nestedType)) {
+      auto convertedType = typeConverter->convertType(unpackedStruct);
+      if (isa<LLVM::LLVMStructType>(convertedType)) {
+        needsLLVMHandling = true;
+        llvmStructType = cast<LLVM::LLVMStructType>(convertedType);
+      }
+      for (auto &member : unpackedStruct.getMembers())
+        fieldNames.push_back(member.name);
+    } else if (auto packedStruct = dyn_cast<moore::StructType>(nestedType)) {
+      auto convertedType = typeConverter->convertType(packedStruct);
+      if (isa<LLVM::LLVMStructType>(convertedType)) {
+        needsLLVMHandling = true;
+        llvmStructType = cast<LLVM::LLVMStructType>(convertedType);
+      }
+      for (auto &member : packedStruct.getMembers())
+        fieldNames.push_back(member.name);
+    } else {
+      return rewriter.notifyMatchFailure(
+          loc, "expected struct type for struct_extract_ref");
+    }
+
+    // If struct has dynamic fields (converts to LLVM struct), use GEP
+    if (needsLLVMHandling) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Find the field index
+      unsigned fieldIndex = 0;
+      for (auto name : fieldNames) {
+        if (name == op.getFieldNameAttr())
+          break;
+        ++fieldIndex;
+      }
+
+      // GEP to the field
+      auto zero = LLVM::ConstantOp::create(rewriter, loc, rewriter.getI32Type(),
+                                           rewriter.getI32IntegerAttr(0));
+      auto fieldIdx = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32Type(),
+          rewriter.getI32IntegerAttr(fieldIndex));
+      rewriter.replaceOpWithNewOp<LLVM::GEPOp>(
+          op, ptrTy, llvmStructType, adaptor.getInput(),
+          ValueRange{zero, fieldIdx});
+      return success();
+    }
+
+    // Otherwise use LLHD sig struct extract for signal types.
     rewriter.replaceOpWithNewOp<llhd::SigStructExtractOp>(
         op, adaptor.getInput(), adaptor.getFieldNameAttr());
     return success();
@@ -5729,14 +5810,14 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
     // alloca for llhd.ref types
     Value keyArg = adaptor.getKey();
     Value keyAlloca;
-    bool needsWriteback = false;
+    Type keyValueType;  // For writeback of llhd.ref keys
     if (isa<LLVM::LLVMPointerType>(keyArg.getType())) {
       // String keys are already LLVM pointers (to struct {ptr, i64})
       keyAlloca = keyArg;
     } else if (auto refType = dyn_cast<llhd::RefType>(keyArg.getType())) {
       // Integer keys are llhd.ref - we need to create an alloca and copy the
       // value to it (the runtime will update it in place for first/next/etc)
-      auto keyValueType = refType.getNestedType();
+      keyValueType = refType.getNestedType();
       auto one = LLVM::ConstantOp::create(rewriter, loc,
                                           rewriter.getI64IntegerAttr(1));
       keyAlloca =
@@ -5745,7 +5826,6 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
       // Read current key value and store to alloca
       auto currentKey = llhd::ProbeOp::create(rewriter, loc, keyArg);
       LLVM::StoreOp::create(rewriter, loc, currentKey, keyAlloca);
-      needsWriteback = true;
     } else {
       return rewriter.notifyMatchFailure(loc, "unsupported key type");
     }
@@ -5755,9 +5835,7 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
         ValueRange{adaptor.getArray(), keyAlloca});
 
     // For non-string keys (llhd.ref), write back the updated key value
-    if (needsWriteback) {
-      auto refType = cast<llhd::RefType>(keyArg.getType());
-      auto keyValueType = refType.getNestedType();
+    if (keyValueType) {
       auto updatedKey =
           LLVM::LoadOp::create(rewriter, loc, keyValueType, keyAlloca);
       auto delay = llhd::ConstantTimeOp::create(
