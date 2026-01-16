@@ -13,7 +13,14 @@
 | Mem2Reg dominance | b881afe61 | 4 | ✅ Fixed |
 | dyn_extract (queues) | 550949250 | 970 | ✅ Fixed |
 | array.size | f18154abb | 349 | ✅ Fixed |
-| vtable.load_method | - | 4764 | 🔴 Next |
+| vtable.load_method | e0df41cec | 4764 | ✅ Fixed |
+| getIntOrFloatBitWidth crash | - | - | 🔴 Next |
+
+### VTable Load Method Fix (e0df41cec)
+- **Abstract class vtables**: Fixed vtable lookup for abstract class handles by recursively searching nested vtables
+- **Root cause**: Abstract classes don't have top-level vtables, but their segments appear nested in derived class vtables
+- **Tests added**: vtable-abstract.mlir, vtable-ops.mlir (12 comprehensive tests)
+- **Impact**: Unblocked 4764 vtable.load_method operations in UVM
 
 ### Array Size Lowering (f18154abb)
 - **Queue/dynamic array size**: Extract length field (field 1) from `{ptr, i64}` struct
