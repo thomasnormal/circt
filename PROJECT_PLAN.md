@@ -4,18 +4,26 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 UVM PARSING COMPLETE - MILESTONE M1 ACHIEVED (January 15, 2026)
+## Current Status: 🚀 UVM MooreToCore 99% COMPLETE (January 16, 2026)
 
-**Test Command**:
+**Test Commands**:
 ```bash
+# UVM Parsing - COMPLETE
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
-# Exit code: 0 (SUCCESS!)
+# Exit code: 0 (SUCCESS!) - 161,443 lines of Moore IR
+
+# UVM MooreToCore - 99% COMPLETE
+./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src | \
+  ./build/bin/circt-opt -convert-moore-to-core
+# Only moore.array.locator ops remain (1 error)
 ```
 
 **Current Blockers / Limitations**:
-1. ~~**Mem2Reg dominance errors**~~ ✅ FIXED (b881afe61) - Loop-local variables now excluded from Mem2Reg promotion
-2. **Runtime gaps** - Randomization/coverage not implemented; DPI/VPI still stubs; MooreToCore queue globals lowering pending
-3. **Multiple input files** - Minor issue with parsing multiple SV files together (empty filename error)
+1. **moore.array.locator** 🔴 CRITICAL - Array locator methods (find, find_index, etc.) not yet lowered in MooreToCore
+2. **Timing in functions** ⚠️ ARCHITECTURAL - Tasks with `@(posedge clk)` can't lower (llhd.wait needs llhd.process parent)
+3. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
+4. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
+5. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
 
 **Recent Fixes (This Session)**:
 - **RefType cast crash for structs with dynamic fields** ✅ FIXED (5dd8ce361) - StructExtractRefOp now uses LLVM GEP for structs containing strings/queues instead of crashing on SigStructExtractOp
@@ -60,33 +68,30 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Test MooreToCore with BFMs
-**Status**: ✅ COMPLETE
-**Task**: Now that interface tasks work, test BFM components through MooreToCore
-**Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
-**Results**:
-- Interface task-calls-task pattern fixed (task_c calling task_a and task_b within same interface)
-- BFM-style patterns with nested task calls now work correctly
-- MooreToCore limitation: Tasks with timing control (`@(posedge clk)`) cannot lower to LLHD (llhd.wait requires llhd.process parent)
-- Simple interface functions/tasks (no timing) lower successfully through MooreToCore
-
-### Track B: Fix AVIP Source Issues
+### Track A: Implement ArrayLocatorOpConversion 🔴 CRITICAL
 **Status**: 🟡 IN PROGRESS
-**Task**: Report/fix source-level issues in JTAG/SPI/UART AVIPs
-**Files**: ~/mbit/*_avip/
-**Issues**: Enum conversions, nested comments, default arg mismatches
+**Task**: Implement lowering for moore.array.locator (last blocker for UVM MooreToCore)
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
+**Next**: Add conversion pattern that iterates queue elements and returns matching ones
+**Priority**: CRITICAL - This is the only remaining blocker for 100% UVM MooreToCore
 
-### Track C: Implement DPI Tool Info Functions
+### Track B: Test APB AVIP Full Pipeline with BFMs
 **Status**: 🟡 IN PROGRESS
-**Task**: Implement uvm_dpi_get_tool_name/version runtime functions
+**Task**: Test APB AVIP through complete pipeline including BFMs
+**Files**: ~/mbit/apb_avip/
+**Next**: Run APB with interface tasks through MooreToCore and identify issues
+
+### Track C: Implement Basic Randomization Stubs
+**Status**: 🟡 IN PROGRESS
+**Task**: Add stub implementations for randomize() to allow UVM to run
 **Files**: lib/Conversion/MooreToCore/
-**Next**: Return "CIRCT" and version string for these functions
+**Next**: Return random values from std::rand() for rand fields
 
-### Track D: Test Full UVM MooreToCore
+### Track D: Test MooreSim with Simple UVM Test
 **Status**: 🟡 IN PROGRESS
-**Task**: Test complete UVM parsing + MooreToCore pipeline
-**Files**: ~/uvm-core/src/
-**Next**: Run uvm_pkg.sv through circt-verilog | circt-opt -convert-moore-to-core
+**Task**: Run a minimal UVM test through MooreSim
+**Files**: test/ or ~/uvm-core/
+**Next**: Create minimal UVM testbench and run through full pipeline
 
 ### Previous Track Results (Iteration 11)
 - **Track A**: ✅ BFM nested task calls fixed (d1b870e5e) - Interface tasks calling other interface tasks now work correctly
