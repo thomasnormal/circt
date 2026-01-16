@@ -30,7 +30,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Ch 11 (Operators) | **87%** | Strong |
 | Ch 12 (Procedural) | **79%** | SequenceWithMatch |
 | Ch 13 (Tasks/Functions) | **86%** | Strong |
-| Ch 14 (Clocking Blocks) | **0%** | NOT IMPLEMENTED |
+| Ch 14 (Clocking Blocks) | **~5%** | ClockingBlockDeclOp added, needs full impl |
 | Ch 16 (Assertions) | **68%** | EmptyArgument |
 | Ch 18 (Random/Constraints) | **25%** | RandSequence |
 | Ch 20 (I/O Formatting) | **83%** | Good |
@@ -48,10 +48,11 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ### Z3 BMC Status
 
-- **Z3 NOT INSTALLED** on system (`Z3_LIBRARIES-NOTFOUND`)
+- **Z3 AVAILABLE** at ~/z3 (include: ~/z3/include, lib: ~/z3/lib/libz3.so)
 - CMake linking code is correct (both CONFIG and Module mode support)
 - Pipeline verified: SV → Moore → HW → BMC MLIR → LLVM IR generation
-- **Blocker**: `verif.clocked_assert` not consumed by circt-bmc (needs lowering pass)
+- **LowerClockedAssertLike pass added** - handles verif.clocked_assert for BMC
+- Testing Z3 integration in progress
 
 ### Test Commands
 ```bash
@@ -66,6 +67,14 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ```
 
 **Iteration 30 Commits**:
+- **Multi-track progress (commit ab52d23c2)** - 3,522 insertions across 26 files:
+  - Track 1: Clocking blocks - ClockingBlockDeclOp, ClockingSignalOp in Moore
+  - Track 2: LLHD interpreter - LLHDProcessInterpreter.cpp/h for circt-sim
+  - Track 3: $past fix - moore::PastOp for type-preserving comparisons
+  - Track 4: clocked_assert lowering - LowerClockedAssertLike.cpp for BMC
+  - LTLToCore enhancements (986 lines added)
+- Big projects status survey (commit 9abf0bb24)
+- Active development tracks documentation (commit e48c2f3f8)
 - SVA functions in boolean contexts (commit a68ed9adf) - ltl.or/ltl.and/ltl.not for LTL types
 - Z3 CMake linking fix (commit 48bcd2308) - JIT runtime linking for SMTToZ3LLVM
 - $rose/$fell test improvements (commit 8ad3a7cc6)

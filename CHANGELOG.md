@@ -52,12 +52,39 @@ Fixed JIT runtime linking for Z3 symbols in circt-bmc and circt-lec:
 - --parse-only: 10/10 (100%)
 - --ir-hw: 9/10 (90%) - `$past(val) == 0` needs conversion pattern
 
-#### Clocking Block Implementation Plan (Research Complete)
-Slang already parses clocking blocks. Implementation needed:
-- `ClockingBlockDeclOp`, `ClockingSignalOp` in Moore dialect
-- Structure.cpp visitor for ClockingBlockSymbol
-- MooreToCore lowering patterns
-- Estimated: ~300-400 lines of code
+#### Multi-Track Progress (commit ab52d23c2) - 3,522 insertions
+Major implementation work across 4 parallel tracks:
+
+**Track 1 - Clocking Blocks**:
+- Added `ClockingBlockDeclOp` and `ClockingSignalOp` to Moore dialect
+- Added MooreToCore conversion patterns for clocking blocks
+- Created `test/Conversion/ImportVerilog/clocking-blocks.sv`
+
+**Track 2 - LLHD Process Interpreter**:
+- New `LLHDProcessInterpreter.cpp/h` files for circt-sim
+- Process detection and scheduling infrastructure
+- Created `test/circt-sim/llhd-process-todo.mlir`
+
+**Track 3 - $past Comparison Fix**:
+- Added `moore::PastOp` to preserve types for $past in comparisons
+- Updated AssertionExpr.cpp for type-preserving $past
+- Added PastOpConversion in MooreToCore
+
+**Track 4 - clocked_assert Lowering for BMC**:
+- New `LowerClockedAssertLike.cpp` pass in VerifToSMT
+- Updated VerifToSMT conversion for clocked assertions
+- Enhanced circt-bmc with clocked assertion support
+
+**Additional Changes**:
+- LTLToCore enhancements: 986 lines added
+- SVAToLTL improvements
+- Runtime and integration test updates
+
+#### Clocking Block Implementation (DONE)
+Clocking blocks now have Moore dialect ops:
+- `ClockingBlockDeclOp`, `ClockingSignalOp` implemented
+- MooreToCore lowering patterns added
+- Testing against sv-tests Chapter 14 in progress
 
 #### Clocked Assert Lowering for BMC (Research Complete)
 Problem: LTLToCore skips i1-property clocked_assert, leaving it unconverted.
