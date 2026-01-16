@@ -59,4 +59,35 @@ module Assertions(input logic clk, rst, a, b);
   // CHECK: moore.to_builtin_bool
   // CHECK: ltl.implication
   assert property (sampled_prop);
+
+  // Test $stable - value unchanged since last clock
+  property stable_test;
+    @(posedge clk) a |-> $stable(b);
+  endproperty
+  // CHECK: ltl.past {{%[a-z0-9]+}}, 1 : i1
+  // CHECK: ltl.not
+  // CHECK: ltl.and
+  // CHECK: ltl.or
+  // CHECK: ltl.implication
+  assert property (stable_test);
+
+  // Test $rose - value is true and was false
+  property rose_test;
+    @(posedge clk) a |-> $rose(b);
+  endproperty
+  // CHECK: ltl.past {{%[a-z0-9]+}}, 1 : i1
+  // CHECK: ltl.not
+  // CHECK: ltl.and
+  // CHECK: ltl.implication
+  assert property (rose_test);
+
+  // Test $fell - value is false and was true
+  property fell_test;
+    @(posedge clk) a |-> $fell(b);
+  endproperty
+  // CHECK: ltl.past {{%[a-z0-9]+}}, 1 : i1
+  // CHECK: ltl.not
+  // CHECK: ltl.and
+  // CHECK: ltl.implication
+  assert property (fell_test);
 endmodule
