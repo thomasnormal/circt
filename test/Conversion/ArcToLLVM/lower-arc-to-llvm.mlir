@@ -358,3 +358,37 @@ func.func @PrintFormattedProcLiteral() {
   sim.proc.print %0
   return
 }
+
+// CHECK-LABEL: llvm.func @SimTerminateSuccessQuiet
+func.func @SimTerminateSuccessQuiet() {
+  // CHECK: [[ZERO:%.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @exit([[ZERO]])
+  sim.terminate success, quiet
+  return
+}
+
+// CHECK-LABEL: llvm.func @SimTerminateFailureQuiet
+func.func @SimTerminateFailureQuiet() {
+  // CHECK: [[ONE:%.+]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @exit([[ONE]])
+  sim.terminate failure, quiet
+  return
+}
+
+// CHECK-LABEL: llvm.func @SimTerminateSuccessVerbose
+func.func @SimTerminateSuccessVerbose() {
+  // CHECK: llvm.call @printf
+  // CHECK: [[ZERO:%.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @exit([[ZERO]])
+  sim.terminate success, verbose
+  return
+}
+
+// CHECK-LABEL: llvm.func @SimTerminateFailureVerbose
+func.func @SimTerminateFailureVerbose() {
+  // CHECK: llvm.call @printf
+  // CHECK: [[ONE:%.+]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @exit([[ONE]])
+  sim.terminate failure, verbose
+  return
+}
