@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 LSP + Constraints Working (January 16, 2026 - Iteration 21)
+## Current Status: 🎉 Simulation Nearly Complete (January 16, 2026 - Iteration 22)
 
 **Test Commands**:
 ```bash
@@ -24,15 +24,19 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ```
 
 **Current Blockers / Limitations** (Post-MooreToCore):
-1. **Initial blocks in arcilator** ⚠️ BLOCKER - `llhd.process` with `llhd.halt` not supported (need halting process lowering)
-2. **sim.terminate** ⚠️ MISSING - No lowering pattern (need exit() call generation)
-3. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
-4. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
-5. **Complex constraints** ⚠️ PARTIAL - ~41% of constraints need SMT solver (simple ranges work)
+1. **Initial blocks in arcilator** ⚠️ LAST BLOCKER - Need to use `seq.initial` instead of `llhd.process` (solution identified!)
+2. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
+3. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
+4. **Complex constraints** ⚠️ PARTIAL - ~18% need SMT solver (82% now work with soft+range)
 
-**Recently Fixed (Iteration 21)**:
+**Recently Fixed (Iteration 22)**:
+- **sim.terminate** ✅ FIXED (575768714) - $finish now calls exit(0/1)
+- **Soft constraints** ✅ FIXED (5e573a811) - ~82% of AVIP constraints now work
+- **Initial block solution** ✅ IDENTIFIED - Use seq.initial instead of llhd.process
+
+**Fixed (Iteration 21)**:
 - **UVM LSP support** ✅ FIXED (d930aad54) - `--uvm-path` flag and `UVM_HOME` env var
-- **Range constraints** ✅ FIXED (2b069ee30) - ~59% of AVIP constraints now work
+- **Range constraints** ✅ FIXED (2b069ee30) - ~59% of AVIP constraints work
 - **Interface symbols** ✅ FIXED (d930aad54) - LSP returns proper interface symbols
 - **sim.proc.print** ✅ FIXED (2be6becf7) - $display works in arcilator
 
@@ -93,67 +97,66 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Simulation Pipeline - Initial Block Support 🟡 BLOCKED
-**Status**: 🟡 BLOCKER IDENTIFIED (Iteration 21)
-**Problem**: `llhd.process` with `llhd.halt` (initial blocks) not supported in arcilator
-**Pipeline Analysis**:
-| Stage | Status | Notes |
-|-------|--------|-------|
-| SV → Moore IR | ✅ | $display → moore.builtin.display |
-| Moore → Core | ✅ | sim.proc.print generated correctly |
-| Core → Arcilator | ❌ | llhd.process with llhd.halt rejected |
-**Root Cause**: `LowerProcessesPass` only handles combinational processes with `llhd.wait`
-**Next**: Add halting process support or convert to func.func entry points
-**Priority**: HIGH - Blocks end-to-end simulation
+### Track A: Initial Block Support 🟡 SOLUTION READY
+**Status**: 🟡 Implementation Ready (Iteration 22)
+**Solution**: Modify MooreToCore to generate `seq.initial` instead of `llhd.process`
+**Why seq.initial**:
+- Path `seq.initial` → `arc.initial` → `_initial` function already exists
+- No arcilator runtime changes needed
+- Handles side effects (printf calls) correctly
+**Implementation**:
+- Change `ProcedureKind::Initial` handling in `MooreToCore.cpp:625-641`
+- Convert `moore.return` → `seq.yield`
+**Next**: Implement the change and test
+**Priority**: HIGH - Last blocker for end-to-end simulation
 
-### Track B: sim.terminate Lowering 🟡 MISSING
-**Status**: 🟡 Not Implemented (Iteration 21)
-**Problem**: `sim.terminate` has no lowering pattern in `LowerArcToLLVM.cpp`
-**Required**: Generate `exit(0)` for success, `exit(1)` for failure
-**Files**: `lib/Conversion/ArcToLLVM/LowerArcToLLVM.cpp`
-**Next**: Add `SimTerminateOpLowering` pattern following `PrintFormattedProcOpLowering` template
-**Priority**: HIGH - Needed for simulation completion
+### Track B: sim.terminate ✅ IMPLEMENTED
+**Status**: ✅ COMPLETE (Iteration 22)
+**Commit**: 575768714
+**Implementation**: Added `SimTerminateOpLowering` pattern
+- `sim.terminate success` → `exit(0)`
+- `sim.terminate failure` → `exit(1)`
+- Verbose mode prints message before exit
+**Result**: $finish now works correctly in arcilator
+**Next**: Test with full simulation pipeline
 
-### Track C: Randomization ✅ Range Constraints IMPLEMENTED
-**Status**: ✅ PARTIAL SUCCESS (Iteration 21)
-**Commit**: 2b069ee30
-**Implementation**: Added range constraint extraction and application
-- `extractRangeConstraints()` analyzes `ConstraintInsideOp` ops
-- `RandomizeOpConversion` calls `__moore_randomize_with_range(min, max)`
-**Coverage**: ~59% of AVIP constraints (simple ranges) now work
-**Remaining** (41%):
-| Type | Percentage | Notes |
-|------|------------|-------|
-| Soft defaults | 23% | Need soft constraint support |
-| Inside (multiple) | 12% | Need multi-range support |
-| Complex | 6% | Needs SMT solver |
-**Next**: Implement soft constraint support
-**Priority**: MEDIUM - Improve constraint coverage
+### Track C: Randomization ✅ 82% Coverage
+**Status**: ✅ MAJOR PROGRESS (Iteration 22)
+**Commits**: 2b069ee30 (range), 5e573a811 (soft)
+**Coverage**: ~82% of AVIP constraints now work
+| Type | Percentage | Status |
+|------|------------|--------|
+| Range constraints | 59% | ✅ Implemented |
+| Soft defaults | 23% | ✅ Implemented |
+| Inside (multiple) | 12% | 🟡 Pending |
+| Complex | 6% | ⚠️ Needs SMT |
+**Next**: Implement multi-range inside constraints
+**Priority**: MEDIUM - 82% is good, 94% achievable
 
-### Track D: LSP ✅ UVM + Interfaces WORKING
-**Status**: ✅ MAJOR IMPROVEMENTS (Iteration 21)
-**Commits**: d930aad54, 95f0dd277
-**UVM Support**:
-- Added `--uvm-path` flag and `UVM_HOME` environment variable
-- AVIP BFM files now analyzable with UVM imports resolved
-**Interface Support**:
-- Fixed `visitInterfaceDefinition()` to extract ports, signals, modports
-- AVIP interface files return proper symbols
-**Current Status**:
-| Feature | Package | Interface | BFM (with UVM) |
-|---------|---------|-----------|----------------|
-| Document Symbols | ✅ | ✅ | ✅ |
-| Hover | ✅ | ⚠️ | ⚠️ |
-| Completion | ✅ | ✅ | ✅ |
-| Go-to-Definition | ❌ | ❌ | ❌ |
-**Next**: Fix cross-file go-to-definition
-**Priority**: LOW - Basic features work
+### Track D: LSP ✅ All 8 AVIPs Validated
+**Status**: ✅ COMPREHENSIVE VALIDATION (Iteration 22)
+**Test Results** (all 8 AVIPs):
+| File Type | Symbol Count | Status |
+|-----------|-------------|--------|
+| Package files | 23-188 | ✅ Excellent |
+| Interface files | 7-49 | ✅ Excellent |
+| BFM files | 14-102 | ✅ Excellent |
+| Agent files | 0 | ⚠️ Need context |
+**Issue**: UVM class files need package context to parse
+**Next**: Consider auto-detecting package context
+**Priority**: LOW - Most important files work
 
 ### Operating Guidance
 - Keep 4 agents active: Track A (unit tests), Track B (simulation), Track C (AVIP testing), Track D (tooling).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 22)
+- **Track A**: ✅ sim.terminate implemented (575768714) - $finish now calls exit()
+- **Track B**: ✅ Initial block solution identified - use seq.initial instead of llhd.process
+- **Track C**: ✅ Soft constraints implemented (5e573a811) - ~82% total coverage
+- **Track D**: ✅ All 8 AVIPs validated - Package/Interface/BFM files work excellently
 
 ### Previous Track Results (Iteration 21)
 - **Track A**: ✅ Pipeline analysis complete - llhd.halt blocker identified
