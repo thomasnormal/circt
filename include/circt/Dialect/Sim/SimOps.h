@@ -29,6 +29,18 @@
 
 #include "circt/Dialect/Sim/SimOpInterfaces.h.inc"
 
+namespace circt {
+namespace sim {
+
+/// Trait for operations that must occur within a simulation process region.
+/// This is a marker trait used to identify process-related operations.
+template <typename ConcreteType>
+class SimProcessRegion
+    : public mlir::OpTrait::TraitBase<ConcreteType, SimProcessRegion> {};
+
+} // namespace sim
+} // namespace circt
+
 #define GET_OP_CLASSES
 #include "circt/Dialect/Sim/Sim.h.inc"
 

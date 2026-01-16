@@ -18,7 +18,7 @@
 namespace json = llvm::json;
 
 using namespace circt;
-using llvm::scope_exit;
+using llvm::make_scope_exit;
 using mlir::UnitAttr;
 
 // NOLINTBEGIN(misc-no-recursion)
@@ -27,10 +27,10 @@ LogicalResult circt::convertAttributeToJSON(llvm::json::OStream &json,
   return TypeSwitch<Attribute, LogicalResult>(attr)
       .Case<DictionaryAttr>([&](auto attr) {
         json.objectBegin();
-        scope_exit guard([&] { json.objectEnd(); });
+        auto guard = make_scope_exit([&] { json.objectEnd(); });
         for (auto subAttr : attr) {
           json.attributeBegin(subAttr.getName());
-          scope_exit guard([&] { json.attributeEnd(); });
+          auto guard = make_scope_exit([&] { json.attributeEnd(); });
           if (failed(convertAttributeToJSON(json, subAttr.getValue())))
             return failure();
         }
@@ -38,7 +38,7 @@ LogicalResult circt::convertAttributeToJSON(llvm::json::OStream &json,
       })
       .Case<ArrayAttr>([&](auto attr) {
         json.arrayBegin();
-        scope_exit guard([&] { json.arrayEnd(); });
+        auto guard = make_scope_exit([&] { json.arrayEnd(); });
         for (auto subAttr : attr)
           if (failed(convertAttributeToJSON(json, subAttr)))
             return failure();
