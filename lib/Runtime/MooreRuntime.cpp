@@ -1927,6 +1927,78 @@ extern "C" int64_t __moore_randomize_with_modulo(int64_t mod, int64_t remainder)
   return static_cast<int64_t>(multiplier) * mod + normalizedRemainder;
 }
 
+extern "C" int64_t __moore_randomize_with_ranges(int64_t *ranges,
+                                                  int64_t numRanges) {
+  // Generate a random value that falls within one of the given ranges.
+  // The ranges array contains pairs of [min1, max1, min2, max2, ...].
+  // numRanges is the number of range pairs (not the array length).
+  //
+  // Algorithm:
+  // 1. Calculate the total size of all ranges combined
+  // 2. Generate a random position within the total size
+  // 3. Map that position to a specific range and value within it
+  //
+  // This ensures uniform distribution across all ranges.
+
+  // Validate inputs
+  if (!ranges || numRanges <= 0)
+    return 0;
+
+  // Calculate total size across all ranges
+  uint64_t totalSize = 0;
+  for (int64_t i = 0; i < numRanges; ++i) {
+    int64_t low = ranges[i * 2];
+    int64_t high = ranges[i * 2 + 1];
+    // Handle inverted ranges (swap if needed)
+    if (low > high) {
+      int64_t tmp = low;
+      low = high;
+      high = tmp;
+    }
+    // Size of this range: high - low + 1
+    uint64_t rangeSize = static_cast<uint64_t>(high - low) + 1;
+    totalSize += rangeSize;
+  }
+
+  // If total size is 0 (shouldn't happen), return first range's min
+  if (totalSize == 0)
+    return ranges[0];
+
+  // Generate random position in [0, totalSize - 1]
+  uint64_t randomVal = __moore_urandom();
+  // For large total sizes, combine two 32-bit values
+  if (totalSize > UINT32_MAX) {
+    randomVal = (static_cast<uint64_t>(__moore_urandom()) << 32) |
+                __moore_urandom();
+  }
+  uint64_t position = randomVal % totalSize;
+
+  // Map position to a specific range and value
+  uint64_t accumulated = 0;
+  for (int64_t i = 0; i < numRanges; ++i) {
+    int64_t low = ranges[i * 2];
+    int64_t high = ranges[i * 2 + 1];
+    // Handle inverted ranges
+    if (low > high) {
+      int64_t tmp = low;
+      low = high;
+      high = tmp;
+    }
+    uint64_t rangeSize = static_cast<uint64_t>(high - low) + 1;
+
+    // Check if position falls within this range
+    if (position < accumulated + rangeSize) {
+      // Position is in this range
+      uint64_t offset = position - accumulated;
+      return low + static_cast<int64_t>(offset);
+    }
+    accumulated += rangeSize;
+  }
+
+  // Fallback (shouldn't reach here)
+  return ranges[0];
+}
+
 //===----------------------------------------------------------------------===//
 // File I/O Operations
 //===----------------------------------------------------------------------===//
