@@ -44,6 +44,7 @@ class UnpackedStructType;
 class UnpackedUnionType;
 class VoidType;
 class ClassHandleType;
+class CovergroupHandleType;
 class VirtualInterfaceType;
 
 /// The number of values each bit of a type can assume.
@@ -105,7 +106,8 @@ public:
     return llvm::isa<PackedType, StringType, ChandleType, EventType, RealType,
                      UnpackedArrayType, OpenUnpackedArrayType, AssocArrayType,
                      QueueType, UnpackedStructType, UnpackedUnionType,
-                     ClassHandleType, VirtualInterfaceType>(type);
+                     ClassHandleType, CovergroupHandleType,
+                     VirtualInterfaceType>(type);
   }
 
   /// Get the value domain of this type.

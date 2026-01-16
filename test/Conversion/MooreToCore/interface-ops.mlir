@@ -120,3 +120,19 @@ func.func @test_simple_instance() -> !moore.ref<virtual_interface<@simple_if>> {
   %inst = moore.interface.instance @simple_if : !moore.ref<virtual_interface<@simple_if>>
   return %inst : !moore.ref<virtual_interface<@simple_if>>
 }
+
+//===----------------------------------------------------------------------===//
+// Ref<virtual_interface> to virtual_interface conversion
+//===----------------------------------------------------------------------===//
+
+/// Test conversion from ref<virtual_interface> to virtual_interface.
+/// This is a common pattern when assigning an interface instance to a
+/// virtual interface variable (vif = intf;).
+// CHECK-LABEL: func.func @test_ref_to_vif_conversion
+// CHECK-SAME: (%[[REF:.*]]: !llhd.ref<!llvm.ptr>)
+// CHECK:   %[[VIF:.*]] = llhd.prb %[[REF]] : !llvm.ptr
+// CHECK:   return %[[VIF]] : !llvm.ptr
+func.func @test_ref_to_vif_conversion(%ref: !moore.ref<virtual_interface<@simple_if>>) -> !moore.virtual_interface<@simple_if> {
+  %vif = moore.conversion %ref : !moore.ref<virtual_interface<@simple_if>> -> !moore.virtual_interface<@simple_if>
+  return %vif : !moore.virtual_interface<@simple_if>
+}

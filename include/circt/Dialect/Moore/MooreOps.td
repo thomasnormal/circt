@@ -3134,6 +3134,73 @@ def CoverCrossDeclOp
   let assemblyFormat = [{ $sym_name `targets` $targets attr-dict }];
 }
 
+def CovergroupInstOp : MooreOp<"covergroup.inst"> {
+  let summary = "Covergroup instantiation";
+  let description = [{
+    Instantiates a covergroup, allocating runtime data structures for
+    tracking coverage. Returns a handle to the covergroup instance.
+
+    Example:
+    ```mlir
+    %cg = moore.covergroup.inst @my_covergroup : !moore.covergroup<@my_covergroup>
+    ```
+
+    This corresponds to SystemVerilog `covergroup_type cg_inst = new();`
+
+    See IEEE 1800-2017 Section 19.3 "Using covergroup in classes".
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$covergroup);
+  let results = (outs CovergroupHandleType:$result);
+  let assemblyFormat = [{ $covergroup attr-dict `:` type($result) }];
+}
+
+def CovergroupSampleOp : MooreOp<"covergroup.sample"> {
+  let summary = "Sample a covergroup";
+  let description = [{
+    Triggers sampling of a covergroup instance. Each coverpoint in the
+    covergroup will capture its current value for coverage tracking.
+
+    The values operand provides the values to sample for each coverpoint
+    in the order they are declared in the covergroup.
+
+    Example:
+    ```mlir
+    moore.covergroup.sample %cg_inst(%val1, %val2) : !moore.covergroup<@cg>(!moore.l8, !moore.l4)
+    ```
+
+    This corresponds to SystemVerilog `cg_inst.sample(args)` or implicit
+    sampling triggered by the covergroup's sampling event.
+
+    See IEEE 1800-2017 Section 19.8 "Covergroup methods".
+  }];
+  let arguments = (ins CovergroupHandleType:$covergroup, Variadic<AnyType>:$values);
+  let assemblyFormat = [{
+    $covergroup `(` $values `)` attr-dict `:` type($covergroup) `(` type($values) `)`
+  }];
+}
+
+def CovergroupGetCoverageOp : MooreOp<"covergroup.get_coverage", [Pure]> {
+  let summary = "Get coverage percentage of a covergroup";
+  let description = [{
+    Returns the current coverage percentage (0.0 to 100.0) of a covergroup
+    instance.
+
+    Example:
+    ```mlir
+    %coverage = moore.covergroup.get_coverage %cg_inst : !moore.covergroup<@cg> -> !moore.real
+    ```
+
+    This corresponds to SystemVerilog `cg_inst.get_coverage()`.
+
+    See IEEE 1800-2017 Section 19.8.1 "Coverage methods".
+  }];
+  let arguments = (ins CovergroupHandleType:$covergroup);
+  let results = (outs RealType:$result);
+  let assemblyFormat = [{
+    $covergroup attr-dict `:` type($covergroup) `->` type($result)
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Constraint Expression Operations
 //===----------------------------------------------------------------------===//

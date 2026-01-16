@@ -67,6 +67,29 @@ def ClassHandleType : MooreTypeDef<"ClassHandle", [], "moore::UnpackedType"> {
 }
 
 //===----------------------------------------------------------------------===//
+// CovergroupHandleType
+//===----------------------------------------------------------------------===//
+
+def CovergroupHandleType : MooreTypeDef<"CovergroupHandle", [], "moore::UnpackedType"> {
+  let mnemonic = "covergroup";
+  let summary = "Covergroup instance handle type";
+  let description = [{
+    The `!moore.covergroup<@CG>` type represents a handle to a covergroup instance.
+    Covergroups track functional coverage during simulation. Each covergroup
+    instance maintains its own coverage data.
+
+    Example:
+    ```mlir
+    %cg = moore.covergroup.inst @my_covergroup : !moore.covergroup<@my_covergroup>
+    ```
+
+    See IEEE 1800-2017 Section 19 "Functional coverage".
+  }];
+  let parameters = (ins AttrParameter<"::mlir::FlatSymbolRefAttr", "covergroup symbol">:$covergroupSym);
+  let assemblyFormat = "`<` $covergroupSym `>`";
+}
+
+//===----------------------------------------------------------------------===//
 // TimeType
 //===----------------------------------------------------------------------===//
 

@@ -24,7 +24,7 @@ Continue!
 def main() -> int:
     payload = json.load(sys.stdin)
 
-    with open("/Users/ahle/debug_stop_on_limits.txt", "a") as debug_file:
+    with open("/home/thomas-ahle/debug_stop_on_limits.txt", "a") as debug_file:
         print(f"stop_on_limits.py invoked with payload: {payload}", file=debug_file)
 
         transcript_path = payload.get("transcript_path")

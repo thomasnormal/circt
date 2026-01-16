@@ -223,6 +223,23 @@ struct TypeVisitor {
     return moore::EventType::get(context.getContext());
   }
 
+  Type visit(const slang::ast::CovergroupType &type) {
+    // Convert the covergroup and return a handle type.
+    // The covergroup should already be declared during module body conversion.
+    if (failed(context.convertCovergroup(type)))
+      return {};
+
+    auto it = context.covergroups.find(&type);
+    if (it == context.covergroups.end() || !it->second || !it->second->op) {
+      mlir::emitError(loc) << "no lowering generated for covergroup type `"
+                           << type.name << "`";
+      return {};
+    }
+    mlir::StringAttr symName = it->second->op.getSymNameAttr();
+    mlir::FlatSymbolRefAttr symRef = mlir::FlatSymbolRefAttr::get(symName);
+    return moore::CovergroupHandleType::get(context.getContext(), symRef);
+  }
+
   Type visit(const slang::ast::VirtualInterfaceType &type) {
     // Get the interface from the virtual interface type
     auto &iface = type.iface;

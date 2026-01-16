@@ -68,6 +68,19 @@ struct VerifAssumeOpConversion : OpConversionPattern<verif::AssumeOp> {
   }
 };
 
+/// Drop verif::CoverOp for now; cover checking is not modeled in SMT.
+struct VerifCoverOpConversion : OpConversionPattern<verif::CoverOp> {
+  using OpConversionPattern<verif::CoverOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(verif::CoverOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    (void)adaptor;
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 template <typename OpTy>
 struct CircuitRelationCheckOpConversion : public OpConversionPattern<OpTy> {
   using OpConversionPattern<OpTy>::OpConversionPattern;
@@ -676,6 +689,7 @@ void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps) {
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
+               VerifCoverOpConversion,
                LogicEquivalenceCheckingOpConversion,
                RefinementCheckingOpConversion>(converter,
                                                patterns.getContext());

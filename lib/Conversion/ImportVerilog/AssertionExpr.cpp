@@ -262,11 +262,24 @@ struct AssertionExprVisitor {
           builder, loc, SmallVector<Value, 2>{antecedent, notRhs});
       return ltl::NotOp::create(builder, loc, implication);
     }
-    case BinaryAssertionOperator::SUntil:
-    case BinaryAssertionOperator::SUntilWith:
-      mlir::emitError(loc, "unsupported binary operator: ")
-          << slang::ast::toString(expr.op);
-      return {};
+    case BinaryAssertionOperator::SUntil: {
+      // Strong until: a U b AND eventually b.
+      auto untilOp = ltl::UntilOp::create(builder, loc, operands);
+      auto eventuallyRhs =
+          ltl::EventuallyOp::create(builder, loc, rhs);
+      return ltl::AndOp::create(builder, loc,
+                                SmallVector<Value, 2>{untilOp, eventuallyRhs});
+    }
+    case BinaryAssertionOperator::SUntilWith: {
+      // Strong until-with: require overlap at termination and eventual b.
+      auto andOp = ltl::AndOp::create(builder, loc, operands);
+      auto untilWith = ltl::UntilOp::create(
+          builder, loc, SmallVector<Value, 2>{lhs, andOp});
+      auto eventuallyAnd =
+          ltl::EventuallyOp::create(builder, loc, andOp);
+      return ltl::AndOp::create(builder, loc,
+                                SmallVector<Value, 2>{untilWith, eventuallyAnd});
+    }
     }
     llvm_unreachable("All enum values handled in switch");
   }
@@ -276,6 +289,22 @@ struct AssertionExprVisitor {
     if (!assertionExpr)
       return {};
     return context.convertLTLTimingControl(expr.clocking, assertionExpr);
+  }
+
+  Value visit(const slang::ast::DisableIffAssertionExpr &expr) {
+    auto disableCond = context.convertRvalueExpression(expr.condition);
+    disableCond = context.convertToI1(disableCond);
+    if (!disableCond)
+      return {};
+
+    auto assertionExpr = context.convertAssertionExpression(expr.expr, loc);
+    if (!assertionExpr)
+      return {};
+
+    // Approximate disable iff by treating the property as vacuously true when
+    // the disable condition holds.
+    return ltl::OrOp::create(builder, loc,
+                             SmallVector<Value, 2>{disableCond, assertionExpr});
   }
 
   /// Emit an error for all other expressions.
@@ -345,6 +374,30 @@ FailureOr<Value> Context::convertAssertionSystemCallArity1(
                                         {pastAndCurrent, notPastAndNotCurrent})
                           .getResult();
                   return stable;
+                })
+          // Translate $changed to ¬$stable(x).
+          .Case("$changed",
+                [&]() -> Value {
+                  auto past =
+                      ltl::PastOp::create(builder, loc, value, 1).getResult();
+                  auto notPast =
+                      ltl::NotOp::create(builder, loc, past).getResult();
+                  auto notCurrent =
+                      ltl::NotOp::create(builder, loc, value).getResult();
+                  auto currentAndNotPast =
+                      ltl::AndOp::create(builder, loc, {value, notPast})
+                          .getResult();
+                  auto notCurrentAndPast =
+                      ltl::AndOp::create(builder, loc, {notCurrent, past})
+                          .getResult();
+                  return ltl::OrOp::create(builder, loc,
+                                           {currentAndNotPast, notCurrentAndPast})
+                      .getResult();
+                })
+          // Translate $past to x[-1].
+          .Case("$past",
+                [&]() -> Value {
+                  return ltl::PastOp::create(builder, loc, value, 1).getResult();
                 })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();

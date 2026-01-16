@@ -1,5 +1,86 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 25: $finish in seq.initial + Interface Conversions + Constraint Lowering
+
+**Status**: Three major fixes implemented. Coverage implementation in progress.
+
+### Track A: Coverage Implementation (In Progress)
+
+Working on covergroup IR ops and lowering:
+- `CovergroupHandleType` added to Moore dialect
+- `CovergroupInstOp` and `CovergroupSampleOp` in progress
+- Lowering to runtime calls being implemented
+
+### Track B: Interface ref→vif Conversion ✅ FIXED
+
+Fixed `moore.conversion` from `ref<virtual_interface>` to `virtual_interface`:
+- Added handling in `ConversionOpConversion` pattern
+- Uses `llhd::ProbeOp` to read pointer from reference
+- Test added in `interface-ops.mlir`
+
+Before fix: Failed with `failed to legalize operation 'moore.conversion'`
+After fix: Properly converts using `llhd.prb %ref : !llvm.ptr`
+
+### Track C: Constraint Op MooreToCore Lowering ✅ COMPLETE
+
+Added 10 constraint op conversion patterns in `MooreToCore.cpp`:
+| Op | Lowering |
+|----|----------|
+| `ConstraintBlockOp` | Erased (handled in RandomizeBIOp) |
+| `ConstraintExprOp` | Erased (processed during randomize) |
+| `ConstraintImplicationOp` | Erased |
+| `ConstraintIfElseOp` | Erased |
+| `ConstraintForeachOp` | Erased |
+| `ConstraintDistOp` | Erased |
+| `ConstraintInsideOp` | Erased |
+| `ConstraintSolveBeforeOp` | Erased |
+| `ConstraintDisableOp` | Erased |
+| `ConstraintUniqueOp` | Erased |
+
+Tests added in `range-constraints.mlir`.
+
+### Track D: $finish in seq.initial ✅ FIXED
+
+Initial blocks with `$finish` now use `seq.initial` instead of falling back to `llhd.process`:
+- Removed `hasUnreachable` check from seq.initial condition
+- Added conversion of `UnreachableOp` to `seq.yield`
+- `$finish` → `sim.terminate` + `seq.yield` now works in seq.initial
+
+Before fix:
+```mlir
+llhd.process {
+  sim.proc.print %0
+  sim.terminate success, quiet
+  llhd.halt  // Falls back to llhd.process due to unreachable
+}
+```
+
+After fix:
+```mlir
+seq.initial() {
+  sim.proc.print %0
+  sim.terminate success, quiet
+} : () -> ()  // Now uses seq.initial (arcilator compatible)
+```
+
+Tests added in `initial-blocks.mlir`.
+
+### What's Fixed
+
+✅ **$finish in initial blocks** now simulates through arcilator
+✅ **Interface member access** with virtual interfaces works
+✅ **Constraint ops** all properly lowered in MooreToCore
+
+### Remaining Work
+
+| Feature | Status | Priority |
+|---------|--------|----------|
+| Coverage collection | In progress | HIGH |
+| SVA assertions | Not implemented | MEDIUM |
+| DPI full support | Stubs only | LOW |
+
+---
+
 ## January 16, 2026 - Iteration 24: Constraint Expression Lowering + Coverage Research
 
 **Status**: Constraint expression parsing now implemented. Coverage architecture fully documented.

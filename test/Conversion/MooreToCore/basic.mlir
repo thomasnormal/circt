@@ -1321,10 +1321,12 @@ func.func @Time(%arg0: !moore.time) -> (!moore.time, !moore.time) {
 }
 
 // CHECK-LABEL: @Unreachable
+// Initial blocks with unreachable (from $finish) now use seq.initial
+// The unreachable is converted to seq.yield
 moore.module @Unreachable() {
-  // CHECK: llhd.process
+  // CHECK: seq.initial() {
+  // CHECK: } : () -> ()
   moore.procedure initial {
-    // CHECK-NEXT: llhd.halt
     moore.unreachable
   }
 }
