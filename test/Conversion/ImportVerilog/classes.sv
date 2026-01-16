@@ -646,13 +646,17 @@ class RandomizableClass;
     shortint fixed;
 endclass
 
-/// Check constraint block support
-/// Note: Constraint blocks are currently lowered as empty blocks.
-/// Full constraint expression support is a future enhancement.
+/// Check constraint block support with expression lowering
+/// Note: Property references in constraints are not yet fully resolved to
+/// `this` accesses, so they appear as comparisons with constant 0.
 
 // CHECK-LABEL: moore.class.classdecl @ConstrainedClass {
 // CHECK:         moore.class.propertydecl @x : !moore.i32 rand_mode rand
 // CHECK:         moore.constraint.block @valid_range {
+// CHECK:           %[[GT:.*]] = moore.sgt {{.*}} : i32 -> i1
+// CHECK:           moore.constraint.expr %[[GT]] : i1
+// CHECK:           %[[LT:.*]] = moore.slt {{.*}} : i32 -> i1
+// CHECK:           moore.constraint.expr %[[LT]] : i1
 // CHECK:         }
 // CHECK: }
 
@@ -666,12 +670,54 @@ endclass
 // CHECK-LABEL: moore.class.classdecl @StaticConstraintClass {
 // CHECK:         moore.class.propertydecl @y : !moore.i32 rand_mode rand
 // CHECK:         moore.constraint.block static @static_bound {
+// CHECK:           %[[GE:.*]] = moore.sge {{.*}} : i32 -> i1
+// CHECK:           moore.constraint.expr %[[GE]] : i1
 // CHECK:         }
 // CHECK: }
 
 class StaticConstraintClass;
     rand int y;
     static constraint static_bound { y >= 0; }
+endclass
+
+/// Check constraint with if-else and soft constraints
+
+// CHECK-LABEL: moore.class.classdecl @AdvancedConstraints {
+// CHECK:         moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK:         moore.class.propertydecl @mode : !moore.i1 rand_mode rand
+// CHECK:         moore.constraint.block @soft_c {
+// CHECK:           %[[LT:.*]] = moore.slt {{.*}} : i32 -> i1
+// CHECK:           moore.constraint.expr %[[LT]] : i1 soft
+// CHECK:         }
+// CHECK:         moore.constraint.block @impl_c {
+// CHECK:           moore.constraint.implication {{.*}} : i1 {
+// CHECK:             %[[GT:.*]] = moore.sgt {{.*}} : i32 -> i1
+// CHECK:             moore.constraint.expr %[[GT]] : i1
+// CHECK:           }
+// CHECK:         }
+// CHECK:         moore.constraint.block @ifelse_c {
+// CHECK:           moore.constraint.if_else {{.*}} : i1 {
+// CHECK:             %[[GT2:.*]] = moore.sgt {{.*}} : i32 -> i1
+// CHECK:             moore.constraint.expr %[[GT2]] : i1
+// CHECK:           } else {
+// CHECK:             %[[LE:.*]] = moore.sle {{.*}} : i32 -> i1
+// CHECK:             moore.constraint.expr %[[LE]] : i1
+// CHECK:           }
+// CHECK:         }
+// CHECK: }
+
+class AdvancedConstraints;
+    rand int x;
+    rand bit mode;
+    constraint soft_c { soft x < 100; }
+    constraint impl_c { mode -> x > 50; }
+    constraint ifelse_c {
+        if (mode) {
+            x > 0;
+        } else {
+            x <= 0;
+        }
+    }
 endclass
 
 //===----------------------------------------------------------------------===//

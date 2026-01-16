@@ -52,6 +52,10 @@ endmodule
 // CHECK-LABEL: moore.class.classdecl @ConstrainedTransaction {
 // CHECK:   moore.class.propertydecl @x : !moore.i32 rand_mode rand
 // CHECK:   moore.constraint.block @valid_range {
+// CHECK:     %[[GT:.*]] = moore.sgt {{.*}} : i32 -> i1
+// CHECK:     moore.constraint.expr %[[GT]] : i1
+// CHECK:     %[[LT:.*]] = moore.slt {{.*}} : i32 -> i1
+// CHECK:     moore.constraint.expr %[[LT]] : i1
 // CHECK:   }
 // CHECK: }
 

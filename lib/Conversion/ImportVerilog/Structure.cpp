@@ -8,6 +8,7 @@
 
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
+#include "slang/ast/Constraints.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
@@ -2356,11 +2357,127 @@ struct ClassDeclVisitor {
     auto constraintOp = moore::ConstraintBlockOp::create(
         builder, loc, constraint.name, isStatic, isPure);
 
-    // For now, leave the body empty. Full constraint expression parsing
-    // will be added in a future patch.
+    // Create the body block
     constraintOp.getBody().emplaceBlock();
 
+    // Convert the constraint expressions inside the block
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPointToEnd(&constraintOp.getBody().front());
+
+    // Get the constraint body from slang
+    const auto &constraintBody = constraint.getConstraints();
+    if (failed(convertConstraint(constraintBody, loc)))
+      return failure();
+
     return success();
+  }
+
+  /// Convert a slang constraint to Moore IR operations.
+  LogicalResult convertConstraint(const slang::ast::Constraint &constraint,
+                                  Location loc) {
+    switch (constraint.kind) {
+    case slang::ast::ConstraintKind::List: {
+      const auto &list = constraint.as<slang::ast::ConstraintList>();
+      for (const auto *item : list.list) {
+        if (failed(convertConstraint(*item, loc)))
+          return failure();
+      }
+      return success();
+    }
+    case slang::ast::ConstraintKind::Expression: {
+      const auto &exprConstraint =
+          constraint.as<slang::ast::ExpressionConstraint>();
+      auto value = context.convertRvalueExpression(exprConstraint.expr);
+      if (!value)
+        return failure();
+      // Convert to boolean if needed
+      value = context.convertToBool(value);
+      if (!value)
+        return failure();
+      // Create the constraint.expr operation
+      moore::ConstraintExprOp::create(builder, loc, value,
+                                      exprConstraint.isSoft);
+      return success();
+    }
+    case slang::ast::ConstraintKind::Implication: {
+      const auto &impl = constraint.as<slang::ast::ImplicationConstraint>();
+      auto predicate = context.convertRvalueExpression(impl.predicate);
+      if (!predicate)
+        return failure();
+      predicate = context.convertToBool(predicate);
+      if (!predicate)
+        return failure();
+      // Create implication op with body
+      auto implOp = moore::ConstraintImplicationOp::create(builder, loc,
+                                                           predicate);
+      implOp.getConsequent().emplaceBlock();
+      OpBuilder::InsertionGuard ig(builder);
+      builder.setInsertionPointToEnd(&implOp.getConsequent().front());
+      return convertConstraint(impl.body, loc);
+    }
+    case slang::ast::ConstraintKind::Conditional: {
+      const auto &cond = constraint.as<slang::ast::ConditionalConstraint>();
+      auto predicate = context.convertRvalueExpression(cond.predicate);
+      if (!predicate)
+        return failure();
+      predicate = context.convertToBool(predicate);
+      if (!predicate)
+        return failure();
+      // Create if-else op
+      auto ifElseOp = moore::ConstraintIfElseOp::create(builder, loc,
+                                                        predicate);
+      // Then region
+      ifElseOp.getThenRegion().emplaceBlock();
+      {
+        OpBuilder::InsertionGuard ig(builder);
+        builder.setInsertionPointToEnd(&ifElseOp.getThenRegion().front());
+        if (failed(convertConstraint(cond.ifBody, loc)))
+          return failure();
+      }
+      // Else region (optional)
+      if (cond.elseBody) {
+        ifElseOp.getElseRegion().emplaceBlock();
+        OpBuilder::InsertionGuard ig(builder);
+        builder.setInsertionPointToEnd(&ifElseOp.getElseRegion().front());
+        if (failed(convertConstraint(*cond.elseBody, loc)))
+          return failure();
+      }
+      return success();
+    }
+    case slang::ast::ConstraintKind::Uniqueness: {
+      const auto &unique = constraint.as<slang::ast::UniquenessConstraint>();
+      SmallVector<Value> items;
+      for (const auto *item : unique.items) {
+        auto value = context.convertRvalueExpression(*item);
+        if (!value)
+          return failure();
+        items.push_back(value);
+      }
+      moore::ConstraintUniqueOp::create(builder, loc, items);
+      return success();
+    }
+    case slang::ast::ConstraintKind::Foreach: {
+      // Foreach constraints require more complex lowering with loop variables
+      // For now, emit a warning and skip
+      mlir::emitWarning(loc) << "foreach constraint not yet fully supported";
+      return success();
+    }
+    case slang::ast::ConstraintKind::SolveBefore: {
+      // Solve-before constraints require symbol references
+      // For now, emit a warning and skip
+      mlir::emitWarning(loc) << "solve-before constraint not yet fully supported";
+      return success();
+    }
+    case slang::ast::ConstraintKind::DisableSoft: {
+      // Disable-soft constraints require symbol references
+      // For now, emit a warning and skip
+      mlir::emitWarning(loc) << "disable-soft constraint not yet fully supported";
+      return success();
+    }
+    case slang::ast::ConstraintKind::Invalid:
+      return failure();
+    }
+    llvm_unreachable("unknown constraint kind");
   }
 
   // Emit an error for all other members.
