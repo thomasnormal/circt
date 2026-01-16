@@ -688,6 +688,26 @@ extern "C" int32_t __moore_string_cmp(MooreString *lhs, MooreString *rhs) {
   return 0;
 }
 
+extern "C" MooreString __moore_string_replicate(MooreString *str, int32_t count) {
+  // Handle null/empty string or non-positive count
+  if (!str || !str->data || str->len <= 0 || count <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  int64_t totalLen = str->len * static_cast<int64_t>(count);
+  MooreString result = allocateString(totalLen);
+
+  // Copy the string count times
+  char *dst = result.data;
+  for (int32_t i = 0; i < count; ++i) {
+    std::memcpy(dst, str->data, str->len);
+    dst += str->len;
+  }
+
+  return result;
+}
+
 extern "C" MooreString __moore_int_to_string(int64_t value) {
   // Same implementation as itoa for unsigned interpretation in UVM context
   // For proper unsigned handling, we use %lu if the value should be unsigned

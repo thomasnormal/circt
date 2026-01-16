@@ -71,6 +71,15 @@ func.func @StringConcat(%a: !moore.string, %b: !moore.string) -> !moore.string {
   return %result : !moore.string
 }
 
+// CHECK-LABEL: func @StringReplicate
+func.func @StringReplicate(%str: !moore.string, %count: !moore.i32) -> !moore.string {
+  // CHECK: llvm.alloca
+  // CHECK: llvm.store
+  // CHECK: llvm.call @__moore_string_replicate
+  %result = moore.string_replicate %count, %str
+  return %result : !moore.string
+}
+
 // CHECK-LABEL: func @StringCmpEq
 func.func @StringCmpEq(%a: !moore.string, %b: !moore.string) -> !moore.i1 {
   // CHECK: llvm.call @__moore_string_cmp
