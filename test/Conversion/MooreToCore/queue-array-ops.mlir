@@ -15,6 +15,7 @@
 // CHECK-DAG: llvm.func @__moore_assoc_delete_key(!llvm.ptr, !llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_array_find_eq(!llvm.ptr, i64, !llvm.ptr, i32, i1) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_array_find_cmp(!llvm.ptr, i64, !llvm.ptr, i32, i32, i1) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_assoc_size(!llvm.ptr) -> i64
 
 // Test global variables for container types
 moore.global_variable @testQueue : !moore.queue<!moore.i32, 0>
@@ -431,8 +432,6 @@ func.func @test_dyn_array_dyn_extract_ref() -> !moore.i32 {
 //===----------------------------------------------------------------------===//
 // Array Size Operations
 //===----------------------------------------------------------------------===//
-
-// CHECK-DAG: llvm.func @__moore_assoc_size(!llvm.ptr) -> i64
 
 // CHECK-LABEL: func @test_queue_size
 // CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
