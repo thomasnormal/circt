@@ -1835,11 +1835,39 @@ struct VTableLoadMethodOpConversion
     VTableOp vtable = nullptr;
     StringRef className = classSym.getRootReference();
 
+    // Helper to recursively find a vtable with matching class name.
+    std::function<VTableOp(VTableOp)> findNestedVTable;
+    findNestedVTable = [&](VTableOp vt) -> VTableOp {
+      if (vt.getSymName().getRootReference() == className)
+        return vt;
+      for (Operation &child : vt.getBody().front()) {
+        if (auto nestedVt = dyn_cast<VTableOp>(child)) {
+          if (auto found = findNestedVTable(nestedVt))
+            return found;
+        }
+      }
+      return nullptr;
+    };
+
+    // First try to find a top-level vtable for this class.
     for (auto vt : mod.getOps<VTableOp>()) {
       // The vtable's sym_name is @ClassName::@vtable, so check if root matches.
       if (vt.getSymName().getRootReference() == className) {
         vtable = vt;
         break;
+      }
+    }
+
+    // If no top-level vtable found (abstract class), search for a nested vtable
+    // with matching class name inside any top-level vtable. Abstract classes
+    // don't have their own top-level vtables but their vtable segments appear
+    // nested inside concrete derived class vtables.
+    if (!vtable) {
+      for (auto vt : mod.getOps<VTableOp>()) {
+        if (auto found = findNestedVTable(vt)) {
+          vtable = found;
+          break;
+        }
       }
     }
 
