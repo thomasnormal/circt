@@ -27,6 +27,9 @@ import "DPI-C" function chandle c_get_handle();
 // CHECK: remark: DPI-C imports not yet supported; call to 'c_get_handle' skipped
 
 // CHECK: moore.module @DPITest
+// Check stub values are generated (constants may be hoisted to module scope):
+// CHECK: moore.constant 0 : i64
+// CHECK: moore.constant 0 : i32
 module DPITest;
   initial begin
     int result;
@@ -41,8 +44,7 @@ module DPITest;
   end
 endmodule
 
-// Check stub values are generated:
+// Check string stub generation inside procedure:
 // CHECK: moore.constant_string "" : i8
 // CHECK: moore.int_to_string
-// CHECK: moore.constant 0 : i64
 // CHECK: moore.conversion %{{.*}} : !moore.i64 -> !moore.chandle
