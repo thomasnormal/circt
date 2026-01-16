@@ -150,3 +150,25 @@ func.func private @test_dyn_cast(%arg0: !moore.class<@BaseClass>) -> (!moore.cla
   %result, %success = moore.class.dyn_cast %arg0 : <@BaseClass> to <@DerivedClass>
   return %result, %success : !moore.class<@DerivedClass>, i1
 }
+
+/// Check that class with struct property computes size correctly
+/// (regression test for DataLayout crash with hw.struct types)
+
+// CHECK-LABEL: func.func private @test_struct_property
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(16 : i64) : i64
+// CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
+// CHECK:   return
+
+// CHECK-NOT: moore.class.new
+// CHECK-NOT: moore.class.classdecl
+
+func.func private @test_struct_property() {
+  %h = moore.class.new : <@ClassWithStruct>
+  return
+}
+// Class with a struct property - must be converted to pure LLVM types
+// for DataLayout::getTypeSize() to work correctly.
+moore.class.classdecl @ClassWithStruct {
+  moore.class.propertydecl @x : !moore.i32
+  moore.class.propertydecl @data : !moore.ustruct<{field1: i32, field2: i32}>
+}
