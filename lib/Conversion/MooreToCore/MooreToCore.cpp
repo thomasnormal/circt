@@ -48,6 +48,68 @@ using namespace moore;
 using comb::ICmpPredicate;
 using llvm::SmallDenseSet;
 
+/// Helper function to convert any type to a pure LLVM type for use in class
+/// struct bodies. The regular type converter produces hw::StructType and
+/// hw::ArrayType for some Moore types, but these don't have LLVM DataLayout
+/// information, which causes crashes when computing class sizes.
+/// This function recursively converts hw::StructType -> LLVM::LLVMStructType
+/// and hw::ArrayType -> LLVM::LLVMArrayType.
+static Type convertToLLVMType(Type type) {
+  MLIRContext *ctx = type.getContext();
+
+  // Handle hw::StructType -> LLVM::LLVMStructType
+  if (auto hwStructTy = dyn_cast<hw::StructType>(type)) {
+    SmallVector<Type> elementTypes;
+    for (auto field : hwStructTy.getElements()) {
+      Type convertedField = convertToLLVMType(field.type);
+      elementTypes.push_back(convertedField);
+    }
+    return LLVM::LLVMStructType::getLiteral(ctx, elementTypes);
+  }
+
+  // Handle hw::ArrayType -> LLVM::LLVMArrayType
+  if (auto hwArrayTy = dyn_cast<hw::ArrayType>(type)) {
+    Type elementType = convertToLLVMType(hwArrayTy.getElementType());
+    return LLVM::LLVMArrayType::get(elementType, hwArrayTy.getNumElements());
+  }
+
+  // Handle hw::UnionType -> LLVM array of bytes (largest element size)
+  if (auto hwUnionTy = dyn_cast<hw::UnionType>(type)) {
+    // For unions, we use the bit width to create an array of i8
+    int64_t bitWidth = hw::getBitWidth(hwUnionTy);
+    if (bitWidth > 0) {
+      int64_t byteWidth = (bitWidth + 7) / 8;
+      auto i8Ty = IntegerType::get(ctx, 8);
+      return LLVM::LLVMArrayType::get(i8Ty, byteWidth);
+    }
+    // Fallback to i8 for empty unions
+    return IntegerType::get(ctx, 8);
+  }
+
+  // Handle nested LLVM struct types (may contain hw types in fields)
+  if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(type)) {
+    if (llvmStructTy.isIdentified()) {
+      // For identified structs, return as-is (they should already be pure LLVM)
+      return type;
+    }
+    // For literal structs, convert each element
+    SmallVector<Type> elementTypes;
+    for (Type elemTy : llvmStructTy.getBody()) {
+      elementTypes.push_back(convertToLLVMType(elemTy));
+    }
+    return LLVM::LLVMStructType::getLiteral(ctx, elementTypes);
+  }
+
+  // Handle LLVM array types (may contain hw types as elements)
+  if (auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    Type elementType = convertToLLVMType(llvmArrayTy.getElementType());
+    return LLVM::LLVMArrayType::get(elementType, llvmArrayTy.getNumElements());
+  }
+
+  // All other types (IntegerType, LLVM::LLVMPointerType, etc.) pass through
+  return type;
+}
+
 namespace {
 
 /// Cache for identified structs and field GEP paths keyed by class symbol.
@@ -186,68 +248,6 @@ static LLVM::LLVMFuncOp getOrCreateRuntimeFunc(ModuleOp mod, OpBuilder &b,
   auto fn = LLVM::LLVMFuncOp::create(b, mod.getLoc(), name, fnTy);
   fn.setLinkage(LLVM::Linkage::External);
   return fn;
-}
-
-/// Helper function to convert any type to a pure LLVM type for use in class
-/// struct bodies. The regular type converter produces hw::StructType and
-/// hw::ArrayType for some Moore types, but these don't have LLVM DataLayout
-/// information, which causes crashes when computing class sizes.
-/// This function recursively converts hw::StructType -> LLVM::LLVMStructType
-/// and hw::ArrayType -> LLVM::LLVMArrayType.
-static Type convertToLLVMType(Type type) {
-  MLIRContext *ctx = type.getContext();
-
-  // Handle hw::StructType -> LLVM::LLVMStructType
-  if (auto hwStructTy = dyn_cast<hw::StructType>(type)) {
-    SmallVector<Type> elementTypes;
-    for (auto field : hwStructTy.getElements()) {
-      Type convertedField = convertToLLVMType(field.type);
-      elementTypes.push_back(convertedField);
-    }
-    return LLVM::LLVMStructType::getLiteral(ctx, elementTypes);
-  }
-
-  // Handle hw::ArrayType -> LLVM::LLVMArrayType
-  if (auto hwArrayTy = dyn_cast<hw::ArrayType>(type)) {
-    Type elementType = convertToLLVMType(hwArrayTy.getElementType());
-    return LLVM::LLVMArrayType::get(elementType, hwArrayTy.getNumElements());
-  }
-
-  // Handle hw::UnionType -> LLVM array of bytes (largest element size)
-  if (auto hwUnionTy = dyn_cast<hw::UnionType>(type)) {
-    // For unions, we use the bit width to create an array of i8
-    int64_t bitWidth = hw::getBitWidth(hwUnionTy);
-    if (bitWidth > 0) {
-      int64_t byteWidth = (bitWidth + 7) / 8;
-      auto i8Ty = IntegerType::get(ctx, 8);
-      return LLVM::LLVMArrayType::get(i8Ty, byteWidth);
-    }
-    // Fallback to i8 for empty unions
-    return IntegerType::get(ctx, 8);
-  }
-
-  // Handle nested LLVM struct types (may contain hw types in fields)
-  if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(type)) {
-    if (llvmStructTy.isIdentified()) {
-      // For identified structs, return as-is (they should already be pure LLVM)
-      return type;
-    }
-    // For literal structs, convert each element
-    SmallVector<Type> elementTypes;
-    for (Type elemTy : llvmStructTy.getBody()) {
-      elementTypes.push_back(convertToLLVMType(elemTy));
-    }
-    return LLVM::LLVMStructType::getLiteral(ctx, elementTypes);
-  }
-
-  // Handle LLVM array types (may contain hw types as elements)
-  if (auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(type)) {
-    Type elementType = convertToLLVMType(llvmArrayTy.getElementType());
-    return LLVM::LLVMArrayType::get(elementType, llvmArrayTy.getNumElements());
-  }
-
-  // All other types (IntegerType, LLVM::LLVMPointerType, etc.) pass through
-  return type;
 }
 
 /// Helper function to create an opaque LLVM Struct Type which corresponds
@@ -2223,6 +2223,32 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
 
       rewriter.replaceOp(op, alloca.getResult());
       return success();
+    }
+
+    // Handle unpacked struct variables containing dynamic types (strings, etc.)
+    // These get converted to LLVM struct types, not hw::StructType
+    if (auto unpackedStructType = dyn_cast<UnpackedStructType>(nestedMooreType)) {
+      auto convertedType = typeConverter->convertType(nestedMooreType);
+      if (auto structTy = dyn_cast<LLVM::LLVMStructType>(convertedType)) {
+        auto *ctx = rewriter.getContext();
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+        // Create an alloca for the struct
+        auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                            rewriter.getI64IntegerAttr(1));
+        auto alloca =
+            LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
+
+        // Initialize with zero values - use LLVM's ZeroOp to create a zeroed
+        // struct
+        auto zeroVal = LLVM::ZeroOp::create(rewriter, loc, structTy);
+
+        // Store the zero-initialized value to alloca
+        LLVM::StoreOp::create(rewriter, loc, zeroVal, alloca);
+
+        rewriter.replaceOp(op, alloca.getResult());
+        return success();
+      }
     }
 
     // For dynamic container types (queues, dynamic arrays, associative arrays),
@@ -6276,6 +6302,42 @@ struct StringConcatOpConversion : public OpConversionPattern<StringConcatOp> {
   }
 };
 
+// moore.string_replicate -> call to __moore_string_replicate runtime function
+struct StringReplicateOpConversion
+    : public OpConversionPattern<StringReplicateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringReplicateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    // __moore_string_replicate(str_ptr, count) -> string
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i32Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_replicate", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getString(), strAlloca);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
+        ValueRange{strAlloca, adaptor.getCount()});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 // moore.string_cmp -> call to __moore_string_cmp runtime function
 struct StringCmpOpConversion : public OpConversionPattern<StringCmpOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -7008,16 +7070,46 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   // data layout and granularity of event tracking in simulation.
   typeConverter.addConversion(
       [&](UnpackedStructType type) -> std::optional<Type> {
-        SmallVector<hw::StructType::FieldInfo> fields;
+        auto *ctx = type.getContext();
+        SmallVector<Type> fieldTypes;
+        bool hasLLVMType = false;
+
+        // First pass: convert all field types and check for LLVM types
         for (auto field : type.getMembers()) {
-          hw::StructType::FieldInfo info;
-          info.type = typeConverter.convertType(field.type);
-          if (!info.type)
+          auto convertedType = typeConverter.convertType(field.type);
+          if (!convertedType)
             return {};
-          info.name = field.name;
+          fieldTypes.push_back(convertedType);
+          // Check if any field converts to an LLVM type (strings, queues,
+          // dynamic arrays, assoc arrays, or nested structs with these types)
+          if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(convertedType))
+            hasLLVMType = true;
+        }
+
+        // If any field is an LLVM type, use LLVM struct for the whole struct
+        // This is necessary because hw::StructType cannot contain LLVM types
+        if (hasLLVMType) {
+          // Convert hw types to LLVM types for the struct
+          SmallVector<Type> llvmFieldTypes;
+          for (auto fieldType : fieldTypes) {
+            auto llvmType = convertToLLVMType(fieldType);
+            if (!llvmType)
+              return {};
+            llvmFieldTypes.push_back(llvmType);
+          }
+          return LLVM::LLVMStructType::getLiteral(ctx, llvmFieldTypes);
+        }
+
+        // Otherwise use hw::StructType
+        SmallVector<hw::StructType::FieldInfo> fields;
+        auto members = type.getMembers();
+        for (size_t i = 0; i < members.size(); ++i) {
+          hw::StructType::FieldInfo info;
+          info.type = fieldTypes[i];
+          info.name = members[i].name;
           fields.push_back(info);
         }
-        return hw::StructType::get(type.getContext(), fields);
+        return hw::StructType::get(ctx, fields);
       });
 
   // QueueType -> LLVM struct {ptr, i64} representing a dynamic queue.
@@ -7118,6 +7210,10 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
       // Check the original Moore type to distinguish from other pointer types.
       if (isa<QueueType, OpenUnpackedArrayType, AssocArrayType, StringType>(
               nestedType))
+        return LLVM::LLVMPointerType::get(type.getContext());
+      // If the inner type converted to an LLVM struct (e.g., unpacked struct
+      // containing dynamic types like strings), also use LLVM pointer.
+      if (isa<LLVM::LLVMStructType>(innerType))
         return LLVM::LLVMPointerType::get(type.getContext());
       return llhd::RefType::get(innerType);
     }
@@ -7465,6 +7561,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringAtoOctOpConversion,
     StringAtoBinOpConversion,
     StringConcatOpConversion,
+    StringReplicateOpConversion,
     StringCmpOpConversion,
     IntToStringOpConversion,
     StringToIntOpConversion,
