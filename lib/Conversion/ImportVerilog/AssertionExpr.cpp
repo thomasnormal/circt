@@ -460,6 +460,13 @@ Value Context::convertAssertionCallExpression(
   switch (args.size()) {
   case (1):
     value = this->convertRvalueExpression(*args[0]);
+
+    // $sampled returns the sampled value of the expression. In procedural
+    // context (outside assertions), we return the original value to preserve
+    // its type for comparisons.
+    if (subroutine.name == "$sampled")
+      return value;
+
     boolVal = builder.createOrFold<moore::ToBuiltinBoolOp>(loc, value);
     if (!boolVal)
       return {};

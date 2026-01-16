@@ -1359,6 +1359,9 @@ struct RvalueExprVisitor : public ExprVisitor {
       return createReduction<moore::ReduceXorOp>(arg, true);
 
     case UnaryOperator::LogicalNot:
+      // Handle LTL types for assertion contexts.
+      if (mlir::isa<ltl::PropertyType, ltl::SequenceType>(arg.getType()))
+        return ltl::NotOp::create(builder, loc, arg);
       arg = context.convertToBool(arg);
       if (!arg)
         return {};
@@ -1384,6 +1387,59 @@ struct RvalueExprVisitor : public ExprVisitor {
     using slang::ast::BinaryOperator;
     // TODO: These should short-circuit; RHS should be in a separate block.
 
+    // Check if either operand is an LTL type (property or sequence).
+    // In assertion contexts, SVA functions like $changed, $stable return LTL
+    // types. When used in logical expressions within assertions, we should use
+    // LTL operations instead of Moore operations.
+    bool lhsIsLTL = mlir::isa<ltl::PropertyType, ltl::SequenceType>(lhs.getType());
+    bool rhsIsLTL = mlir::isa<ltl::PropertyType, ltl::SequenceType>(rhs.getType());
+
+    if (lhsIsLTL || rhsIsLTL) {
+      // Use LTL operations for assertion contexts.
+      // Convert non-LTL operand to i1 if needed.
+      if (!lhsIsLTL) {
+        lhs = context.convertToI1(lhs);
+        if (!lhs)
+          return {};
+      }
+      if (!rhsIsLTL) {
+        rhs = context.convertToI1(rhs);
+        if (!rhs)
+          return {};
+      }
+
+      switch (op) {
+      case BinaryOperator::LogicalAnd:
+        return ltl::AndOp::create(builder, loc, SmallVector<Value, 2>{lhs, rhs});
+
+      case BinaryOperator::LogicalOr:
+        return ltl::OrOp::create(builder, loc, SmallVector<Value, 2>{lhs, rhs});
+
+      case BinaryOperator::LogicalImplication: {
+        // (lhs -> rhs) == (!lhs || rhs)
+        auto notLHS = ltl::NotOp::create(builder, loc, lhs);
+        return ltl::OrOp::create(builder, loc,
+                                 SmallVector<Value, 2>{notLHS, rhs});
+      }
+
+      case BinaryOperator::LogicalEquivalence: {
+        // (lhs <-> rhs) == (lhs && rhs) || (!lhs && !rhs)
+        auto notLHS = ltl::NotOp::create(builder, loc, lhs);
+        auto notRHS = ltl::NotOp::create(builder, loc, rhs);
+        auto both = ltl::AndOp::create(builder, loc,
+                                       SmallVector<Value, 2>{lhs, rhs});
+        auto notBoth = ltl::AndOp::create(builder, loc,
+                                          SmallVector<Value, 2>{notLHS, notRHS});
+        return ltl::OrOp::create(builder, loc,
+                                 SmallVector<Value, 2>{both, notBoth});
+      }
+
+      default:
+        llvm_unreachable("not a logical BinaryOperator");
+      }
+    }
+
+    // Standard boolean conversion for non-LTL operands.
     if (domain) {
       lhs = context.convertToBool(lhs, domain.value());
       rhs = context.convertToBool(rhs, domain.value());
