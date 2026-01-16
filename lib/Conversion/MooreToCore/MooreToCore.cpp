@@ -1971,10 +1971,6 @@ struct VTableLoadMethodOpConversion
       }
     }
 
-    if (!vtable)
-      return rewriter.notifyMatchFailure(
-          op, "could not find vtable for class " + className.str());
-
     // Search for the method in the vtable (including nested vtables for base
     // classes).
     auto methodSym = op.getMethodSym();
@@ -1995,10 +1991,28 @@ struct VTableLoadMethodOpConversion
       return nullptr;
     };
 
-    auto entry = findEntry(vtable);
+    VTableEntryOp entry = nullptr;
+    if (vtable) {
+      entry = findEntry(vtable);
+    }
+
+    // If no vtable was found for the class or the method wasn't in the found
+    // vtable, search ALL vtables in the module for the method. This handles
+    // cases where a class doesn't have its own vtable segment (e.g., a
+    // non-abstract class that extends another class but has no concrete derived
+    // classes with vtable segments for it).
+    if (!entry) {
+      for (auto vt : mod.getOps<VTableOp>()) {
+        if (auto found = findEntry(vt)) {
+          entry = found;
+          break;
+        }
+      }
+    }
+
     if (!entry)
       return rewriter.notifyMatchFailure(
-          op, "could not find method " + methodName.str() + " in vtable");
+          op, "could not find method " + methodName.str() + " in any vtable");
 
     // Get the target function symbol.
     auto targetSym = entry.getTarget();
