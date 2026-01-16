@@ -688,6 +688,81 @@ struct SimEmitValueOpLowering
   }
 };
 
+/// Lowers sim.terminate to an exit() call.
+/// For success, calls exit(0). For failure, calls exit(1).
+/// If verbose is set, prints a message before exiting.
+struct SimTerminateOpLowering
+    : public OpConversionPattern<sim::TerminateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(sim::TerminateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+
+    ModuleOp moduleOp = op->getParentOfType<ModuleOp>();
+    if (!moduleOp)
+      return failure();
+
+    // If verbose, print a message before exiting.
+    if (op.getVerbose()) {
+      // Lookup or create printf function.
+      auto printfFunc = LLVM::lookupOrCreateFn(
+          rewriter, moduleOp, "printf",
+          LLVM::LLVMPointerType::get(getContext()),
+          LLVM::LLVMVoidType::get(getContext()), true);
+      if (failed(printfFunc))
+        return printfFunc;
+
+      // Create the message string.
+      StringRef message = op.getSuccess()
+                              ? "Simulation terminated successfully\n"
+                              : "Simulation terminated with failure\n";
+      SmallVector<char> msgVec{message.begin(), message.end()};
+      msgVec.push_back(0); // Null terminator
+
+      // Generate a unique name for the message global.
+      static std::atomic<unsigned> globalCounter{0};
+      SmallString<32> globalName;
+      globalName = llvm::formatv("_arc_sim_terminate_msg_{0}", globalCounter++);
+
+      LLVM::GlobalOp msgGlobal;
+      {
+        ConversionPatternRewriter::InsertionGuard insertGuard(rewriter);
+        rewriter.setInsertionPointToStart(moduleOp.getBody());
+        auto globalType =
+            LLVM::LLVMArrayType::get(rewriter.getI8Type(), msgVec.size());
+        msgGlobal = LLVM::GlobalOp::create(
+            rewriter, loc, globalType, /*isConstant=*/true,
+            LLVM::Linkage::Internal,
+            /*name=*/globalName, rewriter.getStringAttr(msgVec),
+            /*alignment=*/0);
+      }
+
+      Value msgPtr = LLVM::AddressOfOp::create(rewriter, loc, msgGlobal);
+      LLVM::CallOp::create(rewriter, loc, printfFunc.value(),
+                           ValueRange{msgPtr});
+    }
+
+    // Get or create exit function declaration.
+    auto exitFunc = LLVM::lookupOrCreateFn(
+        rewriter, moduleOp, "exit", rewriter.getI32Type(),
+        LLVM::LLVMVoidType::get(getContext()), false);
+    if (failed(exitFunc))
+      return exitFunc;
+
+    // Create exit code: 0 for success, 1 for failure.
+    int exitCode = op.getSuccess() ? 0 : 1;
+    Value exitCodeValue = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32Type(), exitCode);
+
+    // Call exit().
+    rewriter.replaceOpWithNewOp<LLVM::CallOp>(op, exitFunc.value(),
+                                               ValueRange{exitCodeValue});
+    return success();
+  }
+};
+
 /// Lowers sim.proc.print to printf calls. This pattern expands format string
 /// operations and generates the appropriate printf format string and arguments.
 struct PrintFormattedProcOpLowering
@@ -1143,6 +1218,7 @@ void LowerArcToLLVMPass::runOnOperation() {
     MemoryWriteOpLowering,
     ModelOpLowering,
     PrintFormattedProcOpLowering,
+    SimTerminateOpLowering,
     ReplaceOpWithInputPattern<seq::ToClockOp>,
     ReplaceOpWithInputPattern<seq::FromClockOp>,
     RuntimeModelOpLowering,
