@@ -188,6 +188,68 @@ static LLVM::LLVMFuncOp getOrCreateRuntimeFunc(ModuleOp mod, OpBuilder &b,
   return fn;
 }
 
+/// Helper function to convert any type to a pure LLVM type for use in class
+/// struct bodies. The regular type converter produces hw::StructType and
+/// hw::ArrayType for some Moore types, but these don't have LLVM DataLayout
+/// information, which causes crashes when computing class sizes.
+/// This function recursively converts hw::StructType -> LLVM::LLVMStructType
+/// and hw::ArrayType -> LLVM::LLVMArrayType.
+static Type convertToLLVMType(Type type) {
+  MLIRContext *ctx = type.getContext();
+
+  // Handle hw::StructType -> LLVM::LLVMStructType
+  if (auto hwStructTy = dyn_cast<hw::StructType>(type)) {
+    SmallVector<Type> elementTypes;
+    for (auto field : hwStructTy.getElements()) {
+      Type convertedField = convertToLLVMType(field.type);
+      elementTypes.push_back(convertedField);
+    }
+    return LLVM::LLVMStructType::getLiteral(ctx, elementTypes);
+  }
+
+  // Handle hw::ArrayType -> LLVM::LLVMArrayType
+  if (auto hwArrayTy = dyn_cast<hw::ArrayType>(type)) {
+    Type elementType = convertToLLVMType(hwArrayTy.getElementType());
+    return LLVM::LLVMArrayType::get(elementType, hwArrayTy.getNumElements());
+  }
+
+  // Handle hw::UnionType -> LLVM array of bytes (largest element size)
+  if (auto hwUnionTy = dyn_cast<hw::UnionType>(type)) {
+    // For unions, we use the bit width to create an array of i8
+    int64_t bitWidth = hw::getBitWidth(hwUnionTy);
+    if (bitWidth > 0) {
+      int64_t byteWidth = (bitWidth + 7) / 8;
+      auto i8Ty = IntegerType::get(ctx, 8);
+      return LLVM::LLVMArrayType::get(i8Ty, byteWidth);
+    }
+    // Fallback to i8 for empty unions
+    return IntegerType::get(ctx, 8);
+  }
+
+  // Handle nested LLVM struct types (may contain hw types in fields)
+  if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(type)) {
+    if (llvmStructTy.isIdentified()) {
+      // For identified structs, return as-is (they should already be pure LLVM)
+      return type;
+    }
+    // For literal structs, convert each element
+    SmallVector<Type> elementTypes;
+    for (Type elemTy : llvmStructTy.getBody()) {
+      elementTypes.push_back(convertToLLVMType(elemTy));
+    }
+    return LLVM::LLVMStructType::getLiteral(ctx, elementTypes);
+  }
+
+  // Handle LLVM array types (may contain hw types as elements)
+  if (auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    Type elementType = convertToLLVMType(llvmArrayTy.getElementType());
+    return LLVM::LLVMArrayType::get(elementType, llvmArrayTy.getNumElements());
+  }
+
+  // All other types (IntegerType, LLVM::LLVMPointerType, etc.) pass through
+  return type;
+}
+
 /// Helper function to create an opaque LLVM Struct Type which corresponds
 /// to the sym
 static LLVM::LLVMStructType getOrCreateOpaqueStruct(MLIRContext *ctx,
@@ -258,11 +320,16 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
   for (Operation &child : block) {
     if (auto prop = dyn_cast<ClassPropertyDeclOp>(child)) {
       Type mooreTy = prop.getPropertyType();
-      Type llvmTy = typeConverter.convertType(mooreTy);
-      if (!llvmTy)
+      Type convertedTy = typeConverter.convertType(mooreTy);
+      if (!convertedTy)
         return prop.emitOpError()
                << "failed to convert property type " << mooreTy;
 
+      // Convert to pure LLVM type for DataLayout compatibility.
+      // The type converter may produce hw::StructType or hw::ArrayType,
+      // which don't have DataLayout info, causing crashes when computing
+      // class sizes for malloc.
+      Type llvmTy = convertToLLVMType(convertedTy);
       structBodyMembers.push_back(llvmTy);
 
       // Derived field path: either {i} or {1+i} if base is present.
@@ -315,11 +382,13 @@ static LogicalResult resolveInterfaceStructBody(InterfaceDeclOp op,
   for (Operation &child : block) {
     if (auto signal = dyn_cast<InterfaceSignalDeclOp>(child)) {
       Type mooreTy = signal.getSignalType();
-      Type llvmTy = typeConverter.convertType(mooreTy);
-      if (!llvmTy)
+      Type convertedTy = typeConverter.convertType(mooreTy);
+      if (!convertedTy)
         return signal.emitOpError()
                << "failed to convert signal type " << mooreTy;
 
+      // Convert to pure LLVM type for DataLayout compatibility.
+      Type llvmTy = convertToLLVMType(convertedTy);
       structBodyMembers.push_back(llvmTy);
       structBody.setSignalIndex(signal.getSymName(), idx);
       ++idx;
