@@ -128,61 +128,61 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: System Call Implementation 🎯 ITERATION 27
-**Status**: 🔵 IN PROGRESS
-**Problem**: Many system functions return stubs or not implemented
-**What's Done** (Iteration 26):
-- $countones implemented (llvm.intr.ctpop)
-- 22 DPI stubs working
-- Basic file I/O complete
+### Track A: LLHD Process Interpretation in circt-sim 🎯 ITERATION 28
+**Status**: 🔴 CRITICAL BLOCKER
+**Problem**: circt-sim doesn't interpret LLHD process bodies - simulation ends at 0fs
+**Discovery** (Iteration 27): ProcessScheduler infrastructure exists but not connected to LLHD IR
 **What's Needed**:
-- Bit vector: $countbits, $clog2, $onehot, $onehot0, $isunknown
-- String: $sscanf improvements
-- Coverage: $get_coverage, $set_coverage_db_name
+- Connect ProcessScheduler to LLHD process interpretation
+- Implement llhd.wait, llhd.drv event handling
+- Alternative: Focus on arcilator for RTL-only simulation
+**Files**: `lib/Tools/circt-sim/`, `lib/Dialect/LLHD/`
+**Priority**: CRITICAL - Required for behavioral simulation
+
+### Track B: Direct Interface Member Access 🎯 ITERATION 28
+**Status**: 🟡 MEDIUM PRIORITY
+**Problem**: "unknown hierarchical name" for direct (non-virtual) interface member access
+**Discovery** (Iteration 27): virtual interface access works, but direct interface instances have scoping issues
+**What's Needed**:
+- Fix hierarchical name resolution for interface.member syntax
+- May need interface elaboration pass
+**Files**: `lib/Conversion/ImportVerilog/`
+**Priority**: MEDIUM - Affects some testbenches
+
+### Track C: System Call Expansion 🎯 ITERATION 28
+**Status**: 🟢 GOOD PROGRESS
+**What's Done** (Iteration 27):
+- $onehot, $onehot0 IMPLEMENTED (commit 7d5391552)
+- $countones working (llvm.intr.ctpop)
+- $clog2, $isunknown already implemented
+**What's Needed**:
+- $countbits - count specific bit values
+- $sampled - for assertions
+- $past - for assertions
 **Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`
-**Priority**: HIGH - Many AVIPs use these
+**Priority**: MEDIUM - Incrementally add as needed
 
-### Track B: sim.proc.print Lowering to Arcilator 🎯 ITERATION 27
-**Status**: 🔵 CRITICAL PATH
-**Problem**: $display output doesn't work in arcilator simulation
-**What's Done**:
-- arc.sim.emit → printf lowering exists (template)
-- Research complete: sim.proc.print needs similar lowering
+### Track D: Coverage Runtime & UVM APIs 🎯 ITERATION 28
+**Status**: 🟡 MEDIUM PRIORITY
+**Problem 1**: Coverage ops exist but no runtime sampling
+**Problem 2**: AVIP code uses deprecated UVM APIs (uvm_test_done)
 **What's Needed**:
-- Add sim.fmt.* lowering patterns to LowerArcToLLVM.cpp
-- Add sim.proc.print → printf call generation
-- Test with MooreToCore output containing $display
-**Files**: `lib/Conversion/ArcToLLVM/LowerArcToLLVM.cpp`
-**Priority**: CRITICAL - Required for simulation output
-
-### Track C: ~/mbit AVIP Full Validation 🎯 ITERATION 27
-**Status**: 🔵 TESTING IN PROGRESS
-**What's Done** (Iteration 26):
-- All 9 AVIPs tested, issues documented
-- Issues are AVIP source problems, not CIRCT
-- $countones fixed for APB AVIP constraints
-**What's Needed**:
-- Test end-to-end simulation (not just parsing)
-- Identify remaining system call gaps
-- Create workarounds for deprecated UVM APIs
-**Priority**: HIGH - Real-world validation
-
-### Track D: LSP Debounce Fix & Coverage Runtime 🎯 ITERATION 27
-**Status**: 🔵 READY FOR WORK
-**Problem 1**: LSP hangs on textDocument/didChange (debounce bug)
-**Problem 2**: Coverage ops exist but no runtime sampling
-**What's Needed**:
-- Fix debounce deadlock in circt-verilog-lsp-server
-- Add coverage sampling event handling (e.g., @(posedge clk))
-- Connect CovergroupSampleOp to simulation step
-**Files**: `tools/circt-verilog-lsp-server/`, `lib/Conversion/MooreToCore/`
+- Coverage sampling via @(posedge clk) events
+- Consider updating AVIP source for UVM 2017+ compatibility
+**Files**: `lib/Conversion/MooreToCore/`, `~/mbit/*/`
 **Priority**: MEDIUM - Quality of life improvements
 
 ### Operating Guidance
-- Keep 4 agents active: Track A (system calls), Track B (sim.proc.print), Track C (AVIP testing), Track D (LSP/coverage).
+- Keep 4 agents active: Track A (LLHD interpretation), Track B (interface access), Track C (system calls), Track D (coverage/UVM).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Iteration 27 Results - KEY DISCOVERIES
+- **$onehot/$onehot0**: ✅ IMPLEMENTED (commit 7d5391552) - lowers to llvm.intr.ctpop == 1 / <= 1
+- **sim.proc.print**: ✅ ALREADY WORKS - PrintFormattedProcOpLowering exists in LowerArcToLLVM.cpp
+- **circt-sim**: 🔴 CRITICAL GAP - LLHD process interpretation NOT IMPLEMENTED, simulation ends at 0fs
+- **LSP debounce**: ✅ FIX EXISTS (9f150f33f) - may still have edge cases
 
 ### Previous Track Results (Iteration 26) - MAJOR PROGRESS
 - **Coverage Infrastructure**: ✅ CovergroupHandleType, CovergroupInstOp, CovergroupSampleOp, CovergroupGetCoverageOp implemented
