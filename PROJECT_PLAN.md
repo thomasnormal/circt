@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🚀 UVM MooreToCore 99.99% COMPLETE (January 16, 2026 - Iteration 13)
+## Current Status: 🎉 UVM MooreToCore 100% COMPLETE (January 16, 2026 - Iteration 14)
 
 **Test Commands**:
 ```bash
@@ -12,10 +12,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 # Exit code: 0 (SUCCESS!) - 161,443 lines of Moore IR
 
-# UVM MooreToCore - 99.99% COMPLETE (1 error: moore.builtin.realtobits)
+# UVM MooreToCore - 100% COMPLETE (0 errors!)
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src 2>/dev/null | \
   ./build/bin/circt-opt -convert-moore-to-core 2>&1 | grep -c "failed to legalize"
-# Output: 1 (only moore.builtin.realtobits)
+# Output: 0 (zero errors!)
 
 # AXI4-Lite AVIP - 100% COMPLETE
 ./build/bin/circt-verilog ~/mbit/axi4Lite_avip/... -I ~/uvm-core/src | \
@@ -23,13 +23,15 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 # Exit code: 0 (no errors)
 ```
 
-**Current Blockers / Limitations**:
-1. **moore.builtin.realtobits** ⚠️ NO CONVERSION - No lowering pattern for `$realtobits` system function (1 error in UVM)
-2. **Timing in functions** ⚠️ ARCHITECTURAL - Tasks with `@(posedge clk)` can't lower (llhd.wait needs llhd.process parent)
-3. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
-4. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
-5. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
-6. **circt-sim LLHD execution** ⚠️ GAP - circt-sim runs but doesn't interpret llhd.process bodies or sim.proc.print
+**Current Blockers / Limitations** (Post-MooreToCore):
+1. **Timing in functions** ⚠️ ARCHITECTURAL - Tasks with `@(posedge clk)` can't lower (llhd.wait needs llhd.process parent)
+2. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
+3. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
+4. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
+5. **circt-sim LLHD execution** ⚠️ GAP - circt-sim runs but doesn't interpret llhd.process bodies or sim.proc.print
+
+**Resolved Blockers (Iteration 14)**:
+- ~~**moore.builtin.realtobits**~~ ✅ FIXED (36fdb8ab6) - Added conversion patterns for realtobits/bitstoreal
 
 **Recent Fixes (This Session - Iteration 13)**:
 - **VTable fallback for classes without vtable segments** ✅ FIXED (6f8f531e6) - Searches ALL vtables when class has no segment
