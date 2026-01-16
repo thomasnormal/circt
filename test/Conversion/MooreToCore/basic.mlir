@@ -1439,6 +1439,24 @@ func.func @RealToIntLowering(%arg0: !moore.f32, %arg1: !moore.f64) {
   return
 }
 
+// CHECK-LABEL: func.func @RealToBitsLowering
+func.func @RealToBitsLowering(%arg0: !moore.f64, %arg1: !moore.f32) {
+  // CHECK-NEXT: llvm.bitcast %arg0 : f64 to i64
+  // CHECK-NEXT: llvm.bitcast %arg1 : f32 to i32
+  %0 = moore.builtin.realtobits %arg0
+  %1 = moore.builtin.shortrealtobits %arg1
+  return
+}
+
+// CHECK-LABEL: func.func @BitsToRealLowering
+func.func @BitsToRealLowering(%arg0: !moore.i64, %arg1: !moore.i32) {
+  // CHECK-NEXT: llvm.bitcast %arg0 : i64 to f64
+  // CHECK-NEXT: llvm.bitcast %arg1 : i32 to f32
+  %0 = moore.builtin.bitstoreal %arg0 : i64
+  %1 = moore.builtin.bitstoshortreal %arg1 : i32
+  return
+}
+
 // CHECK-LABEL: func.func @CurrentTime
 func.func @CurrentTime() -> !moore.time {
   // CHECK-NEXT: [[TMP:%.+]] = llhd.current_time
