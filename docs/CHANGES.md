@@ -14,7 +14,20 @@
 | dyn_extract (queues) | 550949250 | 970 | ✅ Fixed |
 | array.size | f18154abb | 349 | ✅ Fixed |
 | vtable.load_method | e0df41cec | 4764 | ✅ Fixed |
-| getIntOrFloatBitWidth crash | - | - | 🔴 Next |
+| getIntOrFloatBitWidth crash | 8911370be | - | ✅ Fixed |
+| data layout crash | - | - | 🔴 Next |
+
+### getIntOrFloatBitWidth Crash Fix (8911370be)
+- **Type-safe helper**: Added `getTypeSizeInBytes()` using `hw::getBitWidth()` for safe type handling
+- **Queue ops fixed**: QueuePushBack, QueuePushFront, QueuePopBack, QueuePopFront, StreamConcat
+- **Non-integer handling**: Uses LLVM::BitcastOp for non-integer types
+
+### Virtual Interface Member Access (0a16d3a06)
+- **VirtualInterfaceSignalRefOp**: Access signals inside interfaces via virtual interfaces
+- **AVIP BFM support**: Enables `vif.proxy_h = this` pattern used in verification components
+
+### QueueConcatOp Format Fix (2bd58f1c9)
+- **Empty operands**: Fixed IR syntax for empty operand case using parentheses format
 
 ### VTable Load Method Fix (e0df41cec)
 - **Abstract class vtables**: Fixed vtable lookup for abstract class handles by recursively searching nested vtables
