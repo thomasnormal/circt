@@ -18,6 +18,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 3. **Multiple input files** - Minor issue with parsing multiple SV files together (empty filename error)
 
 **Recent Fixes (This Session)**:
+- **RefType cast crash for structs with dynamic fields** ✅ FIXED (5dd8ce361) - StructExtractRefOp now uses LLVM GEP for structs containing strings/queues instead of crashing on SigStructExtractOp
 - **Mem2Reg loop-local variable dominance** ✅ FIXED (b881afe61) - Variables inside loops no longer promoted, fixing 4 dominance errors
 - **Static property via instance** ✅ FIXED (a1418d80f) - SystemVerilog allows `obj.static_prop` access. Now correctly generates GetGlobalVariableOp instead of ClassPropertyRefOp.
 - **Static property names in parameterized classes** ✅ FIXED (a1418d80f) - Each specialization now gets unique global variable name (e.g., `uvm_pool_1234::m_prop` not `uvm_pool::m_prop`).
@@ -59,29 +60,41 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: AssocArray Variable Lowering
-**Status**: 🔴 BLOCKING
-**Task**: MooreToCore fails on `moore.variable` for associative array types. 13 instances in UVM.
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp (VariableOpConversion)
-**Next**: Add associative array handling to VariableOpConversion like queues have.
-
-### Track B: Class Members in Interfaces
+### Track A: Test AVIP Packages with Full Pipeline
 **Status**: 🟡 IN PROGRESS
-**Task**: AVIP BFMs have class instances inside interfaces that aren't accessible via virtual interfaces.
-**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
-**Next**: Extend visitVirtualInterfaceMemberAccess() to handle class properties.
+**Task**: Test AVIP packages through full parsing + MooreToCore pipeline
+**Files**: ~/mbit/*_avip/src/env/*.sv
+**Next**: Run AVIP packages through circt-verilog | circt-opt -convert-moore-to-core
 
-### Track C: StringReplicateOp Lowering
+### Track B: AVIP BFM Integration
 **Status**: 🟡 IN PROGRESS
-**Task**: Missing MooreToCore conversion pattern for moore.string_replicate operation.
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add StringReplicateOpConversion similar to other string ops.
+**Task**: Test BFM components with UVM now that RefType crash is fixed
+**Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
+**Next**: Run BFM files through pipeline
 
-### Track D: Virtual Interface Assignment
+### Track C: Explore Remaining Runtime Gaps
 **Status**: 🟡 IN PROGRESS
-**Task**: `vif = interface_instance` assignment not yet supported in ImportVerilog.
-**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
-**Next**: Add support for ArbitrarySymbol expressions in virtual interface context.
+**Task**: Identify what's still missing for actual simulation
+**Files**: lib/Conversion/MooreToCore/
+**Next**: Check for missing ops in queue/class handling
+
+### Track D: Add Unit Tests for StructExtractRef Fix
+**Status**: 🟡 IN PROGRESS
+**Task**: Add MLIR tests for structs with dynamic fields
+**Files**: test/Conversion/MooreToCore/
+**Next**: Create test file for StructExtractRefOp with strings
+
+### Previous Track Results (Iteration 8)
+- **Track A**: ✅ RefType cast crash fixed (5dd8ce361) - StructExtractRefOp now uses GEP for structs with dynamic fields
+- **Track B**: ✅ UVM MooreToCore conversion now completes without crashes
+- **Track C**: ✅ Added dyn_cast safety checks to multiple conversion patterns
+- **Track D**: ✅ Sig2RegPass RefType cast also fixed
+
+### Previous Track Results (Iteration 7)
+- **Track A**: ✅ Virtual interface assignment support added (f4e1cc660) - enables `vif = cfg.vif` patterns
+- **Track B**: ✅ StringReplicateOp lowering added (14bf13ada) - string replication in MooreToCore
+- **Track C**: ✅ Scope tracking for virtual interface member access (d337cb092) - fixes class context issues
+- **Track D**: ✅ Unpacked struct variable lowering fixed (ae1441b9d) - handles dynamic types in structs
 
 ### Previous Track Results (Iteration 6)
 - **Track A**: ✅ Data layout crash fixed (2933eb854) - convertToLLVMType helper
@@ -273,6 +286,11 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `5dd8ce361` - [MooreToCore] Fix RefType cast crashes for structs with dynamic fields
+- `f4e1cc660` - [ImportVerilog] Add virtual interface assignment support
+- `14bf13ada` - [MooreToCore] Add StringReplicateOp lowering
+- `d337cb092` - [ImportVerilog] Add scope tracking for virtual interface member access in classes
+- `ae1441b9d` - [MooreToCore] Fix variable lowering for unpacked structs with dynamic types
 - `b881afe61` - [Moore] Don't promote loop-local variables to avoid Mem2Reg dominance errors
 - `3c9728047` - [Moore] Fix time type handling in Mem2Reg default value generation
 - `a1418d80f` - [ImportVerilog][Moore] Fix static property access and abstract class handling
