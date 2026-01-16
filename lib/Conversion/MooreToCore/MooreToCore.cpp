@@ -3667,6 +3667,60 @@ struct RealToIntOpConversion : public OpConversionPattern<RealToIntOp> {
   }
 };
 
+struct RealtobitsBIOpConversion : public OpConversionPattern<RealtobitsBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(RealtobitsBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // $realtobits: Reinterpret f64 bits as i64
+    rewriter.replaceOpWithNewOp<LLVM::BitcastOp>(
+        op, typeConverter->convertType(op.getType()), adaptor.getValue());
+    return success();
+  }
+};
+
+struct BitstorealBIOpConversion : public OpConversionPattern<BitstorealBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(BitstorealBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // $bitstoreal: Reinterpret i64 bits as f64
+    rewriter.replaceOpWithNewOp<LLVM::BitcastOp>(
+        op, typeConverter->convertType(op.getType()), adaptor.getValue());
+    return success();
+  }
+};
+
+struct ShortrealtobitsBIOpConversion
+    : public OpConversionPattern<ShortrealtobitsBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ShortrealtobitsBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // $shortrealtobits: Reinterpret f32 bits as i32
+    rewriter.replaceOpWithNewOp<LLVM::BitcastOp>(
+        op, typeConverter->convertType(op.getType()), adaptor.getValue());
+    return success();
+  }
+};
+
+struct BitstoshortrealBIOpConversion
+    : public OpConversionPattern<BitstoshortrealBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(BitstoshortrealBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // $bitstoshortreal: Reinterpret i32 bits as f32
+    rewriter.replaceOpWithNewOp<LLVM::BitcastOp>(
+        op, typeConverter->convertType(op.getType()), adaptor.getValue());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Statement Conversion
 //===----------------------------------------------------------------------===//
@@ -7838,6 +7892,12 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for binary real math functions.
     Atan2BIOpConversion,
     HypotBIOpConversion,
+
+    // Patterns for real/bits conversion functions.
+    RealtobitsBIOpConversion,
+    BitstorealBIOpConversion,
+    ShortrealtobitsBIOpConversion,
+    BitstoshortrealBIOpConversion,
 
     // Patterns of power operations.
     PowUOpConversion, PowSOpConversion,
