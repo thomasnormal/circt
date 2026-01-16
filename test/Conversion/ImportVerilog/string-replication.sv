@@ -1,13 +1,18 @@
-// RUN: circt-translate --import-verilog --verify-diagnostics %s
 // RUN: circt-verilog --ir-moore %s 2>&1 | FileCheck %s
 // REQUIRES: slang
 
-// Test that string replication emits a proper error instead of crashing
-// (replication operator requires IntType operand)
+// Test string replication operator
 module StringReplication;
   string s;
   int m;
-  // expected-error @below {{expression of type '!moore.string' cannot be cast to a simple bit vector}}
-  // CHECK: error: expression of type '!moore.string' cannot be cast to a simple bit vector
+
+  // CHECK: moore.module @StringReplication
+  // CHECK: %s = moore.variable : <string>
+  // CHECK: %m = moore.variable : <i32>
+  // CHECK: moore.procedure initial
+  // CHECK: [[STR:%.*]] = moore.constant_string "-"
+  // CHECK: [[COUNT:%.*]] = moore.read %m
+  // CHECK: [[RESULT:%.*]] = moore.string_replicate [[COUNT]], {{.*}}
+  // CHECK: moore.blocking_assign %s, [[RESULT]] : string
   initial s = {m{"-"}};
 endmodule

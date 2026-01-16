@@ -130,8 +130,8 @@ moore.class.classdecl @ConstraintVariants {
 
 // Test randomize operation
 // CHECK-LABEL: func.func @test_randomize
-// CHECK:   %[[OBJ:.*]] = moore.class.new : !moore.class<@Randomizable>
-// CHECK:   %[[SUCCESS:.*]] = moore.randomize %[[OBJ]] : !moore.class<@Randomizable>
+// CHECK:   %[[OBJ:.*]] = moore.class.new : <@Randomizable>
+// CHECK:   %[[SUCCESS:.*]] = moore.randomize %[[OBJ]] : <@Randomizable>
 func.func @test_randomize() {
   %obj = moore.class.new : !moore.class<@Randomizable>
   %success = moore.randomize %obj : !moore.class<@Randomizable>
@@ -218,9 +218,11 @@ func.func @test_constraint_unique(%array: !moore.uarray<8 x i32>) {
 // CHECK-LABEL:   moore.class.classdecl @DistributionConstraints {
 // CHECK-NEXT:     moore.class.propertydecl @x : !moore.i8 rand_mode rand
 // CHECK-NEXT:     moore.constraint.block @dist_constraint {
+// CHECK-NEXT:     ^bb0(%{{.*}}: !moore.i8):
 // CHECK-NEXT:       moore.constraint.dist %{{.*}}, [0, 1, 5, 6], [10, 50, 40], [0, 1, 0] : !moore.i8
 // CHECK-NEXT:     }
 // CHECK-NEXT:     moore.constraint.block @inside_constraint {
+// CHECK-NEXT:     ^bb0(%{{.*}}: !moore.i8):
 // CHECK-NEXT:       moore.constraint.inside %{{.*}}, [1, 1, 3, 5, 7, 7] : !moore.i8
 // CHECK-NEXT:     }
 // CHECK:       }
@@ -368,7 +370,7 @@ moore.interface @handshake_if {
 
 // Test interface instance and virtual interface type
 // CHECK-LABEL: moore.module @test_interface_instance
-// CHECK:         %[[INST:.*]] = moore.interface.instance @handshake_if : !moore.ref<virtual_interface<@handshake_if>>
+// CHECK:         %[[INST:.*]] = moore.interface.instance  @handshake_if : <virtual_interface<@handshake_if>>
 moore.module @test_interface_instance() {
   %bus = moore.interface.instance @handshake_if : !moore.ref<virtual_interface<@handshake_if>>
   moore.output
@@ -377,7 +379,7 @@ moore.module @test_interface_instance() {
 // Test virtual interface get modport
 // CHECK-LABEL: func.func @test_vif_modport
 // CHECK-SAME:    (%[[VIF:.*]]: !moore.virtual_interface<@handshake_if>)
-// CHECK:         %[[DRIVER:.*]] = moore.virtual_interface.get %[[VIF]] @driver : !moore.virtual_interface<@handshake_if> -> !moore.virtual_interface<@handshake_if::@driver>
+// CHECK:         %[[DRIVER:.*]] = moore.virtual_interface.get %[[VIF]] @driver : <@handshake_if> -> <@handshake_if::@driver>
 func.func @test_vif_modport(%vif: !moore.virtual_interface<@handshake_if>) {
   %driver = moore.virtual_interface.get %vif @driver : !moore.virtual_interface<@handshake_if> -> !moore.virtual_interface<@handshake_if::@driver>
   return
@@ -386,8 +388,8 @@ func.func @test_vif_modport(%vif: !moore.virtual_interface<@handshake_if>) {
 // Test virtual interface signal reference
 // CHECK-LABEL: func.func @test_vif_signal_ref
 // CHECK-SAME:    (%[[VIF:.*]]: !moore.virtual_interface<@handshake_if>)
-// CHECK:         %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[VIF]][@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<l8>
-// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : !moore.ref<l8>
+// CHECK:         %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[VIF]][@data] : <@handshake_if> -> <l8>
+// CHECK:         %[[DATA:.*]] = moore.read %[[DATA_REF]] : <l8>
 func.func @test_vif_signal_ref(%vif: !moore.virtual_interface<@handshake_if>) {
   %data_ref = moore.virtual_interface.signal_ref %vif[@data] : !moore.virtual_interface<@handshake_if> -> !moore.ref<l8>
   %data = moore.read %data_ref : !moore.ref<l8>
