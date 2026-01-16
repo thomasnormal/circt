@@ -70,6 +70,32 @@ Created initial implementation files:
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` (21 KB)
 Implements: signal registration, time conversion, llhd.prb/drv/wait/halt handlers
 
+#### Big Projects Status Survey
+
+Comprehensive survey of 6 major projects toward Xcelium parity:
+
+| Project | Status | Key Blocker |
+|---------|--------|-------------|
+| SVA with Z3 | Partial | Z3 not installed, clocked_assert lowering |
+| Multi-core Arcilator | Missing | Requires architectural redesign |
+| LSP/Debugging | Partial | Missing completion, go-to-def, debug |
+| 4-State Logic (X/Z) | Missing | Type system redesign needed |
+| Coverage | Partial | Missing cross-cover expressions |
+| DPI/VPI | Stubs only | FFI bridge needed |
+
+**Key Implementation Files:**
+- SVAToLTL: 321 conversion patterns
+- VerifToSMT: 967 lines
+- MooreToCore: 9,464 lines
+- MooreRuntime: 2,270 lines
+
+### Active Development Tracks (Parallel Agents)
+
+1. **LLHD Interpreter** (a328f45): Debugging process detection in circt-sim
+2. **Clocking Blocks** (aac6fde): Adding ClockingBlockDeclOp, ClockingSignalOp to Moore
+3. **clocked_assert Lowering** (a87c394): Creating LowerClockedAssertLike pass for BMC
+4. **$past Comparison Fix** (a87be46): Adding moore::PastOp to preserve type for comparisons
+
 ---
 
 ## Iteration 29 (Complete) - January 16, 2026
