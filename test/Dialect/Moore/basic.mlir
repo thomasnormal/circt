@@ -546,16 +546,16 @@ func.func @AssocArrayBuiltins(
   %key2: !moore.ref<i32>
 ) {
   // Test assoc.first with string key type
-  // CHECK: [[FOUND1:%.+]] = moore.assoc.first [[ARRAY1]], [[KEY1]] : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
+  // CHECK: [[FOUND1:%.+]] = moore.assoc.first [[ARRAY1]], [[KEY1]] : <assoc_array<i32, string>>, <string>
   %0 = moore.assoc.first %array1, %key1 : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
   // Test assoc.next with string key type
-  // CHECK: [[FOUND2:%.+]] = moore.assoc.next [[ARRAY1]], [[KEY1]] : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
+  // CHECK: [[FOUND2:%.+]] = moore.assoc.next [[ARRAY1]], [[KEY1]] : <assoc_array<i32, string>>, <string>
   %1 = moore.assoc.next %array1, %key1 : !moore.ref<assoc_array<i32, string>>, !moore.ref<string>
   // Test assoc.first with integer key type
-  // CHECK: [[FOUND3:%.+]] = moore.assoc.first [[ARRAY2]], [[KEY2]] : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
+  // CHECK: [[FOUND3:%.+]] = moore.assoc.first [[ARRAY2]], [[KEY2]] : <assoc_array<i64, i32>>, <i32>
   %2 = moore.assoc.first %array2, %key2 : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
   // Test assoc.next with integer key type
-  // CHECK: [[FOUND4:%.+]] = moore.assoc.next [[ARRAY2]], [[KEY2]] : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
+  // CHECK: [[FOUND4:%.+]] = moore.assoc.next [[ARRAY2]], [[KEY2]] : <assoc_array<i64, i32>>, <i32>
   %3 = moore.assoc.next %array2, %key2 : !moore.ref<assoc_array<i64, i32>>, !moore.ref<i32>
   return
 }

@@ -29,9 +29,9 @@ func.func @QueuePushPop(%queue: !moore.ref<queue<i32, 0>>, %elem: !moore.i32) {
   moore.queue.push_back %queue, %elem : <queue<i32, 0>>, i32
   // CHECK: moore.queue.push_front [[QUEUE]], [[ELEM]] : <queue<i32, 0>>, i32
   moore.queue.push_front %queue, %elem : <queue<i32, 0>>, i32
-  // CHECK: moore.queue.pop_back [[QUEUE]] : <queue<i32, 0>> -> !moore.i32
+  // CHECK: moore.queue.pop_back [[QUEUE]] : <queue<i32, 0>> -> i32
   %back = moore.queue.pop_back %queue : <queue<i32, 0>> -> !moore.i32
-  // CHECK: moore.queue.pop_front [[QUEUE]] : <queue<i32, 0>> -> !moore.i32
+  // CHECK: moore.queue.pop_front [[QUEUE]] : <queue<i32, 0>> -> i32
   %front = moore.queue.pop_front %queue : <queue<i32, 0>> -> !moore.i32
   return
 }
@@ -105,7 +105,7 @@ func.func @AssocArrayWithIntKey(%array: !moore.ref<assoc_array<string, i64>>, %k
 // CHECK-LABEL: func.func @AssocArrayExists
 // CHECK-SAME: ([[ARRAY:%.+]]: !moore.assoc_array<i32, string>, [[KEY:%.+]]: !moore.string)
 func.func @AssocArrayExists(%array: !moore.assoc_array<i32, string>, %key: !moore.string) -> !moore.i32 {
-  // CHECK: moore.assoc.exists [[ARRAY]], [[KEY]] : !moore.assoc_array<i32, string>, !moore.string
+  // CHECK: moore.assoc.exists [[ARRAY]], [[KEY]] : <i32, string>, string
   %exists = moore.assoc.exists %array, %key : !moore.assoc_array<i32, string>, !moore.string
   return %exists : !moore.i32
 }
@@ -114,7 +114,7 @@ func.func @AssocArrayExists(%array: !moore.assoc_array<i32, string>, %key: !moor
 // CHECK-LABEL: func.func @AssocArrayExistsIntKey
 // CHECK-SAME: ([[ARRAY:%.+]]: !moore.assoc_array<i32, i64>, [[KEY:%.+]]: !moore.i64)
 func.func @AssocArrayExistsIntKey(%array: !moore.assoc_array<i32, i64>, %key: !moore.i64) -> !moore.i32 {
-  // CHECK: moore.assoc.exists [[ARRAY]], [[KEY]] : !moore.assoc_array<i32, i64>, !moore.i64
+  // CHECK: moore.assoc.exists [[ARRAY]], [[KEY]] : <i32, i64>, i64
   %exists = moore.assoc.exists %array, %key : !moore.assoc_array<i32, i64>, !moore.i64
   return %exists : !moore.i32
 }

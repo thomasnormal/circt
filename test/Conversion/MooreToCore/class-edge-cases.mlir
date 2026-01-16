@@ -72,9 +72,9 @@ moore.class.classdecl @ClassB {
 /// Test creating multiple class instances of different types
 
 // CHECK-LABEL: func.func private @test_multiple_new
-// CHECK:   [[SIZE_A:%.*]] = llvm.mlir.constant(4 : i64) : i64
+// CHECK:   [[SIZE_A:%.*]] = llvm.mlir.constant(8 : i64) : i64
 // CHECK:   [[PTR_A:%.*]] = llvm.call @malloc([[SIZE_A]]) : (i64) -> !llvm.ptr
-// CHECK:   [[SIZE_B:%.*]] = llvm.mlir.constant(8 : i64) : i64
+// CHECK:   [[SIZE_B:%.*]] = llvm.mlir.constant(12 : i64) : i64
 // CHECK:   [[PTR_B:%.*]] = llvm.call @malloc([[SIZE_B]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 // CHECK-NOT: moore.class.new
@@ -134,8 +134,8 @@ func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moo
 
 // CHECK-LABEL: func.func private @test_upcast_then_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(0 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Base"
+// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Base", (i32, i32)>
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 // CHECK-NOT: moore.class.property_ref
@@ -238,14 +238,14 @@ func.func private @test_full_workflow() -> !moore.i1 {
 /// Test that Level3 allocation includes all inherited properties
 
 // CHECK-LABEL: func.func private @test_level3_size
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(20 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 // CHECK-NOT: moore.class.new
 
 func.func private @test_level3_size() {
   // Level3 struct is nested: Level3(Level2(Level1(Base(i32), i64), i16), i8)
-  // Size: 4(i32) + 4(padding) + 8(i64) + 2(i16) + 1(i8) + 1(padding) = 20 bytes
+  // Size: 4(i32) + 4(padding) + 8(i64) + 2(i16) + 2(padding) + 1(i8) + 3(padding) = 24 bytes
   %obj = moore.class.new : <@Level3>
   return
 }

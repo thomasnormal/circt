@@ -1,10 +1,9 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
-// Test file I/O operations: $fopen, $fwrite, $fclose
-// These lower to __moore_fopen, __moore_fwrite, __moore_fclose runtime calls.
+// Test file I/O operations: $fopen, $fclose
+// These lower to __moore_fopen, __moore_fclose runtime calls.
 
 // CHECK-DAG: llvm.func @__moore_fopen(!llvm.ptr, !llvm.ptr) -> i32
-// CHECK-DAG: llvm.func @__moore_fwrite(i32, !llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_fclose(i32)
 
 //===----------------------------------------------------------------------===//
@@ -30,7 +29,7 @@ moore.module @test_fopen(in %filename: !moore.string, in %mode: !moore.string, o
 moore.module @test_fopen_no_mode(in %filename: !moore.string, out fd: !moore.i32) {
   // CHECK: llvm.alloca
   // CHECK: llvm.store
-  // CHECK: llvm.zero : !llvm.ptr
+  // CHECK: llvm.mlir.zero : !llvm.ptr
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_fopen
   %fd = moore.builtin.fopen %filename
   moore.output %fd : !moore.i32

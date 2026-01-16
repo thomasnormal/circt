@@ -1,10 +1,12 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
+// CHECK-DAG: llvm.func @__moore_event_trigger(!llvm.ptr)
+// CHECK-DAG: llvm.func @__moore_event_triggered(!llvm.ptr) -> i1
+// CHECK-DAG: llvm.func @__moore_wait_condition(i32)
+
 //===----------------------------------------------------------------------===//
 // Event Trigger Operation
 //===----------------------------------------------------------------------===//
-
-// CHECK: llvm.func @__moore_event_trigger(!llvm.ptr)
 
 // CHECK-LABEL: hw.module @test_event_trigger
 moore.module @test_event_trigger(in %event: !moore.event) {
@@ -24,8 +26,6 @@ moore.module @test_event_trigger(in %event: !moore.event) {
 // Event Triggered Operation
 //===----------------------------------------------------------------------===//
 
-// CHECK: llvm.func @__moore_event_triggered(!llvm.ptr) -> i1
-
 // CHECK-LABEL: hw.module @test_event_triggered
 moore.module @test_event_triggered(in %event: !moore.event, out result: !moore.i1) {
   // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i64) : i64
@@ -39,8 +39,6 @@ moore.module @test_event_triggered(in %event: !moore.event, out result: !moore.i
 //===----------------------------------------------------------------------===//
 // Wait Condition Operation
 //===----------------------------------------------------------------------===//
-
-// CHECK: llvm.func @__moore_wait_condition(i32)
 
 // CHECK-LABEL: hw.module @test_wait_condition
 moore.module @test_wait_condition(in %clk: !moore.i1) {
