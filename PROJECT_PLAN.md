@@ -59,29 +59,35 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: VTable Load Method Lowering
+### Track A: Fix getIntOrFloatBitWidth Crash
 **Status**: 🔴 BLOCKING
-**Task**: Implement moore.vtable.load_method lowering for virtual method dispatch. 4764 uses in UVM.
+**Task**: MooreToCore crashes with assertion failure on queue types. Fix type handling in lowering.
 **Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add VTableLoadMethodOpConversion - load function pointer from vtable struct.
+**Next**: Find where getIntOrFloatBitWidth() is called on queue/non-numeric types and add proper handling.
 
-### Track B: VTable Operations Suite
+### Track B: Virtual Interface Member Access
 **Status**: 🟡 IN PROGRESS
-**Task**: Implement related vtable operations: vtable.get_method_offset, vtable.create, etc.
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Analyze full vtable IR pattern and implement complete lowering.
+**Task**: Add support for accessing members (including class handles) inside interfaces via virtual interfaces.
+**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
+**Next**: Update MemberAccessExpression to handle virtual interface base types.
 
-### Track C: VTable Create/Store Lowering
+### Track C: QueueConcatOp Empty Operands
 **Status**: 🟡 IN PROGRESS
-**Task**: Implement moore.vtable.create and moore.vtable.store_method operations for vtable construction.
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Analyze vtable IR pattern, implement VTableCreateOp and VTableStoreMethodOp conversions.
+**Task**: Fix QueueConcatOp assembly format when there are 0 operands (produces invalid `: ->` syntax).
+**Files**: include/circt/Dialect/Moore/MooreOps.td
+**Next**: Update assembly format to handle empty operand case gracefully.
 
-### Track D: Unit Tests for VTable Operations
+### Track D: Continue AVIP Testing
 **Status**: 🟡 IN PROGRESS
-**Task**: Create comprehensive tests for vtable lowering patterns.
-**Files**: test/Conversion/MooreToCore/
-**Next**: Create vtable-ops.mlir with tests for load_method, create, store_method.
+**Task**: Test more AVIP components and document remaining blockers.
+**Files**: ~/mbit/*_avip
+**Next**: Test with fixes applied, document new findings.
+
+### Previous Track Results (Iteration 4)
+- **Track A**: ✅ vtable.load_method fixed for abstract classes (e0df41cec) - 4764 ops unblocked
+- **Track B**: ✅ All vtable ops have conversion patterns
+- **Track C**: ✅ AVIP testing found: virtual interface member access needed, QueueConcatOp format bug
+- **Track D**: ✅ Comprehensive vtable tests added (12 test cases)
 
 ### Previous Track Results (Iteration 3)
 - **Track A**: ✅ array.size lowering implemented (f18154abb) - 349 ops unblocked
