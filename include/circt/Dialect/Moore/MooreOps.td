@@ -4913,7 +4913,7 @@ def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
 
     Example:
     ```mlir
-    %result = moore.queue.concat %a, %b : !moore.queue<i32, 0>, !moore.queue<i32, 0> -> !moore.queue<i32, 0>
+    %result = moore.queue.concat(%a, %b) : !moore.queue<i32, 0>, !moore.queue<i32, 0> -> <i32, 0>
     ```
 
     See IEEE 1800-2017 Section 7.10.4 "Queue operators".
@@ -4921,7 +4921,7 @@ def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
   let arguments = (ins Variadic<QueueType>:$inputs);
   let results = (outs QueueType:$result);
   let assemblyFormat = [{
-    $inputs attr-dict `:` type($inputs) `->` type($result)
+    `(` $inputs `)` attr-dict (`:` type($inputs)^)? `->` type($result)
   }];
 }
 

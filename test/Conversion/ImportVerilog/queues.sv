@@ -211,7 +211,7 @@ module QueueConcatTest;
         q2.push_back(4);
         // CHECK: [[Q1:%.+]] = moore.read %q1 : <queue<i32, 0>>
         // CHECK: [[Q2:%.+]] = moore.read %q2 : <queue<i32, 0>>
-        // CHECK: [[CONCAT:%.+]] = moore.queue.concat [[Q1]], [[Q2]] : !moore.queue<i32, 0>, !moore.queue<i32, 0>
+        // CHECK: [[CONCAT:%.+]] = moore.queue.concat([[Q1]], [[Q2]]) : !moore.queue<i32, 0>, !moore.queue<i32, 0> -> <i32, 0>
         // CHECK: moore.blocking_assign %result, [[CONCAT]] : queue<i32, 0>
         result = { q1, q2 };
     end
