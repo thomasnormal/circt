@@ -59,29 +59,35 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Fix getIntOrFloatBitWidth Crash
+### Track A: Fix Data Layout Crash
 **Status**: 🔴 BLOCKING
-**Task**: MooreToCore crashes with assertion failure on queue types. Fix type handling in lowering.
+**Task**: MooreToCore crashes with "neither the scoping op nor the type class provide data layout information for !hw.struct". This happens when class types have mixed hw/llvm types.
 **Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Find where getIntOrFloatBitWidth() is called on queue/non-numeric types and add proper handling.
+**Next**: Investigate data layout handling for mixed hw.struct/llvm types.
 
-### Track B: Virtual Interface Member Access
+### Track B: Test AVIP BFMs with Virtual Interface Fix
 **Status**: 🟡 IN PROGRESS
-**Task**: Add support for accessing members (including class handles) inside interfaces via virtual interfaces.
-**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
-**Next**: Update MemberAccessExpression to handle virtual interface base types.
+**Task**: Test if AVIP BFMs work now that virtual interface member access is implemented.
+**Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
+**Next**: Test apb_master_driver_bfm.sv with UVM imports.
 
-### Track C: QueueConcatOp Empty Operands
+### Track C: ImportVerilog Test Fixes
 **Status**: 🟡 IN PROGRESS
-**Task**: Fix QueueConcatOp assembly format when there are 0 operands (produces invalid `: ->` syntax).
-**Files**: include/circt/Dialect/Moore/MooreOps.td
-**Next**: Update assembly format to handle empty operand case gracefully.
+**Task**: Fix remaining ImportVerilog test failures (16/30 passing).
+**Files**: test/Conversion/ImportVerilog/
+**Next**: Update test expectations for changed behavior.
 
-### Track D: Continue AVIP Testing
+### Track D: Continue MooreToCore Testing
 **Status**: 🟡 IN PROGRESS
-**Task**: Test more AVIP components and document remaining blockers.
-**Files**: ~/mbit/*_avip
-**Next**: Test with fixes applied, document new findings.
+**Task**: Test MooreToCore on individual AVIP components (not full UVM).
+**Files**: ~/mbit/*_avip/
+**Next**: Run --moore-to-core on simple AVIP packages.
+
+### Previous Track Results (Iteration 5)
+- **Track A**: ✅ getIntOrFloatBitWidth crash fixed (8911370be) - added type-safe helper
+- **Track B**: ✅ Virtual interface member access added (0a16d3a06) - VirtualInterfaceSignalRefOp
+- **Track C**: ✅ QueueConcatOp empty format fixed (2bd58f1c9) - parentheses format
+- **Track D**: ✅ Test suite fixed (f7b9c7b15) - Moore 18/18, MooreToCore 24/24
 
 ### Previous Track Results (Iteration 4)
 - **Track A**: ✅ vtable.load_method fixed for abstract classes (e0df41cec) - 4764 ops unblocked
