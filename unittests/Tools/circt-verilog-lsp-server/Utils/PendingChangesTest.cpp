@@ -364,4 +364,46 @@ TEST(PendingChangesMapTest, AbortClearsAll) {
   }
 }
 
+/// Verify that abort() doesn't deadlock when tasks are actively running.
+/// This tests the fix for the deadlock where abort() held the mutex while
+/// waiting for tasks that also needed the mutex.
+TEST(PendingChangesMapTest, AbortDuringActiveTasksDoesNotDeadlock) {
+#if defined(__APPLE__)
+  // See https://github.com/llvm/circt/issues/9292.
+  GTEST_SKIP() << "flaky on macOS";
+#endif
+
+  PendingChangesMap pcm(2);
+
+  // Use a long debounce to ensure tasks are sleeping when we abort.
+  DebounceOptions opt;
+  opt.disableDebounce = false;
+  opt.debounceMinMs = 500; // long sleep
+  opt.debounceMaxMs = 0;   // no cap
+
+  auto a = makeChangeParams("abort_test.sv", 1);
+  pcm.enqueueChange(a);
+
+  // Schedule a debounced update - the task will sleep for 500ms
+  CallbackCapture cap;
+  pcm.debounceAndThen(a, opt, [&](std::unique_ptr<PendingChanges> r) {
+    cap.set(std::move(r));
+  });
+
+  // Wait a bit to ensure the task is sleeping in the thread pool.
+  std::this_thread::sleep_for(50ms);
+
+  // Call abort() - this should NOT deadlock. Previously this would deadlock
+  // because abort() held mu while waiting, but the tasks also needed mu.
+  // The test will timeout if deadlock occurs.
+  pcm.abort();
+
+  // The callback should eventually be called (with nullptr since we cleared
+  // pending).
+  ASSERT_TRUE(cap.waitFor(std::chrono::milliseconds(2000)));
+  // Result should be nullptr because pending was cleared before the task
+  // finished sleeping.
+  EXPECT_EQ(cap.got, nullptr);
+}
+
 } // namespace

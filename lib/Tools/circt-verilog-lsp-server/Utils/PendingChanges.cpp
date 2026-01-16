@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PendingChanges.h"
+#include "llvm/Config/llvm-config.h"
 
 namespace circt {
 namespace lsp {
@@ -22,8 +23,16 @@ DebounceOptions::fromLSPOptions(const circt::lsp::LSPServerOptions &opts) {
 }
 
 void PendingChangesMap::abort() {
-  std::scoped_lock<std::mutex> lock(mu);
-  pending.clear();
+  // Clear pending changes under lock, then wait for tasks WITHOUT holding the
+  // lock. This avoids deadlock since tasks in debounceAndThen() need to acquire
+  // mu.
+  {
+    std::scoped_lock<std::mutex> lock(mu);
+    pending.clear();
+  }
+  // Wait for any in-flight tasks to complete. Safe to call without mu since
+  // pool.wait() only waits for tasks already submitted, and we've cleared the
+  // pending map so callbacks will find nothing to process.
   pool.wait();
 }
 
@@ -73,7 +82,21 @@ void PendingChangesMap::debounceAndThen(
   const std::string key = params.textDocument.uri.file().str();
   const auto scheduleTime = std::chrono::steady_clock::now();
 
-  // If debounce is disabled, run on main thread
+  // If debounce is disabled, run on main thread synchronously.
+  // Also fall back to synchronous mode when LLVM is built without threading
+  // support, since SingleThreadExecutor only executes tasks on wait() which
+  // would cause a hang.
+#if !LLVM_ENABLE_THREADS
+  (void)scheduleTime; // unused in single-threaded mode
+  {
+    std::scoped_lock<std::mutex> lock(mu);
+    auto it = pending.find(key);
+    if (it == pending.end())
+      return cb(nullptr);
+    return cb(takeAndErase(it));
+  }
+#endif
+
   if (options.disableDebounce) {
     std::scoped_lock<std::mutex> lock(mu);
     auto it = pending.find(key);
