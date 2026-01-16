@@ -45,3 +45,19 @@ func.func @test_vtable_load_method(%obj: !moore.class<@testClass>) {
   %fptr = moore.vtable.load_method %obj : @subroutine of <@testClass> -> (!moore.class<@testClass>) -> ()
   return
 }
+
+// Test vtable.load_method with nested vtable lookup (abstract base class case).
+// When the static type is an abstract class without its own top-level vtable,
+// we should find the vtable entry in the nested vtable inside a derived class vtable.
+
+// CHECK-LABEL: func.func @test_vtable_load_method_nested
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK:         %[[FPTR:.*]] = constant @"testClass::subroutine" : (!llvm.ptr) -> ()
+// CHECK:         return
+
+func.func @test_vtable_load_method_nested(%obj: !moore.class<@virtualFunctionClass>) {
+  // virtualFunctionClass has no top-level vtable, but testClass::@vtable contains
+  // a nested @virtualFunctionClass::@vtable with the method entry.
+  %fptr = moore.vtable.load_method %obj : @subroutine of <@virtualFunctionClass> -> (!moore.class<@virtualFunctionClass>) -> ()
+  return
+}
