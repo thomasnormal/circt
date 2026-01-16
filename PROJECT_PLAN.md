@@ -4,24 +4,81 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 28 COMPLETE)
+## Current Status: 🎉 ITERATION 30 - COMPREHENSIVE TEST SURVEY (January 16, 2026)
 
-**Test Commands**:
+**Summary**: SVA boolean context fixes, Z3 CMake linking, comprehensive test suite survey
+
+### Test Suite Coverage (Iteration 30)
+
+| Test Suite | Total Tests | Pass Rate | Notes |
+|------------|-------------|-----------|-------|
+| **sv-tests** | 989 (non-UVM) | **72.1%** (713/989) | Parsing/elaboration focus |
+| **mbit AVIP globals** | 8 packages | **100%** | All package files work |
+| **mbit AVIP interfaces** | 8 interfaces | **75%** | 6/8 pass |
+| **mbit AVIP HVL** | 8 packages | **0%** | Requires UVM library |
+| **verilator-verification** | 154 | ~60% | SVA tests improved |
+
+### sv-tests Chapter Breakdown (72.1% overall)
+
+| Chapter | Pass Rate | Key Gaps |
+|---------|-----------|----------|
+| Ch 5 (Lexical) | **86%** | Good |
+| Ch 6 (Data Types) | **75%** | TaggedUnion |
+| Ch 7 (Aggregate) | **72%** | Unpacked dimensions |
+| Ch 9 (Behavioral) | **73%** | Minor gaps |
+| Ch 10 (Scheduling) | **50%** | RaceyWrite |
+| Ch 11 (Operators) | **87%** | Strong |
+| Ch 12 (Procedural) | **79%** | SequenceWithMatch |
+| Ch 13 (Tasks/Functions) | **86%** | Strong |
+| Ch 14 (Clocking Blocks) | **0%** | NOT IMPLEMENTED |
+| Ch 16 (Assertions) | **68%** | EmptyArgument |
+| Ch 18 (Random/Constraints) | **25%** | RandSequence |
+| Ch 20 (I/O Formatting) | **83%** | Good |
+| Ch 21 (I/O System Tasks) | **37%** | VcdDump |
+
+### Top Missing Features (by sv-tests failures)
+
+| Feature | Tests Failed | Priority |
+|---------|--------------|----------|
+| **ClockingBlock** | ~50 | HIGH |
+| **RandSequence** | ~30 | MEDIUM |
+| **SequenceWithMatch** | ~25 | MEDIUM |
+| **TaggedUnion** | ~20 | MEDIUM |
+| **EmptyArgument** | ~15 | LOW |
+
+### Z3 BMC Status
+
+- **Z3 NOT INSTALLED** on system (`Z3_LIBRARIES-NOTFOUND`)
+- CMake linking code is correct (both CONFIG and Module mode support)
+- Pipeline verified: SV → Moore → HW → BMC MLIR → LLVM IR generation
+- **Blocker**: `verif.clocked_assert` not consumed by circt-bmc (needs lowering pass)
+
+### Test Commands
 ```bash
 # UVM Parsing - COMPLETE
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 # Exit code: 0 (SUCCESS!) - 161,443 lines of Moore IR
 
-# UVM MooreToCore - 100% COMPLETE (0 errors!)
-./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src 2>/dev/null | \
-  ./build/bin/circt-opt -convert-moore-to-core 2>&1 | grep -c "failed to legalize"
-# Output: 0 (zero errors!)
-
-# AXI4-Lite AVIP - 100% COMPLETE
-./build/bin/circt-verilog ~/mbit/axi4Lite_avip/... -I ~/uvm-core/src | \
-  ./build/bin/circt-opt -convert-moore-to-core
-# Exit code: 0 (no errors)
+# SVA BMC (Bounded Model Checking) - CONVERSION WORKS
+./build/bin/circt-verilog --ir-hw /tmp/simple_sva.sv | \
+  ./build/bin/circt-bmc --bound=10
+# VerifToSMT conversion produces valid MLIR (Z3 installation needed)
 ```
+
+**Iteration 30 Commits**:
+- SVA functions in boolean contexts (commit a68ed9adf) - ltl.or/ltl.and/ltl.not for LTL types
+- Z3 CMake linking fix (commit 48bcd2308) - JIT runtime linking for SMTToZ3LLVM
+- $rose/$fell test improvements (commit 8ad3a7cc6)
+- MooreToCore coverage ops tests (commit d92d81882)
+- VerifToSMT conversion tests (commit ecabb4492)
+- SVAToLTL conversion tests (commit 47c5a7f36)
+
+**Iteration 29 Commits**:
+- VerifToSMT `bmc.final` assertion handling fixes
+- ReconcileUnrealizedCasts pass added to circt-bmc pipeline
+- BVConstantOp argument order fix (value, width)
+- Clock counting before region conversion
+- Proper rewriter.eraseOp() usage in conversion patterns
 
 **Iteration 28 Commits**:
 - `7d5391552` - $onehot/$onehot0 system calls
@@ -151,39 +208,73 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: LLHD Process Interpretation in circt-sim 🎯 ITERATION 28
-**Status**: 🔴 CRITICAL BLOCKER - DETAILED RESEARCH COMPLETE
+### Track A: LLHD Process Interpretation in circt-sim 🎯 ITERATION 30
+**Status**: 🟡 IMPLEMENTATION PLAN READY - Phase 1 design complete
 **Problem**: circt-sim doesn't interpret LLHD process bodies - simulation ends at 0fs
 
-**Root Cause Analysis (Iteration 28)**:
-The `SimulationContext::buildSimulationModel()` function in `tools/circt-sim/circt-sim.cpp` (lines 443-486)
-has a critical TODO at line 469: "Walk the module body and create processes for each operation"
+**Implementation Plan (Phase 1A - Core Interpreter)**:
 
-Currently it:
-1. Registers signals for all ports (lines 444-467)
-2. Creates a PLACEHOLDER process with EMPTY callback (lines 471-474)
-3. Does NOT walk the hw.module body to find llhd.process ops
-4. Does NOT interpret llhd.process, llhd.wait, llhd.drv, llhd.prb operations
+```cpp
+// New class: LLHDProcessInterpreter (tools/circt-sim/LLHDProcessInterpreter.h)
+class LLHDProcessInterpreter {
+  struct SignalState {
+    mlir::Value sigValue;
+    size_t schedulerSignalId;
+  };
 
-**What Exists (Infrastructure)**:
-- `ProcessScheduler` (lib/Dialect/Sim/ProcessScheduler.cpp) - Full IEEE 1800 scheduling semantics
-- `EventScheduler` (lib/Dialect/Sim/EventQueue.cpp) - Time wheel event scheduling
-- `Process` class - State machine (Ready, Running, Suspended, Waiting, Terminated)
-- `SensitivityList` - Edge detection (posedge/negedge/anyedge)
-- `ForkJoinManager` - fork/join_any/join_none semantics
-- `SyncPrimitivesManager` - Semaphores, mailboxes
+  llvm::DenseMap<mlir::Value, SignalState> signals;
+  llvm::DenseMap<mlir::Value, llvm::Any> ssaValues;
 
-**What's MISSING (Gap)**:
-1. **LLHD IR Walking**: No code walks hw.module to find llhd.process ops
-2. **LLHD Interpreter**: No interpretation of LLHD operations:
-   - `llhd.process` → Should create Process with ExecuteCallback that interprets body
-   - `llhd.wait` → Should call ProcessScheduler::suspendProcess() or suspendProcessForEvents()
-   - `llhd.drv` → Should call ProcessScheduler::updateSignal() with delay scheduling
-   - `llhd.prb` → Should call ProcessScheduler::getSignalValue()
-   - `llhd.sig` → Should call ProcessScheduler::registerSignal()
-   - `llhd.halt` → Should call ProcessScheduler::terminateProcess()
-3. **Control Flow**: No CF dialect (cf.br, cf.cond_br) interpretation within processes
-4. **Value Tracking**: No SSA value tracking during interpretation
+public:
+  // Phase 1A: Register signals from llhd.sig ops
+  void registerSignals(mlir::Operation *moduleOp);
+
+  // Phase 1A: Convert llhd.time to SimTime
+  SimTime convertTime(llhd::TimeAttr timeAttr);
+
+  // Phase 1A: Core operation handlers
+  void interpretProbe(llhd::PrbOp op);     // Read signal value
+  void interpretDrive(llhd::DrvOp op);     // Schedule signal update
+  void interpretWait(llhd::WaitOp op);     // Suspend process
+  void interpretHalt(llhd::HaltOp op);     // Terminate process
+
+  // Phase 1B: Control flow (cf.br, cf.cond_br)
+  void interpretBranch(cf::BranchOp op);
+  void interpretCondBranch(cf::CondBranchOp op);
+
+  // Phase 1C: Arithmetic (arith.addi, arith.cmpi, etc.)
+  void interpretArith(mlir::Operation *op);
+};
+```
+
+**Integration with circt-sim.cpp**:
+```cpp
+// In SimulationContext::buildSimulationModel():
+for (auto &op : moduleOp.getBody().front()) {
+  if (auto processOp = dyn_cast<llhd::ProcessOp>(&op)) {
+    auto interpreter = std::make_shared<LLHDProcessInterpreter>();
+    interpreter->registerSignals(moduleOp);
+
+    auto callback = [interpreter, &processOp]() {
+      interpreter->execute(processOp.getBody());
+    };
+
+    scheduler.createProcess(callback);
+  }
+}
+```
+
+**Phased Approach**:
+- **Phase 1A** (1 week): Signal registration, llhd.prb/drv/wait/halt handlers
+- **Phase 1B** (3-4 days): Control flow (cf.br, cf.cond_br, block arguments)
+- **Phase 1C** (3-4 days): Arithmetic operations (arith.addi, cmpi, etc.)
+- **Phase 2** (1 week): Complex types, memory, verification
+
+**Files to Create/Modify**:
+- `tools/circt-sim/LLHDProcessInterpreter.h` (NEW)
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (NEW)
+- `tools/circt-sim/circt-sim.cpp` (modify buildSimulationModel)
+- `tools/circt-sim/CMakeLists.txt` (add new source files)
 
 **Verified Test Case**:
 ```bash
@@ -192,23 +283,6 @@ Currently it:
 # Output: "Simulation completed at time 0 fs" with only 1 placeholder process
 # Expected: Should run llhd.process bodies with llhd.wait delays
 ```
-
-**Complexity Estimate**: HIGH (2-4 weeks)
-- Need full LLHD operation interpreter
-- Need to handle control flow within processes
-- Need to track SSA values across wait suspensions
-- Alternative: Use MLIR's interpreter infrastructure
-
-**Alternative Approaches**:
-1. **LLHD → Arc lowering**: Convert LLHD processes to Arc dialect for arcilator
-2. **JIT compilation**: Lower LLHD to LLVM and JIT execute
-3. **MLIR interpreter**: Use mlir-cpu-runner style approach
-
-**Files**:
-- `tools/circt-sim/circt-sim.cpp` (SimulationContext::buildSimulationModel needs implementation)
-- `include/circt/Dialect/Sim/ProcessScheduler.h` (infrastructure ready)
-- `lib/Dialect/Sim/ProcessScheduler.cpp` (infrastructure ready)
-- `lib/Dialect/LLHD/IR/LLHDOps.cpp` (operations to interpret)
 
 **Priority**: CRITICAL - Required for behavioral simulation
 
@@ -241,6 +315,45 @@ Currently it:
 
 ### Track D: Coverage Runtime & UVM APIs 🎯 ITERATION 28 - RESEARCH COMPLETE
 **Status**: 🟡 DOCUMENTED - Infrastructure exists, event sampling gap identified
+
+### Track E: SVA Bounded Model Checking 🎯 ITERATION 29 - IN PROGRESS
+**Status**: 🟢 CONVERSION WORKING - VerifToSMT produces valid MLIR, Z3 linking pending
+
+**What's Working** (Iteration 29):
+1. **Moore → Verif lowering**: SVA assertions lower to verif.assert/assume/cover
+2. **Verif → LTL lowering**: SVAToLTL pass converts SVA sequences to LTL properties
+3. **LTL → Core lowering**: LTLToCore converts LTL to hw/comb logic
+4. **VerifToSMT conversion**: Bounded model checking loop with final assertion handling
+5. **`bmc.final` support**: Assertions checked only at final step work correctly
+
+**Key Fixes (Iteration 29)**:
+- `ReconcileUnrealizedCastsPass` added to pipeline (cleanup unrealized casts)
+- `BVConstantOp` argument order: (value, width) not (width, value)
+- Clock counting moved BEFORE region type conversion
+- `rewriter.eraseOp()` instead of direct `op->erase()` in conversion patterns
+- Yield modification before op erasure (values must remain valid)
+
+**What's Pending**:
+1. **Z3 runtime linking** - Symbols not found: Z3_del_config, Z3_del_context, etc.
+2. **Integration tests** - Need end-to-end SVA → SAT/UNSAT result tests
+3. **Performance benchmarking** - Compare vs Verilator/Xcelium assertion checking
+
+**Test Pipeline**:
+```bash
+# SVA property implication test
+echo 'module test(input clk, a, b);
+  assert property (@(posedge clk) a |=> b);
+endmodule' > /tmp/sva_test.sv
+./build/bin/circt-verilog --ir-hw /tmp/sva_test.sv | ./build/bin/circt-bmc --bound=10
+```
+
+**Files**:
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp` - Core BMC loop generation
+- `tools/circt-bmc/circt-bmc.cpp` - BMC tool pipeline
+- `lib/Conversion/SVAToLTL/SVAToLTL.cpp` - SVA to LTL conversion
+- `lib/Conversion/LTLToCore/LTLToCore.cpp` - LTL to HW/Comb lowering
+
+**Priority**: HIGH - Critical for formal verification capability
 
 **COVERAGE INFRASTRUCTURE ANALYSIS (Iteration 28)**:
 
@@ -302,10 +415,25 @@ Currently it:
 **Priority**: MEDIUM - Explicit sampling works for AVIP patterns; event-driven sampling is enhancement
 
 ### Operating Guidance
-- Keep 4 agents active: Track A (LLHD interpretation), Track B (interface access), Track C (system calls), Track D (coverage/UVM).
+- Keep 4 agents active on highest-priority tracks:
+  - **Track A (LLHD interpretation)** - CRITICAL blocker for behavioral simulation
+  - **Track E (SVA BMC)** - Z3 linking, then integration tests
+  - **Track D (Coverage/UVM)** - Runtime library implementation
+  - **Track C (System calls)** - As discovered through testing
+- Track B (interface access) is COMPLETE.
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
-- Test on ~/mbit/* for real-world feedback.
+- Test on ~/mbit/*avip* and ~/sv-tests/ for real-world feedback.
+
+### Iteration 29 Results - SVA BMC CONVERSION FIXED
+**Key Fixes**:
+- VerifToSMT `bmc.final` assertion handling - proper hoisting and final-only checking
+- ReconcileUnrealizedCastsPass added to circt-bmc pipeline
+- BVConstantOp argument order corrected (value, width)
+- Clock counting before region type conversion
+- Proper rewriter.eraseOp() usage in conversion patterns
+
+**Status**: VerifToSMT conversion produces valid MLIR. Z3 runtime linking is the remaining blocker.
 
 ### Iteration 28 Results - COMPREHENSIVE UPDATE
 **Commits**:
@@ -511,6 +639,75 @@ None! UVM parsing complete.
 
 ---
 
+## Feature Gap Analysis (Iteration 30) - COMPREHENSIVE SURVEY
+
+Based on systematic testing of ~/sv-tests/, ~/mbit/*avip*, and ~/verilator-verification/:
+
+### Critical Gaps for Xcelium Parity
+
+| Feature | Status | Tests Blocked | Priority |
+|---------|--------|---------------|----------|
+| **Clocking Blocks** | NOT IMPLEMENTED | ~50 sv-tests (Ch14 0%) | HIGH - sv-tests |
+| **Z3 Installation** | Z3_LIBRARIES-NOTFOUND | SVA BMC execution | HIGH - Install needed |
+| **LLHD Process Interpreter** | Plan ready | circt-sim behavioral | HIGH - Critical |
+| **RandSequence** | NOT IMPLEMENTED | ~30 sv-tests | MEDIUM |
+| **SequenceWithMatch** | NOT IMPLEMENTED | ~25 sv-tests | MEDIUM |
+| **TaggedUnion** | NOT IMPLEMENTED | ~20 sv-tests | MEDIUM |
+| **clocked_assert lowering** | Missing pass | circt-bmc with clocked props | MEDIUM |
+| **4-State (X/Z)** | NOT IMPLEMENTED | Many tests | HIGH |
+| **Signal Strengths** | NOT IMPLEMENTED | 37 verilator tests | MEDIUM |
+
+### Test Suite Coverage (Verified Iteration 30)
+
+| Test Suite | Total Tests | Pass Rate | Notes |
+|------------|-------------|-----------|-------|
+| **sv-tests** | 989 (non-UVM) | **72.1%** (713/989) | Parsing/elaboration |
+| **mbit AVIP globals** | 8 packages | **100%** (8/8) | All work |
+| **mbit AVIP interfaces** | 8 interfaces | **75%** (6/8) | 2 source issues |
+| **mbit AVIP HVL** | 8 packages | **0%** | Requires UVM lib |
+| **verilator-verification** | 154 | **~60%** | SVA tests improved |
+
+### sv-tests Detailed Analysis
+
+**Strongest Chapters** (>80%):
+- Chapter 11 (Operators): 87% pass
+- Chapter 5 (Lexical): 86% pass
+- Chapter 13 (Tasks/Functions): 86% pass
+- Chapter 20 (I/O Formatting): 83% pass
+
+**Weakest Chapters** (<50%):
+- Chapter 14 (Clocking Blocks): 0% pass - NOT IMPLEMENTED
+- Chapter 18 (Random/Constraints): 25% pass - RandSequence missing
+- Chapter 21 (I/O System Tasks): 37% pass - VcdDump missing
+
+**Top Error Categories** (by test count):
+1. ClockingBlock - 0% of Ch14 tests pass
+2. RandSequence - randsequence statement not supported
+3. SequenceWithMatch - sequence match patterns
+4. TaggedUnion - tagged union types
+5. EmptyArgument - empty function arguments
+
+### SVA Functions Status (Iteration 28-29)
+
+| Function | ImportVerilog | SVAToLTL | VerifToSMT | Status |
+|----------|---------------|----------|------------|--------|
+| $sampled | ✅ | ✅ | ✅ | WORKING |
+| $past | ✅ | ✅ | ✅ | WORKING |
+| $rose | ✅ | ✅ | ✅ | WORKING |
+| $fell | ✅ | ✅ | ✅ | WORKING |
+| $stable | ✅ | ✅ | ✅ | WORKING |
+| $changed | ✅ | ✅ | ✅ | WORKING |
+| Sequences | ✅ | ✅ | ? | Needs testing |
+| Properties | ✅ | ✅ | ? | Needs testing |
+
+### Z3 Linking Fix Options
+
+1. **Quick Fix**: Use `--shared-libs=/path/to/libz3.so` at runtime
+2. **CMake Fix**: Add Z3 to target_link_libraries in circt-bmc
+3. **Auto-detect**: Store Z3 path at build time, inject at runtime
+
+---
+
 ## Features Completed
 
 ### Class Support
@@ -623,6 +820,13 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+
+### Iteration 29
+- VerifToSMT `bmc.final` fixes - proper assertion hoisting and final-only checking
+- ReconcileUnrealizedCastsPass in circt-bmc pipeline
+- BVConstantOp argument order fix (value, width)
+- Clock counting timing fix (before region conversion)
+- Proper rewriter.eraseOp() in conversion patterns
 
 ### Iteration 28
 - `235700509` - [Docs] CHANGELOG update for Iteration 28
