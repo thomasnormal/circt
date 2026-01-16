@@ -15,7 +15,17 @@
 | array.size | f18154abb | 349 | ✅ Fixed |
 | vtable.load_method | e0df41cec | 4764 | ✅ Fixed |
 | getIntOrFloatBitWidth crash | 8911370be | - | ✅ Fixed |
-| data layout crash | - | - | 🔴 Next |
+| data layout crash | 2933eb854 | - | ✅ Fixed |
+| assoc array variable | - | 13 | 🔴 Next |
+
+### Data Layout Crash Fix (2933eb854)
+- **convertToLLVMType helper**: Recursively converts hw.struct/array/union to pure LLVM types
+- **Class/interface structs**: Applied to resolveClassStructBody() and resolveInterfaceStructBody()
+- **Root cause**: hw.struct types don't provide LLVM DataLayout information
+
+### ImportVerilog Tests (65eafb0de)
+- **All tests passing**: 30/30 ImportVerilog tests (was 16/30)
+- **Fixes**: Type prefix patterns, error messages, CHECK ordering, feature behavior changes
 
 ### getIntOrFloatBitWidth Crash Fix (8911370be)
 - **Type-safe helper**: Added `getTypeSizeInBytes()` using `hw::getBitWidth()` for safe type handling
