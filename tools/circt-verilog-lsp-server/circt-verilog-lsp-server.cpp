@@ -18,6 +18,8 @@
 #include "llvm/Support/LSP/Transport.h"
 #include "llvm/Support/Program.h"
 
+#include <cstdlib>
+
 using namespace llvm::lsp;
 
 int main(int argc, char **argv) {
@@ -80,6 +82,17 @@ int main(int argc, char **argv) {
       "command-file", llvm::cl::desc("Alias for -C"),
       llvm::cl::aliasopt(commandFiles), llvm::cl::NotHidden};
 
+  //===--------------------------------------------------------------------===//
+  // UVM support
+  //===--------------------------------------------------------------------===//
+
+  llvm::cl::opt<std::string> uvmPath{
+      "uvm-path",
+      llvm::cl::desc("Path to UVM library source directory (e.g., ~/uvm-core/src). "
+                     "If not specified, UVM_HOME environment variable will be checked."),
+      llvm::cl::value_desc("directory"),
+      llvm::cl::init("")};
+
   //===------------------------------------------------------------------===//
   // Debounce tuning
   //===------------------------------------------------------------------===//
@@ -134,9 +147,16 @@ int main(int argc, char **argv) {
   llvm::lsp::JSONTransport transport(stdin, llvm::outs(), inputStyle,
                                      prettyPrint);
 
+  // Resolve UVM path: prefer command line, then environment variable.
+  std::string resolvedUvmPath = uvmPath;
+  if (resolvedUvmPath.empty()) {
+    if (const char *envUvm = std::getenv("UVM_HOME"))
+      resolvedUvmPath = std::string(envUvm) + "/src";
+  }
+
   // Configure the servers and start the main language server.
   circt::lsp::VerilogServerOptions options(libDirs, sourceLocationIncludeDirs,
-                                           commandFiles);
+                                           commandFiles, resolvedUvmPath);
   circt::lsp::LSPServerOptions lspOptions(noDebounce, debounceMinMs,
                                           debounceMaxMs);
   return failed(
