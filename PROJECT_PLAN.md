@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 28)
+## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 28 COMPLETE)
 
 **Test Commands**:
 ```bash
@@ -23,6 +23,16 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 # Exit code: 0 (no errors)
 ```
 
+**Iteration 28 Commits**:
+- `7d5391552` - $onehot/$onehot0 system calls
+- `2830654d4` - $countbits system call
+- `4704320af` - $sampled/$past/$changed for SVA assertions
+- `25cd3b6a2` - Direct interface member access
+- `12d75735d`, `110fc6caf` - Test fixes and documentation
+- `47c5a7f36` - SVAToLTL comprehensive tests
+- `ecabb4492` - VerifToSMT comprehensive tests
+- `235700509` - CHANGELOG update
+
 **Fork**: https://github.com/thomasnormal/circt (synced with upstream)
 
 **Current Blockers / Limitations** (Post-MooreToCore):
@@ -33,7 +43,13 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 5. **System calls** ✅ $countones IMPLEMENTED - $clog2 and some others still needed
 6. **UVM reg model** ⚠️ CLASS HIERARCHY ISSUE - uvm_reg_map base class mismatch
 
-**AVIP Testing Results** (all 6 AVIPs tested):
+**AVIP Testing Results** (Iteration 28 - comprehensive validation):
+
+| Component Type | Pass Rate | Notes |
+|----------------|-----------|-------|
+| Global packages | 8/8 (100%) | All package files work |
+| Interfaces | 7/9 (78%) | JTAG/I2S fail due to source issues, not CIRCT bugs |
+
 | AVIP | Step 1 (Moore IR) | Step 2 (MooreToCore) | Notes |
 |------|------------------|---------------------|-------|
 | APB | ✅ PASS | ✅ PASS | Works without UVM |
@@ -41,7 +57,14 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | UART | ✅ PASS | ✅ PASS | Works without UVM |
 | SPI | ✅ PASS | ✅ PASS | Works without UVM |
 | AHB | ✅ PASS | ✅ PASS | Works without UVM |
-| AXI4 | ✅ PASS | Not tested | Works without UVM |
+| AXI4 | ✅ PASS | ✅ PASS | Works without UVM |
+
+**MAJOR MILESTONE (Iteration 28)**:
+- **SVA assertion functions** ✅ COMPLETE - $sampled, $past (with delay), $changed, $stable, $rose, $fell all implemented
+- **System calls expanded** ✅ COMPLETE - $onehot, $onehot0, $countbits added
+- **Direct interface member access** ✅ FIXED - Hierarchical name resolution for interface.member syntax
+- **Test coverage improved** ✅ COMPLETE - SVAToLTL: 3 new test files, VerifToSMT: comprehensive tests added
+- **AVIP validation** ✅ COMPLETE - Global packages 100%, Interfaces 78% (failures are source issues)
 
 **MAJOR MILESTONE (Iteration 26)**:
 - **Upstream merge** ✅ COMPLETE - Merged 21 upstream commits, resolved 4 conflicts
@@ -120,7 +143,7 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 | **Assoc Arrays** | Int keys work | All key types + iterators | ✅ String keys fixed |
 | **Randomization** | Range constraints work | rand/randc, constraints | ⚠️ ~59% working |
 | **Coverage** | Coverage dialect exists | Full functional coverage | ⚠️ Partial |
-| **Assertions** | Basic SVA | Full SVA | ✅ SVA dialect |
+| **Assertions** | SVA functions complete | Full SVA | ✅ $sampled/$past/$changed/$stable/$rose/$fell |
 | **DPI/VPI** | Stub returns (0/empty) | Full support | ⚠️ 22 funcs analyzed, stubs work |
 | **MooreToCore** | All 9 AVIPs lower | Full UVM lowering | ✅ Complete |
 
@@ -189,28 +212,32 @@ Currently it:
 
 **Priority**: CRITICAL - Required for behavioral simulation
 
-### Track B: Direct Interface Member Access 🎯 ITERATION 28
-**Status**: 🟡 MEDIUM PRIORITY
+### Track B: Direct Interface Member Access 🎯 ITERATION 28 - FIXED
+**Status**: 🟢 COMPLETE (commit 25cd3b6a2)
 **Problem**: "unknown hierarchical name" for direct (non-virtual) interface member access
-**Discovery** (Iteration 27): virtual interface access works, but direct interface instances have scoping issues
-**What's Needed**:
-- Fix hierarchical name resolution for interface.member syntax
-- May need interface elaboration pass
+**Resolution**: Fixed hierarchical name resolution for interface.member syntax
+**Verified**: Works in AVIP interface tests
 **Files**: `lib/Conversion/ImportVerilog/`
-**Priority**: MEDIUM - Affects some testbenches
+**Priority**: DONE
 
-### Track C: System Call Expansion 🎯 ITERATION 28
-**Status**: 🟢 GOOD PROGRESS
-**What's Done** (Iteration 27):
+### Track C: System Call Expansion 🎯 ITERATION 28 - COMPLETE
+**Status**: 🟢 ALL SVA FUNCTIONS IMPLEMENTED
+**What's Done** (Iteration 28):
 - $onehot, $onehot0 IMPLEMENTED (commit 7d5391552)
+- $countbits IMPLEMENTED (commit 2830654d4) - count specific bit values
 - $countones working (llvm.intr.ctpop)
 - $clog2, $isunknown already implemented
+- **SVA assertion functions** (commit 4704320af):
+  - $sampled - sample value in observed region
+  - $past (with delay parameter) - previous cycle value
+  - $changed - value changed from previous cycle
+  - $stable - value unchanged from previous cycle
+  - $rose - positive edge detection
+  - $fell - negative edge detection
 **What's Needed**:
-- $countbits - count specific bit values
-- $sampled - for assertions
-- $past - for assertions
-**Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`
-**Priority**: MEDIUM - Incrementally add as needed
+- Additional system calls as discovered through testing
+**Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`, `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+**Priority**: LOW - Core SVA functions complete
 
 ### Track D: Coverage Runtime & UVM APIs 🎯 ITERATION 28 - RESEARCH COMPLETE
 **Status**: 🟡 DOCUMENTED - Infrastructure exists, event sampling gap identified
@@ -280,10 +307,28 @@ Currently it:
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
 
-### Iteration 28 Results - TEST VALIDATION
-- **Track D**: ✅ ImportVerilog test validation - dpi.sv test fixed (CHECK ordering issue)
-- **Limitation Documented**: Tasks with clocking events referencing module-level variables (region isolation)
-- **Status**: 38/38 ImportVerilog tests now pass (100%)
+### Iteration 28 Results - COMPREHENSIVE UPDATE
+**Commits**:
+- `7d5391552` - $onehot/$onehot0 system calls
+- `2830654d4` - $countbits system call
+- `4704320af` - $sampled/$past/$changed for SVA assertions
+- `25cd3b6a2` - Direct interface member access fix
+- `12d75735d`, `110fc6caf` - Test fixes and documentation
+- `47c5a7f36` - SVAToLTL comprehensive tests (3 new test files)
+- `ecabb4492` - VerifToSMT comprehensive tests
+- `235700509` - CHANGELOG update
+
+**AVIP Testing Results**:
+- Global packages: 8/8 pass (100%)
+- Interfaces: 7/9 pass (78%) - JTAG/I2S fail due to source issues, not CIRCT bugs
+
+**SVA Assertion Functions** - All implemented:
+- $sampled, $past (with delay), $changed, $stable, $rose, $fell
+
+**Test Coverage Improved**:
+- SVAToLTL: 3 new test files added
+- VerifToSMT: comprehensive tests added
+- ImportVerilog: 38/38 tests pass (100%)
 
 ### Iteration 27 Results - KEY DISCOVERIES
 - **$onehot/$onehot0**: ✅ IMPLEMENTED (commit 7d5391552) - lowers to llvm.intr.ctpop == 1 / <= 1
@@ -578,6 +623,18 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+
+### Iteration 28
+- `235700509` - [Docs] CHANGELOG update for Iteration 28
+- `ecabb4492` - [Tests] VerifToSMT comprehensive tests
+- `47c5a7f36` - [Tests] SVAToLTL comprehensive tests (3 new files)
+- `12d75735d`, `110fc6caf` - [Tests] Test fixes and documentation
+- `25cd3b6a2` - [ImportVerilog] Direct interface member access fix
+- `4704320af` - [ImportVerilog] $sampled/$past/$changed/$stable/$rose/$fell for SVA
+- `2830654d4` - [ImportVerilog] $countbits system call
+- `7d5391552` - [ImportVerilog] $onehot/$onehot0 system calls
+
+### Earlier
 - `6f8f531e6` - [MooreToCore] Add vtable fallback for classes without vtable segments
 - `59ccc8127` - [MooreToCore] Fix StructExtract/StructCreate for dynamic types
 - `d1b870e5e` - [ImportVerilog] Add DPI tool info and fix interface task-to-task calls
