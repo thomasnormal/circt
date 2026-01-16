@@ -60,29 +60,35 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Test AVIP Packages with Full Pipeline
+### Track A: Interface Port Rvalue Handling
 **Status**: 🟡 IN PROGRESS
-**Task**: Test AVIP packages through full parsing + MooreToCore pipeline
-**Files**: ~/mbit/*_avip/src/env/*.sv
-**Next**: Run AVIP packages through circt-verilog | circt-opt -convert-moore-to-core
+**Task**: Fix interface port rvalue handling for BFM parsing
+**Files**: lib/Conversion/ImportVerilog/
+**Next**: Handle interface port expressions like `preset_n` as rvalues
 
-### Track B: AVIP BFM Integration
+### Track B: Expand AVIP Coverage
 **Status**: 🟡 IN PROGRESS
-**Task**: Test BFM components with UVM now that RefType crash is fixed
-**Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
-**Next**: Run BFM files through pipeline
+**Task**: Fix remaining AVIP parsing issues (JTAG, SPI, UART)
+**Files**: ~/mbit/*_avip/
+**Next**: Investigate source-level fixes needed for AVIPs
 
-### Track C: Explore Remaining Runtime Gaps
+### Track C: DPI-C Runtime Implementation
 **Status**: 🟡 IN PROGRESS
-**Task**: Identify what's still missing for actual simulation
+**Task**: Implement DPI-C import stubs for UVM runtime
 **Files**: lib/Conversion/MooreToCore/
-**Next**: Check for missing ops in queue/class handling
+**Next**: Add actual DPI-C function implementations or stubs
 
-### Track D: Add Unit Tests for StructExtractRef Fix
+### Track D: Queue Global Variable Lowering
 **Status**: 🟡 IN PROGRESS
-**Task**: Add MLIR tests for structs with dynamic fields
-**Files**: test/Conversion/MooreToCore/
-**Next**: Create test file for StructExtractRefOp with strings
+**Task**: Implement queue global variable lowering in MooreToCore
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
+**Next**: Add conversion pattern for queue-typed globals
+
+### Previous Track Results (Iteration 9)
+- **Track A**: ✅ 5/9 AVIPs pass full pipeline (APB, AHB, AXI4, I2S, I3C) - JTAG/SPI/UART have source issues
+- **Track B**: ⚠️ BFM parsing blocked on interface port rvalue handling (`preset_n` not recognized)
+- **Track C**: ✅ Runtime gaps documented - DPI-C stubbed, randomization/covergroups not implemented
+- **Track D**: ✅ Unit test for StructExtractRefOp committed (99b4fea86)
 
 ### Previous Track Results (Iteration 8)
 - **Track A**: ✅ RefType cast crash fixed (5dd8ce361) - StructExtractRefOp now uses GEP for structs with dynamic fields
@@ -286,6 +292,7 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `99b4fea86` - [MooreToCore] Add tests for StructExtractRefOp with dynamic fields
 - `5dd8ce361` - [MooreToCore] Fix RefType cast crashes for structs with dynamic fields
 - `f4e1cc660` - [ImportVerilog] Add virtual interface assignment support
 - `14bf13ada` - [MooreToCore] Add StringReplicateOp lowering
