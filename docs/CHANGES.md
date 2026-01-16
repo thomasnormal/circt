@@ -1,5 +1,60 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 15: AVIP Validation & Simulation Pipeline Research
+
+**Status**: All AVIPs validated through MooreToCore. Simulation pipeline research complete.
+
+### Track A: APB/AHB/AXI4-Lite AVIP Validation (ac2c195)
+
+**Result**: All three AVIPs pass with **0 errors**
+
+| AVIP | Files Tested | Lines of SV Code | Errors |
+|------|-------------|------------------|--------|
+| APB AVIP | 77 | 6,295 | **0** |
+| AHB AVIP | 76 | 6,705 | **0** |
+| AXI4-Lite AVIP | 436 | 43,378 | **0** |
+| **Total** | **589** | **56,378** | **0** |
+
+### Track B: JTAG Timescale Issue Investigation (a2d198f)
+
+**Root Cause**: Mixed `timescale directives across files
+- 9 JTAG files have `timescale 1ns/1ps` directives (all in hdlTop/)
+- 64 JTAG files have no timescale directive
+- SystemVerilog requires consistent timescale when any file has one
+
+**Solution**: Use `-timescale "1ns/1ps"` flag for JTAG and UART AVIPs
+
+**Affected AVIPs**:
+| AVIP | Files with `timescale | Needs Flag |
+|------|---------------------|------------|
+| jtag_avip | 9 | Yes |
+| uart_avip | 1 | Yes |
+| All others | 0 | No |
+
+### Track C: circt-sim Pipeline Research (a5278f5)
+
+**Available Simulation Tools**:
+| Tool | Purpose |
+|------|---------|
+| circt-sim | Event-driven simulation with IEEE 1800 scheduling |
+| arcilator | Compiled simulation (JIT/AOT) |
+
+**Pipeline Status**:
+- `circt-verilog` -> Moore IR ✓
+- `circt-opt -convert-moore-to-core` -> HW/LLHD/Sim IR ✓
+- `circt-sim` -> Runs simulation ✓ (VCD output works)
+
+**Current Limitation**: `sim.proc.print` operations don't produce visible output yet
+
+**Two Simulation Paths**:
+1. **Event-driven (circt-sim)**: Works with LLHD process semantics
+2. **Compiled (arcilator)**: Needs structural HW/Seq IR (additional passes required)
+
+### Commits This Iteration
+- `ea93ae0c4`: Add additional tests for realtobits/bitstoreal in basic.mlir
+
+---
+
 ## January 16, 2026 - Iteration 14: UVM MooreToCore 100% COMPLETE!
 
 **Status**: UVM MooreToCore conversion now achieves 100% success with ZERO errors!
