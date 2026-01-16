@@ -106,6 +106,15 @@ int64_t __moore_queue_pop_front(MooreQueue *queue, int64_t element_size);
 void *__moore_queue_sort(void *queue, int64_t elem_size,
                          int (*compare)(const void *, const void *));
 
+/// Slice a queue with an inclusive range [start, end].
+/// @param queue Pointer to the queue structure
+/// @param start Start index (inclusive)
+/// @param end End index (inclusive)
+/// @param element_size Size of each element in bytes
+/// @return A new queue containing the selected slice
+MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start, int64_t end,
+                               int64_t element_size);
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//
@@ -560,6 +569,84 @@ double __moore_covergroup_get_coverage(void *cg);
 ///
 /// This function should be called at the end of simulation (e.g., in $finish).
 void __moore_coverage_report(void);
+
+/// Coverage bin types for explicit bin definitions.
+/// These types correspond to SystemVerilog bin categories.
+enum MooreBinType {
+  MOORE_BIN_VALUE = 0,     ///< Single value bin: bins x = {5};
+  MOORE_BIN_RANGE = 1,     ///< Range bin: bins x = {[0:15]};
+  MOORE_BIN_WILDCARD = 2,  ///< Wildcard bin (future): bins x = {4'b1???};
+  MOORE_BIN_TRANSITION = 3 ///< Transition bin (future): bins x = (1 => 2);
+};
+
+/// Coverage bin definition structure.
+/// @member name Name of the bin
+/// @member type Type of bin (value, range, wildcard, transition)
+/// @member low Lower bound of range (or single value for value bins)
+/// @member high Upper bound of range (same as low for value bins)
+/// @member hit_count Number of times this bin was hit
+typedef struct {
+  const char *name;
+  int32_t type;
+  int64_t low;
+  int64_t high;
+  int64_t hit_count;
+} MooreCoverageBin;
+
+/// Initialize a coverpoint with explicit bin definitions.
+/// Sets up a coverpoint with named bins for precise coverage tracking.
+/// This provides finer-grained coverage than auto bins.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint to initialize
+/// @param name Name of the coverpoint (for reporting)
+/// @param bins Array of bin definitions
+/// @param num_bins Number of bins in the array
+void __moore_coverpoint_init_with_bins(void *cg, int32_t cp_index,
+                                       const char *name,
+                                       MooreCoverageBin *bins,
+                                       int32_t num_bins);
+
+/// Add a single bin to an existing coverpoint.
+/// Can be used to dynamically add bins after initialization.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the bin
+/// @param bin_type Type of bin (see MooreBinType)
+/// @param low Lower bound of the bin range
+/// @param high Upper bound of the bin range
+void __moore_coverpoint_add_bin(void *cg, int32_t cp_index,
+                                const char *bin_name, int32_t bin_type,
+                                int64_t low, int64_t high);
+
+/// Get the hit count for a specific bin.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_index Index of the bin
+/// @return Number of times the bin was hit
+int64_t __moore_coverpoint_get_bin_hits(void *cg, int32_t cp_index,
+                                        int32_t bin_index);
+
+/// Write a JSON coverage report to a file.
+/// Outputs coverage data in JSON format suitable for post-processing.
+/// The JSON includes covergroups, coverpoints, bins, and all hit data.
+///
+/// @param filename Path to the output file (null-terminated string)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_report_json(const char *filename);
+
+/// Write a JSON coverage report string to stdout.
+/// Useful for debugging and piping to other tools.
+void __moore_coverage_report_json_stdout(void);
+
+/// Get coverage data as a JSON string.
+/// Allocates and returns a JSON string with all coverage data.
+/// Caller is responsible for freeing the returned string with __moore_free.
+///
+/// @return Allocated JSON string, or NULL on failure
+char *__moore_coverage_get_json(void);
 
 //===----------------------------------------------------------------------===//
 // Constraint Solving Operations

@@ -198,6 +198,40 @@ extern "C" int64_t __moore_queue_pop_front(MooreQueue *queue,
   return result;
 }
 
+extern "C" MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start,
+                                          int64_t end, int64_t element_size) {
+  MooreQueue result = {nullptr, 0};
+  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0)
+    return result;
+
+  int64_t len = queue->len;
+  if (start < 0)
+    start = 0;
+  if (end < 0)
+    return result;
+  if (start >= len)
+    return result;
+  if (end >= len)
+    end = len - 1;
+  if (end < start)
+    return result;
+
+  int64_t sliceLen = end - start + 1;
+  if (sliceLen <= 0)
+    return result;
+
+  void *data = std::malloc(sliceLen * element_size);
+  if (!data)
+    return result;
+
+  std::memcpy(data,
+              static_cast<char *>(queue->data) + start * element_size,
+              sliceLen * element_size);
+  result.data = data;
+  result.len = sliceLen;
+  return result;
+}
+
 extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
                                     int (*compare)(const void *, const void *)) {
   auto *q = static_cast<MooreQueue *>(queue);
@@ -1780,6 +1814,11 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
   std::free(covergroup);
 }
 
+// Forward declaration for explicit bin update helper
+namespace {
+void updateExplicitBinsHelper(MooreCoverpoint *cp, int64_t value);
+} // namespace
+
 extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
                                            int64_t value) {
   auto *covergroup = static_cast<MooreCovergroup *>(cg);
@@ -1804,6 +1843,9 @@ extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
   if (trackerIt != coverpointTrackers.end()) {
     trackerIt->second.valueCounts[value]++;
   }
+
+  // Update explicit bins if present
+  updateExplicitBinsHelper(cp, value);
 }
 
 extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
@@ -1922,6 +1964,383 @@ extern "C" void __moore_coverage_report(void) {
 
   std::printf("=================================================\n");
 }
+
+//===----------------------------------------------------------------------===//
+// Explicit Bins Support
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Structure to store explicit bin data for a coverpoint.
+/// Stored separately to maintain backward compatibility with the C API.
+struct ExplicitBinData {
+  std::vector<MooreCoverageBin> bins;
+};
+
+/// Map from coverpoint to its explicit bin data.
+thread_local std::map<MooreCoverpoint *, ExplicitBinData> explicitBinData;
+
+} // anonymous namespace
+
+extern "C" void __moore_coverpoint_init_with_bins(void *cg, int32_t cp_index,
+                                                   const char *name,
+                                                   MooreCoverageBin *bins,
+                                                   int32_t num_bins) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  // Allocate a new coverpoint
+  auto *cp = static_cast<MooreCoverpoint *>(std::malloc(sizeof(MooreCoverpoint)));
+  if (!cp)
+    return;
+
+  // Initialize the coverpoint with explicit bins
+  cp->name = name;
+  cp->num_bins = num_bins;
+  cp->hits = 0;
+  cp->min_val = INT64_MAX;
+  cp->max_val = INT64_MIN;
+
+  // Copy bins to internal storage
+  if (num_bins > 0 && bins) {
+    // Allocate hit count array (legacy format for backward compatibility)
+    cp->bins = static_cast<int64_t *>(std::calloc(num_bins, sizeof(int64_t)));
+
+    // Store explicit bin data with names and ranges
+    ExplicitBinData binData;
+    binData.bins.reserve(num_bins);
+    for (int32_t i = 0; i < num_bins; ++i) {
+      MooreCoverageBin bin = bins[i];
+      bin.hit_count = 0; // Initialize hit count
+      binData.bins.push_back(bin);
+    }
+    explicitBinData[cp] = std::move(binData);
+  } else {
+    cp->bins = nullptr;
+  }
+
+  // Store the coverpoint in the covergroup
+  covergroup->coverpoints[cp_index] = cp;
+
+  // Initialize the value tracker for this coverpoint
+  coverpointTrackers[cp] = CoverpointTracker();
+}
+
+extern "C" void __moore_coverpoint_add_bin(void *cg, int32_t cp_index,
+                                            const char *bin_name,
+                                            int32_t bin_type, int64_t low,
+                                            int64_t high) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  // Create the new bin
+  MooreCoverageBin newBin;
+  newBin.name = bin_name;
+  newBin.type = bin_type;
+  newBin.low = low;
+  newBin.high = high;
+  newBin.hit_count = 0;
+
+  // Add to explicit bin data
+  auto it = explicitBinData.find(cp);
+  if (it == explicitBinData.end()) {
+    ExplicitBinData binData;
+    binData.bins.push_back(newBin);
+    explicitBinData[cp] = std::move(binData);
+  } else {
+    it->second.bins.push_back(newBin);
+  }
+
+  // Update the legacy bins array
+  int32_t newNumBins = cp->num_bins + 1;
+  int64_t *newBins =
+      static_cast<int64_t *>(std::realloc(cp->bins, newNumBins * sizeof(int64_t)));
+  if (newBins) {
+    newBins[cp->num_bins] = 0; // Initialize new bin hit count
+    cp->bins = newBins;
+    cp->num_bins = newNumBins;
+  }
+}
+
+extern "C" int64_t __moore_coverpoint_get_bin_hits(void *cg, int32_t cp_index,
+                                                    int32_t bin_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 0;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp || bin_index < 0 || bin_index >= cp->num_bins)
+    return 0;
+
+  // Check explicit bin data first
+  auto it = explicitBinData.find(cp);
+  if (it != explicitBinData.end() && bin_index < (int32_t)it->second.bins.size()) {
+    return it->second.bins[bin_index].hit_count;
+  }
+
+  // Fall back to legacy bins array
+  if (cp->bins)
+    return cp->bins[bin_index];
+
+  return 0;
+}
+
+//===----------------------------------------------------------------------===//
+// JSON Coverage Reporting
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Helper to escape a string for JSON output.
+std::string jsonEscapeString(const char *str) {
+  if (!str)
+    return "null";
+
+  std::string result = "\"";
+  for (const char *p = str; *p; ++p) {
+    switch (*p) {
+    case '"':
+      result += "\\\"";
+      break;
+    case '\\':
+      result += "\\\\";
+      break;
+    case '\n':
+      result += "\\n";
+      break;
+    case '\r':
+      result += "\\r";
+      break;
+    case '\t':
+      result += "\\t";
+      break;
+    default:
+      if (static_cast<unsigned char>(*p) < 32) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "\\u%04x",
+                      static_cast<unsigned char>(*p));
+        result += buf;
+      } else {
+        result += *p;
+      }
+    }
+  }
+  result += "\"";
+  return result;
+}
+
+/// Generate JSON coverage report as a string.
+std::string generateCoverageJson() {
+  std::string json = "{\n";
+  json += "  \"coverage_report\": {\n";
+  json += "    \"version\": \"1.0\",\n";
+  json += "    \"generator\": \"circt-moore-runtime\",\n";
+  json += "    \"covergroups\": [\n";
+
+  bool firstCg = true;
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    if (!firstCg)
+      json += ",\n";
+    firstCg = false;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+
+    json += "      {\n";
+    json += "        \"name\": " + jsonEscapeString(cg->name) + ",\n";
+    json += "        \"coverage_percent\": " + std::to_string(cgCoverage) + ",\n";
+    json += "        \"num_coverpoints\": " + std::to_string(cg->num_coverpoints) + ",\n";
+    json += "        \"coverpoints\": [\n";
+
+    bool firstCp = true;
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      if (!firstCp)
+        json += ",\n";
+      firstCp = false;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      auto trackerIt = coverpointTrackers.find(cp);
+      int64_t uniqueVals =
+          (trackerIt != coverpointTrackers.end())
+              ? static_cast<int64_t>(trackerIt->second.valueCounts.size())
+              : 0;
+
+      json += "          {\n";
+      json += "            \"name\": " + jsonEscapeString(cp->name) + ",\n";
+      json += "            \"coverage_percent\": " + std::to_string(cpCoverage) + ",\n";
+      json += "            \"total_hits\": " + std::to_string(cp->hits) + ",\n";
+      json += "            \"unique_values\": " + std::to_string(uniqueVals) + ",\n";
+      json += "            \"min_value\": " + std::to_string(cp->min_val) + ",\n";
+      json += "            \"max_value\": " + std::to_string(cp->max_val) + ",\n";
+
+      // Add explicit bins if present
+      json += "            \"bins\": [\n";
+      auto binIt = explicitBinData.find(cp);
+      if (binIt != explicitBinData.end()) {
+        bool firstBin = true;
+        for (const auto &bin : binIt->second.bins) {
+          if (!firstBin)
+            json += ",\n";
+          firstBin = false;
+
+          const char *binTypeName = "unknown";
+          switch (bin.type) {
+          case MOORE_BIN_VALUE:
+            binTypeName = "value";
+            break;
+          case MOORE_BIN_RANGE:
+            binTypeName = "range";
+            break;
+          case MOORE_BIN_WILDCARD:
+            binTypeName = "wildcard";
+            break;
+          case MOORE_BIN_TRANSITION:
+            binTypeName = "transition";
+            break;
+          }
+
+          json += "              {\n";
+          json += "                \"name\": " + jsonEscapeString(bin.name) + ",\n";
+          json += "                \"type\": \"" + std::string(binTypeName) + "\",\n";
+          json += "                \"low\": " + std::to_string(bin.low) + ",\n";
+          json += "                \"high\": " + std::to_string(bin.high) + ",\n";
+          json += "                \"hit_count\": " + std::to_string(bin.hit_count) + "\n";
+          json += "              }";
+        }
+      }
+      json += "\n            ],\n";
+
+      // Add value histogram (top 10 values by frequency)
+      json += "            \"top_values\": [\n";
+      if (trackerIt != coverpointTrackers.end()) {
+        // Sort values by count
+        std::vector<std::pair<int64_t, int64_t>> sorted;
+        for (const auto &kv : trackerIt->second.valueCounts) {
+          sorted.emplace_back(kv.first, kv.second);
+        }
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto &a, const auto &b) { return a.second > b.second; });
+
+        bool firstVal = true;
+        int count = 0;
+        for (const auto &kv : sorted) {
+          if (count >= 10)
+            break;
+          if (!firstVal)
+            json += ",\n";
+          firstVal = false;
+          json += "              {\"value\": " + std::to_string(kv.first) +
+                  ", \"count\": " + std::to_string(kv.second) + "}";
+          ++count;
+        }
+      }
+      json += "\n            ]\n";
+      json += "          }";
+    }
+
+    json += "\n        ]\n";
+    json += "      }";
+  }
+
+  json += "\n    ]\n";
+  json += "  }\n";
+  json += "}\n";
+
+  return json;
+}
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_coverage_report_json(const char *filename) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  std::string json = generateCoverageJson();
+  std::fwrite(json.c_str(), 1, json.size(), fp);
+  std::fclose(fp);
+
+  return 0;
+}
+
+extern "C" void __moore_coverage_report_json_stdout(void) {
+  std::string json = generateCoverageJson();
+  std::printf("%s", json.c_str());
+}
+
+extern "C" char *__moore_coverage_get_json(void) {
+  std::string json = generateCoverageJson();
+
+  char *result = static_cast<char *>(std::malloc(json.size() + 1));
+  if (!result)
+    return nullptr;
+
+  std::memcpy(result, json.c_str(), json.size() + 1);
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
+// Enhanced Sampling with Explicit Bin Matching
+//===----------------------------------------------------------------------===//
+
+// Override the original sample function to also update explicit bins
+// This is done by updating the coverpoint_sample function behavior
+namespace {
+
+/// Helper to check if a value matches an explicit bin.
+bool matchesBin(const MooreCoverageBin &bin, int64_t value) {
+  switch (bin.type) {
+  case MOORE_BIN_VALUE:
+    return value == bin.low;
+  case MOORE_BIN_RANGE:
+    return value >= bin.low && value <= bin.high;
+  case MOORE_BIN_WILDCARD:
+    // Wildcard matching is future work
+    return false;
+  case MOORE_BIN_TRANSITION:
+    // Transition matching requires state tracking
+    return false;
+  default:
+    return false;
+  }
+}
+
+/// Update explicit bins when a value is sampled.
+/// This is the implementation of the forward-declared helper function.
+void updateExplicitBinsHelper(MooreCoverpoint *cp, int64_t value) {
+  auto it = explicitBinData.find(cp);
+  if (it == explicitBinData.end())
+    return;
+
+  int32_t binIndex = 0;
+  for (auto &bin : it->second.bins) {
+    if (matchesBin(bin, value)) {
+      bin.hit_count++;
+      // Also update legacy bins array
+      if (cp->bins && binIndex < cp->num_bins) {
+        cp->bins[binIndex]++;
+      }
+    }
+    ++binIndex;
+  }
+}
+
+} // anonymous namespace
 
 //===----------------------------------------------------------------------===//
 // Constraint Solving Operations
