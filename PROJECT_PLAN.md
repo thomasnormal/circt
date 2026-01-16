@@ -59,29 +59,35 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Fix Data Layout Crash
+### Track A: AssocArray Variable Lowering
 **Status**: 🔴 BLOCKING
-**Task**: MooreToCore crashes with "neither the scoping op nor the type class provide data layout information for !hw.struct". This happens when class types have mixed hw/llvm types.
+**Task**: MooreToCore fails on `moore.variable` for associative array types. 13 instances in UVM.
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp (VariableOpConversion)
+**Next**: Add associative array handling to VariableOpConversion like queues have.
+
+### Track B: Class Members in Interfaces
+**Status**: 🟡 IN PROGRESS
+**Task**: AVIP BFMs have class instances inside interfaces that aren't accessible via virtual interfaces.
+**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
+**Next**: Extend visitVirtualInterfaceMemberAccess() to handle class properties.
+
+### Track C: StringReplicateOp Lowering
+**Status**: 🟡 IN PROGRESS
+**Task**: Missing MooreToCore conversion pattern for moore.string_replicate operation.
 **Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Investigate data layout handling for mixed hw.struct/llvm types.
+**Next**: Add StringReplicateOpConversion similar to other string ops.
 
-### Track B: Test AVIP BFMs with Virtual Interface Fix
+### Track D: Virtual Interface Assignment
 **Status**: 🟡 IN PROGRESS
-**Task**: Test if AVIP BFMs work now that virtual interface member access is implemented.
-**Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
-**Next**: Test apb_master_driver_bfm.sv with UVM imports.
+**Task**: `vif = interface_instance` assignment not yet supported in ImportVerilog.
+**Files**: lib/Conversion/ImportVerilog/Expressions.cpp
+**Next**: Add support for ArbitrarySymbol expressions in virtual interface context.
 
-### Track C: ImportVerilog Test Fixes
-**Status**: 🟡 IN PROGRESS
-**Task**: Fix remaining ImportVerilog test failures (16/30 passing).
-**Files**: test/Conversion/ImportVerilog/
-**Next**: Update test expectations for changed behavior.
-
-### Track D: Continue MooreToCore Testing
-**Status**: 🟡 IN PROGRESS
-**Task**: Test MooreToCore on individual AVIP components (not full UVM).
-**Files**: ~/mbit/*_avip/
-**Next**: Run --moore-to-core on simple AVIP packages.
+### Previous Track Results (Iteration 6)
+- **Track A**: ✅ Data layout crash fixed (2933eb854) - convertToLLVMType helper
+- **Track B**: ✅ AVIP BFM testing - interfaces pass, BFMs need class members in interfaces
+- **Track C**: ✅ ImportVerilog tests 30/30 passing (65eafb0de)
+- **Track D**: ✅ AVIP packages pass MooreToCore, RTL modules work
 
 ### Previous Track Results (Iteration 5)
 - **Track A**: ✅ getIntOrFloatBitWidth crash fixed (8911370be) - added type-safe helper
