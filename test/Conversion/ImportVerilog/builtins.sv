@@ -282,6 +282,10 @@ function void BitVectorBuiltins(int x, logic [41:0] y);
   dummyF($isunknown(x));
   // CHECK: [[ISUNK_Y:%.+]] = moore.builtin.isunknown [[Y]] : l42
   dummyF($isunknown(y));
+  // CHECK: [[CNT_X:%.+]] = moore.builtin.countones [[X]] : i32
+  dummyA($countones(x));
+  // CHECK: [[CNT_Y:%.+]] = moore.builtin.countones [[Y]] : l42
+  dummyA($countones(y));
 endfunction
 
 // CHECK-LABEL: func.func private @RandomBuiltins(
