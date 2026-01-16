@@ -25,6 +25,5 @@ add_subdirectory(py-split-input-file)
 
 if(CIRCT_SLANG_FRONTEND_ENABLED)
   add_subdirectory(circt-verilog)
-  # TODO: circt-verilog-lsp-server has slang API compatibility issues
-  # add_subdirectory(circt-verilog-lsp-server)
+  add_subdirectory(circt-verilog-lsp-server)
 endif()

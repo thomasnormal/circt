@@ -33,6 +33,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "slang/ast/ASTVisitor.h"
+#include "slang/ast/EvalContext.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
@@ -58,9 +59,13 @@
 #include "LSPDiagnosticClient.h"
 #include "VerilogDocument.h"
 #include "VerilogServerContext.h"
-#include "circt/Analysis/Linting/LintConfig.h"
-#include "circt/Analysis/Linting/LintRules.h"
+// TODO: Re-enable when CIRCTLinting library is available
+// #include "circt/Analysis/Linting/LintConfig.h"
+// #include "circt/Analysis/Linting/LintRules.h"
 #include "circt/Tools/circt-verilog-lsp-server/CirctVerilogLspServerMain.h"
+
+// Define to enable lint integration when CIRCTLinting library is built
+// #define CIRCT_VERILOG_LSP_LINTING_ENABLED
 
 using namespace circt::lsp;
 using namespace llvm;
@@ -68,6 +73,7 @@ using namespace llvm::lsp;
 
 namespace {
 
+#ifdef CIRCT_VERILOG_LSP_LINTING_ENABLED
 /// Convert a lint severity to LSP DiagnosticSeverity.
 llvm::lsp::DiagnosticSeverity
 lintSeverityToLSP(circt::lint::LintSeverity severity) {
@@ -110,9 +116,10 @@ void runLintChecks(const slang::ast::Compilation &compilation,
     lspDiag.severity = lintSeverityToLSP(lintDiag.severity);
     lspDiag.source = "circt-lint";
 
-    // Set the code if available
+    // Note: LLVM's base LSP Diagnostic doesn't have a 'code' field
+    // If lintDiag.code is available, we could append it to the message
     if (lintDiag.code)
-      lspDiag.code = *lintDiag.code;
+      lspDiag.message = "[" + *lintDiag.code + "] " + lspDiag.message;
 
     // Convert location
     int line = sm.getLineNumber(lintDiag.location) - 1;
@@ -152,12 +159,15 @@ void runLintChecks(const slang::ast::Compilation &compilation,
           relatedInfo.location.uri = *uri;
       }
 
-      lspDiag.relatedInformation.push_back(std::move(relatedInfo));
+      if (!lspDiag.relatedInformation)
+        lspDiag.relatedInformation.emplace();
+      lspDiag.relatedInformation->push_back(std::move(relatedInfo));
     }
 
     diagnostics.push_back(std::move(lspDiag));
   }
 }
+#endif // CIRCT_VERILOG_LSP_LINTING_ENABLED
 
 } // namespace
 
@@ -298,7 +308,9 @@ VerilogDocument::VerilogDocument(
     driver.diagEngine.issue(diag);
 
   // Run lint checks and add any additional diagnostics
+#ifdef CIRCT_VERILOG_LSP_LINTING_ENABLED
   runLintChecks(**compilation, *this, mainBufferId, diagnostics);
+#endif
 
   computeLineOffsets(driver.sourceManager.getSourceText(mainBufferId));
 
@@ -708,9 +720,8 @@ static std::string formatSymbolInfo(const slang::ast::Symbol &symbol) {
     // Try to get the value
     auto initExpr = valueSymbol.getInitializer();
     if (initExpr) {
-      auto cv = initExpr->eval(slang::ast::ASTContext(
-          symbol.getParentScope()->asSymbol(),
-          slang::ast::LookupLocation::max));
+      slang::ast::EvalContext evalCtx(symbol);
+      auto cv = initExpr->eval(evalCtx);
       if (cv)
         os << " = " << cv.toString();
     }
@@ -943,14 +954,14 @@ mapSymbolKind(slang::ast::SymbolKind slangKind) {
     return LK::Function;
   case SK::ClassType:
   case SK::ClassProperty:
-  case SK::ClassMethod:
     return LK::Class;
   case SK::InterfacePort:
     return LK::Interface;
-  case SK::Enum:
+  case SK::EnumType:
   case SK::TypeAlias:
     return LK::Enum;
-  case SK::Struct:
+  case SK::PackedStructType:
+  case SK::UnpackedStructType:
     return LK::Struct;
   default:
     return LK::Variable;
@@ -1067,8 +1078,8 @@ public:
         detail = "parameter";
         auto initExpr = param.getInitializer();
         if (initExpr) {
-          auto cv = initExpr->eval(slang::ast::ASTContext(
-              body, slang::ast::LookupLocation::max));
+          slang::ast::EvalContext evalCtx(member);
+          auto cv = initExpr->eval(evalCtx);
           if (cv)
             detail += " = " + std::string(cv.toString());
         }
@@ -1210,16 +1221,16 @@ mapToCompletionKind(slang::ast::SymbolKind slangKind) {
     return CK::Function;
   case SK::ClassType:
   case SK::ClassProperty:
-  case SK::ClassMethod:
     return CK::Class;
   case SK::InterfacePort:
     return CK::Interface;
-  case SK::Enum:
+  case SK::EnumType:
   case SK::TypeAlias:
     return CK::Enum;
   case SK::EnumValue:
     return CK::EnumMember;
-  case SK::Struct:
+  case SK::PackedStructType:
+  case SK::UnpackedStructType:
     return CK::Struct;
   default:
     return CK::Variable;
@@ -1262,8 +1273,8 @@ static std::string getCompletionDetail(const slang::ast::Symbol &symbol) {
     os << "parameter " << formatTypeDescription(param.getType());
     auto initExpr = param.getInitializer();
     if (initExpr) {
-      auto cv = initExpr->eval(slang::ast::ASTContext(
-          symbol.getParentScope()->asSymbol(), slang::ast::LookupLocation::max));
+      slang::ast::EvalContext evalCtx(symbol);
+      auto cv = initExpr->eval(evalCtx);
       if (cv)
         os << " = " << cv.toString();
     }
@@ -1752,24 +1763,24 @@ void VerilogDocument::getCompletions(const llvm::lsp::URIForFile &uri,
     }
 
     // Add module names for instantiation
-    for (const auto &def : (*compilation)->getDefinitions()) {
+    for (const auto *def : (*compilation)->getDefinitions()) {
       if (prefix.empty() ||
-          llvm::StringRef(def.name).starts_with_insensitive(prefix)) {
+          llvm::StringRef(def->name).starts_with_insensitive(prefix)) {
         llvm::lsp::CompletionItem item;
-        item.label = std::string(def.name);
+        item.label = std::string(def->name);
         item.kind = llvm::lsp::CompletionItemKind::Module;
         item.detail = "module definition";
-        item.insertText = std::string(def.name);
+        item.insertText = std::string(def->name);
         item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
         completions.items.push_back(std::move(item));
 
         // Also add an instantiation snippet
         llvm::lsp::CompletionItem instSnippet;
-        instSnippet.label = std::string(def.name) + " (instantiate)";
+        instSnippet.label = std::string(def->name) + " (instantiate)";
         instSnippet.kind = llvm::lsp::CompletionItemKind::Snippet;
         instSnippet.detail = "Module instantiation";
 
-        std::string snippet = std::string(def.name) + " ${1:inst_name} (\n";
+        std::string snippet = std::string(def->name) + " ${1:inst_name} (\n";
         snippet += "  ${0:// connections}\n";
         snippet += ");";
         instSnippet.insertText = snippet;
@@ -1883,21 +1894,21 @@ void VerilogDocument::getCodeActions(
 
   // Add module instantiation template action
   if (succeeded(compilation)) {
-    for (const auto &def : (*compilation)->getDefinitions()) {
+    for (const auto *def : (*compilation)->getDefinitions()) {
       llvm::lsp::CodeAction instantiateAction;
-      instantiateAction.title = "Insert " + std::string(def.name) + " instance";
+      instantiateAction.title = "Insert " + std::string(def->name) + " instance";
       instantiateAction.kind = llvm::lsp::CodeAction::kRefactor;
 
       // Build the instantiation template
-      std::string instTemplate = std::string(def.name) + " inst_" +
-                                 std::string(def.name) + " (\n";
+      std::string instTemplate = std::string(def->name) + " inst_" +
+                                 std::string(def->name) + " (\n";
 
       // Get the ports from the definition
       bool first = true;
       // Try to get ports from the first instance if available
       const auto &root = (*compilation)->getRoot();
       for (auto *inst : root.topInstances) {
-        if (&inst->getDefinition() == &def) {
+        if (&inst->getDefinition() == def) {
           for (const auto *portSym : inst->body.getPortList()) {
             if (const auto *port = portSym->as_if<slang::ast::PortSymbol>()) {
               if (!first)
@@ -2065,7 +2076,10 @@ VerilogDocument::renameSymbol(const llvm::lsp::URIForFile &uri,
   // Sort edits by position (descending) to avoid offset issues when applying
   std::sort(textEdits.begin(), textEdits.end(),
             [](const llvm::lsp::TextEdit &a, const llvm::lsp::TextEdit &b) {
-              return a.range.start > b.range.start;
+              // Compare positions: a > b if a comes after b
+              if (a.range.start.line != b.range.start.line)
+                return a.range.start.line > b.range.start.line;
+              return a.range.start.character > b.range.start.character;
             });
 
   // Remove duplicates
@@ -2170,12 +2184,13 @@ SemanticTokenType mapToSemanticTokenType(slang::ast::SymbolKind kind) {
     return SemanticTokenType::Class;
   case SK::InterfacePort:
     return SemanticTokenType::Interface;
-  case SK::Enum:
+  case SK::EnumType:
   case SK::TypeAlias:
     return SemanticTokenType::Enum;
   case SK::EnumValue:
     return SemanticTokenType::EnumMember;
-  case SK::Struct:
+  case SK::PackedStructType:
+  case SK::UnpackedStructType:
     return SemanticTokenType::Struct;
   default:
     return SemanticTokenType::Variable;
@@ -2387,8 +2402,8 @@ public:
         // Show parameter values
         auto initExpr = param->getInitializer();
         if (initExpr) {
-          auto cv = initExpr->eval(slang::ast::ASTContext(
-              body, slang::ast::LookupLocation::max));
+          slang::ast::EvalContext evalCtx(member);
+          auto cv = initExpr->eval(evalCtx);
           if (cv) {
             auto pos = getPosition(member.location);
             pos.character += member.name.size();
