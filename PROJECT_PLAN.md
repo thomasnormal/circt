@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 Simulation Nearly Complete (January 16, 2026 - Iteration 22)
+## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 23)
 
 **Test Commands**:
 ```bash
@@ -24,19 +24,23 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ```
 
 **Current Blockers / Limitations** (Post-MooreToCore):
-1. **Initial blocks in arcilator** ⚠️ LAST BLOCKER - Need to use `seq.initial` instead of `llhd.process` (solution identified!)
+1. **Complex initial blocks** ⚠️ PARTIAL - Blocks with wait/captured signals use llhd.process fallback
 2. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
 3. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
-4. **Complex constraints** ⚠️ PARTIAL - ~18% need SMT solver (82% now work with soft+range)
+4. **Complex constraints** ⚠️ PARTIAL - ~6% need SMT solver (94% now work!)
 
-**Recently Fixed (Iteration 22)**:
+**MAJOR MILESTONE (Iteration 23)**:
+- **Initial blocks** ✅ FIXED (cabc1ab6e) - Simple initial blocks use seq.initial, work through arcilator!
+- **Multi-range constraints** ✅ FIXED (c8a125501) - ~94% total constraint coverage
+- **End-to-end pipeline** ✅ VERIFIED - SV → Moore → Core → HW → Arcilator all working
+
+**Fixed (Iteration 22)**:
 - **sim.terminate** ✅ FIXED (575768714) - $finish now calls exit(0/1)
-- **Soft constraints** ✅ FIXED (5e573a811) - ~82% of AVIP constraints now work
-- **Initial block solution** ✅ IDENTIFIED - Use seq.initial instead of llhd.process
+- **Soft constraints** ✅ FIXED (5e573a811) - Default value constraints work
 
 **Fixed (Iteration 21)**:
 - **UVM LSP support** ✅ FIXED (d930aad54) - `--uvm-path` flag and `UVM_HOME` env var
-- **Range constraints** ✅ FIXED (2b069ee30) - ~59% of AVIP constraints work
+- **Range constraints** ✅ FIXED (2b069ee30) - Simple range constraints work
 - **Interface symbols** ✅ FIXED (d930aad54) - LSP returns proper interface symbols
 - **sim.proc.print** ✅ FIXED (2be6becf7) - $display works in arcilator
 
@@ -97,18 +101,16 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Initial Block Support 🟡 SOLUTION READY
-**Status**: 🟡 Implementation Ready (Iteration 22)
-**Solution**: Modify MooreToCore to generate `seq.initial` instead of `llhd.process`
-**Why seq.initial**:
-- Path `seq.initial` → `arc.initial` → `_initial` function already exists
-- No arcilator runtime changes needed
-- Handles side effects (printf calls) correctly
+### Track A: Initial Block Support ✅ COMPLETE
+**Status**: ✅ MILESTONE ACHIEVED (Iteration 23)
+**Commit**: cabc1ab6e
 **Implementation**:
-- Change `ProcedureKind::Initial` handling in `MooreToCore.cpp:625-641`
-- Convert `moore.return` → `seq.yield`
-**Next**: Implement the change and test
-**Priority**: HIGH - Last blocker for end-to-end simulation
+- Simple initial blocks → `seq.initial` (works through arcilator!)
+- Complex blocks (wait/captured signals) → `llhd.process` fallback
+- Handles `IsolatedFromAbove` by cloning constants
+**Result**: `$display` and `$finish` in initial blocks work end-to-end!
+**Next**: Consider supporting more complex cases
+**Priority**: LOW - Main use cases work
 
 ### Track B: sim.terminate ✅ IMPLEMENTED
 **Status**: ✅ COMPLETE (Iteration 22)
@@ -120,18 +122,19 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 **Result**: $finish now works correctly in arcilator
 **Next**: Test with full simulation pipeline
 
-### Track C: Randomization ✅ 82% Coverage
-**Status**: ✅ MAJOR PROGRESS (Iteration 22)
-**Commits**: 2b069ee30 (range), 5e573a811 (soft)
-**Coverage**: ~82% of AVIP constraints now work
+### Track C: Randomization ✅ 94% Coverage
+**Status**: ✅ EXCELLENT (Iteration 23)
+**Commits**: 2b069ee30 (range), 5e573a811 (soft), c8a125501 (multi-range)
+**Coverage**: ~94% of AVIP constraints now work!
 | Type | Percentage | Status |
 |------|------------|--------|
 | Range constraints | 59% | ✅ Implemented |
 | Soft defaults | 23% | ✅ Implemented |
-| Inside (multiple) | 12% | 🟡 Pending |
+| Inside (multiple) | 12% | ✅ Implemented |
 | Complex | 6% | ⚠️ Needs SMT |
-**Next**: Implement multi-range inside constraints
-**Priority**: MEDIUM - 82% is good, 94% achievable
+**Validated on**: APB, AHB, AXI4 AVIP constraint patterns
+**Next**: Consider SMT solver for complex constraints
+**Priority**: LOW - 94% is excellent coverage
 
 ### Track D: LSP ✅ All 8 AVIPs Validated
 **Status**: ✅ COMPREHENSIVE VALIDATION (Iteration 22)
@@ -151,6 +154,12 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 23) - BREAKTHROUGH
+- **Track A**: ✅ seq.initial implemented (cabc1ab6e) - Simple initial blocks work through arcilator!
+- **Track B**: ✅ Full pipeline verified - SV → Moore → Core → HW → Arcilator all working
+- **Track C**: ✅ Multi-range constraints (c8a125501) - ~94% total coverage
+- **Track D**: ✅ AVIP constraints validated - APB/AHB/AXI4 patterns tested
 
 ### Previous Track Results (Iteration 22)
 - **Track A**: ✅ sim.terminate implemented (575768714) - $finish now calls exit()
