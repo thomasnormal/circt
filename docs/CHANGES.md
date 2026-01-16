@@ -1,5 +1,80 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 22: sim.terminate + Soft Constraints + Initial Block Research
+
+**Status**: Major simulation progress - sim.terminate implemented, soft constraints working, initial block path identified.
+
+### Track A: sim.terminate Lowering Implemented ✅
+
+**Commit**: 575768714
+
+Added `SimTerminateOpLowering` pattern:
+- `sim.terminate success, quiet` → `exit(0)`
+- `sim.terminate failure, quiet` → `exit(1)`
+- Verbose mode prints message before exit
+
+Simulations can now properly terminate when `$finish` is called.
+
+### Track B: Initial Block Support Research ✅
+
+**Recommendation**: Modify MooreToCore to generate `seq.initial` instead of `llhd.process` for initial blocks.
+
+**Why**: The path `seq.initial` → `arc.initial` → `_initial` function is already well-tested in arcilator. This approach:
+- Leverages existing infrastructure
+- Requires no arcilator runtime changes
+- Handles side effects (function calls) correctly
+- Supports complex control flow via `scf.execute_region`
+
+**Implementation**: Change `ProcedureKind::Initial` handling in `MooreToCore.cpp:625-641`.
+
+### Track C: Soft Constraint Support Implemented ✅
+
+**Commit**: 5e573a811
+
+Soft constraints provide default values: `constraint c { soft value == 42; }`
+
+Changes:
+- Added `is_soft` attribute to `ConstraintExprOp` and `ConstraintInsideOp`
+- Hard constraints override soft constraints
+- Soft values applied when no hard constraint exists
+
+**Constraint Coverage**: ~59% → ~82% (adding soft to existing range support)
+
+### Track D: Comprehensive LSP AVIP Validation ✅
+
+**Tested all 8 AVIPs** with UVM support enabled:
+
+| AVIP | Package | Interface | BFM | Agent |
+|------|---------|-----------|-----|-------|
+| APB  | ✅ 57 | ✅ 15 | ✅ 34 | ❌ |
+| AHB  | ✅ 54 | ✅ 23 | ✅ 51 | ❌ |
+| AXI4 | ✅ 188 | ✅ 49 | ✅ 102 | ❌ |
+| UART | ✅ 44 | ✅ 7 | ✅ 20 | ❌ |
+| SPI  | ✅ 23 | ✅ 15 | ✅ 31 | ❌ |
+| I2S  | ✅ 46 | ✅ 18 | ✅ 41 | ❌ |
+| I3C  | ✅ 50 | ✅ 15 | ✅ 39 | ❌ |
+| JTAG | ✅ 41 | ✅ 9 | ✅ 14 | ❌ |
+
+**Issue**: UVM class files (agents, tests, sequences) return empty when opened standalone - they need package context.
+
+### Commits This Iteration
+
+| Commit | Description |
+|--------|-------------|
+| `575768714` | [ArcToLLVM] Add sim.terminate lowering to exit() |
+| `5e573a811` | [MooreToCore] Add soft constraint support for randomization |
+
+### Next Steps
+
+| Track | Priority | Task |
+|-------|----------|------|
+| A | HIGH | Implement seq.initial for initial blocks in MooreToCore |
+| B | HIGH | Test full pipeline with sim.terminate |
+| C | MEDIUM | Implement multi-range inside constraints |
+| D | LOW | Fix LSP UVM class context issue |
+
+---
+
 ## January 16, 2026 - Iteration 21: UVM LSP + Range Constraints + Interface Support
 
 **Status**: Major LSP improvements, range constraint support, simulation pipeline gaps documented.
