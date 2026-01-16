@@ -3146,21 +3146,32 @@ def ConstraintExprOp
     The expression evaluates to a boolean condition that constrains the
     values of random variables.
 
+    If `is_soft` is set, this is a soft constraint that provides a default
+    value which can be overridden by hard constraints. Soft constraints are
+    only applied when no conflicting hard constraint exists.
+
     Example:
     ```mlir
     moore.constraint.block @c1 {
       %cond = moore.lt %a, %b : i32
       moore.constraint.expr %cond
     }
+
+    // Soft constraint example:
+    moore.constraint.block @soft_c {
+      %eq = moore.eq %value, %const : i32
+      moore.constraint.expr %eq soft
+    }
     ```
 
     See IEEE 1800-2017 Section 18.5.1 "Constraint expressions".
+    See IEEE 1800-2017 Section 18.5.13 "Soft constraints".
   }];
 
-  let arguments = (ins I1:$condition);
+  let arguments = (ins I1:$condition, UnitAttr:$is_soft);
   let results = (outs);
   let assemblyFormat = [{
-    $condition attr-dict
+    $condition (`soft` $is_soft^)? attr-dict
   }];
 }
 
@@ -3300,20 +3311,28 @@ def ConstraintInsideOp
     The ranges array contains pairs of [low, high] values. Single values
     are represented as [value, value].
 
+    If `is_soft` is set, this is a soft constraint that provides default
+    value ranges which can be overridden by hard constraints.
+
     Example:
     ```mlir
     // x inside { 1, [3:5], 7 }
     moore.constraint.inside %x, [[1, 1], [3, 5], [7, 7]] : i8
+
+    // Soft inside constraint (default range, can be overridden)
+    moore.constraint.inside %x, [0, 100] : i32 soft
     ```
 
     See IEEE 1800-2017 Section 18.5.3 "Set membership constraints".
+    See IEEE 1800-2017 Section 18.5.13 "Soft constraints".
   }];
 
   let arguments = (ins AnyType:$variable,
-                       DenseI64ArrayAttr:$ranges);
+                       DenseI64ArrayAttr:$ranges,
+                       UnitAttr:$is_soft);
   let results = (outs);
   let assemblyFormat = [{
-    $variable `,` $ranges `:` type($variable) attr-dict
+    $variable `,` $ranges `:` type($variable) (`soft` $is_soft^)? attr-dict
   }];
   let hasVerifier = 1;
 }

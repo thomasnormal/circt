@@ -7252,6 +7252,17 @@ struct RangeConstraintInfo {
   int64_t maxValue;       // Maximum value (inclusive)
   unsigned fieldIndex;    // Index of the field in the struct
   unsigned bitWidth;      // Bit width of the property
+  bool isSoft = false;    // Whether this is a soft constraint
+};
+
+/// Helper structure to hold extracted soft constraint information.
+/// Soft constraints provide default values that can be overridden by hard
+/// constraints. Pattern: `constraint soft_c { soft value == 42; }`
+struct SoftConstraintInfo {
+  StringRef propertyName; // Name of the constrained property
+  int64_t defaultValue;   // Default value when no hard constraint applies
+  unsigned fieldIndex;    // Index of the field in the struct
+  unsigned bitWidth;      // Bit width of the property
 };
 
 /// Extract simple range constraints from a class declaration.
@@ -7352,12 +7363,127 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         info.maxValue = high;
         info.fieldIndex = fieldIdx;
         info.bitWidth = bitWidth;
+        info.isSoft = insideOp.getIsSoft();
         constraints.push_back(info);
       }
     }
   }
 
   return constraints;
+}
+
+/// Extract soft constraints from a class declaration.
+/// Soft constraints provide default values that are applied when no hard
+/// constraint specifies a value for the property.
+/// Pattern: `constraint soft_c { soft value == 42; }` -> value defaults to 42
+/// Also supports soft inside: `soft value inside {[0:10]}` -> defaults to first
+/// value.
+static SmallVector<SoftConstraintInfo>
+extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
+                       SymbolRefAttr classSym) {
+  SmallVector<SoftConstraintInfo> softConstraints;
+
+  // Build a map from property names to their indices and types
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = 0;
+
+  // Account for type ID field (index 0 in root classes) or base class
+  if (classDecl.getBaseAttr())
+    propIdx = 1;
+  else
+    propIdx = 1; // Type ID is at index 0
+
+  for (auto &op : classDecl.getBody().getOps()) {
+    if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+      propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+      propIdx++;
+    }
+  }
+
+  // Walk through constraint blocks looking for soft constraints
+  for (auto &op : classDecl.getBody().getOps()) {
+    auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+    if (!constraintBlock)
+      continue;
+
+    // Walk the constraint block body looking for soft ConstraintInsideOp
+    // with single-value ranges (representing equality constraints)
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      // Look for soft ConstraintInsideOp with a single value range
+      if (auto insideOp = dyn_cast<ConstraintInsideOp>(constraintOp)) {
+        // Only process soft constraints
+        if (!insideOp.getIsSoft())
+          continue;
+
+        // Get the variable being constrained
+        Value variable = insideOp.getVariable();
+
+        // The variable should be a block argument referencing a property
+        auto blockArg = dyn_cast<BlockArgument>(variable);
+        if (!blockArg)
+          continue;
+
+        // Get the argument index - this corresponds to the order of rand
+        // properties
+        unsigned argIdx = blockArg.getArgNumber();
+
+        // Find the corresponding property by counting rand properties
+        unsigned randPropCount = 0;
+        StringRef propName;
+        Type propType;
+        for (auto &innerOp : classDecl.getBody().getOps()) {
+          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(innerOp)) {
+            if (propDecl.isRandomizable()) {
+              if (randPropCount == argIdx) {
+                propName = propDecl.getSymName();
+                propType = propDecl.getPropertyType();
+                break;
+              }
+              randPropCount++;
+            }
+          }
+        }
+
+        if (propName.empty())
+          continue;
+
+        // Get the ranges array
+        ArrayRef<int64_t> ranges = insideOp.getRanges();
+
+        // For soft constraints, extract the default value
+        // If it's a single value (low == high), use that as default
+        // If it's a range, use the low value as default
+        if (ranges.size() < 2)
+          continue;
+
+        int64_t defaultValue = ranges[0];
+        // If low == high, it's an equality constraint (soft value == X)
+        // If low != high, it's a range, and we use low as default
+
+        // Find the property index and bit width
+        auto it = propertyMap.find(propName);
+        if (it == propertyMap.end())
+          continue;
+
+        unsigned fieldIdx = it->second.first;
+        Type fieldType = it->second.second;
+
+        // Get bit width from the type
+        unsigned bitWidth = 32; // Default
+        if (auto intType = dyn_cast<IntType>(fieldType))
+          bitWidth = intType.getWidth();
+
+        SoftConstraintInfo info;
+        info.propertyName = propName;
+        info.defaultValue = defaultValue;
+        info.fieldIndex = fieldIdx;
+        info.bitWidth = bitWidth;
+        softConstraints.push_back(info);
+      }
+    }
+  }
+
+  return softConstraints;
 }
 
 /// Conversion for moore.randomize -> runtime function call.
@@ -7403,14 +7529,34 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     auto *classDeclSym = mod.lookupSymbol(classSym);
     auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
 
-    // Extract range constraints from the class
+    // Extract range constraints from the class (includes both hard and soft)
     SmallVector<RangeConstraintInfo> rangeConstraints;
+    SmallVector<SoftConstraintInfo> softConstraints;
     if (classDecl) {
       rangeConstraints = extractRangeConstraints(classDecl, cache, classSym);
+      softConstraints = extractSoftConstraints(classDecl, cache, classSym);
     }
 
-    // If we have range constraints, use range-aware randomization for those fields
-    if (!rangeConstraints.empty()) {
+    // Separate hard constraints from soft range constraints
+    SmallVector<RangeConstraintInfo> hardConstraints;
+    llvm::DenseSet<StringRef> hardConstrainedProps;
+    for (const auto &constraint : rangeConstraints) {
+      if (!constraint.isSoft) {
+        hardConstraints.push_back(constraint);
+        hardConstrainedProps.insert(constraint.propertyName);
+      }
+    }
+
+    // Filter soft constraints to only those without hard constraints
+    SmallVector<SoftConstraintInfo> effectiveSoftConstraints;
+    for (const auto &soft : softConstraints) {
+      if (!hardConstrainedProps.contains(soft.propertyName)) {
+        effectiveSoftConstraints.push_back(soft);
+      }
+    }
+
+    // If we have any constraints, use constraint-aware randomization
+    if (!hardConstraints.empty() || !effectiveSoftConstraints.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -7421,35 +7567,83 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                            SymbolRefAttr::get(basicFn),
                            ValueRange{classPtr, classSizeConst});
 
-      // Then, for each range constraint, generate a constrained random value
-      // and store it in the appropriate field
-      auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
-      auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
-                                            "__moore_randomize_with_range",
-                                            rangeFnTy);
+      // Apply hard range constraints - generate constrained random values
+      if (!hardConstraints.empty()) {
+        auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                              "__moore_randomize_with_range",
+                                              rangeFnTy);
 
-      for (const auto &constraint : rangeConstraints) {
-        // Create min/max constants
-        auto minConst = LLVM::ConstantOp::create(
-            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(constraint.minValue));
-        auto maxConst = LLVM::ConstantOp::create(
-            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(constraint.maxValue));
+        for (const auto &constraint : hardConstraints) {
+          // Create min/max constants
+          auto minConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(constraint.minValue));
+          auto maxConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(constraint.maxValue));
 
-        // Call __moore_randomize_with_range(min, max)
-        auto rangeResult = LLVM::CallOp::create(
-            rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
-            ValueRange{minConst, maxConst});
+          // Call __moore_randomize_with_range(min, max)
+          auto rangeResult = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+              ValueRange{minConst, maxConst});
 
-        // Truncate to the field's bit width if needed
-        Type fieldIntTy = IntegerType::get(ctx, constraint.bitWidth);
-        Value truncatedVal = rangeResult.getResult();
-        if (constraint.bitWidth < 64) {
-          truncatedVal = arith::TruncIOp::create(rewriter, loc, fieldIntTy,
-                                                 rangeResult.getResult());
+          // Truncate to the field's bit width if needed
+          Type fieldIntTy = IntegerType::get(ctx, constraint.bitWidth);
+          Value truncatedVal = rangeResult.getResult();
+          if (constraint.bitWidth < 64) {
+            truncatedVal = arith::TruncIOp::create(rewriter, loc, fieldIntTy,
+                                                   rangeResult.getResult());
+          }
+
+          // Get GEP to the field using the property path
+          auto it = structInfo->propertyPath.find(constraint.propertyName);
+          if (it != structInfo->propertyPath.end()) {
+            // Build GEP indices
+            SmallVector<LLVM::GEPArg> gepIndices;
+            gepIndices.push_back(0); // Initial pointer dereference
+            for (unsigned idx : it->second) {
+              gepIndices.push_back(static_cast<int32_t>(idx));
+            }
+
+            // Create GEP to the field
+            auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                                classPtr, gepIndices);
+
+            // Store the constrained random value
+            LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
+          }
+        }
+      }
+
+      // Apply soft constraints - set default values for properties without hard
+      // constraints. Soft constraints provide fallback values that can be
+      // overridden.
+      for (const auto &soft : effectiveSoftConstraints) {
+        // Create the default value constant
+        Type fieldIntTy = IntegerType::get(ctx, soft.bitWidth);
+        Value defaultVal;
+        if (soft.bitWidth <= 64) {
+          auto i64Val = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(soft.defaultValue));
+          if (soft.bitWidth < 64) {
+            defaultVal =
+                arith::TruncIOp::create(rewriter, loc, fieldIntTy, i64Val);
+          } else {
+            defaultVal = i64Val;
+          }
+        } else {
+          // For larger bit widths, just use the low 64 bits
+          auto i64Val = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(soft.defaultValue));
+          defaultVal =
+              arith::ExtSIOp::create(rewriter, loc, fieldIntTy, i64Val);
         }
 
         // Get GEP to the field using the property path
-        auto it = structInfo->propertyPath.find(constraint.propertyName);
+        auto it = structInfo->propertyPath.find(soft.propertyName);
         if (it != structInfo->propertyPath.end()) {
           // Build GEP indices
           SmallVector<LLVM::GEPArg> gepIndices;
@@ -7462,8 +7656,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
                                               classPtr, gepIndices);
 
-          // Store the constrained random value
-          LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
+          // Store the soft constraint default value
+          LLVM::StoreOp::create(rewriter, loc, defaultVal, fieldPtr);
         }
       }
 
