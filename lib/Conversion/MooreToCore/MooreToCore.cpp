@@ -7245,8 +7245,124 @@ struct RandomBIOpConversion : public OpConversionPattern<RandomBIOp> {
   }
 };
 
+/// Helper structure to hold extracted range constraint information.
+struct RangeConstraintInfo {
+  StringRef propertyName; // Name of the constrained property
+  int64_t minValue;       // Minimum value (inclusive)
+  int64_t maxValue;       // Maximum value (inclusive)
+  unsigned fieldIndex;    // Index of the field in the struct
+  unsigned bitWidth;      // Bit width of the property
+};
+
+/// Extract simple range constraints from a class declaration.
+/// Returns a list of range constraints found in ConstraintInsideOp operations.
+/// Only extracts constraints that can be expressed as simple [min, max] ranges.
+static SmallVector<RangeConstraintInfo>
+extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
+                        SymbolRefAttr classSym) {
+  SmallVector<RangeConstraintInfo> constraints;
+
+  // Build a map from property names to their indices and types
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = 0;
+
+  // Account for base class if present (base class is at index 0)
+  if (classDecl.getBaseAttr())
+    propIdx = 1;
+
+  // Also account for type ID field (index 0 in root classes)
+  if (!classDecl.getBaseAttr())
+    propIdx = 1; // Type ID is at index 0
+
+  for (auto &op : classDecl.getBody().getOps()) {
+    if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+      propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+      propIdx++;
+    }
+  }
+
+  // Walk through constraint blocks looking for ConstraintInsideOp
+  for (auto &op : classDecl.getBody().getOps()) {
+    auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+    if (!constraintBlock)
+      continue;
+
+    // Walk the constraint block body
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      // Look for ConstraintInsideOp which represents range constraints
+      if (auto insideOp = dyn_cast<ConstraintInsideOp>(constraintOp)) {
+        // Get the variable being constrained
+        Value variable = insideOp.getVariable();
+
+        // The variable should be a block argument referencing a property
+        // In the constraint block, arguments correspond to random properties
+        auto blockArg = dyn_cast<BlockArgument>(variable);
+        if (!blockArg)
+          continue;
+
+        // Get the argument index - this corresponds to the order of rand properties
+        unsigned argIdx = blockArg.getArgNumber();
+
+        // Find the corresponding property by counting rand properties
+        unsigned randPropCount = 0;
+        StringRef propName;
+        Type propType;
+        for (auto &innerOp : classDecl.getBody().getOps()) {
+          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(innerOp)) {
+            if (propDecl.isRandomizable()) {
+              if (randPropCount == argIdx) {
+                propName = propDecl.getSymName();
+                propType = propDecl.getPropertyType();
+                break;
+              }
+              randPropCount++;
+            }
+          }
+        }
+
+        if (propName.empty())
+          continue;
+
+        // Get the ranges array
+        ArrayRef<int64_t> ranges = insideOp.getRanges();
+
+        // For now, only handle single range constraints (2 values = 1 range)
+        if (ranges.size() != 2)
+          continue;
+
+        int64_t low = ranges[0];
+        int64_t high = ranges[1];
+
+        // Find the property index and bit width
+        auto it = propertyMap.find(propName);
+        if (it == propertyMap.end())
+          continue;
+
+        unsigned fieldIdx = it->second.first;
+        Type fieldType = it->second.second;
+
+        // Get bit width from the type
+        unsigned bitWidth = 32; // Default
+        if (auto intType = dyn_cast<IntType>(fieldType))
+          bitWidth = intType.getWidth();
+
+        RangeConstraintInfo info;
+        info.propertyName = propName;
+        info.minValue = low;
+        info.maxValue = high;
+        info.fieldIndex = fieldIdx;
+        info.bitWidth = bitWidth;
+        constraints.push_back(info);
+      }
+    }
+  }
+
+  return constraints;
+}
+
 /// Conversion for moore.randomize -> runtime function call.
 /// Implements the SystemVerilog randomize() method on class objects.
+/// Supports constraint-aware randomization for simple range constraints.
 struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
   RandomizeOpConversion(TypeConverter &tc, MLIRContext *ctx,
                         ClassTypeCache &cache)
@@ -7278,13 +7394,88 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-
-    // Create the class size constant
-    auto classSizeConst = LLVM::ConstantOp::create(
-        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
+    auto i1Ty = IntegerType::get(ctx, 1);
 
     // Get the class instance pointer from the adaptor
     Value classPtr = adaptor.getObject();
+
+    // Look up the class declaration to extract constraints
+    auto *classDeclSym = mod.lookupSymbol(classSym);
+    auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
+
+    // Extract range constraints from the class
+    SmallVector<RangeConstraintInfo> rangeConstraints;
+    if (classDecl) {
+      rangeConstraints = extractRangeConstraints(classDecl, cache, classSym);
+    }
+
+    // If we have range constraints, use range-aware randomization for those fields
+    if (!rangeConstraints.empty()) {
+      // First, do basic randomization for the whole class
+      auto classSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
+      auto basicFnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty});
+      auto basicFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                            "__moore_randomize_basic", basicFnTy);
+      LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                           SymbolRefAttr::get(basicFn),
+                           ValueRange{classPtr, classSizeConst});
+
+      // Then, for each range constraint, generate a constrained random value
+      // and store it in the appropriate field
+      auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+      auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                            "__moore_randomize_with_range",
+                                            rangeFnTy);
+
+      for (const auto &constraint : rangeConstraints) {
+        // Create min/max constants
+        auto minConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(constraint.minValue));
+        auto maxConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(constraint.maxValue));
+
+        // Call __moore_randomize_with_range(min, max)
+        auto rangeResult = LLVM::CallOp::create(
+            rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+            ValueRange{minConst, maxConst});
+
+        // Truncate to the field's bit width if needed
+        Type fieldIntTy = IntegerType::get(ctx, constraint.bitWidth);
+        Value truncatedVal = rangeResult.getResult();
+        if (constraint.bitWidth < 64) {
+          truncatedVal = arith::TruncIOp::create(rewriter, loc, fieldIntTy,
+                                                 rangeResult.getResult());
+        }
+
+        // Get GEP to the field using the property path
+        auto it = structInfo->propertyPath.find(constraint.propertyName);
+        if (it != structInfo->propertyPath.end()) {
+          // Build GEP indices
+          SmallVector<LLVM::GEPArg> gepIndices;
+          gepIndices.push_back(0); // Initial pointer dereference
+          for (unsigned idx : it->second) {
+            gepIndices.push_back(static_cast<int32_t>(idx));
+          }
+
+          // Create GEP to the field
+          auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                              classPtr, gepIndices);
+
+          // Store the constrained random value
+          LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
+        }
+      }
+
+      // Return success
+      auto successVal = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
+      rewriter.replaceOp(op, successVal);
+      return success();
+    }
+
+    // No constraints - use basic randomization
+    auto classSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
 
     // __moore_randomize_basic(void *classPtr, int64_t classSize) -> i32
     auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty});
@@ -7297,7 +7488,6 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     // The runtime returns i32 (1 for success, 0 for failure), but the op
     // returns i1. Truncate the result to i1.
-    auto i1Ty = IntegerType::get(ctx, 1);
     auto truncResult =
         arith::TruncIOp::create(rewriter, loc, i1Ty, result.getResult());
 
