@@ -101,59 +101,50 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Initial Block Support ✅ COMPLETE
-**Status**: ✅ MILESTONE ACHIEVED (Iteration 23)
-**Commit**: cabc1ab6e
-**Implementation**:
-- Simple initial blocks → `seq.initial` (works through arcilator!)
-- Complex blocks (wait/captured signals) → `llhd.process` fallback
-- Handles `IsolatedFromAbove` by cloning constants
-**Result**: `$display` and `$finish` in initial blocks work end-to-end!
-**Next**: Consider supporting more complex cases
-**Priority**: LOW - Main use cases work
+### Track A: Coverage Implementation 🎯 NEW
+**Status**: 🔵 READY TO IMPLEMENT
+**Research**: Coverage architecture documented in Iteration 24
+**What's Done**:
+- Runtime functions: `__moore_covergroup_*` already implemented
+- Coverage dialect: Basic ops exist
+**What's Needed**:
+- `CovergroupInstOp` - Create covergroup instance
+- `CovergroupSampleOp` - Sample covergroup data
+- ImportVerilog support for covergroup instantiation
+**Priority**: MEDIUM - UVM testbenches rely on coverage
 
-### Track B: sim.terminate ✅ IMPLEMENTED
-**Status**: ✅ COMPLETE (Iteration 22)
-**Commit**: 575768714
-**Implementation**: Added `SimTerminateOpLowering` pattern
-- `sim.terminate success` → `exit(0)`
-- `sim.terminate failure` → `exit(1)`
-- Verbose mode prints message before exit
-**Result**: $finish now works correctly in arcilator
-**Next**: Test with full simulation pipeline
+### Track B: Interface Member Access 🎯 NEW
+**Status**: 🔵 BLOCKING AVIP PIPELINE
+**Problem**: Interface member access generates rvalue, needs lvalue for drive
+**Example**: `apb_if.paddr` needs to generate assignable reference
+**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Priority**: MEDIUM - Blocking AVIP end-to-end
 
-### Track C: Randomization ✅ 94% Coverage
-**Status**: ✅ EXCELLENT (Iteration 23)
-**Commits**: 2b069ee30 (range), 5e573a811 (soft), c8a125501 (multi-range)
-**Coverage**: ~94% of AVIP constraints now work!
-| Type | Percentage | Status |
-|------|------------|--------|
-| Range constraints | 59% | ✅ Implemented |
-| Soft defaults | 23% | ✅ Implemented |
-| Inside (multiple) | 12% | ✅ Implemented |
-| Complex | 6% | ⚠️ Needs SMT |
-**Validated on**: APB, AHB, AXI4 AVIP constraint patterns
-**Next**: Consider SMT solver for complex constraints
-**Priority**: LOW - 94% is excellent coverage
+### Track C: Constraint Expression Lowering in MooreToCore 🎯 NEW
+**Status**: 🔵 FOLLOW-UP FROM ITERATION 24
+**Done**: ImportVerilog now generates constraint ops (ded570db6)
+**Needed**: MooreToCore needs to lower constraint ops to runtime calls
+**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Priority**: MEDIUM - Complete randomization pipeline
 
-### Track D: LSP ✅ All 8 AVIPs Validated
-**Status**: ✅ COMPREHENSIVE VALIDATION (Iteration 22)
-**Test Results** (all 8 AVIPs):
-| File Type | Symbol Count | Status |
-|-----------|-------------|--------|
-| Package files | 23-188 | ✅ Excellent |
-| Interface files | 7-49 | ✅ Excellent |
-| BFM files | 14-102 | ✅ Excellent |
-| Agent files | 0 | ⚠️ Need context |
-**Issue**: UVM class files need package context to parse
-**Next**: Consider auto-detecting package context
-**Priority**: LOW - Most important files work
+### Track D: $finish Handling for seq.initial 🎯 NEW
+**Status**: 🔵 IDENTIFIED IN ITERATION 24
+**Problem**: $finish generates `moore.unreachable`, forces llhd.process fallback
+**Solution**: Handle $finish separately - emit exit() directly instead of unreachable
+**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+**Priority**: LOW - Affects simulation only, not parsing/analysis
 
 ### Operating Guidance
 - Keep 4 agents active: Track A (unit tests), Track B (simulation), Track C (AVIP testing), Track D (tooling).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 24)
+- **Track A**: ✅ AVIP pipeline testing - Identified blocking issues (interface lvalue, $finish)
+- **Track B**: ✅ Coverage architecture documented - Runtime ready, need IR ops
+- **Track C**: ✅ Constraint expression lowering (ded570db6) - All constraint types now parsed
+- **Track D**: ✅ Complex initial block analysis - Confirmed design is correct
 
 ### Previous Track Results (Iteration 23) - BREAKTHROUGH
 - **Track A**: ✅ seq.initial implemented (cabc1ab6e) - Simple initial blocks work through arcilator!
