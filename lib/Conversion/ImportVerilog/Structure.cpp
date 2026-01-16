@@ -597,6 +597,8 @@ struct ModuleVisitor : public BaseVisitor {
   // Handle procedures.
   LogicalResult convertProcedure(moore::ProcedureKind kind,
                                  const slang::ast::Statement &body) {
+    if (body.as_if<slang::ast::ConcurrentAssertionStatement>())
+      return context.convertStatement(body);
     auto procOp = moore::ProcedureOp::create(builder, loc, kind);
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(&procOp.getBody().emplaceBlock());
@@ -744,8 +746,7 @@ LogicalResult Context::convertCompilation() {
   // through parent scopes to find the time scale effective locally.
   auto prevTimeScale = timeScale;
   timeScale = root.getTimeScale().value_or(slang::TimeScale());
-  auto timeScaleGuard =
-      llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+  llvm::scope_exit timeScaleGuard([&] { timeScale = prevTimeScale; });
 
   LLVM_DEBUG(llvm::dbgs() << "=== convertCompilation: traversing topInstances ===\n");
   // First only to visit the whole AST to collect the hierarchical names without
@@ -836,8 +837,7 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
   // through parent scopes to find the time scale effective locally.
   auto prevTimeScale = timeScale;
   timeScale = module->getTimeScale().value_or(slang::TimeScale());
-  auto timeScaleGuard =
-      llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+  llvm::scope_exit timeScaleGuard([&] { timeScale = prevTimeScale; });
 
   auto parameters = module->getParameters();
   bool hasModuleSame = false;
@@ -1020,8 +1020,7 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   // through parent scopes to find the time scale effective locally.
   auto prevTimeScale = timeScale;
   timeScale = module->getTimeScale().value_or(slang::TimeScale());
-  auto timeScaleGuard =
-      llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+  llvm::scope_exit timeScaleGuard([&] { timeScale = prevTimeScale; });
 
   // Collect downward hierarchical names. Such as,
   // module SubA; int x = Top.y; endmodule. The "Top" module is the parent of
@@ -1090,8 +1089,7 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
   // through parent scopes to find the time scale effective locally.
   auto prevTimeScale = timeScale;
   timeScale = package.getTimeScale().value_or(slang::TimeScale());
-  auto timeScaleGuard =
-      llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+  llvm::scope_exit timeScaleGuard([&] { timeScale = prevTimeScale; });
 
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToEnd(intoModuleOp.getBody());
@@ -1587,8 +1585,7 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // through parent scopes to find the time scale effective locally.
   auto prevTimeScale = timeScale;
   timeScale = subroutine.getTimeScale().value_or(slang::TimeScale());
-  auto timeScaleGuard =
-      llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+  llvm::scope_exit timeScaleGuard([&] { timeScale = prevTimeScale; });
 
   // Keep track of the current scope for virtual interface member access.
   // This allows us to bind syntax to expressions when accessing interface
@@ -1795,7 +1792,7 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // Save previous callbacks
   auto prevRCb = rvalueReadCallback;
   auto prevWCb = variableAssignCallback;
-  auto prevRCbGuard = llvm::make_scope_exit([&] {
+  llvm::scope_exit prevRCbGuard([&] {
     rvalueReadCallback = prevRCb;
     variableAssignCallback = prevWCb;
   });
@@ -1864,7 +1861,7 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
 
   auto savedThis = currentThisRef;
   currentThisRef = valueSymbols.lookup(subroutine.thisVar);
-  auto restoreThis = llvm::make_scope_exit([&] { currentThisRef = savedThis; });
+  llvm::scope_exit restoreThis([&] { currentThisRef = savedThis; });
 
   // Track current function lowering for downstream helpers (returns, captures).
   auto *savedLowering = currentFunctionLowering;
@@ -1873,8 +1870,7 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
       llvm::make_scope_exit([&] { currentFunctionLowering = savedLowering; });
 
   lowering->isConverting = true;
-  auto convertingGuard =
-      llvm::make_scope_exit([&] { lowering->isConverting = false; });
+  llvm::scope_exit convertingGuard([&] { lowering->isConverting = false; });
 
   if (failed(convertStatement(subroutine.getBody())))
     return failure();
@@ -2594,8 +2590,7 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
   // Keep track of local time scale.
   auto prevTimeScale = timeScale;
   timeScale = classdecl.getTimeScale().value_or(slang::TimeScale());
-  auto timeScaleGuard =
-      llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+  llvm::scope_exit timeScaleGuard([&] { timeScale = prevTimeScale; });
 
   // Get or create the class declaration.
   auto *lowering = declareClass(classdecl);
