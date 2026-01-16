@@ -25,6 +25,39 @@ using namespace llvm;
 using namespace llvm::lsp;
 
 //===----------------------------------------------------------------------===//
+// Custom LSP Types (not in base LLVM LSP library)
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Parameters for textDocument/rename request.
+struct RenameParams {
+  TextDocumentIdentifier textDocument;
+  Position position;
+  std::string newName;
+};
+
+inline bool fromJSON(const json::Value &value, RenameParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("textDocument", result.textDocument) &&
+         o.map("position", result.position) && o.map("newName", result.newName);
+}
+
+/// Parameters for textDocument/semanticTokens/full request.
+struct SemanticTokensParams {
+  TextDocumentIdentifier textDocument;
+};
+
+inline bool fromJSON(const json::Value &value, SemanticTokensParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("textDocument", result.textDocument);
+}
+
+} // namespace
+
+//===----------------------------------------------------------------------===//
 // LSPServer
 //===----------------------------------------------------------------------===//
 
@@ -97,7 +130,7 @@ struct LSPServer {
 
   void onPrepareRename(const TextDocumentPositionParams &params,
                        Callback<std::optional<Range>> reply);
-  void onRename(const json::Value &params, Callback<WorkspaceEdit> reply);
+  void onRename(const RenameParams &params, Callback<WorkspaceEdit> reply);
 
   //===--------------------------------------------------------------------===//
   // Document Links
@@ -110,7 +143,7 @@ struct LSPServer {
   // Semantic Tokens
   //===--------------------------------------------------------------------===//
 
-  void onSemanticTokensFull(const json::Value &params,
+  void onSemanticTokensFull(const SemanticTokensParams &params,
                             Callback<json::Value> reply);
 
   //===--------------------------------------------------------------------===//
@@ -161,8 +194,10 @@ private:
 
 void LSPServer::onInitialize(const InitializeParams &params,
                              Callback<json::Value> reply) {
-  // Initialize workspace from the params
-  server.initializeWorkspace(toJSON(params));
+  // Note: LLVM's base InitializeParams doesn't include workspaceFolders.
+  // Workspace folders are typically sent via workspace/didChangeWorkspaceFolders.
+  // Pass an empty object for now - workspace will be configured via notifications.
+  server.initializeWorkspace(json::Object{});
 
   // Send a response with the capabilities of this server.
   json::Object serverCaps{
@@ -337,47 +372,15 @@ void LSPServer::onPrepareRename(const TextDocumentPositionParams &params,
     reply(std::nullopt);
 }
 
-void LSPServer::onRename(const json::Value &params,
+void LSPServer::onRename(const RenameParams &params,
                          Callback<WorkspaceEdit> reply) {
-  // Parse the rename params manually since we don't have the struct
-  json::Path::Root root;
-  auto *obj = params.getAsObject();
-  if (!obj) {
-    reply(make_error<LSPError>("invalid rename params", ErrorCode::InvalidParams));
-    return;
-  }
-
-  // Parse textDocument
-  TextDocumentIdentifier textDocument;
-  auto *textDocObj = obj->get("textDocument");
-  if (!textDocObj ||
-      !fromJSON(*textDocObj, textDocument, json::Path(root))) {
-    reply(make_error<LSPError>("missing textDocument", ErrorCode::InvalidParams));
-    return;
-  }
-
-  // Parse position
-  Position position;
-  auto *posObj = obj->get("position");
-  if (!posObj || !fromJSON(*posObj, position, json::Path(root))) {
-    reply(make_error<LSPError>("missing position", ErrorCode::InvalidParams));
-    return;
-  }
-
-  // Parse newName
-  auto newNameVal = obj->getString("newName");
-  if (!newNameVal) {
-    reply(make_error<LSPError>("missing newName", ErrorCode::InvalidParams));
-    return;
-  }
-  std::string newName = newNameVal->str();
-
-  auto result = server.renameSymbol(textDocument.uri, position, newName);
+  auto result =
+      server.renameSymbol(params.textDocument.uri, params.position, params.newName);
   if (result)
     reply(std::move(*result));
   else
     reply(make_error<LSPError>("cannot rename symbol at this position",
-                                ErrorCode::RequestFailed));
+                               ErrorCode::RequestFailed));
 }
 
 //===----------------------------------------------------------------------===//
@@ -395,24 +398,10 @@ void LSPServer::onDocumentLink(const DocumentLinkParams &params,
 // Semantic Tokens
 //===----------------------------------------------------------------------===//
 
-void LSPServer::onSemanticTokensFull(const json::Value &params,
+void LSPServer::onSemanticTokensFull(const SemanticTokensParams &params,
                                      Callback<json::Value> reply) {
-  circt::lsp::SemanticTokensParams stParams;
-  json::Path::Root root;
-  if (!circt::lsp::fromJSON(params, stParams, json::Path(root))) {
-    reply(make_error<LSPError>("invalid semantic tokens params",
-                                ErrorCode::InvalidParams));
-    return;
-  }
-
-  auto uriOrErr = URIForFile::fromURI(stParams.textDocumentUri);
-  if (!uriOrErr) {
-    reply(make_error<LSPError>("invalid URI", ErrorCode::InvalidParams));
-    return;
-  }
-
   std::vector<uint32_t> data;
-  server.getSemanticTokens(*uriOrErr, data);
+  server.getSemanticTokens(params.textDocument.uri, data);
 
   circt::lsp::SemanticTokensResult result;
   result.data = std::move(data);
