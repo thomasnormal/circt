@@ -106,6 +106,16 @@ int64_t __moore_queue_pop_front(MooreQueue *queue, int64_t element_size);
 void *__moore_queue_sort(void *queue, int64_t elem_size,
                          int (*compare)(const void *, const void *));
 
+/// Reverse sort a queue in place (descending order).
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param elem_size Size of each element in bytes
+void __moore_queue_rsort(MooreQueue *queue, int64_t elem_size);
+
+/// Shuffle a queue in place.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param elem_size Size of each element in bytes
+void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size);
+
 /// Slice a queue with an inclusive range [start, end].
 /// @param queue Pointer to the queue structure
 /// @param start Start index (inclusive)
@@ -473,6 +483,36 @@ MooreQueue __moore_array_unique(MooreQueue *array, int64_t elementSize);
 /// @param elementSize Size of each element in bytes
 /// @return A new queue containing indices of unique elements
 MooreQueue __moore_array_unique_index(MooreQueue *array, int64_t elementSize);
+
+/// Reduce array elements by summation.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return The sum of all elements (truncated to 64 bits)
+int64_t __moore_array_reduce_sum(MooreQueue *array, int64_t elementSize);
+
+/// Reduce array elements by product.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return The product of all elements (truncated to 64 bits)
+int64_t __moore_array_reduce_product(MooreQueue *array, int64_t elementSize);
+
+/// Reduce array elements by bitwise AND.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return Bitwise AND of all elements (truncated to 64 bits)
+int64_t __moore_array_reduce_and(MooreQueue *array, int64_t elementSize);
+
+/// Reduce array elements by bitwise OR.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return Bitwise OR of all elements (truncated to 64 bits)
+int64_t __moore_array_reduce_or(MooreQueue *array, int64_t elementSize);
+
+/// Reduce array elements by bitwise XOR.
+/// @param array Pointer to the input array/queue
+/// @param elementSize Size of each element in bytes
+/// @return Bitwise XOR of all elements (truncated to 64 bits)
+int64_t __moore_array_reduce_xor(MooreQueue *array, int64_t elementSize);
 
 //===----------------------------------------------------------------------===//
 // Coverage Collection Operations

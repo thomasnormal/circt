@@ -463,6 +463,74 @@ struct ExprVisitor {
     if (!type || !value)
       return {};
 
+    auto derefType = value.getType();
+    if (isLvalue)
+      derefType = cast<moore::RefType>(derefType).getNestedType();
+
+    if (auto queueType = dyn_cast<moore::QueueType>(derefType)) {
+      if (isLvalue) {
+        mlir::emitError(loc) << "queue range select is not an lvalue";
+        return {};
+      }
+
+      Value queueValue = value;
+
+      auto prevQueueTarget = context.queueTargetValue;
+      context.queueTargetValue = queueValue;
+      auto restoreQueueTarget =
+          llvm::make_scope_exit([&] { context.queueTargetValue = prevQueueTarget; });
+
+      auto leftValue = context.convertRvalueExpression(expr.left());
+      auto rightValue = context.convertRvalueExpression(expr.right());
+      if (!leftValue || !rightValue)
+        return {};
+
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      auto normalizeIndex = [&](Value idx) -> Value {
+        idx = context.convertToSimpleBitVector(idx);
+        if (!idx)
+          return {};
+        if (!isa<moore::IntType>(idx.getType())) {
+          mlir::emitError(loc) << "queue slice index is not integral: "
+                               << idx.getType();
+          return {};
+        }
+        return context.materializeConversion(i32Ty, idx, false, loc);
+      };
+
+      leftValue = normalizeIndex(leftValue);
+      rightValue = normalizeIndex(rightValue);
+      if (!leftValue || !rightValue)
+        return {};
+
+      Value startValue;
+      Value endValue;
+      auto one = moore::ConstantOp::create(builder, loc, i32Ty, 1);
+
+      using slang::ast::RangeSelectionKind;
+      switch (expr.getSelectionKind()) {
+      case RangeSelectionKind::Simple:
+        startValue = leftValue;
+        endValue = rightValue;
+        break;
+      case RangeSelectionKind::IndexedUp: {
+        auto sum = moore::AddOp::create(builder, loc, leftValue, rightValue);
+        endValue = moore::SubOp::create(builder, loc, sum, one);
+        startValue = leftValue;
+        break;
+      }
+      case RangeSelectionKind::IndexedDown: {
+        auto diff = moore::SubOp::create(builder, loc, leftValue, rightValue);
+        startValue = moore::AddOp::create(builder, loc, diff, one);
+        endValue = leftValue;
+        break;
+      }
+      }
+
+      return moore::QueueSliceOp::create(builder, loc, queueType, queueValue,
+                                         startValue, endValue);
+    }
+
     std::optional<int32_t> constLeft;
     std::optional<int32_t> constRight;
     if (auto *constant = expr.left().getConstant())
@@ -958,6 +1026,27 @@ struct RvalueExprVisitor : public ExprVisitor {
         // For rvalue, read from the reference
         return moore::ReadOp::create(builder, loc, signalRef);
       }
+    }
+
+    // Handle clocking block signal access (ClockVar).
+    // When accessing a signal through a clocking block (e.g., cb.signal),
+    // slang gives us a NamedValueExpression where the symbol is a ClockVarSymbol.
+    // The ClockVarSymbol has an initializer expression pointing to the
+    // underlying signal.
+    if (auto *clockVar = expr.symbol.as_if<slang::ast::ClockVarSymbol>()) {
+      // Get the initializer expression which references the underlying signal
+      auto *initExpr = clockVar->getInitializer();
+      if (!initExpr) {
+        mlir::emitError(loc)
+            << "clocking block signal '" << clockVar->name
+            << "' has no underlying signal reference";
+        return {};
+      }
+
+      // For input signals (rvalue context), we read the underlying signal value.
+      // The input skew delay would be applied at the clocking block level,
+      // not here during individual signal access.
+      return context.convertRvalueExpression(*initExpr);
     }
 
     // Otherwise some other part of ImportVerilog should have added an MLIR
@@ -4109,6 +4198,27 @@ struct LvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle clocking block signal access (ClockVar) for lvalue.
+    // When assigning to a signal through a clocking block (e.g., cb.signal = x),
+    // slang gives us a NamedValueExpression where the symbol is a ClockVarSymbol.
+    // The ClockVarSymbol has an initializer expression pointing to the
+    // underlying signal.
+    if (auto *clockVar = expr.symbol.as_if<slang::ast::ClockVarSymbol>()) {
+      // Get the initializer expression which references the underlying signal
+      auto *initExpr = clockVar->getInitializer();
+      if (!initExpr) {
+        mlir::emitError(loc)
+            << "clocking block signal '" << clockVar->name
+            << "' has no underlying signal reference";
+        return {};
+      }
+
+      // For output signals (lvalue context), we get the underlying signal
+      // reference for assignment. The output skew delay would be applied
+      // at the clocking block level, not here during individual signal access.
+      return context.convertLvalueExpression(*initExpr);
+    }
+
     auto d = mlir::emitError(loc, "unknown name `") << expr.symbol.name << "`";
     d.attachNote(context.convertLocation(expr.symbol.location))
         << "no lvalue generated for " << slang::ast::toString(expr.symbol.kind);
@@ -4474,6 +4584,24 @@ Value Context::convertToSimpleBitVector(Value value) {
     mlir::emitRemark(value.getLoc())
         << "treating queue value as zero in bit-vector context";
     return moore::ConstantOp::create(builder, value.getLoc(), intTy, 0);
+  }
+
+  // Convert strings to a best-effort fixed-width bit vector. Prefer the
+  // original integer when the string came from an IntToStringOp, otherwise
+  // fall back to a 32-bit conversion (SV int size).
+  if (isa<moore::StringType>(value.getType()) ||
+      isa<moore::FormatStringType>(value.getType())) {
+    if (auto formatToStr = value.getDefiningOp<moore::FormatStringToStringOp>())
+      value = formatToStr.getFmtstring();
+
+    if (auto intToStr = value.getDefiningOp<moore::IntToStringOp>())
+      return intToStr.getInput();
+
+    auto intTy = moore::IntType::getInt(getContext(), 32);
+    mlir::emitRemark(value.getLoc())
+        << "converting string to 32-bit integer in bit-vector context";
+    return moore::StringToIntOp::create(builder, value.getLoc(),
+                                        intTy.getTwoValued(), value);
   }
 
   // Some operations in Slang's AST, for example bitwise or `|`, don't cast
@@ -5273,6 +5401,141 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   }
                   return {};
                 })
+          .Case("sum",
+                [&]() -> Value {
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    if (!isa<moore::IntType>(elementType)) {
+                      mlir::emitError(loc)
+                          << "sum() only supports integer element types, got "
+                          << elementType;
+                      return {};
+                    }
+                    auto kindAttr = moore::QueueReduceKindAttr::get(
+                        builder.getContext(), moore::QueueReduceKind::Sum);
+                    return moore::QueueReduceOp::create(builder, loc,
+                                                        elementType, kindAttr,
+                                                        value);
+                  }
+                  return {};
+                })
+          .Case("product",
+                [&]() -> Value {
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    if (!isa<moore::IntType>(elementType)) {
+                      mlir::emitError(loc)
+                          << "product() only supports integer element types, got "
+                          << elementType;
+                      return {};
+                    }
+                    auto kindAttr = moore::QueueReduceKindAttr::get(
+                        builder.getContext(), moore::QueueReduceKind::Product);
+                    return moore::QueueReduceOp::create(builder, loc,
+                                                        elementType, kindAttr,
+                                                        value);
+                  }
+                  return {};
+                })
+          .Case("and",
+                [&]() -> Value {
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    if (!isa<moore::IntType>(elementType)) {
+                      mlir::emitError(loc)
+                          << "and() only supports integer element types, got "
+                          << elementType;
+                      return {};
+                    }
+                    auto kindAttr = moore::QueueReduceKindAttr::get(
+                        builder.getContext(), moore::QueueReduceKind::And);
+                    return moore::QueueReduceOp::create(builder, loc,
+                                                        elementType, kindAttr,
+                                                        value);
+                  }
+                  return {};
+                })
+          .Case("or",
+                [&]() -> Value {
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    if (!isa<moore::IntType>(elementType)) {
+                      mlir::emitError(loc)
+                          << "or() only supports integer element types, got "
+                          << elementType;
+                      return {};
+                    }
+                    auto kindAttr = moore::QueueReduceKindAttr::get(
+                        builder.getContext(), moore::QueueReduceKind::Or);
+                    return moore::QueueReduceOp::create(builder, loc,
+                                                        elementType, kindAttr,
+                                                        value);
+                  }
+                  return {};
+                })
+          .Case("xor",
+                [&]() -> Value {
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                    Type elementType;
+                    if (auto queueType = dyn_cast<moore::QueueType>(type))
+                      elementType = queueType.getElementType();
+                    else if (auto dynArrayType =
+                                 dyn_cast<moore::OpenUnpackedArrayType>(type))
+                      elementType = dynArrayType.getElementType();
+                    if (!isa<moore::IntType>(elementType)) {
+                      mlir::emitError(loc)
+                          << "xor() only supports integer element types, got "
+                          << elementType;
+                      return {};
+                    }
+                    auto kindAttr = moore::QueueReduceKindAttr::get(
+                        builder.getContext(), moore::QueueReduceKind::Xor);
+                    return moore::QueueReduceOp::create(builder, loc,
+                                                        elementType, kindAttr,
+                                                        value);
+                  }
+                  return {};
+                })
+          .Case("unique_index",
+                [&]() -> Value {
+                  // unique_index() returns a queue with indices of unique elements
+                  auto type = value.getType();
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                    auto indexType =
+                        moore::IntType::get(getContext(), 64,
+                                            moore::Domain::TwoValued);
+                    auto resultType = moore::QueueType::get(
+                        cast<moore::UnpackedType>(indexType), 0);
+                    return moore::QueueUniqueIndexOp::create(builder, loc,
+                                                             resultType, value);
+                  }
+                  return {};
+                })
           // File I/O functions (IEEE 1800-2017 Section 21.3)
           .Case("$fopen",
                 [&]() -> Value {
@@ -5454,6 +5717,18 @@ Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subrouti
                 [&]() -> FailureOr<Value> {
                   moore::QueueSortOp::create(builder, loc, arrayRef);
                   // sort returns void, return a dummy value
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("rsort",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueRSortOp::create(builder, loc, arrayRef);
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("shuffle",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueShuffleOp::create(builder, loc, arrayRef);
                   auto intTy = moore::IntType::getInt(getContext(), 1);
                   return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
                 })

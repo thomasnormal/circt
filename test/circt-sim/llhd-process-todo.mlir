@@ -1,19 +1,20 @@
 // RUN: circt-sim %s --top=test_process --sim-stats 2>&1 | FileCheck %s
 // REQUIRES: circt-sim
-// XFAIL: *
 
-// This test documents the current limitation: circt-sim does NOT interpret
-// llhd.process bodies. The simulation infrastructure (ProcessScheduler, 
-// EventQueue) exists, but the connection to LLHD IR is not implemented.
+// This test verifies that circt-sim correctly interprets LLHD process bodies
+// with llhd.wait delays and llhd.drv operations.
 //
-// Current behavior: Simulation ends at 0fs with placeholder process only.
-// Expected behavior: Should execute llhd.process body with llhd.wait delays.
-//
-// See PROJECT_PLAN.md Track A for detailed analysis.
+// The process:
+// 1. Starts at time 0
+// 2. Waits for 10000000 fs (10 ms)
+// 3. Drives the signal with a new value
+// 4. Halts
 
+// CHECK: [circt-sim] Found 1 LLHD processes
+// CHECK: [circt-sim] Registered 1 LLHD signals and 1 LLHD processes
 // CHECK: [circt-sim] Starting simulation
 // CHECK: [circt-sim] Simulation completed at time 10000000 fs
-// CHECK: Processes executed: 1
+// CHECK: Processes executed: 2
 
 hw.module @test_process() {
   %c0_i8 = hw.constant 0 : i8

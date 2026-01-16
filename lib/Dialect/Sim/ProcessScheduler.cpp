@@ -435,20 +435,39 @@ bool ProcessScheduler::advanceTime() {
     return false;
   }
 
-  // Advance to the next event
+  // Advance to the next event time
+  // First try to advance the event scheduler to the next event
   while (!eventScheduler->isComplete()) {
+    // Try to step a delta cycle
     if (eventScheduler->stepDelta()) {
-      // Event was processed, check if any processes are now ready
+      // Events were processed, check if any processes are now ready
       for (auto &queue : readyQueues) {
         if (!queue.empty())
           return true;
       }
     } else {
-      // Try to advance real time
-      if (!eventScheduler->isComplete()) {
-        // Internal event scheduler advancement
-        break;
+      // No events in current delta/time - need to advance real time
+      // Run until the event scheduler processes at least one event or completes
+      SimTime oldTime = eventScheduler->getCurrentTime();
+
+      // runUntil will advance to the next event and process it
+      // We use UINT64_MAX to run until the next event regardless of time
+      eventScheduler->runUntil(oldTime.realTime + 1000000000000000ULL); // +1 second
+
+      SimTime newTime = eventScheduler->getCurrentTime();
+
+      LLVM_DEBUG(llvm::dbgs() << "Advanced time from " << oldTime.realTime
+                              << " to " << newTime.realTime << " fs\n");
+
+      // Check again for ready processes
+      for (auto &queue : readyQueues) {
+        if (!queue.empty())
+          return true;
       }
+
+      // If time didn't advance and no events, we're stuck or done
+      if (oldTime == newTime && eventScheduler->isComplete())
+        break;
     }
   }
 

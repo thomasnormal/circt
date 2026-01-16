@@ -55,7 +55,20 @@ struct EventControlVisitor {
   OpBuilder &builder;
 
   // Handle single signal events like `posedge x`, `negedge y iff z`, or `w`.
+  // Also handles clocking block event references like `@(cb)`.
   LogicalResult visit(const slang::ast::SignalEventControl &ctrl) {
+    // Check if the expression references a clocking block.
+    // In that case, we need to convert the clocking block's clock event instead.
+    auto symRef = ctrl.expr.getSymbolReference();
+    if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+      auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
+      auto &clockEvent = clockingBlock.getEvent();
+      // Recursively convert the clocking block's clock event
+      auto visitor = *this;
+      visitor.loc = context.convertLocation(clockEvent.sourceRange);
+      return clockEvent.visit(visitor);
+    }
+
     auto edge = convertEdgeKind(ctrl.edge);
     auto expr = context.convertRvalueExpression(ctrl.expr);
     if (!expr)
@@ -121,6 +134,18 @@ struct LTLClockControlVisitor {
   Value seqOrPro;
 
   Value visit(const slang::ast::SignalEventControl &ctrl) {
+    // Check if the expression references a clocking block.
+    // In that case, we need to convert the clocking block's clock event instead.
+    auto symRef = ctrl.expr.getSymbolReference();
+    if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+      auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
+      auto &clockEvent = clockingBlock.getEvent();
+      // Recursively convert the clocking block's clock event
+      auto visitor = *this;
+      visitor.loc = context.convertLocation(clockEvent.sourceRange);
+      return clockEvent.visit(visitor);
+    }
+
     auto edge = convertEdgeKindLTL(ctrl.edge);
     auto expr = context.convertRvalueExpression(ctrl.expr);
     if (!expr)
