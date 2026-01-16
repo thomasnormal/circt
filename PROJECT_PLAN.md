@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 23)
+## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 25)
 
 **Test Commands**:
 ```bash
@@ -24,10 +24,15 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ```
 
 **Current Blockers / Limitations** (Post-MooreToCore):
-1. **Complex initial blocks** ⚠️ PARTIAL - Blocks with wait/captured signals use llhd.process fallback
-2. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
+1. **Coverage** ⚠️ IN PROGRESS - covergroups parsed but collection not yet implemented
+2. **SVA assertions** ⚠️ NOT IMPLEMENTED - SVA dialect exists but no simulation lowering
 3. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
 4. **Complex constraints** ⚠️ PARTIAL - ~6% need SMT solver (94% now work!)
+
+**MAJOR MILESTONE (Iteration 25)**:
+- **Interface ref→vif conversion** ✅ FIXED - Interface member access generates proper lvalue references
+- **Constraint MooreToCore lowering** ✅ COMPLETE - All 10 constraint ops now lower to runtime calls
+- **$finish in seq.initial** ✅ FIXED - $finish no longer forces llhd.process fallback
 
 **MAJOR MILESTONE (Iteration 23)**:
 - **Initial blocks** ✅ FIXED (cabc1ab6e) - Simple initial blocks use seq.initial, work through arcilator!
@@ -101,8 +106,8 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Coverage Implementation 🎯 NEW
-**Status**: 🔵 READY TO IMPLEMENT
+### Track A: Coverage Implementation 🎯 ITERATION 26
+**Status**: 🔵 IN PROGRESS
 **Research**: Coverage architecture documented in Iteration 24
 **What's Done**:
 - Runtime functions: `__moore_covergroup_*` already implemented
@@ -111,34 +116,48 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 - `CovergroupInstOp` - Create covergroup instance
 - `CovergroupSampleOp` - Sample covergroup data
 - ImportVerilog support for covergroup instantiation
-**Priority**: MEDIUM - UVM testbenches rely on coverage
+**Priority**: HIGH - UVM testbenches rely on coverage
 
-### Track B: Interface Member Access 🎯 NEW
-**Status**: 🔵 BLOCKING AVIP PIPELINE
-**Problem**: Interface member access generates rvalue, needs lvalue for drive
-**Example**: `apb_if.paddr` needs to generate assignable reference
+### Track B: SVA Assertion Lowering 🎯 ITERATION 26
+**Status**: 🔵 READY TO IMPLEMENT
+**Problem**: SVA assertions parsed but not lowered to simulation
+**What's Done**:
+- SVA dialect exists with basic assertion ops
+**What's Needed**:
+- MooreToCore patterns for assertion ops
+- Runtime functions for assertion checking
 **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Priority**: MEDIUM - Blocking AVIP end-to-end
+**Priority**: MEDIUM - Needed for verification
 
-### Track C: Constraint Expression Lowering in MooreToCore 🎯 NEW
-**Status**: 🔵 FOLLOW-UP FROM ITERATION 24
-**Done**: ImportVerilog now generates constraint ops (ded570db6)
-**Needed**: MooreToCore needs to lower constraint ops to runtime calls
-**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Priority**: MEDIUM - Complete randomization pipeline
+### Track C: AVIP Testing on ~/mbit 🎯 ITERATION 26
+**Status**: 🔵 READY TO TEST
+**What's Done**:
+- Interface ref→vif conversion fixed (Iteration 25)
+- Constraint lowering complete (Iteration 25)
+- $finish handling fixed (Iteration 25)
+**What's Needed**:
+- Full end-to-end testing on ~/mbit AVIPs
+- Identify any remaining gaps
+**Priority**: HIGH - Validates all recent fixes
 
-### Track D: $finish Handling for seq.initial 🎯 NEW
-**Status**: 🔵 IDENTIFIED IN ITERATION 24
-**Problem**: $finish generates `moore.unreachable`, forces llhd.process fallback
-**Solution**: Handle $finish separately - emit exit() directly instead of unreachable
-**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Priority**: LOW - Affects simulation only, not parsing/analysis
+### Track D: Additional Improvements 🎯 ITERATION 26
+**Status**: 🔵 READY FOR WORK
+**Focus Areas**:
+- DPI full support (currently stubs only)
+- Performance optimizations
+- Documentation updates
+**Priority**: MEDIUM - Polish and completeness
 
 ### Operating Guidance
-- Keep 4 agents active: Track A (unit tests), Track B (simulation), Track C (AVIP testing), Track D (tooling).
+- Keep 4 agents active: Track A (coverage), Track B (assertions), Track C (AVIP testing), Track D (improvements).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 25)
+- **Track B**: ✅ Interface ref→vif conversion FIXED - Interface member access generates proper lvalue references
+- **Track C**: ✅ Constraint MooreToCore lowering COMPLETE - All 10 constraint ops now lower to runtime calls
+- **Track D**: ✅ $finish in seq.initial FIXED - $finish no longer forces llhd.process fallback
 
 ### Previous Track Results (Iteration 24)
 - **Track A**: ✅ AVIP pipeline testing - Identified blocking issues (interface lvalue, $finish)
