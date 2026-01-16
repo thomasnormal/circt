@@ -11,6 +11,7 @@
 #include "slang/ast/Constraints.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CoverSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "llvm/ADT/ScopeExit.h"
 
@@ -154,6 +155,19 @@ struct RootVisitor : public BaseVisitor {
   // Handle global variables.
   LogicalResult visit(const slang::ast::VariableSymbol &var) {
     return context.convertGlobalVariable(var);
+  }
+
+  // Handle interface definitions without instances.
+  LogicalResult visit(const slang::ast::DefinitionSymbol &definition) {
+    if (definition.definitionKind != slang::ast::DefinitionKind::Interface)
+      return success();
+    if (definition.getInstanceCount() != 0)
+      return success();
+
+    auto &body = slang::ast::InstanceBodySymbol::fromDefinition(
+        context.compilation, definition, definition.location,
+        slang::ast::InstanceFlags::Uninstantiated, nullptr, nullptr, nullptr);
+    return context.convertInterfaceHeader(&body) ? success() : failure();
   }
 
   // Emit an error for all other members.
@@ -720,6 +734,35 @@ struct ModuleVisitor : public BaseVisitor {
   }
 
   LogicalResult visit(const slang::ast::CoverCrossBodySymbol &) {
+    return success();
+  }
+
+  // Handle clocking blocks
+  LogicalResult visit(const slang::ast::ClockingBlockSymbol &clockingBlock) {
+    // Create the ClockingBlockDeclOp
+    auto clockingOp = moore::ClockingBlockDeclOp::create(
+        builder, loc, clockingBlock.name);
+
+    // Create the body block for the clocking block
+    clockingOp.getBody().emplaceBlock();
+
+    // Set insertion point to inside the clocking block body
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(&clockingOp.getBody().front());
+
+    // Iterate over clocking block members (ClockVarSymbol)
+    for (auto &member : clockingBlock.members()) {
+      if (auto *clockVar =
+              member.as_if<slang::ast::ClockVarSymbol>()) {
+        auto memberLoc = context.convertLocation(clockVar->location);
+        auto type = context.convertType(clockVar->getType());
+        if (!type)
+          return failure();
+        moore::ClockingSignalOp::create(builder, memberLoc, clockVar->name,
+                                        type);
+      }
+    }
+
     return success();
   }
 

@@ -434,14 +434,11 @@ FailureOr<Value> Context::convertAssertionSystemCallArity1(
                                            {currentAndNotPast, notCurrentAndPast})
                       .getResult();
                 })
-          // Translate $past to x[-1].
-          .Case("$past",
-                [&]() -> Value {
-                  return ltl::PastOp::create(builder, loc, value, 1).getResult();
-                })
           // $sampled(x) in assertion context returns the sampled value, which
           // is effectively the current value since assertions use sampled semantics.
           .Case("$sampled", [&]() -> Value { return value; })
+          // Note: $past is handled separately in convertAssertionCallExpression
+          // using moore::PastOp to preserve the type for comparisons.
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
@@ -457,6 +454,30 @@ Value Context::convertAssertionCallExpression(
   Value value;
   Value boolVal;
 
+  // Handle $past specially - it returns the past value with preserved type
+  // so that comparisons like `$past(val) == 0` work correctly.
+  if (subroutine.name == "$past") {
+    value = this->convertRvalueExpression(*args[0]);
+    if (!value)
+      return {};
+
+    // Get the delay (numTicks) from the second argument if present.
+    // Default to 1 if empty or not provided.
+    int64_t delay = 1;
+    if (args.size() > 1 &&
+        args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
+      auto cv = evaluateConstant(*args[1]);
+      if (cv.isInteger()) {
+        auto intVal = cv.integer().as<int64_t>();
+        if (intVal)
+          delay = *intVal;
+      }
+    }
+
+    // Use moore::PastOp to preserve the type for comparisons.
+    return moore::PastOp::create(builder, loc, value, delay).getResult();
+  }
+
   switch (args.size()) {
   case (1):
     value = this->convertRvalueExpression(*args[0]);
@@ -471,34 +492,6 @@ Value Context::convertAssertionCallExpression(
     if (!boolVal)
       return {};
     result = this->convertAssertionSystemCallArity1(subroutine, loc, boolVal);
-    break;
-
-  case (2):
-  case (3):
-  case (4):
-    // Handle $past(expr, numTicks, gatingExpr, clockingEvent) with up to 4 args.
-    // We support the delay parameter but ignore gating and clocking for now.
-    if (subroutine.name == "$past") {
-      value = this->convertRvalueExpression(*args[0]);
-      boolVal = builder.createOrFold<moore::ToBuiltinBoolOp>(loc, value);
-      if (!boolVal)
-        return {};
-
-      // Get the delay (numTicks) from the second argument.
-      // Default to 1 if empty or not provided.
-      int64_t delay = 1;
-      if (args.size() > 1 &&
-          args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
-        auto cv = evaluateConstant(*args[1]);
-        if (cv.isInteger()) {
-          auto intVal = cv.integer().as<int64_t>();
-          if (intVal)
-            delay = *intVal;
-        }
-      }
-
-      return ltl::PastOp::create(builder, loc, boolVal, delay).getResult();
-    }
     break;
 
   default:

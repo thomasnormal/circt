@@ -212,7 +212,11 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
     HWModuleOp module, Operation *op, Twine regName, Value clock,
     Attribute initState, Value reset, bool isAsync, Value resetValue,
     Value next) {
-  if (!isa<BlockArgument>(clock)) {
+  // Look through ToClockOp to find the original i1 clock signal.
+  Value originalClock = clock;
+  if (auto toClockOp = clock.getDefiningOp<seq::ToClockOp>())
+    originalClock = toClockOp.getInput();
+  if (!isa<BlockArgument>(originalClock)) {
     op->emitError("only clocks directly given as block arguments "
                   "are supported");
     return failure();

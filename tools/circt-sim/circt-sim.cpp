@@ -18,6 +18,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LLHDProcessInterpreter.h"
 #include "circt/Conversion/ArcToLLVM.h"
 #include "circt/Conversion/CombToArith.h"
 #include "circt/Conversion/ConvertToArcs.h"
@@ -31,6 +32,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
+#include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/SV/SVDialect.h"
@@ -362,6 +364,9 @@ private:
   // Module information
   std::string topModuleName;
   mlir::ModuleOp rootModule;
+
+  // LLHD Process interpreter
+  std::unique_ptr<LLHDProcessInterpreter> llhdInterpreter;
 };
 
 LogicalResult SimulationContext::initialize(mlir::ModuleOp module,
@@ -466,19 +471,49 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     }
   }
 
-  // TODO: Walk the module body and create processes for each operation
-  // For now, create a simple placeholder process
-  auto topProcessId = scheduler.registerProcess(
-      "top_eval", [this]() {
-        // Placeholder evaluation function
-      });
+  // Check if this module contains LLHD processes
+  bool hasLLHDProcesses = false;
+  size_t llhdProcessCount = 0;
+  size_t totalOpsCount = 0;
 
-  // Mark as combinational (sensitive to all inputs)
-  auto *process = scheduler.getProcess(topProcessId);
-  if (process) {
-    process->setCombinational(true);
-    for (auto &entry : nameToSignal) {
-      scheduler.addSensitivity(topProcessId, entry.second);
+  // Walk all operations in the module body
+  // Use walk to recursively find all operations
+  hwModule.getOperation()->walk([&](Operation *op) {
+    totalOpsCount++;
+    if (isa<llhd::ProcessOp>(op)) {
+      hasLLHDProcesses = true;
+      llhdProcessCount++;
+    }
+  });
+
+  llvm::outs() << "[circt-sim] Found " << llhdProcessCount << " LLHD processes"
+               << " (out of " << totalOpsCount << " total ops) in module\n";
+
+  if (hasLLHDProcesses) {
+    // Use the LLHD process interpreter for modules with LLHD processes
+    llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
+    if (failed(llhdInterpreter->initialize(hwModule))) {
+      llvm::errs() << "Error: Failed to initialize LLHD process interpreter\n";
+      return failure();
+    }
+
+    llvm::outs() << "[circt-sim] Registered " << llhdInterpreter->getNumSignals()
+                 << " LLHD signals and " << llhdInterpreter->getNumProcesses()
+                 << " LLHD processes\n";
+  } else {
+    // For modules without LLHD processes, create a simple placeholder process
+    auto topProcessId = scheduler.registerProcess(
+        "top_eval", [this]() {
+          // Placeholder evaluation function
+        });
+
+    // Mark as combinational (sensitive to all inputs)
+    auto *process = scheduler.getProcess(topProcessId);
+    if (process) {
+      process->setCombinational(true);
+      for (auto &entry : nameToSignal) {
+        scheduler.addSensitivity(topProcessId, entry.second);
+      }
     }
   }
 

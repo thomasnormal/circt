@@ -114,6 +114,20 @@ struct SequenceNonConsecutiveRepeatOpConversion
   }
 };
 
+struct SequenceFirstMatchOpConversion
+    : public OpConversionPattern<SequenceFirstMatchOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SequenceFirstMatchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ltlSeqType = ltl::SequenceType::get(op.getContext());
+    rewriter.replaceOpWithNewOp<ltl::FirstMatchOp>(op, ltlSeqType,
+                                                  adaptor.getInput());
+    return success();
+  }
+};
+
 struct SequenceConcatOpConversion
     : public OpConversionPattern<SequenceConcatOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -481,6 +495,7 @@ void LowerSVAToLTLPass::runOnOperation() {
   patterns.add<SequenceDelayOpConversion, SequenceRepeatOpConversion,
                SequenceGotoRepeatOpConversion,
                SequenceNonConsecutiveRepeatOpConversion,
+               SequenceFirstMatchOpConversion,
                SequenceConcatOpConversion, SequenceOrOpConversion,
                SequenceAndOpConversion, SequenceIntersectOpConversion,
                SequenceClockOpConversion>(typeConverter, &getContext());

@@ -857,6 +857,70 @@ extern "C" int64_t __moore_stream_concat_bits(MooreQueue *queue,
   return result;
 }
 
+extern "C" void __moore_stream_unpack_bits(MooreQueue *array, int64_t sourceBits,
+                                            int32_t elementBitWidth,
+                                            bool isRightToLeft) {
+  if (!array || elementBitWidth <= 0)
+    return;
+
+  // Calculate how many elements we can extract from sourceBits
+  // For a 64-bit source, that's 64 / elementBitWidth elements max
+  int64_t numElements = 64 / elementBitWidth;
+  if (numElements <= 0)
+    numElements = 1;
+
+  // Calculate bytes per element (round up to whole bytes)
+  int32_t bytesPerElement = (elementBitWidth + 7) / 8;
+
+  // Resize the array to hold the elements
+  int64_t newSize = numElements * bytesPerElement;
+
+  // Reallocate if needed
+  if (array->data) {
+    free(array->data);
+  }
+  array->data = malloc(newSize);
+  if (!array->data) {
+    array->len = 0;
+    return;
+  }
+  array->len = numElements;
+
+  auto *data = static_cast<uint8_t *>(array->data);
+  memset(data, 0, newSize);
+
+  // Mask for extracting element bits
+  int64_t elementMask = (elementBitWidth < 64)
+                            ? ((1LL << elementBitWidth) - 1)
+                            : static_cast<int64_t>(-1);
+
+  if (isRightToLeft) {
+    // Right-to-left: extract from LSB to MSB, store from last to first
+    int bitPos = 0;
+    for (int64_t i = numElements - 1; i >= 0 && bitPos < 64; --i) {
+      int64_t elemVal = (sourceBits >> bitPos) & elementMask;
+      // Store element (little-endian)
+      for (int32_t b = 0; b < bytesPerElement && b < 8; ++b) {
+        data[i * bytesPerElement + b] =
+            static_cast<uint8_t>((elemVal >> (b * 8)) & 0xFF);
+      }
+      bitPos += elementBitWidth;
+    }
+  } else {
+    // Left-to-right: extract from LSB to MSB, store from first to last
+    int bitPos = 0;
+    for (int64_t i = 0; i < numElements && bitPos < 64; ++i) {
+      int64_t elemVal = (sourceBits >> bitPos) & elementMask;
+      // Store element (little-endian)
+      for (int32_t b = 0; b < bytesPerElement && b < 8; ++b) {
+        data[i * bytesPerElement + b] =
+            static_cast<uint8_t>((elemVal >> (b * 8)) & 0xFF);
+      }
+      bitPos += elementBitWidth;
+    }
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Event Operations
 //===----------------------------------------------------------------------===//
@@ -2112,6 +2176,89 @@ extern "C" void __moore_fclose(int32_t fd) {
       fileHandles[i] = nullptr;
     }
   }
+}
+
+extern "C" int32_t __moore_fgetc(int32_t fd) {
+  // Find the first file indicated by the MCD
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      return std::fgetc(fileHandles[i]);
+    }
+  }
+  return -1; // EOF/error
+}
+
+extern "C" int32_t __moore_fgets(MooreString *str, int32_t fd) {
+  if (!str)
+    return 0;
+
+  // Find the first file indicated by the MCD
+  FILE *file = nullptr;
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      file = fileHandles[i];
+      break;
+    }
+  }
+
+  if (!file)
+    return 0;
+
+  // Read line into a temporary buffer
+  char buffer[4096];
+  if (!std::fgets(buffer, sizeof(buffer), file))
+    return 0;
+
+  // Allocate string and copy data
+  size_t len = std::strlen(buffer);
+  str->data = static_cast<char *>(std::malloc(len + 1));
+  if (!str->data) {
+    str->len = 0;
+    return 0;
+  }
+  std::memcpy(str->data, buffer, len + 1);
+  str->len = static_cast<int64_t>(len);
+
+  return static_cast<int32_t>(len);
+}
+
+extern "C" int32_t __moore_feof(int32_t fd) {
+  // Find the first file indicated by the MCD
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      return std::feof(fileHandles[i]) ? 1 : 0;
+    }
+  }
+  return 1; // Treat invalid fd as EOF
+}
+
+extern "C" void __moore_fflush(int32_t fd) {
+  if (fd == 0) {
+    // Flush all open files
+    for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+      if (fileHandles[i]) {
+        std::fflush(fileHandles[i]);
+      }
+    }
+    std::fflush(stdout);
+  } else {
+    // Flush specific files indicated by the MCD
+    for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+      if ((fd & (1 << i)) && fileHandles[i]) {
+        std::fflush(fileHandles[i]);
+      }
+    }
+  }
+}
+
+extern "C" int32_t __moore_ftell(int32_t fd) {
+  // Find the first file indicated by the MCD
+  for (int32_t i = 1; i < kMaxOpenFiles; ++i) {
+    if ((fd & (1 << i)) && fileHandles[i]) {
+      return static_cast<int32_t>(std::ftell(fileHandles[i]));
+    }
+  }
+  return -1; // Error
 }
 
 //===----------------------------------------------------------------------===//
