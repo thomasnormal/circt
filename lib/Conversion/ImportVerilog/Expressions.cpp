@@ -3822,12 +3822,11 @@ struct RvalueExprVisitor : public ExprVisitor {
         });
         if (failed(context.convertFunction(**subroutine)))
           return {};
-        // Pass the newObj as the implicit this argument of the ctor while
-        // keeping the caller's implicit `this` for argument evaluation.
-        auto savedOverride = context.methodReceiverOverride;
-        context.methodReceiverOverride = newObj;
-        auto restoreOverride = llvm::make_scope_exit(
-            [&] { context.methodReceiverOverride = savedOverride; });
+        // Pass the newObj as the implicit this argument of the ctor.
+        auto savedThis = context.currentThisRef;
+        context.currentThisRef = newObj;
+        llvm::scope_exit restoreThis(
+            [&] { context.currentThisRef = savedThis; });
         // Emit a call to ctor
         if (!visitCall(*callConstructor, *subroutine))
           return {};
