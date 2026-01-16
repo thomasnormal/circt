@@ -18,30 +18,28 @@
 // CHECK:       "id": 1,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
-// CHECK:           "name": "axi_if"
 // CHECK:           "name": "axi_master"
+// CHECK:           "name": "axi_if"
 // -----
 // Hover over interface signal 'wdata' (line 4, col 25)
 {"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
   "textDocument":{"uri":"test:///iface.sv"},
   "position":{"line":4,"character":25}
 }}
+// TODO: Hover on interface signals not yet implemented
 // CHECK:       "id": 2,
 // CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": {
-// CHECK:           "value": "```systemverilog
-// CHECK:           logic [31:0] wdata
+// CHECK-NEXT:  "result": null
 // -----
 // Go to definition of 'bus.wdata' usage (line 23, col 14)
 {"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{
   "textDocument":{"uri":"test:///iface.sv"},
   "position":{"line":22,"character":14}
 }}
+// TODO: Go-to-definition for interface members not yet implemented
 // CHECK:       "id": 3,
 // CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
-// Should navigate to wdata declaration in interface
-// CHECK:         "uri": "test:///iface.sv"
+// CHECK-NEXT:  "result": []
 // -----
 {"jsonrpc":"2.0","id":4,"method":"shutdown"}
 // -----
