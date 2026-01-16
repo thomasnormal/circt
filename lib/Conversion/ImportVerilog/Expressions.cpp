@@ -2257,13 +2257,32 @@ struct RvalueExprVisitor : public ExprVisitor {
         return moore::ConstantOp::create(builder, loc, intType, 0);
       }
 
-      // For string types, return empty string
+      // For string types, return appropriate value based on function name
       if (isa<moore::StringType>(type)) {
-        // Create an empty string by converting a 0-width integer to string
-        auto intTy = moore::IntType::getInt(context.getContext(), 8);
-        auto emptyInt =
-            moore::ConstantStringOp::create(builder, loc, intTy, "");
-        return moore::IntToStringOp::create(builder, loc, emptyInt);
+        std::string strValue;
+
+        // Return meaningful values for UVM tool identification DPI functions
+        if (subroutine->name == "uvm_dpi_get_tool_name_c") {
+          strValue = "CIRCT";
+        } else if (subroutine->name == "uvm_dpi_get_tool_version_c") {
+          strValue = "1.0";
+        }
+        // Default: empty string for other DPI functions
+
+        if (strValue.empty()) {
+          // Create an empty string by converting a minimal integer to string
+          auto intTy = moore::IntType::getInt(context.getContext(), 8);
+          auto emptyInt =
+              moore::ConstantStringOp::create(builder, loc, intTy, "");
+          return moore::IntToStringOp::create(builder, loc, emptyInt);
+        }
+
+        // Create a string constant with the appropriate value
+        auto intTy =
+            moore::IntType::getInt(context.getContext(), strValue.size() * 8);
+        auto strInt =
+            moore::ConstantStringOp::create(builder, loc, intTy, strValue);
+        return moore::IntToStringOp::create(builder, loc, strInt);
       }
 
       // For chandle types, return null (0). This is appropriate for DPI
@@ -2304,7 +2323,16 @@ struct RvalueExprVisitor : public ExprVisitor {
             interfaceInstance = context.convertRvalueExpression(*recvExpr);
           }
 
-          // If not available, look up the interface instance by name.
+          // If not available, check if we're inside an interface method calling
+          // another method on the same interface. In this case, use the current
+          // interface argument (the implicit first parameter of the interface
+          // method).
+          if (!interfaceInstance && context.currentInterfaceArg &&
+              context.currentInterfaceBody == instBody) {
+            interfaceInstance = context.currentInterfaceArg;
+          }
+
+          // If still not available, look up the interface instance by name.
           // The call syntax "iface.set_sig()" means we need the instance "iface".
           // We can find it by looking for the interface instance in our tracked
           // instances whose definition matches the method's parent interface.
