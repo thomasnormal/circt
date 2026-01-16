@@ -36,7 +36,7 @@ func.func @NestedUnpackedStructWithString() {
 // Test that unpacked structs without dynamic types still use hw::StructType
 // CHECK-LABEL: func.func @UnpackedStructWithoutDynamic
 func.func @UnpackedStructWithoutDynamic() {
-  // CHECK: llhd.sig "var"
+  // CHECK: %var = llhd.sig %{{.*}} : !hw.struct<a: i32, b: i32>
   %var = moore.variable name "var" : <ustruct<{a: i32, b: i32}>>
   return
 }

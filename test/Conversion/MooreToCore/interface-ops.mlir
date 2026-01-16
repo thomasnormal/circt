@@ -29,10 +29,10 @@ moore.interface @axi_bus {
 //===----------------------------------------------------------------------===//
 
 /// Test interface instance lowering to malloc
-/// The interface struct size is 20 bytes:
-///   i1 + i1 (2 bytes) + padding (2) + i32 (4) + i64 (8) + i1 + i1 (2) + padding (2) = 20
+/// The interface struct is: (i1, i1, i32, i64, i1, i1)
+/// Size: i1 + i1 + i32 + i64 + i1 + i1 = 1+1+4+8+1+1 = 16 bytes (packed size)
 // CHECK-LABEL: func.func @test_interface_instance
-// CHECK:   %[[SIZE:.*]] = llvm.mlir.constant(20 : i64) : i64
+// CHECK:   %[[SIZE:.*]] = llvm.mlir.constant(16 : i64) : i64
 // CHECK:   %[[PTR:.*]] = llvm.call @malloc(%[[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 func.func @test_interface_instance() -> !moore.ref<virtual_interface<@axi_bus>> {
