@@ -708,6 +708,92 @@ Based on systematic testing of ~/sv-tests/, ~/mbit/*avip*, and ~/verilator-verif
 
 ---
 
+## Big Projects Status (Iteration 30)
+
+Comprehensive survey of the 6 major projects for Xcelium parity:
+
+### 1. Full SVA Support with Z3 ⚠️ PARTIAL
+
+**Working:**
+- SVA → LTL conversion complete (SVAToLTL.cpp - 321 patterns)
+- VerifToSMT conversion (967 lines)
+- $sampled, $past, $changed, $stable, $rose, $fell implemented
+- circt-bmc bounded model checking pipeline
+
+**Missing:**
+- Z3 NOT INSTALLED (`Z3_LIBRARIES-NOTFOUND`)
+- LTL properties not yet supported in VerifToSMT
+- `verif.clocked_assert` needs lowering pass
+- SMT solver for complex constraints
+
+### 2. Scalable Multi-core Arcilator ❌ MISSING
+
+**Status:** No multi-threading support found
+- Arcilator runtime is single-threaded JIT
+- Arc dialect has 37+ transform passes (all sequential)
+- Would require fundamental architectural redesign
+- Consider PDES (Parallel Discrete Event Simulation) model
+
+### 3. Language Server (LSP) and Debugging ⚠️ PARTIAL
+
+**Working:**
+- circt-verilog-lsp-server compiles and runs
+- LSP transport infrastructure (LLVM LSP integration)
+- `--uvm-path` flag and `UVM_HOME` env var parsing
+- Basic file parsing and error reporting
+
+**Missing:**
+- Code completion (semantic)
+- Go-to-definition/references (cross-file)
+- Rename refactoring
+- Debugger integration (LLDB)
+
+### 4. Full 4-State (X/Z Propagation) ❌ MISSING
+
+**Status:** Two-state logic only (0/1)
+- X and Z recognized as identifiers only
+- Requires Moore type system redesign
+- Would impact 321+ conversion patterns
+- Design 4-state type system RFC needed
+
+### 5. Coverage Support ⚠️ PARTIAL
+
+**Working:**
+- CovergroupDeclOp, CoverpointDeclOp, CoverCrossDeclOp in MooreOps.td
+- Coverage runtime library (2,270 LOC)
+- 80+ test cases in test_coverage_runtime.cpp
+- Coverage ops lower to MooreToCore
+
+**Missing:**
+- Coverage expressions and conditional sampling
+- Cross-cover correlation analysis
+- Coverage HTML report generation
+
+### 6. DPI/VPI Support ⚠️ STUBS ONLY
+
+**Current:**
+- DPI-C import parsing works (22 functions stubbed)
+- External function declarations recognized
+- Stub returns: int=0, string="CIRCT", void=no-op
+
+**Missing:**
+- No actual C function invocation (FFI bridge needed)
+- No VPI (Verilog Procedural Interface)
+- Memory management between SV and C undefined
+
+### Big Projects Summary Table
+
+| Project | Status | Priority | Blocking |
+|---------|--------|----------|----------|
+| SVA with Z3 | Partial | HIGH | Z3 install |
+| Multi-core Arc | Missing | MEDIUM | Architecture |
+| LSP/Debugging | Partial | MEDIUM | Features |
+| 4-State Logic | Missing | LOW | Type system |
+| Coverage | Partial | HIGH | Cross-cover |
+| DPI/VPI | Stubs | MEDIUM | FFI bridge |
+
+---
+
 ## Features Completed
 
 ### Class Support
