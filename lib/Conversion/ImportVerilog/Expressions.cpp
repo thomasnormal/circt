@@ -275,6 +275,72 @@ struct ExprVisitor {
     return context.convertRvalueExpression(expr);
   }
 
+  /// Handle virtual interface member access. When slang resolves vif.data,
+  /// it creates a NamedValueExpression pointing directly to the interface
+  /// member variable. We need to parse the syntax to find the virtual
+  /// interface base and emit the proper VirtualInterfaceSignalRefOp.
+  ///
+  /// Returns the result value, or nullptr if this is not a virtual interface
+  /// member access that we can handle.
+  Value visitVirtualInterfaceMemberAccess(
+      const slang::ast::NamedValueExpression &expr,
+      const slang::syntax::SyntaxNode &syntax) {
+    // Get the left side of a scoped name syntax, which should be the
+    // virtual interface variable expression.
+    const slang::syntax::NameSyntax *leftSyntax = nullptr;
+
+    // Handle scoped names like vif.data
+    if (auto *scoped = syntax.as_if<slang::syntax::ScopedNameSyntax>()) {
+      leftSyntax = scoped->left;
+    }
+
+    if (!leftSyntax)
+      return {};
+
+    // Use slang's expression binding to get the expression for the left side
+    // (the virtual interface variable). We need the current scope where the
+    // expression is being evaluated.
+    if (!context.currentScope)
+      return {};
+
+    // Create an AST context using the current evaluation scope
+    slang::ast::ASTContext astContext(*context.currentScope,
+                                      slang::ast::LookupLocation::max);
+
+    // Bind the left syntax to get an expression for the virtual interface
+    const auto &vifExpr = slang::ast::Expression::bind(*leftSyntax, astContext);
+    if (vifExpr.bad())
+      return {};
+
+    // Check if this is a virtual interface type
+    if (!vifExpr.type->isVirtualInterface())
+      return {};
+
+    // Now convert the virtual interface expression to get the MLIR value
+    Value vifValue = context.convertRvalueExpression(vifExpr);
+    if (!vifValue)
+      return {};
+
+    auto vifTy = dyn_cast<moore::VirtualInterfaceType>(vifValue.getType());
+    if (!vifTy)
+      return {};
+
+    // Create the signal reference operation
+    auto type = context.convertType(*expr.type);
+    if (!type)
+      return {};
+
+    auto signalSym =
+        mlir::FlatSymbolRefAttr::get(builder.getContext(), expr.symbol.name);
+    auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+    Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+        builder, loc, refTy, vifValue, signalSym);
+
+    // For rvalue, read from the reference; for lvalue, return the ref
+    return isLvalue ? signalRef
+                    : moore::ReadOp::create(builder, loc, signalRef);
+  }
+
   /// Handle single bit selections.
   Value visit(const slang::ast::ElementSelectExpression &expr) {
     auto type = context.convertType(*expr.type);
@@ -733,6 +799,33 @@ struct ExprVisitor {
                       : moore::ReadOp::create(builder, loc, fieldRef);
     }
 
+    // Handle virtual interfaces.
+    if (valueType->isVirtualInterface()) {
+      // Convert the base expression (the virtual interface) to get the vif
+      // value.
+      auto vifVal = context.convertRvalueExpression(expr.value());
+      if (!vifVal)
+        return {};
+
+      auto vifTy = dyn_cast<moore::VirtualInterfaceType>(vifVal.getType());
+      if (!vifTy) {
+        mlir::emitError(loc)
+            << "expected virtual interface type but got " << vifVal.getType();
+        return {};
+      }
+
+      // Create a reference to the signal within the virtual interface.
+      auto signalSym =
+          mlir::FlatSymbolRefAttr::get(builder.getContext(), expr.member.name);
+      auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+      Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+          builder, loc, refTy, vifVal, signalSym);
+
+      // For lvalue, return the ref; for rvalue, read from it.
+      return isLvalue ? signalRef
+                      : moore::ReadOp::create(builder, loc, signalRef);
+    }
+
     mlir::emitError(loc, "expression of type ")
         << valueType->toString() << " has no member fields";
     return {};
@@ -824,6 +917,24 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto constant = context.evaluateConstant(expr);
     if (auto value = context.materializeConstant(constant, *expr.type, loc))
       return value;
+
+    // Handle virtual interface member access. When accessing a member through
+    // a virtual interface (e.g., vif.data), slang gives us a NamedValueExpression
+    // where the symbol is the interface member but accessed via a virtual
+    // interface variable. We detect this by checking if the symbol's parent
+    // scope is an interface body and the syntax is a scoped name.
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto parentKind = var->getParentScope()->asSymbol().kind;
+      if (parentKind == slang::ast::SymbolKind::InstanceBody) {
+        // Check if this is accessed through a virtual interface by looking at
+        // the syntax.
+        if (expr.syntax) {
+          if (auto result =
+                  visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
+            return result;
+        }
+      }
+    }
 
     // Otherwise some other part of ImportVerilog should have added an MLIR
     // value for this expression's symbol to the `context.valueSymbols` table.
@@ -3649,6 +3760,21 @@ struct LvalueExprVisitor : public ExprVisitor {
     if (auto *const property =
             expr.symbol.as_if<slang::ast::ClassPropertySymbol>()) {
       return visitClassProperty(context, *property);
+    }
+
+    // Handle virtual interface member access. When accessing a member through
+    // a virtual interface (e.g., vif.data), slang gives us a NamedValueExpression
+    // where the symbol is the interface member but accessed via a virtual
+    // interface variable.
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto parentKind = var->getParentScope()->asSymbol().kind;
+      if (parentKind == slang::ast::SymbolKind::InstanceBody) {
+        if (expr.syntax) {
+          if (auto result =
+                  visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
+            return result;
+        }
+      }
     }
 
     auto d = mlir::emitError(loc, "unknown name `") << expr.symbol.name << "`";

@@ -224,9 +224,18 @@ struct TypeVisitor {
   }
 
   Type visit(const slang::ast::VirtualInterfaceType &type) {
-    // Get the interface name from the instance
+    // Get the interface from the virtual interface type
     auto &iface = type.iface;
-    auto ifaceName = iface.body.getDefinition().name;
+
+    // Ensure the interface is declared (header converted). This is necessary
+    // because virtual interface types reference an interface that might not
+    // have been instantiated anywhere in the design.
+    auto *ifaceLowering = context.convertInterfaceHeader(&iface.body);
+    if (!ifaceLowering)
+      return {};
+
+    // Use the interface's symbol name from the lowering
+    auto ifaceName = ifaceLowering->op.getSymName();
 
     // Build the symbol reference
     mlir::SymbolRefAttr symRef;
