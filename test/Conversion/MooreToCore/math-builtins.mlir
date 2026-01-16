@@ -209,3 +209,17 @@ func.func @test_bitstoreal(%arg0: !moore.i64) -> !moore.f64 {
   %0 = moore.builtin.bitstoreal %arg0 : !moore.i64
   return %0 : !moore.f64
 }
+
+// CHECK-LABEL: func.func @test_shortrealtobits
+func.func @test_shortrealtobits(%arg0: !moore.f32) -> !moore.i32 {
+  // CHECK: llvm.bitcast %arg0 : f32 to i32
+  %0 = moore.builtin.shortrealtobits %arg0
+  return %0 : !moore.i32
+}
+
+// CHECK-LABEL: func.func @test_bitstoshortreal
+func.func @test_bitstoshortreal(%arg0: !moore.i32) -> !moore.f32 {
+  // CHECK: llvm.bitcast %arg0 : i32 to f32
+  %0 = moore.builtin.bitstoshortreal %arg0 : !moore.i32
+  return %0 : !moore.f32
+}
