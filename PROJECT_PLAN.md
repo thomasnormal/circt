@@ -61,10 +61,14 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 ## Active Workstreams (keep 4 agents busy)
 
 ### Track A: Test MooreToCore with BFMs
-**Status**: 🟡 IN PROGRESS
+**Status**: ✅ COMPLETE
 **Task**: Now that interface tasks work, test BFM components through MooreToCore
 **Files**: ~/mbit/*_avip/src/hdl_top/*_bfm/
-**Next**: Run BFM files through full pipeline
+**Results**:
+- Interface task-calls-task pattern fixed (task_c calling task_a and task_b within same interface)
+- BFM-style patterns with nested task calls now work correctly
+- MooreToCore limitation: Tasks with timing control (`@(posedge clk)`) cannot lower to LLHD (llhd.wait requires llhd.process parent)
+- Simple interface functions/tasks (no timing) lower successfully through MooreToCore
 
 ### Track B: Fix AVIP Source Issues
 **Status**: 🟡 IN PROGRESS
@@ -83,6 +87,13 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 **Task**: Test complete UVM parsing + MooreToCore pipeline
 **Files**: ~/uvm-core/src/
 **Next**: Run uvm_pkg.sv through circt-verilog | circt-opt -convert-moore-to-core
+
+### Previous Track Results (Iteration 11)
+- **Track A**: ✅ BFM nested task calls fixed (d1b870e5e) - Interface tasks calling other interface tasks now work correctly
+- **Track A**: ⚠️ MooreToCore timing limitation documented - Tasks with `@(posedge clk)` can't lower (llhd.wait needs process parent)
+- **Track B**: ✅ UVM MooreToCore: StructExtract crash fixed (59ccc8127) - only `moore.array.locator` remains
+- **Track C**: ✅ DPI tool info functions implemented - returns "CIRCT" and "1.0" for tool name/version
+- **Track D**: ✅ AHB AVIP testing confirms same fixes work across AVIPs
 
 ### Previous Track Results (Iteration 10)
 - **Track A**: ✅ Interface task/function support (d1cd16f75) - BFM patterns now work with implicit iface arg
@@ -298,6 +309,8 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+- `59ccc8127` - [MooreToCore] Fix StructExtract/StructCreate for dynamic types
+- `d1b870e5e` - [ImportVerilog] Add DPI tool info and fix interface task-to-task calls
 - `d1cd16f75` - [ImportVerilog] Add interface task/function support
 - `99b4fea86` - [MooreToCore] Add tests for StructExtractRefOp with dynamic fields
 - `5dd8ce361` - [MooreToCore] Fix RefType cast crashes for structs with dynamic fields
