@@ -1,5 +1,74 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 24: Constraint Expression Lowering + Coverage Research
+
+**Status**: Constraint expression parsing now implemented. Coverage architecture fully documented.
+
+### Track A: AVIP Full Pipeline Testing ✅
+
+Tested AVIPs through complete pipeline (SV → Moore → Core → HW → Arcilator):
+- **Result**: Simple cases work end-to-end
+- **Blocking Issues Identified**:
+  - Interface member access needs lvalue support
+  - $finish in initial blocks generates `moore.unreachable` (falls back to llhd.process)
+  - SVA assertions not yet lowered
+
+### Track B: Coverage Implementation Research ✅
+
+Documented full coverage architecture:
+- **Runtime**: `__moore_covergroup_*` functions already implemented
+- **Missing IR Ops**: Need `CovergroupInstOp` and `CovergroupSampleOp`
+- **Lowering Path**: covergroup instantiation → runtime calls → coverage data
+- **Next Step**: Implement covergroup instantiation in ImportVerilog
+
+### Track C: Constraint Expression Lowering ✅ IMPLEMENTED
+
+**Commit**: ded570db6
+
+Implemented full constraint expression parsing in `ImportVerilog/Structure.cpp`:
+| Constraint Type | Moore IR Op |
+|-----------------|-------------|
+| Expression | `moore.constraint.expr` |
+| Implication | `moore.constraint.implication` |
+| Conditional | `moore.constraint.if_else` |
+| Uniqueness | `moore.constraint.unique` |
+| Foreach | Warning (TODO) |
+| SolveBefore | Warning (TODO) |
+| DisableSoft | Warning (TODO) |
+
+Also fixed `MooreOps.td` to use `AnySingleBitType` instead of `I1`.
+
+### Track D: Complex Initial Block Analysis ✅
+
+Confirmed current design is correct:
+- **Simple blocks** → `seq.initial` (arcilator-compatible)
+- **Complex blocks** (wait/captured signals) → `llhd.process` fallback
+- **$finish** generates `moore.unreachable` which disables seq.initial path
+- **Fix**: Consider separate handling for $finish that doesn't emit unreachable
+
+### Commits This Iteration
+
+| Commit | Description |
+|--------|-------------|
+| `ded570db6` | [ImportVerilog] Add constraint expression lowering |
+
+### What's New
+
+✅ **Constraint expressions** now properly parsed and converted to IR
+✅ **Coverage architecture** fully documented - ready for implementation
+✅ **AVIP pipeline** testing identified specific blocking issues
+
+### Remaining Gaps
+
+| Feature | Status | Priority |
+|---------|--------|----------|
+| Coverage collection | Need IR ops | MEDIUM |
+| Interface lvalue access | Not implemented | MEDIUM |
+| $finish in seq.initial | Needs special handling | LOW |
+| Foreach constraints | Warning only | LOW |
+
+---
+
 ## January 16, 2026 - Iteration 23: 🎉 END-TO-END SIMULATION WORKING
 
 **Status**: MAJOR MILESTONE - Simple initial blocks now work through arcilator! Pipeline complete.
