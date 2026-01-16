@@ -3,6 +3,64 @@
 [![](https://github.com/llvm/circt/actions/workflows/buildAndTest.yml/badge.svg?event=push)](https://github.com/llvm/circt/actions?query=workflow%3A%22Build+and+Test%22)
 [![Nightly integration tests](https://github.com/llvm/circt/workflows/Nightly%20integration%20tests/badge.svg)](https://github.com/llvm/circt/actions?query=workflow%3A%22Nightly+integration+tests%22)
 
+---
+
+## Fork Features (thomasnormal/circt vs llvm/circt)
+
+This fork extends CIRCT with enhanced **UVM and SystemVerilog** support for running UVM testbenches. Key additions:
+
+### UVM/Class Support
+- **Class OOP** - Full class hierarchy, inheritance, virtual methods, vtable resolution
+- **Parameterized classes** - UVM-style parameterized classes with proper specialization
+- **Static properties** - Per-specialization static variables with correct scoping
+- **Factory pattern support** - Virtual class vtables, method lookup in parameterized classes
+
+### Interface & Module Support
+- **Virtual interfaces** - Full virtual interface support with ref→vif conversion
+- **Interface member lvalue access** - Proper llhd::ProbeOp generation for interface signals
+- **Modport support** - Complete modport handling
+
+### Constraint Randomization
+- **94% constraint coverage** - Range, multi-range, soft constraints
+- **All 10 constraint ops** - Lower to runtime solver calls
+- **Inline implication constraints** - Supported via runtime
+- **Complex predicates** - SMT solver integration for remaining 6%
+
+### File I/O & System Functions
+- **$fopen/$fwrite/$fclose** - Complete file I/O support
+- **$display/$format** - Full format specifier support including width
+- **$finish/$fatal** - Proper sim.terminate handling in seq.initial
+
+### Initial Blocks & Processes
+- **seq.initial support** - Simple initial blocks run through arcilator
+- **$finish in seq.initial** - No longer forces llhd.process fallback
+- **sim.proc.print** - $display works in arcilator simulation
+
+### Coverage & Assertions
+- **Covergroup infrastructure** - CovergroupHandleType, CovergroupInstOp, CovergroupSampleOp
+- **SVA dialect** - Basic assertion ops for verification
+
+### LSP/IDE Support
+- **UVM path support** - `--uvm-path` flag and `UVM_HOME` environment variable
+- **Interface symbols** - LSP returns proper interface structure
+- **Debounce fix** - LSP no longer hangs on large files
+
+### MooreToCore Lowering
+- **100% UVM parsing** - 161K+ lines of Moore IR from uvm_pkg.sv
+- **0 lowering errors** - Full MooreToCore conversion for UVM
+- **All AVIPs pass** - APB, AHB, AXI4, AXI4-Lite, UART, I2S, I3C, SPI
+
+### Misc Fixes
+- **Array locator inline loops** - Complex predicates via scf.for
+- **llhd.time data layout** - Structs with time fields handled correctly
+- **RefType for dynamic structs** - Proper GEP for strings/queues
+- **Mem2Reg loop-local variables** - Dominance errors fixed
+- **realtobits/bitstoreal** - Conversion patterns for real types
+
+For full details, see [PROJECT_PLAN.md](PROJECT_PLAN.md) and [docs/CHANGES.md](docs/CHANGES.md).
+
+---
+
 # ⚡️ "CIRCT" / Circuit IR Compilers and Tools
 
 "CIRCT" stands for "Circuit Intermediate Representations (IR) Compilers and Tools".  One might also interpret
