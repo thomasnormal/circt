@@ -1,5 +1,74 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 28 (Complete) - January 16, 2026
+
+### Major Accomplishments
+
+#### $onehot and $onehot0 System Functions (commit 7d5391552)
+- Implemented `OneHotBIOp` and `OneHot0BIOp` in Moore dialect
+- Added ImportVerilog handlers for `$onehot` and `$onehot0` system calls
+- MooreToCore lowering using `llvm.intr.ctpop`:
+  - `$onehot(x)` → `ctpop(x) == 1` (exactly one bit set)
+  - `$onehot0(x)` → `ctpop(x) <= 1` (at most one bit set)
+- Tests added in `builtins.sv` and `string-ops.mlir`
+
+#### $countbits System Function (commit 2830654d4)
+- Implemented `CountBitsBIOp` in Moore dialect
+- Added ImportVerilog handler for `$countbits` system call
+- Counts occurrences of specified bit values in a vector
+
+#### SVA Sampled Value Functions (commit 4704320af)
+- Implemented `$sampled` - returns sampled value of expression
+- Implemented `$past` with delay parameter - returns value from N cycles ago
+- Implemented `$changed` - detects when value differs from previous cycle
+- `$stable`, `$rose`, `$fell` all working in SVA context
+
+#### Direct Interface Member Access Fix (commit 25cd3b6a2)
+- Fixed direct member access through interface instances
+- Uses interfaceInstances map for proper resolution
+
+#### Test Infrastructure Fixes
+- Fixed dpi.sv CHECK ordering (commit 12d75735d)
+- Documented task clocking event limitation (commit 110fc6caf)
+  - Tasks with IsolatedFromAbove can't reference module-level variables in timing controls
+  - This is a region isolation limitation, not a parsing issue
+
+#### sim.proc.print Lowering Discovery
+- **Finding**: sim.proc.print lowering ALREADY EXISTS in `LowerArcToLLVM.cpp`
+- `PrintFormattedProcOpLowering` pattern handles all sim.fmt.* operations
+- No additional work needed for $display in arcilator
+
+#### circt-sim LLHD Process Limitation (Critical Finding)
+- **Discovery**: circt-sim does NOT interpret LLHD process bodies
+- Simulation completes at time 0fs with no output
+- Root cause: `circt-sim.cpp:443-486` creates PLACEHOLDER processes
+- ProcessScheduler infrastructure exists but not connected to LLHD IR interpretation
+- This is a critical gap for behavioral simulation
+- Complexity: HIGH (2-4 weeks to implement)
+- Arcilator works for RTL-only designs (seq.initial, combinational logic)
+
+#### Coverage Infrastructure Analysis
+- Coverage infrastructure exists and is complete:
+  - `CovergroupDeclOp`, `CoverpointDeclOp`, `CoverCrossDeclOp`
+  - `CovergroupInstOp`, `CovergroupSampleOp`, `CovergroupGetCoverageOp`
+- MooreToCore lowering complete for all 6 coverage ops
+- **Finding**: Explicit `.sample()` calls WORK (what AVIPs use)
+- **Gap**: Event-driven `@(posedge clk)` sampling not connected
+- AVIPs use explicit sampling - no additional work needed for AVIP support
+
+### Test Results
+- **ImportVerilog Tests**: 38/38 pass (100%)
+- **AVIP Global Packages**: 8/8 pass (100%)
+- **No regressions** from new features
+
+### Key Insights
+- Arcilator is the recommended path for simulation (RTL + seq.initial)
+- circt-sim behavioral simulation needs LLHD process interpreter work
+- sim.proc.print pipeline: Moore → sim.fmt.* → sim.proc.print → printf (all working)
+- Region isolation limitation documented for tasks with timing controls
+
+---
+
 ## Iteration 27 (Complete) - January 16, 2026
 
 ### Major Accomplishments
