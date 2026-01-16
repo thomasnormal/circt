@@ -1,0 +1,156 @@
+// RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
+
+// CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
+
+//===----------------------------------------------------------------------===//
+// Soft Constraint Support Tests
+// IEEE 1800-2017 Section 18.5.13 "Soft constraints"
+//===----------------------------------------------------------------------===//
+
+/// Test class with soft constraint providing default value
+/// Corresponds to SystemVerilog: constraint soft_c { soft value == 42; }
+/// The soft constraint sets a default value that can be overridden.
+
+moore.class.classdecl @SoftConstraintClass {
+  moore.class.propertydecl @value : !moore.i32 rand_mode rand
+  moore.constraint.block @soft_c {
+  ^bb0(%value: !moore.i32):
+    // Soft constraint: soft value == 42 (represented as inside {[42:42]})
+    moore.constraint.inside %value, [42, 42] : !moore.i32 soft
+  }
+}
+
+// CHECK-LABEL: func.func @test_soft_constraint
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_soft_constraint(%obj: !moore.class<@SoftConstraintClass>) -> i1 {
+  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(8 : i64) : i64
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
+  // Soft constraint applies the default value 42
+  // CHECK: %[[DEFAULT:.*]] = llvm.mlir.constant(42 : i64) : i64
+  // CHECK: %[[TRUNC:.*]] = arith.trunci %[[DEFAULT]] : i64 to i32
+  // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+  // CHECK: llvm.store %[[TRUNC]], %[[GEP]] : i32, !llvm.ptr
+  // CHECK: %[[SUCCESS:.*]] = hw.constant true
+  // CHECK: return %[[SUCCESS]] : i1
+  %success = moore.randomize %obj : !moore.class<@SoftConstraintClass>
+  return %success : i1
+}
+
+/// Test class with both hard and soft constraints
+/// Hard constraints override soft constraints on the same property
+
+moore.class.classdecl @HardOverridesSoftClass {
+  moore.class.propertydecl @value : !moore.i32 rand_mode rand
+  // Soft constraint: default to 0
+  moore.constraint.block @soft_c {
+  ^bb0(%value: !moore.i32):
+    moore.constraint.inside %value, [0, 0] : !moore.i32 soft
+  }
+  // Hard constraint: must be in [10:20] - this overrides the soft constraint
+  moore.constraint.block @hard_c {
+  ^bb0(%value: !moore.i32):
+    moore.constraint.inside %value, [10, 20] : !moore.i32
+  }
+}
+
+// CHECK-LABEL: func.func @test_hard_overrides_soft
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_hard_overrides_soft(%obj: !moore.class<@HardOverridesSoftClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Hard constraint is applied (range 10-20), soft is ignored
+  // CHECK: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
+  // CHECK: %[[MAX:.*]] = llvm.mlir.constant(20 : i64) : i64
+  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
+  // CHECK-NOT: llvm.mlir.constant(0 : i64)
+  // CHECK: %[[SUCCESS:.*]] = hw.constant true
+  // CHECK: return %[[SUCCESS]] : i1
+  %success = moore.randomize %obj : !moore.class<@HardOverridesSoftClass>
+  return %success : i1
+}
+
+/// Test class with multiple properties - soft constraint on one, hard on another
+/// Both constraints are in a single block with multiple block arguments
+
+moore.class.classdecl @MixedConstraintsClass {
+  moore.class.propertydecl @softProp : !moore.i32 rand_mode rand
+  moore.class.propertydecl @hardProp : !moore.i32 rand_mode rand
+  // Constraint block with both properties as block arguments
+  // Block arg 0 = softProp (rand prop 0), Block arg 1 = hardProp (rand prop 1)
+  moore.constraint.block @mixed_c {
+  ^bb0(%softProp: !moore.i32, %hardProp: !moore.i32):
+    // Soft constraint on first property (default to 100)
+    moore.constraint.inside %softProp, [100, 100] : !moore.i32 soft
+    // Hard constraint on second property (must be in [1:50])
+    moore.constraint.inside %hardProp, [1, 50] : !moore.i32
+  }
+}
+
+// CHECK-LABEL: func.func @test_mixed_constraints
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_mixed_constraints(%obj: !moore.class<@MixedConstraintsClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Hard constraint on hardProp (at index 2, after type_id and softProp)
+  // CHECK: %[[MIN:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK: %[[MAX:.*]] = llvm.mlir.constant(50 : i64) : i64
+  // CHECK: llvm.call @__moore_randomize_with_range
+  // Soft constraint on softProp (default value 100)
+  // CHECK: %[[DEFAULT:.*]] = llvm.mlir.constant(100 : i64) : i64
+  // CHECK: arith.trunci %[[DEFAULT]] : i64 to i32
+  // CHECK: %[[SUCCESS:.*]] = hw.constant true
+  // CHECK: return %[[SUCCESS]] : i1
+  %success = moore.randomize %obj : !moore.class<@MixedConstraintsClass>
+  return %success : i1
+}
+
+/// Test AVIP-style pattern: soft noOfWaitStates == 0
+
+moore.class.classdecl @AVIPStyleClass {
+  moore.class.propertydecl @noOfWaitStates : !moore.i32 rand_mode rand
+  // AVIP pattern: constraint waitState { soft noOfWaitStates == 0; }
+  moore.constraint.block @waitState {
+  ^bb0(%noOfWaitStates: !moore.i32):
+    moore.constraint.inside %noOfWaitStates, [0, 0] : !moore.i32 soft
+  }
+}
+
+// CHECK-LABEL: func.func @test_avip_soft_constraint
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_avip_soft_constraint(%obj: !moore.class<@AVIPStyleClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Soft constraint sets default to 0
+  // CHECK: %[[DEFAULT:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK: %[[TRUNC:.*]] = arith.trunci %[[DEFAULT]] : i64 to i32
+  // CHECK: llvm.store %[[TRUNC]]
+  // CHECK: %[[SUCCESS:.*]] = hw.constant true
+  // CHECK: return %[[SUCCESS]] : i1
+  %success = moore.randomize %obj : !moore.class<@AVIPStyleClass>
+  return %success : i1
+}
+
+/// Test class with only soft constraint on a property (no hard constraint)
+/// The soft constraint should be applied since nothing overrides it
+
+moore.class.classdecl @OnlySoftClass {
+  moore.class.propertydecl @defaultVal : !moore.i32 rand_mode rand
+  moore.class.propertydecl @randomVal : !moore.i32 rand_mode rand
+  // Only soft constraint on defaultVal
+  moore.constraint.block @default_c {
+  ^bb0(%defaultVal: !moore.i32):
+    moore.constraint.inside %defaultVal, [999, 999] : !moore.i32 soft
+  }
+  // No constraint on randomVal - will be fully random
+}
+
+// CHECK-LABEL: func.func @test_only_soft
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_only_soft(%obj: !moore.class<@OnlySoftClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Soft constraint applies default 999 to defaultVal
+  // CHECK: %[[DEFAULT:.*]] = llvm.mlir.constant(999 : i64) : i64
+  // CHECK: arith.trunci %[[DEFAULT]] : i64 to i32
+  // CHECK: llvm.store
+  // CHECK: %[[SUCCESS:.*]] = hw.constant true
+  // CHECK: return %[[SUCCESS]] : i1
+  %success = moore.randomize %obj : !moore.class<@OnlySoftClass>
+  return %success : i1
+}
