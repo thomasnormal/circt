@@ -12,11 +12,11 @@
 /// Test associative array declaration with different key types
 // CHECK-LABEL: moore.module @AssocArrayDeclarationTest() {
 module AssocArrayDeclarationTest;
-    // CHECK: [[AA1:%.+]] = moore.variable : <!moore.assoc_array<i32, i32>>
+    // CHECK: [[AA1:%.+]] = moore.variable : <assoc_array<i32, i32>>
     int aa_int[int];
-    // CHECK: [[AA2:%.+]] = moore.variable : <!moore.assoc_array<i32, string>>
+    // CHECK: [[AA2:%.+]] = moore.variable : <assoc_array<i32, string>>
     int aa_string[string];
-    // CHECK: [[AA3:%.+]] = moore.variable : <!moore.assoc_array<l8, i32>>
+    // CHECK: [[AA3:%.+]] = moore.variable : <assoc_array<l8, i32>>
     logic [7:0] aa_logic[int];
 endmodule
 
@@ -53,11 +53,11 @@ module AssocArrayDeleteTest;
         aa[30] = 300;
 
         // Delete specific key
-        // CHECK: moore.assoc.delete_key %aa, {{%.+}} : <!moore.assoc_array<i32, i32>>, i32
+        // CHECK: moore.assoc.delete_key %aa, {{%.+}} : <assoc_array<i32, i32>>, i32
         aa.delete(20);
 
         // Delete all entries
-        // CHECK: moore.assoc.delete %aa : <!moore.assoc_array<i32, i32>>
+        // CHECK: moore.assoc.delete %aa : <assoc_array<i32, i32>>
         aa.delete();
     end
 endmodule
@@ -179,7 +179,7 @@ endmodule
 /// Test associative array with string keys (common in UVM)
 // CHECK-LABEL: moore.module @AssocArrayStringKeyTest() {
 module AssocArrayStringKeyTest;
-    // CHECK: moore.variable : <!moore.assoc_array<i32, string>>
+    // CHECK: moore.variable : <assoc_array<i32, string>>
     int cfg_data[string];
     int val;
 
@@ -315,9 +315,9 @@ typedef int assoc_int_typedef[int];
 typedef int assoc_string_typedef[string];
 
 module TypedefAssocArrayTest;
-    // CHECK: moore.variable : <!moore.assoc_array<i32, i32>>
+    // CHECK: moore.variable : <assoc_array<i32, i32>>
     assoc_int_typedef aa_int;
-    // CHECK: moore.variable : <!moore.assoc_array<i32, string>>
+    // CHECK: moore.variable : <assoc_array<i32, string>>
     assoc_string_typedef aa_string;
     int val;
 
@@ -346,7 +346,7 @@ typedef string uvm_id_verbosities_array;
 typedef int severity_id_verbosities_typedef[uvm_id_verbosities_array];
 
 module UVMVerbositiesPatternTest;
-    // CHECK: moore.variable : <!moore.assoc_array<i32, string>>
+    // CHECK: moore.variable : <assoc_array<i32, string>>
     severity_id_verbosities_typedef verbosities;
     string severity;
     int level;

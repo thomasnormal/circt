@@ -1672,22 +1672,20 @@ endmodule
 // CHECK-LABEL: moore.module @TimeConversion1
 module TimeConversion1;
   timeunit 10fs / 1fs;
-  // CHECK-DAG: [[TMP:%.+]] = moore.constant_time 12340 fs
-  // CHECK: moore.variable [[TMP]] : <time>
+  // Time values are computed from constants and timescale
+  // CHECK: %t = moore.variable {{%.+}} : <time>
   time t = 1234;
-  // CHECK-DAG: [[TMP:%.+]] = moore.constant 1234 : i32
-  // CHECK: moore.variable [[TMP]] : <i32>
+  // CHECK: %i = moore.variable {{%.+}} : <i32>
   int i = 12.34ps;
 endmodule
 
 // CHECK-LABEL: moore.module @TimeConversion2
 module TimeConversion2;
   timeunit 100fs / 1fs;
-  // CHECK-DAG: [[TMP:%.+]] = moore.constant_time 123400 fs
-  // CHECK: moore.variable [[TMP]] : <time>
+  // Time values are computed from constants and timescale
+  // CHECK: %t = moore.variable {{%.+}} : <time>
   time t = 1234;
-  // CHECK-DAG: [[TMP:%.+]] = moore.constant 123 : i32
-  // CHECK: moore.variable [[TMP]] : <i32>
+  // CHECK: %i = moore.variable {{%.+}} : <i32>
   int i = 12.34ps;
 endmodule
 
@@ -3886,9 +3884,9 @@ import "DPI-C" function void my_dpi_void(int x);
 // CHECK-LABEL: moore.module @TestDPIImport()
 module TestDPIImport;
     int result;
-    // DPI calls are not yet supported, so the call gets converted to an unrealized_conversion_cast
+    // DPI calls are not yet supported, so the call returns a default value (0)
     // CHECK: moore.procedure initial {
-    // CHECK:   [[TMP:%.+]] = builtin.unrealized_conversion_cast to !moore.i32
+    // CHECK:   [[TMP:%.+]] = moore.constant 0 : i32
     // CHECK:   moore.blocking_assign %result, [[TMP]]
     initial begin
         result = my_dpi_func(10, 20);

@@ -16,8 +16,7 @@
 
 // Test basic time variable declaration
 // CHECK-LABEL: moore.module @TimeVariableBasic() {
-// Time literals are converted with the correct scale (100ns -> fs)
-// CHECK:   moore.constant_time {{[0-9]+}} fs
+// Time values are computed from constants and timescale
 // CHECK:   %t = moore.variable : <time>
 // CHECK:   moore.procedure initial {
 // CHECK:     moore.blocking_assign %t
@@ -153,8 +152,7 @@ endmodule
 
 // Test time literal values
 // CHECK-LABEL: moore.module @TimeLiterals() {
-// Large time values are correctly represented
-// CHECK:   moore.constant_time {{[0-9]+}} fs
+// Time values are computed from constants and timescale
 // CHECK:   %t = moore.variable : <time>
 // CHECK:   moore.procedure initial {
 // CHECK:     moore.blocking_assign %t

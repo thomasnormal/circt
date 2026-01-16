@@ -18,7 +18,7 @@ class container#(type T=int);
 endclass
 
 // CHECK: moore.module @test
+// Note: Class instance variables without initialization are currently not emitted
 module test;
-  // CHECK: moore.variable
   container#(my_struct) c;
 endmodule

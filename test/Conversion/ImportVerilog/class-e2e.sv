@@ -20,6 +20,9 @@
 // Forward-declared class types (P0 fix verification)
 //===----------------------------------------------------------------------===//
 
+// Queue of forward-declared class handles - appears first in output
+// MOORE: moore.global_variable @"pkg::items" : !moore.queue<class<@"pkg::Item">, 0>
+
 // The class is forward-declared via typedef, then used in a queue
 // MOORE-LABEL: moore.class.classdecl @"pkg::Item" {
 // MOORE:   moore.class.propertydecl @id : !moore.i32
@@ -33,9 +36,6 @@
 // MOORE-LABEL: func.func private @"pkg::Item::get_id"
 // MOORE: moore.class.property_ref %arg0[@id]
 // MOORE: moore.read
-
-// Queue of forward-declared class handles
-// MOORE: moore.global_variable @"pkg::items" : !moore.queue<class<@"pkg::Item">, 0>
 
 package pkg;
   // Forward declare the class before use

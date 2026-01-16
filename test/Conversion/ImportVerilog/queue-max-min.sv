@@ -21,7 +21,7 @@ module QueueMaxTest;
         q.push_back(30);
         q.push_back(20);
         // CHECK: [[Q_READ:%.+]] = moore.read %q
-        // CHECK: [[MAX:%.+]] = moore.queue.max [[Q_READ]] : !moore.queue<i32, 0> -> !moore.queue<i32, 0>
+        // CHECK: [[MAX:%.+]] = moore.queue.max [[Q_READ]] : queue<i32, 0> -> <i32, 0>
         max_vals = q.max();
     end
 endmodule
@@ -37,7 +37,7 @@ module QueueMinTest;
         q.push_back(5);
         q.push_back(20);
         // CHECK: [[Q_READ:%.+]] = moore.read %q
-        // CHECK: [[MIN:%.+]] = moore.queue.min [[Q_READ]] : !moore.queue<i32, 0> -> !moore.queue<i32, 0>
+        // CHECK: [[MIN:%.+]] = moore.queue.min [[Q_READ]] : queue<i32, 0> -> <i32, 0>
         min_vals = q.min();
     end
 endmodule
@@ -55,10 +55,10 @@ module FixedArrayMaxMinTest;
         arr[2] = 2;
         arr[3] = 3;
         // CHECK: [[ARR_READ:%.+]] = moore.read %arr
-        // CHECK: moore.queue.max [[ARR_READ]] : !moore.uarray<4 x i32> -> !moore.queue<i32, 0>
+        // CHECK: moore.queue.max [[ARR_READ]] : uarray<4 x i32> -> <i32, 0>
         max_result = arr.max();
         // CHECK: [[ARR_READ2:%.+]] = moore.read %arr
-        // CHECK: moore.queue.min [[ARR_READ2]] : !moore.uarray<4 x i32> -> !moore.queue<i32, 0>
+        // CHECK: moore.queue.min [[ARR_READ2]] : uarray<4 x i32> -> <i32, 0>
         min_result = arr.min();
     end
 endmodule
