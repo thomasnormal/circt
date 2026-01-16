@@ -1,0 +1,9 @@
+{
+  "name": "circt-sv-uvm",
+  "version": "0.1.0",
+  "description": "SystemVerilog/UVM development toolkit with CIRCT LSP integration",
+  "author": {
+    "name": "CIRCT Contributors"
+  },
+  "keywords": ["systemverilog", "uvm", "verification", "lsp", "circt", "hardware"]
+}

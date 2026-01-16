@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "circt-verilog-lsp-server": {
+      "command": "${CIRCT_BUILD_DIR:-./build}/bin/circt-verilog-lsp-server",
+      "args": [],
+      "extensionToLanguage": {
+        ".sv": "systemverilog",
+        ".svh": "systemverilog",
+        ".v": "verilog",
+        ".vh": "verilog"
+      }
+    },
+    "circt-lsp-server": {
+      "command": "${CIRCT_BUILD_DIR:-./build}/bin/circt-lsp-server",
+      "args": [],
+      "extensionToLanguage": {
+        ".mlir": "mlir"
+      }
+    }
+  }
+}
