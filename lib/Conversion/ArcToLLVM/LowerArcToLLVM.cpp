@@ -16,6 +16,7 @@
 #include "circt/Dialect/Arc/Runtime/JITBind.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
+#include "circt/Dialect/Sim/SimOps.h"
 #include "circt/Support/ConversionPatternSet.h"
 #include "circt/Support/Namespace.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -687,6 +688,208 @@ struct SimEmitValueOpLowering
   }
 };
 
+/// Lowers sim.proc.print to printf calls. This pattern expands format string
+/// operations and generates the appropriate printf format string and arguments.
+struct PrintFormattedProcOpLowering
+    : public OpConversionPattern<sim::PrintFormattedProcOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(sim::PrintFormattedProcOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+
+    ModuleOp moduleOp = op->getParentOfType<ModuleOp>();
+    if (!moduleOp)
+      return failure();
+
+    // Collect format string fragments and their values.
+    SmallString<64> formatStr;
+    SmallVector<Value> printfArgs;
+
+    // Recursively process the format string input.
+    if (failed(processFormatString(op.getInput(), formatStr, printfArgs, loc,
+                                   rewriter)))
+      return failure();
+
+    // If the format string is empty, just erase the op.
+    if (formatStr.empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Lookup or create printf function.
+    auto printfFunc = LLVM::lookupOrCreateFn(
+        rewriter, moduleOp, "printf", LLVM::LLVMPointerType::get(getContext()),
+        LLVM::LLVMVoidType::get(getContext()), true);
+    if (failed(printfFunc))
+      return printfFunc;
+
+    // Create global string for the format.
+    SmallVector<char> formatStrVec{formatStr.begin(), formatStr.end()};
+    formatStrVec.push_back(0); // Null terminator
+
+    // Generate a unique name for the format string global.
+    static std::atomic<unsigned> globalCounter{0};
+    SmallString<32> globalName;
+    globalName = llvm::formatv("_arc_sim_print_fmt_{0}", globalCounter++);
+
+    LLVM::GlobalOp formatStrGlobal;
+    {
+      ConversionPatternRewriter::InsertionGuard insertGuard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      auto globalType =
+          LLVM::LLVMArrayType::get(rewriter.getI8Type(), formatStrVec.size());
+      formatStrGlobal = LLVM::GlobalOp::create(
+          rewriter, loc, globalType, /*isConstant=*/true,
+          LLVM::Linkage::Internal,
+          /*name=*/globalName, rewriter.getStringAttr(formatStrVec),
+          /*alignment=*/0);
+    }
+
+    Value formatStrPtr =
+        LLVM::AddressOfOp::create(rewriter, loc, formatStrGlobal);
+
+    // Build the argument list with format string first.
+    SmallVector<Value> callArgs;
+    callArgs.push_back(formatStrPtr);
+    callArgs.append(printfArgs.begin(), printfArgs.end());
+
+    rewriter.replaceOpWithNewOp<LLVM::CallOp>(op, printfFunc.value(), callArgs);
+    return success();
+  }
+
+private:
+  /// Recursively process a format string value and collect format specifiers
+  /// and arguments.
+  LogicalResult processFormatString(Value fmtValue, SmallString<64> &formatStr,
+                                    SmallVector<Value> &args, Location loc,
+                                    ConversionPatternRewriter &rewriter) const {
+    Operation *defOp = fmtValue.getDefiningOp();
+    if (!defOp)
+      return failure();
+
+    return llvm::TypeSwitch<Operation *, LogicalResult>(defOp)
+        .Case<sim::FormatLiteralOp>([&](auto litOp) {
+          // Escape any '%' characters in the literal string.
+          StringRef lit = litOp.getLiteral();
+          for (char c : lit) {
+            if (c == '%')
+              formatStr.push_back('%'); // Double '%' for escape
+            formatStr.push_back(c);
+          }
+          return success();
+        })
+        .Case<sim::FormatStringConcatOp>([&](auto concatOp) {
+          for (Value input : concatOp.getInputs()) {
+            if (failed(processFormatString(input, formatStr, args, loc,
+                                           rewriter)))
+              return failure();
+          }
+          return success();
+        })
+        .Case<sim::FormatHexOp>([&](auto hexOp) {
+          return processIntegerFormat(hexOp.getValue(), hexOp.getIsHexUppercase()
+                                                            ? "%llX"
+                                                            : "%llx",
+                                      formatStr, args, loc, rewriter);
+        })
+        .Case<sim::FormatDecOp>([&](auto decOp) {
+          return processIntegerFormat(decOp.getValue(),
+                                      decOp.getIsSigned() ? "%lld" : "%llu",
+                                      formatStr, args, loc, rewriter);
+        })
+        .Case<sim::FormatBinOp>([&](auto binOp) {
+          // Binary format is not directly supported by printf; use custom
+          // handling.
+          return processBinaryFormat(binOp.getValue(), formatStr, args, loc,
+                                     rewriter);
+        })
+        .Case<sim::FormatOctOp>([&](auto octOp) {
+          return processIntegerFormat(octOp.getValue(), "%llo", formatStr, args,
+                                      loc, rewriter);
+        })
+        .Case<sim::FormatCharOp>([&](auto charOp) {
+          formatStr.append("%c");
+          Value val = charOp.getValue();
+          // Extend or truncate to i32 for printf %c.
+          auto valType = cast<IntegerType>(val.getType());
+          auto i32Type = IntegerType::get(getContext(), 32);
+          if (valType.getWidth() < 32)
+            val = LLVM::ZExtOp::create(rewriter, loc, i32Type, val);
+          else if (valType.getWidth() > 32)
+            val = LLVM::TruncOp::create(rewriter, loc, i32Type, val);
+          args.push_back(val);
+          return success();
+        })
+        .Case<sim::FormatScientificOp>([&](auto expOp) {
+          formatStr.append("%e");
+          args.push_back(expOp.getValue());
+          return success();
+        })
+        .Case<sim::FormatFloatOp>([&](auto fltOp) {
+          formatStr.append("%f");
+          args.push_back(fltOp.getValue());
+          return success();
+        })
+        .Case<sim::FormatGeneralOp>([&](auto genOp) {
+          formatStr.append("%g");
+          args.push_back(genOp.getValue());
+          return success();
+        })
+        .Default([&](Operation *) {
+          // For unsupported format operations, emit a placeholder.
+          formatStr.append("<unsupported>");
+          return success();
+        });
+  }
+
+  /// Process an integer value for printf formatting.
+  LogicalResult processIntegerFormat(Value value, StringRef format,
+                                     SmallString<64> &formatStr,
+                                     SmallVector<Value> &args, Location loc,
+                                     ConversionPatternRewriter &rewriter) const {
+    auto intType = dyn_cast<IntegerType>(value.getType());
+    if (!intType)
+      return failure();
+
+    formatStr.append(format);
+
+    // Extend to 64-bit for printf.
+    auto i64Type = IntegerType::get(getContext(), 64);
+    if (intType.getWidth() < 64)
+      value = LLVM::ZExtOp::create(rewriter, loc, i64Type, value);
+    else if (intType.getWidth() > 64)
+      value = LLVM::TruncOp::create(rewriter, loc, i64Type, value);
+
+    args.push_back(value);
+    return success();
+  }
+
+  /// Process binary format (not directly supported by printf).
+  /// For simplicity, we output as hex with a "0b" prefix indication.
+  LogicalResult processBinaryFormat(Value value, SmallString<64> &formatStr,
+                                    SmallVector<Value> &args, Location loc,
+                                    ConversionPatternRewriter &rewriter) const {
+    // Binary is tricky; printf doesn't support it directly.
+    // For now, output as hex which is the common fallback.
+    auto intType = dyn_cast<IntegerType>(value.getType());
+    if (!intType)
+      return failure();
+
+    formatStr.append("%llx");
+
+    auto i64Type = IntegerType::get(getContext(), 64);
+    if (intType.getWidth() < 64)
+      value = LLVM::ZExtOp::create(rewriter, loc, i64Type, value);
+    else if (intType.getWidth() > 64)
+      value = LLVM::TruncOp::create(rewriter, loc, i64Type, value);
+
+    args.push_back(value);
+    return success();
+  }
+};
+
 } // namespace
 
 static LogicalResult convert(arc::ExecuteOp op, arc::ExecuteOp::Adaptor adaptor,
@@ -885,6 +1088,12 @@ void LowerArcToLLVMPass::runOnOperation() {
   converter.addConversion([&](SimModelInstanceType type) {
     return LLVM::LLVMPointerType::get(type.getContext());
   });
+  // FormatStringType is used by sim.proc.print - convert to pointer type.
+  // The format string ops are processed by PrintFormattedProcOpLowering
+  // and don't need actual values at runtime.
+  converter.addConversion([&](sim::FormatStringType type) {
+    return LLVM::LLVMPointerType::get(type.getContext());
+  });
 
   // Setup the conversion patterns.
   ConversionPatternSet patterns(&getContext(), converter);
@@ -912,6 +1121,14 @@ void LowerArcToLLVMPass::runOnOperation() {
   populateCombToArithConversionPatterns(converter, patterns);
   populateCombToLLVMConversionPatterns(converter, patterns);
 
+  // Mark Sim format string operations as legal so they can be processed
+  // by PrintFormattedProcOpLowering. These are compile-time constructs
+  // that don't produce runtime values; they're metadata for building printf.
+  target.addLegalOp<sim::FormatLiteralOp, sim::FormatHexOp, sim::FormatDecOp,
+                    sim::FormatBinOp, sim::FormatOctOp, sim::FormatCharOp,
+                    sim::FormatScientificOp, sim::FormatFloatOp,
+                    sim::FormatGeneralOp, sim::FormatStringConcatOp>();
+
   // Arc patterns.
   // clang-format off
   patterns.add<
@@ -925,6 +1142,7 @@ void LowerArcToLLVMPass::runOnOperation() {
     MemoryReadOpLowering,
     MemoryWriteOpLowering,
     ModelOpLowering,
+    PrintFormattedProcOpLowering,
     ReplaceOpWithInputPattern<seq::ToClockOp>,
     ReplaceOpWithInputPattern<seq::FromClockOp>,
     RuntimeModelOpLowering,

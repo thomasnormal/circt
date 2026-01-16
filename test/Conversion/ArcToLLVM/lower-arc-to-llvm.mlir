@@ -324,3 +324,37 @@ func.func @issue9171(%arg0: !arc.state<!hw.array<4xi1>>, %idx: i2) -> (i1) {
 arc.runtime.model @arcRuntimeModel_fooModelSym "fooModelName" numStateBytes 1234567
 
 func.func private @Dummy(%arg0: i42, %arg1: !hw.array<4xi19>, %arg2: !arc.storage)
+
+// CHECK-LABEL: llvm.func @PrintFormattedProcLowering
+// CHECK-SAME:    %arg0: i32
+func.func @PrintFormattedProcLowering(%arg0: i32) {
+  // CHECK: [[EXT:%.+]] = llvm.zext %arg0 : i32 to i64
+  // CHECK: llvm.call @printf({{%.+}}, [[EXT]])
+  %0 = sim.fmt.literal "value = "
+  %1 = sim.fmt.dec %arg0 : i32
+  %2 = sim.fmt.literal "\0A"
+  %3 = sim.fmt.concat (%0, %1, %2)
+  sim.proc.print %3
+  return
+}
+
+// CHECK-LABEL: llvm.func @PrintFormattedProcHex
+// CHECK-SAME:    %arg0: i16
+func.func @PrintFormattedProcHex(%arg0: i16) {
+  // CHECK: [[EXT:%.+]] = llvm.zext %arg0 : i16 to i64
+  // CHECK: llvm.call @printf({{%.+}}, [[EXT]])
+  %0 = sim.fmt.literal "hex = "
+  %1 = sim.fmt.hex %arg0, isUpper false : i16
+  %2 = sim.fmt.literal "\0A"
+  %3 = sim.fmt.concat (%0, %1, %2)
+  sim.proc.print %3
+  return
+}
+
+// CHECK-LABEL: llvm.func @PrintFormattedProcLiteral
+func.func @PrintFormattedProcLiteral() {
+  // CHECK: llvm.call @printf
+  %0 = sim.fmt.literal "Hello, World!\0A"
+  sim.proc.print %0
+  return
+}
