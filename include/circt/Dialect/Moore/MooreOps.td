@@ -3168,10 +3168,10 @@ def ConstraintExprOp
     See IEEE 1800-2017 Section 18.5.13 "Soft constraints".
   }];
 
-  let arguments = (ins I1:$condition, UnitAttr:$is_soft);
+  let arguments = (ins AnySingleBitType:$condition, UnitAttr:$is_soft);
   let results = (outs);
   let assemblyFormat = [{
-    $condition (`soft` $is_soft^)? attr-dict
+    $condition attr-dict `:` type($condition) (`soft` $is_soft^)?
   }];
 }
 
@@ -3186,9 +3186,9 @@ def ConstraintImplicationOp
     Example:
     ```mlir
     moore.constraint.block @c1 {
-      moore.constraint.implication %mode_is_fast {
+      moore.constraint.implication %mode_is_fast : i1 {
         // constraints that only apply when mode_is_fast is true
-        moore.constraint.expr %speed_limit
+        moore.constraint.expr %speed_limit : i1
       }
     }
     ```
@@ -3196,11 +3196,11 @@ def ConstraintImplicationOp
     See IEEE 1800-2017 Section 18.5.6 "Implication constraints".
   }];
 
-  let arguments = (ins I1:$antecedent);
+  let arguments = (ins AnySingleBitType:$antecedent);
   let results = (outs);
   let regions = (region SizedRegion<1>:$consequent);
   let assemblyFormat = [{
-    $antecedent attr-dict-with-keyword $consequent
+    $antecedent `:` type($antecedent) attr-dict-with-keyword $consequent
   }];
 }
 
@@ -3216,7 +3216,7 @@ def ConstraintIfElseOp
     Example:
     ```mlir
     moore.constraint.block @c1 {
-      moore.constraint.if_else %is_write {
+      moore.constraint.if_else %is_write : i1 {
         // constraints for write mode
       } else {
         // constraints for read mode
@@ -3227,11 +3227,11 @@ def ConstraintIfElseOp
     See IEEE 1800-2017 Section 18.5.7 "if-else constraints".
   }];
 
-  let arguments = (ins I1:$condition);
+  let arguments = (ins AnySingleBitType:$condition);
   let results = (outs);
   let regions = (region SizedRegion<1>:$then_region, AnyRegion:$else_region);
   let assemblyFormat = [{
-    $condition $then_region (`else` $else_region^)? attr-dict
+    $condition `:` type($condition) $then_region (`else` $else_region^)? attr-dict
   }];
 }
 
