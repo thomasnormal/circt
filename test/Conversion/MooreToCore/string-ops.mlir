@@ -130,6 +130,26 @@ func.func @CountOnes(%val: !moore.i16) -> !moore.i16 {
   return %result : !moore.i16
 }
 
+// CHECK-LABEL: func @OneHot
+func.func @OneHot(%val: !moore.i8) -> !moore.i1 {
+  // OneHot is lowered to ctpop(x) == 1
+  // CHECK: %[[CTPOP:.*]] = llvm.intr.ctpop(%{{.*}}) : (i8) -> i8
+  // CHECK: %[[ONE:.*]] = hw.constant 1 : i8
+  // CHECK: comb.icmp eq %[[CTPOP]], %[[ONE]] : i8
+  %result = moore.builtin.onehot %val : !moore.i8
+  return %result : !moore.i1
+}
+
+// CHECK-LABEL: func @OneHot0
+func.func @OneHot0(%val: !moore.i8) -> !moore.i1 {
+  // OneHot0 is lowered to ctpop(x) <= 1
+  // CHECK: %[[CTPOP:.*]] = llvm.intr.ctpop(%{{.*}}) : (i8) -> i8
+  // CHECK: %[[ONE:.*]] = hw.constant 1 : i8
+  // CHECK: comb.icmp ule %[[CTPOP]], %[[ONE]] : i8
+  %result = moore.builtin.onehot0 %val : !moore.i8
+  return %result : !moore.i1
+}
+
 // CHECK-LABEL: hw.module @FormatStringTest
 moore.module @FormatStringTest() {
   moore.procedure initial {

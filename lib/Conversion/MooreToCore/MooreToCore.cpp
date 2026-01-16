@@ -7501,6 +7501,66 @@ struct CountOnesBIOpConversion : public OpConversionPattern<CountOnesBIOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// OneHotBIOp Conversion
+//===----------------------------------------------------------------------===//
+
+/// $onehot(x) -> ctpop(x) == 1
+/// Returns 1 if exactly one bit is set in the input.
+struct OneHotBIOpConversion : public OpConversionPattern<OneHotBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(OneHotBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value input = adaptor.getValue();
+    auto inputType = cast<IntegerType>(input.getType());
+    unsigned bitWidth = inputType.getWidth();
+
+    // Use LLVM's ctpop (count population) intrinsic to count 1 bits.
+    Value ctpop = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
+
+    // Compare count to 1: exactly one bit set
+    Value one = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 1));
+    Value isOneHot =
+        comb::ICmpOp::create(rewriter, loc, ICmpPredicate::eq, ctpop, one);
+
+    rewriter.replaceOp(op, isOneHot);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// OneHot0BIOp Conversion
+//===----------------------------------------------------------------------===//
+
+/// $onehot0(x) -> ctpop(x) <= 1
+/// Returns 1 if at most one bit is set in the input (zero or one).
+struct OneHot0BIOpConversion : public OpConversionPattern<OneHot0BIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(OneHot0BIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value input = adaptor.getValue();
+    auto inputType = cast<IntegerType>(input.getType());
+    unsigned bitWidth = inputType.getWidth();
+
+    // Use LLVM's ctpop (count population) intrinsic to count 1 bits.
+    Value ctpop = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
+
+    // Compare count to 1: at most one bit set (count <= 1)
+    Value one = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 1));
+    Value isOneHot0 =
+        comb::ICmpOp::create(rewriter, loc, ICmpPredicate::ule, ctpop, one);
+
+    rewriter.replaceOp(op, isOneHot0);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -8956,7 +9016,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringToIntOpConversion,
     SScanfBIOpConversion,
     IsUnknownBIOpConversion,
-    CountOnesBIOpConversion
+    CountOnesBIOpConversion,
+    OneHotBIOpConversion,
+    OneHot0BIOpConversion
   >(typeConverter, patterns.getContext());
   // clang-format on
 

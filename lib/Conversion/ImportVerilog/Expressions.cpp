@@ -4940,6 +4940,20 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return (Value)moore::CountOnesBIOp::create(builder, loc,
                                                               value);
                 })
+          .Case("$onehot",
+                [&]() -> FailureOr<Value> {
+                  value = convertToSimpleBitVector(value);
+                  if (!value)
+                    return failure();
+                  return (Value)moore::OneHotBIOp::create(builder, loc, value);
+                })
+          .Case("$onehot0",
+                [&]() -> FailureOr<Value> {
+                  value = convertToSimpleBitVector(value);
+                  if (!value)
+                    return failure();
+                  return (Value)moore::OneHot0BIOp::create(builder, loc, value);
+                })
           // Event triggered property (IEEE 1800-2017 Section 15.5.3)
           .Case("triggered",
                 [&]() -> Value {

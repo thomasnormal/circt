@@ -2919,6 +2919,42 @@ def CountOnesBIOp : Builtin<"countones", [SameOperandsAndResultType]> {
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
+def OneHotBIOp : Builtin<"onehot"> {
+  let summary = "Check if exactly one bit is set in a bit vector";
+  let description = [{
+    Returns 1 if exactly one bit in the input expression is set to 1,
+    otherwise returns 0. If any bit is X or Z, the result is X.
+
+    This function is commonly used in assertions to verify one-hot encoding
+    of state machines and other signals.
+
+    Equivalent to `$countones(expr) == 1`.
+
+    See IEEE 1800-2017 Section 20.9 "Bit vector system functions".
+  }];
+  let arguments = (ins SimpleBitVectorType:$value);
+  let results = (outs TwoValuedI1:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
+def OneHot0BIOp : Builtin<"onehot0"> {
+  let summary = "Check if at most one bit is set in a bit vector";
+  let description = [{
+    Returns 1 if at most one bit (zero or one) in the input expression is
+    set to 1, otherwise returns 0. If any bit is X or Z, the result is X.
+
+    This function is commonly used in assertions to verify one-hot or
+    zero encoding of signals where idle states are represented by all zeros.
+
+    Equivalent to `$countones(expr) <= 1`.
+
+    See IEEE 1800-2017 Section 20.9 "Bit vector system functions".
+  }];
+  let arguments = (ins SimpleBitVectorType:$value);
+  let results = (outs TwoValuedI1:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 //===----------------------------------------------------------------------===//
 // File I/O System Functions
 //===----------------------------------------------------------------------===//
