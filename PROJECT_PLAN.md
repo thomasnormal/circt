@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 26)
+## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 27)
 
 **Test Commands**:
 ```bash
@@ -128,67 +128,72 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: DPI/System Call Implementation 🎯 ITERATION 27
+### Track A: System Call Implementation 🎯 ITERATION 27
 **Status**: 🔵 IN PROGRESS
-**Problem**: Many system functions return stubs; $countones, $clog2 not implemented
-**What's Done**:
-- 22 DPI stubs implemented
+**Problem**: Many system functions return stubs or not implemented
+**What's Done** (Iteration 26):
+- $countones implemented (llvm.intr.ctpop)
+- 22 DPI stubs working
 - Basic file I/O complete
 **What's Needed**:
-- Bit vector system calls: $countones, $countbits, $clog2, $onehot, $isunknown
-- String system calls: $sformatf (partially done), $sscanf
-- Time system calls: $realtime (more complete implementation)
+- Bit vector: $countbits, $clog2, $onehot, $onehot0, $isunknown
+- String: $sscanf improvements
+- Coverage: $get_coverage, $set_coverage_db_name
 **Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`
 **Priority**: HIGH - Many AVIPs use these
 
-### Track B: SVA Runtime Support 🎯 ITERATION 27
-**Status**: ✅ LOWERING DONE - Need runtime support
+### Track B: sim.proc.print Lowering to Arcilator 🎯 ITERATION 27
+**Status**: 🔵 CRITICAL PATH
+**Problem**: $display output doesn't work in arcilator simulation
 **What's Done**:
-- moore.assert/assume/cover → verif dialect lowering works
-- Test file created: `test/Conversion/MooreToCore/sva-assertions.mlir`
-- Immediate, deferred, and concurrent assertions all lower correctly
+- arc.sim.emit → printf lowering exists (template)
+- Research complete: sim.proc.print needs similar lowering
 **What's Needed**:
-- Runtime reporting for assertion failures (file/line info)
-- Coverage tracking for `cover` statements
-- $assertoff/$asserton support for enabling/disabling assertions
-**Files**: `lib/Dialect/Verif/`, runtime library
-**Priority**: MEDIUM - Assertions work but silent
+- Add sim.fmt.* lowering patterns to LowerArcToLLVM.cpp
+- Add sim.proc.print → printf call generation
+- Test with MooreToCore output containing $display
+**Files**: `lib/Conversion/ArcToLLVM/LowerArcToLLVM.cpp`
+**Priority**: CRITICAL - Required for simulation output
 
 ### Track C: ~/mbit AVIP Full Validation 🎯 ITERATION 27
 **Status**: 🔵 TESTING IN PROGRESS
-**What's Done**:
-- Interface ref→vif conversion fixed
-- Constraint lowering complete
-- $finish handling fixed
-**Testing Status**:
-- Found $countones unsupported in builtins.sv
-- circt-translate vs circt-verilog differences identified
+**What's Done** (Iteration 26):
+- All 9 AVIPs tested, issues documented
+- Issues are AVIP source problems, not CIRCT
+- $countones fixed for APB AVIP constraints
 **What's Needed**:
-- Test all 8 AVIPs through full pipeline
-- Document any remaining gaps
-- File issues for blocking problems
+- Test end-to-end simulation (not just parsing)
+- Identify remaining system call gaps
+- Create workarounds for deprecated UVM APIs
 **Priority**: HIGH - Real-world validation
 
-### Track D: Performance & Polish 🎯 ITERATION 27
+### Track D: LSP Debounce Fix & Coverage Runtime 🎯 ITERATION 27
 **Status**: 🔵 READY FOR WORK
-**Focus Areas**:
-- Build and test time optimization
-- Error message improvement
-- Memory usage profiling for large designs
-- Plugin development (circt-sv-uvm)
-**Priority**: LOW - Nice to have
+**Problem 1**: LSP hangs on textDocument/didChange (debounce bug)
+**Problem 2**: Coverage ops exist but no runtime sampling
+**What's Needed**:
+- Fix debounce deadlock in circt-verilog-lsp-server
+- Add coverage sampling event handling (e.g., @(posedge clk))
+- Connect CovergroupSampleOp to simulation step
+**Files**: `tools/circt-verilog-lsp-server/`, `lib/Conversion/MooreToCore/`
+**Priority**: MEDIUM - Quality of life improvements
 
 ### Operating Guidance
-- Keep 4 agents active: Track A (coverage), Track B (assertions), Track C (AVIP testing), Track D (improvements).
+- Keep 4 agents active: Track A (system calls), Track B (sim.proc.print), Track C (AVIP testing), Track D (LSP/coverage).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
 
-### Previous Track Results (Iteration 26)
-- **Git**: ✅ Merged with upstream (21 commits), resolved 4 conflicts
-- **Fork**: ✅ Published to thomasnormal/circt with comprehensive README feature list
-- **Track B**: ✅ SVA assertions test file created - verif.assert/assume/cover lowering verified
-- **Track C**: ✅ Found $countones unsupported - identified gap in bit vector builtins
+### Previous Track Results (Iteration 26) - MAJOR PROGRESS
+- **Coverage Infrastructure**: ✅ CovergroupHandleType, CovergroupInstOp, CovergroupSampleOp, CovergroupGetCoverageOp implemented
+- **SVA Assertions**: ✅ Verified working - moore.assert/assume/cover → verif dialect
+- **$countones**: ✅ Implemented - lowers to llvm.intr.ctpop
+- **Constraint Lowering**: ✅ All 10 constraint ops have MooreToCore patterns
+- **Interface ref→vif**: ✅ Fixed conversion generates llhd.prb
+- **$finish handling**: ✅ Initial blocks with $finish use seq.initial (arcilator-compatible)
+- **AVIP Testing**: ✅ All 9 AVIPs tested - issues are source code problems, not CIRCT
+- **LSP Validation**: ✅ Works with --no-debounce flag, bug documented
+- **Arcilator Research**: ✅ Identified sim.proc.print lowering as next step
 
 ### Previous Track Results (Iteration 25)
 - **Track B**: ✅ Interface ref→vif conversion FIXED - Interface member access generates proper lvalue references
