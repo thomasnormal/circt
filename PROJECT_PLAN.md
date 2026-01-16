@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 Simulation Pipeline Unblocked (January 16, 2026 - Iteration 20)
+## Current Status: 🎉 LSP + Constraints Working (January 16, 2026 - Iteration 21)
 
 **Test Commands**:
 ```bash
@@ -24,11 +24,17 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ```
 
 **Current Blockers / Limitations** (Post-MooreToCore):
-1. **Timing in functions** ⚠️ ARCHITECTURAL - Tasks with `@(posedge clk)` can't lower (llhd.wait needs llhd.process parent)
-2. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
+1. **Initial blocks in arcilator** ⚠️ BLOCKER - `llhd.process` with `llhd.halt` not supported (need halting process lowering)
+2. **sim.terminate** ⚠️ MISSING - No lowering pattern (need exit() call generation)
 3. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
 4. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
-5. **circt-sim LLHD execution** ⚠️ GAP - circt-sim runs but doesn't interpret llhd.process bodies or sim.proc.print
+5. **Complex constraints** ⚠️ PARTIAL - ~41% of constraints need SMT solver (simple ranges work)
+
+**Recently Fixed (Iteration 21)**:
+- **UVM LSP support** ✅ FIXED (d930aad54) - `--uvm-path` flag and `UVM_HOME` env var
+- **Range constraints** ✅ FIXED (2b069ee30) - ~59% of AVIP constraints now work
+- **Interface symbols** ✅ FIXED (d930aad54) - LSP returns proper interface symbols
+- **sim.proc.print** ✅ FIXED (2be6becf7) - $display works in arcilator
 
 **Resolved Blockers (Iteration 14)**:
 - ~~**moore.builtin.realtobits**~~ ✅ FIXED (36fdb8ab6) - Added conversion patterns for realtobits/bitstoreal
@@ -77,7 +83,7 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 | **Process Control** | fork/join designed | fork/join, disable, wait | ✅ Designed |
 | **File I/O** | $fopen, $fwrite, $fclose | $fopen, $fwrite, $fclose | ✅ Complete |
 | **Assoc Arrays** | Int keys work | All key types + iterators | ✅ String keys fixed |
-| **Randomization** | Not supported | rand/randc, constraints | ⚠️ Parsing only |
+| **Randomization** | Range constraints work | rand/randc, constraints | ⚠️ ~59% working |
 | **Coverage** | Coverage dialect exists | Full functional coverage | ⚠️ Partial |
 | **Assertions** | Basic SVA | Full SVA | ✅ SVA dialect |
 | **DPI/VPI** | Stub returns (0/empty) | Full support | ⚠️ 22 funcs analyzed, stubs work |
@@ -87,71 +93,73 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: LSP Debounce Fix ✅ COMPLETE
-**Status**: ✅ COMPLETE (Iteration 20)
-**Commit**: 9f150f33f
-**Fix**: Deadlock in `abort()` - held mutex while waiting for tasks that needed mutex.
-**Files Modified**:
-- `lib/Tools/circt-verilog-lsp-server/Utils/PendingChanges.cpp`
-- `unittests/Tools/circt-verilog-lsp-server/Utils/PendingChangesTest.cpp`
-**Result**: Users no longer need `--no-debounce` workaround
-**Next**: Add UVM library support to LSP
+### Track A: Simulation Pipeline - Initial Block Support 🟡 BLOCKED
+**Status**: 🟡 BLOCKER IDENTIFIED (Iteration 21)
+**Problem**: `llhd.process` with `llhd.halt` (initial blocks) not supported in arcilator
+**Pipeline Analysis**:
+| Stage | Status | Notes |
+|-------|--------|-------|
+| SV → Moore IR | ✅ | $display → moore.builtin.display |
+| Moore → Core | ✅ | sim.proc.print generated correctly |
+| Core → Arcilator | ❌ | llhd.process with llhd.halt rejected |
+**Root Cause**: `LowerProcessesPass` only handles combinational processes with `llhd.wait`
+**Next**: Add halting process support or convert to func.func entry points
+**Priority**: HIGH - Blocks end-to-end simulation
 
-### Track B: Simulation Pipeline ✅ sim.proc.print IMPLEMENTED
-**Status**: ✅ MAJOR MILESTONE (Iteration 20)
-**Commit**: 2be6becf7
-**Implementation**: Added `PrintFormattedProcOpLowering` pattern in `LowerArcToLLVM.cpp`
-- Recursively processes sim.fmt.* operations (literal, concat, dec, hex, etc.)
-- Generates printf-compatible format strings
-- Creates LLVM globals and calls to printf
-**Test Result**:
-```bash
-$ ./build/bin/arcilator integration_test/arcilator/JIT/proc-print.mlir --run
-value =         42
-hex = 0000002a
-Hello, World!
-```
-**Next Step**: Test full MooreToCore→Arcilator→Execution pipeline on UVM code
-**Priority**: HIGH - Test end-to-end simulation
+### Track B: sim.terminate Lowering 🟡 MISSING
+**Status**: 🟡 Not Implemented (Iteration 21)
+**Problem**: `sim.terminate` has no lowering pattern in `LowerArcToLLVM.cpp`
+**Required**: Generate `exit(0)` for success, `exit(1)` for failure
+**Files**: `lib/Conversion/ArcToLLVM/LowerArcToLLVM.cpp`
+**Next**: Add `SimTerminateOpLowering` pattern following `PrintFormattedProcOpLowering` template
+**Priority**: HIGH - Needed for simulation completion
 
-### Track C: Randomization Runtime 🟡 RESEARCH COMPLETE
-**Status**: 🟡 Research Complete - Implementation Ready (Iteration 20)
-**Findings**:
-- Current: `__moore_randomize_basic()` fills memory with random bytes, ignores constraints
-- Constraints are parsed but discarded during lowering
-**AVIP Constraint Analysis** (1,097 calls):
-| Type | Percentage | Implementation Difficulty |
-|------|------------|--------------------------|
-| Range constraints | 59% | Easy (no SMT) |
-| Soft defaults | 23% | Trivial |
-| Inside constraints | 12% | Enumerable |
-| Complex | 6% | Needs SMT |
-**Proposed Phase 2**: Constraint-aware randomization covering ~80% of patterns
-**Next**: Implement constraint extraction pass + range-aware randomization
-**Priority**: MEDIUM - Enables realistic verification
+### Track C: Randomization ✅ Range Constraints IMPLEMENTED
+**Status**: ✅ PARTIAL SUCCESS (Iteration 21)
+**Commit**: 2b069ee30
+**Implementation**: Added range constraint extraction and application
+- `extractRangeConstraints()` analyzes `ConstraintInsideOp` ops
+- `RandomizeOpConversion` calls `__moore_randomize_with_range(min, max)`
+**Coverage**: ~59% of AVIP constraints (simple ranges) now work
+**Remaining** (41%):
+| Type | Percentage | Notes |
+|------|------------|-------|
+| Soft defaults | 23% | Need soft constraint support |
+| Inside (multiple) | 12% | Need multi-range support |
+| Complex | 6% | Needs SMT solver |
+**Next**: Implement soft constraint support
+**Priority**: MEDIUM - Improve constraint coverage
 
-### Track D: Developer Tooling & LSP 🟡 AVIP GAPS IDENTIFIED
-**Status**: 🟡 Working but gaps found on real AVIP code (Iteration 20)
-**AVIP Testing Results**:
-| Feature | Package Files | Interface Files | BFM Files |
-|---------|--------------|-----------------|-----------|
-| Document Symbols | ✅ Works | ❌ Empty | ❌ UVM errors |
-| Hover | ✅ Works | ❌ Null | ❌ Null |
-| Completion | ✅ Excellent | ✅ Works | ❌ UVM errors |
-| Go-to-Definition | ❌ Empty | ❌ Empty | ❌ Empty |
-**Critical Gaps**:
-1. UVM library not available (80%+ of AVIP code unusable)
-2. Interface declarations return empty symbols
-3. Cross-file navigation broken (even with `-y` flag)
-**Workaround**: Use `-y` flag for package resolution
-**Next**: Add UVM library support, fix interface declaration support
-**Priority**: MEDIUM - Needed for production use
+### Track D: LSP ✅ UVM + Interfaces WORKING
+**Status**: ✅ MAJOR IMPROVEMENTS (Iteration 21)
+**Commits**: d930aad54, 95f0dd277
+**UVM Support**:
+- Added `--uvm-path` flag and `UVM_HOME` environment variable
+- AVIP BFM files now analyzable with UVM imports resolved
+**Interface Support**:
+- Fixed `visitInterfaceDefinition()` to extract ports, signals, modports
+- AVIP interface files return proper symbols
+**Current Status**:
+| Feature | Package | Interface | BFM (with UVM) |
+|---------|---------|-----------|----------------|
+| Document Symbols | ✅ | ✅ | ✅ |
+| Hover | ✅ | ⚠️ | ⚠️ |
+| Completion | ✅ | ✅ | ✅ |
+| Go-to-Definition | ❌ | ❌ | ❌ |
+**Next**: Fix cross-file go-to-definition
+**Priority**: LOW - Basic features work
 
 ### Operating Guidance
 - Keep 4 agents active: Track A (unit tests), Track B (simulation), Track C (AVIP testing), Track D (tooling).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 21)
+- **Track A**: ✅ Pipeline analysis complete - llhd.halt blocker identified
+- **Track B**: ✅ UVM LSP support added (d930aad54) - --uvm-path flag, UVM_HOME env var
+- **Track C**: ✅ Range constraints implemented (2b069ee30) - ~59% of AVIP constraints work
+- **Track D**: ✅ Interface symbols fixed (d930aad54) - LSP properly shows interface structure
 
 ### Previous Track Results (Iteration 20)
 - **Track A**: ✅ LSP debounce deadlock FIXED (9f150f33f) - `--no-debounce` no longer needed
