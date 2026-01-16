@@ -150,6 +150,32 @@ func.func @OneHot0(%val: !moore.i8) -> !moore.i1 {
   return %result : !moore.i1
 }
 
+// CHECK-LABEL: func @CountBitsOnes
+func.func @CountBitsOnes(%val: !moore.i16) -> !moore.i16 {
+  // $countbits(x, 1) is lowered to ctpop(x)
+  // CHECK: llvm.intr.ctpop(%{{.*}}) : (i16) -> i16
+  %result = moore.builtin.countbits %val, 2 : !moore.i16
+  return %result : !moore.i16
+}
+
+// CHECK-LABEL: func @CountBitsZeros
+func.func @CountBitsZeros(%val: !moore.i8) -> !moore.i8 {
+  // $countbits(x, 0) is lowered to bitwidth - ctpop(x)
+  // CHECK: %[[CTPOP:.*]] = llvm.intr.ctpop(%{{.*}}) : (i8) -> i8
+  // CHECK: %[[WIDTH:.*]] = hw.constant 8 : i8
+  // CHECK: comb.sub %[[WIDTH]], %[[CTPOP]] : i8
+  %result = moore.builtin.countbits %val, 1 : !moore.i8
+  return %result : !moore.i8
+}
+
+// CHECK-LABEL: func @CountBitsBoth
+func.func @CountBitsBoth(%val: !moore.i8) -> !moore.i8 {
+  // $countbits(x, 0, 1) is lowered to bitwidth (all bits are 0 or 1)
+  // CHECK: hw.constant 8 : i8
+  %result = moore.builtin.countbits %val, 3 : !moore.i8
+  return %result : !moore.i8
+}
+
 // CHECK-LABEL: hw.module @FormatStringTest
 moore.module @FormatStringTest() {
   moore.procedure initial {

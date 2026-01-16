@@ -7561,6 +7561,57 @@ struct OneHot0BIOpConversion : public OpConversionPattern<OneHot0BIOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// CountBitsBIOp Conversion
+//===----------------------------------------------------------------------===//
+
+/// $countbits(x, control_bits) lowering for two-valued types.
+/// control_bits mask: 0b0001=count zeros, 0b0010=count ones,
+///                    0b0100=count X (always 0), 0b1000=count Z (always 0)
+///
+/// For two-valued lowering:
+/// - $countbits(x, 1) = ctpop(x)
+/// - $countbits(x, 0) = bitwidth - ctpop(x)
+/// - $countbits(x, 0, 1) = bitwidth (all bits are either 0 or 1)
+struct CountBitsBIOpConversion : public OpConversionPattern<CountBitsBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CountBitsBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value input = adaptor.getValue();
+    auto inputType = cast<IntegerType>(input.getType());
+    unsigned bitWidth = inputType.getWidth();
+
+    int32_t controlBits = op.getControlBits();
+    bool countZeros = (controlBits & 1) != 0;  // 0b0001
+    bool countOnes = (controlBits & 2) != 0;   // 0b0010
+    // X and Z are always 0 in two-valued lowering (bits 0b0100 and 0b1000)
+
+    Value result;
+    if (countOnes && countZeros) {
+      // Counting both 0s and 1s = all bits = bitwidth
+      result = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, bitWidth));
+    } else if (countOnes) {
+      // Count 1 bits using ctpop
+      result = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
+    } else if (countZeros) {
+      // Count 0 bits = bitwidth - ctpop(x)
+      Value ctpop = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
+      Value width =
+          hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, bitWidth));
+      result = comb::SubOp::create(rewriter, loc, width, ctpop);
+    } else {
+      // No 0s or 1s to count (only X/Z which are 0 in two-valued)
+      result = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 0));
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -9018,7 +9069,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     IsUnknownBIOpConversion,
     CountOnesBIOpConversion,
     OneHotBIOpConversion,
-    OneHot0BIOpConversion
+    OneHot0BIOpConversion,
+    CountBitsBIOpConversion
   >(typeConverter, patterns.getContext());
   // clang-format on
 

@@ -2955,6 +2955,31 @@ def OneHot0BIOp : Builtin<"onehot0"> {
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
+def CountBitsBIOp : Builtin<"countbits", [SameOperandsAndResultType]> {
+  let summary = "Count the number of bits matching a control value";
+  let description = [{
+    Returns the count of the number of bits in the input expression that
+    match any of the specified control_bit values (0, 1, x, z).
+
+    For the two-valued (no X/Z) lowering:
+    - `$countbits(x, 1)` is equivalent to `$countones(x)`
+    - `$countbits(x, 0)` is equivalent to `bitwidth - $countones(x)`
+
+    The control_bits attribute specifies which bit values to count:
+    - 0b0001 (1): count zeros
+    - 0b0010 (2): count ones
+    - 0b0100 (4): count X values (always 0 in two-valued)
+    - 0b1000 (8): count Z values (always 0 in two-valued)
+
+    Multiple values can be OR'd together to count multiple bit types.
+
+    See IEEE 1800-2017 Section 20.9 "Bit vector system functions".
+  }];
+  let arguments = (ins IntType:$value, I32Attr:$control_bits);
+  let results = (outs IntType:$result);
+  let assemblyFormat = "$value `,` $control_bits attr-dict `:` type($value)";
+}
+
 //===----------------------------------------------------------------------===//
 // File I/O System Functions
 //===----------------------------------------------------------------------===//

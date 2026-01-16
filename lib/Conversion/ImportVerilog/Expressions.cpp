@@ -3288,6 +3288,51 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle $countbits separately since it takes variable arguments.
+    // $countbits(expression, control_bit...) counts bits matching any control_bit.
+    // IEEE 1800-2017 Section 20.9 "Bit vector system functions"
+    if (subroutine.name == "$countbits" && args.size() >= 2) {
+      value = context.convertRvalueExpression(*args[0]);
+      if (!value)
+        return {};
+      value = context.convertToSimpleBitVector(value);
+      if (!value)
+        return {};
+
+      // Parse control_bit arguments to build control_bits mask:
+      // - 0b0001 (1): count zeros
+      // - 0b0010 (2): count ones
+      // - 0b0100 (4): count X values
+      // - 0b1000 (8): count Z values
+      int32_t controlBitsMask = 0;
+      for (size_t i = 1; i < args.size(); ++i) {
+        // Evaluate the control_bit argument as a constant
+        auto evalResult = context.evaluateConstant(*args[i]);
+        if (evalResult.bad() || !evalResult.isInteger()) {
+          mlir::emitError(loc) << "$countbits control_bit arguments must be constants";
+          return {};
+        }
+        auto intVal = evalResult.integer().as<int32_t>();
+        if (!intVal) {
+          mlir::emitError(loc) << "$countbits control_bit value out of range";
+          return {};
+        }
+        switch (*intVal) {
+        case 0: controlBitsMask |= 1; break;  // count zeros
+        case 1: controlBitsMask |= 2; break;  // count ones
+        default:
+          mlir::emitError(loc) << "$countbits control_bit must be 0, 1, x, or z";
+          return {};
+        }
+      }
+
+      auto intAttr = builder.getI32IntegerAttr(controlBitsMask);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(
+          ty, moore::CountBitsBIOp::create(builder, loc, value, intAttr),
+          expr.type->isSigned(), loc);
+    }
+
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
