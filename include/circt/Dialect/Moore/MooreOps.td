@@ -2903,6 +2903,22 @@ def IsUnknownBIOp : Builtin<"isunknown"> {
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
+def CountOnesBIOp : Builtin<"countones", [SameOperandsAndResultType]> {
+  let summary = "Count the number of 1 bits in a bit vector";
+  let description = [{
+    Returns the count of the number of bits set to 1 in the input expression.
+    If any bit in the expression is X or Z, the result is X.
+
+    This function is commonly used in constraint expressions for one-hot
+    encoding validation (e.g., `$countones(sel) == 1`).
+
+    See IEEE 1800-2017 Section 20.9 "Bit vector system functions".
+  }];
+  let arguments = (ins IntType:$value);
+  let results = (outs IntType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 //===----------------------------------------------------------------------===//
 // File I/O System Functions
 //===----------------------------------------------------------------------===//
