@@ -482,3 +482,50 @@ func.func @test_assoc_array_size() -> !moore.i32 {
   %size = moore.array.size %assoc : !moore.assoc_array<!moore.i32, !moore.i8>
   return %size : !moore.i32
 }
+
+//===----------------------------------------------------------------------===//
+// Array Locator with Complex Predicates (Inline Loop Lowering)
+//===----------------------------------------------------------------------===//
+
+// Test AND predicate - uses inline loop approach since simple pattern doesn't
+// match compound predicates.
+// CHECK-LABEL: func @test_array_locator_and_predicate
+// CHECK: scf.for
+// CHECK: comb.and
+// CHECK: scf.if
+// CHECK: llvm.call @__moore_queue_push_back
+func.func @test_array_locator_and_predicate() -> !moore.queue<!moore.i32, 0> {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.array.locator all, elements %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0> {
+  ^bb0(%item: !moore.i32):
+    %five = moore.constant 5 : i32
+    %ten = moore.constant 10 : i32
+    %cond1 = moore.sgt %item, %five : i32 -> i1
+    %cond2 = moore.slt %item, %ten : i32 -> i1
+    %cond = moore.and %cond1, %cond2 : i1
+    moore.array.locator.yield %cond : i1
+  }
+  return %result : !moore.queue<!moore.i32, 0>
+}
+
+// Test OR predicate - uses inline loop approach.
+// CHECK-LABEL: func @test_array_locator_or_predicate
+// CHECK: scf.for
+// CHECK: comb.or
+// CHECK: scf.if
+// CHECK: llvm.call @__moore_queue_push_back
+func.func @test_array_locator_or_predicate() -> !moore.queue<!moore.i32, 0> {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
+  %result = moore.array.locator all, elements %queue : !moore.queue<!moore.i32, 0> -> !moore.queue<!moore.i32, 0> {
+  ^bb0(%item: !moore.i32):
+    %zero = moore.constant 0 : i32
+    %hundred = moore.constant 100 : i32
+    %cond1 = moore.eq %item, %zero : i32 -> i1
+    %cond2 = moore.eq %item, %hundred : i32 -> i1
+    %cond = moore.or %cond1, %cond2 : i1
+    moore.array.locator.yield %cond : i1
+  }
+  return %result : !moore.queue<!moore.i32, 0>
+}
