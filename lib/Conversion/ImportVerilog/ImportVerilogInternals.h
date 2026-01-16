@@ -374,6 +374,13 @@ struct Context {
   /// that. We will view the strange IR, such as `module @Sub(out y, out y)`;
   DenseSet<StringAttr> sameHierPaths;
 
+  /// A table of interface instances that may be referenced in expressions.
+  /// When an interface is assigned to a virtual interface variable, slang
+  /// represents the reference as an ArbitrarySymbolExpression. This map
+  /// stores the MLIR Value (ref to virtual interface) for each interface
+  /// instance symbol.
+  DenseMap<const slang::ast::InstanceSymbol *, Value> interfaceInstances;
+
   /// A stack of assignment left-hand side values. Each assignment will push its
   /// lowered left-hand side onto this stack before lowering its right-hand
   /// side. This allows expressions to resolve the opaque
