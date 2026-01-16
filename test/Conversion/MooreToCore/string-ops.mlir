@@ -122,6 +122,14 @@ func.func @IsUnknown(%val: !moore.i32) -> !moore.i1 {
   return %result : !moore.i1
 }
 
+// CHECK-LABEL: func @CountOnes
+func.func @CountOnes(%val: !moore.i16) -> !moore.i16 {
+  // CountOnes is lowered to llvm.intr.ctpop (count population)
+  // CHECK: llvm.intr.ctpop(%{{.*}}) : (i16) -> i16
+  %result = moore.builtin.countones %val : !moore.i16
+  return %result : !moore.i16
+}
+
 // CHECK-LABEL: hw.module @FormatStringTest
 moore.module @FormatStringTest() {
   moore.procedure initial {
