@@ -155,3 +155,163 @@ func.func @test_no_vtable_segment_fallback(%obj: !moore.class<@MiddleClass>) {
   %fptr = moore.vtable.load_method %obj : @get_name of <@MiddleClass> -> (!moore.class<@MiddleClass>) -> !moore.i32
   return
 }
+
+//===----------------------------------------------------------------------===//
+// Test 5: Multiple intermediate classes in hierarchy (A -> B -> C)
+// where B has no vtable segment of its own
+//===----------------------------------------------------------------------===//
+
+// This tests a deeper hierarchy where MiddleAbstract doesn't have a vtable segment
+// but its parent TopBase does, and its child LeafConcrete creates the actual vtable.
+
+// Top-level base class
+moore.class.classdecl @TopBase {
+  moore.class.methoddecl @get_id -> @"TopBase::get_id" : (!moore.class<@TopBase>) -> !moore.i32
+  moore.class.methoddecl @describe -> @"TopBase::describe" : (!moore.class<@TopBase>) -> !moore.i32
+}
+
+// Middle abstract class - extends TopBase but has no vtable segment
+moore.class.classdecl @MiddleAbstract extends @TopBase {
+  moore.class.methoddecl @get_id -> @"MiddleAbstract::get_id" : (!moore.class<@MiddleAbstract>) -> !moore.i32
+  moore.class.methoddecl @describe -> @"MiddleAbstract::describe" : (!moore.class<@MiddleAbstract>) -> !moore.i32
+  moore.class.methoddecl @process : (!moore.class<@MiddleAbstract>) -> ()
+}
+
+// Leaf concrete class - creates vtable for itself and TopBase (but not MiddleAbstract)
+moore.class.classdecl @LeafConcrete extends @MiddleAbstract {
+  moore.class.methoddecl @get_id -> @"LeafConcrete::get_id" : (!moore.class<@LeafConcrete>) -> !moore.i32
+  moore.class.methoddecl @describe -> @"LeafConcrete::describe" : (!moore.class<@LeafConcrete>) -> !moore.i32
+  moore.class.methoddecl @process -> @"LeafConcrete::process" : (!moore.class<@LeafConcrete>) -> ()
+}
+
+// VTable for LeafConcrete - contains segment for TopBase but NOT for MiddleAbstract
+moore.vtable @LeafConcrete::@vtable {
+  moore.vtable @TopBase::@vtable {
+    moore.vtable_entry @get_id -> @"LeafConcrete::get_id"
+    moore.vtable_entry @describe -> @"LeafConcrete::describe"
+  }
+  moore.vtable_entry @get_id -> @"LeafConcrete::get_id"
+  moore.vtable_entry @describe -> @"LeafConcrete::describe"
+  moore.vtable_entry @process -> @"LeafConcrete::process"
+}
+
+func.func private @"TopBase::get_id"(%this: !moore.class<@TopBase>) -> !moore.i32 {
+  %c10 = moore.constant 10 : !moore.i32
+  return %c10 : !moore.i32
+}
+
+func.func private @"TopBase::describe"(%this: !moore.class<@TopBase>) -> !moore.i32 {
+  %c100 = moore.constant 100 : !moore.i32
+  return %c100 : !moore.i32
+}
+
+func.func private @"MiddleAbstract::get_id"(%this: !moore.class<@MiddleAbstract>) -> !moore.i32 {
+  %c20 = moore.constant 20 : !moore.i32
+  return %c20 : !moore.i32
+}
+
+func.func private @"MiddleAbstract::describe"(%this: !moore.class<@MiddleAbstract>) -> !moore.i32 {
+  %c200 = moore.constant 200 : !moore.i32
+  return %c200 : !moore.i32
+}
+
+func.func private @"LeafConcrete::get_id"(%this: !moore.class<@LeafConcrete>) -> !moore.i32 {
+  %c30 = moore.constant 30 : !moore.i32
+  return %c30 : !moore.i32
+}
+
+func.func private @"LeafConcrete::describe"(%this: !moore.class<@LeafConcrete>) -> !moore.i32 {
+  %c300 = moore.constant 300 : !moore.i32
+  return %c300 : !moore.i32
+}
+
+func.func private @"LeafConcrete::process"(%this: !moore.class<@LeafConcrete>) {
+  return
+}
+
+// CHECK-LABEL: func.func @test_deep_hierarchy_middle_no_vtable
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK:         %[[FPTR:.*]] = constant @"LeafConcrete::get_id" : (!llvm.ptr) -> i32
+// CHECK:         return
+
+func.func @test_deep_hierarchy_middle_no_vtable(%obj: !moore.class<@MiddleAbstract>) {
+  // MiddleAbstract has no vtable segment, but get_id should be found by
+  // searching all vtables - will find it in LeafConcrete's vtable
+  %fptr = moore.vtable.load_method %obj : @get_id of <@MiddleAbstract> -> (!moore.class<@MiddleAbstract>) -> !moore.i32
+  return
+}
+
+// CHECK-LABEL: func.func @test_deep_hierarchy_process_method
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK:         %[[FPTR:.*]] = constant @"LeafConcrete::process" : (!llvm.ptr) -> ()
+// CHECK:         return
+
+func.func @test_deep_hierarchy_process_method(%obj: !moore.class<@MiddleAbstract>) {
+  // The process method is only declared in MiddleAbstract but implemented in LeafConcrete
+  // This tests that methods unique to middle classes can still be found
+  %fptr = moore.vtable.load_method %obj : @process of <@MiddleAbstract> -> (!moore.class<@MiddleAbstract>) -> ()
+  return
+}
+
+//===----------------------------------------------------------------------===//
+// Test 6: Multiple vtables where method could be in any of them
+//===----------------------------------------------------------------------===//
+
+// This tests that when multiple concrete classes exist, the fallback search
+// finds the method in any available vtable.
+
+// Interface-like base class
+moore.class.classdecl @Printable {
+  moore.class.methoddecl @print -> @"Printable::print" : (!moore.class<@Printable>) -> ()
+}
+
+// First concrete implementation
+moore.class.classdecl @Document extends @Printable {
+  moore.class.methoddecl @print -> @"Document::print" : (!moore.class<@Document>) -> ()
+}
+
+// Second concrete implementation
+moore.class.classdecl @Report extends @Printable {
+  moore.class.methoddecl @print -> @"Report::print" : (!moore.class<@Report>) -> ()
+}
+
+// VTable for Document
+moore.vtable @Document::@vtable {
+  moore.vtable @Printable::@vtable {
+    moore.vtable_entry @print -> @"Document::print"
+  }
+  moore.vtable_entry @print -> @"Document::print"
+}
+
+// VTable for Report
+moore.vtable @Report::@vtable {
+  moore.vtable @Printable::@vtable {
+    moore.vtable_entry @print -> @"Report::print"
+  }
+  moore.vtable_entry @print -> @"Report::print"
+}
+
+func.func private @"Printable::print"(%this: !moore.class<@Printable>) {
+  return
+}
+
+func.func private @"Document::print"(%this: !moore.class<@Document>) {
+  return
+}
+
+func.func private @"Report::print"(%this: !moore.class<@Report>) {
+  return
+}
+
+// CHECK-LABEL: func.func @test_multiple_vtables_available
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK:         %[[FPTR:.*]] = constant @"Document::print" : (!llvm.ptr) -> ()
+// CHECK:         return
+
+func.func @test_multiple_vtables_available(%obj: !moore.class<@Printable>) {
+  // Printable has no direct vtable, but both Document and Report have vtables
+  // with Printable segments. The fallback search should find print in one of them.
+  // (It will find the first one encountered - Document in this case)
+  %fptr = moore.vtable.load_method %obj : @print of <@Printable> -> (!moore.class<@Printable>) -> ()
+  return
+}
