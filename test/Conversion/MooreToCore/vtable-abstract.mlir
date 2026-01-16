@@ -101,3 +101,57 @@ func.func @test_abstract_vtable_load_and_call(%obj: !moore.class<@AbstractBase>)
   func.call_indirect %fptr(%obj) : (!moore.class<@AbstractBase>) -> ()
   return
 }
+
+//===----------------------------------------------------------------------===//
+// Test 4: Class with no vtable segment - method found via global vtable search
+//===----------------------------------------------------------------------===//
+
+// This tests the scenario where a class (MiddleClass) extends a base class
+// but has no vtable segment of its own in any vtable. The method should still
+// be found by searching all available vtables.
+
+// Base class with method
+moore.class.classdecl @BaseWithMethod {
+  moore.class.methoddecl @get_name -> @"BaseWithMethod::get_name" : (!moore.class<@BaseWithMethod>) -> !moore.i32
+}
+
+// Middle class extends base but has no derived classes that create a vtable
+// segment for it specifically
+moore.class.classdecl @MiddleClass extends @BaseWithMethod {
+  moore.class.methoddecl @get_name -> @"BaseWithMethod::get_name" : (!moore.class<@MiddleClass>) -> !moore.i32
+}
+
+// Another concrete class that creates a vtable (but not for MiddleClass)
+moore.class.classdecl @OtherConcrete extends @BaseWithMethod {
+  moore.class.methoddecl @get_name -> @"OtherConcrete::get_name" : (!moore.class<@OtherConcrete>) -> !moore.i32
+}
+
+// VTable for OtherConcrete - does NOT contain a segment for MiddleClass
+moore.vtable @OtherConcrete::@vtable {
+  moore.vtable @BaseWithMethod::@vtable {
+    moore.vtable_entry @get_name -> @"OtherConcrete::get_name"
+  }
+  moore.vtable_entry @get_name -> @"OtherConcrete::get_name"
+}
+
+func.func private @"BaseWithMethod::get_name"(%this: !moore.class<@BaseWithMethod>) -> !moore.i32 {
+  %c0 = moore.constant 0 : !moore.i32
+  return %c0 : !moore.i32
+}
+
+func.func private @"OtherConcrete::get_name"(%this: !moore.class<@OtherConcrete>) -> !moore.i32 {
+  %c1 = moore.constant 1 : !moore.i32
+  return %c1 : !moore.i32
+}
+
+// CHECK-LABEL: func.func @test_no_vtable_segment_fallback
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK:         %[[FPTR:.*]] = constant @"OtherConcrete::get_name" : (!llvm.ptr) -> i32
+// CHECK:         return
+
+func.func @test_no_vtable_segment_fallback(%obj: !moore.class<@MiddleClass>) {
+  // MiddleClass has no vtable segment anywhere, but get_name should be found
+  // by searching all vtables in the module
+  %fptr = moore.vtable.load_method %obj : @get_name of <@MiddleClass> -> (!moore.class<@MiddleClass>) -> !moore.i32
+  return
+}
