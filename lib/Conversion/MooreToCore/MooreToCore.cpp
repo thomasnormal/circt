@@ -2971,6 +2971,23 @@ struct StructCreateOpConversion : public OpConversionPattern<StructCreateOp> {
   matchAndRewrite(StructCreateOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Check if this converts to an LLVM struct type (has dynamic fields).
+    // If so, we need to use LLVM::UndefOp + LLVM::InsertValueOp instead of
+    // hw::StructCreateOp.
+    if (isa<LLVM::LLVMStructType>(resultType)) {
+      auto loc = op.getLoc();
+      // Create an undef struct and insert each field
+      Value result = LLVM::UndefOp::create(rewriter, loc, resultType);
+      for (auto [idx, field] : llvm::enumerate(adaptor.getFields())) {
+        result = LLVM::InsertValueOp::create(rewriter, loc, result, field,
+                                             ArrayRef<int64_t>{(int64_t)idx});
+      }
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Default: use hw::StructCreateOp for hw::StructType
     rewriter.replaceOpWithNewOp<hw::StructCreateOp>(op, resultType,
                                                     adaptor.getFields());
     return success();
@@ -2983,6 +3000,57 @@ struct StructExtractOpConversion : public OpConversionPattern<StructExtractOp> {
   LogicalResult
   matchAndRewrite(StructExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto inputType = op.getInput().getType();
+
+    // Check if this is an unpacked struct with dynamic fields (strings, classes,
+    // etc.). These convert to LLVM struct types instead of hw::StructType, so we
+    // need to use LLVM::ExtractValueOp instead of hw::StructExtractOp.
+    bool needsLLVMHandling = false;
+    SmallVector<StringAttr> fieldNames;
+
+    if (auto unpackedStruct = dyn_cast<moore::UnpackedStructType>(inputType)) {
+      auto convertedType = typeConverter->convertType(unpackedStruct);
+      if (isa<LLVM::LLVMStructType>(convertedType)) {
+        needsLLVMHandling = true;
+      }
+      for (auto &member : unpackedStruct.getMembers())
+        fieldNames.push_back(member.name);
+    } else if (auto packedStruct = dyn_cast<moore::StructType>(inputType)) {
+      auto convertedType = typeConverter->convertType(packedStruct);
+      if (isa<LLVM::LLVMStructType>(convertedType)) {
+        needsLLVMHandling = true;
+      }
+      for (auto &member : packedStruct.getMembers())
+        fieldNames.push_back(member.name);
+    }
+
+    if (needsLLVMHandling) {
+      // Find the field index by name
+      auto fieldName = op.getFieldNameAttr();
+      int64_t fieldIndex = -1;
+      for (size_t i = 0; i < fieldNames.size(); i++) {
+        if (fieldNames[i] == fieldName) {
+          fieldIndex = i;
+          break;
+        }
+      }
+      if (fieldIndex < 0) {
+        return op.emitError("field '")
+               << fieldName.getValue() << "' not found in struct";
+      }
+
+      // Convert the result type
+      auto resultType = typeConverter->convertType(op.getResult().getType());
+      if (!resultType)
+        return failure();
+
+      // Use LLVM::ExtractValueOp for LLVM struct types
+      rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+          op, resultType, adaptor.getInput(), ArrayRef<int64_t>{fieldIndex});
+      return success();
+    }
+
+    // Default: use hw::StructExtractOp for hw::StructType
     rewriter.replaceOpWithNewOp<hw::StructExtractOp>(
         op, adaptor.getInput(), adaptor.getFieldNameAttr());
     return success();
