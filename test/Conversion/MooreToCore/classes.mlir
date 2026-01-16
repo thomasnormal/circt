@@ -42,9 +42,11 @@ moore.class.classdecl @C {
 }
 
 /// Check that new lowers to malloc with inheritance without shadowing
+/// D struct is: (struct<"C", (i32, i32, i32, i32)>, i32, i64, i16)
+/// Size: C(16) + i32(4) + i64(8) + i16(2) = 30 bytes (packed size)
 
 // CHECK-LABEL: func.func private @test_new3
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(32 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(30 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 

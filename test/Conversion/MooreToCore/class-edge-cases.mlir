@@ -238,14 +238,17 @@ func.func private @test_full_workflow() -> !moore.i1 {
 /// Test that Level3 allocation includes all inherited properties
 
 // CHECK-LABEL: func.func private @test_level3_size
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(19 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 // CHECK-NOT: moore.class.new
 
 func.func private @test_level3_size() {
-  // Level3 struct is nested: Level3(Level2(Level1(Base(i32), i64), i16), i8)
-  // Size: 4(i32) + 4(padding) + 8(i64) + 2(i16) + 2(padding) + 1(i8) + 3(padding) = 24 bytes
+  // Level3 struct is nested: Level3(Level2(Level1(Base(i32, i32), i64), i16), i8)
+  // Base: i32 + i32 = 8 bytes
+  // Level1: Base(8) + i64 = 16 bytes
+  // Level2: Level1(16) + i16 = 18 bytes
+  // Level3: Level2(18) + i8 = 19 bytes (packed size)
   %obj = moore.class.new : <@Level3>
   return
 }
