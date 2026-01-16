@@ -736,6 +736,32 @@ def ConvertHWToSMT : Pass<"convert-hw-to-smt", "mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// LowerClockedAssertLike
+//===----------------------------------------------------------------------===//
+
+def LowerClockedAssertLike : Pass<"lower-clocked-assert-like", "hw::HWModuleOp"> {
+  let summary = "Lower clocked assertions with i1 properties to unclocked assertions";
+  let description = [{
+    This pass lowers clocked assertions (verif.clocked_assert, verif.clocked_assume,
+    verif.clocked_cover) with i1 properties to their unclocked equivalents
+    (verif.assert, verif.assume, verif.cover). This is useful for BMC where
+    the clocked assertions with simple boolean properties need to be converted
+    to unclocked form before VerifToSMT conversion.
+
+    The transformation drops the clock and edge information since for BMC the
+    circuit is already being evaluated at each time step.
+
+    Note: Clocked assertions with LTL properties (ltl::PropertyType or
+    ltl::SequenceType) are not handled by this pass - they should be handled
+    by the LTLToCore pass instead.
+  }];
+  let constructor = "circt::createLowerClockedAssertLikePass()";
+  let dependentDialects = [
+    "hw::HWDialect", "verif::VerifDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // ConvertVerifToSMT
 //===----------------------------------------------------------------------===//
 

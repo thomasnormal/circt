@@ -10,6 +10,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/LTL/LTLTypes.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Support/CustomDirectiveImpl.h"
 #include "circt/Support/FoldUtils.h"
@@ -20,6 +21,7 @@
 #include "mlir/IR/TypeRange.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 
 using namespace circt;
@@ -273,6 +275,19 @@ LogicalResult BoundedModelCheckingOp::verifyRegions() {
   for (auto input : circuitArgTy)
     if (isa<seq::ClockType>(input))
       totalClocks++;
+  // When registers are present but no explicit clock type args exist,
+  // check if an i1 argument might be used as clock (common pattern where
+  // i1 is converted to clock via ToClockOp inside the circuit).
+  if (totalClocks == 0 && getNumRegs() > 0) {
+    // Circuit region has i1 args that could be clocks - check circuitArgTy
+    for (auto input : circuitArgTy) {
+      if (input.isSignlessInteger(1)) {
+        // Assume first i1 argument could be a clock
+        totalClocks = 1;
+        break;
+      }
+    }
+  }
   auto initYields = initYieldOp->getOperands();
   // We know init and loop yields match, so only need to check one
   if (initYields.size() < totalClocks)

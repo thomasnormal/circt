@@ -149,6 +149,16 @@ void LowerToBMCPass::runOnOperation() {
       }
     }
   }
+  // Also check for i1 inputs that are converted to clocks via ToClockOp
+  if (!hasClk) {
+    hwModule.walk([&](seq::ToClockOp toClockOp) {
+      if (auto blockArg = dyn_cast<BlockArgument>(toClockOp.getInput())) {
+        if (blockArg.getOwner() == &hwModule.getBody().front()) {
+          hasClk = true;
+        }
+      }
+    });
+  }
   {
     OpBuilder::InsertionGuard guard(builder);
     // Initialize clock to 0 if it exists, otherwise just yield nothing

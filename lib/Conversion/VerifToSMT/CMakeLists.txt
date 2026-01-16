@@ -1,4 +1,5 @@
 add_circt_conversion_library(CIRCTVerifToSMT
+  LowerClockedAssertLike.cpp
   VerifToSMT.cpp
 
   DEPENDS
@@ -10,6 +11,7 @@ add_circt_conversion_library(CIRCTVerifToSMT
   LINK_LIBS PUBLIC
   CIRCTHW
   CIRCTHWToSMT
+  CIRCTLTL
   CIRCTVerif
   MLIRArithDialect
   MLIRFuncDialect

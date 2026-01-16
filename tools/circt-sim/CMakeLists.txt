@@ -33,7 +33,11 @@ set(libs
   MLIRTransforms
 )
 
-add_circt_tool(circt-sim circt-sim.cpp DEPENDS ${libs})
+add_circt_tool(circt-sim
+  circt-sim.cpp
+  LLHDProcessInterpreter.cpp
+  DEPENDS ${libs}
+)
 target_link_libraries(circt-sim
   PRIVATE
   ${libs}

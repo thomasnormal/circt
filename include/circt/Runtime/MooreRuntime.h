@@ -255,6 +255,16 @@ MooreString __moore_stream_concat_strings(MooreQueue *queue, bool isRightToLeft)
 int64_t __moore_stream_concat_bits(MooreQueue *queue, int32_t elementBitWidth,
                                    bool isRightToLeft);
 
+/// Unpack bits from a value into a dynamic array.
+/// The inverse of __moore_stream_concat_bits. Used for streaming unpacking
+/// assignments like: {<<{array}} = source_bits
+/// @param array Pointer to the destination queue/array
+/// @param sourceBits The bits to unpack (up to 64 bits)
+/// @param elementBitWidth Bit width of each element
+/// @param isRightToLeft If true, unpack right-to-left; otherwise left-to-right
+void __moore_stream_unpack_bits(MooreQueue *array, int64_t sourceBits,
+                                int32_t elementBitWidth, bool isRightToLeft);
+
 //===----------------------------------------------------------------------===//
 // Event Operations
 //===----------------------------------------------------------------------===//
@@ -610,6 +620,36 @@ void __moore_fwrite(int32_t fd, MooreString *message);
 /// Implements the SystemVerilog $fclose system task.
 /// @param fd File descriptor to close
 void __moore_fclose(int32_t fd);
+
+/// Read a single character from a file.
+/// Implements the SystemVerilog $fgetc system function.
+/// @param fd File descriptor to read from
+/// @return The character read, or EOF (-1) on error or end-of-file
+int32_t __moore_fgetc(int32_t fd);
+
+/// Read a line from a file into a string.
+/// Implements the SystemVerilog $fgets system function.
+/// @param str Pointer to the destination string structure
+/// @param fd File descriptor to read from
+/// @return The number of characters read, or 0 on error or end-of-file
+int32_t __moore_fgets(MooreString *str, int32_t fd);
+
+/// Check if end-of-file has been reached.
+/// Implements the SystemVerilog $feof system function.
+/// @param fd File descriptor to check
+/// @return Non-zero if EOF has been reached, 0 otherwise
+int32_t __moore_feof(int32_t fd);
+
+/// Flush file output buffer.
+/// Implements the SystemVerilog $fflush system task.
+/// @param fd File descriptor to flush (0 flushes all files)
+void __moore_fflush(int32_t fd);
+
+/// Get current file position.
+/// Implements the SystemVerilog $ftell system function.
+/// @param fd File descriptor
+/// @return Current file position, or -1 on error
+int32_t __moore_ftell(int32_t fd);
 
 //===----------------------------------------------------------------------===//
 // Memory Management

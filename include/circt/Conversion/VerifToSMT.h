@@ -12,16 +12,26 @@
 #include "circt/Support/LLVM.h"
 #include <memory>
 
+namespace mlir {
+class Pass;
+} // namespace mlir
+
 namespace circt {
 class Namespace;
 
+#define GEN_PASS_DECL_LOWERCLOCKEDASSERTLIKE
 #define GEN_PASS_DECL_CONVERTVERIFTOSMT
 #include "circt/Conversion/Passes.h.inc"
 
 /// Get the Verif to SMT conversion patterns.
 void populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps);
+    bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
+    SmallVectorImpl<Operation *> &coverBMCOps);
+
+/// Create a pass to lower clocked assertions with i1 properties to unclocked
+/// assertions.
+std::unique_ptr<mlir::Pass> createLowerClockedAssertLikePass();
 
 } // namespace circt
 

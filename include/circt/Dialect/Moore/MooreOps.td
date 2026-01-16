@@ -1464,6 +1464,39 @@ def StreamConcatOp : MooreOp<"stream_concat", [Pure]> {
   }];
 }
 
+def StreamUnpackOp : MooreOp<"stream_unpack", []> {
+  let summary = "Streaming unpack into a dynamic array or queue";
+  let description = [{
+    Performs streaming unpacking from a bit vector into a dynamic array or queue
+    reference. This is the inverse of `moore.stream_concat` and corresponds to
+    using streaming operators on the left-hand side of an assignment:
+    `{<<{array}} = source` or `{>>{array}} = source`.
+
+    The source value is unpacked bit-by-bit into the elements of the target
+    dynamic array. The array is resized as needed to hold all the bits.
+
+    The `isRightToLeft` attribute controls the direction:
+    - false (default): left-to-right streaming (`{>>{array}} = src`)
+    - true: right-to-left streaming (`{<<{array}} = src`)
+
+    Example:
+    ```mlir
+    // Unpack bits into a dynamic array
+    moore.stream_unpack %array_ref, %source : !moore.ref<!moore.open_uarray<i1>>, !moore.i64
+    ```
+
+    See IEEE 1800-2017 Section 11.4.14 "Streaming operators (pack/unpack)".
+  }];
+  let arguments = (ins
+    RefType:$dst,
+    UnpackedType:$src,
+    DefaultValuedAttr<BoolAttr, "false">:$isRightToLeft
+  );
+  let assemblyFormat = [{
+    $dst `,` $src (`right_to_left` $isRightToLeft^)? attr-dict `:` type($dst) `,` type($src)
+  }];
+}
+
 class LogicalEqOpBase<string mnemonic> : MooreOp<mnemonic, [
   Pure,
   Commutative,
@@ -2115,6 +2148,30 @@ def AssumeOp : ImmediateAssertOp<"assume">{
 
 def CoverOp : ImmediateAssertOp<"cover">{
   let summary = "Monitor the coverage information.";
+}
+
+def PastOp : MooreOp<"past", [Pure, SameOperandsAndResultType]> {
+  let summary = "Get the value from a previous clock cycle";
+  let description = [{
+    The `moore.past` operation returns the value of an expression from a previous
+    clock cycle. This is used to implement the SystemVerilog `$past` system
+    function when the value needs to preserve its type for comparisons.
+
+    The `delay` attribute specifies how many clock cycles in the past to look.
+    A delay of 1 (the default) returns the value from the previous cycle.
+
+    Example:
+    ```mlir
+    %past_val = moore.past %val delay 1 : !moore.l32
+    ```
+
+    See IEEE 1800-2017 Section 16.9.3 "Past sampled value functions".
+  }];
+  let arguments = (ins UnpackedType:$input, I64Attr:$delay);
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = [{
+    $input `delay` $delay attr-dict `:` type($input)
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -3061,6 +3118,141 @@ def SScanfBIOp : Builtin<"sscanf"> {
   let arguments = (ins StringType:$input, StrAttr:$format, Variadic<RefType>:$args);
   let results = (outs TwoValuedI32:$result);
   let assemblyFormat = "$input `,` $format `,` $args attr-dict `:` type($args)";
+}
+
+def FGetCBIOp : Builtin<"fgetc"> {
+  let summary = "Read a single character from a file";
+  let description = [{
+    Corresponds to the `$fgetc` system function. Reads and returns a single
+    character (byte) from the file specified by the file descriptor.
+
+    Returns the character read as an integer, or EOF (-1) if end-of-file
+    is reached or an error occurs.
+
+    See IEEE 1800-2017 Section 21.3.3 "File input functions".
+  }];
+  let arguments = (ins TwoValuedI32:$fd);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$fd attr-dict";
+}
+
+def FGetSBIOp : Builtin<"fgets"> {
+  let summary = "Read a line from a file into a string";
+  let description = [{
+    Corresponds to the `$fgets` system function. Reads characters from the
+    file specified by the file descriptor into the string variable until
+    a newline is encountered, end-of-file is reached, or the string is full.
+
+    The str argument must be a reference to a string variable where the
+    read data will be stored. Returns the number of characters read, or
+    0 if end-of-file is reached or an error occurs.
+
+    See IEEE 1800-2017 Section 21.3.3 "File input functions".
+  }];
+  let arguments = (ins RefType:$str, TwoValuedI32:$fd);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$str `,` $fd attr-dict `:` type($str)";
+}
+
+def FEofBIOp : Builtin<"feof"> {
+  let summary = "Check if end-of-file has been reached";
+  let description = [{
+    Corresponds to the `$feof` system function. Tests whether end-of-file
+    has been reached on the file specified by the file descriptor.
+
+    Returns a non-zero value if end-of-file has been reached, 0 otherwise.
+
+    See IEEE 1800-2017 Section 21.3.3 "File input functions".
+  }];
+  let arguments = (ins TwoValuedI32:$fd);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$fd attr-dict";
+}
+
+def FFlushBIOp : Builtin<"fflush"> {
+  let summary = "Flush file buffer";
+  let description = [{
+    Corresponds to the `$fflush` system task. Flushes the output buffer
+    for the file specified by the file descriptor. If fd is 0, all open
+    files are flushed.
+
+    See IEEE 1800-2017 Section 21.3.2 "Closing files".
+  }];
+  let arguments = (ins TwoValuedI32:$fd);
+  let assemblyFormat = "$fd attr-dict";
+}
+
+def FTellBIOp : Builtin<"ftell"> {
+  let summary = "Get current file position";
+  let description = [{
+    Corresponds to the `$ftell` system function. Returns the current value
+    of the file position indicator for the file specified by the file
+    descriptor.
+
+    Returns the current file position, or -1 if an error occurs.
+
+    See IEEE 1800-2017 Section 21.3.3 "File input functions".
+  }];
+  let arguments = (ins TwoValuedI32:$fd);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$fd attr-dict";
+}
+
+def StrobeBIOp : Builtin<"strobe"> {
+  let summary = "Display values at the end of the current time step";
+  let description = [{
+    Corresponds to the `$strobe` system task. Similar to `$display`, but
+    the output is delayed until the end of the current simulation time
+    step, ensuring that all events scheduled for the current time have
+    been processed.
+
+    See IEEE 1800-2017 Section 21.2.4 "Strobed monitoring".
+  }];
+  let arguments = (ins FormatStringType:$message);
+  let assemblyFormat = "$message attr-dict";
+}
+
+def MonitorBIOp : Builtin<"monitor"> {
+  let summary = "Enable continuous monitoring of variable changes";
+  let description = [{
+    Corresponds to the `$monitor` system task. Enables monitoring of the
+    specified variables. Whenever any of the monitored variables changes
+    value during simulation, the formatted message is automatically
+    displayed at the end of the current time step.
+
+    Only one $monitor task can be active at a time. Subsequent calls to
+    $monitor replace the previous monitoring specification.
+
+    See IEEE 1800-2017 Section 21.2.3 "Monitoring".
+  }];
+  let arguments = (ins FormatStringType:$message);
+  let assemblyFormat = "$message attr-dict";
+}
+
+def FStrobeBIOp : Builtin<"fstrobe"> {
+  let summary = "Write strobe output to a file";
+  let description = [{
+    Corresponds to the `$fstrobe` system task. Like `$strobe`, but writes
+    the output to the file specified by the file descriptor instead of
+    standard output.
+
+    See IEEE 1800-2017 Section 21.3.1 "File output tasks".
+  }];
+  let arguments = (ins TwoValuedI32:$fd, FormatStringType:$message);
+  let assemblyFormat = "$fd `,` $message attr-dict";
+}
+
+def FMonitorBIOp : Builtin<"fmonitor"> {
+  let summary = "Enable continuous monitoring to a file";
+  let description = [{
+    Corresponds to the `$fmonitor` system task. Like `$monitor`, but writes
+    the output to the file specified by the file descriptor instead of
+    standard output.
+
+    See IEEE 1800-2017 Section 21.3.1 "File output tasks".
+  }];
+  let arguments = (ins TwoValuedI32:$fd, FormatStringType:$message);
+  let assemblyFormat = "$fd `,` $message attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
@@ -5088,6 +5280,23 @@ def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
   }];
 }
 
+def QueueSliceOp : QueueBuiltin<"slice", [Pure]> {
+  let summary = "Slice a queue by index range";
+  let description = [{
+    Returns a new queue containing elements in the inclusive range
+    [start, end] from the input queue. If the range is invalid or empty,
+    the result is an empty queue.
+
+    Example:
+    ```mlir
+    %slice = moore.queue.slice %q, %start, %end : !moore.queue<i32, 0>
+    ```
+  }];
+  let arguments = (ins QueueType:$queue, TwoValuedI32:$start, TwoValuedI32:$end);
+  let results = (outs QueueType:$result);
+  let assemblyFormat = "$queue `,` $start `,` $end attr-dict `:` type($queue)";
+}
+
 //===----------------------------------------------------------------------===//
 // Array Locator Methods
 //===----------------------------------------------------------------------===//
@@ -5425,6 +5634,69 @@ def StringAtoBinOp : StringBuiltin<"atobin"> {
   let arguments = (ins StringType:$str);
   let results = (outs TwoValuedI32:$result);
   let assemblyFormat = "$str attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Clocking Blocks
+//===----------------------------------------------------------------------===//
+
+def ClockingBlockDeclOp : MooreOp<"clocking_block", [
+  NoTerminator,
+  SingleBlock
+]> {
+  let summary = "Clocking block declaration";
+  let description = [{
+    Declares a SystemVerilog clocking block. Clocking blocks define a
+    synchronization mechanism for signals relative to a clock event.
+    They specify input and output skews for sampling and driving signals.
+
+    Example:
+    ```mlir
+    moore.clocking_block "cb" {
+      // Signals sampled/driven relative to the clocking event
+    }
+    ```
+
+    See IEEE 1800-2017 Section 14 "Clocking Blocks".
+  }];
+
+  let arguments = (ins
+    StrAttr:$name
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $name attr-dict-with-keyword $body
+  }];
+}
+
+def ClockingSignalOp : MooreOp<"clocking_block.signal", [
+  HasParent<"ClockingBlockDeclOp">
+]> {
+  let summary = "Declare a signal within a clocking block";
+  let description = [{
+    Declares a signal within a clocking block. The signal specifies the
+    direction (input, output, or inout) and optional skew values for
+    sampling and driving.
+
+    Example:
+    ```mlir
+    moore.clocking_block.signal "data" : !moore.l32
+    ```
+
+    See IEEE 1800-2017 Section 14.3 "Clocking block declaration".
+  }];
+
+  let arguments = (ins
+    StrAttr:$name,
+    TypeAttr:$type
+  );
+  let assemblyFormat = [{
+    $name `:` $type attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    ::mlir::Type getSignalType() { return getTypeAttr().getValue(); }
+  }];
 }
 
 #endif // CIRCT_DIALECT_MOORE_MOOREOPS

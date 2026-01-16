@@ -8,6 +8,7 @@
 
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
+#include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/Namespace.h"
@@ -44,6 +45,10 @@ struct VerifAssertOpConversion : OpConversionPattern<verif::AssertOp> {
   LogicalResult
   matchAndRewrite(verif::AssertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (isa<ltl::SequenceType, ltl::PropertyType>(
+            adaptor.getProperty().getType())) {
+      return op.emitError("LTL properties are not supported by VerifToSMT yet");
+    }
     Value cond = typeConverter->materializeTargetConversion(
         rewriter, op.getLoc(), smt::BoolType::get(getContext()),
         adaptor.getProperty());
@@ -60,6 +65,10 @@ struct VerifAssumeOpConversion : OpConversionPattern<verif::AssumeOp> {
   LogicalResult
   matchAndRewrite(verif::AssumeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (isa<ltl::SequenceType, ltl::PropertyType>(
+            adaptor.getProperty().getType())) {
+      return op.emitError("LTL properties are not supported by VerifToSMT yet");
+    }
     Value cond = typeConverter->materializeTargetConversion(
         rewriter, op.getLoc(), smt::BoolType::get(getContext()),
         adaptor.getProperty());
@@ -75,8 +84,15 @@ struct VerifCoverOpConversion : OpConversionPattern<verif::CoverOp> {
   LogicalResult
   matchAndRewrite(verif::CoverOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    (void)adaptor;
-    rewriter.eraseOp(op);
+    if (isa<ltl::SequenceType, ltl::PropertyType>(
+            adaptor.getProperty().getType())) {
+      return op.emitError("LTL cover properties are not supported by "
+                          "VerifToSMT yet");
+    }
+    Value cond = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getProperty());
+    rewriter.replaceOpWithNewOp<smt::AssertOp>(op, cond);
     return success();
   }
 };
@@ -369,14 +385,19 @@ struct VerifBoundedModelCheckingOpConversion
 
   VerifBoundedModelCheckingOpConversion(
       TypeConverter &converter, MLIRContext *context, Namespace &names,
-      bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps)
+      bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
+      SmallVectorImpl<Operation *> &coverBMCOps)
       : OpConversionPattern(converter, context), names(names),
         risingClocksOnly(risingClocksOnly),
-        propertylessBMCOps(propertylessBMCOps) {}
+        propertylessBMCOps(propertylessBMCOps), coverBMCOps(coverBMCOps) {}
   LogicalResult
   matchAndRewrite(verif::BoundedModelCheckingOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+
+    bool isCoverCheck =
+        std::find(coverBMCOps.begin(), coverBMCOps.end(), op) !=
+        coverBMCOps.end();
 
     if (std::find(propertylessBMCOps.begin(), propertylessBMCOps.end(), op) !=
         propertylessBMCOps.end()) {
@@ -388,6 +409,44 @@ struct VerifBoundedModelCheckingOpConversion
       rewriter.replaceOp(op, trueVal);
       return success();
     }
+
+    // Hoist any final-only asserts into circuit outputs so we can check them
+    // only at the final step.
+    SmallVector<Value> finalCheckValues;
+    SmallVector<Operation *> opsToErase;
+    auto &circuitBlock = op.getCircuit().front();
+    circuitBlock.walk([&](Operation *curOp) {
+      if (!curOp->hasAttr("bmc.final"))
+        return;
+      if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
+        finalCheckValues.push_back(assertOp.getProperty());
+        opsToErase.push_back(curOp);
+        return;
+      }
+      if (auto assumeOp = dyn_cast<verif::AssumeOp>(curOp)) {
+        finalCheckValues.push_back(assumeOp.getProperty());
+        opsToErase.push_back(curOp);
+        return;
+      }
+      if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
+        finalCheckValues.push_back(coverOp.getProperty());
+        opsToErase.push_back(curOp);
+        return;
+      }
+    });
+    // Modify the yield first (while values are still valid)
+    if (!finalCheckValues.empty()) {
+      auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
+      SmallVector<Value> newYieldOperands(yieldOp.getOperands());
+      newYieldOperands.append(finalCheckValues.begin(),
+                              finalCheckValues.end());
+      yieldOp->setOperands(newYieldOperands);
+    }
+    // Erase the bmc.final ops using the rewriter to properly notify the
+    // conversion framework
+    for (auto *opToErase : opsToErase)
+      rewriter.eraseOp(opToErase);
+    size_t numFinalAsserts = finalCheckValues.size();
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
@@ -406,15 +465,24 @@ struct VerifBoundedModelCheckingOpConversion
     if (failed(typeConverter->convertTypes(
             op.getCircuit().front().back().getOperandTypes(), circuitOutputTy)))
       return failure();
+
+    unsigned numRegs = op.getNumRegs();
+    auto initialValues = op.getInitialValues();
+
+    // Count clocks from the original init yield types (BEFORE region conversion)
+    // This handles both explicit seq::ClockType and i1 clocks converted via
+    // ToClockOp
+    size_t numInitClocks = 0;
+    for (auto ty : op.getInit().front().back().getOperandTypes())
+      if (isa<seq::ClockType>(ty))
+        numInitClocks++;
+
     if (failed(rewriter.convertRegionTypes(&op.getInit(), *typeConverter)))
       return failure();
     if (failed(rewriter.convertRegionTypes(&op.getLoop(), *typeConverter)))
       return failure();
     if (failed(rewriter.convertRegionTypes(&op.getCircuit(), *typeConverter)))
       return failure();
-
-    unsigned numRegs = op.getNumRegs();
-    auto initialValues = op.getInitialValues();
 
     auto initFuncTy = rewriter.getFunctionType({}, initOutputTy);
     // Loop and init output types are necessarily the same, so just use init
@@ -469,19 +537,32 @@ struct VerifBoundedModelCheckingOpConversion
     smt::PushOp::create(rewriter, loc, 1);
 
     // InputDecls order should be <circuit arguments> <state arguments>
-    // <wasViolated>
+    // <finalChecks> <wasViolated>
     // Get list of clock indexes in circuit args
     size_t initIndex = 0;
     SmallVector<Value> inputDecls;
     SmallVector<int> clockIndexes;
+    size_t nonRegIndex = 0; // Track position among non-register inputs
     for (auto [curIndex, oldTy, newTy] :
          llvm::enumerate(oldCircuitInputTy, circuitInputTy)) {
-      if (isa<seq::ClockType>(oldTy)) {
+      // Check if this is a register input
+      bool isRegister = curIndex >= oldCircuitInputTy.size() - numRegs;
+
+      // Check if this is a clock - either explicit seq::ClockType or
+      // an i1 that corresponds to an init clock (for i1 clocks converted via
+      // ToClockOp inside the circuit)
+      bool isClock = isa<seq::ClockType>(oldTy) ||
+                     (!isRegister && nonRegIndex < numInitClocks);
+
+      if (isClock) {
         inputDecls.push_back(initVals[initIndex++]);
         clockIndexes.push_back(curIndex);
+        nonRegIndex++;
         continue;
       }
-      if (curIndex >= oldCircuitInputTy.size() - numRegs) {
+      if (!isRegister)
+        nonRegIndex++;
+      if (isRegister) {
         auto initVal =
             initialValues[curIndex - oldCircuitInputTy.size() + numRegs];
         if (auto initIntAttr = dyn_cast<IntegerAttr>(initVal)) {
@@ -512,6 +593,11 @@ struct VerifBoundedModelCheckingOpConversion
         arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(false));
     Value constTrue =
         arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
+    // Initialize final check iter_args with SMT bv<1> zero (these will be
+    // updated with circuit outputs)
+    auto smtBVFalse = smt::BVConstantOp::create(rewriter, loc, 0, 1);
+    for (size_t i = 0; i < numFinalAsserts; ++i)
+      inputDecls.push_back(smtBVFalse);
     inputDecls.push_back(constFalse); // wasViolated?
 
     // TODO: swapping to a whileOp here would allow early exit once the property
@@ -530,6 +616,12 @@ struct VerifBoundedModelCheckingOpConversion
                   builder, loc, circuitFuncOp,
                   iterArgs.take_front(circuitFuncOp.getNumArguments()))
                   ->getResults();
+          ValueRange circuitOutputs =
+              numFinalAsserts == 0 ? circuitCallOuts
+                                   : circuitCallOuts.drop_back(numFinalAsserts);
+          ValueRange finalCheckOutputs =
+              numFinalAsserts == 0 ? ValueRange{}
+                                   : circuitCallOuts.take_back(numFinalAsserts);
 
           // If we have a cycle up to which we ignore assertions, we need an
           // IfOp to track this
@@ -592,7 +684,8 @@ struct VerifBoundedModelCheckingOpConversion
           for (auto index : clockIndexes)
             loopCallInputs.push_back(iterArgs[index]);
           // Fetch state args to feed to loop
-          for (auto stateArg : iterArgs.drop_back().take_back(numStateArgs))
+          for (auto stateArg :
+               iterArgs.drop_back(1 + numFinalAsserts).take_back(numStateArgs))
             loopCallInputs.push_back(stateArg);
           ValueRange loopVals =
               func::CallOp::create(builder, loc, loopFuncOp, loopCallInputs)
@@ -601,14 +694,20 @@ struct VerifBoundedModelCheckingOpConversion
           size_t loopIndex = 0;
           // Collect decls to yield at end of iteration
           SmallVector<Value> newDecls;
+          size_t nonRegIdx = 0;
           for (auto [oldTy, newTy] :
                llvm::zip(TypeRange(oldCircuitInputTy).drop_back(numRegs),
                          TypeRange(circuitInputTy).drop_back(numRegs))) {
-            if (isa<seq::ClockType>(oldTy))
+            // Check if this is a clock - either explicit seq::ClockType or
+            // an i1 that corresponds to an init clock
+            bool isClock = isa<seq::ClockType>(oldTy) ||
+                           (nonRegIdx < numInitClocks);
+            if (isClock)
               newDecls.push_back(loopVals[loopIndex++]);
             else
               newDecls.push_back(
                   smt::DeclareFunOp::create(builder, loc, newTy));
+            nonRegIdx++;
           }
 
           // Only update the registers on a clock posedge unless in rising
@@ -616,7 +715,7 @@ struct VerifBoundedModelCheckingOpConversion
           // TODO: this will also need changing with multiple clocks - currently
           // it only accounts for the one clock case.
           if (clockIndexes.size() == 1) {
-            SmallVector<Value> regInputs = circuitCallOuts.take_back(numRegs);
+            SmallVector<Value> regInputs = circuitOutputs.take_back(numRegs);
             if (risingClocksOnly) {
               // In rising clocks only mode we don't need to worry about whether
               // there was a posedge
@@ -654,13 +753,61 @@ struct VerifBoundedModelCheckingOpConversion
           for (; loopIndex < loopVals.size(); ++loopIndex)
             newDecls.push_back(loopVals[loopIndex]);
 
+          // Pass through finalCheckOutputs (already !smt.bv<1>) for next
+          // iteration
+          for (auto finalVal : finalCheckOutputs) {
+            newDecls.push_back(finalVal);
+          }
           newDecls.push_back(violated);
 
           scf::YieldOp::create(builder, loc, newDecls);
         });
 
-    Value res = arith::XOrIOp::create(rewriter, loc, forOp->getResults().back(),
-                                      constTrue);
+    // Get the violation flag from the loop
+    Value violated = forOp->getResults().back();
+
+    // If there are final checks, check if they can be violated
+    Value finalCheckViolated = constFalse;
+    if (numFinalAsserts > 0) {
+      // For each final check, assert its negation (we're looking for
+      // violations). If SAT, the check can be violated.
+      auto results = forOp->getResults();
+      size_t finalStart = results.size() - 1 - numFinalAsserts;
+      auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+      for (size_t i = 0; i < numFinalAsserts; ++i) {
+        // Results are !smt.bv<1>, check if they can be false
+        Value finalVal = results[finalStart + i];
+        Value isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+        // Assert the negation: we're looking for cases where the check FAILS
+        Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
+        smt::AssertOp::create(rewriter, loc, isFalse);
+      }
+      // Now check if there's a satisfying assignment (i.e., a violation)
+      auto finalCheckOp =
+          smt::CheckOp::create(rewriter, loc, rewriter.getI1Type());
+      {
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.createBlock(&finalCheckOp.getSatRegion());
+        smt::YieldOp::create(rewriter, loc, constTrue);
+        rewriter.createBlock(&finalCheckOp.getUnknownRegion());
+        smt::YieldOp::create(rewriter, loc, constTrue);
+        rewriter.createBlock(&finalCheckOp.getUnsatRegion());
+        smt::YieldOp::create(rewriter, loc, constFalse);
+      }
+      finalCheckViolated = finalCheckOp.getResult(0);
+    }
+
+    // Combine results: true if no violations found
+    // For assert check: !violated && !finalCheckViolated
+    // For cover check: violated (we want to find a trace)
+    Value res;
+    if (isCoverCheck) {
+      res = violated;
+    } else {
+      Value anyViolation =
+          arith::OrIOp::create(rewriter, loc, violated, finalCheckViolated);
+      res = arith::XOrIOp::create(rewriter, loc, anyViolation, constTrue);
+    }
     smt::YieldOp::create(rewriter, loc, res);
     rewriter.replaceOp(op, solver.getResults());
     return success();
@@ -669,6 +816,7 @@ struct VerifBoundedModelCheckingOpConversion
   Namespace &names;
   bool risingClocksOnly;
   SmallVectorImpl<Operation *> &propertylessBMCOps;
+  SmallVectorImpl<Operation *> &coverBMCOps;
 };
 
 } // namespace
@@ -687,7 +835,8 @@ struct ConvertVerifToSMTPass
 
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps) {
+    bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
+    SmallVectorImpl<Operation *> &coverBMCOps) {
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
                VerifCoverOpConversion,
                LogicEquivalenceCheckingOpConversion,
@@ -695,7 +844,7 @@ void circt::populateVerifToSMTConversionPatterns(
                                                patterns.getContext());
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, risingClocksOnly,
-      propertylessBMCOps);
+      propertylessBMCOps, coverBMCOps);
 }
 
 void ConvertVerifToSMTPass::runOnOperation() {
@@ -709,6 +858,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
   // issues with whether assertions are/aren't lowered yet)
   SymbolTable symbolTable(getOperation());
   SmallVector<Operation *> propertylessBMCOps;
+  SmallVector<Operation *> coverBMCOps;
   WalkResult assertionCheck = getOperation().walk(
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
@@ -746,9 +896,16 @@ void ConvertVerifToSMTPass::runOnOperation() {
           }
           SmallVector<mlir::Operation *> worklist;
           int numAssertions = 0;
+          int numCovers = 0;
           op->walk([&](Operation *curOp) {
-            if (isa<verif::AssertOp>(curOp))
-              numAssertions++;
+            if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
+              if (!assertOp->hasAttr("bmc.final"))
+                numAssertions++;
+            }
+            if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
+              if (!coverOp->hasAttr("bmc.final"))
+                numCovers++;
+            }
             if (auto inst = dyn_cast<InstanceOp>(curOp))
               worklist.push_back(symbolTable.lookup(inst.getModuleName()));
           });
@@ -757,27 +914,35 @@ void ConvertVerifToSMTPass::runOnOperation() {
           while (!worklist.empty()) {
             auto *module = worklist.pop_back_val();
             module->walk([&](Operation *curOp) {
-              if (isa<verif::AssertOp>(curOp))
-                numAssertions++;
+              if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
+                if (!assertOp->hasAttr("bmc.final"))
+                  numAssertions++;
+              }
+              if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
+                if (!coverOp->hasAttr("bmc.final"))
+                  numCovers++;
+              }
               if (auto inst = dyn_cast<InstanceOp>(curOp))
                 worklist.push_back(symbolTable.lookup(inst.getModuleName()));
             });
-            if (numAssertions > 1)
+            if (numAssertions > 1 || numCovers > 1)
               break;
           }
-          if (numAssertions == 0) {
+          if (numAssertions == 0 && numCovers == 0) {
             op->emitWarning("no property provided to check in module - will "
                             "trivially find no violations.");
             propertylessBMCOps.push_back(bmcOp);
           }
-          if (numAssertions > 1) {
+          if (numAssertions > 1 || numCovers > 1 ||
+              (numAssertions > 0 && numCovers > 0)) {
             op->emitError(
-                "bounded model checking problems with multiple assertions are "
-                "not yet "
-                "correctly handled - instead, you can assert the "
-                "conjunction of your assertions");
+                "bounded model checking problems with multiple properties are "
+                "not yet correctly handled - instead, check one property at a "
+                "time");
             return WalkResult::interrupt();
           }
+          if (numCovers == 1)
+            coverBMCOps.push_back(bmcOp);
         }
         return WalkResult::advance();
       });
@@ -793,7 +958,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
   names.add(symCache);
 
   populateVerifToSMTConversionPatterns(converter, patterns, names,
-                                       risingClocksOnly, propertylessBMCOps);
+                                       risingClocksOnly, propertylessBMCOps,
+                                       coverBMCOps);
 
   if (failed(mlir::applyPartialConversion(getOperation(), target,
                                           std::move(patterns))))

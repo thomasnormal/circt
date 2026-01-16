@@ -12,12 +12,17 @@
 
 #include "circt/Conversion/CombToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
+#include "circt/Conversion/LTLToCore.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
+#include "circt/Conversion/SVAToLTL.h"
 #include "circt/Conversion/VerifToSMT.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LTL/LTLDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
@@ -190,6 +195,9 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(verif::createLowerTestsPass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
   pm.addPass(createExternalizeRegisters());
   LowerToBMCOptions lowerToBMCOptions;
   lowerToBMCOptions.bound = clockBound;
@@ -203,6 +211,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   convertVerifToSMTOptions.risingClocksOnly = risingClocksOnly;
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
   pm.addPass(createSimpleCanonicalizerPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB) {
     LowerSMTToZ3LLVMOptions options;
@@ -340,6 +349,7 @@ int main(int argc, char **argv) {
     circt::comb::CombDialect,
     circt::emit::EmitDialect,
     circt::hw::HWDialect,
+    circt::ltl::LTLDialect,
     circt::om::OMDialect,
     circt::seq::SeqDialect,
     mlir::smt::SMTDialect,
