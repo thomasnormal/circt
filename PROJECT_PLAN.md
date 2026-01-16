@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🚀 UVM MooreToCore 99% COMPLETE (January 16, 2026)
+## Current Status: 🚀 UVM MooreToCore 100% COMPLETE (January 16, 2026)
 
 **Test Commands**:
 ```bash
@@ -12,18 +12,18 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src
 # Exit code: 0 (SUCCESS!) - 161,443 lines of Moore IR
 
-# UVM MooreToCore - 99% COMPLETE
+# UVM MooreToCore - 100% COMPLETE
 ./build/bin/circt-verilog --ir-moore ~/uvm-core/src/uvm_pkg.sv -I ~/uvm-core/src | \
   ./build/bin/circt-opt -convert-moore-to-core
-# Only moore.array.locator ops remain (1 error)
+# MooreToCore completes (array.locator lowered via inline predicate loop)
 ```
 
 **Current Blockers / Limitations**:
-1. **moore.array.locator** 🔴 CRITICAL - Array locator methods (find, find_index, etc.) not yet lowered in MooreToCore
-2. **Timing in functions** ⚠️ ARCHITECTURAL - Tasks with `@(posedge clk)` can't lower (llhd.wait needs llhd.process parent)
-3. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
-4. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
-5. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
+1. **Timing in functions** ⚠️ ARCHITECTURAL - Tasks with `@(posedge clk)` can't lower (llhd.wait needs llhd.process parent)
+2. **Randomization** ⚠️ NOT IMPLEMENTED - rand/randc constraints parsed but not executed
+3. **Coverage** ⚠️ NOT IMPLEMENTED - covergroups parsed but not collected
+4. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
+5. **Performance/scale** ⚠️ NEEDS VALIDATION - Large UVM runs depend on mbit/* AVIP coverage
 
 **Recent Fixes (This Session)**:
 - **RefType cast crash for structs with dynamic fields** ✅ FIXED (5dd8ce361) - StructExtractRefOp now uses LLVM GEP for structs containing strings/queues instead of crashing on SigStructExtractOp
@@ -68,18 +68,18 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Implement ArrayLocatorOpConversion 🔴 CRITICAL
-**Status**: 🟡 IN PROGRESS
-**Task**: Implement lowering for moore.array.locator (last blocker for UVM MooreToCore)
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add conversion pattern that iterates queue elements and returns matching ones
-**Priority**: CRITICAL - This is the only remaining blocker for 100% UVM MooreToCore
+### Track A: Array Locator + Predicate Coverage
+**Status**: 🟢 IN PROGRESS
+**Task**: Validate complex predicate lowering via inline loop; add regression tests
+**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp, test/Conversion/MooreToCore/
+**Next**: Add tests for class_handle_cmp, AND/OR, func.call predicates
+**Priority**: HIGH - Ensure UVM array locator patterns are fully covered
 
-### Track B: Test APB AVIP Full Pipeline with BFMs
+### Track B: Test mbit AVIPs Full Pipeline with BFMs
 **Status**: 🟡 IN PROGRESS
-**Task**: Test APB AVIP through complete pipeline including BFMs
+**Task**: Test mbit/* AVIPs through complete pipeline including BFMs
 **Files**: ~/mbit/apb_avip/
-**Next**: Run APB with interface tasks through MooreToCore and identify issues
+**Next**: Run APB, AHB, AXI4, and UART through MooreToCore; log any remaining failures
 
 ### Track C: Implement Basic Randomization Stubs
 **Status**: 🟡 IN PROGRESS
@@ -92,6 +92,11 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 **Task**: Run a minimal UVM test through MooreSim
 **Files**: test/ or ~/uvm-core/
 **Next**: Create minimal UVM testbench and run through full pipeline
+
+### Operating Guidance
+- Keep 4 agents active: Track A (tests), Track B (AVIPs), Track C (randomization), Track D (MooreSim).
+- Add unit tests for each new feature or bug fix.
+- Commit regularly and merge worktrees into main to keep workers in sync.
 
 ### Previous Track Results (Iteration 11)
 - **Track A**: ✅ BFM nested task calls fixed (d1b870e5e) - Interface tasks calling other interface tasks now work correctly
