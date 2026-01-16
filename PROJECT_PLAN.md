@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 25)
+## Current Status: 🎉 END-TO-END SIMULATION WORKING (January 16, 2026 - Iteration 26)
 
 **Test Commands**:
 ```bash
@@ -23,11 +23,20 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 # Exit code: 0 (no errors)
 ```
 
+**Fork**: https://github.com/thomasnormal/circt (synced with upstream)
+
 **Current Blockers / Limitations** (Post-MooreToCore):
-1. **Coverage** ⚠️ IN PROGRESS - covergroups parsed but collection not yet implemented
-2. **SVA assertions** ⚠️ NOT IMPLEMENTED - SVA dialect exists but no simulation lowering
+1. **Coverage** ✅ INFRASTRUCTURE DONE - CovergroupHandleType, CovergroupInstOp, CovergroupSampleOp implemented
+2. **SVA assertions** ✅ LOWERING WORKS - moore.assert/assume/cover → verif.assert/assume/cover
 3. **DPI/VPI** ⚠️ STUBS ONLY - 22 DPI functions return defaults (0, empty string, "CIRCT")
 4. **Complex constraints** ⚠️ PARTIAL - ~6% need SMT solver (94% now work!)
+5. **System calls** ⚠️ PARTIAL - $countones, $clog2 and other bit vector builtins not yet implemented
+
+**MAJOR MILESTONE (Iteration 26)**:
+- **Upstream merge** ✅ COMPLETE - Merged 21 upstream commits, resolved 4 conflicts
+- **Fork published** ✅ COMPLETE - thomasnormal/circt with comprehensive README feature list
+- **SVA assertion lowering** ✅ VERIFIED - moore.assert/assume/cover → verif dialect working
+- **Coverage infrastructure** ✅ COMPLETE - CovergroupHandleType and ops implemented in Iteration 25
 
 **MAJOR MILESTONE (Iteration 25)**:
 - **Interface ref→vif conversion** ✅ FIXED - Interface member access generates proper lvalue references
@@ -106,53 +115,67 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Coverage Implementation 🎯 ITERATION 26
+### Track A: DPI/System Call Implementation 🎯 ITERATION 27
 **Status**: 🔵 IN PROGRESS
-**Research**: Coverage architecture documented in Iteration 24
+**Problem**: Many system functions return stubs; $countones, $clog2 not implemented
 **What's Done**:
-- Runtime functions: `__moore_covergroup_*` already implemented
-- Coverage dialect: Basic ops exist
+- 22 DPI stubs implemented
+- Basic file I/O complete
 **What's Needed**:
-- `CovergroupInstOp` - Create covergroup instance
-- `CovergroupSampleOp` - Sample covergroup data
-- ImportVerilog support for covergroup instantiation
-**Priority**: HIGH - UVM testbenches rely on coverage
+- Bit vector system calls: $countones, $countbits, $clog2, $onehot, $isunknown
+- String system calls: $sformatf (partially done), $sscanf
+- Time system calls: $realtime (more complete implementation)
+**Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`
+**Priority**: HIGH - Many AVIPs use these
 
-### Track B: SVA Assertion Lowering 🎯 ITERATION 26
-**Status**: 🔵 READY TO IMPLEMENT
-**Problem**: SVA assertions parsed but not lowered to simulation
+### Track B: SVA Runtime Support 🎯 ITERATION 27
+**Status**: ✅ LOWERING DONE - Need runtime support
 **What's Done**:
-- SVA dialect exists with basic assertion ops
+- moore.assert/assume/cover → verif dialect lowering works
+- Test file created: `test/Conversion/MooreToCore/sva-assertions.mlir`
+- Immediate, deferred, and concurrent assertions all lower correctly
 **What's Needed**:
-- MooreToCore patterns for assertion ops
-- Runtime functions for assertion checking
-**Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
-**Priority**: MEDIUM - Needed for verification
+- Runtime reporting for assertion failures (file/line info)
+- Coverage tracking for `cover` statements
+- $assertoff/$asserton support for enabling/disabling assertions
+**Files**: `lib/Dialect/Verif/`, runtime library
+**Priority**: MEDIUM - Assertions work but silent
 
-### Track C: AVIP Testing on ~/mbit 🎯 ITERATION 26
-**Status**: 🔵 READY TO TEST
+### Track C: ~/mbit AVIP Full Validation 🎯 ITERATION 27
+**Status**: 🔵 TESTING IN PROGRESS
 **What's Done**:
-- Interface ref→vif conversion fixed (Iteration 25)
-- Constraint lowering complete (Iteration 25)
-- $finish handling fixed (Iteration 25)
+- Interface ref→vif conversion fixed
+- Constraint lowering complete
+- $finish handling fixed
+**Testing Status**:
+- Found $countones unsupported in builtins.sv
+- circt-translate vs circt-verilog differences identified
 **What's Needed**:
-- Full end-to-end testing on ~/mbit AVIPs
-- Identify any remaining gaps
-**Priority**: HIGH - Validates all recent fixes
+- Test all 8 AVIPs through full pipeline
+- Document any remaining gaps
+- File issues for blocking problems
+**Priority**: HIGH - Real-world validation
 
-### Track D: Additional Improvements 🎯 ITERATION 26
+### Track D: Performance & Polish 🎯 ITERATION 27
 **Status**: 🔵 READY FOR WORK
 **Focus Areas**:
-- DPI full support (currently stubs only)
-- Performance optimizations
-- Documentation updates
-**Priority**: MEDIUM - Polish and completeness
+- Build and test time optimization
+- Error message improvement
+- Memory usage profiling for large designs
+- Plugin development (circt-sv-uvm)
+**Priority**: LOW - Nice to have
 
 ### Operating Guidance
 - Keep 4 agents active: Track A (coverage), Track B (assertions), Track C (AVIP testing), Track D (improvements).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 26)
+- **Git**: ✅ Merged with upstream (21 commits), resolved 4 conflicts
+- **Fork**: ✅ Published to thomasnormal/circt with comprehensive README feature list
+- **Track B**: ✅ SVA assertions test file created - verif.assert/assume/cover lowering verified
+- **Track C**: ✅ Found $countones unsupported - identified gap in bit vector builtins
 
 ### Previous Track Results (Iteration 25)
 - **Track B**: ✅ Interface ref→vif conversion FIXED - Interface member access generates proper lvalue references

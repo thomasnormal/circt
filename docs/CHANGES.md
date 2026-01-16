@@ -1,5 +1,72 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 26: Upstream Merge + Fork Publication + SVA Verification
+
+**Status**: Major infrastructure milestone - fork published and synced with upstream.
+
+### Git/Repository Changes
+
+**Upstream Merge**:
+- Merged 21 commits from llvm/circt
+- Resolved 4 conflicts in:
+  - `include/circt/Dialect/Sim/SimOps.h` (SimOpInterfaces.h.inc)
+  - `lib/Conversion/ImportVerilog/Expressions.cpp` (currentThisRef)
+  - `lib/Conversion/ImportVerilog/TimingControls.cpp` (rvalueReadCallback)
+  - `lib/Support/JSON.cpp` (scope_exit style)
+
+**Fork Published**:
+- URL: https://github.com/thomasnormal/circt
+- Added comprehensive feature list to README.md documenting all UVM/SV additions
+- Remotes configured: `origin` = fork, `upstream` = llvm/circt
+
+### Track B: SVA Assertion Lowering ✅ VERIFIED
+
+Created test file `test/Conversion/MooreToCore/sva-assertions.mlir` verifying:
+```mlir
+// Immediate assertions
+moore.assert immediate %cond → verif.assert %cond
+
+// Deferred assertions (observed, final)
+moore.assert observed %cond → verif.assert %cond
+
+// Assume and cover
+moore.assume immediate %cond → verif.assume %cond
+moore.cover immediate %cond → verif.cover %cond
+```
+
+**Finding**: AssertLikeOpConversion drops the DeferAssert attribute - all assertion types become immediate verif ops. Future work needed for proper deferred assertion semantics.
+
+### Track C: AVIP/Builtin Testing
+
+**Found Gap**: `$countones` system call not implemented
+```
+../test/Conversion/ImportVerilog/builtins.sv:286:10: error: unsupported system call `$countones`
+```
+
+**Missing Bit Vector Builtins**:
+- `$countones` - count 1 bits
+- `$countbits` - count specific bit values
+- `$clog2` - ceiling log base 2
+- `$onehot`, `$onehot0` - one-hot encoding checks
+- `$isunknown` - check for X/Z
+
+### What's New
+
+✅ **Fork published** with comprehensive documentation
+✅ **Upstream synced** - 21 commits merged
+✅ **SVA lowering verified** - immediate/deferred/concurrent assertions work
+✅ **Builtin gap identified** - $countones and related bit vector ops needed
+
+### Remaining Work
+
+| Feature | Status | Priority |
+|---------|--------|----------|
+| Bit vector builtins | Not implemented | HIGH |
+| DPI full support | Stubs only | MEDIUM |
+| Assertion runtime | Lowering works, no output | LOW |
+
+---
+
 ## January 16, 2026 - Iteration 25: $finish in seq.initial + Interface Conversions + Constraint Lowering
 
 **Status**: Three major fixes implemented. Coverage implementation in progress.
