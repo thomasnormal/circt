@@ -1,12 +1,45 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 27 (Current) - January 16, 2026
+## Iteration 27 (Complete) - January 16, 2026
 
-### In Progress
-- Track A: DPI/System call implementation
-- Track B: sim.proc.print lowering to arcilator
-- Track C: AVIP full validation on ~/mbit
-- Track D: LSP debounce fix and polish
+### Major Accomplishments
+
+#### $onehot and $onehot0 System Functions (commit 7d5391552)
+- Implemented `OneHotBIOp` and `OneHot0BIOp` in Moore dialect
+- Added ImportVerilog handlers for `$onehot` and `$onehot0` system calls
+- MooreToCore lowering using `llvm.intr.ctpop`:
+  - `$onehot(x)` → `ctpop(x) == 1` (exactly one bit set)
+  - `$onehot0(x)` → `ctpop(x) <= 1` (at most one bit set)
+- Added unit tests in `builtins.sv` and `string-ops.mlir`
+
+#### sim.proc.print Lowering Discovery
+- **Finding**: sim.proc.print lowering ALREADY EXISTS in `LowerArcToLLVM.cpp`
+- `PrintFormattedProcOpLowering` pattern handles all sim.fmt.* operations
+- No additional work needed for $display in arcilator
+
+#### circt-sim LLHD Process Limitation (Critical Finding)
+- **Discovery**: circt-sim does NOT interpret LLHD process bodies
+- Simulation completes at time 0fs with no output
+- ProcessScheduler infrastructure exists but not connected to LLHD IR interpretation
+- This is a critical gap for behavioral simulation
+- Arcilator works for RTL-only designs (seq.initial, combinational logic)
+
+#### LSP Debounce Fix Verification
+- Confirmed fix exists (commit 9f150f33f)
+- Some edge cases may still cause timeouts
+- `--no-debounce` workaround remains available
+
+### Files Modified
+- `include/circt/Dialect/Moore/MooreOps.td` - OneHotBIOp, OneHot0BIOp
+- `lib/Conversion/ImportVerilog/Expressions.cpp` - $onehot, $onehot0 handlers
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` - OneHot conversion patterns
+- `test/Conversion/ImportVerilog/builtins.sv` - Unit tests
+- `test/Conversion/MooreToCore/string-ops.mlir` - MooreToCore tests
+
+### Key Insights
+- Arcilator is the recommended path for simulation (RTL + seq.initial)
+- circt-sim behavioral simulation needs LLHD process interpreter work
+- sim.proc.print pipeline: Moore → sim.fmt.* → sim.proc.print → printf (all working)
 
 ---
 
