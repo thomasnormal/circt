@@ -1,6 +1,49 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 30 (In Progress) - January 16, 2026
+## Iteration 31 - January 16, 2026
+
+### Clocking Block Signal Access and @(cb) Syntax (commit 43f3c7a4d)
+
+**Major Feature**: Complete clocking block signal access support per IEEE 1800-2017 Section 14.
+
+**Clocking Block Signal Access**:
+- `cb.signal` rvalue generation - reads correctly resolve to underlying signal value
+- `cb.signal` lvalue generation - writes correctly resolve to underlying signal
+- Both input and output clocking signals supported
+- Works in procedural contexts (always_ff, always_comb)
+
+**Clocking Block Event Reference**:
+- `@(cb)` syntax now works in event controls
+- Automatically resolves to the clocking block's underlying clock event
+- Supports both posedge and negedge clocking blocks
+
+**Queue Reduction Operations**:
+- Added QueueReduceOp for sum(), product(), and(), or(), xor() methods
+- QueueReduceKind enum and attribute
+- MooreToCore conversion to runtime function calls
+
+**LLHD Process Interpreter Phase 2**:
+- Full process execution: llhd.drv, llhd.wait, llhd.halt
+- Signal probing and driving operations
+- Time advancement and delta cycle handling
+- 5/6 circt-sim tests passing
+
+**Files Modified** (1,408 insertions):
+- `lib/Conversion/ImportVerilog/Expressions.cpp` - ClockVar rvalue/lvalue handling
+- `lib/Conversion/ImportVerilog/TimingControls.cpp` - @(cb) event reference
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` - QueueReduceOp, UArrayCmpOp conversions
+- `include/circt/Dialect/Moore/MooreOps.td` - QueueReduceOp, QueueReduceKind
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Process execution fixes
+
+**New Test Files**:
+- `test/Conversion/ImportVerilog/clocking-event-wait.sv` - @(cb) syntax tests
+- `test/Conversion/ImportVerilog/clocking-signal-access.sv` - cb.signal tests
+- `test/circt-sim/llhd-process-basic.mlir` - Basic process execution
+- `test/circt-sim/llhd-process-probe.mlir` - Probe and drive operations
+
+---
+
+## Iteration 30 - January 16, 2026
 
 ### Major Accomplishments
 
@@ -39,7 +82,7 @@ Fixed JIT runtime linking for Z3 symbols in circt-bmc and circt-lec:
 | Ch 5 (Lexical) | 86% | Strong |
 | Ch 11 (Operators) | 87% | Strong |
 | Ch 13 (Tasks/Functions) | 86% | Strong |
-| Ch 14 (Clocking Blocks) | **0%** | NOT IMPLEMENTED |
+| Ch 14 (Clocking Blocks) | **~80%** | Signal access, @(cb) event |
 | Ch 18 (Random/Constraints) | 25% | RandSequence missing |
 | Overall | **72.1%** (713/989) | Good baseline |
 

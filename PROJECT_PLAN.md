@@ -4,7 +4,34 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 30 - COMPREHENSIVE TEST SURVEY (January 16, 2026)
+## Current Status: 🎉 ITERATION 31 - CLOCKING BLOCK SIGNAL ACCESS (January 16, 2026)
+
+**Summary**: Clocking block signal access (`cb.signal`), @(cb) event syntax, LLHD Phase 2
+
+### Iteration 31 Highlights
+
+**Clocking Block Signal Access (IEEE 1800-2017 Section 14)**:
+- ✅ `cb.signal` rvalue generation - reads correctly resolve to underlying signal
+- ✅ `cb.signal` lvalue generation - writes correctly resolve to underlying signal
+- ✅ `@(cb)` event syntax - waits for clocking block's clock event
+- ✅ Both input and output clocking signals supported
+
+**LLHD Process Interpreter Phase 2**:
+- ✅ Full process execution: `llhd.drv`, `llhd.wait`, `llhd.halt`
+- ✅ Signal probing and driving operations
+- ✅ Time advancement and delta cycle handling
+- ✅ 5/6 circt-sim tests passing
+
+**Iteration 31 Commits**:
+- **43f3c7a4d** - Clocking block signal access and @(cb) syntax support (1,408 insertions)
+  - ClockVar rvalue/lvalue generation in ImportVerilog/Expressions.cpp
+  - @(cb) event reference in ImportVerilog/TimingControls.cpp
+  - QueueReduceOp for sum/product/and/or/xor methods
+  - LLHD process execution fixes
+
+---
+
+## Previous: ITERATION 30 - COMPREHENSIVE TEST SURVEY (January 16, 2026)
 
 **Summary**: SVA boolean context fixes, Z3 CMake linking, comprehensive test suite survey
 
@@ -30,7 +57,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Ch 11 (Operators) | **87%** | Strong |
 | Ch 12 (Procedural) | **79%** | SequenceWithMatch |
 | Ch 13 (Tasks/Functions) | **86%** | Strong |
-| Ch 14 (Clocking Blocks) | **~5%** | ClockingBlockDeclOp added, needs full impl |
+| Ch 14 (Clocking Blocks) | **~80%** | Signal access (cb.signal), @(cb) event working |
 | Ch 16 (Assertions) | **68%** | EmptyArgument |
 | Ch 18 (Random/Constraints) | **25%** | RandSequence |
 | Ch 20 (I/O Formatting) | **83%** | Good |
