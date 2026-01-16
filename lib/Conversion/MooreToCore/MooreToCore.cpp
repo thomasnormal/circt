@@ -106,6 +106,14 @@ static Type convertToLLVMType(Type type) {
     return LLVM::LLVMArrayType::get(elementType, llvmArrayTy.getNumElements());
   }
 
+  // Handle llhd::TimeType -> LLVM struct {i64 realTime, i32 delta, i32 epsilon}
+  // This is needed because llhd::TimeType doesn't have DataLayout info.
+  if (isa<llhd::TimeType>(type)) {
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    return LLVM::LLVMStructType::getLiteral(ctx, {i64Ty, i32Ty, i32Ty});
+  }
+
   // All other types (IntegerType, LLVM::LLVMPointerType, etc.) pass through
   return type;
 }
@@ -1113,6 +1121,31 @@ struct NamedBlockOpConversion : public OpConversionPattern<NamedBlockOp> {
 // Declaration Conversion
 //===----------------------------------------------------------------------===//
 
+/// Compute the size of a type in bytes, handling types that DataLayout
+/// doesn't support (like llhd::TimeType).
+static uint64_t getTypeSizeSafe(Type type, ModuleOp mod) {
+  // Handle llhd::TimeType specially - DataLayout doesn't support it.
+  // Time is represented as {i64 realTime, i32 delta, i32 epsilon} = 16 bytes.
+  if (isa<llhd::TimeType>(type))
+    return 16;
+
+  // Handle LLVM struct types recursively to catch nested llhd::TimeType.
+  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(type)) {
+    uint64_t size = 0;
+    for (Type fieldTy : structTy.getBody())
+      size += getTypeSizeSafe(fieldTy, mod);
+    return size;
+  }
+
+  // Handle LLVM array types.
+  if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(type))
+    return arrayTy.getNumElements() * getTypeSizeSafe(arrayTy.getElementType(), mod);
+
+  // For other types, use DataLayout.
+  DataLayout dl(mod);
+  return dl.getTypeSize(type);
+}
+
 static Value createZeroValue(Type type, Location loc,
                              ConversionPatternRewriter &rewriter) {
   // Handle pointers.
@@ -1343,8 +1376,7 @@ struct InterfaceInstanceOpConversion
     auto structTy = structInfo->interfaceBody;
 
     // Calculate the size of the interface struct.
-    DataLayout dl(mod);
-    uint64_t byteSize = dl.getTypeSize(structTy);
+    uint64_t byteSize = getTypeSizeSafe(structTy, mod);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto cSize = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                                           rewriter.getI64IntegerAttr(byteSize));
@@ -1538,9 +1570,8 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
     auto structInfo = cache.getStructInfo(sym);
     auto structTy = structInfo->classBody;
 
-    DataLayout dl(mod);
-    // DataLayout::getTypeSize gives a byte count for LLVM types.
-    uint64_t byteSize = dl.getTypeSize(structTy);
+    // Compute struct size (handles llhd::TimeType which DataLayout doesn't support).
+    uint64_t byteSize = getTypeSizeSafe(structTy, mod);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto i32Ty = IntegerType::get(ctx, 32);
     auto cSize = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
@@ -7173,9 +7204,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     auto structTy = structInfo->classBody;
 
-    // Calculate the class size using DataLayout
-    DataLayout dl(mod);
-    uint64_t byteSize = dl.getTypeSize(structTy);
+    // Calculate the class size (handles llhd::TimeType which DataLayout doesn't support).
+    uint64_t byteSize = getTypeSizeSafe(structTy, mod);
 
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
@@ -7421,8 +7451,9 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
             return {};
           fieldTypes.push_back(convertedType);
           // Check if any field converts to an LLVM type (strings, queues,
-          // dynamic arrays, assoc arrays, or nested structs with these types)
-          if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(convertedType))
+          // dynamic arrays, assoc arrays, time, or nested structs with these)
+          if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType, llhd::TimeType>(
+                  convertedType))
             hasLLVMType = true;
         }
 
