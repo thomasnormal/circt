@@ -981,6 +981,52 @@ struct RvalueExprVisitor : public ExprVisitor {
       return value;
     }
 
+    // Handle direct interface member access (e.g., intf.clk where intf is a
+    // direct interface instance, not a virtual interface). Check if the
+    // symbol's parent is an interface body.
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto *parentScope = var->getParentScope();
+      if (parentScope) {
+        if (auto *instBody =
+                parentScope->asSymbol()
+                    .as_if<slang::ast::InstanceBodySymbol>()) {
+          if (instBody->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface) {
+            // This is a variable inside an interface. Find the interface
+            // instance from the hierarchical path.
+            for (const auto &elem : expr.ref.path) {
+              if (auto *instSym =
+                      elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+                auto it = context.interfaceInstances.find(instSym);
+                if (it != context.interfaceInstances.end()) {
+                  // Found the interface instance. The instance is stored as a
+                  // RefType<VirtualInterfaceType>, so we need to read it first.
+                  Value instRef = it->second;
+                  Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+                  // Create a signal reference.
+                  auto type = context.convertType(*expr.type);
+                  if (!type)
+                    return {};
+                  auto signalSym = mlir::FlatSymbolRefAttr::get(
+                      builder.getContext(), expr.symbol.name);
+                  auto refTy =
+                      moore::RefType::get(cast<moore::UnpackedType>(type));
+                  Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+                      builder, loc, refTy, vifValue, signalSym);
+                  // For rvalue, read from the reference
+                  auto readOp = moore::ReadOp::create(builder, loc, signalRef);
+                  if (context.rvalueReadCallback)
+                    context.rvalueReadCallback(readOp);
+                  return readOp.getResult();
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Emit an error for those hierarchical values not recorded in the
     // `valueSymbols`.
     auto d = mlir::emitError(loc, "unknown hierarchical name `")
@@ -2594,12 +2640,13 @@ struct RvalueExprVisitor : public ExprVisitor {
                   const slang::ast::CallExpression::SystemCallInfo &info) {
     const auto &subroutine = *info.subroutine;
 
-    // $rose, $fell, $stable, $changed, and $past are only valid in
+    // $rose, $fell, $stable, $changed, $past, and $sampled are only valid in
     // the context of properties and assertions. Those are treated in the
     // LTLDialect; treat them there instead.
     bool isAssertionCall =
         llvm::StringSwitch<bool>(subroutine.name)
-            .Cases({"$rose", "$fell", "$stable", "$past"}, true)
+            .Cases({"$rose", "$fell", "$stable", "$changed", "$past", "$sampled"},
+                   true)
             .Default(false);
 
     if (isAssertionCall)
@@ -4027,6 +4074,48 @@ struct LvalueExprVisitor : public ExprVisitor {
       auto refTy = moore::RefType::get(cast<moore::UnpackedType>(varType));
       auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
       return moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+    }
+
+    // Handle direct interface member access (e.g., intf.clk = 1 where intf is a
+    // direct interface instance, not a virtual interface). Check if the
+    // symbol's parent is an interface body.
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
+      auto *parentScope = var->getParentScope();
+      if (parentScope) {
+        if (auto *instBody =
+                parentScope->asSymbol()
+                    .as_if<slang::ast::InstanceBodySymbol>()) {
+          if (instBody->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface) {
+            // This is a variable inside an interface. Find the interface
+            // instance from the hierarchical path.
+            for (const auto &elem : expr.ref.path) {
+              if (auto *instSym =
+                      elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+                auto it = context.interfaceInstances.find(instSym);
+                if (it != context.interfaceInstances.end()) {
+                  // Found the interface instance. The instance is stored as a
+                  // RefType<VirtualInterfaceType>, so we need to read it first.
+                  Value instRef = it->second;
+                  Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+                  // Create a signal reference.
+                  auto type = context.convertType(*expr.type);
+                  if (!type)
+                    return {};
+                  auto signalSym = mlir::FlatSymbolRefAttr::get(
+                      builder.getContext(), expr.symbol.name);
+                  auto refTy =
+                      moore::RefType::get(cast<moore::UnpackedType>(type));
+                  // For lvalue, return the reference directly
+                  return moore::VirtualInterfaceSignalRefOp::create(
+                      builder, loc, refTy, vifValue, signalSym);
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // Emit an error for those hierarchical values not recorded in the
