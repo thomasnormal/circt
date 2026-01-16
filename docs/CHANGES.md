@@ -1,5 +1,109 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 18: circt-verilog-lsp-server Fixed & Working
+
+**Status**: Fixed and built `circt-verilog-lsp-server` - full SystemVerilog LSP support now operational.
+
+### Track D: Verilog LSP Server Fixes
+
+**Binary**: `build/bin/circt-verilog-lsp-server`
+
+**Fixes Applied**:
+| Issue | File | Fix |
+|-------|------|-----|
+| LLVM LSP API mismatch | LSPServer.cpp | Added custom `RenameParams`, `SemanticTokensParams` structs |
+| Workspace init | LSPServer.cpp | Use empty `json::Object{}` (LLVM lacks workspace folders) |
+| Slang v9.1 API | VerilogDocument.cpp | Added `EvalContext.h` include, fixed SymbolKind enums |
+| SymbolKind names | VerilogDocument.cpp | Changed to `EnumType`, `PackedStructType`, `UnpackedStructType` |
+| Position comparison | VerilogDocument.cpp | LLVM LSP lacks `operator>`, implemented manual comparison |
+| Optional vector | VerilogDocument.cpp | Fixed `relatedInformation.emplace()` before push_back |
+| CIRCTLinting link | VerilogDocument.cpp | Disabled lint code (library not built) via `#ifdef` |
+
+**LSP Features Verified**:
+| Feature | Status | Test Result |
+|---------|--------|-------------|
+| Document Symbols | ✅ | Returns module hierarchy, ports, variables |
+| Hover | ✅ | Shows type info (e.g., `logic internal_wire`) |
+| Go-to-Definition | ✅ | Navigates to symbol definitions |
+| Find References | ✅ | Finds all references to symbol |
+| Diagnostics | ✅ | Reports syntax/semantic errors (0 on valid SV) |
+| Completions | ✅ | Trigger on `.` character |
+| Rename Symbol | ✅ | Prepare + execute rename |
+| Semantic Tokens | ✅ | Full token legend (23 types, 9 modifiers) |
+| Inlay Hints | ✅ | Available |
+
+**Plugin Updated**: `.mcp.json` now includes both LSP servers:
+- `circt-verilog-lsp-server` for `.sv`, `.svh`, `.v`, `.vh`
+- `circt-lsp-server` for `.mlir`
+
+---
+
+## January 16, 2026 - Iteration 17: Developer Tooling & Plugin Creation
+
+**Status**: Created Claude Code plugin for SystemVerilog/UVM development.
+
+### Track D: circt-sv-uvm Plugin
+
+**Location**: `circt-sv-uvm/`
+
+**Components Created**:
+| Type | Count | Details |
+|------|-------|---------|
+| MCP Servers | 2 | `circt-verilog-lsp-server` + `circt-lsp-server` |
+| Commands | 4 | lint-sv, analyze-coverage, generate-uvm-component, generate-sva |
+| Skills | 2 | UVM methodology, SystemVerilog patterns |
+
+**Plugin Features**:
+- **MCP Integration**: Connects to `circt-lsp-server` for MLIR files (go-to-def, hover, completion)
+- **`/lint-sv`**: Run SystemVerilog linting using slang/verilator
+- **`/analyze-coverage`**: Analyze functional coverage reports
+- **`/generate-uvm-component`**: Generate UVM agent, driver, monitor, sequence, scoreboard templates
+- **`/generate-sva`**: Generate SVA assertions from natural language descriptions
+- **UVM Skill**: Full UVM methodology (phases, factory, sequences, agents, RAL, coverage)
+- **SV Skill**: SystemVerilog patterns (interfaces, clocking blocks, constraints, classes)
+
+**Plugin Structure**:
+```
+circt-sv-uvm/
+├── .claude-plugin/plugin.json
+├── .mcp.json
+├── commands/
+│   ├── lint-sv.md
+│   ├── analyze-coverage.md
+│   ├── generate-uvm-component.md
+│   └── generate-sva.md
+├── skills/
+│   ├── uvm-methodology/SKILL.md
+│   └── systemverilog-patterns/SKILL.md
+└── README.md
+```
+
+**Usage**:
+```bash
+claude --plugin-dir ./circt-sv-uvm
+```
+
+### Current Limitations (Post-MooreToCore)
+
+| Limitation | Status | Priority |
+|------------|--------|----------|
+| **Unit test failures** | 4/27 failing (85%) | HIGH |
+| **Simulation execution** | circt-sim doesn't interpret llhd.process | HIGH |
+| **Randomization** | Parsed, not executed | MEDIUM |
+| **Coverage** | Parsed, not collected | MEDIUM |
+| **DPI/VPI** | 22 functions stubbed | LOW |
+
+### Next Steps by Track
+
+| Track | Focus | Next Task |
+|-------|-------|-----------|
+| A | Unit Tests | Fix size calculation mismatches in 4 failing tests |
+| B | Simulation | Investigate arcilator path for behavioral execution |
+| C | AVIP Testing | Test end-to-end simulation on ~/mbit/* |
+| D | Tooling | Test plugin, expand UVM patterns |
+
+---
+
 ## January 16, 2026 - Iteration 16: LSP, Testing & Simulation Research
 
 **Status**: LSP investigated, unit tests run, simulation implementation paths identified.

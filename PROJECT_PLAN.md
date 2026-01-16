@@ -87,38 +87,52 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Implement moore.builtin.realtobits Conversion
+### Track A: Fix Unit Test Failures
 **Status**: 🟡 IN PROGRESS
-**Task**: Add conversion pattern for `moore.builtin.realtobits` (SystemVerilog `$realtobits` function)
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add pattern that converts real to i64 bits using LLVM bitcast
-**Priority**: HIGH - Last blocker for 100% UVM MooreToCore
-
-### Track B: Implement moore.builtin.bitstoreal Conversion
-**Status**: 🟡 IN PROGRESS
-**Task**: Add conversion pattern for `moore.builtin.bitstoreal` (SystemVerilog `$bitstoreal` function)
-**Files**: lib/Conversion/MooreToCore/MooreToCore.cpp
-**Next**: Add pattern that converts i64 bits to real using LLVM bitcast
-**Priority**: HIGH - Complement to realtobits for full real conversion support
-
-### Track C: Test More ~/mbit/* AVIPs Through Pipeline
-**Status**: 🟡 IN PROGRESS
-**Task**: Continue testing remaining AVIPs (UART, I2S, I3C, SPI, JTAG) through full MooreToCore
-**Files**: ~/mbit/*_avip/
-**Next**: Test each AVIP individually and document any new failures
-**Priority**: MEDIUM - Validates real-world verification code
-
-### Track D: Add Unit Tests for Recent Fixes
-**Status**: 🟡 IN PROGRESS
-**Task**: Add unit tests for vtable fallback, struct operations with dynamic types
+**Task**: Fix 4 failing MooreToCore unit tests (size calculation mismatches)
 **Files**: test/Conversion/MooreToCore/
-**Next**: Add test for no-vtable-segment fallback, test for struct with time fields
-**Priority**: MEDIUM - Ensures recent fixes don't regress
+**Failing Tests**:
+- `class-edge-cases.mlir`: Expected 24 bytes, got 19
+- `interface-ops.mlir`: Expected 20 bytes, got 16
+- `classes.mlir`: Expected 32 bytes, got 28
+- `unpacked-struct-dynamic.mlir`: Signal naming format mismatch
+**Next**: Investigate size calculation logic, update expected values or fix conversion
+**Priority**: HIGH - 85% test pass rate needs to be 100%
+
+### Track B: Simulation Pipeline (Arcilator Path)
+**Status**: 🟡 IN PROGRESS
+**Task**: Enable behavioral SV execution via arcilator
+**Files**: lib/Dialect/Arc/, tools/arcilator/
+**Current Gap**: circt-sim doesn't interpret llhd.process bodies or sim.proc.print
+**Next**: Investigate arcilator integration with `arc.sim.emit` printf lowering
+**Priority**: HIGH - Required for M4 (Basic Sim)
+**Recommendation**: Use arcilator path - leverages existing printf lowering
+
+### Track C: Real-World AVIP Testing on ~/mbit/*
+**Status**: 🟡 IN PROGRESS
+**Task**: Continue testing AVIPs through full pipeline, gather feedback
+**Files**: ~/mbit/*_avip/
+**Current Status**: 8/9 AVIPs pass MooreToCore (JTAG has source issues)
+**Next**: Test end-to-end simulation once Track B unblocks, document runtime gaps
+**Priority**: MEDIUM - Real-world validation
+
+### Track D: Developer Tooling & LSP
+**Status**: ✅ COMPLETE (Iteration 18)
+**Task**: Fix and enable circt-verilog-lsp-server for SystemVerilog
+**Files**: lib/Tools/circt-verilog-lsp-server/, circt-sv-uvm/
+**Completed**:
+- Fixed LLVM LSP API compatibility (RenameParams, SemanticTokensParams)
+- Fixed Slang v9.1 API compatibility (SymbolKind enums, EvalContext)
+- Built and tested circt-verilog-lsp-server
+- Updated plugin .mcp.json with both LSP servers
+- Verified: go-to-def, hover, symbols, diagnostics, rename, semantic tokens
+**Next**: Integrate with IDE (VS Code extension), enable lint integration when CIRCTLinting builds
 
 ### Operating Guidance
-- Keep 4 agents active: Track A (realtobits), Track B (bitstoreal), Track C (AVIP testing), Track D (unit tests).
+- Keep 4 agents active: Track A (unit tests), Track B (simulation), Track C (AVIP testing), Track D (tooling).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
+- Test on ~/mbit/* for real-world feedback.
 
 ### Previous Track Results (Iteration 13)
 - **Track A**: ✅ VTable fallback committed (6f8f531e6) - Classes without vtable segments now search ALL vtables
