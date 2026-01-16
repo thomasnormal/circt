@@ -4,7 +4,7 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 UVM MooreToCore 100% COMPLETE (January 16, 2026 - Iteration 14)
+## Current Status: 🎉 Simulation Pipeline Unblocked (January 16, 2026 - Iteration 20)
 
 **Test Commands**:
 ```bash
@@ -87,68 +87,77 @@ Correct path is `~/uvm-core/src`. Making good progress on remaining blockers!
 
 ## Active Workstreams (keep 4 agents busy)
 
-### Track A: Unit Tests ✅ COMPLETE
-**Status**: ✅ COMPLETE (Iteration 19)
-**Result**: All 27/27 MooreToCore unit tests now pass (100%)
-**Files**: test/Conversion/MooreToCore/
-**Fixed**:
-- `class-edge-cases.mlir`: Updated expected size values
-- `interface-ops.mlir`: Fixed size expectations
-- `classes.mlir`: Corrected byte calculations
-- `unpacked-struct-dynamic.mlir`: Fixed signal naming format
-**Next**: Monitor for regressions as new features are added
+### Track A: LSP Debounce Fix ✅ COMPLETE
+**Status**: ✅ COMPLETE (Iteration 20)
+**Commit**: 9f150f33f
+**Fix**: Deadlock in `abort()` - held mutex while waiting for tasks that needed mutex.
+**Files Modified**:
+- `lib/Tools/circt-verilog-lsp-server/Utils/PendingChanges.cpp`
+- `unittests/Tools/circt-verilog-lsp-server/Utils/PendingChangesTest.cpp`
+**Result**: Users no longer need `--no-debounce` workaround
+**Next**: Add UVM library support to LSP
 
-### Track B: Simulation Pipeline (Arcilator Path)
-**Status**: 🟡 RESEARCH COMPLETE - Implementation Needed
-**Task**: Enable behavioral SV execution via arcilator
-**Files**: lib/Dialect/Arc/, tools/arcilator/
-**Findings (Iteration 19)**:
-- Arcilator has `arc.sim.emit` → printf lowering via `--lower-to-execution`
-- Missing: `sim.proc.print` lowering to `arc.sim.emit`
-- Arcilator is cycle-based, good for RTL; behavioral SV may need extensions
-**Next Step**: Implement `sim.proc.print` → `arc.sim.emit` conversion
-**Priority**: HIGH - Required for M4 (Basic Sim)
+### Track B: Simulation Pipeline ✅ sim.proc.print IMPLEMENTED
+**Status**: ✅ MAJOR MILESTONE (Iteration 20)
+**Commit**: 2be6becf7
+**Implementation**: Added `PrintFormattedProcOpLowering` pattern in `LowerArcToLLVM.cpp`
+- Recursively processes sim.fmt.* operations (literal, concat, dec, hex, etc.)
+- Generates printf-compatible format strings
+- Creates LLVM globals and calls to printf
+**Test Result**:
+```bash
+$ ./build/bin/arcilator integration_test/arcilator/JIT/proc-print.mlir --run
+value =         42
+hex = 0000002a
+Hello, World!
+```
+**Next Step**: Test full MooreToCore→Arcilator→Execution pipeline on UVM code
+**Priority**: HIGH - Test end-to-end simulation
 
-### Track C: Real-World AVIP Testing on ~/mbit/*
-**Status**: ✅ TESTING COMPLETE - Gaps Quantified (Iteration 19)
-**Task**: Test AVIPs through full pipeline, document runtime gaps
-**Files**: ~/mbit/*_avip/
-**Findings (Iteration 19)**:
-- All 9 AVIPs parse and convert through MooreToCore
-- Runtime gaps quantified across all AVIPs:
-  - **1097 randomization calls** (rand/randc constraints)
-  - **970 coverage calls** (covergroups/coverpoints)
-  - **453 DPI calls** (22 unique functions)
-  - **127 assertion instances** (SVA)
-**Next**: Implement randomization runtime (highest impact)
-**Priority**: MEDIUM - Implementation phase
+### Track C: Randomization Runtime 🟡 RESEARCH COMPLETE
+**Status**: 🟡 Research Complete - Implementation Ready (Iteration 20)
+**Findings**:
+- Current: `__moore_randomize_basic()` fills memory with random bytes, ignores constraints
+- Constraints are parsed but discarded during lowering
+**AVIP Constraint Analysis** (1,097 calls):
+| Type | Percentage | Implementation Difficulty |
+|------|------------|--------------------------|
+| Range constraints | 59% | Easy (no SMT) |
+| Soft defaults | 23% | Trivial |
+| Inside constraints | 12% | Enumerable |
+| Complex | 6% | Needs SMT |
+**Proposed Phase 2**: Constraint-aware randomization covering ~80% of patterns
+**Next**: Implement constraint extraction pass + range-aware randomization
+**Priority**: MEDIUM - Enables realistic verification
 
-### Track D: Developer Tooling & LSP
-**Status**: ✅ COMPLETE + Tests Added (Iteration 19)
-**Task**: Fix and enable circt-verilog-lsp-server for SystemVerilog
-**Files**: lib/Tools/circt-verilog-lsp-server/, circt-sv-uvm/
-**Completed (Iteration 18)**:
-- Fixed LLVM LSP API compatibility (RenameParams, SemanticTokensParams)
-- Fixed Slang v9.1 API compatibility (SymbolKind enums, EvalContext)
-- Built and tested circt-verilog-lsp-server
-- Updated plugin .mcp.json with both LSP servers
-- Verified: go-to-def, hover, symbols, diagnostics, rename, semantic tokens
-**Completed (Iteration 19)**:
-- Added 6 comprehensive LSP test files:
-  - `find-references.test` - Reference finding across modules
-  - `interface.test` - Interface and modport support
-  - `module-instantiation.test` - Hierarchy navigation
-  - `procedural.test` - Tasks, functions, always blocks
-  - `types.test` - typedef, enum, struct support
-  - `document-links.test` - Include directive links
-**Known Issue**: Debounce mode causes hang on didChange; use `--no-debounce` flag
-**Next**: Fix debounce bug, enable lint integration when CIRCTLinting builds
+### Track D: Developer Tooling & LSP 🟡 AVIP GAPS IDENTIFIED
+**Status**: 🟡 Working but gaps found on real AVIP code (Iteration 20)
+**AVIP Testing Results**:
+| Feature | Package Files | Interface Files | BFM Files |
+|---------|--------------|-----------------|-----------|
+| Document Symbols | ✅ Works | ❌ Empty | ❌ UVM errors |
+| Hover | ✅ Works | ❌ Null | ❌ Null |
+| Completion | ✅ Excellent | ✅ Works | ❌ UVM errors |
+| Go-to-Definition | ❌ Empty | ❌ Empty | ❌ Empty |
+**Critical Gaps**:
+1. UVM library not available (80%+ of AVIP code unusable)
+2. Interface declarations return empty symbols
+3. Cross-file navigation broken (even with `-y` flag)
+**Workaround**: Use `-y` flag for package resolution
+**Next**: Add UVM library support, fix interface declaration support
+**Priority**: MEDIUM - Needed for production use
 
 ### Operating Guidance
 - Keep 4 agents active: Track A (unit tests), Track B (simulation), Track C (AVIP testing), Track D (tooling).
 - Add unit tests for each new feature or bug fix.
 - Commit regularly and merge worktrees into main to keep workers in sync.
 - Test on ~/mbit/* for real-world feedback.
+
+### Previous Track Results (Iteration 20)
+- **Track A**: ✅ LSP debounce deadlock FIXED (9f150f33f) - `--no-debounce` no longer needed
+- **Track B**: ✅ sim.proc.print lowering IMPLEMENTED (2be6becf7) - Arcilator can now output $display
+- **Track C**: ✅ Randomization architecture researched - 80% of constraints can be done without SMT
+- **Track D**: ✅ LSP tested on AVIPs - Package files work, interface/UVM gaps identified
 
 ### Previous Track Results (Iteration 19)
 - **Track A**: ✅ All 27/27 MooreToCore unit tests pass (100%)
