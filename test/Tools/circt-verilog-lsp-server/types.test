@@ -1,0 +1,62 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test LSP functionality for user-defined types (typedef, enum, struct).
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///types.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"package types_pkg;\n  typedef enum logic [2:0] {\n    IDLE   = 3'b000,\n    READ   = 3'b001,\n    WRITE  = 3'b010,\n    DONE   = 3'b011\n  } state_e;\n  \n  typedef struct packed {\n    logic [7:0]  data;\n    logic        valid;\n    logic        last;\n  } packet_t;\n  \n  typedef logic [31:0] word_t;\nendpackage\n\nmodule fsm\n  import types_pkg::*;\n(\n  input  logic     clk,\n  input  logic     rst_n,\n  output state_e   state,\n  output packet_t  packet\n);\n  state_e current_state;\n  state_e next_state;\n  \n  always_ff @(posedge clk) begin\n    if (!rst_n)\n      current_state <= IDLE;\n    else\n      current_state <= next_state;\n  end\n  \n  assign state = current_state;\nendmodule"
+}}}
+// -----
+// Document symbols should include package and module
+{"jsonrpc":"2.0","id":1,"method":"textDocument/documentSymbol","params":{
+  "textDocument":{"uri":"test:///types.sv"}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:           "name": "types_pkg"
+// CHECK:           "name": "fsm"
+// -----
+// Hover over 'state_e' type (line 6, col 4)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///types.sv"},
+  "position":{"line":6,"character":5}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result":
+// -----
+// Hover over 'packet_t' struct type (line 12, col 4)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///types.sv"},
+  "position":{"line":12,"character":5}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result":
+// -----
+// Go to definition of 'state_e' usage (line 22, col 10)
+{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///types.sv"},
+  "position":{"line":22,"character":10}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result":
+// -----
+// Hover over enum value 'IDLE' usage (line 29, col 24)
+{"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{
+  "textDocument":{"uri":"test:///types.sv"},
+  "position":{"line":29,"character":24}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result":
+// -----
+{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
