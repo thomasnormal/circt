@@ -936,6 +936,30 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle interface signal access from within an interface method.
+    // When we're inside an interface task/function, signal references
+    // should use the implicit interface argument.
+    if (context.currentInterfaceArg) {
+      auto it = context.interfaceSignalNames.find(&expr.symbol);
+      if (it != context.interfaceSignalNames.end()) {
+        // This is an interface signal access from within an interface method.
+        // Use VirtualInterfaceSignalRefOp to access the signal through the
+        // implicit interface argument.
+        auto type = context.convertType(*expr.type);
+        if (!type)
+          return {};
+
+        auto signalSym =
+            mlir::FlatSymbolRefAttr::get(builder.getContext(), it->second);
+        auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+        Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+            builder, loc, refTy, context.currentInterfaceArg, signalSym);
+
+        // For rvalue, read from the reference
+        return moore::ReadOp::create(builder, loc, signalRef);
+      }
+    }
+
     // Otherwise some other part of ImportVerilog should have added an MLIR
     // value for this expression's symbol to the `context.valueSymbols` table.
     auto d = mlir::emitError(loc, "unknown name `") << expr.symbol.name << "`";
@@ -2242,6 +2266,15 @@ struct RvalueExprVisitor : public ExprVisitor {
         return moore::IntToStringOp::create(builder, loc, emptyInt);
       }
 
+      // For chandle types, return null (0). This is appropriate for DPI
+      // functions like uvm_re_comp that return opaque C pointers.
+      if (isa<moore::ChandleType>(type)) {
+        auto intTy =
+            moore::IntType::get(context.getContext(), 64, moore::Domain::TwoValued);
+        auto zero = moore::ConstantOp::create(builder, loc, intTy, 0);
+        return moore::ConversionOp::create(builder, loc, type, zero);
+      }
+
       // For other types, fall back to unrealized conversion cast
       return mlir::UnrealizedConversionCastOp::create(builder, loc, type,
                                                       ValueRange{})
@@ -2249,6 +2282,60 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     const bool isMethod = (subroutine->thisVar != nullptr);
+
+    // Check if this is an interface method call (task/function defined inside
+    // an interface). Interface methods have an implicit first argument for the
+    // interface instance, similar to class methods with 'this'.
+    bool isInterfaceMethod = false;
+    Value interfaceInstance;
+    const auto &parentSym = subroutine->getParentScope()->asSymbol();
+    if (parentSym.kind == slang::ast::SymbolKind::InstanceBody) {
+      if (auto *instBody = parentSym.as_if<slang::ast::InstanceBodySymbol>()) {
+        if (instBody->getDefinition().definitionKind ==
+            slang::ast::DefinitionKind::Interface) {
+          isInterfaceMethod = true;
+          // Get the interface instance from the call expression.
+          // For calls like `iface.set_sig()`, we need to extract the interface
+          // instance from the syntax tree since slang doesn't provide thisClass()
+          // for interface method calls like it does for class method calls.
+
+          // First, try thisClass() in case slang does provide it
+          if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+            interfaceInstance = context.convertRvalueExpression(*recvExpr);
+          }
+
+          // If not available, look up the interface instance by name.
+          // The call syntax "iface.set_sig()" means we need the instance "iface".
+          // We can find it by looking for the interface instance in our tracked
+          // instances whose definition matches the method's parent interface.
+          if (!interfaceInstance) {
+            // Find the interface instance by scanning tracked instances
+            for (const auto &[instSym, instValue] : context.interfaceInstances) {
+              if (&instSym->body == instBody) {
+                interfaceInstance = instValue;
+                break;
+              }
+            }
+          }
+
+          if (!interfaceInstance) {
+            mlir::emitError(loc)
+                << "interface method call requires interface instance (could "
+                   "not find instance for interface '"
+                << instBody->getDefinition().name << "')";
+            return {};
+          }
+
+          // If the interface instance is a reference, read it to get the value.
+          // Interface instances in modules are stored as refs.
+          if (auto refTy =
+                  dyn_cast<moore::RefType>(interfaceInstance.getType())) {
+            interfaceInstance =
+                moore::ReadOp::create(builder, loc, interfaceInstance);
+          }
+        }
+      }
+    }
 
     auto *lowering = context.declareFunction(*subroutine);
     if (!lowering)
@@ -2446,6 +2533,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       callOp = buildMethodCall(subroutine, lowering, methodReceiverTy,
                                methodReceiver, arguments, resultTypes,
                                isSuperCall);
+    } else if (isInterfaceMethod) {
+      // Interface method call -> func.call with implicit interface argument.
+      // The interface instance is passed as the first argument.
+      SmallVector<Value> argsWithIface;
+      argsWithIface.reserve(arguments.size() + 1);
+      argsWithIface.push_back(interfaceInstance);
+      argsWithIface.append(arguments.begin(), arguments.end());
+      callOp =
+          mlir::func::CallOp::create(builder, loc, lowering->op, argsWithIface);
     } else {
       // Free function -> func.call
       callOp =
@@ -3797,6 +3893,27 @@ struct LvalueExprVisitor : public ExprVisitor {
                   visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
             return result;
         }
+      }
+    }
+
+    // Handle interface signal access from within an interface method (lvalue).
+    // When we're inside an interface task/function, signal references
+    // should use the implicit interface argument.
+    if (context.currentInterfaceArg) {
+      auto it = context.interfaceSignalNames.find(&expr.symbol);
+      if (it != context.interfaceSignalNames.end()) {
+        // This is an interface signal access from within an interface method.
+        // Use VirtualInterfaceSignalRefOp to access the signal through the
+        // implicit interface argument.
+        auto type = context.convertType(*expr.type);
+        if (!type)
+          return {};
+
+        auto signalSym =
+            mlir::FlatSymbolRefAttr::get(builder.getContext(), it->second);
+        auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+        return moore::VirtualInterfaceSignalRefOp::create(
+            builder, loc, refTy, context.currentInterfaceArg, signalSym);
       }
     }
 

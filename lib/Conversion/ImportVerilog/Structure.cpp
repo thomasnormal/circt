@@ -1171,12 +1171,25 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   return &lowering;
 }
 
-/// Convert an interface body - signals, modports, and ports.
+/// Convert an interface body - signals, modports, ports, and procedural code.
 LogicalResult
 Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
   auto &lowering = *interfaces[iface];
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToStart(&lowering.op.getBody().front());
+
+  // Set up interface context for signal access tracking.
+  // Save and restore the previous interface context.
+  auto prevInterfaceBody = currentInterfaceBody;
+  currentInterfaceBody = iface;
+  auto interfaceGuard =
+      llvm::make_scope_exit([&] { currentInterfaceBody = prevInterfaceBody; });
+
+  // Clear and restore interface signal names map.
+  auto prevSignalNames = std::move(interfaceSignalNames);
+  interfaceSignalNames.clear();
+  auto signalNamesGuard =
+      llvm::make_scope_exit([&] { interfaceSignalNames = std::move(prevSignalNames); });
 
   // Track internal symbols from interface ports so we can skip them when
   // iterating through members (they would otherwise appear as duplicate
@@ -1195,8 +1208,13 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
         return failure();
       moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type);
       // Track the internal symbol so we skip it in member iteration
-      if (port->internalSymbol)
+      if (port->internalSymbol) {
         portInternalSymbols.insert(port->internalSymbol);
+        // Map the internal symbol to the signal name for rvalue lookup
+        interfaceSignalNames[port->internalSymbol] = port->name;
+      }
+      // Also map the port symbol itself
+      interfaceSignalNames[port] = port->name;
     } else if (const auto *multiPort =
                    symbol->as_if<slang::ast::MultiPortSymbol>()) {
       for (auto *port : multiPort->ports) {
@@ -1205,13 +1223,17 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
         if (!type)
           return failure();
         moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type);
-        if (port->internalSymbol)
+        if (port->internalSymbol) {
           portInternalSymbols.insert(port->internalSymbol);
+          interfaceSignalNames[port->internalSymbol] = port->name;
+        }
+        interfaceSignalNames[port] = port->name;
       }
     }
   }
 
-  // Convert all members of the interface
+  // First pass: Convert signal declarations (variables/nets) and modports.
+  // We need to build the signal name map before converting procedural code.
   for (auto &member : iface->members()) {
     auto loc = convertLocation(member.location);
 
@@ -1230,6 +1252,8 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       if (!type)
         return failure();
       moore::InterfaceSignalDeclOp::create(builder, loc, var->name, type);
+      // Map the variable symbol to its signal name
+      interfaceSignalNames[var] = var->name;
       continue;
     }
 
@@ -1238,6 +1262,8 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       if (!type)
         return failure();
       moore::InterfaceSignalDeclOp::create(builder, loc, net->name, type);
+      // Map the net symbol to its signal name
+      interfaceSignalNames[net] = net->name;
       continue;
     }
 
@@ -1288,8 +1314,21 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
                                    builder.getArrayAttr(ports));
       continue;
     }
+  }
 
-    // Skip other members for now (parameters, etc.)
+  // Second pass: Convert procedural code (tasks, functions).
+  // These need the signal name map to be fully built first.
+  for (auto &member : iface->members()) {
+    // Handle tasks and functions
+    if (auto *subroutine = member.as_if<slang::ast::SubroutineSymbol>()) {
+      if (failed(convertFunction(*subroutine)))
+        return failure();
+      continue;
+    }
+
+    // Note: always blocks and other procedural code in interfaces would need
+    // additional support. For now, we focus on tasks/functions which are the
+    // primary use case for BFMs.
   }
 
   return success();
@@ -1305,6 +1344,32 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
     if (!lowering->op)
       return {};
     return lowering.get();
+  }
+
+  // Check if this is a task/function inside an interface.
+  // Interface methods need an implicit first argument for the interface instance.
+  const auto &parentSym = subroutine.getParentScope()->asSymbol();
+  if (parentSym.kind == slang::ast::SymbolKind::InstanceBody) {
+    if (auto *instBody = parentSym.as_if<slang::ast::InstanceBodySymbol>()) {
+      if (instBody->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        // This is a task/function inside an interface.
+        // Build qualified name: @"InterfaceName"::subroutine
+        SmallString<64> qualName;
+        qualName += instBody->getDefinition().name;
+        qualName += "::";
+        qualName += subroutine.name;
+
+        // Add implicit interface argument: %iface : !moore.virtual_interface<@I>
+        SmallVector<Type, 1> extraParams;
+        auto ifaceSym = mlir::FlatSymbolRefAttr::get(
+            getContext(), instBody->getDefinition().name);
+        auto vifType = moore::VirtualInterfaceType::get(getContext(), ifaceSym);
+        extraParams.push_back(vifType);
+
+        return declareCallableImpl(subroutine, qualName, extraParams);
+      }
+    }
   }
 
   if (!subroutine.thisVar) {
@@ -1612,6 +1677,21 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
     return success();
   }
 
+  // Check if this is an interface method (task/function inside an interface).
+  // Interface methods have an implicit first argument for the interface instance.
+  bool isInterfaceMethod = false;
+  const slang::ast::InstanceBodySymbol *ifaceBody = nullptr;
+  const auto &parentSym = subroutine.getParentScope()->asSymbol();
+  if (parentSym.kind == slang::ast::SymbolKind::InstanceBody) {
+    if (auto *instBody = parentSym.as_if<slang::ast::InstanceBodySymbol>()) {
+      if (instBody->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        isInterfaceMethod = true;
+        ifaceBody = instBody;
+      }
+    }
+  }
+
   // If this is a class method, the first input is %this :
   // !moore.class<@C>
   if (isMethod) {
@@ -1623,10 +1703,57 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
     valueSymbols.insert(subroutine.thisVar, thisArg);
   }
 
+  // If this is an interface method, the first input is the interface instance.
+  // Set up the interface argument for signal access within the method body.
+  auto prevInterfaceArg = currentInterfaceArg;
+  auto prevInterfaceBody = currentInterfaceBody;
+  auto interfaceArgGuard = llvm::make_scope_exit([&] {
+    currentInterfaceArg = prevInterfaceArg;
+    currentInterfaceBody = prevInterfaceBody;
+  });
+
+  if (isInterfaceMethod) {
+    auto ifaceLoc = convertLocation(subroutine.location);
+    auto ifaceType = lowering->op.getFunctionType().getInput(0);
+    auto ifaceArg = block.addArgument(ifaceType, ifaceLoc);
+
+    // Store the interface argument and body for signal access in expressions
+    currentInterfaceArg = ifaceArg;
+    currentInterfaceBody = ifaceBody;
+
+    // Build the signal name map for this interface (if not already built)
+    // This handles the case where convertFunction is called outside of
+    // convertInterfaceBody (e.g., for forward references)
+    if (interfaceSignalNames.empty()) {
+      for (auto *symbol : ifaceBody->getPortList()) {
+        if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+          if (port->internalSymbol)
+            interfaceSignalNames[port->internalSymbol] = port->name;
+          interfaceSignalNames[port] = port->name;
+        } else if (const auto *multiPort =
+                       symbol->as_if<slang::ast::MultiPortSymbol>()) {
+          for (auto *port : multiPort->ports) {
+            if (port->internalSymbol)
+              interfaceSignalNames[port->internalSymbol] = port->name;
+            interfaceSignalNames[port] = port->name;
+          }
+        }
+      }
+      for (auto &member : ifaceBody->members()) {
+        if (auto *var = member.as_if<slang::ast::VariableSymbol>())
+          interfaceSignalNames[var] = var->name;
+        if (auto *net = member.as_if<slang::ast::NetSymbol>())
+          interfaceSignalNames[net] = net->name;
+      }
+    }
+  }
+
   // Add user-defined block arguments
   auto inputs = lowering->op.getFunctionType().getInputs();
   auto astArgs = subroutine.getArguments();
-  auto valInputs = llvm::ArrayRef<Type>(inputs).drop_front(isMethod ? 1 : 0);
+  // Drop the implicit first argument (this for methods, interface for interface methods)
+  unsigned numImplicitArgs = (isMethod || isInterfaceMethod) ? 1 : 0;
+  auto valInputs = llvm::ArrayRef<Type>(inputs).drop_front(numImplicitArgs);
 
   for (auto [astArg, type] : llvm::zip(astArgs, valInputs)) {
     auto loc = convertLocation(astArg->location);

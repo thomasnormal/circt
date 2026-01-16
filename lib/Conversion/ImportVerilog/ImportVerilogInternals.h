@@ -429,6 +429,19 @@ struct Context {
   /// specifier to determine the hierarchical path.
   const slang::ast::Scope *currentScope = nullptr;
 
+  /// The current interface body being processed (if any). This is used when
+  /// converting tasks/functions defined inside an interface to determine
+  /// when signal accesses should use the implicit interface argument.
+  const slang::ast::InstanceBodySymbol *currentInterfaceBody = nullptr;
+
+  /// The implicit interface argument value when inside an interface task/func.
+  /// This is the virtual interface reference that signal accesses should use.
+  Value currentInterfaceArg = nullptr;
+
+  /// Map from interface signal symbols to their names for signal lookup
+  /// when inside interface tasks/functions.
+  DenseMap<const slang::ast::Symbol *, StringRef> interfaceSignalNames;
+
 private:
   /// Helper function to extract the commonalities in lowering of functions and
   /// methods
