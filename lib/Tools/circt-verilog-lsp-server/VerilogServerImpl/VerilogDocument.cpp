@@ -251,6 +251,20 @@ VerilogDocument::VerilogDocument(
   for (const auto &libDir : libDirs)
     driver.sourceLoader.addSearchDirectories(libDir);
 
+  // Add UVM support if configured.
+  if (!context.options.uvmPath.empty()) {
+    // Add UVM include directories for `include directives.
+    (void)driver.sourceManager.addUserDirectories(context.options.uvmPath);
+
+    // Also add the UVM package source file to the compilation.
+    // This makes uvm_pkg available for import.
+    llvm::SmallString<256> uvmPkgPath(context.options.uvmPath);
+    llvm::sys::path::append(uvmPkgPath, "uvm_pkg.sv");
+    if (llvm::sys::fs::exists(uvmPkgPath)) {
+      driver.sourceLoader.addFiles(uvmPkgPath.str());
+    }
+  }
+
   auto memBuffer = llvm::MemoryBuffer::getMemBufferCopy(contents, uri.file());
   if (!memBuffer) {
     circt::lsp::Logger::error(
@@ -956,6 +970,7 @@ mapSymbolKind(slang::ast::SymbolKind slangKind) {
   case SK::ClassProperty:
     return LK::Class;
   case SK::InterfacePort:
+  case SK::Modport:
     return LK::Interface;
   case SK::EnumType:
   case SK::TypeAlias:
@@ -1157,6 +1172,146 @@ public:
     symbols.push_back(std::move(pkgSym));
   }
 
+  /// Visit interface definitions to extract document symbols.
+  /// Unlike modules which are instantiated, interfaces may not be instantiated
+  /// but still need to appear in the document symbol list.
+  void visitInterfaceDefinition(const slang::ast::DefinitionSymbol &def,
+                                slang::ast::Compilation &compilation) {
+    if (def.definitionKind != slang::ast::DefinitionKind::Interface)
+      return;
+
+    if (def.location.buffer() != bufferId)
+      return;
+
+    auto *syntax = def.getSyntax();
+    if (!syntax)
+      return;
+
+    llvm::lsp::Range fullRange = doc.getLspRange(syntax->sourceRange());
+    int nameLine = sm.getLineNumber(def.location) - 1;
+    int nameCol = sm.getColumnNumber(def.location) - 1;
+    llvm::lsp::Range nameRange(llvm::lsp::Position(nameLine, nameCol),
+                               llvm::lsp::Position(nameLine, nameCol + def.name.size()));
+
+    // Use SymbolKind::Interface (11 in LSP spec)
+    llvm::lsp::DocumentSymbol ifSym(def.name, llvm::lsp::SymbolKind::Interface,
+                                    fullRange, nameRange);
+    ifSym.detail = "interface";
+
+    // Create a temporary instance body to get the interface members.
+    // This allows us to extract ports, signals, modports, etc.
+    auto &body = slang::ast::InstanceBodySymbol::fromDefinition(
+        compilation, def, def.location, slang::ast::InstanceFlags::None,
+        nullptr, nullptr, nullptr);
+
+    std::vector<llvm::lsp::DocumentSymbol> children;
+
+    // Add ports
+    for (const auto *portSym : body.getPortList()) {
+      if (const auto *port = portSym->as_if<slang::ast::PortSymbol>()) {
+        if (!port->location.valid() || port->location.buffer() != bufferId)
+          continue;
+
+        int pLine = sm.getLineNumber(port->location) - 1;
+        int pCol = sm.getColumnNumber(port->location) - 1;
+        llvm::lsp::Range pRange(llvm::lsp::Position(pLine, pCol),
+                                llvm::lsp::Position(pLine, pCol + port->name.size()));
+
+        llvm::lsp::DocumentSymbol portSymbol(port->name, llvm::lsp::SymbolKind::Property,
+                                             pRange, pRange);
+        std::string detail;
+        switch (port->direction) {
+        case slang::ast::ArgumentDirection::In:
+          detail = "input";
+          break;
+        case slang::ast::ArgumentDirection::Out:
+          detail = "output";
+          break;
+        case slang::ast::ArgumentDirection::InOut:
+          detail = "inout";
+          break;
+        case slang::ast::ArgumentDirection::Ref:
+          detail = "ref";
+          break;
+        }
+        auto width = port->getType().getBitWidth();
+        if (width > 1)
+          detail += " [" + std::to_string(width - 1) + ":0]";
+        portSymbol.detail = detail;
+        children.push_back(std::move(portSymbol));
+      }
+    }
+
+    // Visit members for variables, nets, modports, etc.
+    for (const auto &member : body.members()) {
+      if (member.location.buffer() != bufferId)
+        continue;
+
+      llvm::lsp::SymbolKind kind = mapSymbolKind(member.kind);
+      std::string detail;
+
+      switch (member.kind) {
+      case slang::ast::SymbolKind::Net: {
+        const auto &net = member.as<slang::ast::NetSymbol>();
+        auto width = net.getType().getBitWidth();
+        detail = "wire";
+        if (width > 1)
+          detail += " [" + std::to_string(width - 1) + ":0]";
+        break;
+      }
+      case slang::ast::SymbolKind::Variable: {
+        const auto &var = member.as<slang::ast::VariableSymbol>();
+        auto width = var.getType().getBitWidth();
+        detail = "logic";
+        if (width > 1)
+          detail += " [" + std::to_string(width - 1) + ":0]";
+        break;
+      }
+      case slang::ast::SymbolKind::Modport: {
+        detail = "modport";
+        break;
+      }
+      case slang::ast::SymbolKind::Parameter: {
+        const auto &param = member.as<slang::ast::ParameterSymbol>();
+        detail = "parameter";
+        auto initExpr = param.getInitializer();
+        if (initExpr) {
+          slang::ast::EvalContext evalCtx(member);
+          auto cv = initExpr->eval(evalCtx);
+          if (cv)
+            detail += " = " + std::string(cv.toString());
+        }
+        break;
+      }
+      case slang::ast::SymbolKind::Subroutine: {
+        const auto &sub = member.as<slang::ast::SubroutineSymbol>();
+        if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+          detail = "function";
+        else
+          detail = "task";
+        break;
+      }
+      default:
+        continue; // Skip other member types
+      }
+
+      if (member.name.empty())
+        continue;
+
+      int mLine = sm.getLineNumber(member.location) - 1;
+      int mCol = sm.getColumnNumber(member.location) - 1;
+      llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),
+                              llvm::lsp::Position(mLine, mCol + member.name.size()));
+
+      llvm::lsp::DocumentSymbol memberSym(member.name, kind, mRange, mRange);
+      memberSym.detail = detail;
+      children.push_back(std::move(memberSym));
+    }
+
+    ifSym.children = std::move(children);
+    symbols.push_back(std::move(ifSym));
+  }
+
   template <typename T>
   void visit(const T &) {}
 
@@ -1183,11 +1338,24 @@ void VerilogDocument::getDocumentSymbols(
     visitor.visit(*package);
   }
 
-  // Visit top instances
+  // Visit top instances (modules)
   for (auto *inst : root.topInstances) {
     if (inst->body.location.buffer() != mainBufferId)
       continue;
     visitor.visit(inst->body);
+  }
+
+  // Visit interface definitions
+  // Interfaces may not be instantiated as top instances but should still
+  // appear in the document symbol list.
+  for (const auto *sym : (*compilation)->getDefinitions()) {
+    if (sym->kind == slang::ast::SymbolKind::Definition) {
+      const auto &def = sym->as<slang::ast::DefinitionSymbol>();
+      if (def.definitionKind == slang::ast::DefinitionKind::Interface &&
+          def.location.buffer() == mainBufferId) {
+        visitor.visitInterfaceDefinition(def, **compilation);
+      }
+    }
   }
 
   symbols = std::move(visitor.symbols);

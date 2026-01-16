@@ -36,9 +36,10 @@ namespace lsp {
 struct VerilogServerOptions {
   VerilogServerOptions(const std::vector<std::string> &libDirs,
                        const std::vector<std::string> &extraSourceLocationDirs,
-                       const std::vector<std::string> &commandFiles)
+                       const std::vector<std::string> &commandFiles,
+                       const std::string &uvmPath = "")
       : libDirs(libDirs), extraSourceLocationDirs(extraSourceLocationDirs),
-        commandFiles(commandFiles) {}
+        commandFiles(commandFiles), uvmPath(uvmPath) {}
   /// Additional list of RTL directories to search.
   const std::vector<std::string> &libDirs;
   /// Additional list of external source directories to search.
@@ -46,6 +47,9 @@ struct VerilogServerOptions {
   /// Additional list of command files that reference dependencies of the
   /// project.
   const std::vector<std::string> &commandFiles;
+  /// Path to the UVM library source directory (e.g., ~/uvm-core/src).
+  /// If empty, the UVM_HOME environment variable will be checked.
+  const std::string uvmPath;
 };
 // namespace lsp
 
