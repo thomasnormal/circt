@@ -286,6 +286,14 @@ function void BitVectorBuiltins(int x, logic [41:0] y);
   dummyA($countones(x));
   // CHECK: [[CNT_Y:%.+]] = moore.builtin.countones [[Y]] : l42
   dummyA($countones(y));
+  // CHECK: [[ONEHOT_X:%.+]] = moore.builtin.onehot [[X]] : i32
+  dummyF($onehot(x));
+  // CHECK: [[ONEHOT_Y:%.+]] = moore.builtin.onehot [[Y]] : l42
+  dummyF($onehot(y));
+  // CHECK: [[ONEHOT0_X:%.+]] = moore.builtin.onehot0 [[X]] : i32
+  dummyF($onehot0(x));
+  // CHECK: [[ONEHOT0_Y:%.+]] = moore.builtin.onehot0 [[Y]] : l42
+  dummyF($onehot0(y));
 endfunction
 
 // CHECK-LABEL: func.func private @RandomBuiltins(
