@@ -1,5 +1,87 @@
 # Recent Changes (UVM Parity Work)
 
+## January 16, 2026 - Iteration 21: UVM LSP + Range Constraints + Interface Support
+
+**Status**: Major LSP improvements, range constraint support, simulation pipeline gaps documented.
+
+### Track A: Full Simulation Pipeline Analysis
+
+**Finding**: The MooreToCore → Arcilator pipeline has gaps for behavioral code.
+
+| Stage | Status | Notes |
+|-------|--------|-------|
+| SV → Moore IR | ✅ Works | $display → moore.builtin.display |
+| Moore → Core | ✅ Works | moore.builtin.display → sim.proc.print |
+| Core → Arcilator | ❌ Blocked | llhd.process with llhd.halt not supported |
+
+**Blockers**:
+1. `llhd.process` with `llhd.halt` (initial blocks) - arcilator only handles combinational processes
+2. `sim.terminate` has no lowering pattern
+
+**Workaround**: Use direct `func.func` entry points for testing (like integration test).
+
+### Track B: UVM Library Support Added ✅
+
+**Commit**: d930aad54
+
+Added `--uvm-path` flag and `UVM_HOME` environment variable support:
+```bash
+# Option 1: Command line
+circt-verilog-lsp-server --uvm-path=/path/to/uvm-core/src
+
+# Option 2: Environment variable
+export UVM_HOME=/path/to/uvm-core
+circt-verilog-lsp-server
+```
+
+AVIP BFM files now analyze correctly with UVM imports resolved.
+
+### Track C: Range Constraint Support ✅
+
+**Commit**: 2b069ee30
+
+Implemented range constraint extraction and application:
+- Added `RangeConstraintInfo` structure
+- `extractRangeConstraints()` analyzes `ConstraintInsideOp` ops
+- `RandomizeOpConversion` now:
+  1. Calls `__moore_randomize_basic()` first
+  2. For each range constraint, calls `__moore_randomize_with_range(min, max)`
+  3. Stores constrained value at field offset
+
+**Coverage**: ~59% of AVIP constraints (simple ranges) now work.
+
+### Track D: Interface Symbol Support Fixed ✅
+
+**Commit**: d930aad54
+
+Fixed `textDocument/documentSymbol` for interface files:
+- Added `visitInterfaceDefinition()` method
+- Extracts ports with direction (input/output/inout)
+- Extracts signals with bit widths
+- Extracts modports
+- Uses `SymbolKind::Interface` (11) per LSP spec
+
+AVIP interface files (apb_if.sv, axi4_if.sv, etc.) now return proper symbols.
+
+### Commits This Iteration
+
+| Commit | Description |
+|--------|-------------|
+| `d930aad54` | [VerilogLSP] Add UVM library support and interface symbol extraction |
+| `2b069ee30` | [MooreToCore] Add range constraint support for randomization |
+| `95f0dd277` | [VerilogLSP] Update interface test expectations |
+
+### Next Steps
+
+| Track | Priority | Task |
+|-------|----------|------|
+| A | HIGH | Add llhd.process halting support for initial blocks |
+| B | HIGH | Add sim.terminate lowering pattern |
+| C | MEDIUM | Implement soft constraint support |
+| D | LOW | Add hover/go-to-definition for interface members |
+
+---
+
 ## January 16, 2026 - Iteration 20: Critical Fixes & Simulation Pipeline
 
 **Status**: Major fixes landed - LSP debounce deadlock fixed, sim.proc.print lowering implemented, randomization architecture researched.
