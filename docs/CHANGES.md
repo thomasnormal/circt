@@ -4,11 +4,29 @@
 
 **Status**: UVM MooreToCore conversion complete, including `moore.array.locator`.
 
-### Array Locator Inline Predicate Loop (uncommitted)
+### Iteration 12 Fixes (January 16, 2026)
+
+#### Array Locator Inline Loop (115316b07)
 - **Problem**: Complex `moore.array.locator` predicates (string comparisons, class handle comparisons, AND/OR, calls) were not lowered.
 - **Solution**: Inline predicate region into an `scf.for` loop, materialize predicate to `i1`, and push matches via `__moore_queue_push_back`.
 - **Impact**: Removes the last MooreToCore blocker for UVM conversion.
-- **Tests**: Added array.locator string predicate coverage in `test/Conversion/MooreToCore/queue-array-ops.mlir`.
+- **Tests**: Added array.locator string/AND/OR predicate tests in `test/Conversion/MooreToCore/queue-array-ops.mlir`.
+
+#### llhd.time Data Layout Crash (1a4bf3014)
+- **Problem**: Structs with `time` fields caused DataLayout crash - `llhd::TimeType` has no DataLayout info.
+- **Solution**:
+  - Added `getTypeSizeSafe()` helper that handles `llhd::TimeType` (16 bytes)
+  - Updated `convertToLLVMType()` to convert `llhd::TimeType` to LLVM struct `{i64, i32, i32}`
+  - Updated unpacked struct type conversion to detect `llhd::TimeType` as needing LLVM struct
+- **Impact**: UVM classes with time fields (e.g., `access_record` struct) now convert correctly.
+
+#### DPI chandle Support (115316b07)
+- **DPI chandle return**: Added test coverage for DPI functions returning `chandle` (used by `uvm_re_comp`)
+- **Stub behavior**: Returns null (0 converted to chandle)
+
+#### AVIP MooreToCore Validation
+All 7 AVIPs now pass through MooreToCore pipeline:
+- APB, AHB, AXI4, UART, I2S, I3C, SPI ✅
 
 ### MooreToCore Lowering Progress
 
@@ -62,7 +80,7 @@
 - **Solution**: Check original Moore type via typeConverter, use LLVM GEP for dynamic structs
 - **Impact**: Unblocked 57 StructExtractRefOp operations
 
-### AVIP Testing Results
+### AVIP Testing Results (Updated Iteration 12)
 
 | AVIP | Parsing | MooreToCore | Issue |
 |------|---------|-------------|-------|
@@ -72,11 +90,11 @@
 | AXI4Lite | ✅ Pass | ✅ Pass | - |
 | I2S | ✅ Pass | ✅ Pass | - |
 | I3C | ✅ Pass | ✅ Pass | - |
-| JTAG | ❌ Fail | - | Source: enum implicit conversion |
-| SPI | ❌ Fail | - | Source: nested block comments |
-| UART | ❌ Fail | - | Source: default arg mismatch |
+| SPI | ✅ Pass | ✅ Pass | - |
+| UART | ✅ Pass | ✅ Pass | - |
+| JTAG | ⚠️ Partial | - | Needs --timescale flag |
 
-**Note**: JTAG/SPI/UART failures are source code issues in the AVIPs, not CIRCT bugs.
+**Note**: 7/9 AVIPs fully pass. JTAG needs timescale flag.
 
 ---
 
