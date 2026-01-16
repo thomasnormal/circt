@@ -12,6 +12,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
@@ -620,15 +621,78 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
     if (failed(rewriter.convertRegionTypes(&op.getBody(), *typeConverter)))
       return failure();
 
-    // Handle initial and final procedures. These lower to a corresponding
-    // `llhd.process` or `llhd.final` op that executes the body and then halts.
-    if (op.getKind() == ProcedureKind::Initial ||
-        op.getKind() == ProcedureKind::Final) {
-      Operation *newOp;
-      if (op.getKind() == ProcedureKind::Initial)
-        newOp = llhd::ProcessOp::create(rewriter, loc, TypeRange{});
-      else
-        newOp = llhd::FinalOp::create(rewriter, loc);
+    // Handle initial procedures. Simple initial blocks (without wait_event,
+    // wait_delay, or unreachable ops) lower to `seq.initial` which is supported
+    // by arcilator for simulation. Initial blocks with wait ops need
+    // `llhd.process` because they require multiple basic blocks for the
+    // wait/check/resume pattern. Unreachable ops need llhd.halt which isn't
+    // valid in seq.initial.
+    if (op.getKind() == ProcedureKind::Initial) {
+      bool hasWaitEvent = !op.getBody().getOps<WaitEventOp>().empty();
+      bool hasWaitDelay = !op.getBody().getOps<WaitDelayOp>().empty();
+      bool hasUnreachable = !op.getBody().getOps<UnreachableOp>().empty();
+
+      // Check if all captured values are constant-like. If not, we can't
+      // use seq.initial due to IsolatedFromAbove constraint.
+      llvm::SetVector<Value> captures;
+      getUsedValuesDefinedAbove(op.getBody(), op.getBody(), captures);
+      bool allCapturesConstant = true;
+      for (Value capture : captures) {
+        Operation *defOp = capture.getDefiningOp();
+        if (!defOp || !defOp->hasTrait<OpTrait::ConstantLike>()) {
+          allCapturesConstant = false;
+          break;
+        }
+      }
+
+      // Simple initial blocks can use seq.initial for arcilator support.
+      if (!hasWaitEvent && !hasWaitDelay && !hasUnreachable &&
+          allCapturesConstant) {
+        auto initialOp =
+            seq::InitialOp::create(rewriter, loc, TypeRange{}, std::function<void()>{});
+        auto &body = initialOp.getBody();
+        // The builder creates an empty block, erase it before inlining
+        rewriter.eraseBlock(&body.front());
+        rewriter.inlineRegionBefore(op.getBody(), body, body.end());
+
+        // Clone constant-like operations that are used inside the initial block
+        // but defined outside, to satisfy IsolatedFromAbove constraint.
+        rewriter.setInsertionPointToStart(&body.front());
+        for (Value capture : captures) {
+          Operation *defOp = capture.getDefiningOp();
+          Operation *cloned = rewriter.clone(*defOp);
+          for (auto [orig, replacement] :
+               llvm::zip(defOp->getResults(), cloned->getResults()))
+            replaceAllUsesInRegionWith(orig, replacement, body);
+        }
+
+        for (auto returnOp :
+             llvm::make_early_inc_range(body.getOps<ReturnOp>())) {
+          rewriter.setInsertionPoint(returnOp);
+          seq::YieldOp::create(rewriter, returnOp.getLoc());
+          rewriter.eraseOp(returnOp);
+        }
+        rewriter.eraseOp(op);
+        return success();
+      }
+      // Complex initial blocks (with wait ops, unreachable, or non-constant
+      // captures) still need llhd.process with halt
+      auto newOp = llhd::ProcessOp::create(rewriter, loc, TypeRange{});
+      auto &body = newOp->getRegion(0);
+      rewriter.inlineRegionBefore(op.getBody(), body, body.end());
+      for (auto returnOp :
+           llvm::make_early_inc_range(body.getOps<ReturnOp>())) {
+        rewriter.setInsertionPoint(returnOp);
+        rewriter.replaceOpWithNewOp<llhd::HaltOp>(returnOp, ValueRange{});
+      }
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Handle final procedures. These lower to `llhd.final` op that executes
+    // the body and then halts.
+    if (op.getKind() == ProcedureKind::Final) {
+      auto newOp = llhd::FinalOp::create(rewriter, loc);
       auto &body = newOp->getRegion(0);
       rewriter.inlineRegionBefore(op.getBody(), body, body.end());
       for (auto returnOp :
@@ -7246,13 +7310,16 @@ struct RandomBIOpConversion : public OpConversionPattern<RandomBIOp> {
 };
 
 /// Helper structure to hold extracted range constraint information.
+/// Supports both single-range and multi-range constraints.
 struct RangeConstraintInfo {
   StringRef propertyName; // Name of the constrained property
-  int64_t minValue;       // Minimum value (inclusive)
-  int64_t maxValue;       // Maximum value (inclusive)
+  int64_t minValue;       // Minimum value (inclusive) - for single range
+  int64_t maxValue;       // Maximum value (inclusive) - for single range
+  SmallVector<std::pair<int64_t, int64_t>> ranges; // All ranges for multi-range
   unsigned fieldIndex;    // Index of the field in the struct
   unsigned bitWidth;      // Bit width of the property
   bool isSoft = false;    // Whether this is a soft constraint
+  bool isMultiRange = false; // Whether this has multiple ranges
 };
 
 /// Helper structure to hold extracted soft constraint information.
@@ -7334,15 +7401,12 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         if (propName.empty())
           continue;
 
-        // Get the ranges array
-        ArrayRef<int64_t> ranges = insideOp.getRanges();
+        // Get the ranges array - pairs of [low, high] values
+        ArrayRef<int64_t> rangesArr = insideOp.getRanges();
 
-        // For now, only handle single range constraints (2 values = 1 range)
-        if (ranges.size() != 2)
+        // Ranges must come in pairs (even number of values, at least 2)
+        if (rangesArr.size() < 2 || rangesArr.size() % 2 != 0)
           continue;
-
-        int64_t low = ranges[0];
-        int64_t high = ranges[1];
 
         // Find the property index and bit width
         auto it = propertyMap.find(propName);
@@ -7359,11 +7423,27 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 
         RangeConstraintInfo info;
         info.propertyName = propName;
-        info.minValue = low;
-        info.maxValue = high;
         info.fieldIndex = fieldIdx;
         info.bitWidth = bitWidth;
         info.isSoft = insideOp.getIsSoft();
+
+        // Check if this is a single range or multiple ranges
+        if (rangesArr.size() == 2) {
+          // Single range - use the simple path
+          info.minValue = rangesArr[0];
+          info.maxValue = rangesArr[1];
+          info.isMultiRange = false;
+        } else {
+          // Multiple ranges - store all range pairs
+          info.isMultiRange = true;
+          // Also set minValue/maxValue to the first range for compatibility
+          info.minValue = rangesArr[0];
+          info.maxValue = rangesArr[1];
+          // Store all ranges as pairs
+          for (size_t i = 0; i < rangesArr.size(); i += 2) {
+            info.ranges.push_back({rangesArr[i], rangesArr[i + 1]});
+          }
+        }
         constraints.push_back(info);
       }
     }
@@ -7569,31 +7649,92 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
       // Apply hard range constraints - generate constrained random values
       if (!hardConstraints.empty()) {
+        // Function type for single-range: __moore_randomize_with_range(i64, i64) -> i64
         auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
         auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
                                               "__moore_randomize_with_range",
                                               rangeFnTy);
 
-        for (const auto &constraint : hardConstraints) {
-          // Create min/max constants
-          auto minConst = LLVM::ConstantOp::create(
-              rewriter, loc, i64Ty,
-              rewriter.getI64IntegerAttr(constraint.minValue));
-          auto maxConst = LLVM::ConstantOp::create(
-              rewriter, loc, i64Ty,
-              rewriter.getI64IntegerAttr(constraint.maxValue));
+        // Function type for multi-range: __moore_randomize_with_ranges(ptr, i64) -> i64
+        auto rangesFnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+        auto rangesFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                               "__moore_randomize_with_ranges",
+                                               rangesFnTy);
 
-          // Call __moore_randomize_with_range(min, max)
-          auto rangeResult = LLVM::CallOp::create(
-              rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
-              ValueRange{minConst, maxConst});
+        for (const auto &constraint : hardConstraints) {
+          Value rangeResultVal;
+
+          if (constraint.isMultiRange) {
+            // Multi-range constraint - create an array of range pairs and call
+            // __moore_randomize_with_ranges
+
+            // Create array type for the ranges: [numRanges * 2 x i64]
+            size_t numRanges = constraint.ranges.size();
+            auto arrayTy = LLVM::LLVMArrayType::get(i64Ty, numRanges * 2);
+
+            // Allocate stack space for the ranges array
+            auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                                rewriter.getI64IntegerAttr(1));
+            auto rangesAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy,
+                                                       arrayTy, one);
+
+            // Store each range pair into the array
+            for (size_t i = 0; i < numRanges; ++i) {
+              // Store min value at index i*2
+              auto minIdx = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2)));
+              auto minPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                rangesAlloca,
+                                                ValueRange{minIdx});
+              auto minVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.ranges[i].first));
+              LLVM::StoreOp::create(rewriter, loc, minVal, minPtr);
+
+              // Store max value at index i*2+1
+              auto maxIdx = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2 + 1)));
+              auto maxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                rangesAlloca,
+                                                ValueRange{maxIdx});
+              auto maxVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.ranges[i].second));
+              LLVM::StoreOp::create(rewriter, loc, maxVal, maxPtr);
+            }
+
+            // Call __moore_randomize_with_ranges(ranges_ptr, num_ranges)
+            auto numRangesConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(numRanges)));
+            auto rangeResult = LLVM::CallOp::create(
+                rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangesFn),
+                ValueRange{rangesAlloca, numRangesConst});
+            rangeResultVal = rangeResult.getResult();
+          } else {
+            // Single range constraint - use existing __moore_randomize_with_range
+            auto minConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(constraint.minValue));
+            auto maxConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(constraint.maxValue));
+
+            // Call __moore_randomize_with_range(min, max)
+            auto rangeResult = LLVM::CallOp::create(
+                rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+                ValueRange{minConst, maxConst});
+            rangeResultVal = rangeResult.getResult();
+          }
 
           // Truncate to the field's bit width if needed
           Type fieldIntTy = IntegerType::get(ctx, constraint.bitWidth);
-          Value truncatedVal = rangeResult.getResult();
+          Value truncatedVal = rangeResultVal;
           if (constraint.bitWidth < 64) {
             truncatedVal = arith::TruncIOp::create(rewriter, loc, fieldIntTy,
-                                                   rangeResult.getResult());
+                                                   rangeResultVal);
           }
 
           // Get GEP to the field using the property path

@@ -762,10 +762,9 @@ func.func @BinaryRealOps(%arg0: !moore.f32, %arg1: !moore.f32) {
 
 // CHECK-LABEL: hw.module @Procedures
 moore.module @Procedures() {
-  // CHECK: llhd.process {
+  // CHECK: seq.initial() {
   // CHECK:   func.call @dummyA()
-  // CHECK:   llhd.halt
-  // CHECK: }
+  // CHECK: } : () -> ()
   moore.procedure initial {
     func.call @dummyA() : () -> ()
     moore.return
