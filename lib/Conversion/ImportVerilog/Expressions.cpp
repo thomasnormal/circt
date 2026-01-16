@@ -3825,7 +3825,7 @@ struct RvalueExprVisitor : public ExprVisitor {
         // Pass the newObj as the implicit this argument of the ctor.
         auto savedThis = context.currentThisRef;
         context.currentThisRef = newObj;
-        llvm::scope_exit restoreThis(
+        auto restoreThis = llvm::make_scope_exit(
             [&] { context.currentThisRef = savedThis; });
         // Emit a call to ctor
         if (!visitCall(*callConstructor, *subroutine))
@@ -4931,6 +4931,14 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                     return failure();
                   return (Value)moore::IsUnknownBIOp::create(builder, loc,
                                                              value);
+                })
+          .Case("$countones",
+                [&]() -> FailureOr<Value> {
+                  value = convertToSimpleBitVector(value);
+                  if (!value)
+                    return failure();
+                  return (Value)moore::CountOnesBIOp::create(builder, loc,
+                                                              value);
                 })
           // Event triggered property (IEEE 1800-2017 Section 15.5.3)
           .Case("triggered",
