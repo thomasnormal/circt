@@ -4315,6 +4315,16 @@ protected:
     auto i64Ty = IntegerType::get(ctx, 64);
     return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
   }
+
+  /// Get the size in bytes for a type. Uses hw::getBitWidth which handles
+  /// all types including structs. Returns at least 1 byte.
+  static int64_t getTypeSizeInBytes(Type type) {
+    int64_t bitWidth = hw::getBitWidth(type);
+    if (bitWidth <= 0)
+      return 1; // Default to 1 byte for unknown/opaque types
+    int64_t byteSize = bitWidth / 8;
+    return byteSize > 0 ? byteSize : 1;
+  }
 };
 
 /// Conversion for moore.queue.max -> runtime function call.
@@ -4470,11 +4480,7 @@ struct QueuePushBackOpConversion
 
     // Calculate element size
     auto elemSize = LLVM::ConstantOp::create(
-        rewriter, loc,
-        rewriter.getI64IntegerAttr(
-            elemType.getIntOrFloatBitWidth() / 8 > 0
-                ? elemType.getIntOrFloatBitWidth() / 8
-                : 1));
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{queueAlloca, elemAlloca, elemSize});
@@ -4521,11 +4527,7 @@ struct QueuePushFrontOpConversion
 
     // Calculate element size
     auto elemSize = LLVM::ConstantOp::create(
-        rewriter, loc,
-        rewriter.getI64IntegerAttr(
-            elemType.getIntOrFloatBitWidth() / 8 > 0
-                ? elemType.getIntOrFloatBitWidth() / 8
-                : 1));
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{queueAlloca, elemAlloca, elemSize});
@@ -4568,11 +4570,7 @@ struct QueuePopBackOpConversion
 
     // Calculate element size
     auto elemSize = LLVM::ConstantOp::create(
-        rewriter, loc,
-        rewriter.getI64IntegerAttr(
-            resultType.getIntOrFloatBitWidth() / 8 > 0
-                ? resultType.getIntOrFloatBitWidth() / 8
-                : 1));
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(resultType)));
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
                                      SymbolRefAttr::get(fn),
@@ -4580,11 +4578,16 @@ struct QueuePopBackOpConversion
 
     // Convert result to the expected type
     Value result = call.getResult();
-    auto resultWidth = resultType.getIntOrFloatBitWidth();
-    if (resultWidth < 64) {
-      result = arith::TruncIOp::create(rewriter, loc, resultType, result);
-    } else if (resultWidth > 64) {
-      result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+    if (resultType.isIntOrFloat()) {
+      auto resultWidth = resultType.getIntOrFloatBitWidth();
+      if (resultWidth < 64) {
+        result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+      } else if (resultWidth > 64) {
+        result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+      }
+    } else {
+      // For non-integer types (structs, etc.), bitcast from i64
+      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
     }
 
     rewriter.replaceOp(op, result);
@@ -4625,11 +4628,7 @@ struct QueuePopFrontOpConversion
 
     // Calculate element size
     auto elemSize = LLVM::ConstantOp::create(
-        rewriter, loc,
-        rewriter.getI64IntegerAttr(
-            resultType.getIntOrFloatBitWidth() / 8 > 0
-                ? resultType.getIntOrFloatBitWidth() / 8
-                : 1));
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(resultType)));
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
                                      SymbolRefAttr::get(fn),
@@ -4637,11 +4636,16 @@ struct QueuePopFrontOpConversion
 
     // Convert result to the expected type
     Value result = call.getResult();
-    auto resultWidth = resultType.getIntOrFloatBitWidth();
-    if (resultWidth < 64) {
-      result = arith::TruncIOp::create(rewriter, loc, resultType, result);
-    } else if (resultWidth > 64) {
-      result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+    if (resultType.isIntOrFloat()) {
+      auto resultWidth = resultType.getIntOrFloatBitWidth();
+      if (resultWidth < 64) {
+        result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+      } else if (resultWidth > 64) {
+        result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+      }
+    } else {
+      // For non-integer types (structs, etc.), bitcast from i64
+      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
     }
 
     rewriter.replaceOp(op, result);
@@ -4895,13 +4899,19 @@ struct StreamConcatOpConversion
 
       Value result = call.getResult();
       if (convertedResultType != i64Ty) {
-        auto resultWidth = convertedResultType.getIntOrFloatBitWidth();
-        if (resultWidth < 64) {
-          result = arith::TruncIOp::create(rewriter, loc, convertedResultType,
+        if (convertedResultType.isIntOrFloat()) {
+          auto resultWidth = convertedResultType.getIntOrFloatBitWidth();
+          if (resultWidth < 64) {
+            result = arith::TruncIOp::create(rewriter, loc, convertedResultType,
+                                             result);
+          } else if (resultWidth > 64) {
+            result = arith::ExtUIOp::create(rewriter, loc, convertedResultType,
+                                            result);
+          }
+        } else {
+          // For non-integer types (structs, etc.), bitcast from i64
+          result = LLVM::BitcastOp::create(rewriter, loc, convertedResultType,
                                            result);
-        } else if (resultWidth > 64) {
-          result = arith::ExtUIOp::create(rewriter, loc, convertedResultType,
-                                          result);
         }
       }
       rewriter.replaceOp(op, result);
