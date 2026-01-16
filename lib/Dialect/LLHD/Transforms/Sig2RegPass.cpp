@@ -134,9 +134,11 @@ public:
                   return success();
                 }
 
-                auto bw = hw::getBitWidth(
-                    cast<llhd::RefType>(extractOp.getInput().getType())
-                        .getNestedType());
+                auto refType =
+                    dyn_cast<llhd::RefType>(extractOp.getInput().getType());
+                if (!refType)
+                  return failure();
+                auto bw = hw::getBitWidth(refType.getNestedType());
                 if (bw <= 0)
                   return failure();
 
