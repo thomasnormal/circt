@@ -24,7 +24,8 @@ public:
         .template Case<AndOp, OrOp, DelayOp, ConcatOp, RepeatOp, NotOp,
                        ImplicationOp, UntilOp, EventuallyOp, ClockOp,
                        IntersectOp, NonConsecutiveRepeatOp, GoToRepeatOp,
-                       BooleanConstantOp>([&](auto op) -> ResultType {
+                       FirstMatchOp, BooleanConstantOp>([&](auto op)
+                                                        -> ResultType {
           return thisCast->visitLTL(op, args...);
         })
         .Default([&](auto) -> ResultType {
@@ -62,6 +63,7 @@ public:
   HANDLE(IntersectOp, Unhandled);
   HANDLE(NonConsecutiveRepeatOp, Unhandled);
   HANDLE(GoToRepeatOp, Unhandled);
+  HANDLE(FirstMatchOp, Unhandled);
   HANDLE(BooleanConstantOp, Unhandled);
 #undef HANDLE
 };

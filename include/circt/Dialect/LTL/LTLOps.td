@@ -248,6 +248,21 @@ def NonConsecutiveRepeatOp : LTLOp<"non_consecutive_repeat", [Pure]> {
   }];
 }
 
+def FirstMatchOp : LTLOp<"first_match", [Pure]> {
+  let arguments = (ins LTLAnySequenceType:$input);
+  let results = (outs LTLSequenceType:$result);
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input)
+  }];
+
+  let summary = "A sequence that matches the earliest occurrence.";
+  let description = [{
+    Selects the earliest match of the `$input` sequence. This corresponds to
+    the SystemVerilog `first_match` operator and is used to make matching
+    deterministic when multiple matches could overlap in time.
+  }];
+}
+
 
 //===----------------------------------------------------------------------===//
 // Properties

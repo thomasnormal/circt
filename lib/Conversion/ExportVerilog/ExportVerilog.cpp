@@ -2643,7 +2643,7 @@ SubExprInfo ExprEmitter::emitSubExpr(Value exp,
   unsigned subExprStartIndex = buffer.tokens.size();
   if (op)
     ps.addCallback({op, true});
-  llvm::scope_exit done([&]() {
+  auto done = llvm::make_scope_exit([&]() {
     if (op)
       ps.addCallback({op, false});
   });
@@ -3587,6 +3587,7 @@ private:
   EmittedProperty visitLTL(ltl::RepeatOp op);
   EmittedProperty visitLTL(ltl::GoToRepeatOp op);
   EmittedProperty visitLTL(ltl::NonConsecutiveRepeatOp op);
+  EmittedProperty visitLTL(ltl::FirstMatchOp op);
   EmittedProperty visitLTL(ltl::NotOp op);
   EmittedProperty visitLTL(ltl::ImplicationOp op);
   EmittedProperty visitLTL(ltl::UntilOp op);
@@ -3849,6 +3850,16 @@ EmittedProperty PropertyEmitter::visitLTL(ltl::NonConsecutiveRepeatOp op) {
   ps << "]";
 
   return {PropertyPrecedence::Repeat};
+}
+
+EmittedProperty PropertyEmitter::visitLTL(ltl::FirstMatchOp op) {
+  ps << "first_match"
+     << "(";
+  ps.scopedBox(PP::ibox2, [&] {
+    emitNestedProperty(op.getInput(), PropertyPrecedence::Lowest);
+    ps << ")";
+  });
+  return {PropertyPrecedence::Unary};
 }
 
 EmittedProperty PropertyEmitter::visitLTL(ltl::NotOp op) {

@@ -7478,6 +7478,29 @@ struct IsUnknownBIOpConversion : public OpConversionPattern<IsUnknownBIOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// CountOnesBIOp Conversion
+//===----------------------------------------------------------------------===//
+
+/// $countones(x) -> llvm.ctpop(x)
+/// Returns the number of 1 bits in the input.
+struct CountOnesBIOpConversion : public OpConversionPattern<CountOnesBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CountOnesBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value input = adaptor.getValue();
+    auto inputType = cast<IntegerType>(input.getType());
+
+    // Use LLVM's ctpop (count population) intrinsic to count 1 bits.
+    Value ctpop = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
+    rewriter.replaceOp(op, ctpop);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -8932,7 +8955,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     IntToStringOpConversion,
     StringToIntOpConversion,
     SScanfBIOpConversion,
-    IsUnknownBIOpConversion
+    IsUnknownBIOpConversion,
+    CountOnesBIOpConversion
   >(typeConverter, patterns.getContext());
   // clang-format on
 
