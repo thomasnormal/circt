@@ -305,11 +305,15 @@ struct ModuleVisitor : public BaseVisitor {
           builder.getContext(), ifaceRef);
       auto vifRefType = moore::RefType::get(vifType);
 
-      // Create the interface instance op
-      moore::InterfaceInstanceOp::create(
+      // Create the interface instance op and store it for later lookup
+      auto instOp = moore::InterfaceInstanceOp::create(
           builder, loc, vifRefType,
           builder.getStringAttr(Twine(blockNamePrefix) + instNode.name),
           ifaceRef);
+
+      // Store the interface instance for lookup when it's referenced
+      // (e.g., in virtual interface assignments like `vif = intf`)
+      context.interfaceInstances[&instNode] = instOp.getResult();
 
       return success();
     }
@@ -1519,6 +1523,13 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   timeScale = subroutine.getTimeScale().value_or(slang::TimeScale());
   auto timeScaleGuard =
       llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
+
+  // Keep track of the current scope for virtual interface member access.
+  // This allows us to bind syntax to expressions when accessing interface
+  // members through virtual interfaces inside class methods.
+  auto prevScope = currentScope;
+  currentScope = &subroutine;
+  auto scopeGuard = llvm::make_scope_exit([&] { currentScope = prevScope; });
 
   // First get or create the function declaration.
   auto *lowering = declareFunction(subroutine);
