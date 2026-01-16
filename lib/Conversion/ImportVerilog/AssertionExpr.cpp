@@ -129,6 +129,18 @@ struct AssertionExprVisitor {
     return builder.createOrFold<ltl::ConcatOp>(loc, sequenceElements);
   }
 
+  Value visit(const slang::ast::FirstMatchAssertionExpr &expr) {
+    if (!expr.matchItems.empty()) {
+      mlir::emitError(loc, "first_match match items are not supported");
+      return {};
+    }
+
+    auto sequenceValue = context.convertAssertionExpression(expr.seq, loc);
+    if (!sequenceValue)
+      return {};
+    return ltl::FirstMatchOp::create(builder, loc, sequenceValue);
+  }
+
   Value visit(const slang::ast::UnaryAssertionExpr &expr) {
     auto value = context.convertAssertionExpression(expr.expr, loc);
     if (!value)
@@ -291,6 +303,34 @@ struct AssertionExprVisitor {
     return context.convertLTLTimingControl(expr.clocking, assertionExpr);
   }
 
+  Value visit(const slang::ast::ConditionalAssertionExpr &expr) {
+    auto condition = context.convertRvalueExpression(expr.condition);
+    condition = context.convertToI1(condition);
+    if (!condition)
+      return {};
+
+    auto ifExpr = context.convertAssertionExpression(expr.ifExpr, loc);
+    if (!ifExpr)
+      return {};
+
+    auto notCond = ltl::NotOp::create(builder, loc, condition);
+
+    if (expr.elseExpr) {
+      auto elseExpr = context.convertAssertionExpression(*expr.elseExpr, loc);
+      if (!elseExpr)
+        return {};
+      auto condAndIf =
+          ltl::AndOp::create(builder, loc, SmallVector<Value, 2>{condition, ifExpr});
+      auto notCondAndElse =
+          ltl::AndOp::create(builder, loc, SmallVector<Value, 2>{notCond, elseExpr});
+      return ltl::OrOp::create(builder, loc,
+                               SmallVector<Value, 2>{condAndIf, notCondAndElse});
+    }
+
+    return ltl::OrOp::create(builder, loc,
+                             SmallVector<Value, 2>{notCond, ifExpr});
+  }
+
   Value visit(const slang::ast::DisableIffAssertionExpr &expr) {
     auto disableCond = context.convertRvalueExpression(expr.condition);
     disableCond = context.convertToI1(disableCond);
@@ -399,6 +439,9 @@ FailureOr<Value> Context::convertAssertionSystemCallArity1(
                 [&]() -> Value {
                   return ltl::PastOp::create(builder, loc, value, 1).getResult();
                 })
+          // $sampled(x) in assertion context returns the sampled value, which
+          // is effectively the current value since assertions use sampled semantics.
+          .Case("$sampled", [&]() -> Value { return value; })
           .Default([&]() -> Value { return {}; });
   return systemCallRes();
 }
@@ -421,6 +464,34 @@ Value Context::convertAssertionCallExpression(
     if (!boolVal)
       return {};
     result = this->convertAssertionSystemCallArity1(subroutine, loc, boolVal);
+    break;
+
+  case (2):
+  case (3):
+  case (4):
+    // Handle $past(expr, numTicks, gatingExpr, clockingEvent) with up to 4 args.
+    // We support the delay parameter but ignore gating and clocking for now.
+    if (subroutine.name == "$past") {
+      value = this->convertRvalueExpression(*args[0]);
+      boolVal = builder.createOrFold<moore::ToBuiltinBoolOp>(loc, value);
+      if (!boolVal)
+        return {};
+
+      // Get the delay (numTicks) from the second argument.
+      // Default to 1 if empty or not provided.
+      int64_t delay = 1;
+      if (args.size() > 1 &&
+          args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
+        auto cv = evaluateConstant(*args[1]);
+        if (cv.isInteger()) {
+          auto intVal = cv.integer().as<int64_t>();
+          if (intVal)
+            delay = *intVal;
+        }
+      }
+
+      return ltl::PastOp::create(builder, loc, boolVal, delay).getResult();
+    }
     break;
 
   default:
@@ -447,6 +518,11 @@ Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
 Value Context::convertToI1(Value value) {
   if (!value)
     return {};
+
+  // If the value is already an i1 (e.g., from $sampled), return it directly.
+  if (value.getType().isInteger(1))
+    return value;
+
   auto type = dyn_cast<moore::IntType>(value.getType());
   if (!type || type.getBitSize() != 1) {
     mlir::emitError(value.getLoc(), "expected a 1-bit integer");
