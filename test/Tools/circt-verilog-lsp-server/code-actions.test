@@ -11,16 +11,16 @@
   "text":"module test_mod (\n  input  logic clk,\n  output logic [7:0] data_out\n);\n  assign data_out = counter;\nendmodule"
 }}}
 // -----
-// Request code actions for the document (should return refactoring actions)
+// Request code actions for a selection (should return refactoring actions)
 {"jsonrpc":"2.0","id":1,"method":"textDocument/codeAction","params":{
   "textDocument":{"uri":"test:///codeaction.sv"},
-  "range":{"start":{"line":4,"character":0},"end":{"line":4,"character":28}},
+  "range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
   "context":{"diagnostics":[]}
 }}
 // CHECK:       "id": 1,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
-// Should include refactoring action
+// Should include refactoring action for extract to signal
 // CHECK:         "kind": "refactor"
 // CHECK:         "title": "Extract to signal"
 // -----
@@ -37,10 +37,100 @@
 // CHECK:       "id": 2,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
-// Should include quick fix suggestions for undeclared identifier
+// Should include quick fix suggestions for undeclared identifier with proper titles
 // CHECK:         "kind": "quickfix"
-// CHECK:         "title": "Declare as wire"
-// CHECK:         "title": "Declare as logic"
+// CHECK:         "title": "Declare 'counter' as wire"
+// CHECK:         "title": "Declare 'counter' as logic"
+// CHECK:         "title": "Declare 'counter' as reg"
+// -----
+// Test that quick fixes include workspace edits with text changes
+{"jsonrpc":"2.0","id":3,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///codeaction.sv"},
+  "range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
+     "message":"unknown identifier 'my_signal'",
+     "severity":1}
+  ]}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include workspace edits
+// CHECK:         "edit":
+// CHECK:           "changes":
+// CHECK:             "test:///codeaction.sv":
+// CHECK:               "newText": "  wire my_signal;
+// -----
+// Test code action for width mismatch diagnostic
+{"jsonrpc":"2.0","id":4,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///codeaction.sv"},
+  "range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
+     "message":"width mismatch in assignment",
+     "severity":2}
+  ]}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include truncation and extension quick fixes
+// CHECK:         "kind": "quickfix"
+// CHECK:         "title": "Add explicit truncation"
+// CHECK:         "title": "Add explicit zero-extension"
+// -----
+// Test code action for unknown module diagnostic
+{"jsonrpc":"2.0","id":5,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///codeaction.sv"},
+  "range":{"start":{"line":4,"character":0},"end":{"line":4,"character":10}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":4,"character":0},"end":{"line":4,"character":10}},
+     "message":"unknown module 'submodule'",
+     "severity":1}
+  ]}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include create module stub quick fix
+// CHECK:         "kind": "quickfix"
+// CHECK:         "title": "Create module stub for 'submodule'"
+// -----
+// Test code action for missing import (UVM types)
+{"jsonrpc":"2.0","id":6,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///codeaction.sv"},
+  "range":{"start":{"line":0,"character":0},"end":{"line":0,"character":10}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":10}},
+     "message":"unknown type 'uvm_component'",
+     "severity":1}
+  ]}
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include add import quick fix for uvm_pkg
+// CHECK:         "kind": "quickfix"
+// CHECK:         "title": "Add 'import uvm_pkg::*;'"
+// -----
+// Test that logic declaration is marked as preferred
+{"jsonrpc":"2.0","id":7,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///codeaction.sv"},
+  "range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":4,"character":20},"end":{"line":4,"character":27}},
+     "message":"use of undeclared identifier 'counter'",
+     "severity":1}
+  ]}
+}}
+// CHECK:       "id": 7,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// The logic declaration should be marked as preferred
+// CHECK:         "isPreferred": true,
+// CHECK-NEXT:    "kind": "quickfix",
+// CHECK-NEXT:    "title": "Declare 'counter' as logic"
 // -----
 {"jsonrpc":"2.0","id":99,"method":"shutdown"}
 // -----

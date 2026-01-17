@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 51 - January 18, 2026
+
+### DPI/VPI Runtime, Randc Fixes, LSP Code Actions
+
+**Track A: DPI/VPI + UVM Runtime** ⭐
+- Added in-memory HDL path map for `uvm_hdl_*` access (force/release semantics)
+- `uvm_dpi_get_next_arg_c` now parses quoted args and reloads on env changes
+- Regex stubs now support basic `.` and `*` matching; unsupported bracket classes rejected
+- Added VPI stubs: `vpi_handle_by_name`, `vpi_get`, `vpi_get_str`, `vpi_put_value`, `vpi_release_handle`
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`, `test/Conversion/ImportVerilog/uvm_dpi_hdl_access.sv`
+
+**Track B: Randomization / Randc** ⭐
+- Preserved non-rand fields around `randomize()` lowering
+- Randc now cycles deterministically per-field; constrained fields skip override
+- Wide randc uses linear full-cycle fallback beyond 16-bit domains
+- Tests: `test/Conversion/MooreToCore/randc-*.mlir`, `test/Conversion/MooreToCore/randomize-nonrand.mlir`
+
+**Track C: Coverage / Class Features**
+- Covergroups declared inside classes now lower to class properties
+- File: `lib/Conversion/ImportVerilog/Structure.cpp`
+
+**Track D: LSP Code Actions**
+- Added quick fixes: declare wire/logic/reg, missing import, module stub, width fixes
+- Added refactor actions: extract signal, instantiation template
+- Test: `test/Tools/circt-verilog-lsp-server/code-actions.test`
+
+---
+
 ## Iteration 50 - January 17, 2026
 
 ### Interface Deduplication, BMC Repeat Patterns, LSP Signature Help

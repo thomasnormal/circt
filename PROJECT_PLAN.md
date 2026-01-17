@@ -4,39 +4,46 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 50 - Interface Deduplication & LSP Signature Help (January 17, 2026)
+## Current Status: ITERATION 51 - DPI/VPI Stubs, Randc Fixes, LSP Code Actions (January 18, 2026)
 
-**Summary**: Fixed interface deduplication when multiple classes use the same virtual interface type, added BMC LTL repeat patterns, and implemented full LSP signature help support.
+**Summary**: Expanded DPI/VPI runtime stubs with in-memory HDL access, improved randc/randomize lowering, added class covergroup property lowering, and implemented LSP code actions quick fixes.
 
-### Iteration 50 Highlights
+### Iteration 51 Highlights
 
-**Track A: Full UVM AVIP Testing** (IN PROGRESS)
-- 🔄 Testing APB AVIP with virtual interface method fix
-- 🔄 Investigating interface signal resolution issues
-- 🔄 Analyzing `interfaceSignalNames` map behavior
+**Track A: DPI/VPI + UVM Runtime** (IN PROGRESS)
+- ✅ HDL access stubs now backed by an in-memory path map with force/release semantics
+- ✅ VPI stubs added: `vpi_handle_by_name`, `vpi_get`, `vpi_get_str`, `vpi_put_value`, `vpi_release_handle`
+- ✅ `uvm_dpi_get_next_arg_c` now parses quoted args and reloads when env changes
+- ✅ Regex stubs accept basic patterns with `.` and `*` (rejects bracket classes)
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`, `test/Conversion/ImportVerilog/uvm_dpi_hdl_access.sv`
 
-**Track B: Interface Deduplication Fix** ⭐
-- ✅ Fixed duplicate interface declarations (`@my_if`, `@my_if_0`, etc.)
-- ✅ Root cause: `InstanceBodySymbol*` used as cache key caused duplicates
-- ✅ Solution: Added `interfacesByDefinition` map indexed by `DefinitionSymbol*`
-- ✅ Multiple classes using same virtual interface now share one interface declaration
-- Files: `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`, `Structure.cpp`
-- Test: `test/Conversion/ImportVerilog/virtual-interface-multiple-classes.sv`
+**Track B: Randomization + Randc Correctness** ⭐
+- ✅ randc now cycles deterministically per-field; constrained fields skip randc overrides
+- ✅ Non-rand fields preserved around randomize lowering
+- ✅ Wide randc uses a linear full-cycle fallback for >16-bit domains
+- Tests: `test/Conversion/MooreToCore/randc-*.mlir`, `test/Conversion/MooreToCore/randomize-nonrand.mlir`
 
-**Track C: BMC LTL Repeat Patterns** ⭐
-- ✅ Added `LTLGoToRepeatOpConversion` for `a[->n]` goto repetition
-- ✅ Added `LTLNonConsecutiveRepeatOpConversion` for `a[=n]` non-consecutive
-- ✅ Registered in `populateVerifToSMTConversionPatterns`
-- ✅ Documented LTL/SVA pattern support status
-- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
-- Test: `test/Tools/circt-bmc/multi-step-assertions.mlir`
+**Track C: Coverage / Class Features** ⭐
+- ✅ Covergroups declared inside classes now lower to class properties
+- Files: `lib/Conversion/ImportVerilog/Structure.cpp`
 
-**Track D: LSP Signature Help** ⭐
-- ✅ Full `textDocument/signatureHelp` implementation
-- ✅ Trigger characters: `(` and `,`
-- ✅ Active parameter tracking, documentation display
-- Files: `VerilogDocument.h/.cpp`, `VerilogTextFile.h/.cpp`, `VerilogServer.h/.cpp`, `LSPServer.cpp`
-- Test: `test/Tools/circt-verilog-lsp-server/signature-help.test`
+**Track D: LSP Tooling** ⭐
+- ✅ Added code actions: declare wire/logic/reg, module stub, missing import, width fixes
+- ✅ Added refactor actions: extract signal, instantiation template
+- Test: `test/Tools/circt-verilog-lsp-server/code-actions.test`
+
+---
+
+## Major Workstreams (Parity With Xcelium)
+
+| Workstream | Status | Current Limitations | Next Task |
+|-----------|--------|---------------------|-----------|
+| Full SVA support with Z3 (~/z3) | Not integrated | Z3-based checks not wired into CIRCT pipeline | Define Z3 bridge API + proof/CE format |
+| Scalable multi-core (Arcilator/tools) | Not started | Single-threaded scheduling | Identify parallel regions + add job orchestration |
+| LSP + debugging | In progress | No debugging hooks; limited code actions | Add debug adapters + trace stepping |
+| Full 4-state (X/Z) propagation | Not started | 2-state assumptions in lowering/runtime | Design 4-state IR + ops, add X/Z rules |
+| Coverage support | Partial | Runtime sampling/reporting gaps | Finish covergroup runtime + bin hit reporting |
+| DPI/VPI | Partial (stubs) | In-memory only; no simulator wiring | Connect HDL/VPI to simulator data model |
 
 ---
 
@@ -175,43 +182,48 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Track Status & Next Tasks
 
-### Track A: UVM Core Support
-**Status**: P0 bug blocking all UVM
-**Current**: Fixing 'this' pointer scoping (Iteration 47)
+### Track A: UVM Runtime / DPI/VPI
+**Status**: In progress (stubs wired to in-memory HDL map)
+**Current**: VPI and DPI stubs exist; HDL access backed by map
 **Next Tasks**:
-1. Fix 'this' scoping in NewClassExpression
-2. Re-test ~/mbit/*avip testbenches
-3. Address any remaining UVM errors
-4. Add randomization runtime support
+1. Wire HDL/VPI access to simulator signal model
+2. Expand VPI property coverage and vector formatting
+3. Run ~/mbit/*avip regressions after wiring
+4. Keep DPI/UVM unit tests in sync with runtime behavior
 
-### Track B: Formal Verification / BMC
-**Status**: Delay buffers implemented, crash to fix
-**Current**: Fixing clock-not-first crash (Iteration 47)
+### Track B: Randomization + 4-State
+**Status**: Randc improvements landed; 4-state not started
+**Current**: randc cycles per-field, constrained fields skip overrides
 **Next Tasks**:
-1. Fix index bounds error in BMC with non-first clock
-2. Add unbounded delay `##[*]` support
-3. Improve assertion coverage reporting
-4. Add BMC counterexample extraction
+1. Add real constraint solving (hard/soft/inline)
+2. Design 4-state value model and propagation rules
+3. Update MooreRuntime + lowering for X/Z operations
+4. Re-test ~/sv-tests and targeted UVM randomization suites
 
-### Track C: SystemVerilog Assertions
-**Status**: Basic SVA working, bounded sequences needed
-**Current**: SVA bounded sequences (Iteration 47)
+### Track C: SVA/Z3 + Coverage
+**Status**: SVA parsing ok; Z3 and coverage runtime incomplete
+**Current**: Covergroups in classes lowered as properties
 **Next Tasks**:
-1. Add `##[n:m]` bounded delay ranges
-2. Add `##[*]` and `##[+]` unbounded delays
-3. Improve SVA error messages
-4. Add `sequence` declarations
+1. Define Z3 bridge for SVA evaluation (~/z3)
+2. Implement coverage sample/report hooks end-to-end
+3. Add coverage tests in ~/verilator-verification where applicable
+4. Track coverage feature gaps vs Xcelium
 
-### Track D: Tooling & LSP
-**Status**: Full-featured (goto-def, hover, completion, symbols, tokens)
-**Current**: Completion already exists, verifying (Iteration 47)
+### Track D: Tooling, LSP, Debugging
+**Status**: LSP features expanding (code actions landed)
+**Current**: Quick fixes + refactors added
 **Next Tasks**:
-1. Add find-references
-2. Add rename symbol
-3. Add more UVM-specific snippets
-4. Add diagnostics improvements
+1. Add debugger hooks and trace stepping
+2. Improve workspace symbol/indexing coverage
+3. Expand diagnostics and refactor actions
+4. Validate against larger sv-test workspaces
 
 ---
+
+## Coordination & Cadence
+- Keep four agents active in parallel (one per track) to maintain velocity.
+- Add unit tests alongside new features and commit regularly.
+- Merge work trees into `main` frequently to keep agents synchronized.
 
 ## Testing Strategy
 
@@ -224,6 +236,12 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 cd ~/mbit/apb_avip && ~/circt/build/bin/circt-verilog --ir-moore \
   -I ~/uvm-core/src -I src/globals -I src/hvl_top/master \
   ~/uvm-core/src/uvm_pkg.sv src/globals/apb_global_pkg.sv ...
+
+# SV tests (use the existing harness)
+cd ~/sv-tests && ./run.sh --tool=circt-verilog
+
+# Verilator verification suites
+cd ~/verilator-verification && ./run.sh --tool=circt-verilog
 
 # Run unit tests
 ninja -C build check-circt-unit
