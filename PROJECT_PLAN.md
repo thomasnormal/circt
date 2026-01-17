@@ -4,7 +4,49 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 37 - LTL SEQUENCE OPS + LSP FIXES (January 17, 2026)
+## Current Status: 🎉 ITERATION 40 - RANDJOIN BREAK SEMANTICS (January 18, 2026)
+
+**Summary**: `break` in forked randjoin productions exits only that production.
+
+### Iteration 40 Highlights
+
+**Track A: UVM Language Parity (ImportVerilog/Lowering)**
+- ✅ `break` inside forked randjoin branches exits the production branch
+- ✅ Added randjoin+break conversion coverage
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+- Tests: `test/Conversion/ImportVerilog/randsequence.sv`
+
+---
+
+## Previous: ITERATION 39 - RANDJOIN ORDER RANDOMIZATION (January 18, 2026)
+
+**Summary**: randjoin(all) now randomizes production execution order.
+
+### Iteration 39 Highlights
+
+**Track A: UVM Language Parity (ImportVerilog/Lowering)**
+- ✅ randjoin(N>=numProds) uses Fisher-Yates selection to randomize order
+- ✅ joinCount clamped to number of productions before dispatch
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+
+---
+
+## Previous: ITERATION 38 - RANDSEQUENCE BREAK/RETURN (January 18, 2026)
+
+**Summary**: Randsequence productions now support `break` and production-local `return`.
+
+### Iteration 38 Highlights
+
+**Track A: UVM Language Parity (ImportVerilog/Lowering)**
+- ✅ `break` exits the randsequence statement
+- ✅ `return` exits the current production without returning from the function
+- ✅ Added return target stack and per-production exit blocks
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`, `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+- Tests: `test/Conversion/ImportVerilog/randsequence.sv`
+
+---
+
+## Previous: ITERATION 37 - LTL SEQUENCE OPS + LSP FIXES (January 17, 2026)
 
 **Summary**: LTL sequence operators (concat/delay/repeat) for VerifToSMT, LSP test fixes.
 
@@ -115,7 +157,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **Status**: Active | **Priority**: HIGH
 **Next Task**: Refine randsequence randjoin scheduling semantics
 - Define ordering/side-effect semantics for forked productions
-- Add break/return handling in productions (control flow)
+- Clarify break handling in randjoin/forked productions
 - Files: `lib/Conversion/ImportVerilog/Statements.cpp`
 
 ### Track B: Runtime & Array/Queue Semantics
@@ -165,18 +207,19 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Current Limitations (Key Gaps)
 - Randsequence randjoin>1 scheduling semantics (ordering and side-effects)
+- Randsequence break in forked productions exits only that production
 - Comparator-aware sort/rsort for queues/arrays (non-integer elements)
-- SVA sequence operators (concat, delay, repeat) for BMC
+- SVA implication operators and repetition ranges for BMC
 - 4-state X/Z propagation and DPI/VPI (architectural work)
 
 ## Next Feature Targets (Top Impact)
-1. Randsequence randjoin>1 scheduling semantics (ordering, side effects, break/return)
+1. Randsequence randjoin>1 scheduling semantics (ordering, side effects)
 2. Comparator-aware sort/rsort for queues and arrays (non-integer keys)
-3. SVA sequence operators (##, [*], |->)
-4. LSP hover and completion
+3. SVA implication operators and repetition ranges
+4. LSP diagnostics and references
 
 **Immediate Next Task**
-- Define and implement randsequence randjoin scheduling semantics with break/return.
+- Define and implement randsequence randjoin scheduling semantics.
 
 ---
 

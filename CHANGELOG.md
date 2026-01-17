@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 40 - January 18, 2026
+
+### Randjoin Break Semantics
+- `break` in forked randjoin productions exits only that production
+- Added randjoin+break conversion coverage
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+- Test: `test/Conversion/ImportVerilog/randsequence.sv`
+
+---
+
+## Iteration 39 - January 18, 2026
+
+### Randjoin Order Randomization
+- randjoin(N>=numProds) now randomizes production execution order
+- joinCount clamped to number of productions before dispatch
+- break inside forked randjoin productions exits only that production
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+- Tests: `test/Conversion/ImportVerilog/randsequence.sv`
+
+---
+
+## Iteration 38 - January 18, 2026
+
+### Randsequence Break/Return
+- `break` now exits the randsequence statement
+- `return` exits the current production without returning from the function
+- Added return target stack and per-production exit blocks
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`, `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+- Test: `test/Conversion/ImportVerilog/randsequence.sv`
+
+---
+
 ## Iteration 37 - January 17, 2026
 
 ### LTL Sequence Operators + LSP Test Fixes (commit 3f73564be)
