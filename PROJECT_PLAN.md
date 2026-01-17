@@ -4,38 +4,47 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 53 - Simulation Analysis + LSP Document Symbols (January 17, 2026)
+## Current Status: ITERATION 54 - LLHD Fix + Moore Conversion + Binsof + LSP Highlight (January 17, 2026)
+
+**Summary**: Fixed critical LLHD process canonicalization, implemented moore.conversion lowering for ref-to-ref types, added full binsof/intersect support for cross coverage, and implemented LSP document highlights.
+
+### Iteration 54 Highlights
+
+**Track A: LLHD Process Canonicalization** ⭐ CRITICAL FIX!
+- ✅ Fixed trivial `llhd.process` operations not being removed
+- ✅ Added canonicalization pattern to remove dead processes (no drives)
+- ✅ Updated `--ir-hw` help text (it ALREADY includes LLHD lowering)
+- Files: `lib/Dialect/LLHD/IR/LLHDOps.cpp`
+- Test: `processes.mlir` (EmptyWaitProcess)
+
+**Track B: Moore Conversion Lowering** ⭐
+- ✅ Implemented ref-to-ref type conversions in MooreToCore.cpp
+- ✅ Supports array-to-integer, integer-to-integer, float-to-integer refs
+- ✅ Fixes ~5% of test files that were failing with moore.conversion errors
+- Files: `lib/Conversion/MooreToCore/MooreToCore.cpp` (+131 lines)
+- Test: `basic.mlir` (RefToRefConversion tests)
+
+**Track C: Coverage binsof/intersect** ⭐ MAJOR FEATURE!
+- ✅ Extended `CoverCrossDeclOp` with body region for cross bins
+- ✅ Added `CrossBinDeclOp` for bins/illegal_bins/ignore_bins
+- ✅ Added `BinsOfOp` for `binsof(cp) intersect {values}`
+- ✅ Implemented `convertBinsSelectExpr()` in Structure.cpp (+193 lines)
+- ✅ Added MooreToCore lowering patterns
+- Tests: `binsof-intersect.sv`, `binsof-avip-patterns.sv` (new)
+
+**Track D: LSP Document Highlight** ⭐
+- ✅ Implemented `textDocument/documentHighlight` protocol
+- ✅ Definitions as Write (kind 3), references as Read (kind 2)
+- Files: VerilogDocument/Server/TextFile .h/.cpp, LSPServer.cpp
+- Test: `document-highlight.test` (new)
+
+**Summary**: 934 insertions across 20 files
+
+---
+
+## Previous: ITERATION 53 - Simulation Analysis + LSP Document Symbols (January 17, 2026)
 
 **Summary**: Identified CRITICAL blocker for AVIP simulation (llhd.process not lowered), verified soft constraints already implemented, analyzed coverage features, and added LSP document symbols support.
-
-### Iteration 53 Highlights
-
-**Track A: AVIP Simulation Analysis** ⭐ CRITICAL BLOCKER FOUND!
-- ❌ CRITICAL: `llhd.process` not lowered in `--ir-hw` mode
-- ❌ Arc conversion fails: "failed to legalize operation 'llhd.process'"
-- Root cause: `--ir-hw` stops after MooreToCore, doesn't run LlhdToCorePipeline
-- All 1,342 AVIP files parse perfectly but CANNOT SIMULATE
-- Priority fix for Iteration 54: Extend pipeline or add `--ir-core` mode
-- Also found: `moore.conversion` missing lowering pattern (~5% of tests)
-
-**Track B: Soft Constraint Verification** ⭐
-- ✅ Verified soft constraints ALREADY IMPLEMENTED in Structure.cpp
-- ✅ `ConstraintExprOp` has `UnitAttr:$is_soft` attribute
-- ✅ MooreToCore has `SoftConstraintInfo` for randomization
-- ✅ Created comprehensive test: `soft-constraint.sv` (new, 190 lines)
-- Tests: basic, multiple, mixed, conditional, implication, foreach soft constraints
-
-**Track C: Coverage Feature Analysis** ⭐
-- Analyzed 59 covergroups across 21 files in 9 AVIPs
-- Found 220+ cross coverage declarations with binsof/intersect
-- Gaps: binsof/intersect semantics not fully enforced
-- Coverage runtime fully functional for basic to intermediate use
-
-**Track D: LSP Document Symbols** ⭐
-- ✅ Added class support with hierarchical method/property children
-- ✅ Added procedural block support (always_ff, always_comb, initial, etc.)
-- Files: `VerilogDocument.cpp` (+173 lines)
-- Test: `document-symbols.test` (enhanced, +115 lines)
 
 ---
 

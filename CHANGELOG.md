@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 54 - January 17, 2026
+
+### LLHD Process Canonicalization, Moore Conversion Lowering, Binsof/Intersect, LSP Highlights
+
+**Track A: LLHD Process Canonicalization** ⭐ CRITICAL FIX!
+- Fixed trivial `llhd.process` operations not being removed
+- Added canonicalization pattern in `lib/Dialect/LLHD/IR/LLHDOps.cpp`
+- Removes processes with no results and no DriveOp operations (dead code)
+- Updated `--ir-hw` help text to clarify it includes LLHD lowering
+- Test: `test/Dialect/LLHD/Canonicalization/processes.mlir` (EmptyWaitProcess)
+
+**Track B: Moore Conversion Lowering** ⭐
+- Implemented ref-to-ref type conversions in MooreToCore.cpp (+131 lines)
+- Supports: array-to-integer, integer-to-integer, float-to-integer ref conversions
+- Fixes ~5% of test files that were failing with moore.conversion errors
+- Test: `test/Conversion/MooreToCore/basic.mlir` (RefToRefConversion tests)
+
+**Track C: Coverage binsof/intersect** ⭐ MAJOR FEATURE!
+- Extended `CoverCrossDeclOp` with body region for cross bins
+- Added `CrossBinDeclOp` for bins/illegal_bins/ignore_bins in cross coverage
+- Added `BinsOfOp` for `binsof(coverpoint) intersect {values}` expressions
+- Implemented `convertBinsSelectExpr()` in Structure.cpp (+193 lines)
+- Added MooreToCore lowering patterns for CrossBinDeclOp and BinsOfOp
+- Tests: `binsof-intersect.sv`, `binsof-avip-patterns.sv` (new)
+
+**Track D: LSP Document Highlight** ⭐
+- Implemented `textDocument/documentHighlight` protocol
+- Definitions highlighted as Write (kind 3), references as Read (kind 2)
+- Uses existing symbol indexing infrastructure
+- Files: VerilogDocument.h/cpp, VerilogServer.h/cpp, VerilogTextFile.h/cpp, LSPServer.cpp
+- Test: `test/Tools/circt-verilog-lsp-server/document-highlight.test` (new)
+
+**Summary**: 934 insertions across 20 files
+
+---
+
 ## Iteration 53 - January 17, 2026
 
 ### Simulation Analysis, Soft Constraints, Coverage Research, LSP Document Symbols
@@ -102,6 +138,7 @@
 - Covergroups declared inside classes now lower to class properties
 - Queue concatenation now accepts element operands by materializing a single-element queue
 - Queue concatenation runtime now implemented with element size
+- Queue concat handles empty input lists
 - Files: `lib/Conversion/ImportVerilog/Structure.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`,
   `lib/Conversion/MooreToCore/MooreToCore.cpp`, `lib/Runtime/MooreRuntime.cpp`
 - Tests: `test/Conversion/ImportVerilog/queues.sv`, `unittests/Runtime/MooreRuntimeTest.cpp`
