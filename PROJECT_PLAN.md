@@ -4,56 +4,40 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 46 - COVERGROUPS, BMC DELAYS, LSP TOKENS (January 17, 2026)
+## Current Status: 🎉 ITERATION 47 - P0 BUG FIXED! (January 17, 2026)
 
-**Summary**: Covergroup bins support, multi-step BMC delay buffers implementation, LSP semantic token highlighting, and critical UVM bug identification.
+**Summary**: Critical 'this' pointer scoping bug FIXED! UVM testbenches that previously failed now compile. Also fixed BMC clock-not-first crash.
 
-### Iteration 46 Highlights (commit 0dc2dcbc1)
+### Iteration 47 Highlights (commit dd7908c7c)
 
-**Track A: Covergroup Bins Support** ⭐ IEEE 1800-2017 Section 19
-- ✅ Added `CoverageBinDeclOp` to MooreOps.td with `CoverageBinKind` enum
-- ✅ Support for bins, illegal_bins, ignore_bins, default bins
-- ✅ Added `sampling_event` attribute to `CovergroupDeclOp`
-- ✅ Enhanced Structure.cpp to convert coverpoint bins from slang AST
-- Files: `include/circt/Dialect/Moore/MooreOps.td`, `lib/Conversion/ImportVerilog/Structure.cpp`
-- Tests: `test/Conversion/ImportVerilog/covergroup_bins.sv`, `covergroup_uvm_style.sv`
+**Track A: Fix 'this' pointer scoping in constructor args** ⭐⭐⭐ P0 FIXED!
+- ✅ Fixed BLOCKING UVM bug in `Expressions.cpp:4059-4067`
+- ✅ Changed `context.currentThisRef = newObj` to `context.methodReceiverOverride = newObj`
+- ✅ Constructor argument evaluation now correctly uses caller's 'this' scope
+- ✅ Expressions like `m_cb = new({name,"_cb"}, m_cntxt)` now work correctly
+- ✅ ALL UVM heartbeat and similar patterns now compile
+- Test: `test/Conversion/ImportVerilog/constructor-arg-this-scope.sv`
 
-**Track B: Multi-Step BMC Delay Buffers** ⭐ TEMPORAL PROPERTY FIX
-- ✅ Added `DelayInfo` struct to track `ltl.delay` operations
-- ✅ Implemented delay buffer mechanism using `scf.for` iter_args
-- ✅ Properly handle `ltl.delay(signal, N)` across multiple time steps
-- ✅ Buffer initialized to false, shifts each step with new signal value
-- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+167 lines)
-- Tests: `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir`
+**Track B: Fix BMC clock-not-first crash** ⭐
+- ✅ Fixed crash in `VerifToSMT.cpp` when clock is not first non-register argument
+- ✅ Added `isI1Type` check before position-based clock detection
+- ✅ Prevents incorrect identification of non-i1 types as clocks
+- Test: `test/Conversion/VerifToSMT/bmc-clock-not-first.mlir`
 
-**Track C: UVM Real-World Testing** ⚠️ CRITICAL BUG FOUND
-- ✅ Tested 9 AVIP testbenches from ~/mbit/ (APB, AXI4, AHB, UART, SPI, I2S, I3C, JTAG)
-- ⚠️ Found single blocking error: 'this' pointer scoping in constructor args
-- Bug location: `Expressions.cpp:4059-4067` (NewClassExpression)
-- Document: `UVM_REAL_WORLD_TEST_RESULTS.md` (318 lines of analysis)
+**Track C: SVA bounded sequences ##[n:m]** ✓ Already Working
+- ✅ Verified feature already implemented via `ltl.delay` with min/max attributes
+- ✅ Supports: `##[1:3]`, `##[0:2]`, `##[*]`, `##[+]`, chained sequences
+- Test: `test/Conversion/ImportVerilog/sva_bounded_delay.sv`
 
-**Track D: LSP Semantic Token Highlighting**
-- ✅ Added `SyntaxTokenCollector` for lexer-level token extraction
-- ✅ Support for keyword, comment, string, number, operator tokens
-- ✅ Added `isOperatorToken()` helper function
-- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+185 lines)
-- Tests: `test/Tools/circt-verilog-lsp-server/semantic-tokens.test`
+**Track D: LSP completion support** ✓ Already Working
+- ✅ Verified feature already fully implemented
+- ✅ Keywords, snippets, signal names, module names all working
+- Existing test: `test/Tools/circt-verilog-lsp-server/completion.test`
 
 ### Key Gaps Remaining
-1. **'this' pointer scoping bug**: Blocks UVM testbenches (P0 priority)
+1. ~~**'this' pointer scoping bug**~~: ✅ FIXED in Iteration 47
 2. **Randomization**: `randomize()` and constraints not yet at runtime
-3. **Pre-existing BMC crash**: `bmc-clock-not-first.mlir` has index bounds issue
-
----
-
-## Iteration 47 In Progress
-
-| Track | Feature | Agent | Status |
-|-------|---------|-------|--------|
-| A | **FIX: 'this' scoping bug** (P0) | a3d74ff | Analyzing Expressions.cpp |
-| B | FIX: BMC clock-not-first crash | a9e19e1 | Analyzing VerifToSMT.cpp |
-| C | SVA bounded sequences `##[n:m]` | ad91dda | Checking slang support |
-| D | LSP completion enhancement | ad0a87a | Found existing impl! |
+3. ~~**Pre-existing BMC crash**~~: ✅ FIXED in Iteration 47
 
 ---
 
@@ -61,9 +45,9 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ### P0 - BLOCKING UVM (Must fix for any UVM testbench)
 
-| Gap | Location | Impact | Est. Effort |
-|-----|----------|--------|-------------|
-| 'this' pointer scoping in constructor args | `Expressions.cpp:4059-4067` | Blocks ALL UVM | 0.5-1 day |
+| Gap | Location | Impact | Status |
+|-----|----------|--------|--------|
+| ~~'this' pointer scoping in constructor args~~ | `Expressions.cpp:4059-4067` | ~~Blocks ALL UVM~~ | ✅ FIXED |
 
 ### P1 - CRITICAL (Required for full UVM stimulus)
 
@@ -441,6 +425,8 @@ ninja -C build check-circt-unit
 - VPI stubs now return basic handles/strings for smoke testing
 - vpi_handle_by_name seeds the HDL access map
 - vpi_release_handle added for cleanup
+- vpi_put_value updates the HDL access map for matching reads
+- vpi_put_value flags now mark the entry as forced
 - Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`
 
 ### Track B: Class Randomization & Constraints
