@@ -12,6 +12,7 @@
 
 #include "circt/Runtime/MooreRuntime.h"
 #include "gtest/gtest.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -134,7 +135,7 @@ TEST(MooreRuntimeDpiRegexTest, RegexDeglobbed) {
 //===----------------------------------------------------------------------===//
 
 TEST(MooreRuntimeDpiArgsTest, GetNextArgFromEnv) {
-  setenv("CIRCT_UVM_ARGS", "arg1 arg2", 1);
+  setenv("CIRCT_UVM_ARGS", "arg1 \"two words\" 'three words' arg\\\"4", 1);
   unsetenv("UVM_ARGS");
 
   int32_t idx = 0;
@@ -143,12 +144,151 @@ TEST(MooreRuntimeDpiArgsTest, GetNextArgFromEnv) {
   __moore_free(arg1.data);
 
   MooreString arg2 = uvm_dpi_get_next_arg_c(&idx);
-  EXPECT_EQ(std::string(arg2.data, arg2.len), "arg2");
+  EXPECT_EQ(std::string(arg2.data, arg2.len), "two words");
+  __moore_free(arg2.data);
+
+  MooreString arg3 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg3.data, arg3.len), "three words");
+  __moore_free(arg3.data);
+
+  MooreString arg4 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg4.data, arg4.len), "arg\"4");
+  __moore_free(arg4.data);
+
+  MooreString arg5 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(arg5.data, nullptr);
+  EXPECT_EQ(arg5.len, 0);
+}
+
+TEST(MooreRuntimeDpiArgsTest, GetNextArgFromUvmArgsFallback) {
+  unsetenv("CIRCT_UVM_ARGS");
+  setenv("UVM_ARGS", "fallback1 fallback2", 1);
+
+  int32_t idx = 0;
+  MooreString arg1 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg1.data, arg1.len), "fallback1");
+  __moore_free(arg1.data);
+
+  MooreString arg2 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg2.data, arg2.len), "fallback2");
   __moore_free(arg2.data);
 
   MooreString arg3 = uvm_dpi_get_next_arg_c(&idx);
   EXPECT_EQ(arg3.data, nullptr);
   EXPECT_EQ(arg3.len, 0);
+}
+
+TEST(MooreRuntimeDpiArgsTest, GetNextArgClearsOnEmpty) {
+  setenv("CIRCT_UVM_ARGS", "first", 1);
+  unsetenv("UVM_ARGS");
+  int32_t idx = 0;
+  MooreString arg1 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg1.data, arg1.len), "first");
+  __moore_free(arg1.data);
+
+  setenv("CIRCT_UVM_ARGS", "", 1);
+  idx = 0;
+  MooreString arg2 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(arg2.data, nullptr);
+  EXPECT_EQ(arg2.len, 0);
+}
+
+//===----------------------------------------------------------------------===//
+// VPI Stub Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeVpiTest, VpiStubsReturnDefaults) {
+  EXPECT_EQ(vpi_handle_by_name(nullptr, nullptr), nullptr);
+  EXPECT_EQ(vpi_handle_by_name("", nullptr), nullptr);
+  EXPECT_EQ(vpi_get(0, nullptr), 0);
+  EXPECT_EQ(vpi_get_str(0, nullptr), nullptr);
+  vpi_value value = {0, nullptr};
+  EXPECT_EQ(vpi_put_value(nullptr, &value, nullptr, 0), 0);
+}
+
+TEST(MooreRuntimeVpiTest, VpiHandleName) {
+  vpiHandle handle = vpi_handle_by_name("top.sig", nullptr);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(vpi_get(0, handle), 1);
+  EXPECT_EQ(std::string(vpi_get_str(0, handle)), "top.sig");
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiHandleSeedsHdlMap) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_sig", nullptr);
+  ASSERT_NE(handle, nullptr);
+
+  MooreString path = makeMooreString("top.vpi_sig");
+  uvm_hdl_data_t value = 99;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 0);
+
+  vpi_release_handle(nullptr);
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiPutValueUpdatesHdl) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_put", nullptr);
+  ASSERT_NE(handle, nullptr);
+
+  uvm_hdl_data_t newValue = 1234;
+  vpi_value value = {0, &newValue};
+  EXPECT_EQ(vpi_put_value(handle, &value, nullptr, 0), 1);
+
+  MooreString path = makeMooreString("top.vpi_put");
+  uvm_hdl_data_t readValue = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &readValue), 1);
+  EXPECT_EQ(readValue, newValue);
+
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiPutValueForceFlag) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_force", nullptr);
+  ASSERT_NE(handle, nullptr);
+
+  uvm_hdl_data_t newValue = 77;
+  vpi_value value = {0, &newValue};
+  EXPECT_EQ(vpi_put_value(handle, &value, nullptr, 1), 1);
+
+  MooreString path = makeMooreString("top.vpi_force");
+  uvm_hdl_data_t readValue = 0;
+  EXPECT_EQ(uvm_hdl_deposit(&path, 12), 1);
+  EXPECT_EQ(uvm_hdl_read(&path, &readValue), 1);
+  EXPECT_EQ(readValue, newValue);
+
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiPutValueForceRelease) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_force_rel", nullptr);
+  ASSERT_NE(handle, nullptr);
+
+  uvm_hdl_data_t newValue = 88;
+  vpi_value value = {0, &newValue};
+  EXPECT_EQ(vpi_put_value(handle, &value, nullptr, 1), 1);
+
+  MooreString path = makeMooreString("top.vpi_force_rel");
+  uvm_hdl_data_t readValue = 0;
+  EXPECT_EQ(uvm_hdl_release(&path), 1);
+  EXPECT_EQ(uvm_hdl_deposit(&path, 33), 1);
+  EXPECT_EQ(uvm_hdl_read(&path, &readValue), 1);
+  EXPECT_EQ(readValue, 33);
+
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiGetStrInvalidHandle) {
+  EXPECT_EQ(vpi_get_str(0, nullptr), nullptr);
+}
+
+TEST(MooreRuntimeVpiTest, VpiPutValueNullInput) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_null", nullptr);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(vpi_put_value(handle, nullptr, nullptr, 0), 0);
+  vpi_value value = {0, nullptr};
+  EXPECT_EQ(vpi_put_value(handle, &value, nullptr, 0), 0);
+  vpi_release_handle(handle);
 }
 
 //===----------------------------------------------------------------------===//
@@ -168,6 +308,97 @@ TEST(MooreRuntimeRandCTest, RandcCyclesValues) {
   EXPECT_EQ(values[3], 3);
 }
 
+TEST(MooreRuntimeRandCTest, RandcCyclesRepeat) {
+  int64_t bitWidth = 2;
+  int64_t values[4];
+  for (int i = 0; i < 4; ++i)
+    values[i] = __moore_randc_next(values, bitWidth);
+  std::sort(std::begin(values), std::end(values));
+  EXPECT_EQ(values[0], 0);
+  EXPECT_EQ(values[1], 1);
+  EXPECT_EQ(values[2], 2);
+  EXPECT_EQ(values[3], 3);
+}
+
+TEST(MooreRuntimeRandCTest, RandcCyclesFourBit) {
+  int64_t bitWidth = 4;
+  int64_t values[16];
+  for (int i = 0; i < 16; ++i)
+    values[i] = __moore_randc_next(values, bitWidth);
+  std::sort(std::begin(values), std::end(values));
+  for (int i = 0; i < 16; ++i)
+    EXPECT_EQ(values[i], i);
+}
+
+TEST(MooreRuntimeRandCTest, RandcCyclesFiveBit) {
+  int64_t bitWidth = 5;
+  int64_t values[32];
+  for (int i = 0; i < 32; ++i)
+    values[i] = __moore_randc_next(values, bitWidth);
+  std::sort(std::begin(values), std::end(values));
+  for (int i = 0; i < 32; ++i)
+    EXPECT_EQ(values[i], i);
+}
+
+TEST(MooreRuntimeRandCTest, RandcCyclesSixBit) {
+  int64_t bitWidth = 6;
+  int64_t values[64];
+  for (int i = 0; i < 64; ++i)
+    values[i] = __moore_randc_next(values, bitWidth);
+  std::sort(std::begin(values), std::end(values));
+  for (int i = 0; i < 64; ++i)
+    EXPECT_EQ(values[i], i);
+}
+
+TEST(MooreRuntimeRandCTest, RandcWideRangeClamped) {
+  int64_t bitWidth = 20;
+  int64_t value = __moore_randc_next(&bitWidth, bitWidth);
+  uint64_t mask = (1ULL << bitWidth) - 1;
+  EXPECT_EQ(static_cast<uint64_t>(value) & ~mask, 0ULL);
+}
+
+TEST(MooreRuntimeRandCTest, RandcWideRangeLinearStep) {
+  int64_t bitWidth = 20;
+  int64_t value1 = __moore_randc_next(&bitWidth, bitWidth);
+  int64_t value2 = __moore_randc_next(&bitWidth, bitWidth);
+  EXPECT_NE(value1, value2);
+}
+
+TEST(MooreRuntimeRandCTest, RandcIndependentFields) {
+  int64_t bitWidth = 2;
+  int64_t valuesA[4];
+  int64_t valuesB[4];
+  for (int i = 0; i < 4; ++i) {
+    valuesA[i] = __moore_randc_next(valuesA, bitWidth);
+    valuesB[i] = __moore_randc_next(valuesB, bitWidth);
+  }
+  std::sort(std::begin(valuesA), std::end(valuesA));
+  std::sort(std::begin(valuesB), std::end(valuesB));
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(valuesA[i], i);
+    EXPECT_EQ(valuesB[i], i);
+  }
+}
+
+TEST(MooreRuntimeRandCTest, RandcBitWidthChangeResetsCycle) {
+  int64_t key = 0;
+  int64_t bitWidth = 2;
+  int64_t values2[4];
+  for (int i = 0; i < 4; ++i)
+    values2[i] = __moore_randc_next(&key, bitWidth);
+  std::sort(std::begin(values2), std::end(values2));
+  for (int i = 0; i < 4; ++i)
+    EXPECT_EQ(values2[i], i);
+
+  bitWidth = 3;
+  int64_t values3[8];
+  for (int i = 0; i < 8; ++i)
+    values3[i] = __moore_randc_next(&key, bitWidth);
+  std::sort(std::begin(values3), std::end(values3));
+  for (int i = 0; i < 8; ++i)
+    EXPECT_EQ(values3[i], i);
+}
+
 //===----------------------------------------------------------------------===//
 // DPI HDL Access Tests
 //===----------------------------------------------------------------------===//
@@ -182,11 +413,30 @@ TEST(MooreRuntimeDpiHdlTest, HdlDepositAndRead) {
   EXPECT_EQ(value, 123);
 }
 
+TEST(MooreRuntimeDpiHdlTest, HdlCheckPathCreatesEntry) {
+  MooreString path = makeMooreString("top.newsig");
+  EXPECT_EQ(uvm_hdl_check_path(&path), 1);
+
+  uvm_hdl_data_t value = 55;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 0);
+}
+
+TEST(MooreRuntimeDpiHdlTest, HdlCheckPathInvalid) {
+  MooreString empty = {nullptr, 0};
+  EXPECT_EQ(uvm_hdl_check_path(&empty), 0);
+  EXPECT_EQ(uvm_hdl_check_path(nullptr), 0);
+}
+
 TEST(MooreRuntimeDpiHdlTest, HdlForceRelease) {
   MooreString path = makeMooreString("top.force_sig");
   EXPECT_EQ(uvm_hdl_force(&path, 77), 1);
 
   uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 77);
+
+  EXPECT_EQ(uvm_hdl_deposit(&path, 33), 1);
   EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
   EXPECT_EQ(value, 77);
 
@@ -200,6 +450,19 @@ TEST(MooreRuntimeDpiHdlTest, HdlReleaseAndReadUnknown) {
   uvm_hdl_data_t value = 99;
   EXPECT_EQ(uvm_hdl_release_and_read(&path, &value), 1);
   EXPECT_EQ(value, 0);
+}
+
+TEST(MooreRuntimeDpiHdlTest, HdlReleaseAndReadClearsForce) {
+  MooreString path = makeMooreString("top.force_release");
+  EXPECT_EQ(uvm_hdl_force(&path, 11), 1);
+
+  uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_release_and_read(&path, &value), 1);
+  EXPECT_EQ(value, 11);
+
+  EXPECT_EQ(uvm_hdl_deposit(&path, 22), 1);
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 22);
 }
 
 TEST(MooreRuntimeDpiHdlTest, HdlReadInvalidPath) {

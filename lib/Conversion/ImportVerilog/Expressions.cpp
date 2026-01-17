@@ -4055,11 +4055,14 @@ struct RvalueExprVisitor : public ExprVisitor {
         });
         if (failed(context.convertFunction(**subroutine)))
           return {};
-        // Pass the newObj as the implicit this argument of the ctor.
-        auto savedThis = context.currentThisRef;
-        context.currentThisRef = newObj;
-        auto restoreThis = llvm::make_scope_exit(
-            [&] { context.currentThisRef = savedThis; });
+        // Set methodReceiverOverride so visitCall uses newObj as the
+        // constructor's 'this' argument. Do NOT set currentThisRef here -
+        // constructor arguments must be evaluated with the CALLER's 'this'
+        // so property accesses like m_cntxt resolve to the correct type.
+        auto savedOverride = context.methodReceiverOverride;
+        context.methodReceiverOverride = newObj;
+        auto restoreOverride = llvm::make_scope_exit(
+            [&] { context.methodReceiverOverride = savedOverride; });
         // Emit a call to ctor
         if (!visitCall(*callConstructor, *subroutine))
           return {};
