@@ -4,7 +4,49 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 40 - RANDJOIN BREAK SEMANTICS (January 18, 2026)
+## Current Status: 🎉 ITERATION 43 - WORKSPACE SYMBOL INDEXING (January 18, 2026)
+
+**Summary**: Workspace symbol search now scans workspace source files.
+
+### Iteration 43 Highlights
+
+**Track D: Tooling & Debug (LSP)**
+- ✅ `workspace/symbol` scans workspace source files for module/interface/package
+- ✅ Captures ranges for matches with basic regex parsing
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.h`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp`
+
+---
+
+## Previous: ITERATION 42 - LSP WORKSPACE SYMBOLS (January 18, 2026)
+
+**Summary**: Added workspace symbol search for open documents.
+
+### Iteration 42 Highlights
+
+**Track D: Tooling & Debug (LSP)**
+- ✅ `workspace/symbol` implemented for open documents
+- ✅ Added lit coverage for workspace symbol queries
+- Files: `lib/Tools/circt-verilog-lsp-server/LSPServer.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.h`
+- Tests: `test/Tools/circt-verilog-lsp-server/workspace-symbol.test`
+
+---
+
+## Previous: ITERATION 41 - SVA GOTO/NON-CONSEC REPETITION (January 18, 2026)
+
+**Summary**: Added BMC conversions for goto and non-consecutive repetition.
+
+### Iteration 41 Highlights
+
+**Track C: SVA + Z3 Track**
+- ✅ `ltl.goto_repeat` and `ltl.non_consecutive_repeat` lower to SMT booleans
+- ✅ Base=0 returns true; base>0 uses the input at a single step
+- ✅ Added coverage to `ltl-temporal.mlir`
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Tests: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
+
+---
+
+## Previous: ITERATION 40 - RANDJOIN BREAK SEMANTICS (January 18, 2026)
 
 **Summary**: `break` in forked randjoin productions exits only that production.
 
@@ -171,17 +213,16 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **Status**: ✅ LTL + SEQUENCE OPS DONE | **Priority**: HIGH
 **Next Task**: SVA implication operators and repetition ranges
 - Need `|->` (overlapping implication) and `|=>` (non-overlapping)
-- Need range repetition `[*m:n]` and goto repetition `[->n]`
+- Need range repetition `[*m:n]` beyond single-step semantics
 - Consider `throughout` and `within` operators
 - Test with: `LD_LIBRARY_PATH=~/z3-install/lib64 ./build/bin/circt-bmc`
 - Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Track D: Tooling & Debug (LSP)
-**Status**: ✅ Hover/Completion WORKING | **Priority**: MEDIUM
-**Next Task**: LSP diagnostics and references
-- Add `textDocument/publishDiagnostics` for error reporting
-- Add `textDocument/references` for find all references
-- Consider `textDocument/documentSymbol` for outline view
+**Status**: ✅ Workspace Symbols (workspace files) | **Priority**: MEDIUM
+**Next Task**: Improve workspace symbol accuracy
+- Replace regex scanning with parsed symbol extraction
+- Expand `textDocument/documentSymbol` coverage in tests
 - Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/`
 
 **Testing Cadence**
@@ -194,7 +235,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 |---------|--------|----------------|
 | **Full SVA + Z3** | ✅ LTL + SEQ OPS | Add implication (|->, |=>) and range repetition |
 | **Multi-core Arcilator** | MISSING | Architecture plan + task decomposition for parallel simulation |
-| **LSP + Debugging** | ✅ Hover/Completion | Add diagnostics, references |
+| **LSP + Debugging** | ✅ Workspace Symbols (open docs) | Index workspace-wide symbols |
 | **Full 4-state (X/Z)** | MISSING | Type system + dataflow propagation plan |
 | **Coverage** | PARTIAL | Cross coverage + covergroup sampling expressions |
 | **DPI/VPI** | STUBS | FFI bridge + handle marshaling |
@@ -209,13 +250,14 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 - Randsequence randjoin>1 scheduling semantics (ordering and side-effects)
 - Randsequence break in forked productions exits only that production
 - Comparator-aware sort/rsort for queues/arrays (non-integer elements)
-- SVA implication operators and repetition ranges for BMC
+- SVA implication operators and repetition ranges beyond single-step semantics
+- Workspace symbol search limited to open documents
 - 4-state X/Z propagation and DPI/VPI (architectural work)
 
 ## Next Feature Targets (Top Impact)
 1. Randsequence randjoin>1 scheduling semantics (ordering, side effects)
 2. Comparator-aware sort/rsort for queues and arrays (non-integer keys)
-3. SVA implication operators and repetition ranges
+3. SVA implication operators and repetition ranges beyond single-step semantics
 4. LSP diagnostics and references
 
 **Immediate Next Task**
