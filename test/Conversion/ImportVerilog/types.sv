@@ -196,10 +196,14 @@ module DynamicArrayElementSelect;
     // CHECK: moore.dyn_extract [[ARR2_READ]] from [[CONST]] : open_uarray<l8>, i32 -> l8
     val = arr2[0];
 
+    // Note: $ indexing is only valid for queues, not dynamic arrays.
+    // See queues.sv for $ index testing with queues.
+
     // Test lvalue element select into dynamic array
     // CHECK: [[IDX_READ2:%.+]] = moore.read %idx
     // CHECK: moore.dyn_extract_ref [[ARR]] from [[IDX_READ2]] : <open_uarray<i1>>, i32 -> <i1>
     arr[idx] = b;
+
   end
 endmodule
 
