@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 49 - January 17, 2026
+
+### Virtual Interface Method Calls Fixed! ⭐⭐⭐
+
+**Track A: Virtual Interface Method Call Fix** ⭐⭐⭐ MAJOR FIX!
+- Fixed the last remaining UVM APB AVIP blocker
+- Issue: `vif.method()` calls from class methods failed with "interface method call requires interface instance"
+- Root cause: slang's `CallExpression::thisClass()` doesn't populate the virtual interface expression for interface method calls (unlike class method calls)
+- Solution: Extract the vi expression from syntax using `Expression::bind()` when `thisClass()` is not available
+  - Check if call syntax is `InvocationExpressionSyntax`
+  - Extract left-hand side (receiver) for both `MemberAccessExpressionSyntax` and `ScopedNameSyntax` patterns
+  - Use slang's `Expression::bind()` to bind the syntax and get the expression
+  - If expression is a valid virtual interface type, convert it to interface instance value
+- APB AVIP now compiles with ZERO "interface method call" errors!
+- Files: `lib/Conversion/ImportVerilog/Expressions.cpp` (+35 lines)
+- Test: `test/Conversion/ImportVerilog/virtual-interface-methods.sv`
+
+**Track B: Coverage Runtime Documentation**
+- Verified coverage infrastructure already comprehensive with:
+  - `__moore_covergroup_create`
+  - `__moore_coverpoint_init`
+  - `__moore_coverpoint_sample`
+  - `__moore_coverage_report` (text and JSON)
+- Created test documenting runtime functions and reporting
+- Fixed syntax in `test/Conversion/MooreToCore/coverage-ops.mlir`
+- Test: `test/Conversion/ImportVerilog/coverage-runtime.sv`
+
+**Track C: SVA Sequence Declarations**
+- Verified already supported via slang's AssertionInstanceExpression expansion
+- Slang expands named sequences inline before CIRCT sees them
+- Created comprehensive test with sequences, properties, and operators:
+  - Bounded delays `##[n:m]`
+  - Repetition `[*n]`, `[*n:m]`
+  - Sequence operators: and, or, intersect, throughout, within, first_match
+  - Parameterized sequences with arguments
+- Test: `test/Conversion/ImportVerilog/sva-sequence-decl.sv`
+
+**Track D: LSP Rename Symbol Support**
+- Verified already fully implemented with `prepareRename()` and `renameSymbol()` methods
+- Comprehensive test coverage already exists
+- No changes needed
+
+---
+
 ## Iteration 48 - January 17, 2026
 
 ### Cross Coverage, LSP Find-References, Randomization Verification
