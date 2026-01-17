@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 55 - January 17, 2026
+
+### Constraint Iteration Limits, Coverage Auto-Bins, Simulation Analysis
+
+**Track A: AVIP Simulation Analysis** ⭐ STATUS UPDATE
+- Pure RTL modules work with arcilator (combinational, sequential with sync reset)
+- AVIP BFM patterns with virtual interfaces BLOCKED: arcilator rejects llhd.sig/llhd.prb
+- Two paths forward identified:
+  1. Extract pure RTL for arcilator simulation
+  2. Need LLHD-aware simulator or different lowering for full UVM testbench support
+
+**Track B: Constraint Iteration Limits** ⭐ RELIABILITY IMPROVEMENT
+- Added `MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT` (10,000 attempts)
+- Added `MooreConstraintResult` enum: SUCCESS, FALLBACK, ITERATION_LIMIT
+- Added `MooreConstraintStats` struct for tracking solve attempts/success/failures
+- New functions: `__moore_constraint_get/reset_stats`, `set/get_iteration_limit`
+- Added `__moore_randomize_with_constraint` with custom predicate support
+- Warning output when constraints cannot be satisfied within limit
+- Files: `MooreRuntime.h` (+110 lines), `MooreRuntime.cpp` (+210 lines)
+- Tests: `MooreRuntimeTest.cpp` (+342 lines)
+
+**Track C: Coverage Auto-Bin Patterns** ⭐
+- Added `is_array` and `num_bins` attributes to `CoverageBinDeclOp`
+- Added `auto_bin_max` attribute to `CoverpointDeclOp`
+- Supports: `bins x[] = {values}`, `bins x[N] = {range}`, `option.auto_bin_max`
+- Files: `MooreOps.td` (+29 lines), `Structure.cpp` (+42 lines)
+- Test: `covergroup_auto_bins.sv` (new, 100 lines)
+
+**Track D: LSP Hover** ⭐
+- Verified hover already fully implemented (variables, ports, functions, classes)
+- Tests exist and pass
+
+**Summary**: 985 insertions across 10 files
+
+---
+
 ## Iteration 54 - January 17, 2026
 
 ### LLHD Process Canonicalization, Moore Conversion Lowering, Binsof/Intersect, LSP Highlights
@@ -33,6 +69,23 @@
 - Test: `test/Tools/circt-verilog-lsp-server/document-highlight.test` (new)
 
 **Summary**: 934 insertions across 20 files
+
+---
+
+## Iteration 54 - January 19, 2026
+
+### Concat Ref Lowering Fixes
+
+**Track A: Streaming Assignment Lowering**
+- Lowered `moore.extract_ref` on `moore.concat_ref` to underlying refs
+- Added MooreToCore fallback to drop dead `moore.concat_ref` ops
+- Files: `lib/Dialect/Moore/Transforms/LowerConcatRef.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- Test: `test/Dialect/Moore/lower-concatref.mlir`
+
+**Track A: Real Conversion Lowering**
+- Added MooreToCore lowering for `moore.convert_real` (f32/f64 trunc/extend)
+- Files: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- Test: `test/Conversion/MooreToCore/basic.mlir`
 
 ---
 
