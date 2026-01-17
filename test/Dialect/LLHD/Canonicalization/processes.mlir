@@ -11,6 +11,18 @@ hw.module @EmptyProcess() {
   // CHECK-NEXT: hw.output
 }
 
+// CHECK-LABEL: hw.module @EmptyWaitProcess(
+hw.module @EmptyWaitProcess() {
+  // Trivial processes that just wait forever without doing anything should be removed.
+  // This is necessary for arcilator simulation support.
+  llhd.process {
+    cf.br ^bb1
+  ^bb1:
+    llhd.wait ^bb1
+  }
+  // CHECK-NEXT: hw.output
+}
+
 // CHECK-LABEL: hw.module @DontRemoveEmptyProcessWithResults(
 hw.module @DontRemoveEmptyProcessWithResults(in %a: i42, out z: i42) {
   // CHECK-NEXT: llhd.process -> i42 {

@@ -655,6 +655,22 @@ DriveOp::ensureOnlySafeAccesses(const MemorySlot &slot,
 //===----------------------------------------------------------------------===//
 
 LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
+  // Remove processes that have no results and no DriveOp operations. Such
+  // processes are dead code (e.g., empty wait loops) and can be safely removed.
+  // This is necessary for arcilator simulation support since llhd.process ops
+  // cannot be directly lowered to Arc.
+  if (op.getNumResults() == 0) {
+    bool hasDrive = false;
+    op.walk([&](DriveOp) {
+      hasDrive = true;
+      return WalkResult::interrupt();
+    });
+    if (!hasDrive) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+  }
+
   if (!op.getBody().hasOneBlock())
     return failure();
 
@@ -662,11 +678,6 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
   auto haltOp = dyn_cast<HaltOp>(block.getTerminator());
   if (!haltOp)
     return failure();
-
-  if (op.getNumResults() == 0 && block.getOperations().size() == 1) {
-    rewriter.eraseOp(op);
-    return success();
-  }
 
   // Only constants and halt terminator are expected in a single block.
   if (!llvm::all_of(block.without_terminator(), [](auto &bodyOp) {

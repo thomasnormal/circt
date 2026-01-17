@@ -1475,3 +1475,26 @@ func.func @TimeConversion(%arg0: !moore.l64, %arg1: !moore.time) -> (!moore.time
   // CHECK-NEXT: return [[TMP0]], [[TMP1]]
   return %0, %1 : !moore.time, !moore.l64
 }
+
+// CHECK-LABEL: func.func @RefToRefConversion
+// CHECK-SAME: (%[[ARG0:.*]]: !llhd.ref<!hw.array<16xi1>>)
+func.func @RefToRefConversion(%arg0: !moore.ref<uarray<16 x l1>>) -> !moore.ref<l16> {
+  // CHECK: [[PROBE:%.+]] = llhd.prb %[[ARG0]] : !hw.array<16xi1>
+  // CHECK: [[BITCAST:%.+]] = hw.bitcast [[PROBE]] : (!hw.array<16xi1>) -> i16
+  // CHECK: [[SIG:%.+]] = llhd.sig [[BITCAST]] : i16
+  // CHECK: return [[SIG]] : !llhd.ref<i16>
+  %0 = moore.conversion %arg0 : !moore.ref<uarray<16 x l1>> -> !moore.ref<l16>
+  return %0 : !moore.ref<l16>
+}
+
+// CHECK-LABEL: func.func @RefToRefConversionWidthChange
+// CHECK-SAME: (%[[ARG0:.*]]: !llhd.ref<i8>)
+func.func @RefToRefConversionWidthChange(%arg0: !moore.ref<i8>) -> !moore.ref<i16> {
+  // CHECK: [[PROBE:%.+]] = llhd.prb %[[ARG0]] : i8
+  // CHECK: [[ZERO:%.+]] = hw.constant 0 : i8
+  // CHECK: [[CONCAT:%.+]] = comb.concat [[ZERO]], [[PROBE]] : i8, i8
+  // CHECK: [[SIG:%.+]] = llhd.sig [[CONCAT]] : i16
+  // CHECK: return [[SIG]] : !llhd.ref<i16>
+  %0 = moore.conversion %arg0 : !moore.ref<i8> -> !moore.ref<i16>
+  return %0 : !moore.ref<i16>
+}

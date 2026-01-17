@@ -116,6 +116,26 @@ void circt::lsp::VerilogServer::findReferencesOf(
     fileIt->second->findReferencesOf(uri, pos, includeDeclaration, references);
 }
 
+void circt::lsp::VerilogServer::getDocumentHighlights(
+    const URIForFile &uri, const Position &pos,
+    std::vector<DocumentHighlight> &highlights) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end()) {
+    // Get highlights from VerilogDocument and convert to VerilogServer type
+    std::vector<VerilogDocument::DocumentHighlight> docHighlights;
+    fileIt->second->getDocumentHighlights(uri, pos, docHighlights);
+
+    // Convert from VerilogDocument::DocumentHighlight to VerilogServer::DocumentHighlight
+    for (const auto &dh : docHighlights) {
+      DocumentHighlight highlight;
+      highlight.range = dh.range;
+      highlight.kind = static_cast<DocumentHighlightKind>(
+          static_cast<int>(dh.kind));
+      highlights.push_back(highlight);
+    }
+  }
+}
+
 std::optional<llvm::lsp::Hover>
 circt::lsp::VerilogServer::getHover(const URIForFile &uri, const Position &pos) {
   auto fileIt = impl->files.find(uri.file());

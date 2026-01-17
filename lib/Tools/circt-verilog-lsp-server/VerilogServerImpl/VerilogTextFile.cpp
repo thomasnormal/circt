@@ -157,6 +157,13 @@ void VerilogTextFile::findReferencesOf(
   doc->findReferencesOf(uri, pos, includeDeclaration, references);
 }
 
+void VerilogTextFile::getDocumentHighlights(
+    const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos,
+    std::vector<VerilogDocument::DocumentHighlight> &highlights) {
+  auto doc = getDocument();
+  doc->getDocumentHighlights(uri, pos, highlights);
+}
+
 std::optional<llvm::lsp::Hover>
 VerilogTextFile::getHover(const llvm::lsp::URIForFile &uri,
                           llvm::lsp::Position pos) {
