@@ -4,41 +4,44 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 54 - LLHD Fix + Moore Conversion + Binsof + LSP Highlight (January 17, 2026)
+## Current Status: ITERATION 55 - Constraint Limits + Coverage Auto-Bins + Simulation (January 17, 2026)
 
-**Summary**: Fixed critical LLHD process canonicalization, implemented moore.conversion lowering for ref-to-ref types, added full binsof/intersect support for cross coverage, and implemented LSP document highlights.
+**Summary**: Added constraint solving iteration limits with fallback, implemented coverage auto-bin patterns, clarified simulation status (pure RTL works, UVM testbenches need alternative approach).
 
-### Iteration 54 Highlights
+### Iteration 55 Highlights
 
-**Track A: LLHD Process Canonicalization** ⭐ CRITICAL FIX!
-- ✅ Fixed trivial `llhd.process` operations not being removed
-- ✅ Added canonicalization pattern to remove dead processes (no drives)
-- ✅ Updated `--ir-hw` help text (it ALREADY includes LLHD lowering)
-- Files: `lib/Dialect/LLHD/IR/LLHDOps.cpp`
-- Test: `processes.mlir` (EmptyWaitProcess)
+**Track A: AVIP Simulation Status** ⭐ IMPORTANT!
+- ✅ Pure RTL modules work with arcilator (combinational, sequential with sync reset)
+- ❌ AVIP BFM patterns BLOCKED: arcilator rejects llhd.sig/llhd.prb operations
+- Two paths forward:
+  1. Extract pure RTL for arcilator simulation (works today)
+  2. Need LLHD-aware simulator or different lowering for full UVM testbench support
 
-**Track B: Moore Conversion Lowering** ⭐
-- ✅ Implemented ref-to-ref type conversions in MooreToCore.cpp
-- ✅ Supports array-to-integer, integer-to-integer, float-to-integer refs
-- ✅ Fixes ~5% of test files that were failing with moore.conversion errors
-- Files: `lib/Conversion/MooreToCore/MooreToCore.cpp` (+131 lines)
-- Test: `basic.mlir` (RefToRefConversion tests)
+**Track B: Constraint Iteration Limits** ⭐
+- ✅ Added `MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT` (10,000 attempts)
+- ✅ Added `MooreConstraintResult` enum and `MooreConstraintStats` struct
+- ✅ Added stats tracking, iteration limit control, constrained randomize functions
+- ✅ Warning output when constraints cannot be satisfied
+- Files: `MooreRuntime.h` (+110), `MooreRuntime.cpp` (+210)
+- Tests: `MooreRuntimeTest.cpp` (+342 lines)
 
-**Track C: Coverage binsof/intersect** ⭐ MAJOR FEATURE!
-- ✅ Extended `CoverCrossDeclOp` with body region for cross bins
-- ✅ Added `CrossBinDeclOp` for bins/illegal_bins/ignore_bins
-- ✅ Added `BinsOfOp` for `binsof(cp) intersect {values}`
-- ✅ Implemented `convertBinsSelectExpr()` in Structure.cpp (+193 lines)
-- ✅ Added MooreToCore lowering patterns
-- Tests: `binsof-intersect.sv`, `binsof-avip-patterns.sv` (new)
+**Track C: Coverage Auto-Bin Patterns** ⭐
+- ✅ Added `is_array` and `num_bins` to `CoverageBinDeclOp`
+- ✅ Added `auto_bin_max` to `CoverpointDeclOp`
+- ✅ Supports: `bins x[]`, `bins x[N]`, `option.auto_bin_max`
+- Test: `covergroup_auto_bins.sv` (new)
 
-**Track D: LSP Document Highlight** ⭐
-- ✅ Implemented `textDocument/documentHighlight` protocol
-- ✅ Definitions as Write (kind 3), references as Read (kind 2)
-- Files: VerilogDocument/Server/TextFile .h/.cpp, LSPServer.cpp
-- Test: `document-highlight.test` (new)
+**Track D: LSP Hover** ⭐
+- ✅ Verified hover already fully implemented
+- Supports: variables, ports, parameters, modules, functions, classes
 
-**Summary**: 934 insertions across 20 files
+**Summary**: 985 insertions across 10 files
+
+---
+
+## Previous: ITERATION 54 - LLHD Fix + Moore Conversion + Binsof (January 17, 2026)
+
+**Summary**: Fixed critical LLHD process canonicalization, implemented moore.conversion lowering for ref-to-ref types, added full binsof/intersect support for cross coverage, and implemented LSP document highlights. 934 insertions.
 
 ---
 
