@@ -4,7 +4,37 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 47 - P0 BUG FIXED! (January 17, 2026)
+## Current Status: ITERATION 48 - Cross Coverage & LSP Improvements (January 17, 2026)
+
+**Summary**: Added cross coverage support, improved LSP find-references, verified runtime randomization infrastructure. UVM APB AVIP now down to just 3 errors.
+
+### Iteration 48 Highlights (commit 64726a33b)
+
+**Track A: Re-test UVM after P0 fix** ✓
+- ✅ APB AVIP now down to only 3 errors (from many more before 'this' fix)
+- ✅ Remaining errors: virtual interface method calls
+- ✅ UVM core library compiles with minimal errors
+
+**Track B: Runtime Randomization Verification** ✓
+- ✅ Verified infrastructure already fully implemented
+- ✅ MooreToCore.cpp has RandomizeOpConversion (lines 8734-9129)
+- ✅ MooreRuntime has __moore_randomize_basic, __moore_randc_next, etc.
+- Test: `test/Conversion/ImportVerilog/runtime-randomization.sv`
+
+**Track C: Cross Coverage Support** ⭐
+- ✅ Fixed coverpoint symbol lookup bug (use original slang name as key)
+- ✅ Added automatic name generation for unnamed cross coverage
+- ✅ CoverCrossDeclOp now correctly references coverpoints
+- Test: `test/Conversion/ImportVerilog/covergroup_cross.sv`
+
+**Track D: LSP Find-References Enhancement** ✓
+- ✅ Added `includeDeclaration` parameter support through call chain
+- ✅ Modified LSPServer.cpp, VerilogServer.h/.cpp, VerilogTextFile.h/.cpp, VerilogDocument.h/.cpp
+- ✅ Find-references now properly includes or excludes declaration
+
+---
+
+## Previous: ITERATION 47 - P0 BUG FIXED! (January 17, 2026)
 
 **Summary**: Critical 'this' pointer scoping bug FIXED! UVM testbenches that previously failed now compile. Also fixed BMC clock-not-first crash.
 
