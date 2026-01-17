@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 42 - January 18, 2026
+
+### LSP Workspace Symbols
+- Added `workspace/symbol` support for open documents
+- Added workspace symbol lit test coverage
+- Files: `lib/Tools/circt-verilog-lsp-server/LSPServer.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.h`
+- Test: `test/Tools/circt-verilog-lsp-server/workspace-symbol.test`
+
+---
+
+## Iteration 41 - January 18, 2026
+
+### SVA Goto/Non-Consecutive Repetition
+- Added BMC conversions for `ltl.goto_repeat` and `ltl.non_consecutive_repeat`
+- Base=0 returns true; base>0 uses input at a single step
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Tests: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
+
+---
+
 ## Iteration 40 - January 18, 2026
 
 ### Randjoin Break Semantics
