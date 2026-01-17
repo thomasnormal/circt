@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 48 - January 17, 2026
+
+### Cross Coverage, LSP Find-References, Randomization Verification
+
+**Track A: Re-test UVM after P0 fix**
+- Re-tested APB AVIP with the 'this' scoping fix from Iteration 47
+- Down to only 3 errors (from many more before the fix)
+- Remaining errors: virtual interface method calls in out-of-line task definitions
+- UVM core library now compiles with minimal errors
+
+**Track B: Runtime Randomization Verification**
+- Verified that runtime randomization infrastructure already fully implemented
+- MooreToCore.cpp `RandomizeOpConversion` (lines 8734-9129) handles all randomization
+- MooreRuntime functions: `__moore_randomize_basic`, `__moore_randc_next`, `__moore_randomize_with_range`
+- Tests: `test/Conversion/ImportVerilog/runtime-randomization.sv` (new)
+
+**Track C: Cross Coverage Support** ⭐
+- Fixed coverpoint symbol lookup bug (use original slang name as key)
+- Added automatic name generation for unnamed cross coverage (e.g., "addr_x_cmd" from target names)
+- CoverCrossDeclOp now correctly references coverpoints
+- Files: `lib/Conversion/ImportVerilog/Structure.cpp` (+24 lines)
+- Tests: `test/Conversion/ImportVerilog/covergroup_cross.sv` (new)
+
+**Track D: LSP Find-References Enhancement**
+- Added `includeDeclaration` parameter support through the call chain
+- Modified: LSPServer.cpp, VerilogServer.h/.cpp, VerilogTextFile.h/.cpp, VerilogDocument.h/.cpp
+- Find-references now properly includes or excludes the declaration per LSP protocol
+- Files: `lib/Tools/circt-verilog-lsp-server/` (+42 lines across 8 files)
+
+---
+
 ## Iteration 47 - January 17, 2026
 
 ### Critical P0 Bug Fix: 'this' Pointer Scoping
