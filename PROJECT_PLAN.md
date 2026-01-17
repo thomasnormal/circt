@@ -4,7 +4,43 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 49 - Virtual Interface Methods Fixed! (January 17, 2026)
+## Current Status: ITERATION 50 - Interface Deduplication & LSP Signature Help (January 17, 2026)
+
+**Summary**: Fixed interface deduplication when multiple classes use the same virtual interface type, added BMC LTL repeat patterns, and implemented full LSP signature help support.
+
+### Iteration 50 Highlights
+
+**Track A: Full UVM AVIP Testing** (IN PROGRESS)
+- 🔄 Testing APB AVIP with virtual interface method fix
+- 🔄 Investigating interface signal resolution issues
+- 🔄 Analyzing `interfaceSignalNames` map behavior
+
+**Track B: Interface Deduplication Fix** ⭐
+- ✅ Fixed duplicate interface declarations (`@my_if`, `@my_if_0`, etc.)
+- ✅ Root cause: `InstanceBodySymbol*` used as cache key caused duplicates
+- ✅ Solution: Added `interfacesByDefinition` map indexed by `DefinitionSymbol*`
+- ✅ Multiple classes using same virtual interface now share one interface declaration
+- Files: `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`, `Structure.cpp`
+- Test: `test/Conversion/ImportVerilog/virtual-interface-multiple-classes.sv`
+
+**Track C: BMC LTL Repeat Patterns** ⭐
+- ✅ Added `LTLGoToRepeatOpConversion` for `a[->n]` goto repetition
+- ✅ Added `LTLNonConsecutiveRepeatOpConversion` for `a[=n]` non-consecutive
+- ✅ Registered in `populateVerifToSMTConversionPatterns`
+- ✅ Documented LTL/SVA pattern support status
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Test: `test/Tools/circt-bmc/multi-step-assertions.mlir`
+
+**Track D: LSP Signature Help** ⭐
+- ✅ Full `textDocument/signatureHelp` implementation
+- ✅ Trigger characters: `(` and `,`
+- ✅ Active parameter tracking, documentation display
+- Files: `VerilogDocument.h/.cpp`, `VerilogTextFile.h/.cpp`, `VerilogServer.h/.cpp`, `LSPServer.cpp`
+- Test: `test/Tools/circt-verilog-lsp-server/signature-help.test`
+
+---
+
+## Previous: ITERATION 49 - Virtual Interface Methods Fixed! (January 17, 2026)
 
 **Summary**: Fixed the last remaining UVM APB AVIP blocker! Virtual interface method calls like `vif.method()` from class methods now work correctly. APB AVIP compiles with ZERO "interface method call" errors.
 

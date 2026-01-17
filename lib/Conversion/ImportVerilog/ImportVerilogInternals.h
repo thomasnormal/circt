@@ -327,10 +327,17 @@ struct Context {
   /// class template (e.g., uvm_pool_18 -> uvm_pool).
   DenseMap<mlir::StringAttr, mlir::StringAttr> classSpecializationToGeneric;
 
-  /// Interfaces that have already been converted.
+  /// Interfaces that have already been converted, indexed by instance body.
+  /// Multiple instance bodies may map to the same InterfaceLowering if they
+  /// share the same DefinitionSymbol.
   DenseMap<const slang::ast::InstanceBodySymbol *,
            std::unique_ptr<InterfaceLowering>>
       interfaces;
+  /// Interfaces indexed by their definition symbol. This is used to deduplicate
+  /// interface declarations when multiple virtual interface variables reference
+  /// the same interface definition.
+  DenseMap<const slang::ast::DefinitionSymbol *, InterfaceLowering *>
+      interfacesByDefinition;
   /// A list of interfaces for which the header has been created, but the body
   /// has not been converted yet.
   std::queue<const slang::ast::InstanceBodySymbol *> interfaceWorklist;

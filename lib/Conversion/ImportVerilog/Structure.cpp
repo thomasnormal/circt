@@ -1177,12 +1177,33 @@ Context::convertPackage(const slang::ast::PackageSymbol &package) {
 
 /// Convert an interface declaration header. Creates the moore.interface op
 /// and schedules the body for conversion.
+///
+/// This function deduplicates interface declarations: if an interface with the
+/// same DefinitionSymbol has already been created (e.g., from a different
+/// virtual interface variable referencing the same interface type), we reuse
+/// that existing declaration rather than creating a duplicate.
 InterfaceLowering *
 Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
+  // Check if we've already processed this specific instance body.
   auto &slot = interfaces[iface];
   if (slot)
     return slot.get();
 
+  // Check if an interface with the same definition has already been created.
+  // This handles the case where multiple virtual interface variables reference
+  // the same interface type, which would otherwise create duplicate interface
+  // declarations with mangled names (e.g., @my_if, @my_if_0, @my_if_1).
+  const auto &definition = iface->getDefinition();
+  auto defIt = interfacesByDefinition.find(&definition);
+  if (defIt != interfacesByDefinition.end()) {
+    // Reuse the existing interface lowering. We don't need to create a new
+    // unique_ptr; instead, we create a new one that points to the same op.
+    slot = std::make_unique<InterfaceLowering>();
+    slot->op = defIt->second->op;
+    return slot.get();
+  }
+
+  // Create a new interface lowering.
   slot = std::make_unique<InterfaceLowering>();
   auto &lowering = *slot;
 
@@ -1198,13 +1219,16 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
 
   // Create the interface op
   auto ifaceOp = moore::InterfaceDeclOp::create(
-      builder, loc, iface->getDefinition().name);
+      builder, loc, definition.name);
   orderedRootOps.insert(it, {iface->location, ifaceOp});
 
   // Create the body block for the interface
   ifaceOp.getBody().emplaceBlock();
 
   lowering.op = ifaceOp;
+
+  // Register in the definition-based map for deduplication.
+  interfacesByDefinition[&definition] = &lowering;
 
   // Add the interface to the symbol table
   symbolTable.insert(ifaceOp);
@@ -1750,9 +1774,11 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // Set up the interface argument for signal access within the method body.
   auto prevInterfaceArg = currentInterfaceArg;
   auto prevInterfaceBody = currentInterfaceBody;
+  auto prevInterfaceSignalNames = std::move(interfaceSignalNames);
   auto interfaceArgGuard = llvm::make_scope_exit([&] {
     currentInterfaceArg = prevInterfaceArg;
     currentInterfaceBody = prevInterfaceBody;
+    interfaceSignalNames = std::move(prevInterfaceSignalNames);
   });
 
   if (isInterfaceMethod) {
@@ -1764,30 +1790,31 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
     currentInterfaceArg = ifaceArg;
     currentInterfaceBody = ifaceBody;
 
-    // Build the signal name map for this interface (if not already built)
-    // This handles the case where convertFunction is called outside of
-    // convertInterfaceBody (e.g., for forward references)
-    if (interfaceSignalNames.empty()) {
-      for (auto *symbol : ifaceBody->getPortList()) {
-        if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+    // Build the signal name map for this interface.
+    // We always clear and rebuild the map because we may be processing a
+    // different interface than before (e.g., when converting virtual interface
+    // method calls from within a class, multiple interfaces may have methods
+    // called in sequence).
+    interfaceSignalNames.clear();
+    for (auto *symbol : ifaceBody->getPortList()) {
+      if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+        if (port->internalSymbol)
+          interfaceSignalNames[port->internalSymbol] = port->name;
+        interfaceSignalNames[port] = port->name;
+      } else if (const auto *multiPort =
+                     symbol->as_if<slang::ast::MultiPortSymbol>()) {
+        for (auto *port : multiPort->ports) {
           if (port->internalSymbol)
             interfaceSignalNames[port->internalSymbol] = port->name;
           interfaceSignalNames[port] = port->name;
-        } else if (const auto *multiPort =
-                       symbol->as_if<slang::ast::MultiPortSymbol>()) {
-          for (auto *port : multiPort->ports) {
-            if (port->internalSymbol)
-              interfaceSignalNames[port->internalSymbol] = port->name;
-            interfaceSignalNames[port] = port->name;
-          }
         }
       }
-      for (auto &member : ifaceBody->members()) {
-        if (auto *var = member.as_if<slang::ast::VariableSymbol>())
-          interfaceSignalNames[var] = var->name;
-        if (auto *net = member.as_if<slang::ast::NetSymbol>())
-          interfaceSignalNames[net] = net->name;
-      }
+    }
+    for (auto &member : ifaceBody->members()) {
+      if (auto *var = member.as_if<slang::ast::VariableSymbol>())
+        interfaceSignalNames[var] = var->name;
+      if (auto *net = member.as_if<slang::ast::NetSymbol>())
+        interfaceSignalNames[net] = net->name;
     }
   }
 

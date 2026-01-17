@@ -226,6 +226,13 @@ void VerilogTextFile::getInlayHints(const llvm::lsp::URIForFile &uri,
   doc->getInlayHints(uri, range, hints);
 }
 
+llvm::lsp::SignatureHelp
+VerilogTextFile::getSignatureHelp(const llvm::lsp::URIForFile &uri,
+                                  llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->getSignatureHelp(uri, pos);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;
