@@ -4,37 +4,42 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 57 - Coverage Options + Solve Constraints + Simulation (January 17, 2026)
+## Current Status: ITERATION 58 - Inline Constraints + Coverage Merge + AVIP Demo (January 17, 2026)
 
-**Summary**: Tested circt-sim simulation on AVIP patterns (works!), implemented solve-before constraints, comprehensive coverage options, verified LSP find references.
+**Summary**: Implemented inline constraints (with clause), coverage database merge, comprehensive AVIP testbench demo, and LSP fuzzy workspace search. LARGEST ITERATION: 2,535 insertions.
 
-### Iteration 57 Highlights
+### Iteration 58 Highlights
 
-**Track A: circt-sim AVIP Testing** ⭐ SIMULATION VERIFIED!
-- ✅ Successfully tested `circt-sim` on AVIP-style patterns
-- ✅ Works: Event-driven simulation, APB protocol, state machines, VCD output
-- ❌ Limitations: UVM not supported, tasks with timing need work
-- Usage: `circt-sim test.mlir --top testbench --vcd waves.vcd`
+**Track A: End-to-End AVIP Testbench** ⭐ DEMONSTRATION
+- ✅ Created comprehensive APB testbench: `avip-apb-simulation.sv` (388 lines)
+- ✅ Components: Transaction, Coverage, Scoreboard, Memory
+- ✅ Shows: randomize, sample, check, report flow
+- Documents circt-sim procedural execution limitations
 
-**Track B: Unique/Solve Constraints** ⭐
-- ✅ Implemented `solve...before` constraint parsing
-- ✅ Extracts variables from NamedValue/HierarchicalValue expressions
-- ✅ Creates `moore.constraint.solve_before` operations
-- Test: `constraint-solve.sv` (new, 335 lines)
+**Track B: Inline Constraints (with clause)** ⭐ MAJOR FEATURE
+- ✅ Extended `RandomizeOp` and `StdRandomizeOp` with inline_constraints region
+- ✅ Parses with clause from randomize() calls
+- ✅ Supports: `obj.randomize() with {...}`, `std::randomize(x,y) with {...}`
+- Test: `randomize.sv` (enhanced)
 
-**Track C: Coverage Options** ⭐ COMPREHENSIVE
-- ✅ CovergroupDeclOp: weight, goal, comment, per_instance, at_least, strobe
-- ✅ Type options: type_weight, type_goal, type_comment
-- ✅ CoverpointDeclOp: weight, goal, comment, at_least, auto_bin_max, detect_overlap
-- ✅ CoverCrossDeclOp: weight, goal, comment, at_least, cross_auto_bin_max
-- ✅ Runtime: weighted coverage, threshold checking
-- Test: `coverage-options.sv` (new)
+**Track C: Coverage Database Merge** ⭐ VERIFICATION FLOW
+- ✅ JSON-based coverage database format
+- ✅ Functions: save, load, merge, merge_files
+- ✅ Cumulative bin hit counts, name-based matching
+- Tests: `MooreRuntimeTest.cpp` (+361 lines)
 
-**Track D: LSP Find References** ⭐
-- ✅ Verified already fully implemented
-- ✅ Enhanced tests for includeDeclaration option
+**Track D: LSP Workspace Symbols (Fuzzy)** ⭐
+- ✅ Sophisticated fuzzy matching with CamelCase detection
+- ✅ Score-based ranking, finds functions/tasks
+- Test: `workspace-symbol-fuzzy.test` (new)
 
-**Summary**: 1,200 insertions across 9 files
+**Summary**: 2,535 insertions across 13 files (LARGEST ITERATION!)
+
+---
+
+## Previous: ITERATION 57 - Coverage Options + Solve Constraints (January 17, 2026)
+
+**Summary**: circt-sim simulation verified, solve-before constraints, comprehensive coverage options. 1,200 insertions.
 
 ---
 

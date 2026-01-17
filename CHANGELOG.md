@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 58 - January 17, 2026
+
+### Inline Constraints, Coverage Merge, AVIP Testbench, LSP Fuzzy Search
+
+**Track A: End-to-End AVIP Simulation Testbench** ⭐ DEMONSTRATION
+- Created comprehensive APB-style testbench: `avip-apb-simulation.sv` (388 lines)
+- Components: Transaction (rand, constraints), Coverage (covergroups), Scoreboard, Memory
+- Demonstrates full verification flow: randomize, sample, check, report
+- Documents current limitations in circt-sim procedural execution
+
+**Track B: Inline Constraints (with clause)** ⭐ MAJOR FEATURE
+- Extended `RandomizeOp` and `StdRandomizeOp` with `inline_constraints` region
+- Moved `convertConstraint()` to Context class for reuse
+- Parses with clause from `randomize()` calls via `RandomizeCallInfo`
+- Supports: `obj.randomize() with {...}`, `std::randomize(x,y) with {...}`
+- Test: `randomize.sv` (enhanced with inline constraint tests)
+
+**Track C: Coverage Database Merge** ⭐ VERIFICATION FLOW
+- JSON-based coverage database format for interoperability
+- Functions: `__moore_coverage_save`, `__moore_coverage_load`, `__moore_coverage_merge`
+- Supports cumulative bin hit counts, name-based matching
+- `__moore_coverage_merge_files(file1, file2, output)` for direct merging
+- Tests: `MooreRuntimeTest.cpp` (+361 lines for merge tests)
+
+**Track D: LSP Workspace Symbols (Fuzzy Matching)** ⭐
+- Replaced substring matching with sophisticated fuzzy algorithm
+- CamelCase and underscore boundary detection
+- Score-based ranking: exact > prefix > substring > fuzzy
+- Extended to find functions and tasks
+- Test: `workspace-symbol-fuzzy.test` (new)
+
+**Summary**: 2,535 insertions across 13 files (LARGEST ITERATION!)
+
+---
+
 ## Iteration 57 - January 17, 2026
 
 ### Coverage Options, Solve-Before Constraints, circt-sim Testing, LSP References
@@ -164,9 +199,15 @@
 - Test: `test/Conversion/MooreToCore/basic.mlir`
 
 **Track A: LLHD Inline Calls**
-- Allowed inlining into `seq.initial`/`seq.always` regions in LLHD inline pass
+- Added single-block inlining for non-procedural regions (top-level/seq.initial)
+- Switched LLHD inline pass to sequential module traversal to avoid crashes
+- Improved recursive call diagnostics for `--ir-hw` lowering
 - Files: `lib/Dialect/LLHD/Transforms/InlineCalls.cpp`
 - Test: `test/Dialect/LLHD/Transforms/inline-calls.mlir`
+
+**Track A: Moore Randomize Builders**
+- Removed duplicate builder overloads for `randomize`/`std_randomize`
+- Files: `include/circt/Dialect/Moore/MooreOps.td`
 
 ---
 
