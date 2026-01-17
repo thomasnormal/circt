@@ -4,6 +4,46 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
+---
+
+## Remaining Limitations & Next Steps
+
+### CRITICAL: Simulation Blockers
+1. **UVM Library Not Supported**: `uvm_pkg` imports fail - need UVM stubs or full UVM compilation
+2. **circt-sim Procedural Execution**: Limited loop/conditional/function call support in interpreter
+3. **Virtual Interface Tasks**: Tasks with timing on module ports need work
+
+### Track Status & Next Tasks
+
+| Track | Focus Area | Current Status | Next Priority |
+|-------|-----------|----------------|---------------|
+| **A** | Runtime/Simulation | circt-sim works for basic RTL | UVM base class stubs, task timing |
+| **B** | Randomization | Full constraint support | Constraint mode on/off, pre/post_randomize |
+| **C** | Coverage | Merge, options, transition bins | Exclusions, illegal bins runtime |
+| **D** | LSP Tooling | Full navigation suite | Completion, semantic tokens |
+
+### Feature Completion Matrix
+
+| Feature | Parse | IR | Lower | Runtime | Test |
+|---------|-------|-----|-------|---------|------|
+| rand/randc | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Constraints (basic) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Soft constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Distribution constraints | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Inline constraints | ✅ | ✅ | ⚠️ | - | ✅ |
+| Covergroups | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Coverpoints | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cross coverage | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Transition bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Coverage merge | - | - | - | ✅ | ✅ |
+| Virtual interfaces | ✅ | ✅ | ⚠️ | ❌ | ⚠️ |
+| Classes | ✅ | ✅ | ✅ | ⚠️ | ✅ |
+| UVM base classes | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
+
+---
+
 ## Current Status: ITERATION 58 - Inline Constraints + Coverage Merge + AVIP Demo (January 17, 2026)
 
 **Summary**: Implemented inline constraints (with clause), coverage database merge, comprehensive AVIP testbench demo, and LSP fuzzy workspace search. LARGEST ITERATION: 2,535 insertions.
