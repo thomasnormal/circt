@@ -4,7 +4,76 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 34 - MULTI-TRACK PARALLEL PROGRESS (January 17, 2026)
+## Current Status: 🎉 ITERATION 37 - LTL SEQUENCE OPS + LSP FIXES (January 17, 2026)
+
+**Summary**: LTL sequence operators (concat/delay/repeat) for VerifToSMT, LSP test fixes.
+
+### Iteration 37 Highlights (commit 3f73564be)
+
+**Track A: Randsequence randjoin(N>1)**
+- ✅ Extended randjoin test coverage with `randsequence-randjoin.sv`
+- ✅ Fisher-Yates partial shuffle for N distinct production selection
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+
+**Track C: SVA Sequence Operators in VerifToSMT**
+- ✅ `ltl.delay` → delay=0 passes through, delay>0 returns true (BMC semantics)
+- ✅ `ltl.concat` → empty=true, single=itself, multiple=smt.and
+- ✅ `ltl.repeat` → base=0 returns true, base>=1 returns input
+- ✅ LTL type converters for `!ltl.sequence` and `!ltl.property` to `smt::BoolType`
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+124 lines)
+- Test: `test/Conversion/VerifToSMT/ltl-temporal.mlir` (+88 lines)
+
+**Track D: LSP Hover and Completion Tests**
+- ✅ Fixed `hover.test` character position coordinate
+- ✅ Fixed `class-hover.test` by wrapping classes in package
+- ✅ Verified all LSP tests pass: hover, completion, class-hover, uvm-completion
+- Files: `test/Tools/circt-verilog-lsp-server/hover.test`, `class-hover.test`
+
+---
+
+## Previous: ITERATION 36 - QUEUE SORT RUNTIME FIX (January 18, 2026)
+
+**Summary**: Queue sort/rsort now sort in place with element size awareness.
+
+### Iteration 36 Highlights
+
+**Track B: Runtime & Array/Queue Semantics**
+- ✅ `queue.sort()` and `queue.rsort()` lower to in-place runtime calls
+- ✅ Element-size-aware comparators for <=8 bytes and bytewise fallback for larger
+- Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`, `include/circt/Runtime/MooreRuntime.h`
+
+---
+
+## Previous: ITERATION 35 - RANDSEQUENCE CONCURRENCY + TAGGED UNIONS (January 18, 2026)
+
+**Summary**: Four parallel agents completed: randsequence randjoin>1 fork/join, tagged union patterns, dynamic array streaming lvalues, randsequence case exit fix.
+
+### Iteration 35 Highlights
+
+**Track A: Randsequence randjoin>1 Concurrency**
+- ✅ randjoin(all) and randjoin(subset) now use `moore.fork join`
+- ✅ Distinct production selection via partial Fisher-Yates shuffle
+- ✅ Forked branches dispatch by selected index
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+
+**Track B: Tagged Union Lowering + Pattern Matches**
+- ✅ Tagged unions lowered to `{tag, data}` wrapper structs
+- ✅ `.tag` access and tagged member extraction lowered
+- ✅ PatternCase and `matches` expressions for tagged/constant/wildcard patterns
+- Files: `lib/Conversion/ImportVerilog/Types.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`, `lib/Conversion/ImportVerilog/Statements.cpp`
+
+**Track C: Streaming Lvalue Fix (Dynamic/Open Arrays)**
+- ✅ `{>>{arr}} = packed` lvalue streaming now supports open unpacked arrays
+- ✅ Lowered to `moore.stream_unpack` in lvalue context
+- Files: `lib/Conversion/ImportVerilog/Expressions.cpp`
+
+**Track D: Randsequence Case Exit Correctness**
+- ✅ Default fallthrough now branches to exit, not last match
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+
+---
+
+## Previous: ITERATION 34 - MULTI-TRACK PARALLEL PROGRESS (January 17, 2026)
 
 **Summary**: Four parallel agents completed: randcase, queue delete(index), LTL-to-SMT operators, LSP verification.
 
@@ -44,32 +113,33 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ### Track A: UVM Language Parity (ImportVerilog/Lowering)
 **Status**: Active | **Priority**: HIGH
-**Next Task**: Implement randsequence randjoin>1 semantics + concurrency
-- randjoin should select multiple productions (potentially concurrently)
-- Current support only selects a single production (randjoin(1))
+**Next Task**: Refine randsequence randjoin scheduling semantics
+- Define ordering/side-effect semantics for forked productions
+- Add break/return handling in productions (control flow)
 - Files: `lib/Conversion/ImportVerilog/Statements.cpp`
 
 ### Track B: Runtime & Array/Queue Semantics
-**Status**: ✅ delete(index) DONE | **Priority**: HIGH
-**Next Task**: Implement comparator-aware sort/rsort for queues
-- Current sort works for integers; need custom comparator support
-- Required for UVM testbenches sorting complex objects
+**Status**: ✅ sort/rsort in-place DONE | **Priority**: HIGH
+**Next Task**: Comparator support for non-integer keys (classes/strings)
+- Extend sort/rsort beyond integer/bytewise comparison
+- Required for UVM object queues with custom comparison
 - Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`
 
 ### Track C: SVA + Z3 Track
-**Status**: ✅ LTL BASICS DONE | **Priority**: HIGH
-**Next Task**: Add SVA sequence operators to VerifToSMT
-- Need `ltl.concat` (sequence concatenation)
-- Need `ltl.delay` (cycle delay ##n)
-- Need `ltl.repeat` (repetition [*n])
+**Status**: ✅ LTL + SEQUENCE OPS DONE | **Priority**: HIGH
+**Next Task**: SVA implication operators and repetition ranges
+- Need `|->` (overlapping implication) and `|=>` (non-overlapping)
+- Need range repetition `[*m:n]` and goto repetition `[->n]`
+- Consider `throughout` and `within` operators
 - Test with: `LD_LIBRARY_PATH=~/z3-install/lib64 ./build/bin/circt-bmc`
 - Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Track D: Tooling & Debug (LSP)
-**Status**: ✅ Go-to-def WORKING | **Priority**: MEDIUM
-**Next Task**: LSP hover information and completion
-- Add `textDocument/hover` for type/doc info on symbols
-- Add `textDocument/completion` for code completion
+**Status**: ✅ Hover/Completion WORKING | **Priority**: MEDIUM
+**Next Task**: LSP diagnostics and references
+- Add `textDocument/publishDiagnostics` for error reporting
+- Add `textDocument/references` for find all references
+- Consider `textDocument/documentSymbol` for outline view
 - Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/`
 
 **Testing Cadence**
@@ -80,9 +150,9 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Project | Status | Next Milestone |
 |---------|--------|----------------|
-| **Full SVA + Z3** | ✅ LTL BASICS | Add sequence operators (concat, delay, repeat) |
+| **Full SVA + Z3** | ✅ LTL + SEQ OPS | Add implication (|->, |=>) and range repetition |
 | **Multi-core Arcilator** | MISSING | Architecture plan + task decomposition for parallel simulation |
-| **LSP + Debugging** | ✅ Go-to-def | Add hover, completion, diagnostics |
+| **LSP + Debugging** | ✅ Hover/Completion | Add diagnostics, references |
 | **Full 4-state (X/Z)** | MISSING | Type system + dataflow propagation plan |
 | **Coverage** | PARTIAL | Cross coverage + covergroup sampling expressions |
 | **DPI/VPI** | STUBS | FFI bridge + handle marshaling |
@@ -94,19 +164,19 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 - Runtime: `export LD_LIBRARY_PATH=~/z3-install/lib64:$LD_LIBRARY_PATH`
 
 ## Current Limitations (Key Gaps)
-- Randsequence randjoin>1 semantics and concurrency
+- Randsequence randjoin>1 scheduling semantics (ordering and side-effects)
 - Comparator-aware sort/rsort for queues/arrays (non-integer elements)
 - SVA sequence operators (concat, delay, repeat) for BMC
 - 4-state X/Z propagation and DPI/VPI (architectural work)
 
 ## Next Feature Targets (Top Impact)
-1. Randsequence randjoin>1 semantics and concurrency
-2. Comparator-aware sort/rsort for queues and arrays
+1. Randsequence randjoin>1 scheduling semantics (ordering, side effects, break/return)
+2. Comparator-aware sort/rsort for queues and arrays (non-integer keys)
 3. SVA sequence operators (##, [*], |->)
 4. LSP hover and completion
 
 **Immediate Next Task**
-- Launch four parallel agents for Iteration 35.
+- Define and implement randsequence randjoin scheduling semantics with break/return.
 
 ---
 

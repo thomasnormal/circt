@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 37 - January 17, 2026
+
+### LTL Sequence Operators + LSP Test Fixes (commit 3f73564be)
+
+**Track A: Randsequence randjoin(N>1)**
+- Extended randjoin test coverage with `randsequence-randjoin.sv`
+- Fisher-Yates partial shuffle algorithm for N distinct production selection
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+
+**Track C: SVA Sequence Operators in VerifToSMT**
+- `ltl.delay` conversion: delay=0 passes input through, delay>0 returns true (BMC semantics)
+- `ltl.concat` conversion: empty=true, single=itself, multiple=smt.and
+- `ltl.repeat` conversion: base=0 returns true, base>=1 returns input
+- Added LTL type converters for `!ltl.sequence` and `!ltl.property` to `smt::BoolType`
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+124 lines)
+- Test: `test/Conversion/VerifToSMT/ltl-temporal.mlir` (+88 lines)
+
+**Track D: LSP Hover and Completion Tests**
+- Fixed `hover.test` character position coordinate
+- Fixed `class-hover.test` by wrapping classes in package scope
+- All LSP tests passing: hover, completion, class-hover, uvm-completion
+- Files: `test/Tools/circt-verilog-lsp-server/hover.test`, `class-hover.test`
+
+---
+
+## Iteration 36 - January 18, 2026
+
+### Queue Sort/RSort Runtime Fix
+- `queue.sort()` and `queue.rsort()` now call in-place runtime functions
+- Element-size-aware comparator supports <=8-byte integers and bytewise fallback
+- Updated Moore runtime API and lowering to pass element sizes
+- Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`, `include/circt/Runtime/MooreRuntime.h`
+
+---
+
+## Iteration 35 - January 18, 2026
+
+### Randsequence Concurrency + Tagged Unions
+
+**Randsequence randjoin>1**
+- randjoin(all) and randjoin(subset) now lower to `moore.fork join`
+- Distinct production selection via partial Fisher-Yates shuffle
+- Forked branches dispatch by selected production index
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+- Test: `test/Conversion/ImportVerilog/randsequence.sv`
+
+**Tagged Union Patterns**
+- Tagged unions lowered to `{tag, data}` wrapper struct
+- Tagged member access and `.tag` extraction supported
+- PatternCase and `matches` expressions for tagged/constant/wildcard patterns
+- Files: `lib/Conversion/ImportVerilog/Types.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`, `lib/Conversion/ImportVerilog/Statements.cpp`
+- Test: `test/Conversion/ImportVerilog/tagged-union.sv`
+
+**Streaming Lvalue Fix**
+- `{>>{arr}} = packed` supports open/dynamic unpacked arrays in lvalue context
+- Lowered to `moore.stream_unpack`
+- Files: `lib/Conversion/ImportVerilog/Expressions.cpp`
+- Test: `test/Conversion/ImportVerilog/types.sv`
+
+---
+
 ## Iteration 34 - January 17, 2026
 
 ### Multi-Track Parallel Progress (commit 0621de47b)
@@ -77,6 +138,9 @@
 - Tagged union matches in `if` / conditional expressions
 - Randsequence statement lowering restored (weights/if/case/repeat, randjoin(1))
 - Randcase weighted selection support
+- Randsequence randjoin>1 sequential selection support
+- Randsequence randjoin(all) uses fork/join concurrency
+- Randsequence randjoin>1 subset uses fork/join concurrency
 
 **Tests**
 - Added randsequence arguments/defaults test case
