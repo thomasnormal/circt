@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 46 - January 17, 2026
+
+### Covergroups, BMC Delays, LSP Tokens
+
+**Track A: Covergroup Bins Support** ⭐
+- Added `CoverageBinDeclOp` to MooreOps.td with `CoverageBinKind` enum
+- Support for bins, illegal_bins, ignore_bins, default bins
+- Added `sampling_event` attribute to `CovergroupDeclOp`
+- Enhanced Structure.cpp to convert coverpoint bins from slang AST
+- Files: `include/circt/Dialect/Moore/MooreOps.td` (+97 lines), `lib/Conversion/ImportVerilog/Structure.cpp` (+88 lines)
+- Tests: `test/Conversion/ImportVerilog/covergroup_bins.sv`, `covergroup_uvm_style.sv`
+
+**Track B: Multi-Step BMC Delay Buffers** ⭐
+- Added `DelayInfo` struct to track `ltl.delay` operations
+- Implemented delay buffer mechanism using `scf.for` iter_args
+- Properly handle `ltl.delay(signal, N)` across multiple time steps
+- Buffer initialized to false (bv<1> 0), shifts each step with new signal value
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+167 lines)
+- Tests: `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir`
+
+**Track C: UVM Real-World Testing** ⚠️
+- Tested 9 AVIP testbenches from ~/mbit/ (APB, AXI4, AHB, UART, SPI, I2S, I3C, JTAG)
+- Found single blocking error: 'this' pointer scoping in constructor args
+- Bug location: `Expressions.cpp:4059-4067` (NewClassExpression)
+- Root cause: `context.currentThisRef = newObj` set BEFORE constructor args evaluated
+- Document: `UVM_REAL_WORLD_TEST_RESULTS.md` (318 lines of analysis)
+
+**Track D: LSP Semantic Token Highlighting**
+- Added `SyntaxTokenCollector` for lexer-level token extraction
+- Support for keyword, comment, string, number, operator tokens
+- Added `isOperatorToken()` helper function
+- Token types: keyword(13), comment(14), string(15), number(16), operator(17)
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+185 lines)
+- Tests: `test/Tools/circt-verilog-lsp-server/semantic-tokens.test`
+
+---
+
 ## Iteration 45 - January 17, 2026
 
 ### DPI-C Stubs + Verification
@@ -55,9 +92,49 @@
 - Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
 - uvm_dpi_get_next_arg_c now reads space-delimited args from `CIRCT_UVM_ARGS` or `UVM_ARGS`
 - Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- uvm_dpi_get_next_arg_c now supports quoted arguments in env strings
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- uvm_dpi_get_next_arg_c now supports single-quoted args and escaped quotes
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- uvm_dpi_get_next_arg_c now reloads args when env vars change
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added coverage for clearing args when env is empty
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- uvm_hdl_deposit now preserves forced values until release
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added test coverage for release_and_read clearing force state
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
 - randc properties now use a runtime cycle helper for small bit widths
 - Tests: `test/Conversion/MooreToCore/randc-randomize.mlir`, `unittests/Runtime/MooreRuntimeTest.cpp`
 - Added repeat-cycle coverage for randc runtime
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Increased randc cycle coverage to 16-bit fields with unit test
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added randc wide-bit clamp test for masked values
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added randc constraint coverage to ensure hard ranges bypass randc cycling
+- Tests: `test/Conversion/MooreToCore/randc-constraint.mlir`
+- Soft constraints now bypass randc cycling for the constrained field
+- Tests: `test/Conversion/MooreToCore/randc-soft-constraint.mlir`
+- Added independent randc cycle coverage for multiple fields
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added MooreToCore coverage for multiple randc fields
+- Tests: `test/Conversion/MooreToCore/randc-multi.mlir`
+- Randc cycle now resets if the bit width changes for a field
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added 5-bit and 6-bit randc cycle unit tests
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added linear randc fallback for wider widths (no allocation)
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added VPI stub APIs for linking and basic tests
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- VPI stubs now return a basic handle/name for vpi_handle_by_name/vpi_get_str
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added ImportVerilog coverage for UVM HDL access DPI calls
+- Tests: `test/Conversion/ImportVerilog/uvm_dpi_hdl_access.sv`
+- uvm_hdl_check_path now initializes a placeholder entry in the HDL map
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added coverage for invalid uvm_hdl_check_path inputs
 - Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
 
 **Track B: Queue sort.with Operations**

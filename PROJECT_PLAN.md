@@ -4,7 +4,49 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 45 - DPI-C STUBS + VERIFICATION (January 17, 2026)
+## Current Status: 🎉 ITERATION 46 - COVERGROUPS, BMC DELAYS, LSP TOKENS (January 17, 2026)
+
+**Summary**: Covergroup bins support, multi-step BMC delay buffers implementation, LSP semantic token highlighting, and critical UVM bug identification.
+
+### Iteration 46 Highlights (commit 0dc2dcbc1)
+
+**Track A: Covergroup Bins Support** ⭐ IEEE 1800-2017 Section 19
+- ✅ Added `CoverageBinDeclOp` to MooreOps.td with `CoverageBinKind` enum
+- ✅ Support for bins, illegal_bins, ignore_bins, default bins
+- ✅ Added `sampling_event` attribute to `CovergroupDeclOp`
+- ✅ Enhanced Structure.cpp to convert coverpoint bins from slang AST
+- Files: `include/circt/Dialect/Moore/MooreOps.td`, `lib/Conversion/ImportVerilog/Structure.cpp`
+- Tests: `test/Conversion/ImportVerilog/covergroup_bins.sv`, `covergroup_uvm_style.sv`
+
+**Track B: Multi-Step BMC Delay Buffers** ⭐ TEMPORAL PROPERTY FIX
+- ✅ Added `DelayInfo` struct to track `ltl.delay` operations
+- ✅ Implemented delay buffer mechanism using `scf.for` iter_args
+- ✅ Properly handle `ltl.delay(signal, N)` across multiple time steps
+- ✅ Buffer initialized to false, shifts each step with new signal value
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+167 lines)
+- Tests: `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir`
+
+**Track C: UVM Real-World Testing** ⚠️ CRITICAL BUG FOUND
+- ✅ Tested 9 AVIP testbenches from ~/mbit/ (APB, AXI4, AHB, UART, SPI, I2S, I3C, JTAG)
+- ⚠️ Found single blocking error: 'this' pointer scoping in constructor args
+- Bug location: `Expressions.cpp:4059-4067` (NewClassExpression)
+- Document: `UVM_REAL_WORLD_TEST_RESULTS.md` (318 lines of analysis)
+
+**Track D: LSP Semantic Token Highlighting**
+- ✅ Added `SyntaxTokenCollector` for lexer-level token extraction
+- ✅ Support for keyword, comment, string, number, operator tokens
+- ✅ Added `isOperatorToken()` helper function
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+185 lines)
+- Tests: `test/Tools/circt-verilog-lsp-server/semantic-tokens.test`
+
+### Key Gaps Remaining
+1. **'this' pointer scoping bug**: Blocks UVM testbenches (P0 priority)
+2. **Randomization**: `randomize()` and constraints not yet at runtime
+3. **Pre-existing BMC crash**: `bmc-clock-not-first.mlir` has index bounds issue
+
+---
+
+## Previous: ITERATION 45 - DPI-C STUBS + VERIFICATION (January 17, 2026)
 
 **Summary**: Major progress on DPI-C runtime stubs, class randomization verification, multi-step BMC analysis, and LSP workspace fixes.
 
@@ -280,14 +322,25 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 - Runtime stubs are wired; HDL access now uses in-memory map
 - Next add HDL hierarchy access (connect to simulation objects)
 - Command line args are read from `CIRCT_UVM_ARGS`/`UVM_ARGS` (space-delimited)
+- Command line args support quoted strings and basic escapes
+- Command line args reload when env strings change (useful for tests)
+- Force semantics preserved in HDL access stub (deposit respects force)
+- UVM HDL access DPI calls covered by ImportVerilog tests
+- Added VPI stub API placeholders (no real simulator integration yet)
+- uvm_hdl_check_path initializes entries in the HDL map
 - Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`
 
 ### Track B: Class Randomization & Constraints
 **Status**: IN PROGRESS | **Priority**: CRITICAL
 **Next Task**: Rand/RandC semantics beyond basic preservation
 - Randomize now preserves non-rand fields during `randomize()`
-- randc cycling now supported for small bit widths (fallback to random above 12 bits)
-- Next implement constraint filtering and broaden randc coverage
+- randc cycling now supported for small bit widths (linear fallback above 16 bits)
+- Soft/hard constrained randc fields bypass randc cycling
+- Next implement broader constraint coverage and widen randc cycles
+- Add coverage for multiple randc fields and cycle reset behavior
+- Multi-field randc conversion coverage added
+- Randc cycle resets on bit-width changes
+ - Randc fields with hard constraints bypass randc cycling
 - Files: `lib/Conversion/MooreToCore/MooreToCore.cpp`, `lib/Runtime/MooreRuntime.cpp`
 
 ### Track C: SVA + Z3 Track
@@ -313,7 +366,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Project | Status | Next Milestone |
 |---------|--------|----------------|
-| **DPI/VPI Support** | 🔴 CRITICAL GAP | Implement HDL access behind DPI stubs, add VPI handle basics |
+| **DPI/VPI Support** | 🔴 CRITICAL GAP | Implement HDL access behind DPI stubs, add real VPI handle support |
 | **Class Randomization** | 🔴 CRITICAL GAP | randc cycling + constraint-aware randomize |
 | **Full SVA + Z3** | ✅ LTL + IMPLICATION | Multi-step BMC unrolling |
 | **LSP + Debugging** | ✅ Workspace Symbols | Symbol index + rename/debugging hooks |
@@ -331,7 +384,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 **CRITICAL (Blocking UVM)**:
 1. **DPI-C imports are partially stubbed** - HDL access uses in-memory map, no real hierarchy
-2. **Class randomization partial** - randc cycling limited to <=12-bit fields; constraints still incomplete
+2. **Class randomization partial** - randc cycling limited to <=16-bit fields; wider widths use linear cycle
 3. **Covergroups dropped** - Needed for UVM coverage collection
 
 **HIGH PRIORITY**:
