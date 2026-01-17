@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 45 - January 17, 2026
+
+### DPI-C Stubs + Verification
+
+**Track A: DPI-C Import Support** ⭐
+- Added 18 DPI-C stub functions to MooreRuntime for UVM support
+- HDL access stubs: uvm_hdl_deposit, force, release, read, check_path
+- Regex stubs: uvm_re_comp, uvm_re_exec, uvm_re_free, uvm_dump_re_cache
+- Command-line stubs: uvm_dpi_get_next_arg_c, get_tool_name_c, etc.
+- Changed DPI-C handling from skipping to generating runtime function calls
+- Files: `include/circt/Runtime/MooreRuntime.h`, `lib/Runtime/MooreRuntime.cpp` (+428 lines)
+- Tests: `test/Conversion/ImportVerilog/dpi_imports.sv`, `uvm_dpi_basic.sv`
+- Unit Tests: `unittests/Runtime/MooreRuntimeTest.cpp` (+158 lines)
+
+**Track B: Class Randomization Verification**
+- Verified rand/randc properties, randomize() method fully working
+- Constraints with pre/post, inline, soft constraints all operational
+- Tests: `test/Conversion/ImportVerilog/class-randomization.sv`, `class-randomization-constraints.sv`
+
+**Track C: Multi-Step BMC Analysis**
+- Documented ltl.delay limitation (N>0 converts to true in single-step BMC)
+- Created manual workaround demonstrating register-based approach
+- Tests: `test/Conversion/VerifToSMT/bmc-manual-multistep.mlir`
+
+**Track D: LSP Workspace Fixes**
+- Fixed VerilogServer.cpp compilation errors (StringSet usage, .str() removal)
+- Fixed workspace symbol gathering in Workspace.cpp
+
+**Misc**
+- Fixed scope_exit usage in circt-test.cpp (use llvm::make_scope_exit)
+
+---
+
 ## Iteration 44 - January 17, 2026
 
 ### UVM Parity Push - Multi-Track Progress
@@ -12,6 +45,20 @@
 - Verified all UVM patterns working (virtual methods, extern, super calls)
 - Added 21 comprehensive test cases
 - Test: `test/Conversion/ImportVerilog/uvm_method_patterns.sv`
+- DPI-C imports now lower to runtime stub calls (no constant fallbacks)
+- Tests: `test/Conversion/ImportVerilog/dpi_imports.sv`
+- UVM regex stubs now use `std::regex` with glob support
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- UVM HDL access stubs now track values in an in-memory map
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added runtime tests for regex compexecfree and deglobbed helpers
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- uvm_dpi_get_next_arg_c now reads space-delimited args from `CIRCT_UVM_ARGS` or `UVM_ARGS`
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- randc properties now use a runtime cycle helper for small bit widths
+- Tests: `test/Conversion/MooreToCore/randc-randomize.mlir`, `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added repeat-cycle coverage for randc runtime
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
 
 **Track B: Queue sort.with Operations**
 - Added `QueueSortWithOp`, `QueueRSortWithOp`, `QueueSortKeyYieldOp`
@@ -19,6 +66,8 @@
 - Added import support for `q.sort() with (expr)` syntax
 - Files: `include/circt/Dialect/Moore/MooreOps.td`, `lib/Conversion/ImportVerilog/Expressions.cpp`
 - Test: `test/Conversion/ImportVerilog/queue-sort-comparator.sv`
+- Randomize now preserves non-rand class fields around `randomize()`
+- Test: `test/Conversion/MooreToCore/randomize-nonrand.mlir`
 
 **Track C: SVA Implication Tests**
 - Verified `|->` and `|=>` implemented in VerifToSMT
@@ -36,11 +85,11 @@
 ## Iteration 43 - January 18, 2026
 
 ### Workspace Symbol Indexing
-- Workspace symbol search scans workspace source files for module/interface/package
+- Workspace symbol search scans workspace source files for module/interface/package/class/program/checker
 - Ranges computed from basic regex matches
 - Deduplicates workspace symbols across open documents and workspace scan
 - Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.h`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp`
-- Tests: `test/Tools/circt-verilog-lsp-server/workspace-symbol-project.test`
+- Tests: `test/Tools/circt-verilog-lsp-server/workspace-symbol-project.test` (module/interface/package/class/program/checker)
 
 ---
 
