@@ -2413,82 +2413,13 @@ struct RvalueExprVisitor : public ExprVisitor {
         llvm::make_scope_exit(
             [&] { context.methodReceiverOverride = savedReceiverOverride; });
 
-    // DPI-C imports are not yet supported. Emit a remark and return a
-    // meaningful default value to allow compilation to continue.
-    // For UVM compatibility, we return appropriate defaults:
-    // - int/integer types: return 0
-    // - string types: return empty string
-    // - void functions: return a void cast
-    // We still declare the function so it appears in the IR for potential
-    // future linkage with actual DPI implementations.
+    // DPI-C imports are handled by generating normal function calls to
+    // stub implementations provided by the MooreRuntime library. The
+    // functions are declared as external and linked at compile time.
     if (subroutine->flags & slang::ast::MethodFlags::DPIImport) {
-      mlir::emitRemark(loc) << "DPI-C imports not yet supported; call to '"
-                            << subroutine->name << "' skipped";
-
-      // Declare the DPI function (creates func.func private declaration)
-      // and mark it as converted so it doesn't get processed again.
-      auto *lowering = context.declareFunction(*subroutine);
-      if (lowering) {
-        (void)context.convertFunction(*subroutine);
-      }
-
-      // Return a meaningful default value based on the result type.
-      if (expr.type->isVoid()) {
-        return mlir::UnrealizedConversionCastOp::create(
-                   builder, loc, moore::VoidType::get(context.getContext()),
-                   ValueRange{})
-            .getResult(0);
-      }
-      auto type = context.convertType(*expr.type);
-      if (!type)
-        return {};
-
-      // For integer types, return 0
-      if (auto intType = dyn_cast<moore::IntType>(type)) {
-        return moore::ConstantOp::create(builder, loc, intType, 0);
-      }
-
-      // For string types, return appropriate value based on function name
-      if (isa<moore::StringType>(type)) {
-        std::string strValue;
-
-        // Return meaningful values for UVM tool identification DPI functions
-        if (subroutine->name == "uvm_dpi_get_tool_name_c") {
-          strValue = "CIRCT";
-        } else if (subroutine->name == "uvm_dpi_get_tool_version_c") {
-          strValue = "1.0";
-        }
-        // Default: empty string for other DPI functions
-
-        if (strValue.empty()) {
-          // Create an empty string by converting a minimal integer to string
-          auto intTy = moore::IntType::getInt(context.getContext(), 8);
-          auto emptyInt =
-              moore::ConstantStringOp::create(builder, loc, intTy, "");
-          return moore::IntToStringOp::create(builder, loc, emptyInt);
-        }
-
-        // Create a string constant with the appropriate value
-        auto intTy =
-            moore::IntType::getInt(context.getContext(), strValue.size() * 8);
-        auto strInt =
-            moore::ConstantStringOp::create(builder, loc, intTy, strValue);
-        return moore::IntToStringOp::create(builder, loc, strInt);
-      }
-
-      // For chandle types, return null (0). This is appropriate for DPI
-      // functions like uvm_re_comp that return opaque C pointers.
-      if (isa<moore::ChandleType>(type)) {
-        auto intTy =
-            moore::IntType::get(context.getContext(), 64, moore::Domain::TwoValued);
-        auto zero = moore::ConstantOp::create(builder, loc, intTy, 0);
-        return moore::ConversionOp::create(builder, loc, type, zero);
-      }
-
-      // For other types, fall back to unrealized conversion cast
-      return mlir::UnrealizedConversionCastOp::create(builder, loc, type,
-                                                      ValueRange{})
-          .getResult(0);
+      mlir::emitRemark(loc) << "DPI-C import '" << subroutine->name
+                            << "' will use runtime stub (link with MooreRuntime)";
+      // Fall through to normal call generation below
     }
 
     const bool isMethod = (subroutine->thisVar != nullptr);

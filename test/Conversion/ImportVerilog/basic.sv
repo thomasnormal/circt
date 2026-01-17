@@ -3812,9 +3812,9 @@ import "DPI-C" function void my_dpi_void(int x);
 // CHECK-LABEL: moore.module @TestDPIImport()
 module TestDPIImport;
     int result;
-    // DPI calls are not yet supported, so the call returns a default value (0)
+    // DPI calls lower to runtime stub functions.
     // CHECK: moore.procedure initial {
-    // CHECK:   [[TMP:%.+]] = moore.constant 0 : i32
+    // CHECK:   [[TMP:%.+]] = func.call @my_dpi_func
     // CHECK:   moore.blocking_assign %result, [[TMP]]
     initial begin
         result = my_dpi_func(10, 20);

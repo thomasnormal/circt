@@ -769,17 +769,17 @@ static LogicalResult listTests(TestSuite &suite) {
   if (opts.json) {
     json::OStream json(output->os(), 2);
     json.arrayBegin();
-    auto guard = scope_exit([&] { json.arrayEnd(); });
+    auto guard = llvm::make_scope_exit([&] { json.arrayEnd(); });
     for (auto &test : suite.tests) {
       if (ignoreTestListing(test, suite))
         continue;
       json.objectBegin();
-      auto guard = scope_exit([&] { json.objectEnd(); });
+      auto guard = llvm::make_scope_exit([&] { json.objectEnd(); });
       json.attribute("name", test.name.getValue());
       json.attribute("kind", toString(test.kind));
       if (!test.attrs.empty()) {
         json.attributeBegin("attrs");
-        auto guard = scope_exit([&] { json.attributeEnd(); });
+        auto guard = llvm::make_scope_exit([&] { json.attributeEnd(); });
         if (failed(convertAttributeToJSON(json, test.attrs)))
           return mlir::emitError(test.loc)
                  << "unsupported attributes: `" << test.attrs

@@ -24,7 +24,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <random>
+#include <regex>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -46,6 +49,50 @@ MooreString allocateString(int64_t len) {
     result.len = 0;
   }
   return result;
+}
+
+std::string convertGlobToRegex(const std::string &pattern, bool withBrackets) {
+  std::string regex;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    char c = pattern[i];
+    if (withBrackets && c == '[') {
+      regex.push_back('[');
+      for (++i; i < pattern.size(); ++i) {
+        char b = pattern[i];
+        regex.push_back(b);
+        if (b == ']')
+          break;
+      }
+      continue;
+    }
+    switch (c) {
+    case '*':
+      regex += ".*";
+      break;
+    case '?':
+      regex += ".";
+      break;
+    case '.':
+    case '^':
+    case '$':
+    case '+':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case '|':
+    case '\\':
+      regex += '\\';
+      regex += c;
+      break;
+    default:
+      regex += c;
+      break;
+    }
+  }
+  return regex;
 }
 
 } // anonymous namespace
@@ -305,11 +352,14 @@ extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
 }
 
 namespace {
+// Helper function forward declaration
+uint64_t readElementValueUnsigned(void *element, int64_t elementSize);
+
 thread_local int64_t queueSortElemSize = 0;
 
 int compareQueueElemDesc(const void *a, const void *b) {
-  uint64_t va = readElementValueUnsigned(a, queueSortElemSize);
-  uint64_t vb = readElementValueUnsigned(b, queueSortElemSize);
+  uint64_t va = readElementValueUnsigned(const_cast<void*>(a), queueSortElemSize);
+  uint64_t vb = readElementValueUnsigned(const_cast<void*>(b), queueSortElemSize);
   if (va < vb)
     return 1;
   if (va > vb)
@@ -1154,6 +1204,43 @@ extern "C" int32_t __moore_randomize_basic(void *classPtr, int64_t classSize) {
   }
 
   return 1; // Success
+}
+
+extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
+  if (!fieldPtr || bitWidth <= 0)
+    return 0;
+
+  constexpr int64_t kMaxCycleBits = 12;
+  if (bitWidth > kMaxCycleBits) {
+    uint64_t value = static_cast<uint64_t>(__moore_urandom());
+    value |= static_cast<uint64_t>(__moore_urandom()) << 32;
+    if (bitWidth < 64)
+      value &= ((1ULL << bitWidth) - 1);
+    return static_cast<int64_t>(value);
+  }
+
+  const uint64_t maxValue = (1ULL << bitWidth) - 1;
+  struct RandCState {
+    std::vector<uint64_t> remaining;
+  };
+
+  static std::mutex randcMutex;
+  static std::unordered_map<void *, RandCState> randcStates;
+
+  std::lock_guard<std::mutex> lock(randcMutex);
+  auto &state = randcStates[fieldPtr];
+  if (state.remaining.empty()) {
+    state.remaining.reserve(maxValue + 1);
+    for (uint64_t value = 0; value <= maxValue; ++value)
+      state.remaining.push_back(value);
+  }
+
+  std::uniform_int_distribution<size_t> dist(0, state.remaining.size() - 1);
+  size_t idx = dist(urandomGenerator);
+  uint64_t value = state.remaining[idx];
+  state.remaining[idx] = state.remaining.back();
+  state.remaining.pop_back();
+  return static_cast<int64_t>(value);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2861,4 +2948,341 @@ extern "C" int32_t __moore_ftell(int32_t fd) {
 
 extern "C" void __moore_free(void *ptr) {
   std::free(ptr);
+}
+
+//===----------------------------------------------------------------------===//
+// DPI-C Import Stubs for UVM Support
+//===----------------------------------------------------------------------===//
+//
+// These stub implementations provide basic functionality for UVM DPI-C imports.
+// They allow UVM code to compile and run without requiring external C libraries.
+// For production use, these should be replaced with full implementations.
+//
+
+//===----------------------------------------------------------------------===//
+// HDL Access Stubs
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct HDLValueEntry {
+  uvm_hdl_data_t value = 0;
+  bool forced = false;
+};
+
+std::unordered_map<std::string, HDLValueEntry> hdlValues;
+std::mutex hdlMutex;
+
+bool getPathKey(MooreString *path, std::string &key) {
+  if (!path || !path->data || path->len <= 0)
+    return false;
+  key.assign(path->data, path->len);
+  return !key.empty();
+}
+} // namespace
+
+extern "C" int32_t uvm_hdl_check_path(MooreString *path) {
+  std::string key;
+  if (!getPathKey(path, key))
+    return 0;
+  return 1;
+}
+
+extern "C" int32_t uvm_hdl_deposit(MooreString *path, uvm_hdl_data_t value) {
+  std::string key;
+  if (!getPathKey(path, key))
+    return 0;
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto &entry = hdlValues[key];
+  entry.value = value;
+  return 1;
+}
+
+extern "C" int32_t uvm_hdl_force(MooreString *path, uvm_hdl_data_t value) {
+  std::string key;
+  if (!getPathKey(path, key))
+    return 0;
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto &entry = hdlValues[key];
+  entry.value = value;
+  entry.forced = true;
+  return 1;
+}
+
+extern "C" int32_t uvm_hdl_release_and_read(MooreString *path,
+                                             uvm_hdl_data_t *value) {
+  std::string key;
+  if (!value || !getPathKey(path, key))
+    return 0;
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto it = hdlValues.find(key);
+  if (it != hdlValues.end()) {
+    it->second.forced = false;
+    *value = it->second.value;
+  } else {
+    *value = 0;
+  }
+  return 1;
+}
+
+extern "C" int32_t uvm_hdl_release(MooreString *path) {
+  std::string key;
+  if (!getPathKey(path, key))
+    return 0;
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto it = hdlValues.find(key);
+  if (it != hdlValues.end())
+    it->second.forced = false;
+  return 1;
+}
+
+extern "C" int32_t uvm_hdl_read(MooreString *path, uvm_hdl_data_t *value) {
+  std::string key;
+  if (!value || !getPathKey(path, key))
+    return 0;
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto it = hdlValues.find(key);
+  if (it != hdlValues.end())
+    *value = it->second.value;
+  else
+    *value = 0;
+  return 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Regular Expression Stubs
+//===----------------------------------------------------------------------===//
+
+namespace {
+// Simple regex stub: just stores the pattern string for later matching.
+// A full implementation would use a regex library like PCRE2 that doesn't
+// require exception support.
+struct UVMRegexStub {
+  std::string pattern;
+  bool deglob;
+  bool valid = false;
+};
+
+// Buffer for last match result (used by uvm_re_buffer)
+std::string lastMatchBuffer;
+} // namespace
+
+extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
+  if (!pattern || !pattern->data) {
+    return nullptr;
+  }
+
+  std::string regexPattern(pattern->data, pattern->len);
+  const bool useGlob = (deglob != 0);
+  if (useGlob) {
+    regexPattern = convertGlobToRegex(regexPattern, true);
+  }
+
+  // Create a stub regex object
+  // Note: std::regex compilation can throw exceptions, but we build
+  // with -fno-exceptions. For now, use a simple substring match stub.
+  // A full implementation would use a regex library that doesn't need exceptions.
+  auto *stub = new UVMRegexStub();
+  stub->pattern = regexPattern;
+  stub->deglob = useGlob;
+  stub->valid = true;
+
+  // Optional: Print debug info
+  // std::printf("[DPI] uvm_re_comp: %s (deglob=%d)\n",
+  //             stub->pattern.c_str(), deglob);
+
+  return static_cast<void *>(stub);
+}
+
+extern "C" int32_t uvm_re_exec(void *rexp, MooreString *str) {
+  if (!rexp || !str || !str->data) {
+    return -1; // No match
+  }
+
+  auto *stub = static_cast<UVMRegexStub *>(rexp);
+  if (!stub->valid)
+    return -1;
+  std::string target(str->data, str->len);
+
+  // Simplified matching: just check if pattern is a substring
+  // A real implementation would use proper regex matching (e.g., PCRE2 library)
+  size_t pos = target.find(stub->pattern);
+  if (pos != std::string::npos) {
+    lastMatchBuffer = stub->pattern; // Store match for uvm_re_buffer
+    return static_cast<int32_t>(pos); // Return match position
+  }
+
+  lastMatchBuffer.clear();
+  return -1; // No match
+}
+
+extern "C" void uvm_re_free(void *rexp) {
+  if (rexp) {
+    auto *stub = static_cast<UVMRegexStub *>(rexp);
+    delete stub;
+  }
+}
+
+extern "C" MooreString uvm_re_buffer(void) {
+  // Return the last matched substring
+  MooreString result;
+  if (lastMatchBuffer.empty()) {
+    result.data = nullptr;
+    result.len = 0;
+  } else {
+    result.len = static_cast<int64_t>(lastMatchBuffer.size());
+    result.data = static_cast<char *>(std::malloc(result.len));
+    if (result.data) {
+      std::memcpy(result.data, lastMatchBuffer.data(), result.len);
+    } else {
+      result.len = 0;
+    }
+  }
+  return result;
+}
+
+extern "C" int32_t uvm_re_compexecfree(MooreString *pattern, MooreString *str,
+                                        int32_t deglob, int32_t *exec_ret) {
+  if (!pattern || !str || !exec_ret) {
+    if (exec_ret)
+      *exec_ret = -1;
+    return 0; // Invalid regex
+  }
+
+  // Compile, execute, and free in one go
+  void *rexp = uvm_re_comp(pattern, deglob);
+  if (!rexp) {
+    *exec_ret = -1;
+    return 0; // Invalid regex
+  }
+
+  *exec_ret = uvm_re_exec(rexp, str);
+  uvm_re_free(rexp);
+
+  return 1; // Valid regex
+}
+
+extern "C" MooreString uvm_re_deglobbed(MooreString *glob,
+                                         int32_t with_brackets) {
+  if (!glob || !glob->data) {
+    MooreString result = {nullptr, 0};
+    return result;
+  }
+
+  std::string pattern(glob->data, glob->len);
+  std::string regex =
+      convertGlobToRegex(pattern, with_brackets != 0);
+
+  // Allocate and return result
+  MooreString result;
+  result.len = static_cast<int64_t>(regex.size());
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, regex.data(), result.len);
+  } else {
+    result.len = 0;
+  }
+
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
+// Command Line / Tool Info Stubs
+//===----------------------------------------------------------------------===//
+
+namespace {
+// Simulated command line arguments (empty for stub)
+std::vector<std::string> cmdLineArgs;
+bool cmdLineArgsInitialized = false;
+
+void initCommandLineArgs() {
+  if (cmdLineArgsInitialized)
+    return;
+  cmdLineArgsInitialized = true;
+
+  const char *env = std::getenv("CIRCT_UVM_ARGS");
+  if (!env)
+    env = std::getenv("UVM_ARGS");
+  if (!env)
+    return;
+
+  std::string args(env);
+  size_t i = 0;
+  while (i < args.size()) {
+    while (i < args.size() &&
+           std::isspace(static_cast<unsigned char>(args[i])))
+      ++i;
+    if (i >= args.size())
+      break;
+    size_t start = i;
+    while (i < args.size() &&
+           !std::isspace(static_cast<unsigned char>(args[i])))
+      ++i;
+    if (i > start)
+      cmdLineArgs.emplace_back(args.substr(start, i - start));
+  }
+}
+} // namespace
+
+extern "C" MooreString uvm_dpi_get_next_arg_c(int32_t *idx) {
+  initCommandLineArgs();
+
+  if (!idx) {
+    MooreString result = {nullptr, 0};
+    return result;
+  }
+
+  // Stub: Return empty string (no arguments)
+  // A real implementation would parse actual command line arguments
+  if (*idx >= static_cast<int32_t>(cmdLineArgs.size())) {
+    MooreString result = {nullptr, 0};
+    return result;
+  }
+
+  const std::string &arg = cmdLineArgs[*idx];
+  (*idx)++;
+
+  MooreString result;
+  result.len = static_cast<int64_t>(arg.size());
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, arg.data(), result.len);
+  } else {
+    result.len = 0;
+  }
+
+  return result;
+}
+
+extern "C" MooreString uvm_dpi_get_tool_name_c(void) {
+  // Return "CIRCT" as the tool name
+  const char *toolName = "CIRCT";
+  size_t len = std::strlen(toolName);
+
+  MooreString result;
+  result.len = static_cast<int64_t>(len);
+  result.data = static_cast<char *>(std::malloc(len));
+  if (result.data) {
+    std::memcpy(result.data, toolName, len);
+  } else {
+    result.len = 0;
+  }
+
+  return result;
+}
+
+extern "C" MooreString uvm_dpi_get_tool_version_c(void) {
+  // Return "1.0" as the tool version
+  const char *toolVersion = "1.0";
+  size_t len = std::strlen(toolVersion);
+
+  MooreString result;
+  result.len = static_cast<int64_t>(len);
+  result.data = static_cast<char *>(std::malloc(len));
+  if (result.data) {
+    std::memcpy(result.data, toolVersion, len);
+  } else {
+    result.len = 0;
+  }
+
+  return result;
 }

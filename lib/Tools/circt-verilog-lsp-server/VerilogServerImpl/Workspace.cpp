@@ -11,7 +11,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+
+#include <regex>
 
 using namespace circt;
 using namespace circt::lsp;
@@ -325,14 +328,74 @@ llvm::Expected<std::vector<std::string>> Workspace::getAllSourceFiles() const {
   return allFiles;
 }
 
-std::vector<std::pair<std::string, std::string>>
-Workspace::findAllModules() const {
+static llvm::lsp::Position offsetToPosition(llvm::StringRef text,
+                                            size_t offset) {
+  unsigned line = 0;
+  unsigned col = 0;
+  for (size_t i = 0; i < offset && i < text.size(); ++i) {
+    if (text[i] == '\n') {
+      line++;
+      col = 0;
+    } else {
+      col++;
+    }
+  }
+  return llvm::lsp::Position(line, col);
+}
+
+std::vector<Workspace::WorkspaceSymbolEntry> Workspace::findAllSymbols() const {
   std::scoped_lock<std::mutex> lock(mutex);
 
-  std::vector<std::pair<std::string, std::string>> modules;
+  std::vector<WorkspaceSymbolEntry> symbols;
 
-  // This would require parsing all source files to extract module names
-  // For now, return empty - this can be populated as files are opened
+  auto filesOrErr = getAllSourceFiles();
+  if (!filesOrErr) {
+    llvm::consumeError(filesOrErr.takeError());
+    return symbols;
+  }
 
-  return modules;
+  std::regex pattern(
+      R"(\\b(module|interface|package|class|program|checker)\\s+(?:automatic\\s+)?([A-Za-z_][A-Za-z0-9_$]*))");
+
+  for (const auto &file : *filesOrErr) {
+    llvm::SmallString<256> absPath(file);
+    llvm::sys::fs::make_absolute(absPath);
+    llvm::sys::path::remove_dots(absPath, /*remove_dot_dot=*/true);
+
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(absPath);
+    if (!bufferOrErr)
+      continue;
+
+    llvm::StringRef contents = bufferOrErr->get()->getBuffer();
+    std::string contentStr = contents.str();
+    for (std::sregex_iterator it(contentStr.begin(), contentStr.end(), pattern),
+                              end;
+         it != end; ++it) {
+      const std::smatch &match = *it;
+      if (match.size() < 3)
+        continue;
+      std::string kindStr = match[1].str();
+      std::string name = match[2].str();
+      size_t namePos = static_cast<size_t>(match.position(2));
+      size_t nameEnd = namePos + name.size();
+
+      WorkspaceSymbolEntry entry;
+      entry.name = std::move(name);
+      entry.filePath = absPath.str().str();
+      entry.kind = llvm::lsp::SymbolKind::Module;
+      if (kindStr == "interface")
+        entry.kind = llvm::lsp::SymbolKind::Interface;
+      else if (kindStr == "package")
+        entry.kind = llvm::lsp::SymbolKind::Package;
+      else if (kindStr == "class")
+        entry.kind = llvm::lsp::SymbolKind::Class;
+
+      auto start = offsetToPosition(contents, namePos);
+      auto endPos = offsetToPosition(contents, nameEnd);
+      entry.range = llvm::lsp::Range(start, endPos);
+      symbols.push_back(std::move(entry));
+    }
+  }
+
+  return symbols;
 }

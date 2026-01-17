@@ -1,12 +1,6 @@
 // RUN: circt-verilog --ir-moore %s 2>&1 | FileCheck %s
 
-// Test that DPI-C imports are skipped with a remark, not a crash or hard error.
-// DPI-C imports are not yet supported but should not block compilation.
-// Instead of calling the DPI functions, meaningful default values are returned:
-// - int types: return 0
-// - string types: return empty string
-// - chandle types: return null (0 converted to chandle)
-// - void functions: no-op
+// Test that DPI-C imports are lowered to runtime stub calls with remarks.
 
 // DPI-C function declaration at package level
 import "DPI-C" function int c_add(int a, int b);
@@ -21,15 +15,17 @@ import "DPI-C" function string c_get_string();
 // This is commonly used by UVM for regex compilation (uvm_re_comp)
 import "DPI-C" function chandle c_get_handle();
 
-// CHECK: remark: DPI-C imports not yet supported; call to 'c_add' skipped
-// CHECK: remark: DPI-C imports not yet supported; call to 'c_void_func' skipped
-// CHECK: remark: DPI-C imports not yet supported; call to 'c_get_string' skipped
-// CHECK: remark: DPI-C imports not yet supported; call to 'c_get_handle' skipped
+// CHECK: remark: DPI-C import 'c_add' will use runtime stub (link with MooreRuntime)
+// CHECK: remark: DPI-C import 'c_void_func' will use runtime stub (link with MooreRuntime)
+// CHECK: remark: DPI-C import 'c_get_string' will use runtime stub (link with MooreRuntime)
+// CHECK: remark: DPI-C import 'c_get_handle' will use runtime stub (link with MooreRuntime)
 
 // CHECK: moore.module @DPITest
-// Check stub values are generated (constants may be hoisted to module scope):
-// CHECK: moore.constant 0 : i64
-// CHECK: moore.constant 0 : i32
+// Check DPI calls are emitted:
+// CHECK: func.call @c_add
+// CHECK: func.call @c_void_func
+// CHECK: func.call @c_get_string
+// CHECK: func.call @c_get_handle
 module DPITest;
   initial begin
     int result;
@@ -43,8 +39,3 @@ module DPITest;
     $display("result=%d s=%s h=%p", result, s, h);
   end
 endmodule
-
-// Check string stub generation inside procedure:
-// CHECK: moore.constant_string "" : i8
-// CHECK: moore.int_to_string
-// CHECK: moore.conversion %{{.*}} : !moore.i64 -> !moore.chandle
