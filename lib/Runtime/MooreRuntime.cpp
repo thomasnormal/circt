@@ -81,12 +81,51 @@ extern "C" void __moore_queue_clear(MooreQueue *queue) {
   queue->len = 0;
 }
 
-extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index) {
+extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
+                                           int64_t element_size) {
   // Delete element at specified index.
-  // TODO: This requires knowing the element size to properly shift elements.
-  // For now, this is a placeholder that just marks the operation as done.
-  (void)queue;
-  (void)index;
+  // SystemVerilog semantics: delete(index) removes the element at that index
+  // and shifts all subsequent elements down by one position.
+  if (!queue || !queue->data || element_size <= 0)
+    return;
+
+  // Bounds check: index must be valid
+  if (index < 0 || index >= queue->len)
+    return;
+
+  // If this is the last element, just shrink
+  if (queue->len == 1) {
+    std::free(queue->data);
+    queue->data = nullptr;
+    queue->len = 0;
+    return;
+  }
+
+  // Allocate new storage with one fewer element
+  int64_t newLen = queue->len - 1;
+  void *newData = std::malloc(newLen * element_size);
+  if (!newData)
+    return;
+
+  char *src = static_cast<char *>(queue->data);
+  char *dst = static_cast<char *>(newData);
+
+  // Copy elements before the deleted index
+  if (index > 0) {
+    std::memcpy(dst, src, index * element_size);
+  }
+
+  // Copy elements after the deleted index
+  if (index < queue->len - 1) {
+    std::memcpy(dst + index * element_size,
+                src + (index + 1) * element_size,
+                (queue->len - index - 1) * element_size);
+  }
+
+  // Free old data and update queue
+  std::free(queue->data);
+  queue->data = newData;
+  queue->len = newLen;
 }
 
 extern "C" void __moore_queue_push_back(MooreQueue *queue, void *element,

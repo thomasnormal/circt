@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 33 - January 17-18, 2026
+
+### Z3 Configuration (January 17)
+- ✅ Z3 4.12.4 built and installed at `~/z3-install/`
+- ✅ CIRCT configured with `Z3_DIR=~/z3-install/lib64/cmake/z3`
+- ✅ `circt-bmc` builds and runs with Z3 SMT backend
+- ✅ Runtime linking: `LD_LIBRARY_PATH=~/z3-install/lib64`
+- Note: Required symlink `lib -> lib64` for FindZ3 compatibility
+
+### UVM Parity Fixes (Queues/Arrays, File I/O, Distributions)
+
+**Queue/Array Operations**
+- Queue range slicing with runtime support
+- Dynamic array range slicing with runtime support
+- `unique_index()` implemented end-to-end
+- Array reductions: `sum()`, `product()`, `and()`, `or()`, `xor()`
+- `rsort()` and `shuffle()` queue methods wired to runtime
+
+**File I/O and System Tasks**
+- `$fgetc`, `$fgets`, `$feof`, `$fflush`, `$ftell` conversions
+- `$ferror`, `$ungetc`, `$fread` with runtime implementations
+- `$strobe`, `$monitor`, `$fstrobe`, `$fmonitor` tasks added
+- `$dumpfile/$dumpvars/$dumpports` no-op handling
+
+**Distribution Functions**
+- `$dist_uniform`, `$dist_normal`, `$dist_exponential`, `$dist_poisson`
+- `$dist_erlang`, `$dist_chi_square`, `$dist_t`
+
+**Lowering/Type System**
+- Unpacked array comparison (`uarray_cmp`) lowering implemented
+- String → bitvector fallback for UVM field automation
+- Randsequence production argument binding (input-only, default values)
+- Randsequence randjoin(1) support
+- Streaming operator lvalue unpacking for dynamic arrays/queues
+- Tagged union construction + member access (struct wrapper)
+- Tagged union PatternCase matching (tag compare/extract)
+- Tagged union matches in `if` / conditional expressions
+- Randsequence statement lowering restored (weights/if/case/repeat, randjoin(1))
+
+**Tests**
+- Added randsequence arguments/defaults test case
+- Added randsequence randjoin(1) test case
+
+**Files Modified**
+- `lib/Conversion/ImportVerilog/Expressions.cpp`
+- `lib/Conversion/ImportVerilog/Statements.cpp`
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- `include/circt/Dialect/Moore/MooreOps.td`
+- `include/circt/Runtime/MooreRuntime.h`
+- `lib/Runtime/MooreRuntime.cpp`
+
+**Next Focus**
+- Dynamic array range select lowering (queue slice already implemented)
+
+---
+
 ## Iteration 31 - January 16, 2026
 
 ### Clocking Block Signal Access and @(cb) Syntax (commit 43f3c7a4d)

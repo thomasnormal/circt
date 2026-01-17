@@ -1,0 +1,133 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test go-to-definition for various Verilog/SystemVerilog constructs
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// Test 1: Module instantiation - go to module definition from instance
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///inst.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"module child(input a, output b);\n  assign b = a;\nendmodule\n\nmodule parent;\n  wire x, y;\n  child inst(.a(x), .b(y));\nendmodule"
+}}}
+// -----
+// Go to definition of module 'child' from instantiation type (child at char 2)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///inst.sv"},
+  "position":{"line":6,"character":4}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 0
+// CHECK:           },
+// CHECK:           "uri": "test:///inst.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Go to definition of wire 'x' from port connection (x at char 16)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///inst.sv"},
+  "position":{"line":6,"character":16}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 5
+// CHECK:           },
+// CHECK:           "uri": "test:///inst.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"test:///inst.sv"}}}
+// -----
+// Test 2: Wire and reg definitions
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///signals.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"module signals;\n  wire [7:0] data_wire;\n  reg [7:0] data_reg;\n  logic [7:0] data_logic;\n  \n  assign data_wire = data_reg;\n  always @* data_reg = data_logic;\nendmodule"
+}}}
+// -----
+// Go to definition of 'data_reg' from assignment (data_reg at char 21)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///signals.sv"},
+  "position":{"line":5,"character":21}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 2
+// CHECK:           },
+// CHECK:           "uri": "test:///signals.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Go to definition of 'data_logic' from always block (data_logic at char 23)
+{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///signals.sv"},
+  "position":{"line":6,"character":23}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 3
+// CHECK:           },
+// CHECK:           "uri": "test:///signals.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"test:///signals.sv"}}}
+// -----
+// Test 3: Port definitions
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///ports.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"module ports(input clk, input [7:0] data, output reg [7:0] result);\n  always @(posedge clk)\n    result <= data;\nendmodule"
+}}}
+// -----
+// Go to definition of 'data' from always block (data at char 14)
+{"jsonrpc":"2.0","id":5,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///ports.sv"},
+  "position":{"line":2,"character":14}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 0
+// CHECK:           },
+// CHECK:           "uri": "test:///ports.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Go to definition of 'clk' from always sensitivity list (clk at char 19)
+{"jsonrpc":"2.0","id":6,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///ports.sv"},
+  "position":{"line":1,"character":19}
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 0
+// CHECK:           },
+// CHECK:           "uri": "test:///ports.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+{"jsonrpc":"2.0","id":7,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

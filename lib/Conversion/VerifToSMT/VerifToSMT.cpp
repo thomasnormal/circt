@@ -37,6 +37,165 @@ using namespace hw;
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+//===----------------------------------------------------------------------===//
+// LTL Operation Conversion Patterns
+//===----------------------------------------------------------------------===//
+
+/// Convert ltl.and to smt.and
+struct LTLAndOpConversion : OpConversionPattern<ltl::AndOp> {
+  using OpConversionPattern<ltl::AndOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::AndOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Value, 4> smtOperands;
+    for (Value input : adaptor.getInputs()) {
+      Value converted = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()), input);
+      if (!converted)
+        return failure();
+      smtOperands.push_back(converted);
+    }
+    if (smtOperands.size() == 1) {
+      rewriter.replaceOp(op, smtOperands[0]);
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<smt::AndOp>(op, smtOperands);
+    return success();
+  }
+};
+
+/// Convert ltl.or to smt.or
+struct LTLOrOpConversion : OpConversionPattern<ltl::OrOp> {
+  using OpConversionPattern<ltl::OrOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::OrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Value, 4> smtOperands;
+    for (Value input : adaptor.getInputs()) {
+      Value converted = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()), input);
+      if (!converted)
+        return failure();
+      smtOperands.push_back(converted);
+    }
+    if (smtOperands.size() == 1) {
+      rewriter.replaceOp(op, smtOperands[0]);
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<smt::OrOp>(op, smtOperands);
+    return success();
+  }
+};
+
+/// Convert ltl.not to smt.not
+struct LTLNotOpConversion : OpConversionPattern<ltl::NotOp> {
+  using OpConversionPattern<ltl::NotOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::NotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value input = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getInput());
+    if (!input)
+      return failure();
+    rewriter.replaceOpWithNewOp<smt::NotOp>(op, input);
+    return success();
+  }
+};
+
+/// Convert ltl.implication to smt.or(not(antecedent), consequent)
+struct LTLImplicationOpConversion : OpConversionPattern<ltl::ImplicationOp> {
+  using OpConversionPattern<ltl::ImplicationOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::ImplicationOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value antecedent = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getAntecedent());
+    Value consequent = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getConsequent());
+    if (!antecedent || !consequent)
+      return failure();
+    Value notAntecedent = smt::NotOp::create(rewriter, op.getLoc(), antecedent);
+    rewriter.replaceOpWithNewOp<smt::OrOp>(op, notAntecedent, consequent);
+    return success();
+  }
+};
+
+/// Convert ltl.eventually to SMT boolean.
+/// For bounded model checking, eventually(p) at the current time step
+/// contributes p to an OR over all time steps. The BMC loop handles
+/// the accumulation; here we just convert the inner property.
+struct LTLEventuallyOpConversion : OpConversionPattern<ltl::EventuallyOp> {
+  using OpConversionPattern<ltl::EventuallyOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::EventuallyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For BMC: eventually(p) means p should hold at some point.
+    // At each time step, we check if p holds. The BMC loop accumulates
+    // these checks with OR. Here we convert the inner property.
+    Value input = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getInput());
+    if (!input)
+      return failure();
+    // The eventually property at this step is just the inner property value
+    // The liveness aspect (must eventually hold) is checked by the BMC framework
+    rewriter.replaceOp(op, input);
+    return success();
+  }
+};
+
+/// Convert ltl.until to SMT boolean.
+/// p until q: p holds continuously until q holds.
+/// For bounded checking at a single step: q || (p && X(p U q))
+/// Since X requires next-state which BMC handles, we encode:
+/// weak until semantics: q || p (either q holds or p holds at this step)
+struct LTLUntilOpConversion : OpConversionPattern<ltl::UntilOp> {
+  using OpConversionPattern<ltl::UntilOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::UntilOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value p = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getInput());
+    Value q = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getCondition());
+    if (!p || !q)
+      return failure();
+    // Weak until: the property q || p
+    // Full until semantics requires tracking across time steps in BMC
+    rewriter.replaceOpWithNewOp<smt::OrOp>(op, q, p);
+    return success();
+  }
+};
+
+/// Convert ltl.boolean_constant to smt.constant
+struct LTLBooleanConstantOpConversion
+    : OpConversionPattern<ltl::BooleanConstantOp> {
+  using OpConversionPattern<ltl::BooleanConstantOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::BooleanConstantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, op.getValue());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Verif Operation Conversion Patterns
+//===----------------------------------------------------------------------===//
+
 /// Lower a verif::AssertOp operation with an i1 operand to a smt::AssertOp,
 /// negated to check for unsatisfiability.
 struct VerifAssertOpConversion : OpConversionPattern<verif::AssertOp> {
@@ -837,6 +996,13 @@ void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
+  // Add LTL operation conversion patterns
+  patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLNotOpConversion,
+               LTLImplicationOpConversion, LTLEventuallyOpConversion,
+               LTLUntilOpConversion, LTLBooleanConstantOpConversion>(
+      converter, patterns.getContext());
+
+  // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
                VerifCoverOpConversion,
                LogicEquivalenceCheckingOpConversion,
@@ -951,6 +1117,18 @@ void ConvertVerifToSMTPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   TypeConverter converter;
   populateHWToSMTTypeConverter(converter);
+
+  // Add type conversions for LTL types to SMT bool
+  converter.addConversion([](ltl::SequenceType type) -> Type {
+    return smt::BoolType::get(type.getContext());
+  });
+  converter.addConversion([](ltl::PropertyType type) -> Type {
+    return smt::BoolType::get(type.getContext());
+  });
+
+  // Mark LTL operations as illegal so they get converted
+  target.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::NotOp, ltl::ImplicationOp,
+                      ltl::EventuallyOp, ltl::UntilOp, ltl::BooleanConstantOp>();
 
   SymbolCache symCache;
   symCache.addDefinitions(getOperation());

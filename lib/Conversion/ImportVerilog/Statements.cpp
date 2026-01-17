@@ -8,7 +8,12 @@
 
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
+#include "slang/ast/Statement.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/statements/MiscStatements.h"
+#include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace mlir;
@@ -439,12 +444,22 @@ struct StmtVisitor {
     // `&&&` operator.
     Value allConds;
     for (const auto &condition : stmt.conditions) {
-      if (condition.pattern)
-        return mlir::emitError(loc,
-                               "match patterns in if conditions not supported");
-      auto cond = context.convertRvalueExpression(*condition.expr);
-      if (!cond)
-        return failure();
+      Value cond;
+      if (condition.pattern) {
+        auto exprValue = context.convertRvalueExpression(*condition.expr);
+        if (!exprValue)
+          return failure();
+        auto patternMatch = matchPattern(
+            *condition.pattern, exprValue, *condition.expr->type,
+            slang::ast::CaseStatementCondition::Normal);
+        if (failed(patternMatch))
+          return failure();
+        cond = *patternMatch;
+      } else {
+        cond = context.convertRvalueExpression(*condition.expr);
+        if (!cond)
+          return failure();
+      }
       cond = context.convertToBool(cond);
       if (!cond)
         return failure();
@@ -481,6 +496,76 @@ struct StmtVisitor {
 
     // If control never reaches the exit block, remove it and mark control flow
     // as terminated. Otherwise we continue inserting ops in the exit block.
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
+  /// Handle pattern case statements.
+  LogicalResult visit(const slang::ast::PatternCaseStatement &stmt) {
+    auto caseExpr = context.convertRvalueExpression(stmt.expr);
+    if (!caseExpr)
+      return failure();
+
+    auto &exitBlock = createBlock();
+    Block *lastMatchBlock = nullptr;
+
+    for (const auto &item : stmt.items) {
+      auto &matchBlock = createBlock();
+      lastMatchBlock = &matchBlock;
+
+      auto matchResult =
+          matchPattern(*item.pattern, caseExpr, *stmt.expr.type, stmt.condition);
+      if (failed(matchResult))
+        return failure();
+      auto cond = context.convertToBool(*matchResult);
+      if (!cond)
+        return failure();
+
+      if (item.filter) {
+        auto filter = context.convertRvalueExpression(*item.filter);
+        if (!filter)
+          return failure();
+        filter = context.convertToBool(filter);
+        if (!filter)
+          return failure();
+        cond = moore::AndOp::create(builder, loc, cond, filter);
+      }
+
+      cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+      auto &nextBlock = createBlock();
+      cf::CondBranchOp::create(builder, loc, cond, &matchBlock, &nextBlock);
+      builder.setInsertionPointToEnd(&nextBlock);
+
+      matchBlock.moveBefore(builder.getInsertionBlock());
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToEnd(&matchBlock);
+      if (failed(context.convertStatement(*item.stmt)))
+        return failure();
+      if (!isTerminated()) {
+        auto itemLoc = context.convertLocation(item.stmt->sourceRange);
+        cf::BranchOp::create(builder, itemLoc, &exitBlock);
+      }
+    }
+
+    if (stmt.defaultCase) {
+      auto &defaultBlock = createBlock();
+      cf::BranchOp::create(builder, loc, &defaultBlock);
+      builder.setInsertionPointToEnd(&defaultBlock);
+      if (failed(context.convertStatement(*stmt.defaultCase)))
+        return failure();
+      if (!isTerminated()) {
+        auto defLoc = context.convertLocation(stmt.defaultCase->sourceRange);
+        cf::BranchOp::create(builder, defLoc, &exitBlock);
+      }
+    } else if (lastMatchBlock) {
+      cf::BranchOp::create(builder, loc, &exitBlock);
+    }
+
     if (exitBlock.hasNoPredecessors()) {
       exitBlock.erase();
       setTerminated();
@@ -655,6 +740,166 @@ struct StmtVisitor {
       builder.setInsertionPointToEnd(&exitBlock);
     }
     return success();
+  }
+
+  FailureOr<Value> matchPattern(const slang::ast::Pattern &pattern, Value value,
+                                const slang::ast::Type &targetType,
+                                slang::ast::CaseStatementCondition condKind) {
+    using slang::ast::PatternKind;
+    switch (pattern.kind) {
+    case PatternKind::Wildcard: {
+      auto boolType = moore::IntType::get(context.getContext(), 1,
+                                          moore::Domain::TwoValued);
+      return moore::ConstantOp::create(builder, loc, boolType, 1);
+    }
+    case PatternKind::Constant: {
+      auto &constPattern = pattern.as<slang::ast::ConstantPattern>();
+      auto rhs = context.convertRvalueExpression(constPattern.expr);
+      if (!rhs)
+        return failure();
+      return comparePatternValue(value, rhs, condKind);
+    }
+    case PatternKind::Tagged:
+      return matchTaggedPattern(pattern.as<slang::ast::TaggedPattern>(), value,
+                                targetType, condKind);
+    default:
+      mlir::emitError(loc) << "unsupported pattern in case statement: "
+                           << slang::ast::toString(pattern.kind);
+      return failure();
+    }
+  }
+
+  FailureOr<Value>
+  comparePatternValue(Value lhs, Value rhs,
+                      slang::ast::CaseStatementCondition condKind) {
+    if (isa<moore::StringType>(lhs.getType())) {
+      auto cond = moore::StringCmpOp::create(
+          builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
+      return context.convertToBool(cond);
+    }
+
+    auto lhsSBV = context.convertToSimpleBitVector(lhs);
+    auto rhsSBV = context.convertToSimpleBitVector(rhs);
+    if (!lhsSBV || !rhsSBV)
+      return failure();
+
+    Value cond;
+    switch (condKind) {
+    case slang::ast::CaseStatementCondition::Normal:
+      cond = moore::CaseEqOp::create(builder, loc, lhsSBV, rhsSBV);
+      break;
+    case slang::ast::CaseStatementCondition::WildcardXOrZ:
+      cond = moore::CaseXZEqOp::create(builder, loc, lhsSBV, rhsSBV);
+      break;
+    case slang::ast::CaseStatementCondition::WildcardJustZ:
+      cond = moore::CaseZEqOp::create(builder, loc, lhsSBV, rhsSBV);
+      break;
+    case slang::ast::CaseStatementCondition::Inside:
+      mlir::emitError(loc, "unsupported set membership pattern match");
+      return failure();
+    }
+    return context.convertToBool(cond);
+  }
+
+  FailureOr<Value>
+  matchTaggedPattern(const slang::ast::TaggedPattern &pattern, Value value,
+                     const slang::ast::Type &targetType,
+                     slang::ast::CaseStatementCondition condKind) {
+    if (!targetType.isTaggedUnion()) {
+      mlir::emitError(loc)
+          << "tagged pattern applied to non-tagged union type";
+      return failure();
+    }
+
+    auto getTaggedUnionField =
+        [&](Type containerType, StringRef fieldName)
+        -> std::optional<moore::StructLikeMember> {
+      if (auto structTy = dyn_cast<moore::StructType>(containerType)) {
+        for (auto member : structTy.getMembers())
+          if (member.name.getValue() == fieldName)
+            return member;
+      } else if (auto structTy =
+                     dyn_cast<moore::UnpackedStructType>(containerType)) {
+        for (auto member : structTy.getMembers())
+          if (member.name.getValue() == fieldName)
+            return member;
+      }
+      return std::nullopt;
+    };
+
+    auto containerType = value.getType();
+    if (auto refTy = dyn_cast<moore::RefType>(containerType))
+      containerType = refTy.getNestedType();
+
+    auto dataMember = getTaggedUnionField(containerType, "data");
+    auto tagMember = getTaggedUnionField(containerType, "tag");
+    if (!dataMember || !tagMember) {
+      mlir::emitError(loc)
+          << "tagged union lowering expected {tag, data} struct wrapper";
+      return failure();
+    }
+
+    unsigned tagIndex = 0;
+    bool found = false;
+    const auto &canonical = targetType.getCanonicalType();
+    if (auto *packed = canonical.as_if<slang::ast::PackedUnionType>()) {
+      for (auto &member : packed->membersOfType<slang::ast::FieldSymbol>()) {
+        if (&member == &pattern.member) {
+          found = true;
+          break;
+        }
+        ++tagIndex;
+      }
+    } else if (auto *unpacked =
+                   canonical.as_if<slang::ast::UnpackedUnionType>()) {
+      for (auto &member : unpacked->membersOfType<slang::ast::FieldSymbol>()) {
+        if (&member == &pattern.member) {
+          found = true;
+          break;
+        }
+        ++tagIndex;
+      }
+    }
+
+    if (!found) {
+      mlir::emitError(loc) << "could not resolve tagged union member index";
+      return failure();
+    }
+
+    auto tagValue =
+        moore::StructExtractOp::create(builder, loc, tagMember->type,
+                                       tagMember->name, value);
+    auto tagConst = moore::ConstantOp::create(builder, loc, tagMember->type,
+                                              tagIndex);
+    auto tagMatch = comparePatternValue(tagValue, tagConst,
+                                        slang::ast::CaseStatementCondition::Normal);
+    if (failed(tagMatch))
+      return failure();
+
+    if (!pattern.valuePattern)
+      return tagMatch;
+
+    auto unionValue =
+        moore::StructExtractOp::create(builder, loc, dataMember->type,
+                                       dataMember->name, value);
+    auto memberName = builder.getStringAttr(pattern.member.name);
+    auto memberType = context.convertType(*pattern.member.getDeclaredType());
+    if (!memberType)
+      return failure();
+    if (isa<moore::VoidType>(memberType))
+      memberType = moore::IntType::getInt(context.getContext(), 1);
+
+    auto memberValue = moore::UnionExtractOp::create(
+        builder, loc, memberType, memberName, unionValue);
+    auto valueMatch =
+        matchPattern(*pattern.valuePattern, memberValue,
+                     *pattern.member.getDeclaredType(), condKind);
+    if (failed(valueMatch))
+      return failure();
+
+    auto combined =
+        moore::AndOp::create(builder, loc, *tagMatch, *valueMatch);
+    return context.convertToBool(combined);
   }
 
   // Handle `for` loops.
@@ -1301,6 +1546,549 @@ struct StmtVisitor {
     else
       moore::BlockingAssignOp::create(builder, loc, target, inverted);
     return success();
+  }
+
+  // Handle randsequence statements.
+  LogicalResult visit(const slang::ast::RandSequenceStatement &stmt) {
+    if (!stmt.firstProduction)
+      return success();
+    return executeProduction(*stmt.firstProduction);
+  }
+
+  // Handle randcase statements.
+  // RandCase provides weighted random case selection (IEEE 1800-2017 Section
+  // 18.16). We generate weighted random selection using $urandom_range,
+  // computing total weight and using cascading comparisons to select an item.
+  LogicalResult visit(const slang::ast::RandCaseStatement &stmt) {
+    // Empty randcase - nothing to do
+    if (stmt.items.empty())
+      return success();
+
+    // Collect weights from each item
+    SmallVector<int64_t> weights;
+    int64_t totalWeight = 0;
+    for (const auto &item : stmt.items) {
+      // Evaluate the weight expression (must be a constant integer)
+      auto cv = context.evaluateConstant(*item.expr);
+      int64_t weight = 1; // Default weight if evaluation fails
+      if (!cv.bad()) {
+        auto maybeWeight = cv.integer().as<int64_t>();
+        if (maybeWeight)
+          weight = *maybeWeight;
+      }
+      // Weights must be non-negative
+      if (weight < 0)
+        weight = 0;
+      weights.push_back(weight);
+      totalWeight += weight;
+    }
+
+    // If all weights are 0, treat them all as equal weight of 1
+    if (totalWeight == 0) {
+      totalWeight = stmt.items.size();
+      for (auto &w : weights)
+        w = 1;
+    }
+
+    // If there's only one item with positive weight, execute it directly
+    size_t nonZeroCount = 0;
+    size_t lastNonZeroIdx = 0;
+    for (size_t i = 0; i < weights.size(); ++i) {
+      if (weights[i] > 0) {
+        nonZeroCount++;
+        lastNonZeroIdx = i;
+      }
+    }
+    if (nonZeroCount == 1)
+      return context.convertStatement(*stmt.items[lastNonZeroIdx].stmt);
+
+    // Generate a random number in [0, totalWeight-1]
+    auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+    Value maxVal =
+        moore::ConstantOp::create(builder, loc, i32Ty, totalWeight - 1);
+    Value randVal =
+        moore::UrandomRangeBIOp::create(builder, loc, maxVal, Value{});
+
+    // Create blocks for each item and an exit block
+    auto &exitBlock = createBlock();
+    SmallVector<Block *> itemBlocks;
+    for (size_t i = 0; i < stmt.items.size(); ++i)
+      itemBlocks.push_back(&createBlock());
+
+    // Generate cascading comparisons to select the item
+    // If rand < weight[0], goto item[0]
+    // else if rand < weight[0] + weight[1], goto item[1]
+    // etc.
+    int64_t cumWeight = 0;
+    for (size_t i = 0; i < stmt.items.size(); ++i) {
+      cumWeight += weights[i];
+      auto threshold = moore::ConstantOp::create(builder, loc, i32Ty, cumWeight);
+      Value cond = moore::UltOp::create(builder, loc, randVal, threshold);
+      cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+
+      if (i == stmt.items.size() - 1) {
+        // Last item - unconditional branch
+        cf::BranchOp::create(builder, loc, itemBlocks[i]);
+      } else {
+        auto &nextCheckBlock = createBlock();
+        cf::CondBranchOp::create(builder, loc, cond, itemBlocks[i],
+                                 &nextCheckBlock);
+        builder.setInsertionPointToEnd(&nextCheckBlock);
+      }
+    }
+
+    // Generate code for each item
+    for (size_t i = 0; i < stmt.items.size(); ++i) {
+      builder.setInsertionPointToEnd(itemBlocks[i]);
+      if (failed(context.convertStatement(*stmt.items[i].stmt)))
+        return failure();
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
+    }
+
+    // Continue at exit block
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
+  LogicalResult executeProduction(
+      const slang::ast::RandSeqProductionSymbol &prod) {
+    auto rules = prod.getRules();
+    if (rules.empty())
+      return success();
+    if (rules.size() == 1)
+      return executeRule(rules[0]);
+
+    SmallVector<int64_t> weights;
+    int64_t totalWeight = 0;
+    for (const auto &rule : rules) {
+      int64_t weight = 1;
+      if (rule.weightExpr) {
+        auto cv = context.evaluateConstant(*rule.weightExpr);
+        if (!cv.bad()) {
+          auto maybeWeight = cv.integer().as<int64_t>();
+          if (maybeWeight)
+            weight = *maybeWeight;
+        }
+      }
+      if (weight < 0)
+        weight = 0;
+      weights.push_back(weight);
+      totalWeight += weight;
+    }
+
+    if (totalWeight == 0) {
+      totalWeight = rules.size();
+      for (auto &w : weights)
+        w = 1;
+    }
+
+    size_t nonZeroCount = 0;
+    size_t lastNonZeroIdx = 0;
+    for (size_t i = 0; i < weights.size(); ++i) {
+      if (weights[i] > 0) {
+        nonZeroCount++;
+        lastNonZeroIdx = i;
+      }
+    }
+    if (nonZeroCount == 1)
+      return executeRule(rules[lastNonZeroIdx]);
+
+    auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+    Value maxVal =
+        moore::ConstantOp::create(builder, loc, i32Ty, totalWeight - 1);
+    Value randVal =
+        moore::UrandomRangeBIOp::create(builder, loc, maxVal, Value{});
+
+    auto &exitBlock = createBlock();
+    SmallVector<Block *> ruleBlocks;
+    for (size_t i = 0; i < rules.size(); ++i)
+      ruleBlocks.push_back(&createBlock());
+
+    int64_t cumWeight = 0;
+    for (size_t i = 0; i < rules.size(); ++i) {
+      cumWeight += weights[i];
+      auto threshold =
+          moore::ConstantOp::create(builder, loc, i32Ty, cumWeight);
+      Value cond = moore::UltOp::create(builder, loc, randVal, threshold);
+      cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+
+      if (i == rules.size() - 1) {
+        cf::BranchOp::create(builder, loc, ruleBlocks[i]);
+      } else {
+        auto &nextCheckBlock = createBlock();
+        cf::CondBranchOp::create(builder, loc, cond, ruleBlocks[i],
+                                 &nextCheckBlock);
+        builder.setInsertionPointToEnd(&nextCheckBlock);
+      }
+    }
+
+    for (size_t i = 0; i < rules.size(); ++i) {
+      builder.setInsertionPointToEnd(ruleBlocks[i]);
+      if (failed(executeRule(rules[i])))
+        return failure();
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
+    }
+
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
+  LogicalResult
+  executeRule(const slang::ast::RandSeqProductionSymbol::Rule &rule) {
+    Context::ValueSymbolScope ruleScope(context.valueSymbols);
+    auto savedScope = context.currentScope;
+    context.currentScope = rule.ruleBlock;
+    auto scopeGuard =
+        llvm::make_scope_exit([&] { context.currentScope = savedScope; });
+
+    Block &breakBlock = createBlock();
+    context.loopStack.push_back({&breakBlock, &breakBlock});
+    auto loopGuard =
+        llvm::make_scope_exit([&] { context.loopStack.pop_back(); });
+
+    if (rule.codeBlock)
+      if (failed(convertStatementBlock(*rule.codeBlock->block)))
+        return failure();
+
+    if (rule.isRandJoin) {
+      int64_t joinCount = 0;
+      if (rule.randJoinExpr) {
+        auto cv = context.evaluateConstant(*rule.randJoinExpr);
+        if (!cv.bad()) {
+          auto maybeCount = cv.integer().as<int64_t>();
+          if (maybeCount)
+            joinCount = *maybeCount;
+        }
+      }
+      if (joinCount <= 0)
+        joinCount = 1;
+
+      if (joinCount == 1 && !rule.prods.empty()) {
+        auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+        Value maxVal = moore::ConstantOp::create(
+            builder, loc, i32Ty,
+            static_cast<int64_t>(rule.prods.size() - 1));
+        Value randVal =
+            moore::UrandomRangeBIOp::create(builder, loc, maxVal, Value{});
+
+        auto &exitBlock = createBlock();
+        SmallVector<Block *> itemBlocks;
+        for (size_t i = 0; i < rule.prods.size(); ++i)
+          itemBlocks.push_back(&createBlock());
+
+        for (size_t i = 0; i < rule.prods.size(); ++i) {
+          auto idxConst = moore::ConstantOp::create(
+              builder, loc, i32Ty, static_cast<int64_t>(i));
+          Value cond =
+              moore::CaseEqOp::create(builder, loc, randVal, idxConst);
+          cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+          if (i == rule.prods.size() - 1) {
+            cf::BranchOp::create(builder, loc, itemBlocks[i]);
+          } else {
+            auto &nextCheckBlock = createBlock();
+            cf::CondBranchOp::create(builder, loc, cond, itemBlocks[i],
+                                     &nextCheckBlock);
+            builder.setInsertionPointToEnd(&nextCheckBlock);
+          }
+        }
+
+        for (size_t i = 0; i < rule.prods.size(); ++i) {
+          builder.setInsertionPointToEnd(itemBlocks[i]);
+          if (failed(executeProdBase(*rule.prods[i])))
+            return failure();
+          if (!isTerminated())
+            cf::BranchOp::create(builder, loc, &exitBlock);
+        }
+
+        if (exitBlock.hasNoPredecessors()) {
+          exitBlock.erase();
+          setTerminated();
+        } else {
+          builder.setInsertionPointToEnd(&exitBlock);
+        }
+      } else {
+        mlir::emitRemark(loc)
+            << "randjoin(" << joinCount
+            << ") not fully supported; executing productions sequentially";
+        for (auto prod : rule.prods) {
+          if (failed(executeProdBase(*prod)))
+            return failure();
+          if (isTerminated())
+            break;
+        }
+      }
+    } else {
+      for (auto prod : rule.prods) {
+        if (failed(executeProdBase(*prod)))
+          return failure();
+        if (isTerminated())
+          break;
+      }
+    }
+
+    if (!isTerminated())
+      cf::BranchOp::create(builder, loc, &breakBlock);
+
+    if (!breakBlock.hasNoPredecessors()) {
+      builder.setInsertionPointToEnd(&breakBlock);
+      return success();
+    }
+
+    if (isTerminated())
+      return success();
+
+    breakBlock.erase();
+    return success();
+  }
+
+  LogicalResult executeProdBase(
+      const slang::ast::RandSeqProductionSymbol::ProdBase &prodBase) {
+    using ProdKind = slang::ast::RandSeqProductionSymbol::ProdKind;
+    switch (prodBase.kind) {
+    case ProdKind::Item:
+      return executeProdItem(
+          prodBase.as<slang::ast::RandSeqProductionSymbol::ProdItem>());
+    case ProdKind::CodeBlock:
+      return convertStatementBlock(
+          *prodBase.as<slang::ast::RandSeqProductionSymbol::CodeBlockProd>()
+               .block);
+    case ProdKind::IfElse:
+      return executeIfElseProd(
+          prodBase.as<slang::ast::RandSeqProductionSymbol::IfElseProd>());
+    case ProdKind::Repeat:
+      return executeRepeatProd(
+          prodBase.as<slang::ast::RandSeqProductionSymbol::RepeatProd>());
+    case ProdKind::Case:
+      return executeCaseProd(
+          prodBase.as<slang::ast::RandSeqProductionSymbol::CaseProd>());
+    }
+    return success();
+  }
+
+  LogicalResult executeProdItem(
+      const slang::ast::RandSeqProductionSymbol::ProdItem &item) {
+    if (!item.target)
+      return success();
+
+    Context::ValueSymbolScope argScope(context.valueSymbols);
+    auto args = item.args;
+    auto formals = item.target->arguments;
+    if (args.size() > formals.size()) {
+      mlir::emitError(loc) << "too many arguments in randsequence production";
+      return failure();
+    }
+    for (size_t i = 0; i < formals.size(); ++i) {
+      auto *formal = formals[i];
+      if (formal->direction != slang::ast::ArgumentDirection::In) {
+        mlir::emitError(loc)
+            << "randsequence production arguments must be input-only";
+        return failure();
+      }
+      const slang::ast::Expression *argExpr = nullptr;
+      if (i < args.size())
+        argExpr = args[i];
+      else
+        argExpr = formal->getDefaultValue();
+      if (!argExpr) {
+        mlir::emitError(loc)
+            << "missing argument for randsequence production '"
+            << item.target->name << "'";
+        return failure();
+      }
+      auto argType = context.convertType(*formal->getDeclaredType());
+      if (!argType)
+        return failure();
+      auto argValue = context.convertRvalueExpression(*argExpr, argType);
+      if (!argValue)
+        return failure();
+
+      auto refTy = moore::RefType::get(cast<moore::UnpackedType>(argType));
+      auto var = moore::VariableOp::create(
+          builder, loc, refTy, builder.getStringAttr(formal->name), argValue);
+      context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                           formal, var);
+    }
+
+    return executeProduction(*item.target);
+  }
+
+  LogicalResult executeIfElseProd(
+      const slang::ast::RandSeqProductionSymbol::IfElseProd &ifElse) {
+    auto condValue = context.convertRvalueExpression(*ifElse.expr);
+    if (!condValue)
+      return failure();
+    condValue = context.convertToBool(condValue);
+    if (!condValue)
+      return failure();
+    condValue = moore::ToBuiltinBoolOp::create(builder, loc, condValue);
+
+    Block &exitBlock = createBlock();
+    Block &trueBlock = createBlock();
+    Block *falseBlock = ifElse.elseItem ? &createBlock() : nullptr;
+    cf::CondBranchOp::create(builder, loc, condValue, &trueBlock,
+                             falseBlock ? falseBlock : &exitBlock);
+
+    builder.setInsertionPointToEnd(&trueBlock);
+    if (failed(executeProdItem(ifElse.ifItem)))
+      return failure();
+    if (!isTerminated())
+      cf::BranchOp::create(builder, loc, &exitBlock);
+
+    if (ifElse.elseItem) {
+      builder.setInsertionPointToEnd(falseBlock);
+      if (failed(executeProdItem(*ifElse.elseItem)))
+        return failure();
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
+    }
+
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
+  LogicalResult executeRepeatProd(
+      const slang::ast::RandSeqProductionSymbol::RepeatProd &repeat) {
+    auto cv = context.evaluateConstant(*repeat.expr);
+    if (cv.bad()) {
+      mlir::emitError(loc) << "randsequence repeat count must be constant";
+      return failure();
+    }
+    auto maybeCount = cv.integer().as<int64_t>();
+    if (!maybeCount)
+      return success();
+    int64_t count = *maybeCount;
+    if (count <= 0)
+      return success();
+
+    auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+    Value countVal = moore::ConstantOp::create(builder, loc, i32Ty, count);
+    Value initVal = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+    auto counter = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(i32Ty),
+        builder.getStringAttr("rs_idx"), initVal);
+
+    Block &condBlock = createBlock();
+    Block &bodyBlock = createBlock();
+    Block &stepBlock = createBlock();
+    Block &exitBlock = createBlock();
+
+    cf::BranchOp::create(builder, loc, &condBlock);
+
+    builder.setInsertionPointToEnd(&condBlock);
+    Value idxVal = moore::ReadOp::create(builder, loc, counter);
+    Value cond = moore::UltOp::create(builder, loc, idxVal, countVal);
+    cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+    cf::CondBranchOp::create(builder, loc, cond, &bodyBlock, &exitBlock);
+
+    builder.setInsertionPointToEnd(&bodyBlock);
+    if (failed(executeProdItem(repeat.item)))
+      return failure();
+    if (!isTerminated())
+      cf::BranchOp::create(builder, loc, &stepBlock);
+
+    builder.setInsertionPointToEnd(&stepBlock);
+    Value nextVal = moore::AddOp::create(
+        builder, loc, idxVal,
+        moore::ConstantOp::create(builder, loc, i32Ty, 1));
+    moore::BlockingAssignOp::create(builder, loc, counter, nextVal);
+    cf::BranchOp::create(builder, loc, &condBlock);
+
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
+  LogicalResult executeCaseProd(
+      const slang::ast::RandSeqProductionSymbol::CaseProd &caseProd) {
+    auto caseExpr = context.convertRvalueExpression(*caseProd.expr);
+    if (!caseExpr)
+      return failure();
+
+    auto &exitBlock = createBlock();
+    Block *lastMatchBlock = nullptr;
+
+    for (const auto &item : caseProd.items) {
+      auto &matchBlock = createBlock();
+      lastMatchBlock = &matchBlock;
+
+      for (const auto *expr : item.expressions) {
+        auto value = context.convertRvalueExpression(*expr);
+        if (!value)
+          return failure();
+        auto caseExprSBV = context.convertToSimpleBitVector(caseExpr);
+        auto valueSBV = context.convertToSimpleBitVector(value);
+        if (!caseExprSBV || !valueSBV)
+          return failure();
+        Value cond =
+            moore::CaseEqOp::create(builder, loc, caseExprSBV, valueSBV);
+        cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+
+        auto &nextBlock = createBlock();
+        cf::CondBranchOp::create(builder, loc, cond, &matchBlock, &nextBlock);
+        builder.setInsertionPointToEnd(&nextBlock);
+      }
+
+      matchBlock.moveBefore(builder.getInsertionBlock());
+
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToEnd(&matchBlock);
+      if (failed(executeProdItem(item.item)))
+        return failure();
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
+    }
+
+    if (caseProd.defaultItem) {
+      if (failed(executeProdItem(*caseProd.defaultItem)))
+        return failure();
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
+    } else if (lastMatchBlock) {
+      cf::BranchOp::create(builder, loc, lastMatchBlock);
+    }
+
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
+  LogicalResult
+  convertStatementBlock(const slang::ast::StatementBlockSymbol &block) {
+    auto savedScope = context.currentScope;
+    context.currentScope = &block;
+    auto scopeGuard =
+        llvm::make_scope_exit([&] { context.currentScope = savedScope; });
+
+    slang::ast::ASTContext astContext(block,
+                                      slang::ast::LookupLocation::max);
+    slang::ast::Statement::StatementContext stmtCtx(astContext);
+    const auto &stmt = block.getStatement(astContext, stmtCtx);
+    return context.convertStatement(stmt);
   }
 
   /// Emit an error for all other statements.
