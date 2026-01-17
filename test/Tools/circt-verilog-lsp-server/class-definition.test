@@ -59,10 +59,10 @@
 // CHECK-NEXT:    }
 // CHECK-NEXT:  ]
 // -----
-// Find definition of obj.show() method call
+// Find definition of obj.show() method call (line 23: obj.show(), char 8 is 'show')
 {"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{
   "textDocument":{"uri":"test:///classes.sv"},
-  "position":{"line":22,"character":10}
+  "position":{"line":23,"character":8}
 }}
 // CHECK:       "id": 4,
 // CHECK-NEXT:  "jsonrpc": "2.0",
