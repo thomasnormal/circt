@@ -1210,18 +1210,13 @@ extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
   if (!fieldPtr || bitWidth <= 0)
     return 0;
 
-  constexpr int64_t kMaxCycleBits = 12;
-  if (bitWidth > kMaxCycleBits) {
-    uint64_t value = static_cast<uint64_t>(__moore_urandom());
-    value |= static_cast<uint64_t>(__moore_urandom()) << 32;
-    if (bitWidth < 64)
-      value &= ((1ULL << bitWidth) - 1);
-    return static_cast<int64_t>(value);
-  }
-
-  const uint64_t maxValue = (1ULL << bitWidth) - 1;
   struct RandCState {
+    int64_t bitWidth = 0;
     std::vector<uint64_t> remaining;
+    uint64_t current = 0;
+    uint64_t step = 1;
+    bool linear = false;
+    bool initialized = false;
   };
 
   static std::mutex randcMutex;
@@ -1229,18 +1224,52 @@ extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
 
   std::lock_guard<std::mutex> lock(randcMutex);
   auto &state = randcStates[fieldPtr];
-  if (state.remaining.empty()) {
-    state.remaining.reserve(maxValue + 1);
-    for (uint64_t value = 0; value <= maxValue; ++value)
-      state.remaining.push_back(value);
+  if (bitWidth > 63) {
+    uint64_t value = static_cast<uint64_t>(__moore_urandom());
+    value |= static_cast<uint64_t>(__moore_urandom()) << 32;
+    return static_cast<int64_t>(value);
   }
 
-  std::uniform_int_distribution<size_t> dist(0, state.remaining.size() - 1);
-  size_t idx = dist(urandomGenerator);
-  uint64_t value = state.remaining[idx];
-  state.remaining[idx] = state.remaining.back();
-  state.remaining.pop_back();
-  return static_cast<int64_t>(value);
+  constexpr int64_t kMaxCycleBits = 16;
+  const uint64_t maxValue = (1ULL << bitWidth) - 1;
+
+  if (state.bitWidth != bitWidth) {
+    state.bitWidth = bitWidth;
+    state.remaining.clear();
+    state.linear = bitWidth > kMaxCycleBits;
+    state.initialized = false;
+  }
+
+  if (!state.linear) {
+    if (state.remaining.empty()) {
+      state.remaining.reserve(maxValue + 1);
+      for (uint64_t value = 0; value <= maxValue; ++value)
+        state.remaining.push_back(value);
+    }
+
+    std::uniform_int_distribution<size_t> dist(0, state.remaining.size() - 1);
+    size_t idx = dist(urandomGenerator);
+    uint64_t value = state.remaining[idx];
+    state.remaining[idx] = state.remaining.back();
+    state.remaining.pop_back();
+    return static_cast<int64_t>(value);
+  }
+
+  if (!state.initialized) {
+    uint64_t seed = static_cast<uint64_t>(__moore_urandom());
+    seed |= static_cast<uint64_t>(__moore_urandom()) << 32;
+    state.current = seed & maxValue;
+    uint64_t step = seed | 1ULL;
+    step &= maxValue;
+    if (step == 0)
+      step = 1;
+    state.step = step;
+    state.initialized = true;
+    return static_cast<int64_t>(state.current);
+  }
+
+  state.current = (state.current + state.step) & maxValue;
+  return static_cast<int64_t>(state.current);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2984,6 +3013,8 @@ extern "C" int32_t uvm_hdl_check_path(MooreString *path) {
   std::string key;
   if (!getPathKey(path, key))
     return 0;
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  (void)hdlValues[key];
   return 1;
 }
 
@@ -2993,7 +3024,8 @@ extern "C" int32_t uvm_hdl_deposit(MooreString *path, uvm_hdl_data_t value) {
     return 0;
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto &entry = hdlValues[key];
-  entry.value = value;
+  if (!entry.forced)
+    entry.value = value;
   return 1;
 }
 
@@ -3192,34 +3224,61 @@ extern "C" MooreString uvm_re_deglobbed(MooreString *glob,
 namespace {
 // Simulated command line arguments (empty for stub)
 std::vector<std::string> cmdLineArgs;
-bool cmdLineArgsInitialized = false;
+std::string cmdLineArgsEnv;
+
+void parseCommandLineArgs(const std::string &args) {
+  cmdLineArgs.clear();
+
+  std::string current;
+  bool inQuotes = false;
+  char quoteChar = '\0';
+  for (size_t i = 0; i < args.size(); ++i) {
+    char c = args[i];
+    if (c == '\\' && i + 1 < args.size()) {
+      char next = args[i + 1];
+      if (next == '"' || next == '\'' || next == '\\') {
+        current.push_back(next);
+        ++i;
+        continue;
+      }
+    }
+    if ((c == '"' || c == '\'') && (!inQuotes || c == quoteChar)) {
+      if (inQuotes) {
+        inQuotes = false;
+        quoteChar = '\0';
+      } else {
+        inQuotes = true;
+        quoteChar = c;
+      }
+      continue;
+    }
+    if (!inQuotes && std::isspace(static_cast<unsigned char>(c))) {
+      if (!current.empty()) {
+        cmdLineArgs.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(c);
+  }
+  if (!current.empty())
+    cmdLineArgs.push_back(current);
+}
 
 void initCommandLineArgs() {
-  if (cmdLineArgsInitialized)
-    return;
-  cmdLineArgsInitialized = true;
-
   const char *env = std::getenv("CIRCT_UVM_ARGS");
   if (!env)
     env = std::getenv("UVM_ARGS");
-  if (!env)
+  std::string nextEnv = env ? std::string(env) : std::string();
+
+  if (nextEnv == cmdLineArgsEnv)
     return;
 
-  std::string args(env);
-  size_t i = 0;
-  while (i < args.size()) {
-    while (i < args.size() &&
-           std::isspace(static_cast<unsigned char>(args[i])))
-      ++i;
-    if (i >= args.size())
-      break;
-    size_t start = i;
-    while (i < args.size() &&
-           !std::isspace(static_cast<unsigned char>(args[i])))
-      ++i;
-    if (i > start)
-      cmdLineArgs.emplace_back(args.substr(start, i - start));
-  }
+  cmdLineArgsEnv = nextEnv;
+  if (cmdLineArgsEnv.empty())
+    cmdLineArgs.clear();
+  else
+    parseCommandLineArgs(cmdLineArgsEnv);
 }
 } // namespace
 
@@ -3285,4 +3344,67 @@ extern "C" MooreString uvm_dpi_get_tool_version_c(void) {
   }
 
   return result;
+}
+
+//===----------------------------------------------------------------------===//
+// VPI Stub Support
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct VpiHandleImpl {
+  std::string name;
+};
+
+thread_local std::string vpiStringResult;
+
+void releaseVpiHandle(vpiHandle handle) {
+  if (!handle)
+    return;
+  auto *impl = static_cast<VpiHandleImpl *>(handle);
+  delete impl;
+}
+} // namespace
+
+extern "C" vpiHandle vpi_handle_by_name(const char *name, vpiHandle scope) {
+  (void)scope;
+  if (!name || !*name)
+    return nullptr;
+  {
+    std::lock_guard<std::mutex> lock(hdlMutex);
+    (void)hdlValues[std::string(name)];
+  }
+  auto *handle = new VpiHandleImpl();
+  handle->name = name;
+  return static_cast<vpiHandle>(handle);
+}
+
+extern "C" int32_t vpi_get(int32_t property, vpiHandle obj) {
+  (void)property;
+  return obj ? 1 : 0;
+}
+
+extern "C" char *vpi_get_str(int32_t property, vpiHandle obj) {
+  (void)property;
+  if (!obj)
+    return nullptr;
+  auto *handle = static_cast<VpiHandleImpl *>(obj);
+  vpiStringResult = handle->name;
+  return const_cast<char *>(vpiStringResult.c_str());
+}
+
+extern "C" void vpi_release_handle(vpiHandle obj) {
+  releaseVpiHandle(obj);
+}
+
+extern "C" int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
+                                 int32_t flags) {
+  (void)time;
+  if (!obj || !value || !value->value)
+    return 0;
+  auto *handle = static_cast<VpiHandleImpl *>(obj);
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto &entry = hdlValues[handle->name];
+  entry.value = *static_cast<uvm_hdl_data_t *>(value->value);
+  entry.forced = (flags != 0);
+  return 1;
 }

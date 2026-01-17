@@ -922,6 +922,24 @@ MooreString uvm_dpi_get_tool_name_c(void);
 /// @return String containing the tool version (stub: returns "1.0")
 MooreString uvm_dpi_get_tool_version_c(void);
 
+//===----------------------------------------------------------------------===//
+// VPI Stub Support
+//===----------------------------------------------------------------------===//
+
+typedef void *vpiHandle;
+
+typedef struct vpi_value_s {
+  int32_t format;
+  void *value;
+} vpi_value;
+
+vpiHandle vpi_handle_by_name(const char *name, vpiHandle scope);
+int32_t vpi_get(int32_t property, vpiHandle obj);
+char *vpi_get_str(int32_t property, vpiHandle obj);
+int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
+                      int32_t flags);
+void vpi_release_handle(vpiHandle obj);
+
 #ifdef __cplusplus
 }
 #endif

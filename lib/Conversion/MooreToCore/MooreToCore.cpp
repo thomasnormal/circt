@@ -8804,7 +8804,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         LLVM::StoreOp::create(rewriter, loc, entry.second, entry.first);
     };
 
-    auto applyRandcFields = [&](const llvm::DenseSet<StringRef> *hardConstrained) {
+    auto applyRandcFields = [&](const llvm::DenseSet<StringRef> *hardConstrained,
+                                const llvm::DenseSet<StringRef> *softConstrained) {
       if (!classDecl)
         return;
 
@@ -8815,8 +8816,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
         if (propDecl.getRandMode() != RandMode::RandC)
           continue;
-        if (hardConstrained &&
-            hardConstrained->contains(propDecl.getSymName()))
+        if ((hardConstrained &&
+             hardConstrained->contains(propDecl.getSymName())) ||
+            (softConstrained &&
+             softConstrained->contains(propDecl.getSymName())))
           continue;
 
         auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
@@ -8884,6 +8887,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     // If we have any constraints, use constraint-aware randomization
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty()) {
+      llvm::DenseSet<StringRef> softConstrainedProps;
+      for (const auto &soft : effectiveSoftConstraints)
+        softConstrainedProps.insert(soft.propertyName);
+
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -9049,7 +9056,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         }
       }
 
-      applyRandcFields(&hardConstrainedProps);
+      applyRandcFields(&hardConstrainedProps, &softConstrainedProps);
       // Return success
       restorePreservedFields();
       auto successVal = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
@@ -9075,7 +9082,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     auto truncResult =
         arith::TruncIOp::create(rewriter, loc, i1Ty, result.getResult());
 
-    applyRandcFields(nullptr);
+    applyRandcFields(nullptr, nullptr);
     restorePreservedFields();
     rewriter.replaceOp(op, truncResult);
     return success();

@@ -981,8 +981,10 @@ struct VerifBoundedModelCheckingOpConversion
       // Check if this is a clock - either explicit seq::ClockType or
       // an i1 that corresponds to an init clock (for i1 clocks converted via
       // ToClockOp inside the circuit)
+      bool isI1Type = isa<IntegerType>(oldTy) &&
+                      cast<IntegerType>(oldTy).getWidth() == 1;
       bool isClock = isa<seq::ClockType>(oldTy) ||
-                     (!isRegister && nonRegIndex < numInitClocks);
+                     (!isRegister && isI1Type && nonRegIndex < numInitClocks);
 
       if (isClock) {
         inputDecls.push_back(initVals[initIndex++]);
@@ -1141,8 +1143,10 @@ struct VerifBoundedModelCheckingOpConversion
                          TypeRange(circuitInputTy).take_front(numNonStateArgs))) {
             // Check if this is a clock - either explicit seq::ClockType or
             // an i1 that corresponds to an init clock
+            bool isI1Type = isa<IntegerType>(oldTy) &&
+                            cast<IntegerType>(oldTy).getWidth() == 1;
             bool isClock = isa<seq::ClockType>(oldTy) ||
-                           (nonRegIdx < numInitClocks);
+                           (isI1Type && nonRegIdx < numInitClocks);
             if (isClock)
               newDecls.push_back(loopVals[loopIndex++]);
             else
