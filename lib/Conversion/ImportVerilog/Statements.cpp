@@ -750,7 +750,7 @@ struct StmtVisitor {
     case PatternKind::Wildcard: {
       auto boolType = moore::IntType::get(context.getContext(), 1,
                                           moore::Domain::TwoValued);
-      return moore::ConstantOp::create(builder, loc, boolType, 1);
+      return Value(moore::ConstantOp::create(builder, loc, boolType, 1));
     }
     case PatternKind::Constant: {
       auto &constPattern = pattern.as<slang::ast::ConstantPattern>();
@@ -869,9 +869,14 @@ struct StmtVisitor {
     auto tagValue =
         moore::StructExtractOp::create(builder, loc, tagMember->type,
                                        tagMember->name, value);
-    auto tagConst = moore::ConstantOp::create(builder, loc, tagMember->type,
-                                              tagIndex);
-    auto tagMatch = comparePatternValue(tagValue, tagConst,
+    auto tagIntType = dyn_cast<moore::IntType>(tagMember->type);
+    if (!tagIntType) {
+      mlir::emitError(loc) << "tagged union tag member must have integer type";
+      return failure();
+    }
+    auto tagConst = moore::ConstantOp::create(builder, loc, tagIntType,
+                                              static_cast<int64_t>(tagIndex));
+    auto tagMatch = comparePatternValue(tagValue, Value(tagConst),
                                         slang::ast::CaseStatementCondition::Normal);
     if (failed(tagMatch))
       return failure();
@@ -893,7 +898,7 @@ struct StmtVisitor {
         builder, loc, memberType, memberName, unionValue);
     auto valueMatch =
         matchPattern(*pattern.valuePattern, memberValue,
-                     *pattern.member.getDeclaredType(), condKind);
+                     pattern.member.getDeclaredType()->getType(), condKind);
     if (failed(valueMatch))
       return failure();
 
@@ -1772,10 +1777,21 @@ struct StmtVisitor {
             joinCount = *maybeCount;
         }
       }
-      if (joinCount <= 0)
-        joinCount = 1;
-
-      if (joinCount == 1 && !rule.prods.empty()) {
+      // Handle edge cases per IEEE 1800-2017 Section 18.17
+      // N=0 or no productions: do nothing
+      if (joinCount <= 0 || rule.prods.empty()) {
+        // Nothing to execute
+      } else if (joinCount >= static_cast<int64_t>(rule.prods.size())) {
+        // N >= number of alternatives: execute all productions sequentially
+        // (concurrent execution via ForkOp would require single-block regions
+        // which is not always possible when productions have control flow)
+        for (auto prod : rule.prods) {
+          if (failed(executeProdBase(*prod)))
+            return failure();
+          if (isTerminated())
+            break;
+        }
+      } else if (joinCount == 1) {
         auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
         Value maxVal = moore::ConstantOp::create(
             builder, loc, i32Ty,
@@ -1819,14 +1835,116 @@ struct StmtVisitor {
           builder.setInsertionPointToEnd(&exitBlock);
         }
       } else {
-        mlir::emitRemark(loc)
-            << "randjoin(" << joinCount
-            << ") not fully supported; executing productions sequentially";
-        for (auto prod : rule.prods) {
-          if (failed(executeProdBase(*prod)))
-            return failure();
-          if (isTerminated())
-            break;
+        // randjoin(N) where 1 < N < number of productions
+        // Select N distinct productions using Fisher-Yates partial shuffle
+        // and execute them sequentially (concurrent execution is allowed but
+        // not required by IEEE 1800-2017).
+        auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+        size_t numProds = rule.prods.size();
+
+        // Create array of index variables initialized to [0, 1, 2, ..., n-1]
+        SmallVector<Value> indexVars;
+        for (size_t i = 0; i < numProds; ++i) {
+          Value initVal = moore::ConstantOp::create(builder, loc, i32Ty,
+                                                    static_cast<int64_t>(i));
+          auto var = moore::VariableOp::create(
+              builder, loc, moore::RefType::get(i32Ty),
+              builder.getStringAttr("rj_idx_" + std::to_string(i)), initVal);
+          indexVars.push_back(var);
+        }
+
+        // Fisher-Yates partial shuffle: for i from 0 to joinCount-1,
+        // swap arr[i] with arr[random(i, numProds-1)]
+        for (int64_t i = 0; i < joinCount; ++i) {
+          // Generate random index in range [i, numProds-1]
+          Value minVal =
+              moore::ConstantOp::create(builder, loc, i32Ty, i);
+          Value maxVal = moore::ConstantOp::create(
+              builder, loc, i32Ty, static_cast<int64_t>(numProds - 1));
+          Value randIdx =
+              moore::UrandomRangeBIOp::create(builder, loc, maxVal, minVal);
+
+          // Read value at position i before any swap
+          Value valAtI = moore::ReadOp::create(builder, loc, indexVars[i]);
+
+          // For each possible randIdx value j in [i, numProds-1], swap if match
+          for (size_t j = i; j < numProds; ++j) {
+            auto jConst = moore::ConstantOp::create(builder, loc, i32Ty,
+                                                    static_cast<int64_t>(j));
+            Value cond = moore::CaseEqOp::create(builder, loc, randIdx, jConst);
+            cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+
+            auto &swapBlock = createBlock();
+            auto &nextBlock = createBlock();
+            cf::CondBranchOp::create(builder, loc, cond, &swapBlock, &nextBlock);
+
+            builder.setInsertionPointToEnd(&swapBlock);
+            // Swap indexVars[i] and indexVars[j]
+            Value valAtJ = moore::ReadOp::create(builder, loc, indexVars[j]);
+            moore::BlockingAssignOp::create(builder, loc, indexVars[i], valAtJ);
+            moore::BlockingAssignOp::create(builder, loc, indexVars[j], valAtI);
+            cf::BranchOp::create(builder, loc, &nextBlock);
+
+            builder.setInsertionPointToEnd(&nextBlock);
+          }
+        }
+
+        // Execute the first joinCount selected productions sequentially
+        auto &exitBlock = createBlock();
+        for (int64_t i = 0; i < joinCount; ++i) {
+          Value selectedIdx = moore::ReadOp::create(builder, loc, indexVars[i]);
+
+          // Create blocks for each possible production
+          SmallVector<Block *> prodBlocks;
+          for (size_t p = 0; p < numProds; ++p)
+            prodBlocks.push_back(&createBlock());
+          auto &afterProdBlock = createBlock();
+
+          // Dispatch to the correct production based on selectedIdx
+          for (size_t p = 0; p < numProds; ++p) {
+            auto pConst = moore::ConstantOp::create(builder, loc, i32Ty,
+                                                    static_cast<int64_t>(p));
+            Value cond =
+                moore::CaseEqOp::create(builder, loc, selectedIdx, pConst);
+            cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+
+            if (p == numProds - 1) {
+              cf::BranchOp::create(builder, loc, prodBlocks[p]);
+            } else {
+              auto &nextCheckBlock = createBlock();
+              cf::CondBranchOp::create(builder, loc, cond, prodBlocks[p],
+                                       &nextCheckBlock);
+              builder.setInsertionPointToEnd(&nextCheckBlock);
+            }
+          }
+
+          // Generate code for each production block
+          for (size_t p = 0; p < numProds; ++p) {
+            builder.setInsertionPointToEnd(prodBlocks[p]);
+            if (failed(executeProdBase(*rule.prods[p])))
+              return failure();
+            if (!isTerminated())
+              cf::BranchOp::create(builder, loc, &afterProdBlock);
+          }
+
+          if (afterProdBlock.hasNoPredecessors()) {
+            afterProdBlock.erase();
+            if (isTerminated())
+              break;
+          } else {
+            builder.setInsertionPointToEnd(&afterProdBlock);
+          }
+        }
+
+        // Branch to exit block after all selected productions are executed
+        if (!isTerminated())
+          cf::BranchOp::create(builder, loc, &exitBlock);
+
+        if (exitBlock.hasNoPredecessors()) {
+          exitBlock.erase();
+          setTerminated();
+        } else {
+          builder.setInsertionPointToEnd(&exitBlock);
         }
       }
     } else {
@@ -2064,8 +2182,9 @@ struct StmtVisitor {
         return failure();
       if (!isTerminated())
         cf::BranchOp::create(builder, loc, &exitBlock);
-    } else if (lastMatchBlock) {
-      cf::BranchOp::create(builder, loc, lastMatchBlock);
+    } else {
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &exitBlock);
     }
 
     if (exitBlock.hasNoPredecessors()) {

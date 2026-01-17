@@ -27,10 +27,10 @@
 // CHECK-NEXT:    },
 // CHECK-NEXT:    "range":
 // -----
-// Hover over 'data_in' port (line 1, col 25)
+// Hover over 'data_in' port (line 1, col 27)
 {"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{
   "textDocument":{"uri":"test:///foo.sv"},
-  "position":{"line":1,"character":25}
+  "position":{"line":1,"character":27}
 }}
 // CHECK:       "id": 2,
 // CHECK-NEXT:  "jsonrpc": "2.0",
