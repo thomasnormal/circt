@@ -5465,24 +5465,40 @@ struct QueueDeleteOpConversion
     auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     if (adaptor.getIndex()) {
       // delete(index) - remove element at specific index
-      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty});
+      // Function signature: void delete_index(queue_ptr, index, element_size)
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, i64Ty});
       auto fn = getOrCreateRuntimeFunc(mod, rewriter,
                                        "__moore_queue_delete_index", fnTy);
 
-      // Queue is passed by pointer, index by value
+      // Get the element type from the queue reference type
+      auto refType = cast<moore::RefType>(op.getQueue().getType());
+      auto mooreQueueTy = cast<moore::QueueType>(refType.getNestedType());
+      auto elemType = typeConverter->convertType(mooreQueueTy.getElementType());
+
+      // Queue is passed by pointer, index by value, element_size by value
       auto one = LLVM::ConstantOp::create(rewriter, loc,
                                           rewriter.getI64IntegerAttr(1));
       auto queueAlloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
       LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
 
+      // Calculate element size
+      auto elemSize = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+      // Truncate index to i32 if necessary
+      Value indexVal = adaptor.getIndex();
+      if (indexVal.getType() != i32Ty)
+        indexVal = LLVM::TruncOp::create(rewriter, loc, i32Ty, indexVal);
+
       LLVM::CallOp::create(rewriter, loc, TypeRange{},
                            SymbolRefAttr::get(fn),
-                           ValueRange{queueAlloca, adaptor.getIndex()});
+                           ValueRange{queueAlloca, indexVal, elemSize});
     } else {
       // delete() - clear all elements
       auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});

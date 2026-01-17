@@ -98,6 +98,20 @@ int64_t __moore_queue_pop_back(MooreQueue *queue, int64_t element_size);
 /// @return The popped element value (as 64-bit integer)
 int64_t __moore_queue_pop_front(MooreQueue *queue, int64_t element_size);
 
+/// Clear all elements from a queue.
+/// This corresponds to the SystemVerilog `.delete()` method without arguments.
+/// @param queue Pointer to the queue structure (modified in place)
+void __moore_queue_clear(MooreQueue *queue);
+
+/// Delete an element at a specific index from a queue.
+/// This corresponds to the SystemVerilog `.delete(index)` method.
+/// Elements after the deleted index are shifted down.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param index Index of the element to delete
+/// @param element_size Size of each element in bytes
+void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
+                                int64_t element_size);
+
 /// Sort a queue and return a new sorted queue.
 /// @param queue Pointer to the queue structure
 /// @param elem_size Size of each element in bytes
