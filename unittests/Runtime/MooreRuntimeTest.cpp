@@ -14,8 +14,15 @@
 #include "gtest/gtest.h"
 #include <cstddef>
 #include <cstring>
+#include <string>
 
 namespace {
+
+MooreString makeMooreString(const char *cstr) {
+  if (!cstr)
+    return {nullptr, 0};
+  return {const_cast<char *>(cstr), static_cast<int64_t>(std::strlen(cstr))};
+}
 
 //===----------------------------------------------------------------------===//
 // String Length Tests
@@ -49,6 +56,157 @@ TEST(MooreRuntimeStringTest, StringToUpper) {
   EXPECT_EQ(std::string(result.data, result.len), "HELLO WORLD");
 
   __moore_free(result.data);
+}
+
+//===----------------------------------------------------------------------===//
+// DPI Regex Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeDpiRegexTest, RegexExecMatches) {
+  MooreString pattern = makeMooreString("test.*pattern");
+  void *rexp = uvm_re_comp(&pattern, 0);
+  ASSERT_NE(rexp, nullptr);
+
+  MooreString target = makeMooreString("xx test-123-pattern yy");
+  int32_t pos = uvm_re_exec(rexp, &target);
+  EXPECT_GE(pos, 0);
+
+  MooreString buffer = uvm_re_buffer();
+  EXPECT_EQ(std::string(buffer.data, buffer.len), "test-123-pattern");
+  __moore_free(buffer.data);
+
+  uvm_re_free(rexp);
+}
+
+TEST(MooreRuntimeDpiRegexTest, RegexExecNoMatchClearsBuffer) {
+  MooreString pattern = makeMooreString("abc");
+  void *rexp = uvm_re_comp(&pattern, 0);
+  ASSERT_NE(rexp, nullptr);
+
+  MooreString target = makeMooreString("zzz");
+  EXPECT_EQ(uvm_re_exec(rexp, &target), -1);
+
+  MooreString buffer = uvm_re_buffer();
+  EXPECT_EQ(buffer.len, 0);
+  EXPECT_EQ(buffer.data, nullptr);
+
+  uvm_re_free(rexp);
+}
+
+TEST(MooreRuntimeDpiRegexTest, RegexDeglobMatches) {
+  MooreString pattern = makeMooreString("foo*bar");
+  void *rexp = uvm_re_comp(&pattern, 1);
+  ASSERT_NE(rexp, nullptr);
+
+  MooreString target = makeMooreString("fooXYZbar");
+  EXPECT_GE(uvm_re_exec(rexp, &target), 0);
+
+  MooreString buffer = uvm_re_buffer();
+  EXPECT_EQ(std::string(buffer.data, buffer.len), "fooXYZbar");
+  __moore_free(buffer.data);
+
+  uvm_re_free(rexp);
+}
+
+TEST(MooreRuntimeDpiRegexTest, RegexInvalidPattern) {
+  MooreString pattern = makeMooreString("[unterminated");
+  void *rexp = uvm_re_comp(&pattern, 0);
+  EXPECT_EQ(rexp, nullptr);
+}
+
+TEST(MooreRuntimeDpiRegexTest, RegexCompexecfree) {
+  MooreString pattern = makeMooreString("ab.*c");
+  MooreString target = makeMooreString("xx abZZc yy");
+  int32_t execRet = -2;
+  EXPECT_EQ(uvm_re_compexecfree(&pattern, &target, 0, &execRet), 1);
+  EXPECT_GE(execRet, 0);
+}
+
+TEST(MooreRuntimeDpiRegexTest, RegexDeglobbed) {
+  MooreString pattern = makeMooreString("foo*bar?.sv");
+  MooreString converted = uvm_re_deglobbed(&pattern, 1);
+  EXPECT_EQ(std::string(converted.data, converted.len), "foo.*bar.\\.sv");
+  __moore_free(converted.data);
+}
+
+//===----------------------------------------------------------------------===//
+// DPI Command Line Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeDpiArgsTest, GetNextArgFromEnv) {
+  setenv("CIRCT_UVM_ARGS", "arg1 arg2", 1);
+  unsetenv("UVM_ARGS");
+
+  int32_t idx = 0;
+  MooreString arg1 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg1.data, arg1.len), "arg1");
+  __moore_free(arg1.data);
+
+  MooreString arg2 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(std::string(arg2.data, arg2.len), "arg2");
+  __moore_free(arg2.data);
+
+  MooreString arg3 = uvm_dpi_get_next_arg_c(&idx);
+  EXPECT_EQ(arg3.data, nullptr);
+  EXPECT_EQ(arg3.len, 0);
+}
+
+//===----------------------------------------------------------------------===//
+// Randomize RandC Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeRandCTest, RandcCyclesValues) {
+  int64_t bitWidth = 2;
+  int64_t values[4];
+  for (int i = 0; i < 4; ++i) {
+    values[i] = __moore_randc_next(values, bitWidth);
+  }
+  std::sort(std::begin(values), std::end(values));
+  EXPECT_EQ(values[0], 0);
+  EXPECT_EQ(values[1], 1);
+  EXPECT_EQ(values[2], 2);
+  EXPECT_EQ(values[3], 3);
+}
+
+//===----------------------------------------------------------------------===//
+// DPI HDL Access Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeDpiHdlTest, HdlDepositAndRead) {
+  MooreString path = makeMooreString("top.sig");
+  EXPECT_EQ(uvm_hdl_check_path(&path), 1);
+  EXPECT_EQ(uvm_hdl_deposit(&path, 123), 1);
+
+  uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 123);
+}
+
+TEST(MooreRuntimeDpiHdlTest, HdlForceRelease) {
+  MooreString path = makeMooreString("top.force_sig");
+  EXPECT_EQ(uvm_hdl_force(&path, 77), 1);
+
+  uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 77);
+
+  EXPECT_EQ(uvm_hdl_release(&path), 1);
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 77);
+}
+
+TEST(MooreRuntimeDpiHdlTest, HdlReleaseAndReadUnknown) {
+  MooreString path = makeMooreString("top.unknown");
+  uvm_hdl_data_t value = 99;
+  EXPECT_EQ(uvm_hdl_release_and_read(&path, &value), 1);
+  EXPECT_EQ(value, 0);
+}
+
+TEST(MooreRuntimeDpiHdlTest, HdlReadInvalidPath) {
+  MooreString empty = {nullptr, 0};
+  uvm_hdl_data_t value = 5;
+  EXPECT_EQ(uvm_hdl_read(&empty, &value), 0);
+  EXPECT_EQ(value, 5);
 }
 
 TEST(MooreRuntimeStringTest, StringToLower) {

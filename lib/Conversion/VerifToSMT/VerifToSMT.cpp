@@ -193,11 +193,39 @@ struct LTLBooleanConstantOpConversion
 };
 
 /// Convert ltl.delay to SMT boolean.
-/// For BMC, delay(seq, N) represents a sequence that starts N cycles later.
-/// At the current time step in BMC, we convert to the inner sequence value
-/// since the BMC framework handles temporal shifting. For N=0, this is just
-/// the sequence itself. For N>0, we return true (trivially satisfied at this
-/// step) since the actual check happens N cycles later.
+///
+/// CURRENT LIMITATION (as of Iteration 45):
+/// For BMC, delay(seq, N) with N>0 represents a sequence that starts N cycles
+/// later. However, the current implementation does NOT properly track delayed
+/// obligations across time steps. Instead:
+///   - delay(seq, 0) → seq (correct: no delay)
+///   - delay(seq, N>0) → true (INCORRECT: should track obligation)
+///
+/// This means temporal properties like "req |-> ##1 ack" (ack must hold 1 cycle
+/// after req) are NOT properly verified. The delay is treated as trivially true.
+///
+/// WHY THIS IS HARD TO FIX:
+/// The BMC infrastructure converts the circuit to a function before this
+/// pattern runs. The function is then called in an scf.for loop, but:
+/// 1. This pattern has no access to the loop's iter_args
+/// 2. Delay tracking would require threading "obligation buffers" through the loop
+/// 3. The architecture separates function extraction from delay conversion
+///
+/// WORKAROUND (proven in test/Conversion/VerifToSMT/bmc-manual-multistep.mlir):
+/// Use explicit registers to store previous cycle values:
+///   %prev_req = seq.compreg %req, %clk
+///   %prop = comb.or %not_prev_req, %ack  // !prev_req || ack
+/// This manually implements "req |-> ##1 ack" and BMC can verify it.
+///
+/// TODO(Future): Implement proper delay tracking:
+/// 1. Before function extraction, scan circuit for ltl.delay operations
+/// 2. Allocate delay_buffer[] slots in scf.for iter_args (one per delay)
+/// 3. Initialize buffers to false in init region
+/// 4. Shift buffers each iteration: buffer[i] = buffer[i+1], buffer[N-1] = prop
+/// 5. Modify this conversion to return buffer[delay-1] for delay > 0
+/// 6. Assert buffer[0] values (mature obligations)
+///
+/// See BMC_MULTISTEP_DESIGN.md for detailed architecture proposal.
 struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
   using OpConversionPattern<ltl::DelayOp>::OpConversionPattern;
 
@@ -216,10 +244,10 @@ struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
         return failure();
       rewriter.replaceOp(op, input);
     } else {
-      // For BMC with delay > 0: At the current step, a delayed sequence
-      // is trivially true (the obligation is pushed to a future step).
-      // The BMC framework is responsible for tracking these delayed obligations.
-      // For a simple conversion, we return true here.
+      // LIMITATION: For BMC with delay > 0, we return true (trivially satisfied).
+      // This is INCORRECT for bounded model checking but required by the current
+      // architecture. The proper fix requires significant refactoring.
+      // See documentation above for workarounds and future implementation.
       rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
     }
     return success();

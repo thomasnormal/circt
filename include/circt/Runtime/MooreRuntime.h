@@ -367,6 +367,14 @@ int32_t __moore_random_seeded(int32_t seed);
 /// @return 1 on success, 0 on failure (e.g., null pointer)
 int32_t __moore_randomize_basic(void *classPtr, int64_t classSize);
 
+/// Generate the next randc value for a field.
+/// Uses a per-field cycle for small bit widths; larger widths fall back to
+/// random values.
+/// @param fieldPtr Pointer to the field storage (used as cycle key)
+/// @param bitWidth Width of the field in bits
+/// @return Next value in the cycle or a random value
+int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth);
+
 //===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Operations
 //===----------------------------------------------------------------------===//
@@ -800,6 +808,119 @@ int32_t __moore_ftell(int32_t fd);
 /// Should be called to release strings and arrays when no longer needed.
 /// @param ptr Pointer to the memory to free
 void __moore_free(void *ptr);
+
+//===----------------------------------------------------------------------===//
+// DPI-C Import Stubs for UVM Support
+//===----------------------------------------------------------------------===//
+//
+// These functions provide stub implementations of UVM DPI-C imports.
+// They allow UVM code to compile and run without requiring external C
+// libraries. The stubs provide simplified behavior suitable for basic
+// testing and development.
+//
+// Categories:
+// - HDL Access: uvm_hdl_* functions for signal manipulation
+// - Regex: uvm_re_* functions for pattern matching
+// - Command Line: uvm_dpi_* functions for tool information
+//
+
+//===----------------------------------------------------------------------===//
+// HDL Access Stubs (IEEE 1800.2-2017 DPI)
+//===----------------------------------------------------------------------===//
+
+/// HDL data type used for deposit/force/read operations.
+/// Large enough to hold a 64-bit value.
+typedef int64_t uvm_hdl_data_t;
+
+/// Check if an HDL path exists in the design hierarchy.
+/// @param path Pointer to the path string structure
+/// @return 1 if path exists, 0 otherwise (stub: always returns 1)
+int32_t uvm_hdl_check_path(MooreString *path);
+
+/// Deposit a value to an HDL object (procedural assignment).
+/// @param path Pointer to the path string structure
+/// @param value The value to deposit
+/// @return 1 on success, 0 on failure (stub: always returns 1)
+int32_t uvm_hdl_deposit(MooreString *path, uvm_hdl_data_t value);
+
+/// Force a value onto an HDL object (continuous assignment).
+/// @param path Pointer to the path string structure
+/// @param value The value to force
+/// @return 1 on success, 0 on failure (stub: always returns 1)
+int32_t uvm_hdl_force(MooreString *path, uvm_hdl_data_t value);
+
+/// Release a forced value and read the current value.
+/// @param path Pointer to the path string structure
+/// @param value Pointer to store the read value
+/// @return 1 on success, 0 on failure (stub: always returns 1)
+int32_t uvm_hdl_release_and_read(MooreString *path, uvm_hdl_data_t *value);
+
+/// Release a forced value on an HDL object.
+/// @param path Pointer to the path string structure
+/// @return 1 on success, 0 on failure (stub: always returns 1)
+int32_t uvm_hdl_release(MooreString *path);
+
+/// Read the current value of an HDL object.
+/// @param path Pointer to the path string structure
+/// @param value Pointer to store the read value
+/// @return 1 on success, 0 on failure (stub: always returns 1)
+int32_t uvm_hdl_read(MooreString *path, uvm_hdl_data_t *value);
+
+//===----------------------------------------------------------------------===//
+// Regular Expression Stubs
+//===----------------------------------------------------------------------===//
+
+/// Compile a regular expression pattern.
+/// @param pattern Pointer to the regex pattern string
+/// @param deglob If non-zero, treat as glob pattern and convert to regex
+/// @return Opaque handle to compiled regex (stub: returns dummy non-zero value)
+void *uvm_re_comp(MooreString *pattern, int32_t deglob);
+
+/// Execute a compiled regular expression against a string.
+/// @param rexp Handle from uvm_re_comp
+/// @param str Pointer to the string to match against
+/// @return Match index or -1 if no match (stub: returns 0 for match)
+int32_t uvm_re_exec(void *rexp, MooreString *str);
+
+/// Free a compiled regular expression.
+/// @param rexp Handle from uvm_re_comp
+void uvm_re_free(void *rexp);
+
+/// Get the buffer containing the last matched substring.
+/// @return Pointer to the match buffer string (stub: returns empty string)
+MooreString uvm_re_buffer(void);
+
+/// Compile and execute a regex in one call, then free it.
+/// @param pattern Pointer to the regex pattern string
+/// @param str Pointer to the string to match against
+/// @param deglob If non-zero, treat as glob pattern
+/// @param exec_ret Pointer to store the match result (0 = match, -1 = no match)
+/// @return 1 if regex was valid, 0 otherwise (stub: always returns 1)
+int32_t uvm_re_compexecfree(MooreString *pattern, MooreString *str,
+                            int32_t deglob, int32_t *exec_ret);
+
+/// Convert a glob pattern to a regular expression.
+/// @param glob Pointer to the glob pattern string
+/// @param with_brackets If non-zero, use bracket expressions in output
+/// @return A string containing the converted regex pattern
+MooreString uvm_re_deglobbed(MooreString *glob, int32_t with_brackets);
+
+//===----------------------------------------------------------------------===//
+// Command Line / Tool Info Stubs
+//===----------------------------------------------------------------------===//
+
+/// Get the next command line argument.
+/// @param idx Pointer to the current argument index (updated on success)
+/// @return Pointer to the next argument string, or NULL if no more arguments
+MooreString uvm_dpi_get_next_arg_c(int32_t *idx);
+
+/// Get the name of the simulation tool.
+/// @return String containing the tool name (stub: returns "CIRCT")
+MooreString uvm_dpi_get_tool_name_c(void);
+
+/// Get the version of the simulation tool.
+/// @return String containing the tool version (stub: returns "1.0")
+MooreString uvm_dpi_get_tool_version_c(void);
 
 #ifdef __cplusplus
 }

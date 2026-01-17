@@ -29,6 +29,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/LSP/Protocol.h"
 
 #include "circt/Support/LLVM.h"
@@ -147,7 +148,7 @@ static void collectWorkspaceSymbols(
   for (const auto &symbol : symbols) {
     if (matchesWorkspaceQuery(symbol.name, query)) {
       circt::lsp::WorkspaceSymbol entry;
-      entry.name = symbol.name.str();
+      entry.name = symbol.name;
       entry.kind = symbol.kind;
       entry.location = llvm::lsp::Location(uri, symbol.range);
       entry.containerName = containerName.str();
@@ -160,6 +161,8 @@ static void collectWorkspaceSymbols(
 
 void circt::lsp::VerilogServer::getWorkspaceSymbols(
     llvm::StringRef query, std::vector<WorkspaceSymbol> &symbols) {
+  llvm::StringSet<> seen;
+
   for (auto &entry : impl->files) {
     const auto &filePath = entry.first();
     auto uriOrErr = llvm::lsp::URIForFile::fromFile(filePath);
@@ -168,6 +171,39 @@ void circt::lsp::VerilogServer::getWorkspaceSymbols(
     std::vector<llvm::lsp::DocumentSymbol> docSymbols;
     entry.second->getDocumentSymbols(*uriOrErr, docSymbols);
     collectWorkspaceSymbols(*uriOrErr, query, "", docSymbols, symbols);
+
+    for (const auto &symbol : symbols) {
+      std::string key = symbol.location.uri.file().str();
+      key.append(":");
+      key.append(symbol.name);
+      key.append(":");
+      key.append(std::to_string(symbol.location.range.start.line));
+      key.append(":");
+      key.append(std::to_string(symbol.location.range.start.character));
+      seen.insert(std::move(key));
+    }
+  }
+
+  for (const auto &entry : impl->workspace.findAllSymbols()) {
+    if (!matchesWorkspaceQuery(entry.name, query))
+      continue;
+    auto uriOrErr = llvm::lsp::URIForFile::fromFile(entry.filePath);
+    if (!uriOrErr)
+      continue;
+    WorkspaceSymbol symbol;
+    symbol.name = entry.name;
+    symbol.kind = entry.kind;
+    symbol.location = llvm::lsp::Location(*uriOrErr, entry.range);
+
+    std::string key = symbol.location.uri.file().str();
+    key.append(":");
+    key.append(symbol.name);
+    key.append(":");
+    key.append(std::to_string(symbol.location.range.start.line));
+    key.append(":");
+    key.append(std::to_string(symbol.location.range.start.character));
+    if (seen.insert(key).second)
+      symbols.push_back(std::move(symbol));
   }
 }
 

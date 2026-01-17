@@ -8716,6 +8716,21 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
   return softConstraints;
 }
 
+static Type resolveStructFieldType(LLVM::LLVMStructType structTy,
+                                   ArrayRef<unsigned> path) {
+  Type current = structTy;
+  for (unsigned index : path) {
+    auto currentStruct = dyn_cast<LLVM::LLVMStructType>(current);
+    if (!currentStruct)
+      return {};
+    auto body = currentStruct.getBody();
+    if (index >= body.size())
+      return {};
+    current = body[index];
+  }
+  return current;
+}
+
 /// Conversion for moore.randomize -> runtime function call.
 /// Implements the SystemVerilog randomize() method on class objects.
 /// Supports constraint-aware randomization for simple range constraints.
@@ -8758,6 +8773,88 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     // Look up the class declaration to extract constraints
     auto *classDeclSym = mod.lookupSymbol(classSym);
     auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
+
+    SmallVector<std::pair<Value, Value>> preservedFields;
+    if (classDecl) {
+      for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
+        if (propDecl.isRandomizable())
+          continue;
+        auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
+        if (!pathOpt)
+          continue;
+        Type fieldTy = resolveStructFieldType(structTy, *pathOpt);
+        if (!fieldTy)
+          continue;
+
+        SmallVector<LLVM::GEPArg> gepIndices;
+        gepIndices.push_back(0);
+        for (unsigned idx : *pathOpt)
+          gepIndices.push_back(static_cast<int32_t>(idx));
+
+        auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                            classPtr, gepIndices);
+        auto fieldVal =
+            LLVM::LoadOp::create(rewriter, loc, fieldTy, fieldPtr);
+        preservedFields.push_back({fieldPtr, fieldVal});
+      }
+    }
+
+    auto restorePreservedFields = [&]() {
+      for (auto &entry : preservedFields)
+        LLVM::StoreOp::create(rewriter, loc, entry.second, entry.first);
+    };
+
+    auto applyRandcFields = [&](const llvm::DenseSet<StringRef> *hardConstrained) {
+      if (!classDecl)
+        return;
+
+      auto randcFnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+      auto randcFn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_randc_next",
+                                            randcFnTy);
+
+      for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
+        if (propDecl.getRandMode() != RandMode::RandC)
+          continue;
+        if (hardConstrained &&
+            hardConstrained->contains(propDecl.getSymName()))
+          continue;
+
+        auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
+        if (!pathOpt)
+          continue;
+        Type fieldTy = resolveStructFieldType(structTy, *pathOpt);
+        auto intTy = dyn_cast_or_null<IntegerType>(fieldTy);
+        if (!intTy)
+          continue;
+
+        unsigned bitWidth = intTy.getWidth();
+        if (bitWidth == 0)
+          continue;
+
+        SmallVector<LLVM::GEPArg> gepIndices;
+        gepIndices.push_back(0);
+        for (unsigned idx : *pathOpt)
+          gepIndices.push_back(static_cast<int32_t>(idx));
+        auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                            classPtr, gepIndices);
+
+        auto widthConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(bitWidth));
+        auto randcValue = LLVM::CallOp::create(
+            rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(randcFn),
+            ValueRange{fieldPtr, widthConst});
+
+        Value converted = randcValue.getResult();
+        if (bitWidth < 64) {
+          converted =
+              arith::TruncIOp::create(rewriter, loc, intTy, converted);
+        } else if (bitWidth > 64) {
+          converted =
+              arith::ExtSIOp::create(rewriter, loc, intTy, converted);
+        }
+        LLVM::StoreOp::create(rewriter, loc, converted, fieldPtr);
+      }
+    };
 
     // Extract range constraints from the class (includes both hard and soft)
     SmallVector<RangeConstraintInfo> rangeConstraints;
@@ -8952,7 +9049,9 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         }
       }
 
+      applyRandcFields(&hardConstrainedProps);
       // Return success
+      restorePreservedFields();
       auto successVal = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
       rewriter.replaceOp(op, successVal);
       return success();
@@ -8976,6 +9075,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     auto truncResult =
         arith::TruncIOp::create(rewriter, loc, i1Ty, result.getResult());
 
+    applyRandcFields(nullptr);
+    restorePreservedFields();
     rewriter.replaceOp(op, truncResult);
     return success();
   }
