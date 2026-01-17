@@ -79,7 +79,9 @@ public:
                       std::vector<llvm::lsp::Location> &locations);
 
   /// Find all references of the object pointed at by the given position.
+  /// If includeDeclaration is true, also include the symbol's declaration.
   void findReferencesOf(const URIForFile &uri, const llvm::lsp::Position &pos,
+                        bool includeDeclaration,
                         std::vector<llvm::lsp::Location> &references);
 
   /// Return hover information for the object at the given position.

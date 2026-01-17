@@ -2967,8 +2967,9 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
         }
       }
 
-      // Store the symbol ref for cross references.
-      coverpointSymbols[cpName] =
+      // Store the symbol ref for cross references using the original slang name
+      // as the key (since that's what CoverCrossSymbol::targets uses).
+      coverpointSymbols[cp->name] =
           mlir::FlatSymbolRefAttr::get(cpOp.getSymNameAttr());
     } else if (auto *cross = member.as_if<slang::ast::CoverCrossSymbol>()) {
       auto crossLoc = convertLocation(cross->location);
@@ -2982,7 +2983,24 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
         }
       }
 
-      moore::CoverCrossDeclOp::create(builder, crossLoc, cross->name,
+      // Determine the cross name. If no explicit label is provided, generate
+      // a name from the target coverpoint names joined with "_x_".
+      std::string crossName;
+      if (!cross->name.empty()) {
+        crossName = std::string(cross->name);
+      } else {
+        // Generate name like "addr_x_cmd" from the target coverpoint names.
+        llvm::raw_string_ostream os(crossName);
+        bool first = true;
+        for (const auto *target : cross->targets) {
+          if (!first)
+            os << "_x_";
+          first = false;
+          os << target->name;
+        }
+      }
+
+      moore::CoverCrossDeclOp::create(builder, crossLoc, crossName,
                                       builder.getArrayAttr(targets));
     }
   }

@@ -331,7 +331,8 @@ void LSPServer::onGoToDefinition(const TextDocumentPositionParams &params,
 void LSPServer::onReference(const ReferenceParams &params,
                             Callback<std::vector<Location>> reply) {
   std::vector<Location> locations;
-  server.findReferencesOf(params.textDocument.uri, params.position, locations);
+  server.findReferencesOf(params.textDocument.uri, params.position,
+                          params.context.includeDeclaration, locations);
   reply(std::move(locations));
 }
 

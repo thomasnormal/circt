@@ -68,7 +68,7 @@ public:
                       std::vector<llvm::lsp::Location> &locations);
 
   void findReferencesOf(const llvm::lsp::URIForFile &uri,
-                        const llvm::lsp::Position &pos,
+                        const llvm::lsp::Position &pos, bool includeDeclaration,
                         std::vector<llvm::lsp::Location> &references);
 
   //===--------------------------------------------------------------------===//

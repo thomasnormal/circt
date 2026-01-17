@@ -634,7 +634,7 @@ void VerilogDocument::getLocationsOf(
 
 void VerilogDocument::findReferencesOf(
     const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos,
-    std::vector<llvm::lsp::Location> &references) {
+    bool includeDeclaration, std::vector<llvm::lsp::Location> &references) {
 
   if (!index)
     return;
@@ -650,6 +650,15 @@ void VerilogDocument::findReferencesOf(
   if (!symbol)
     return;
 
+  // Include the declaration location if requested
+  if (includeDeclaration && symbol->location.valid()) {
+    slang::SourceRange declRange(
+        symbol->location,
+        symbol->location + (symbol->name.size() ? symbol->name.size() : 1));
+    references.push_back(getLspLocation(declRange));
+  }
+
+  // Add all references to the symbol
   auto it = index->getReferences().find(symbol);
   if (it == index->getReferences().end())
     return;

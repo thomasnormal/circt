@@ -109,11 +109,11 @@ void circt::lsp::VerilogServer::getLocationsOf(
 }
 
 void circt::lsp::VerilogServer::findReferencesOf(
-    const URIForFile &uri, const Position &pos,
+    const URIForFile &uri, const Position &pos, bool includeDeclaration,
     std::vector<llvm::lsp::Location> &references) {
   auto fileIt = impl->files.find(uri.file());
   if (fileIt != impl->files.end())
-    fileIt->second->findReferencesOf(uri, pos, references);
+    fileIt->second->findReferencesOf(uri, pos, includeDeclaration, references);
 }
 
 std::optional<llvm::lsp::Hover>
