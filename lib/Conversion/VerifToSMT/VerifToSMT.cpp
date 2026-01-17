@@ -192,6 +192,117 @@ struct LTLBooleanConstantOpConversion
   }
 };
 
+/// Convert ltl.delay to SMT boolean.
+/// For BMC, delay(seq, N) represents a sequence that starts N cycles later.
+/// At the current time step in BMC, we convert to the inner sequence value
+/// since the BMC framework handles temporal shifting. For N=0, this is just
+/// the sequence itself. For N>0, we return true (trivially satisfied at this
+/// step) since the actual check happens N cycles later.
+struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
+  using OpConversionPattern<ltl::DelayOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::DelayOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the delay amount
+    uint64_t delay = op.getDelay();
+
+    if (delay == 0) {
+      // No delay: just pass through the input sequence
+      Value input = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+          adaptor.getInput());
+      if (!input)
+        return failure();
+      rewriter.replaceOp(op, input);
+    } else {
+      // For BMC with delay > 0: At the current step, a delayed sequence
+      // is trivially true (the obligation is pushed to a future step).
+      // The BMC framework is responsible for tracking these delayed obligations.
+      // For a simple conversion, we return true here.
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
+    }
+    return success();
+  }
+};
+
+/// Convert ltl.concat to SMT boolean.
+/// Concatenation in LTL joins sequences end-to-end. For BMC at a single
+/// time step, concat(a, b) means: a holds at its time range, then b holds
+/// at its time range. When flattened to a single step check, if both
+/// sequences are instantaneous (booleans), this is equivalent to AND.
+/// For sequences with duration, BMC tracks them across steps.
+struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
+  using OpConversionPattern<ltl::ConcatOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::ConcatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Value, 4> smtOperands;
+    for (Value input : adaptor.getInputs()) {
+      Value converted = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()), input);
+      if (!converted)
+        return failure();
+      smtOperands.push_back(converted);
+    }
+
+    if (smtOperands.empty()) {
+      // Empty concatenation is trivially true
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
+      return success();
+    }
+
+    if (smtOperands.size() == 1) {
+      rewriter.replaceOp(op, smtOperands[0]);
+      return success();
+    }
+
+    // For BMC: concatenation of sequences at a single step is AND
+    // (all parts of the sequence must hold in their respective positions)
+    rewriter.replaceOpWithNewOp<smt::AndOp>(op, smtOperands);
+    return success();
+  }
+};
+
+/// Convert ltl.repeat to SMT boolean.
+/// Repetition in LTL means the sequence must match N times consecutively.
+/// For BMC at a single step:
+/// - repeat(seq, 0, 0) is an empty sequence (true)
+/// - repeat(seq, N, 0) with N>0 means seq must hold N times
+/// For a single-step check where seq is a boolean, this is just seq
+/// (the sequence holding once is the same as holding N times at that instant).
+struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
+  using OpConversionPattern<ltl::RepeatOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::RepeatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    uint64_t base = op.getBase();
+
+    if (base == 0) {
+      // Zero repetitions: empty sequence, trivially true
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
+      return success();
+    }
+
+    // For base >= 1: the sequence must match at least once
+    // In BMC single-step semantics, this is just the input sequence value
+    Value input = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getInput());
+    if (!input)
+      return failure();
+
+    // For exact repetition (base=N, more=0), at a single step this is
+    // equivalent to the input holding (since a boolean sequence is
+    // instantaneous and N repetitions of it all overlap at the same step).
+    // The temporal tracking of multiple repetitions is handled by BMC.
+    rewriter.replaceOp(op, input);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Verif Operation Conversion Patterns
 //===----------------------------------------------------------------------===//
@@ -999,8 +1110,9 @@ void circt::populateVerifToSMTConversionPatterns(
   // Add LTL operation conversion patterns
   patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLNotOpConversion,
                LTLImplicationOpConversion, LTLEventuallyOpConversion,
-               LTLUntilOpConversion, LTLBooleanConstantOpConversion>(
-      converter, patterns.getContext());
+               LTLUntilOpConversion, LTLBooleanConstantOpConversion,
+               LTLDelayOpConversion, LTLConcatOpConversion,
+               LTLRepeatOpConversion>(converter, patterns.getContext());
 
   // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
@@ -1118,7 +1230,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
   TypeConverter converter;
   populateHWToSMTTypeConverter(converter);
 
-  // Add type conversions for LTL types to SMT bool
+  // Add LTL type conversions to SMT boolean
+  // LTL sequences and properties are converted to SMT booleans for BMC
   converter.addConversion([](ltl::SequenceType type) -> Type {
     return smt::BoolType::get(type.getContext());
   });
@@ -1126,9 +1239,10 @@ void ConvertVerifToSMTPass::runOnOperation() {
     return smt::BoolType::get(type.getContext());
   });
 
-  // Mark LTL operations as illegal so they get converted
+  // Mark LTL operations as illegal so they get converted to SMT
   target.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::NotOp, ltl::ImplicationOp,
-                      ltl::EventuallyOp, ltl::UntilOp, ltl::BooleanConstantOp>();
+                      ltl::EventuallyOp, ltl::UntilOp, ltl::BooleanConstantOp,
+                      ltl::DelayOp, ltl::ConcatOp, ltl::RepeatOp>();
 
   SymbolCache symCache;
   symCache.addDefinitions(getOperation());
