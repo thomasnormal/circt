@@ -9,6 +9,7 @@
 #include "ImportVerilogInternals.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
 
@@ -4152,6 +4153,101 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Create the covergroup instantiation op.
     return moore::CovergroupInstOp::create(builder, loc, cgTy, cgSym);
+  }
+
+  // Handle distribution expression: variable dist { items }
+  // This is used within constraints to specify weighted random distributions.
+  Value visit(const slang::ast::DistExpression &expr) {
+    // Convert the left-hand side as an lvalue to get a reference to the
+    // variable being constrained. This is necessary so the constraint can
+    // be associated with the variable during randomization.
+    auto variable = context.convertLvalueExpression(expr.left());
+    if (!variable)
+      return {};
+
+    // Collect values, weights, and per_range markers
+    // Values are stored as [low, high] pairs for each item (single values
+    // have low == high)
+    SmallVector<int64_t> values;
+    SmallVector<int64_t> weights;
+    SmallVector<int64_t> perRange;
+
+    for (const auto &item : expr.items()) {
+      // Check if this is a range or a single value
+      if (const auto *range =
+              item.value.as_if<slang::ast::ValueRangeExpression>()) {
+        // Range expression: [low:high]
+        auto leftVal = context.evaluateConstant(range->left());
+        auto rightVal = context.evaluateConstant(range->right());
+        if (leftVal.bad() || rightVal.bad()) {
+          mlir::emitError(loc) << "dist range bounds must be constant";
+          return {};
+        }
+        auto maybeLow = leftVal.integer().as<int64_t>();
+        auto maybeHigh = rightVal.integer().as<int64_t>();
+        if (!maybeLow || !maybeHigh) {
+          mlir::emitError(loc) << "dist range bounds must be integers";
+          return {};
+        }
+        values.push_back(*maybeLow);
+        values.push_back(*maybeHigh);
+      } else {
+        // Single value
+        auto val = context.evaluateConstant(item.value);
+        if (val.bad()) {
+          mlir::emitError(loc) << "dist value must be constant";
+          return {};
+        }
+        auto maybeV = val.integer().as<int64_t>();
+        if (!maybeV) {
+          mlir::emitError(loc) << "dist value must be an integer";
+          return {};
+        }
+        int64_t v = *maybeV;
+        // Single values are represented as a range [v, v]
+        values.push_back(v);
+        values.push_back(v);
+      }
+
+      // Get the weight (default to 1 if not specified)
+      int64_t weight = 1;
+      int64_t isPerRange = 0; // 0 = := (per item), 1 = :/ (per range)
+
+      if (item.weight.has_value()) {
+        auto weightVal = context.evaluateConstant(*item.weight->expr);
+        if (!weightVal.bad()) {
+          auto maybeWeight = weightVal.integer().as<int64_t>();
+          if (maybeWeight)
+            weight = *maybeWeight;
+        }
+        isPerRange =
+            (item.weight->kind ==
+             slang::ast::DistExpression::DistWeight::PerRange)
+                ? 1
+                : 0;
+      }
+
+      weights.push_back(weight);
+      perRange.push_back(isPerRange);
+    }
+
+    // Handle default weight if specified
+    if (expr.defaultWeight()) {
+      // Default weight applies to any value not explicitly listed
+      // For now, we don't have a mechanism to represent this in the IR
+      mlir::emitWarning(loc) << "default dist weight not yet supported";
+    }
+
+    // Create the distribution constraint op
+    moore::ConstraintDistOp::create(builder, loc, variable, values, weights,
+                                    perRange);
+
+    // DistExpression has void type in slang, but we need to return something
+    // for the expression visitor. Return a constant 1 (true) as a placeholder
+    // since this is typically used in constraint contexts where the result
+    // indicates the constraint is satisfied.
+    auto boolType = moore::IntType::getInt(context.getContext(), 1);
+    return moore::ConstantOp::create(builder, loc, boolType, 1);
   }
 
   /// Emit an error for all other expressions.

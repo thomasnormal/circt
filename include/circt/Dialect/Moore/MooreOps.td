@@ -3462,6 +3462,16 @@ def CoverageBinKind : I32EnumAttr<"CoverageBinKind", "coverage bin kind", [
   let cppNamespace = "::circt::moore";
 }
 
+def TransitionRepeatKind : I32EnumAttr<"TransitionRepeatKind",
+    "transition repeat kind in coverage bins", [
+  I32EnumAttrCase<"None", 0, "none">,
+  I32EnumAttrCase<"Consecutive", 1, "consecutive">,
+  I32EnumAttrCase<"Nonconsecutive", 2, "nonconsecutive">,
+  I32EnumAttrCase<"GoTo", 3, "goto">
+]> {
+  let cppNamespace = "::circt::moore";
+}
+
 def CoverageBinDeclOp
     : MooreOp<"coverbin.decl", [Symbol, HasParent<"CoverpointDeclOp">]> {
   let summary = "Coverage bin declaration";
@@ -3481,7 +3491,13 @@ def CoverageBinDeclOp
     - `is_array` with no `num_bins`: Creates one bin per value (e.g., `bins x[] = {[0:7]}`)
     - `is_array` with `num_bins`: Creates N bins covering the range (e.g., `bins x[4] = {[0:255]}`)
 
-    Example:
+    Transition bins track state transitions rather than individual values.
+    The `transitions` attribute contains an array of transition sequences.
+    Each sequence is an array of [value, repeatKind, repeatFrom, repeatTo].
+    - repeatKind: 0=none, 1=consecutive[*n], 2=nonconsecutive[=n], 3=goto[->n]
+    - repeatFrom, repeatTo: repeat count range (0 if not applicable)
+
+    Example value bins:
     ```mlir
     moore.coverbin.decl @low kind<bins> values [0, 1, 2, 3]
     moore.coverbin.decl @high kind<bins> values [4, 5, 6, 7]
@@ -3490,22 +3506,37 @@ def CoverageBinDeclOp
     moore.coverbin.decl @fixed_bins kind<bins> array num_bins<4> values [0, 1, 2, 3, 4, 5, 6, 7]
     ```
 
+    Example transition bins:
+    ```mlir
+    // bins idle_to_run = (IDLE => RUN);
+    moore.coverbin.decl @idle_to_run kind<bins> transitions [[[0, 0, 0, 0], [1, 0, 0, 0]]]
+    // bins cycle = (IDLE => RUN => DONE => IDLE);
+    moore.coverbin.decl @cycle kind<bins> transitions [[[0, 0, 0, 0], [1, 0, 0, 0], [2, 0, 0, 0], [0, 0, 0, 0]]]
+    // bins repeat3 = (IDLE [*3] => RUN);
+    moore.coverbin.decl @repeat3 kind<bins> transitions [[[0, 1, 3, 3], [1, 0, 0, 0]]]
+    ```
+
     See IEEE 1800-2017 Section 19.5.1 "Defining bins for values".
+    See IEEE 1800-2017 Section 19.5.4 "Defining transition bins".
   }];
   let arguments = (ins SymbolNameAttr:$sym_name,
                        CoverageBinKind:$kind,
                        UnitAttr:$is_wildcard,
                        UnitAttr:$is_default,
                        UnitAttr:$is_array,
+                       UnitAttr:$is_default_sequence,
                        OptionalAttr<I64Attr>:$num_bins,
-                       OptionalAttr<ArrayAttr>:$values);
+                       OptionalAttr<ArrayAttr>:$values,
+                       OptionalAttr<ArrayAttr>:$transitions);
   let assemblyFormat = [{
     $sym_name `kind` `<` $kind `>`
     (`wildcard` $is_wildcard^)?
     (`default` $is_default^)?
+    (`default_sequence` $is_default_sequence^)?
     (`array` $is_array^)?
     (`num_bins` `<` $num_bins^ `>`)?
     (`values` $values^)?
+    (`transitions` $transitions^)?
     attr-dict
   }];
 }

@@ -128,6 +128,48 @@
 // CHECK-NEXT:    }
 // CHECK-NEXT:  ]
 // -----
-{"jsonrpc":"2.0","id":7,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"test:///ports.sv"}}}
+// -----
+// Test 4: Function and task definitions
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///funcs.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"module funcs;\n  function int add(int a, int b);\n    return a + b;\n  endfunction\n  \n  task show(int x);\n    $display(\"x=%d\", x);\n  endtask\n  \n  int result;\n  initial begin\n    result = add(1, 2);\n    show(result);\n  end\nendmodule"
+}}}
+// -----
+// Go to definition of function 'add' from call (add at char 13)
+{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///funcs.sv"},
+  "position":{"line":11,"character":13}
+}}
+// CHECK:       "id": 7,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 1
+// CHECK:           },
+// CHECK:           "uri": "test:///funcs.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+// Go to definition of task 'show' from call (show at char 4)
+{"jsonrpc":"2.0","id":8,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"test:///funcs.sv"},
+  "position":{"line":12,"character":5}
+}}
+// CHECK:       "id": 8,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK-NEXT:      "range": {
+// CHECK:             "line": 5
+// CHECK:           },
+// CHECK:           "uri": "test:///funcs.sv"
+// CHECK-NEXT:    }
+// CHECK-NEXT:  ]
+// -----
+{"jsonrpc":"2.0","id":9,"method":"shutdown"}
 // -----
 {"jsonrpc":"2.0","method":"exit"}

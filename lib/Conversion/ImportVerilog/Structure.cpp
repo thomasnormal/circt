@@ -3227,6 +3227,86 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
             auto valuesAttr =
                 valueAttrs.empty() ? nullptr : builder.getArrayAttr(valueAttrs);
 
+            // Handle transition bins (bins x = (a => b => c)).
+            // TransList is a span of TransSet, where each TransSet is a span
+            // of TransRangeList. Each TransRangeList has items (values) and
+            // optional repeat information.
+            SmallVector<mlir::Attribute> transitionsAttr;
+            auto transList = bin->getTransList();
+            for (const auto &transSet : transList) {
+              // Each TransSet represents one alternative transition sequence
+              // e.g., in (a => b), (c => d), we have two TransSets
+              SmallVector<mlir::Attribute> sequenceAttr;
+              for (const auto &rangeList : transSet) {
+                // Each TransRangeList represents a step in the sequence
+                // with its values and optional repeat
+                for (const auto *itemExpr : rangeList.items) {
+                  auto result = evaluateConstant(*itemExpr);
+                  if (result.isInteger()) {
+                    auto intVal = result.integer().as<int64_t>();
+                    if (intVal) {
+                      // Create [value, repeatKind, repeatFrom, repeatTo]
+                      int64_t repeatKind = 0;
+                      int64_t repeatFrom = 0;
+                      int64_t repeatTo = 0;
+
+                      switch (rangeList.repeatKind) {
+                      case slang::ast::CoverageBinSymbol::TransRangeList::None:
+                        repeatKind = 0;
+                        break;
+                      case slang::ast::CoverageBinSymbol::TransRangeList::
+                          Consecutive:
+                        repeatKind = 1;
+                        break;
+                      case slang::ast::CoverageBinSymbol::TransRangeList::
+                          Nonconsecutive:
+                        repeatKind = 2;
+                        break;
+                      case slang::ast::CoverageBinSymbol::TransRangeList::GoTo:
+                        repeatKind = 3;
+                        break;
+                      }
+
+                      // Get repeat range if present
+                      if (rangeList.repeatFrom) {
+                        auto fromResult = evaluateConstant(*rangeList.repeatFrom);
+                        if (fromResult.isInteger()) {
+                          auto fromVal = fromResult.integer().as<int64_t>();
+                          if (fromVal)
+                            repeatFrom = fromVal.value();
+                        }
+                      }
+                      if (rangeList.repeatTo) {
+                        auto toResult = evaluateConstant(*rangeList.repeatTo);
+                        if (toResult.isInteger()) {
+                          auto toVal = toResult.integer().as<int64_t>();
+                          if (toVal)
+                            repeatTo = toVal.value();
+                        }
+                      } else if (rangeList.repeatFrom) {
+                        // If only repeatFrom is set, repeatTo equals repeatFrom
+                        repeatTo = repeatFrom;
+                      }
+
+                      SmallVector<mlir::Attribute> transItem = {
+                          builder.getI64IntegerAttr(intVal.value()),
+                          builder.getI64IntegerAttr(repeatKind),
+                          builder.getI64IntegerAttr(repeatFrom),
+                          builder.getI64IntegerAttr(repeatTo)};
+                      sequenceAttr.push_back(builder.getArrayAttr(transItem));
+                    }
+                  }
+                }
+              }
+              if (!sequenceAttr.empty()) {
+                transitionsAttr.push_back(builder.getArrayAttr(sequenceAttr));
+              }
+            }
+
+            auto transAttr =
+                transitionsAttr.empty() ? nullptr
+                                        : builder.getArrayAttr(transitionsAttr);
+
             // Handle array bins (bins x[] or bins x[N]).
             // isArray is true for both syntax forms.
             // getNumberOfBinsExpr() returns the N expression for bins x[N].
@@ -3245,8 +3325,9 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
             moore::CoverageBinDeclOp::create(
                 builder, binLoc, builder.getStringAttr(bin->name), binKind,
                 bin->isWildcard, bin->isDefault, bin->isArray,
+                bin->isDefaultSequence,
                 numBins ? builder.getI64IntegerAttr(*numBins) : nullptr,
-                valuesAttr);
+                valuesAttr, transAttr);
           }
         }
       }

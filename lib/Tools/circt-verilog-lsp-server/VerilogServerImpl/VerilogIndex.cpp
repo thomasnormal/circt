@@ -8,6 +8,7 @@
 
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Expression.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
@@ -187,6 +188,27 @@ struct VerilogIndexer : slang::ast::ASTVisitor<VerilogIndexer, true, true> {
   void visit(const slang::ast::ClassType &classType) {
     insertSymbol(&classType, classType.location, /*isDefinition=*/true);
 
+    // Index the base class reference (extends clause)
+    if (const auto *baseClass = classType.getBaseClass()) {
+      // Try to get the syntax to find the exact location of the base class name
+      if (auto *syntax = classType.getSyntax()) {
+        if (auto *classDecl =
+                syntax->as_if<slang::syntax::ClassDeclarationSyntax>()) {
+          if (classDecl->extendsClause) {
+            auto &baseName = classDecl->extendsClause->baseName;
+            auto nameRange = baseName->sourceRange();
+            if (nameRange.start().valid() && nameRange.end().valid()) {
+              // Link to the base class type
+              if (baseClass->isClass()) {
+                const auto &baseClassType = baseClass->getCanonicalType().as<slang::ast::ClassType>();
+                insertSymbol(&baseClassType, nameRange, /*isDefinition=*/false);
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Index all class members (properties, methods, etc.)
     for (const auto &member : classType.members()) {
       if (member.location.valid() && !member.name.empty()) {
@@ -215,6 +237,32 @@ struct VerilogIndexer : slang::ast::ASTVisitor<VerilogIndexer, true, true> {
     if (symbol && !symbol->name.empty()) {
       // The member being accessed
       insertSymbol(symbol, expr.sourceRange, /*isDefinition=*/false);
+    }
+    recurseIfInMainBuffer(expr);
+  }
+
+  // Handle function/task calls for go-to-definition
+  void visit(const slang::ast::CallExpression &expr) {
+    // Get the subroutine being called
+    if (!expr.isSystemCall()) {
+      // User-defined function/task call
+      const auto *sub = std::get<const slang::ast::SubroutineSymbol *>(expr.subroutine);
+      if (sub && !sub->name.empty()) {
+        // Find the source range for the function name in the call expression
+        // The call expression's source range covers the entire call including args,
+        // but we want to link just the function name part to the definition.
+        // We need to extract just the name location from the syntax.
+        if (expr.syntax) {
+          if (auto *invocation =
+                  expr.syntax->as_if<slang::syntax::InvocationExpressionSyntax>()) {
+            // The left side contains the function name
+            auto nameRange = invocation->left->sourceRange();
+            if (nameRange.start().valid() && nameRange.end().valid()) {
+              insertSymbol(sub, nameRange, /*isDefinition=*/false);
+            }
+          }
+        }
+      }
     }
     recurseIfInMainBuffer(expr);
   }
@@ -252,6 +300,17 @@ void VerilogIndex::initialize(slang::ast::Compilation &compilation) {
       continue;
     // Visit the body of the top instance.
     inst->body.visit(visitor);
+  }
+
+  // Index compilation units for standalone classes and other symbols
+  // that aren't part of packages or module instances
+  for (const auto *unit : compilation.getCompilationUnits()) {
+    for (const auto &member : unit->members()) {
+      // Skip members not in the main buffer
+      if (member.location.valid() && member.location.buffer() != getBufferId())
+        continue;
+      member.visit(visitor);
+    }
   }
 
   // Parse the source location from the main file.

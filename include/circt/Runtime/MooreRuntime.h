@@ -383,6 +383,28 @@ int32_t __moore_randomize_basic(void *classPtr, int64_t classSize);
 /// @return Next value in the cycle or a random value
 int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth);
 
+/// Generate a weighted random value from a distribution.
+/// Implements SystemVerilog distribution constraints (dist keyword).
+///
+/// The ranges array contains pairs of [low, high] values defining the ranges.
+/// The weights array specifies the weight for each range.
+/// The perRange array indicates the weight type:
+///   - 0 (:=) means the weight applies to each value in the range
+///   - 1 (:/) means the weight is divided among values in the range
+///
+/// Example: x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }
+///   ranges: [0, 0, 1, 5, 6, 6] (pairs)
+///   weights: [10, 50, 40]
+///   perRange: [0, 1, 0]
+///
+/// @param ranges Array of range pairs [low1, high1, low2, high2, ...]
+/// @param weights Array of weights for each range
+/// @param perRange Array indicating weight type (0 = :=, 1 = :/)
+/// @param numRanges Number of ranges (weights and perRange have this length)
+/// @return A random value selected according to the distribution
+int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights,
+                                    int64_t *perRange, int64_t numRanges);
+
 //===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Operations
 //===----------------------------------------------------------------------===//
@@ -645,9 +667,38 @@ void __moore_coverage_report(void);
 enum MooreBinType {
   MOORE_BIN_VALUE = 0,     ///< Single value bin: bins x = {5};
   MOORE_BIN_RANGE = 1,     ///< Range bin: bins x = {[0:15]};
-  MOORE_BIN_WILDCARD = 2,  ///< Wildcard bin (future): bins x = {4'b1???};
-  MOORE_BIN_TRANSITION = 3 ///< Transition bin (future): bins x = (1 => 2);
+  MOORE_BIN_WILDCARD = 2,  ///< Wildcard bin: bins x = {4'b1???};
+  MOORE_BIN_TRANSITION = 3 ///< Transition bin: bins x = (1 => 2);
 };
+
+/// Transition repeat kinds for sequence coverage bins.
+/// Corresponds to SystemVerilog transition repeat specifications.
+enum MooreTransitionRepeatKind {
+  MOORE_TRANS_NONE = 0,           ///< No repeat: (a => b)
+  MOORE_TRANS_CONSECUTIVE = 1,    ///< Consecutive repeat [*n]: (a [*3] => b)
+  MOORE_TRANS_NONCONSECUTIVE = 2, ///< Non-consecutive repeat [=n]: (a [=3] => b)
+  MOORE_TRANS_GOTO = 3            ///< Goto repeat [->n]: (a [->3] => b)
+};
+
+/// Transition step structure for defining a single step in a transition sequence.
+/// @member value The value at this step
+/// @member repeat_kind Type of repeat (none, consecutive, non-consecutive, goto)
+/// @member repeat_from Minimum repeat count (0 if no repeat)
+/// @member repeat_to Maximum repeat count (0 if no repeat, equals from for exact)
+typedef struct {
+  int64_t value;
+  int32_t repeat_kind;
+  int32_t repeat_from;
+  int32_t repeat_to;
+} MooreTransitionStep;
+
+/// Transition sequence structure for transition coverage bins.
+/// @member steps Array of transition steps
+/// @member num_steps Number of steps in the sequence
+typedef struct {
+  MooreTransitionStep *steps;
+  int32_t num_steps;
+} MooreTransitionSequence;
 
 /// Coverage bin definition structure.
 /// @member name Name of the bin
@@ -697,6 +748,72 @@ void __moore_coverpoint_add_bin(void *cg, int32_t cp_index,
 /// @param bin_index Index of the bin
 /// @return Number of times the bin was hit
 int64_t __moore_coverpoint_get_bin_hits(void *cg, int32_t cp_index,
+                                        int32_t bin_index);
+
+//===----------------------------------------------------------------------===//
+// Transition Coverage Operations
+//===----------------------------------------------------------------------===//
+//
+// Transition coverage tracks state machine transitions rather than just values.
+// This implements SystemVerilog transition bins like: bins x = (IDLE => RUN);
+//
+
+/// Opaque handle to a transition tracker state machine.
+typedef struct MooreTransitionTracker *MooreTransitionTrackerHandle;
+
+/// Create a new transition tracker for a coverpoint.
+/// The tracker maintains state to detect multi-step transitions.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Handle to the tracker, or NULL on failure
+MooreTransitionTrackerHandle __moore_transition_tracker_create(void *cg,
+                                                                int32_t cp_index);
+
+/// Destroy a transition tracker and free resources.
+///
+/// @param tracker Handle to the transition tracker
+void __moore_transition_tracker_destroy(MooreTransitionTrackerHandle tracker);
+
+/// Add a transition bin to a coverpoint.
+/// A transition bin tracks a sequence of state transitions.
+///
+/// Example: bins idle_to_run = (IDLE => RUN);
+///   sequences = {{IDLE, 0, 0, 0}, {RUN, 0, 0, 0}}
+///   num_sequences = 1, each sequence has num_steps = 2
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the bin
+/// @param sequences Array of transition sequences (alternatives)
+/// @param num_sequences Number of alternative sequences
+void __moore_coverpoint_add_transition_bin(void *cg, int32_t cp_index,
+                                           const char *bin_name,
+                                           MooreTransitionSequence *sequences,
+                                           int32_t num_sequences);
+
+/// Update transition tracker with a new sampled value.
+/// This function advances the state machine for all transition bins
+/// and records hits when complete sequences are observed.
+///
+/// @param tracker Handle to the transition tracker
+/// @param value The newly sampled value
+void __moore_transition_tracker_sample(MooreTransitionTrackerHandle tracker,
+                                       int64_t value);
+
+/// Reset all transition tracker state machines to initial state.
+/// Useful when restarting coverage collection or on reset events.
+///
+/// @param tracker Handle to the transition tracker
+void __moore_transition_tracker_reset(MooreTransitionTrackerHandle tracker);
+
+/// Get the number of times a transition bin was hit.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_index Index of the transition bin
+/// @return Number of complete transitions observed
+int64_t __moore_transition_bin_get_hits(void *cg, int32_t cp_index,
                                         int32_t bin_index);
 
 /// Write a JSON coverage report to a file.

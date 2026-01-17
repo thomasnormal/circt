@@ -1307,6 +1307,64 @@ extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
   return static_cast<int64_t>(state.current);
 }
 
+extern "C" int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights,
+                                               int64_t *perRange,
+                                               int64_t numRanges) {
+  if (!ranges || !weights || !perRange || numRanges <= 0)
+    return 0;
+
+  // Calculate total weight considering per-range vs per-value weights.
+  // For := (perRange=0), weight applies to each value in the range.
+  // For :/ (perRange=1), weight is divided among values in the range.
+  int64_t totalWeight = 0;
+  std::vector<int64_t> effectiveWeights(numRanges);
+
+  for (int64_t i = 0; i < numRanges; ++i) {
+    int64_t low = ranges[i * 2];
+    int64_t high = ranges[i * 2 + 1];
+    int64_t rangeSize = high - low + 1;
+    int64_t weight = weights[i];
+
+    if (perRange[i] == 0) {
+      // := weight: weight applies to each value
+      effectiveWeights[i] = weight * rangeSize;
+    } else {
+      // :/ weight: total weight for the range
+      effectiveWeights[i] = weight;
+    }
+    totalWeight += effectiveWeights[i];
+  }
+
+  if (totalWeight <= 0)
+    return ranges[0]; // Return first value if no valid weights
+
+  // Generate a random number in [0, totalWeight)
+  int64_t randomWeight =
+      static_cast<int64_t>(__moore_urandom()) % totalWeight;
+
+  // Find which range the random weight falls into
+  int64_t cumulativeWeight = 0;
+  for (int64_t i = 0; i < numRanges; ++i) {
+    cumulativeWeight += effectiveWeights[i];
+    if (randomWeight < cumulativeWeight) {
+      // Select from this range
+      int64_t low = ranges[i * 2];
+      int64_t high = ranges[i * 2 + 1];
+      int64_t rangeSize = high - low + 1;
+
+      // Pick a random value within the range
+      if (rangeSize == 1) {
+        return low;
+      } else {
+        return low + static_cast<int64_t>(__moore_urandom()) % rangeSize;
+      }
+    }
+  }
+
+  // Fallback: return first value (shouldn't reach here)
+  return ranges[0];
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Operations
 //===----------------------------------------------------------------------===//
@@ -2667,6 +2725,256 @@ void updateExplicitBinsHelper(MooreCoverpoint *cp, int64_t value) {
 }
 
 } // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Transition Coverage Operations
+//===----------------------------------------------------------------------===//
+//
+// Transition coverage tracks state machine transitions rather than just values.
+// This implements SystemVerilog transition bins like: bins x = (IDLE => RUN);
+//
+
+namespace {
+
+/// Structure to store a transition bin definition.
+struct TransitionBinDef {
+  const char *name;
+  std::vector<MooreTransitionSequence> sequences; // Alternative sequences
+  int64_t hit_count;
+};
+
+/// Structure to track the matching state for a single transition sequence.
+struct TransitionSequenceState {
+  int32_t current_step;  // Which step in the sequence we're waiting for
+  int32_t repeat_count;  // For repeat patterns, count of matching values
+  bool active;           // Is this sequence currently being tracked
+};
+
+/// Structure to store transition tracking state for a coverpoint.
+struct TransitionTrackerState {
+  MooreCovergroup *covergroup;
+  int32_t cp_index;
+  std::vector<TransitionBinDef> bins;
+
+  // For each bin, for each alternative sequence, track the matching state
+  // Indexed as: sequenceStates[bin_index][sequence_index]
+  std::vector<std::vector<TransitionSequenceState>> sequenceStates;
+
+  // Previous value for detecting transitions
+  int64_t prev_value;
+  bool has_prev_value;
+};
+
+/// Check if a value matches a transition step (considering wildcards and ranges).
+bool valueMatchesStep(int64_t value, const MooreTransitionStep &step) {
+  // For now, simple equality check. Could be extended for ranges/wildcards.
+  return value == step.value;
+}
+
+/// Advance the state machine for a single sequence given a new value.
+/// Returns true if the sequence completed (bin hit).
+bool advanceSequenceState(TransitionSequenceState &state,
+                          const MooreTransitionSequence &seq,
+                          int64_t value, int64_t prev_value, bool has_prev) {
+  if (seq.num_steps < 2)
+    return false; // Need at least 2 steps for a transition
+
+  // If not active, check if the first step matches the previous value
+  // and second step matches current value (for simple transitions)
+  if (!state.active) {
+    // Check if we're at a potential start of the sequence
+    if (has_prev && valueMatchesStep(prev_value, seq.steps[0]) &&
+        valueMatchesStep(value, seq.steps[1])) {
+      if (seq.num_steps == 2) {
+        // Simple 2-step transition - complete!
+        return true;
+      } else {
+        // Start tracking longer sequence
+        state.active = true;
+        state.current_step = 2;
+        state.repeat_count = 0;
+      }
+    }
+    return false;
+  }
+
+  // Active - check if current value matches the next expected step
+  if (state.current_step >= seq.num_steps) {
+    state.active = false;
+    return false;
+  }
+
+  const MooreTransitionStep &step = seq.steps[state.current_step];
+
+  // Handle repeat patterns
+  if (step.repeat_kind != MOORE_TRANS_NONE) {
+    if (valueMatchesStep(value, step)) {
+      state.repeat_count++;
+
+      // Check if we've seen enough repeats
+      if (state.repeat_count >= step.repeat_from) {
+        // Check if this could be the end of repeats (max reached or next step matches)
+        if (state.repeat_count >= step.repeat_to ||
+            (state.current_step + 1 < seq.num_steps &&
+             valueMatchesStep(value, seq.steps[state.current_step + 1]))) {
+          state.current_step++;
+          state.repeat_count = 0;
+
+          // Check if sequence complete
+          if (state.current_step >= seq.num_steps) {
+            state.active = false;
+            return true;
+          }
+        }
+      }
+    } else {
+      // Value doesn't match - check if we can move to next step
+      if (state.repeat_count >= step.repeat_from &&
+          state.current_step + 1 < seq.num_steps &&
+          valueMatchesStep(value, seq.steps[state.current_step + 1])) {
+        state.current_step++;
+        state.repeat_count = 0;
+
+        if (state.current_step >= seq.num_steps) {
+          state.active = false;
+          return true;
+        }
+      } else {
+        // Sequence broken
+        state.active = false;
+        state.current_step = 0;
+        state.repeat_count = 0;
+      }
+    }
+  } else {
+    // No repeat - simple step matching
+    if (valueMatchesStep(value, step)) {
+      state.current_step++;
+
+      // Check if sequence complete
+      if (state.current_step >= seq.num_steps) {
+        state.active = false;
+        return true;
+      }
+    } else {
+      // Sequence broken
+      state.active = false;
+      state.current_step = 0;
+      state.repeat_count = 0;
+    }
+  }
+
+  return false;
+}
+
+} // anonymous namespace
+
+/// The actual transition tracker structure.
+struct MooreTransitionTracker {
+  TransitionTrackerState state;
+};
+
+extern "C" MooreTransitionTrackerHandle
+__moore_transition_tracker_create(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return nullptr;
+
+  auto *tracker = new MooreTransitionTracker();
+  tracker->state.covergroup = covergroup;
+  tracker->state.cp_index = cp_index;
+  tracker->state.prev_value = 0;
+  tracker->state.has_prev_value = false;
+
+  return tracker;
+}
+
+extern "C" void
+__moore_transition_tracker_destroy(MooreTransitionTrackerHandle tracker) {
+  if (tracker) {
+    // Free the sequence steps
+    for (auto &bin : tracker->state.bins) {
+      for (auto &seq : bin.sequences) {
+        if (seq.steps) {
+          std::free(seq.steps);
+        }
+      }
+    }
+    delete tracker;
+  }
+}
+
+extern "C" void __moore_coverpoint_add_transition_bin(
+    void *cg, int32_t cp_index, const char *bin_name,
+    MooreTransitionSequence *sequences, int32_t num_sequences) {
+  // This function is called to define transition bins on a coverpoint.
+  // The actual tracking happens via the transition tracker.
+  // For now, this is a stub - full implementation would store the bin
+  // definition and integrate with the coverpoint structure.
+  (void)cg;
+  (void)cp_index;
+  (void)bin_name;
+  (void)sequences;
+  (void)num_sequences;
+}
+
+extern "C" void
+__moore_transition_tracker_sample(MooreTransitionTrackerHandle tracker,
+                                  int64_t value) {
+  if (!tracker)
+    return;
+
+  auto &state = tracker->state;
+
+  // Check each bin's sequences for matches
+  for (size_t binIdx = 0; binIdx < state.bins.size(); ++binIdx) {
+    auto &bin = state.bins[binIdx];
+    auto &binStates = state.sequenceStates[binIdx];
+
+    for (size_t seqIdx = 0; seqIdx < bin.sequences.size(); ++seqIdx) {
+      auto &seq = bin.sequences[seqIdx];
+      auto &seqState = binStates[seqIdx];
+
+      if (advanceSequenceState(seqState, seq, value, state.prev_value,
+                               state.has_prev_value)) {
+        bin.hit_count++;
+      }
+    }
+  }
+
+  // Update previous value
+  state.prev_value = value;
+  state.has_prev_value = true;
+}
+
+extern "C" void
+__moore_transition_tracker_reset(MooreTransitionTrackerHandle tracker) {
+  if (!tracker)
+    return;
+
+  auto &state = tracker->state;
+  state.prev_value = 0;
+  state.has_prev_value = false;
+
+  // Reset all sequence states
+  for (auto &binStates : state.sequenceStates) {
+    for (auto &seqState : binStates) {
+      seqState.active = false;
+      seqState.current_step = 0;
+      seqState.repeat_count = 0;
+    }
+  }
+}
+
+extern "C" int64_t __moore_transition_bin_get_hits(void *cg, int32_t cp_index,
+                                                   int32_t bin_index) {
+  // This would need to look up the transition tracker for this coverpoint
+  // and return the hit count. For now, return 0 as a stub.
+  (void)cg;
+  (void)cp_index;
+  (void)bin_index;
+  return 0;
+}
 
 //===----------------------------------------------------------------------===//
 // Cross Coverage Operations
