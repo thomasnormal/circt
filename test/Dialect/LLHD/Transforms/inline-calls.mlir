@@ -68,3 +68,18 @@ func.func private @bar_wrapper(%arg0: i42) -> i42 {
   %0 = call @bar(%arg0) : (i42) -> i42
   return %0 : i42
 }
+
+// CHECK-LABEL: @Init
+hw.module @Init() {
+  // CHECK: seq.initial
+  seq.initial() {
+    %c1_i32 = hw.constant 1 : i32
+    // CHECK-NOT: call @dummy
+    func.call @dummy(%c1_i32) : (i32) -> ()
+  } : () -> ()
+  hw.output
+}
+
+func.func private @dummy(%arg0: i32) {
+  return
+}

@@ -3391,9 +3391,22 @@ def CovergroupDeclOp
     The optional `sampling_event` attribute describes the event that triggers
     coverage sampling (e.g., "@(posedge clk)").
 
+    Coverage options (IEEE 1800-2017 Section 19.7):
+    - `weight`: Relative importance for coverage calculation (default: 1)
+    - `goal`: Target coverage percentage (default: 100)
+    - `comment`: Documentation string
+    - `per_instance`: When true, track coverage per instance (default: false)
+    - `at_least`: Minimum hits for a bin to be covered (default: 1)
+    - `cross_num_print_missing`: Max missing cross products to print (default: 0)
+    - `strobe`: When true, sample at the end of the time slot (default: false)
+
+    Type options (set via type_option.*) affect all instances:
+    - `type_weight`, `type_goal`, `type_comment`
+
     Example:
     ```mlir
-    moore.covergroup.decl @my_cg sampling_event<"@(posedge clk)"> {
+    moore.covergroup.decl @my_cg sampling_event<"@(posedge clk)">
+        per_instance<true> goal<90> {
       moore.coverpoint.decl @data_cp : !moore.l8 {}
     }
     ```
@@ -3401,10 +3414,30 @@ def CovergroupDeclOp
     See IEEE 1800-2017 Section 19 "Functional coverage".
   }];
   let arguments = (ins SymbolNameAttr:$sym_name,
-                       OptionalAttr<StrAttr>:$sampling_event);
+                       OptionalAttr<StrAttr>:$sampling_event,
+                       OptionalAttr<I64Attr>:$weight,
+                       OptionalAttr<I64Attr>:$goal,
+                       OptionalAttr<StrAttr>:$comment,
+                       UnitAttr:$per_instance,
+                       OptionalAttr<I64Attr>:$at_least,
+                       OptionalAttr<I64Attr>:$cross_num_print_missing,
+                       UnitAttr:$strobe,
+                       OptionalAttr<I64Attr>:$type_weight,
+                       OptionalAttr<I64Attr>:$type_goal,
+                       OptionalAttr<StrAttr>:$type_comment);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = [{
     $sym_name (`sampling_event` `<` $sampling_event^ `>`)?
+    (`weight` `<` $weight^ `>`)?
+    (`goal` `<` $goal^ `>`)?
+    (`comment` `<` $comment^ `>`)?
+    (`per_instance` $per_instance^)?
+    (`at_least` `<` $at_least^ `>`)?
+    (`cross_num_print_missing` `<` $cross_num_print_missing^ `>`)?
+    (`strobe` $strobe^)?
+    (`type_weight` `<` $type_weight^ `>`)?
+    (`type_goal` `<` $type_goal^ `>`)?
+    (`type_comment` `<` $type_comment^ `>`)?
     attr-dict-with-keyword $body
   }];
 }
@@ -3419,9 +3452,14 @@ def CoverpointDeclOp
     of values or expressions. It may optionally contain bins that specify
     how values should be grouped for coverage tracking.
 
-    The optional `auto_bin_max` attribute limits the number of automatically
-    created bins when no explicit bins are defined. If not specified, the
-    default is 64 bins. Setting to 0 creates one bin per unique value.
+    Coverage options (IEEE 1800-2017 Section 19.7):
+    - `weight`: Relative importance for coverage calculation (default: 1)
+    - `goal`: Target coverage percentage (default: 100)
+    - `comment`: Documentation string
+    - `at_least`: Minimum hits for a bin to be covered (default: 1)
+    - `auto_bin_max`: Maximum auto-generated bins (default: 64, 0 = one per value)
+    - `detect_overlap`: Report overlapping bins (default: false)
+    - `cross_auto_bin_max`: Max auto bins for cross (default: 64)
 
     Example without bins:
     ```mlir
@@ -3433,9 +3471,10 @@ def CoverpointDeclOp
     moore.coverpoint.decl @data_cp : !moore.l8 auto_bin_max<16> {}
     ```
 
-    Example with bins:
+    Example with options:
     ```mlir
-    moore.coverpoint.decl @data_cp : !moore.l8 {
+    moore.coverpoint.decl @data_cp : !moore.l8
+        weight<2> goal<95> comment<"Data coverage"> at_least<5> {
       moore.coverbin.decl @low kind<bins> values [0, 1, 2, 3]
       moore.coverbin.decl @high kind<bins> values [4, 5, 6, 7]
     }
@@ -3445,11 +3484,23 @@ def CoverpointDeclOp
   }];
   let arguments = (ins SymbolNameAttr:$sym_name,
                        TypeAttr:$type,
-                       OptionalAttr<I64Attr>:$auto_bin_max);
+                       OptionalAttr<I64Attr>:$weight,
+                       OptionalAttr<I64Attr>:$goal,
+                       OptionalAttr<StrAttr>:$comment,
+                       OptionalAttr<I64Attr>:$at_least,
+                       OptionalAttr<I64Attr>:$auto_bin_max,
+                       UnitAttr:$detect_overlap,
+                       OptionalAttr<I64Attr>:$cross_auto_bin_max);
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
     $sym_name `:` $type
+    (`weight` `<` $weight^ `>`)?
+    (`goal` `<` $goal^ `>`)?
+    (`comment` `<` $comment^ `>`)?
+    (`at_least` `<` $at_least^ `>`)?
     (`auto_bin_max` `<` $auto_bin_max^ `>`)?
+    (`detect_overlap` $detect_overlap^)?
+    (`cross_auto_bin_max` `<` $cross_auto_bin_max^ `>`)?
     attr-dict-with-keyword $body
   }];
 }
@@ -3551,6 +3602,14 @@ def CoverCrossDeclOp
     the Cartesian product of multiple coverpoints. It may optionally contain
     bins that use binsof/intersect expressions to select specific cross products.
 
+    Coverage options (IEEE 1800-2017 Section 19.7):
+    - `weight`: Relative importance for coverage calculation (default: 1)
+    - `goal`: Target coverage percentage (default: 100)
+    - `comment`: Documentation string
+    - `at_least`: Minimum hits for a bin to be covered (default: 1)
+    - `cross_num_print_missing`: Max missing cross products to print (default: 0)
+    - `cross_auto_bin_max`: Maximum auto-generated cross bins (default: 64)
+
     Example without bins (automatic bins):
     ```mlir
     moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp] {}
@@ -3558,7 +3617,8 @@ def CoverCrossDeclOp
 
     Example with bins using binsof/intersect:
     ```mlir
-    moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp] {
+    moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp]
+        weight<2> goal<90> {
       moore.crossbin.decl @valid kind<bins> {
         moore.binsof @addr_cp intersect [0, 1, 2, 3]
       }
@@ -3570,9 +3630,25 @@ def CoverCrossDeclOp
 
     See IEEE 1800-2017 Section 19.6 "Defining cross coverage".
   }];
-  let arguments = (ins SymbolNameAttr:$sym_name, SymbolRefArrayAttr:$targets);
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       SymbolRefArrayAttr:$targets,
+                       OptionalAttr<I64Attr>:$weight,
+                       OptionalAttr<I64Attr>:$goal,
+                       OptionalAttr<StrAttr>:$comment,
+                       OptionalAttr<I64Attr>:$at_least,
+                       OptionalAttr<I64Attr>:$cross_num_print_missing,
+                       OptionalAttr<I64Attr>:$cross_auto_bin_max);
   let regions = (region SizedRegion<1>:$body);
-  let assemblyFormat = [{ $sym_name `targets` $targets attr-dict-with-keyword $body }];
+  let assemblyFormat = [{
+    $sym_name `targets` $targets
+    (`weight` `<` $weight^ `>`)?
+    (`goal` `<` $goal^ `>`)?
+    (`comment` `<` $comment^ `>`)?
+    (`at_least` `<` $at_least^ `>`)?
+    (`cross_num_print_missing` `<` $cross_num_print_missing^ `>`)?
+    (`cross_auto_bin_max` `<` $cross_auto_bin_max^ `>`)?
+    attr-dict-with-keyword $body
+  }];
 }
 
 def CrossBinDeclOp
@@ -3954,14 +4030,19 @@ def ConstraintDisableOp
 
 def ConstraintUniqueOp
     : MooreOp<"constraint.unique", []> {
-  let summary = "Unique constraint for array elements";
+  let summary = "Unique constraint for variables or array elements";
   let description = [{
-    Specifies that all elements of an array must have unique values
-    after randomization.
+    Specifies that all provided variables/elements must have unique values
+    after randomization. Can be used with:
+    - Individual variables: unique { a, b, c } ensures a, b, c are all different
+    - Arrays: unique { arr } ensures all elements of arr are different
 
     Example:
     ```mlir
-    // unique { arr }
+    // unique { a, b, c } - individual variables
+    moore.constraint.unique %a, %b, %c : i8, i8, i8
+
+    // unique { arr } - array elements
     moore.constraint.unique %arr : !moore.uarray<8 x i32>
     ```
 

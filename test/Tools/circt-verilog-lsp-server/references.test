@@ -77,6 +77,59 @@
 // CHECK:         "uri": "test:///refs_test.sv"
 // CHECK:       ]
 // -----
-{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+// Test 6: Find references with includeDeclaration=false
+// Should find only usages, not the declaration
+{"jsonrpc":"2.0","id":6,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs_test.sv"},
+  "position":{"line":8,"character":23},
+  "context":{"includeDeclaration":false}
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs_test.sv"
+// CHECK:       ]
+// -----
+// Open a second file to test function references
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///func_test.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module func_test;\n  function int add(int a, int b);\n    return a + b;\n  endfunction\n  \n  int result1, result2, result3;\n  \n  initial begin\n    result1 = add(1, 2);\n    result2 = add(3, 4);\n    result3 = add(result1, result2);\n  end\nendmodule"
+}}}
+// -----
+// Test 7: Find all references to 'add' function (line 1, col 15)
+// Should find: function declaration and all call sites
+{"jsonrpc":"2.0","id":7,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///func_test.sv"},
+  "position":{"line":1,"character":15},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 7,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find function declaration and 3 call sites (4 total)
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:       ]
+// -----
+// Test 8: Find references to function without declaration
+{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///func_test.sv"},
+  "position":{"line":1,"character":15},
+  "context":{"includeDeclaration":false}
+}}
+// CHECK:       "id": 8,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find only 3 call sites (no declaration)
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:         "uri": "test:///func_test.sv"
+// CHECK:       ]
+// -----
+{"jsonrpc":"2.0","id":9,"method":"shutdown"}
 // -----
 {"jsonrpc":"2.0","method":"exit"}

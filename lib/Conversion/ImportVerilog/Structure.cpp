@@ -11,6 +11,7 @@
 #include "slang/ast/Constraints.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/TimingControl.h"
+#include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
@@ -2609,9 +2610,57 @@ struct ClassDeclVisitor {
       return convertConstraint(foreachCons.body, loc);
     }
     case slang::ast::ConstraintKind::SolveBefore: {
-      // Solve-before constraints require symbol references
-      // For now, emit a warning and skip
-      mlir::emitWarning(loc) << "solve-before constraint not yet fully supported";
+      const auto &solveBefore =
+          constraint.as<slang::ast::SolveBeforeConstraint>();
+
+      // Helper lambda to extract variable name from expression
+      auto extractVarName =
+          [&](const slang::ast::Expression *expr) -> std::optional<StringRef> {
+        // Handle NamedValueExpression - most common case for random variables
+        if (expr->kind == slang::ast::ExpressionKind::NamedValue) {
+          const auto &namedExpr =
+              expr->as<slang::ast::NamedValueExpression>();
+          return namedExpr.symbol.name;
+        }
+        // Handle HierarchicalValueExpression for hierarchical references
+        if (expr->kind == slang::ast::ExpressionKind::HierarchicalValue) {
+          const auto &hierExpr =
+              expr->as<slang::ast::HierarchicalValueExpression>();
+          return hierExpr.symbol.name;
+        }
+        return std::nullopt;
+      };
+
+      // Collect 'before' (solve) variables
+      SmallVector<Attribute> beforeRefs;
+      for (const auto *item : solveBefore.solve) {
+        if (auto varName = extractVarName(item)) {
+          beforeRefs.push_back(
+              mlir::FlatSymbolRefAttr::get(builder.getContext(), *varName));
+        } else {
+          mlir::emitWarning(loc)
+              << "solve-before: could not extract variable name from expression";
+        }
+      }
+
+      // Collect 'after' variables
+      SmallVector<Attribute> afterRefs;
+      for (const auto *item : solveBefore.after) {
+        if (auto varName = extractVarName(item)) {
+          afterRefs.push_back(
+              mlir::FlatSymbolRefAttr::get(builder.getContext(), *varName));
+        } else {
+          mlir::emitWarning(loc)
+              << "solve-before: could not extract variable name from expression";
+        }
+      }
+
+      // Only create the op if we have at least one variable in each list
+      if (!beforeRefs.empty() && !afterRefs.empty()) {
+        moore::ConstraintSolveBeforeOp::create(
+            builder, loc, builder.getArrayAttr(beforeRefs),
+            builder.getArrayAttr(afterRefs));
+      }
       return success();
     }
     case slang::ast::ConstraintKind::DisableSoft: {
@@ -3037,6 +3086,92 @@ static void convertBinsSelectExpr(
   }
 }
 
+/// Helper struct to hold extracted coverage options.
+struct CoverageOptions {
+  std::optional<int64_t> weight;
+  std::optional<int64_t> goal;
+  std::optional<std::string> comment;
+  bool perInstance = false;
+  std::optional<int64_t> atLeast;
+  std::optional<int64_t> autoBinMax;
+  std::optional<int64_t> crossNumPrintMissing;
+  std::optional<int64_t> crossAutoBinMax;
+  bool strobe = false;
+  bool detectOverlap = false;
+  // Type options (for covergroups)
+  std::optional<int64_t> typeWeight;
+  std::optional<int64_t> typeGoal;
+  std::optional<std::string> typeComment;
+};
+
+/// Extract coverage options from a span of CoverageOptionSetter.
+static CoverageOptions extractCoverageOptions(
+    std::span<const slang::ast::CoverageOptionSetter> options,
+    const std::function<slang::ConstantValue(const slang::ast::Expression &)>
+        &evaluateConstant) {
+  CoverageOptions result;
+
+  for (const auto &opt : options) {
+    std::string_view name = opt.getName();
+    bool isTypeOption = opt.isTypeOption();
+
+    // Get the value expression (RHS of the assignment)
+    const auto &expr = opt.getExpression();
+    const slang::ast::Expression *valueExpr = &expr;
+    if (expr.kind == slang::ast::ExpressionKind::Assignment) {
+      valueExpr = &expr.as<slang::ast::AssignmentExpression>().right();
+    }
+
+    // Extract integer value if possible
+    std::optional<int64_t> intValue;
+    auto constVal = evaluateConstant(*valueExpr);
+    if (constVal.isInteger()) {
+      auto intVal = constVal.integer().as<int64_t>();
+      if (intVal)
+        intValue = intVal.value();
+    }
+
+    // Extract string value if possible
+    std::optional<std::string> strValue;
+    if (constVal.isString()) {
+      strValue = std::string(constVal.str());
+    }
+
+    // Map option names to struct fields
+    if (isTypeOption) {
+      if (name == "weight" && intValue)
+        result.typeWeight = *intValue;
+      else if (name == "goal" && intValue)
+        result.typeGoal = *intValue;
+      else if (name == "comment" && strValue)
+        result.typeComment = *strValue;
+    } else {
+      if (name == "weight" && intValue)
+        result.weight = *intValue;
+      else if (name == "goal" && intValue)
+        result.goal = *intValue;
+      else if (name == "comment" && strValue)
+        result.comment = *strValue;
+      else if (name == "per_instance" && intValue)
+        result.perInstance = (*intValue != 0);
+      else if (name == "at_least" && intValue)
+        result.atLeast = *intValue;
+      else if (name == "auto_bin_max" && intValue)
+        result.autoBinMax = *intValue;
+      else if (name == "cross_num_print_missing" && intValue)
+        result.crossNumPrintMissing = *intValue;
+      else if (name == "cross_auto_bin_max" && intValue)
+        result.crossAutoBinMax = *intValue;
+      else if (name == "strobe" && intValue)
+        result.strobe = (*intValue != 0);
+      else if (name == "detect_overlap" && intValue)
+        result.detectOverlap = (*intValue != 0);
+    }
+  }
+
+  return result;
+}
+
 LogicalResult
 Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
   // Check if already converted.
@@ -3096,9 +3231,32 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
     }
   }
 
-  // Create the covergroup declaration op.
-  auto covergroupOp =
-      moore::CovergroupDeclOp::create(builder, loc, cgName, samplingEventAttr);
+  // Extract covergroup-level options from the body.
+  const auto &cgBody = covergroup.getBody();
+  auto cgOptions = extractCoverageOptions(
+      cgBody.options, [this](const slang::ast::Expression &expr) {
+        return evaluateConstant(expr);
+      });
+
+  // Create the covergroup declaration op with all options.
+  auto covergroupOp = moore::CovergroupDeclOp::create(
+      builder, loc, cgName, samplingEventAttr,
+      cgOptions.weight ? builder.getI64IntegerAttr(*cgOptions.weight) : nullptr,
+      cgOptions.goal ? builder.getI64IntegerAttr(*cgOptions.goal) : nullptr,
+      cgOptions.comment ? builder.getStringAttr(*cgOptions.comment) : nullptr,
+      cgOptions.perInstance,
+      cgOptions.atLeast ? builder.getI64IntegerAttr(*cgOptions.atLeast)
+                        : nullptr,
+      cgOptions.crossNumPrintMissing
+          ? builder.getI64IntegerAttr(*cgOptions.crossNumPrintMissing)
+          : nullptr,
+      cgOptions.strobe,
+      cgOptions.typeWeight ? builder.getI64IntegerAttr(*cgOptions.typeWeight)
+                           : nullptr,
+      cgOptions.typeGoal ? builder.getI64IntegerAttr(*cgOptions.typeGoal)
+                         : nullptr,
+      cgOptions.typeComment ? builder.getStringAttr(*cgOptions.typeComment)
+                            : nullptr);
   orderedRootOps.insert({covergroup.location, covergroupOp});
   symbolTable.insert(covergroupOp);
 
@@ -3118,7 +3276,6 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
   OpBuilder::InsertionGuard bodyGuard(builder);
   builder.setInsertionPointToStart(&body.front());
 
-  const auto &cgBody = covergroup.getBody();
   for (const auto &member : cgBody.members()) {
     if (auto *cp = member.as_if<slang::ast::CoverpointSymbol>()) {
       auto cpLoc = convertLocation(cp->location);
@@ -3158,30 +3315,30 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
         cpName = "cp";
       }
 
-      // Extract auto_bin_max option if present.
-      std::optional<int64_t> autoBinMax;
-      for (const auto &opt : cp->options) {
-        if (opt.getName() == "auto_bin_max") {
-          // The expression is an AssignmentExpression, we need the RHS.
-          const auto &expr = opt.getExpression();
-          const slang::ast::Expression *valueExpr = &expr;
-          if (expr.kind == slang::ast::ExpressionKind::Assignment) {
-            valueExpr =
-                &expr.as<slang::ast::AssignmentExpression>().right();
-          }
-          auto result = evaluateConstant(*valueExpr);
-          if (result.isInteger()) {
-            auto intVal = result.integer().as<int64_t>();
-            if (intVal)
-              autoBinMax = intVal.value();
-          }
-        }
-      }
+      // Extract all coverpoint options.
+      auto cpOptions = extractCoverageOptions(
+          cp->options, [this](const slang::ast::Expression &expr) {
+            return evaluateConstant(expr);
+          });
 
+      // Create the coverpoint declaration op with all options.
       auto cpOp = moore::CoverpointDeclOp::create(
           builder, cpLoc, builder.getStringAttr(cpName),
           mlir::TypeAttr::get(exprType),
-          autoBinMax ? builder.getI64IntegerAttr(*autoBinMax) : nullptr);
+          cpOptions.weight ? builder.getI64IntegerAttr(*cpOptions.weight)
+                           : nullptr,
+          cpOptions.goal ? builder.getI64IntegerAttr(*cpOptions.goal) : nullptr,
+          cpOptions.comment ? builder.getStringAttr(*cpOptions.comment)
+                            : nullptr,
+          cpOptions.atLeast ? builder.getI64IntegerAttr(*cpOptions.atLeast)
+                            : nullptr,
+          cpOptions.autoBinMax
+              ? builder.getI64IntegerAttr(*cpOptions.autoBinMax)
+              : nullptr,
+          cpOptions.detectOverlap ? builder.getUnitAttr() : nullptr,
+          cpOptions.crossAutoBinMax
+              ? builder.getI64IntegerAttr(*cpOptions.crossAutoBinMax)
+              : nullptr);
 
       // Create the coverpoint body block for bins.
       auto &cpBody = cpOp.getBody();
@@ -3365,8 +3522,29 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
         }
       }
 
+      // Extract cross coverage options.
+      auto crossOptions = extractCoverageOptions(
+          cross->options, [this](const slang::ast::Expression &expr) {
+            return evaluateConstant(expr);
+          });
+
+      // Create the cross coverage declaration op with all options.
       auto crossOp = moore::CoverCrossDeclOp::create(
-          builder, crossLoc, crossName, builder.getArrayAttr(targets));
+          builder, crossLoc, crossName, builder.getArrayAttr(targets),
+          crossOptions.weight ? builder.getI64IntegerAttr(*crossOptions.weight)
+                              : nullptr,
+          crossOptions.goal ? builder.getI64IntegerAttr(*crossOptions.goal)
+                            : nullptr,
+          crossOptions.comment ? builder.getStringAttr(*crossOptions.comment)
+                               : nullptr,
+          crossOptions.atLeast ? builder.getI64IntegerAttr(*crossOptions.atLeast)
+                               : nullptr,
+          crossOptions.crossNumPrintMissing
+              ? builder.getI64IntegerAttr(*crossOptions.crossNumPrintMissing)
+              : nullptr,
+          crossOptions.crossAutoBinMax
+              ? builder.getI64IntegerAttr(*crossOptions.crossAutoBinMax)
+              : nullptr);
 
       // Create the cross body block for bins.
       auto &crossBody = crossOp.getBody();

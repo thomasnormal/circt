@@ -934,6 +934,140 @@ double __moore_covergroup_get_goal(void *cg);
 /// @return true if coverage >= goal, false otherwise
 bool __moore_covergroup_goal_met(void *cg);
 
+/// Set the weight for a covergroup (relative importance in coverage calculation).
+/// IEEE 1800-2017 Section 19.7.1: option.weight
+///
+/// @param cg Pointer to the covergroup
+/// @param weight Weight value (default: 1)
+void __moore_covergroup_set_weight(void *cg, int64_t weight);
+
+/// Get the weight for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return Weight value (default: 1)
+int64_t __moore_covergroup_get_weight(void *cg);
+
+/// Set per_instance mode for a covergroup.
+/// When true, coverage is tracked per-instance rather than merged across instances.
+/// IEEE 1800-2017 Section 19.7.1: option.per_instance
+///
+/// @param cg Pointer to the covergroup
+/// @param perInstance true for per-instance coverage, false for type-level
+void __moore_covergroup_set_per_instance(void *cg, bool perInstance);
+
+/// Get per_instance mode for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return true if per-instance mode is enabled
+bool __moore_covergroup_get_per_instance(void *cg);
+
+/// Set the at_least threshold for a covergroup.
+/// Specifies minimum number of hits for a bin to be considered covered.
+/// IEEE 1800-2017 Section 19.7.1: option.at_least
+///
+/// @param cg Pointer to the covergroup
+/// @param atLeast Minimum hit count for coverage (default: 1)
+void __moore_covergroup_set_at_least(void *cg, int64_t atLeast);
+
+/// Get the at_least threshold for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return Minimum hit count for coverage (default: 1)
+int64_t __moore_covergroup_get_at_least(void *cg);
+
+/// Set the comment string for a covergroup.
+/// IEEE 1800-2017 Section 19.7.1: option.comment
+///
+/// @param cg Pointer to the covergroup
+/// @param comment Comment string (copied internally)
+void __moore_covergroup_set_comment(void *cg, const char *comment);
+
+/// Get the comment string for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return Comment string, or NULL if not set
+const char *__moore_covergroup_get_comment(void *cg);
+
+/// Set the weight for a coverpoint.
+/// IEEE 1800-2017 Section 19.7.2: option.weight for coverpoints
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param weight Weight value (default: 1)
+void __moore_coverpoint_set_weight(void *cg, int32_t cp_index, int64_t weight);
+
+/// Get the weight for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Weight value (default: 1)
+int64_t __moore_coverpoint_get_weight(void *cg, int32_t cp_index);
+
+/// Set the goal for a coverpoint.
+/// IEEE 1800-2017 Section 19.7.2: option.goal for coverpoints
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param goal Target coverage percentage (0.0 to 100.0)
+void __moore_coverpoint_set_goal(void *cg, int32_t cp_index, double goal);
+
+/// Get the goal for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Target coverage percentage (default: 100.0)
+double __moore_coverpoint_get_goal(void *cg, int32_t cp_index);
+
+/// Set the at_least threshold for a coverpoint.
+/// IEEE 1800-2017 Section 19.7.2: option.at_least for coverpoints
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param atLeast Minimum hit count for coverage (default: 1)
+void __moore_coverpoint_set_at_least(void *cg, int32_t cp_index,
+                                      int64_t atLeast);
+
+/// Get the at_least threshold for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Minimum hit count for coverage (default: 1)
+int64_t __moore_coverpoint_get_at_least(void *cg, int32_t cp_index);
+
+/// Set the comment string for a coverpoint.
+/// IEEE 1800-2017 Section 19.7.2: option.comment for coverpoints
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param comment Comment string (copied internally)
+void __moore_coverpoint_set_comment(void *cg, int32_t cp_index,
+                                     const char *comment);
+
+/// Get the comment string for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Comment string, or NULL if not set
+const char *__moore_coverpoint_get_comment(void *cg, int32_t cp_index);
+
+/// Get weighted coverage for a covergroup.
+/// Calculates coverage considering per-coverpoint and per-cross weights.
+/// IEEE 1800-2017 Section 19.8: coverage calculation with weights
+///
+/// @param cg Pointer to the covergroup
+/// @return Weighted coverage percentage (0.0 to 100.0)
+double __moore_covergroup_get_weighted_coverage(void *cg);
+
+/// Check if a bin meets the at_least threshold.
+/// Used for detailed coverage reporting.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_index Index of the bin
+/// @return true if bin hits >= at_least threshold
+bool __moore_coverpoint_bin_covered(void *cg, int32_t cp_index,
+                                     int32_t bin_index);
+
 //===----------------------------------------------------------------------===//
 // HTML Coverage Report
 //===----------------------------------------------------------------------===//
