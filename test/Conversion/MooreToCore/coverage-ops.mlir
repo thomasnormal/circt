@@ -55,7 +55,8 @@ func.func @TestCovergroupGetCoverage(%cg: !moore.covergroup<@TestCG>) -> !moore.
 moore.covergroup.decl @CrossCG {
   moore.coverpoint.decl @a : !moore.i4 {}
   moore.coverpoint.decl @b : !moore.i4 {}
-  moore.covercross.decl @ab targets [@a, @b]
+  moore.covercross.decl @ab targets [@a, @b] {
+  }
 }
 
 // CHECK-LABEL: func @TestCrossInst

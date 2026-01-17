@@ -72,6 +72,27 @@ public:
                         std::vector<llvm::lsp::Location> &references);
 
   //===--------------------------------------------------------------------===//
+  // Document Highlight
+  //===--------------------------------------------------------------------===//
+
+  /// Document highlight kind - indicates whether a reference is a read, write,
+  /// or text reference.
+  enum class DocumentHighlightKind { Text = 1, Read = 2, Write = 3 };
+
+  /// A document highlight represents a range in a document which deserves
+  /// special attention, typically used to highlight all occurrences of a symbol.
+  struct DocumentHighlight {
+    llvm::lsp::Range range;
+    DocumentHighlightKind kind = DocumentHighlightKind::Text;
+  };
+
+  /// Return document highlights for all occurrences of the symbol at the given
+  /// position within the same document.
+  void getDocumentHighlights(const llvm::lsp::URIForFile &uri,
+                             const llvm::lsp::Position &pos,
+                             std::vector<DocumentHighlight> &highlights);
+
+  //===--------------------------------------------------------------------===//
   // Hover Information
   //===--------------------------------------------------------------------===//
 

@@ -668,6 +668,71 @@ void VerilogDocument::findReferencesOf(
 }
 
 //===----------------------------------------------------------------------===//
+// Document Highlight
+//===----------------------------------------------------------------------===//
+
+void VerilogDocument::getDocumentHighlights(
+    const llvm::lsp::URIForFile &uri, const llvm::lsp::Position &pos,
+    std::vector<DocumentHighlight> &highlights) {
+
+  if (!index)
+    return;
+
+  const auto &slangBufferPointer = getPointerFor(pos);
+  if (!slangBufferPointer)
+    return;
+
+  const auto &intervalMap = index->getIntervalMap();
+  auto intervalIt = intervalMap.find(slangBufferPointer);
+
+  if (!intervalIt.valid() || slangBufferPointer < intervalIt.start())
+    return;
+
+  const auto *symbol = dyn_cast<const slang::ast::Symbol *>(intervalIt.value());
+  if (!symbol)
+    return;
+
+  const auto &sm = getSlangSourceManager();
+
+  // Helper lambda to convert slang SourceRange to LSP Range
+  auto toHighlight = [&](slang::SourceRange range,
+                         DocumentHighlightKind kind) -> std::optional<DocumentHighlight> {
+    // Only include highlights from the same buffer (document)
+    if (!range.start().valid() || range.start().buffer() != mainBufferId)
+      return std::nullopt;
+
+    int startLine = sm.getLineNumber(range.start()) - 1;
+    int startCol = sm.getColumnNumber(range.start()) - 1;
+    int endLine = sm.getLineNumber(range.end()) - 1;
+    int endCol = sm.getColumnNumber(range.end()) - 1;
+
+    DocumentHighlight highlight;
+    highlight.range = llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                                       llvm::lsp::Position(endLine, endCol));
+    highlight.kind = kind;
+    return highlight;
+  };
+
+  // Add the declaration location (as "Write" kind for definitions)
+  if (symbol->location.valid() && symbol->location.buffer() == mainBufferId) {
+    slang::SourceRange declRange(
+        symbol->location,
+        symbol->location + (symbol->name.size() ? symbol->name.size() : 1));
+    if (auto hl = toHighlight(declRange, DocumentHighlightKind::Write))
+      highlights.push_back(*hl);
+  }
+
+  // Add all references to the symbol (as "Read" kind for uses)
+  auto refIt = index->getReferences().find(symbol);
+  if (refIt != index->getReferences().end()) {
+    for (const auto &referenceRange : refIt->second) {
+      if (auto hl = toHighlight(referenceRange, DocumentHighlightKind::Read))
+        highlights.push_back(*hl);
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Hover Information
 //===----------------------------------------------------------------------===//
 

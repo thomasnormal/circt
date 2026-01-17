@@ -1,0 +1,72 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test document highlight functionality for highlighting all occurrences of a symbol.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///highlight.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_highlight (\n  input  logic clk,\n  input  logic data_in,\n  output logic data_out\n);\n  logic counter;\n  always_ff @(posedge clk) begin\n    counter <= counter + 1;\n    data_out <= data_in + counter;\n  end\nendmodule"
+}}}
+// -----
+// Highlight all occurrences of 'counter' (line 5, col 8 - the declaration)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/documentHighlight","params":{
+  "textDocument":{"uri":"test:///highlight.sv"},
+  "position":{"line":5,"character":8}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find declaration (kind 3 = Write) first
+// CHECK:         "kind": 3
+// CHECK:         "range": {
+// CHECK:           "end": {
+// CHECK:             "character": 15
+// CHECK:             "line": 5
+// CHECK:           },
+// CHECK:           "start": {
+// CHECK:             "character": 8
+// CHECK:             "line": 5
+// CHECK:           }
+// CHECK:         }
+// Should find usages (kind 2 = Read)
+// CHECK:         "kind": 2
+// -----
+// Highlight 'clk' from declaration location (line 1, col 15)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight","params":{
+  "textDocument":{"uri":"test:///highlight.sv"},
+  "position":{"line":1,"character":15}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find declaration
+// CHECK:         "kind":
+// CHECK:         "range":
+// -----
+// Highlight on whitespace should return null
+{"jsonrpc":"2.0","id":3,"method":"textDocument/documentHighlight","params":{
+  "textDocument":{"uri":"test:///highlight.sv"},
+  "position":{"line":4,"character":0}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": null
+// -----
+// Highlight 'data_in' port from declaration (line 2, col 15)
+{"jsonrpc":"2.0","id":4,"method":"textDocument/documentHighlight","params":{
+  "textDocument":{"uri":"test:///highlight.sv"},
+  "position":{"line":2,"character":15}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find port declaration (kind 3 = Write)
+// CHECK:         "kind": 3
+// CHECK:         "range":
+// -----
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

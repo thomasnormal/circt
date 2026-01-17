@@ -3486,10 +3486,97 @@ def CoverageBinDeclOp
 }
 
 def CoverCrossDeclOp
-    : MooreOp<"covercross.decl", [Symbol, HasParent<"CovergroupDeclOp">]> {
+    : MooreOp<"covercross.decl", [Symbol, SymbolTable,
+                                  HasParent<"CovergroupDeclOp">,
+                                  NoTerminator, SingleBlock]> {
   let summary = "Cross coverage declaration";
+  let description = [{
+    Declares a cross coverage item within a covergroup. Cross coverage tracks
+    the Cartesian product of multiple coverpoints. It may optionally contain
+    bins that use binsof/intersect expressions to select specific cross products.
+
+    Example without bins (automatic bins):
+    ```mlir
+    moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp] {}
+    ```
+
+    Example with bins using binsof/intersect:
+    ```mlir
+    moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp] {
+      moore.crossbin.decl @valid kind<bins> {
+        moore.binsof @addr_cp intersect [0, 1, 2, 3]
+      }
+      moore.crossbin.decl @ignore_high kind<ignore_bins> {
+        moore.binsof @addr_cp intersect [250, 251, 252, 253, 254, 255]
+      }
+    }
+    ```
+
+    See IEEE 1800-2017 Section 19.6 "Defining cross coverage".
+  }];
   let arguments = (ins SymbolNameAttr:$sym_name, SymbolRefArrayAttr:$targets);
-  let assemblyFormat = [{ $sym_name `targets` $targets attr-dict }];
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{ $sym_name `targets` $targets attr-dict-with-keyword $body }];
+}
+
+def CrossBinDeclOp
+    : MooreOp<"crossbin.decl", [Symbol, HasParent<"CoverCrossDeclOp">,
+                                NoTerminator, SingleBlock]> {
+  let summary = "Cross coverage bin declaration";
+  let description = [{
+    Declares a bin within a cross coverage item. Cross bins use binsof/intersect
+    expressions to select which cross products to include in the bin.
+
+    The `kind` attribute specifies the bin type:
+    - `bins`: Normal coverage bins that count hits
+    - `illegal_bins`: Values that should not occur (violations are reported)
+    - `ignore_bins`: Values to exclude from coverage calculation
+
+    The body contains binsof expressions that define the selection criteria.
+
+    Example:
+    ```mlir
+    moore.crossbin.decl @valid kind<bins> {
+      moore.binsof @addr_cp intersect [0, 1, 2, 3]
+    }
+    ```
+
+    See IEEE 1800-2017 Section 19.6.1 "Specifying cross coverage bins".
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name, CoverageBinKind:$kind);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{ $sym_name `kind` `<` $kind `>` attr-dict-with-keyword $body }];
+}
+
+def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
+  let summary = "Binsof select expression for cross coverage";
+  let description = [{
+    Represents a binsof expression used in cross coverage bin selection.
+    The binsof expression references a coverpoint or coverpoint bin and
+    optionally specifies an intersect clause to filter values.
+
+    Example without intersect (selects all bins of the coverpoint):
+    ```mlir
+    moore.binsof @addr_cp
+    ```
+
+    Example with intersect (selects specific values):
+    ```mlir
+    moore.binsof @addr_cp intersect [0, 1, 2, 3]
+    ```
+
+    Example referencing a specific bin:
+    ```mlir
+    moore.binsof @addr_cp::@low_bins intersect [0, 1]
+    ```
+
+    See IEEE 1800-2017 Section 19.6.1.1 "select_expression".
+  }];
+  let arguments = (ins SymbolRefAttr:$target,
+                       OptionalAttr<ArrayAttr>:$intersect_values);
+  let assemblyFormat = [{
+    $target (`intersect` $intersect_values^)? attr-dict
+  }];
 }
 
 def CovergroupInstOp : MooreOp<"covergroup.inst"> {

@@ -15,7 +15,8 @@ module test_cross_coverage;
   // CHECK:   }
   // CHECK:   moore.coverpoint.decl @cmd_cp : !moore.l4 {
   // CHECK:   }
-  // CHECK:   moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp]
+  // CHECK:   moore.covercross.decl @addr_x_cmd targets [@addr_cp, @cmd_cp] {
+  // CHECK:   }
   // CHECK: }
   covergroup cg @(posedge clk);
     coverpoint addr;
@@ -28,7 +29,8 @@ module test_cross_coverage;
   // CHECK:   }
   // CHECK:   moore.coverpoint.decl @cmd_cp : !moore.l4 {
   // CHECK:   }
-  // CHECK:   moore.covercross.decl @addr_cmd_cross targets [@addr_cp, @cmd_cp]
+  // CHECK:   moore.covercross.decl @addr_cmd_cross targets [@addr_cp, @cmd_cp] {
+  // CHECK:   }
   // CHECK: }
   covergroup cg_named @(posedge clk);
     addr_cp: coverpoint addr;
@@ -43,7 +45,8 @@ module test_cross_coverage;
   // CHECK:   }
   // CHECK:   moore.coverpoint.decl @m_cp : !moore.l2 {
   // CHECK:   }
-  // CHECK:   moore.covercross.decl @triple_cross targets [@a_cp, @c_cp, @m_cp]
+  // CHECK:   moore.covercross.decl @triple_cross targets [@a_cp, @c_cp, @m_cp] {
+  // CHECK:   }
   // CHECK: }
   covergroup cg_triple @(posedge valid);
     a_cp: coverpoint addr;
@@ -59,8 +62,10 @@ module test_cross_coverage;
   // CHECK:   }
   // CHECK:   moore.coverpoint.decl @cp3 : !moore.l2 {
   // CHECK:   }
-  // CHECK:   moore.covercross.decl @cross1 targets [@cp1, @cp2]
-  // CHECK:   moore.covercross.decl @cross2 targets [@cp2, @cp3]
+  // CHECK:   moore.covercross.decl @cross1 targets [@cp1, @cp2] {
+  // CHECK:   }
+  // CHECK:   moore.covercross.decl @cross2 targets [@cp2, @cp3] {
+  // CHECK:   }
   // CHECK: }
   covergroup cg_multi_cross @(posedge clk);
     cp1: coverpoint addr;

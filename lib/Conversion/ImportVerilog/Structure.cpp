@@ -2908,6 +2908,135 @@ LogicalResult Context::convertStaticClassProperty(
 // Covergroup Conversion
 //===----------------------------------------------------------------------===//
 
+/// Helper to convert a BinsSelectExpr (binsof/intersect) to Moore IR.
+/// This handles the recursive structure of bins select expressions used in
+/// cross coverage bins.
+static void convertBinsSelectExpr(
+    const slang::ast::BinsSelectExpr &expr,
+    const llvm::StringMap<mlir::FlatSymbolRefAttr> &coverpointSymbols,
+    OpBuilder &builder, Location loc,
+    const std::function<slang::ConstantValue(const slang::ast::Expression &)>
+        &evaluateConstant) {
+
+  switch (expr.kind) {
+  case slang::ast::BinsSelectExprKind::Condition: {
+    // binsof(coverpoint) intersect {values}
+    auto &condExpr = static_cast<const slang::ast::ConditionBinsSelectExpr &>(expr);
+    auto &target = condExpr.target;
+
+    // Get the target symbol reference
+    mlir::SymbolRefAttr targetRef;
+    if (target.kind == slang::ast::SymbolKind::Coverpoint) {
+      // Direct coverpoint reference
+      auto it = coverpointSymbols.find(target.name);
+      if (it != coverpointSymbols.end()) {
+        targetRef = it->second;
+      } else {
+        // Create a reference using the target name
+        targetRef = mlir::FlatSymbolRefAttr::get(
+            builder.getContext(), target.name);
+      }
+    } else if (target.kind == slang::ast::SymbolKind::CoverageBin) {
+      // Reference to a specific bin within a coverpoint (cp.bin_name)
+      auto *parentScope = target.getParentScope();
+      if (parentScope) {
+        auto &parentSym = parentScope->asSymbol();
+        if (parentSym.kind == slang::ast::SymbolKind::Coverpoint) {
+          auto it = coverpointSymbols.find(parentSym.name);
+          if (it != coverpointSymbols.end()) {
+            // Create nested ref: @coverpoint::@bin
+            targetRef = mlir::SymbolRefAttr::get(
+                builder.getContext(), it->second.getValue(),
+                {mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                              target.name)});
+          }
+        }
+      }
+    }
+
+    if (!targetRef) {
+      // Fallback: use the target name directly
+      targetRef =
+          mlir::FlatSymbolRefAttr::get(builder.getContext(), target.name);
+    }
+
+    // Collect intersect values if present
+    mlir::ArrayAttr intersectValuesAttr;
+    if (!condExpr.intersects.empty()) {
+      SmallVector<mlir::Attribute> intersectValues;
+      for (const auto *intersectExpr : condExpr.intersects) {
+        // Check if it's a value range expression (e.g., [0:10])
+        if (intersectExpr->kind == slang::ast::ExpressionKind::ValueRange) {
+          auto &rangeExpr =
+              intersectExpr->as<slang::ast::ValueRangeExpression>();
+          auto leftVal = evaluateConstant(rangeExpr.left());
+          auto rightVal = evaluateConstant(rangeExpr.right());
+          if (leftVal.isInteger() && rightVal.isInteger()) {
+            auto leftInt = leftVal.integer().as<int64_t>();
+            auto rightInt = rightVal.integer().as<int64_t>();
+            if (leftInt && rightInt) {
+              // Expand the range into individual values
+              for (int64_t v = leftInt.value(); v <= rightInt.value(); ++v) {
+                intersectValues.push_back(builder.getI64IntegerAttr(v));
+              }
+            }
+          }
+        } else {
+          // Single value
+          auto result = evaluateConstant(*intersectExpr);
+          if (result.isInteger()) {
+            auto intVal = result.integer().as<int64_t>();
+            if (intVal)
+              intersectValues.push_back(
+                  builder.getI64IntegerAttr(intVal.value()));
+          }
+        }
+      }
+      if (!intersectValues.empty())
+        intersectValuesAttr = builder.getArrayAttr(intersectValues);
+    }
+
+    moore::BinsOfOp::create(builder, loc, targetRef, intersectValuesAttr);
+    break;
+  }
+
+  case slang::ast::BinsSelectExprKind::Unary: {
+    // !binsof(coverpoint) - negation
+    // For now, we recursively convert the inner expression.
+    // A more complete implementation would track the negation.
+    auto &unaryExpr = static_cast<const slang::ast::UnaryBinsSelectExpr &>(expr);
+    convertBinsSelectExpr(unaryExpr.expr, coverpointSymbols, builder, loc,
+                          evaluateConstant);
+    break;
+  }
+
+  case slang::ast::BinsSelectExprKind::Binary: {
+    // binsof(a) && binsof(b) or binsof(a) || binsof(b)
+    auto &binaryExpr = static_cast<const slang::ast::BinaryBinsSelectExpr &>(expr);
+    convertBinsSelectExpr(binaryExpr.left, coverpointSymbols, builder, loc,
+                          evaluateConstant);
+    convertBinsSelectExpr(binaryExpr.right, coverpointSymbols, builder, loc,
+                          evaluateConstant);
+    break;
+  }
+
+  case slang::ast::BinsSelectExprKind::WithFilter: {
+    // binsof(a) with (filter_expr)
+    auto &filterExpr =
+        static_cast<const slang::ast::BinSelectWithFilterExpr &>(expr);
+    convertBinsSelectExpr(filterExpr.expr, coverpointSymbols, builder, loc,
+                          evaluateConstant);
+    break;
+  }
+
+  case slang::ast::BinsSelectExprKind::SetExpr:
+  case slang::ast::BinsSelectExprKind::CrossId:
+  case slang::ast::BinsSelectExprKind::Invalid:
+    // These are less common or error cases - skip for now
+    break;
+  }
+}
+
 LogicalResult
 Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
   // Check if already converted.
@@ -3117,8 +3246,68 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
         }
       }
 
-      moore::CoverCrossDeclOp::create(builder, crossLoc, crossName,
-                                      builder.getArrayAttr(targets));
+      auto crossOp = moore::CoverCrossDeclOp::create(
+          builder, crossLoc, crossName, builder.getArrayAttr(targets));
+
+      // Create the cross body block for bins.
+      auto &crossBody = crossOp.getBody();
+      crossBody.emplaceBlock();
+
+      // Convert cross bins within this cross coverage.
+      // Cross bins are stored in CoverCrossBodySymbol which is a member.
+      {
+        OpBuilder::InsertionGuard crossBinGuard(builder);
+        builder.setInsertionPointToStart(&crossBody.front());
+
+        for (const auto &crossMember : cross->members()) {
+          // The CoverCrossBodySymbol contains the actual bins
+          if (auto *body =
+                  crossMember.as_if<slang::ast::CoverCrossBodySymbol>()) {
+            for (const auto &bodyMember : body->members()) {
+              if (auto *bin =
+                      bodyMember.as_if<slang::ast::CoverageBinSymbol>()) {
+                auto binLoc = convertLocation(bin->location);
+
+                // Determine bin kind
+                moore::CoverageBinKind binKind;
+                switch (bin->binsKind) {
+                case slang::ast::CoverageBinSymbol::Bins:
+                  binKind = moore::CoverageBinKind::Bins;
+                  break;
+                case slang::ast::CoverageBinSymbol::IllegalBins:
+                  binKind = moore::CoverageBinKind::IllegalBins;
+                  break;
+                case slang::ast::CoverageBinSymbol::IgnoreBins:
+                  binKind = moore::CoverageBinKind::IgnoreBins;
+                  break;
+                }
+
+                // Create the cross bin declaration
+                auto crossBinOp = moore::CrossBinDeclOp::create(
+                    builder, binLoc, builder.getStringAttr(bin->name), binKind);
+
+                // Create body block for binsof expressions
+                auto &binBody = crossBinOp.getBody();
+                binBody.emplaceBlock();
+
+                // Convert binsof/intersect expressions
+                if (auto *selectExpr = bin->getCrossSelectExpr()) {
+                  OpBuilder::InsertionGuard binsofGuard(builder);
+                  builder.setInsertionPointToStart(&binBody.front());
+                  // Create lambda to capture this context for evaluateConstant
+                  auto evalConst =
+                      [this](const slang::ast::Expression &e)
+                          -> slang::ConstantValue {
+                    return this->evaluateConstant(e);
+                  };
+                  convertBinsSelectExpr(*selectExpr, coverpointSymbols, builder,
+                                        binLoc, evalConst);
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 

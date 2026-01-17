@@ -68,6 +68,13 @@ public:
                         llvm::lsp::Position pos, bool includeDeclaration,
                         std::vector<llvm::lsp::Location> &references);
 
+  /// Return document highlights for all occurrences of the symbol at the
+  /// given position within the same document.
+  /// Thread-safe; acquires docMutex.
+  void getDocumentHighlights(
+      const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos,
+      std::vector<VerilogDocument::DocumentHighlight> &highlights);
+
   /// Return hover information for the object at the given position.
   /// Thread-safe; acquires docMutex.
   std::optional<llvm::lsp::Hover> getHover(const llvm::lsp::URIForFile &uri,

@@ -108,6 +108,13 @@ struct LSPServer {
                    Callback<std::vector<Location>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Document Highlight
+  //===--------------------------------------------------------------------===//
+
+  void onDocumentHighlight(const TextDocumentPositionParams &params,
+                           Callback<json::Value> reply);
+
+  //===--------------------------------------------------------------------===//
   // Hover
   //===--------------------------------------------------------------------===//
 
@@ -238,6 +245,7 @@ void LSPServer::onInitialize(const InitializeParams &params,
       },
       {"definitionProvider", true},
       {"referencesProvider", true},
+      {"documentHighlightProvider", true},
       {"hoverProvider", true},
       {"documentSymbolProvider", true},
       {"workspaceSymbolProvider", true},
@@ -346,6 +354,32 @@ void LSPServer::onReference(const ReferenceParams &params,
   server.findReferencesOf(params.textDocument.uri, params.position,
                           params.context.includeDeclaration, locations);
   reply(std::move(locations));
+}
+
+//===----------------------------------------------------------------------===//
+// Document Highlight
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onDocumentHighlight(const TextDocumentPositionParams &params,
+                                    Callback<json::Value> reply) {
+  std::vector<circt::lsp::VerilogServer::DocumentHighlight> highlights;
+  server.getDocumentHighlights(params.textDocument.uri, params.position,
+                               highlights);
+
+  // Convert to JSON manually since base LLVM LSP doesn't have DocumentHighlight
+  if (highlights.empty()) {
+    reply(json::Value(nullptr));
+    return;
+  }
+
+  json::Array result;
+  for (const auto &hl : highlights) {
+    json::Object obj;
+    obj["range"] = toJSON(hl.range);
+    obj["kind"] = static_cast<int>(hl.kind);
+    result.push_back(std::move(obj));
+  }
+  reply(std::move(result));
 }
 
 //===----------------------------------------------------------------------===//
@@ -514,6 +548,10 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
                         &LSPServer::onGoToDefinition);
   messageHandler.method("textDocument/references", &lspServer,
                         &LSPServer::onReference);
+
+  // Document Highlight
+  messageHandler.method("textDocument/documentHighlight", &lspServer,
+                        &LSPServer::onDocumentHighlight);
 
   // Hover
   messageHandler.method("textDocument/hover", &lspServer,

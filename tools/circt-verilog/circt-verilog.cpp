@@ -118,8 +118,8 @@ struct CLOptions {
               "Run the entire pass manager to just before the LLHD pipeline "
               ", and emit the resulting LLHD+Core dialect IR"),
           clEnumValN(LoweringMode::OutputIRHW, "ir-hw",
-                     "Run the MooreToCore conversion and emit the resulting "
-                     "core dialect IR")),
+                     "Run the MooreToCore and LLHD lowering pipelines, and "
+                     "emit the resulting HW/Comb/Seq dialect IR")),
       cl::init(LoweringMode::Full), cl::cat(cat)};
 
   cl::opt<bool> debugInfo{"g", cl::desc("Generate debug information"),
@@ -308,6 +308,9 @@ static void populatePasses(PassManager &pm) {
   populateMooreToCorePipeline(pm);
   if (opts.loweringMode == LoweringMode::OutputIRLLHD)
     return;
+  // OutputIRHW and Full modes both require LLHD lowering to convert
+  // llhd.process and other LLHD ops into HW/Comb/Seq dialect ops.
+  // This is necessary for simulation via arcilator.
   LlhdToCorePipelineOptions options;
   options.detectMemories = opts.detectMemories;
   options.sroa = opts.sroa;

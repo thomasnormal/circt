@@ -1983,6 +1983,38 @@ struct CoverCrossDeclOpConversion
   matchAndRewrite(CoverCrossDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Cross coverage requires additional runtime support.
+    // The cross bins and binsof expressions are captured in the IR
+    // but not yet lowered to runtime calls.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for CrossBinDeclOp.
+/// Currently erases the declaration. Cross bin support is future work.
+struct CrossBinDeclOpConversion : public OpConversionPattern<CrossBinDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CrossBinDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: Cross bin lowering requires runtime support for
+    // binsof/intersect semantics.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for BinsOfOp.
+/// Currently erases the operation. Binsof lowering is future work.
+struct BinsOfOpConversion : public OpConversionPattern<BinsOfOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(BinsOfOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: BinsOf operations will be processed during cross bin
+    // lowering to implement the select expression semantics.
     rewriter.eraseOp(op);
     return success();
   }
@@ -4020,6 +4052,77 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       }
     }
 
+    // Handle ref-to-ref type conversions (e.g., ref<uarray<16 x l1>> to
+    // ref<l16>). This is used in streaming concatenation operations where
+    // arrays are reinterpreted as integers of the same bit width.
+    // Check the original Moore types since both input and result should be
+    // RefType for this case.
+    auto mooreInputRefType = dyn_cast<moore::RefType>(op.getInput().getType());
+    auto mooreResultRefType = dyn_cast<moore::RefType>(op.getResult().getType());
+    if (mooreInputRefType && mooreResultRefType) {
+      // Convert the input type through the type converter
+      Type inputType = typeConverter->convertType(op.getInput().getType());
+      if (!inputType) {
+        op.emitError("conversion input type is not currently supported");
+        return failure();
+      }
+      auto inputRefType = dyn_cast<llhd::RefType>(inputType);
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (inputRefType && resultRefType) {
+        Type inputNestedType = inputRefType.getNestedType();
+        Type resultNestedType = resultRefType.getNestedType();
+
+        // Get bit width, supporting both hw types and float types
+        auto getBitWidthForType = [](Type type) -> int64_t {
+          // Try hw::getBitWidth first for hw types
+          int64_t bw = hw::getBitWidth(type);
+          if (bw != -1)
+            return bw;
+          // Handle float types
+          if (auto floatTy = dyn_cast<FloatType>(type))
+            return floatTy.getWidth();
+          return -1;
+        };
+
+        int64_t inputBw = getBitWidthForType(inputNestedType);
+        int64_t resultBw = getBitWidthForType(resultNestedType);
+
+        // Both nested types must have known bit widths
+        if (inputBw == -1 || resultBw == -1)
+          return failure();
+
+        // Probe the input reference to get the value
+        Value probedValue = llhd::ProbeOp::create(rewriter, loc, adaptor.getInput());
+
+        // For float input types, first bitcast to integer
+        if (isa<FloatType>(inputNestedType)) {
+          probedValue = rewriter.createOrFold<LLVM::BitcastOp>(
+              loc, rewriter.getIntegerType(inputBw), probedValue);
+        } else {
+          probedValue = rewriter.createOrFold<hw::BitcastOp>(
+              loc, rewriter.getIntegerType(inputBw), probedValue);
+        }
+
+        Value adjustedValue = adjustIntegerWidth(rewriter, probedValue, resultBw, loc);
+
+        // For float result types, bitcast from integer
+        Value resultValue;
+        if (isa<FloatType>(resultNestedType)) {
+          resultValue = rewriter.createOrFold<LLVM::BitcastOp>(
+              loc, resultNestedType, adjustedValue);
+        } else {
+          resultValue = rewriter.createOrFold<hw::BitcastOp>(
+              loc, resultNestedType, adjustedValue);
+        }
+
+        // Create a new signal with the converted value
+        auto signal =
+            llhd::SignalOp::create(rewriter, loc, resultRefType, StringAttr{}, resultValue);
+        rewriter.replaceOp(op, signal.getResult());
+        return success();
+      }
+    }
+
     int64_t inputBw = hw::getBitWidth(adaptor.getInput().getType());
     int64_t resultBw = hw::getBitWidth(resultType);
     if (inputBw == -1 || resultBw == -1)
@@ -4032,6 +4135,19 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
     Value result =
         rewriter.createOrFold<hw::BitcastOp>(loc, resultType, amount);
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct ConcatRefOpConversion : public OpConversionPattern<ConcatRefOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ConcatRefOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op->use_empty())
+      return op.emitError("moore.concat_ref must be lowered before MooreToCore");
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -6017,8 +6133,8 @@ struct QueueConcatOpConversion
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
 
-    // Function signature: queue concat(ptr to array of queues, count)
-    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty});
+    // Function signature: queue concat(ptr to array of queues, count, elem_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i64Ty});
     auto fn =
         getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_concat", fnTy);
 
@@ -6041,9 +6157,15 @@ struct QueueConcatOpConversion
       LLVM::StoreOp::create(rewriter, loc, inputs[i], elemPtr);
     }
 
+    auto mooreQueueTy = cast<moore::QueueType>(op.getResult().getType());
+    auto elemType =
+        typeConverter->convertType(mooreQueueTy.getElementType());
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),
-                                     ValueRange{arrayAlloca, count});
+                                     ValueRange{arrayAlloca, count, elemSize});
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
@@ -9576,6 +9698,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<CovergroupDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CoverpointDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CoverCrossDeclOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CrossBinDeclOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<BinsOfOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupInstOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupSampleOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CovergroupGetCoverageOpConversion>(typeConverter, patterns.getContext());
@@ -9620,6 +9744,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
 
     // Patterns for conversion operations.
     ConversionOpConversion,
+    ConcatRefOpConversion,
     BitcastConversion<PackedToSBVOp>,
     BitcastConversion<SBVToPackedOp>,
     BitcastConversion<LogicToIntOp>,
