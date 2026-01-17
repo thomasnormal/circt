@@ -319,6 +319,39 @@ extern "C" MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start,
   return result;
 }
 
+extern "C" MooreQueue __moore_queue_concat(MooreQueue *queues, int64_t count,
+                                           int64_t element_size) {
+  MooreQueue result = {nullptr, 0};
+  if (!queues || count <= 0 || element_size <= 0)
+    return result;
+
+  int64_t totalLen = 0;
+  for (int64_t i = 0; i < count; ++i) {
+    if (queues[i].len > 0)
+      totalLen += queues[i].len;
+  }
+  if (totalLen <= 0)
+    return result;
+
+  void *data = std::malloc(totalLen * element_size);
+  if (!data)
+    return result;
+
+  int64_t offset = 0;
+  for (int64_t i = 0; i < count; ++i) {
+    const auto &q = queues[i];
+    if (!q.data || q.len <= 0)
+      continue;
+    std::memcpy(static_cast<char *>(data) + offset * element_size, q.data,
+                q.len * element_size);
+    offset += q.len;
+  }
+
+  result.data = data;
+  result.len = totalLen;
+  return result;
+}
+
 extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
                                     int (*compare)(const void *, const void *)) {
   auto *q = static_cast<MooreQueue *>(queue);
@@ -2635,6 +2668,524 @@ void updateExplicitBinsHelper(MooreCoverpoint *cp, int64_t value) {
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
+// Cross Coverage Operations
+//===----------------------------------------------------------------------===//
+//
+// Cross coverage tracks combinations of values from multiple coverpoints.
+// This implements the SystemVerilog `cross` construct within covergroups.
+//
+
+namespace {
+
+/// Structure to store cross coverage data for a covergroup.
+struct CrossCoverageData {
+  std::vector<MooreCrossCoverage> crosses;
+  /// Map from cross index to a map of value tuples to hit counts.
+  /// The key is a vector of int64_t values (one per coverpoint in the cross).
+  std::map<std::vector<int64_t>, int64_t> crossBins;
+};
+
+/// Map from covergroup to its cross coverage data.
+thread_local std::map<MooreCovergroup *, CrossCoverageData> crossCoverageData;
+
+/// Map from covergroup to its coverage goal (default 100.0).
+thread_local std::map<MooreCovergroup *, double> covergroupGoals;
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_cross_create(void *cg, const char *name,
+                                        int32_t *cp_indices, int32_t num_cps) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || !cp_indices || num_cps < 2)
+    return -1;
+
+  // Validate coverpoint indices
+  for (int32_t i = 0; i < num_cps; ++i) {
+    if (cp_indices[i] < 0 || cp_indices[i] >= covergroup->num_coverpoints)
+      return -1;
+  }
+
+  // Get or create cross coverage data for this covergroup
+  auto &crossData = crossCoverageData[covergroup];
+
+  // Create the cross
+  MooreCrossCoverage cross;
+  cross.name = name;
+  cross.num_cps = num_cps;
+
+  // Copy the coverpoint indices
+  cross.cp_indices = static_cast<int32_t *>(std::malloc(num_cps * sizeof(int32_t)));
+  if (!cross.cp_indices)
+    return -1;
+  std::memcpy(cross.cp_indices, cp_indices, num_cps * sizeof(int32_t));
+
+  // bins_data will be used to store the cross bin map
+  cross.bins_data = nullptr;
+
+  int32_t crossIndex = static_cast<int32_t>(crossData.crosses.size());
+  crossData.crosses.push_back(cross);
+
+  return crossIndex;
+}
+
+extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
+                                     int32_t num_values) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || !cp_values)
+    return;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end())
+    return;
+
+  // For each cross, record the combination of values
+  for (auto &cross : it->second.crosses) {
+    std::vector<int64_t> valueKey;
+    valueKey.reserve(cross.num_cps);
+
+    bool validSample = true;
+    for (int32_t i = 0; i < cross.num_cps; ++i) {
+      int32_t cpIdx = cross.cp_indices[i];
+      if (cpIdx < 0 || cpIdx >= num_values) {
+        validSample = false;
+        break;
+      }
+      valueKey.push_back(cp_values[cpIdx]);
+    }
+
+    if (validSample) {
+      it->second.crossBins[valueKey]++;
+    }
+  }
+}
+
+extern "C" double __moore_cross_get_coverage(void *cg, int32_t cross_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return 0.0;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() || cross_index < 0 ||
+      cross_index >= static_cast<int32_t>(it->second.crosses.size()))
+    return 0.0;
+
+  // Count unique cross bins hit for this cross
+  const auto &cross = it->second.crosses[cross_index];
+  int64_t binsHit = 0;
+  int64_t totalPossibleBins = 1;
+
+  // Calculate total possible cross bins from coverpoint ranges
+  // For each coverpoint in the cross, multiply by its unique value count
+  for (int32_t i = 0; i < cross.num_cps; ++i) {
+    int32_t cpIdx = cross.cp_indices[i];
+    if (cpIdx >= 0 && cpIdx < covergroup->num_coverpoints) {
+      auto *cp = covergroup->coverpoints[cpIdx];
+      if (cp) {
+        auto trackerIt = coverpointTrackers.find(cp);
+        if (trackerIt != coverpointTrackers.end()) {
+          int64_t uniqueVals = static_cast<int64_t>(
+              trackerIt->second.valueCounts.size());
+          if (uniqueVals > 0)
+            totalPossibleBins *= uniqueVals;
+        }
+      }
+    }
+  }
+
+  // Count actual cross bins hit for this specific cross
+  for (const auto &kv : it->second.crossBins) {
+    // Check if this bin belongs to this cross by comparing with first cp index
+    if (kv.first.size() == static_cast<size_t>(cross.num_cps)) {
+      binsHit++;
+    }
+  }
+
+  if (totalPossibleBins == 0)
+    return 0.0;
+
+  double coverage = (100.0 * binsHit) / totalPossibleBins;
+  return coverage > 100.0 ? 100.0 : coverage;
+}
+
+extern "C" int64_t __moore_cross_get_bins_hit(void *cg, int32_t cross_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return 0;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() || cross_index < 0 ||
+      cross_index >= static_cast<int32_t>(it->second.crosses.size()))
+    return 0;
+
+  const auto &cross = it->second.crosses[cross_index];
+  int64_t binsHit = 0;
+
+  for (const auto &kv : it->second.crossBins) {
+    if (kv.first.size() == static_cast<size_t>(cross.num_cps)) {
+      binsHit++;
+    }
+  }
+
+  return binsHit;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Reset and Aggregation
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_covergroup_reset(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  // Reset each coverpoint
+  for (int32_t i = 0; i < covergroup->num_coverpoints; ++i) {
+    __moore_coverpoint_reset(cg, i);
+  }
+
+  // Reset cross coverage data
+  auto crossIt = crossCoverageData.find(covergroup);
+  if (crossIt != crossCoverageData.end()) {
+    crossIt->second.crossBins.clear();
+  }
+}
+
+extern "C" void __moore_coverpoint_reset(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  // Reset hit count and range tracking
+  cp->hits = 0;
+  cp->min_val = INT64_MAX;
+  cp->max_val = INT64_MIN;
+
+  // Reset explicit bin hit counts
+  if (cp->bins) {
+    for (int32_t i = 0; i < cp->num_bins; ++i) {
+      cp->bins[i] = 0;
+    }
+  }
+
+  // Reset explicit bin data
+  auto binIt = explicitBinData.find(cp);
+  if (binIt != explicitBinData.end()) {
+    for (auto &bin : binIt->second.bins) {
+      bin.hit_count = 0;
+    }
+  }
+
+  // Reset value tracker
+  auto trackerIt = coverpointTrackers.find(cp);
+  if (trackerIt != coverpointTrackers.end()) {
+    trackerIt->second.valueCounts.clear();
+  }
+}
+
+extern "C" double __moore_coverage_get_total(void) {
+  if (registeredCovergroups.empty())
+    return 0.0;
+
+  double totalCoverage = 0.0;
+  int32_t validGroups = 0;
+
+  for (auto *cg : registeredCovergroups) {
+    if (cg) {
+      totalCoverage += __moore_covergroup_get_coverage(cg);
+      validGroups++;
+    }
+  }
+
+  if (validGroups == 0)
+    return 0.0;
+
+  return totalCoverage / validGroups;
+}
+
+extern "C" int32_t __moore_coverage_get_num_covergroups(void) {
+  return static_cast<int32_t>(registeredCovergroups.size());
+}
+
+extern "C" void __moore_covergroup_set_goal(void *cg, double goal) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  // Clamp goal to valid range
+  if (goal < 0.0)
+    goal = 0.0;
+  if (goal > 100.0)
+    goal = 100.0;
+
+  covergroupGoals[covergroup] = goal;
+}
+
+extern "C" double __moore_covergroup_get_goal(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return 100.0;
+
+  auto it = covergroupGoals.find(covergroup);
+  if (it != covergroupGoals.end())
+    return it->second;
+
+  return 100.0; // Default goal
+}
+
+extern "C" bool __moore_covergroup_goal_met(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return false;
+
+  double coverage = __moore_covergroup_get_coverage(cg);
+  double goal = __moore_covergroup_get_goal(cg);
+
+  return coverage >= goal;
+}
+
+//===----------------------------------------------------------------------===//
+// HTML Coverage Report
+//===----------------------------------------------------------------------===//
+
+extern "C" int32_t __moore_coverage_report_html(const char *filename) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  // Generate HTML report with embedded CSS and JavaScript
+  std::string html;
+  html += "<!DOCTYPE html>\n";
+  html += "<html lang=\"en\">\n";
+  html += "<head>\n";
+  html += "  <meta charset=\"UTF-8\">\n";
+  html += "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n";
+  html += "  <title>CIRCT Coverage Report</title>\n";
+  html += "  <style>\n";
+  html += "    :root {\n";
+  html += "      --bg-primary: #1a1a2e;\n";
+  html += "      --bg-secondary: #16213e;\n";
+  html += "      --text-primary: #eee;\n";
+  html += "      --text-secondary: #aaa;\n";
+  html += "      --accent: #0f4c75;\n";
+  html += "      --success: #28a745;\n";
+  html += "      --warning: #ffc107;\n";
+  html += "      --danger: #dc3545;\n";
+  html += "    }\n";
+  html += "    body {\n";
+  html += "      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n";
+  html += "      background: var(--bg-primary);\n";
+  html += "      color: var(--text-primary);\n";
+  html += "      margin: 0;\n";
+  html += "      padding: 20px;\n";
+  html += "    }\n";
+  html += "    h1, h2, h3 { margin-top: 0; }\n";
+  html += "    .container { max-width: 1200px; margin: 0 auto; }\n";
+  html += "    .header {\n";
+  html += "      background: var(--bg-secondary);\n";
+  html += "      padding: 20px;\n";
+  html += "      border-radius: 8px;\n";
+  html += "      margin-bottom: 20px;\n";
+  html += "    }\n";
+  html += "    .summary {\n";
+  html += "      display: grid;\n";
+  html += "      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n";
+  html += "      gap: 15px;\n";
+  html += "      margin-bottom: 20px;\n";
+  html += "    }\n";
+  html += "    .stat-card {\n";
+  html += "      background: var(--bg-secondary);\n";
+  html += "      padding: 15px;\n";
+  html += "      border-radius: 8px;\n";
+  html += "      text-align: center;\n";
+  html += "    }\n";
+  html += "    .stat-value {\n";
+  html += "      font-size: 2em;\n";
+  html += "      font-weight: bold;\n";
+  html += "    }\n";
+  html += "    .stat-label {\n";
+  html += "      color: var(--text-secondary);\n";
+  html += "      font-size: 0.9em;\n";
+  html += "    }\n";
+  html += "    .covergroup {\n";
+  html += "      background: var(--bg-secondary);\n";
+  html += "      border-radius: 8px;\n";
+  html += "      padding: 20px;\n";
+  html += "      margin-bottom: 15px;\n";
+  html += "    }\n";
+  html += "    .coverpoint {\n";
+  html += "      background: rgba(255,255,255,0.05);\n";
+  html += "      border-radius: 6px;\n";
+  html += "      padding: 15px;\n";
+  html += "      margin: 10px 0;\n";
+  html += "    }\n";
+  html += "    .progress-bar {\n";
+  html += "      background: rgba(255,255,255,0.1);\n";
+  html += "      border-radius: 4px;\n";
+  html += "      height: 20px;\n";
+  html += "      overflow: hidden;\n";
+  html += "      margin: 5px 0;\n";
+  html += "    }\n";
+  html += "    .progress-fill {\n";
+  html += "      height: 100%;\n";
+  html += "      border-radius: 4px;\n";
+  html += "      transition: width 0.3s ease;\n";
+  html += "    }\n";
+  html += "    .coverage-high { background: var(--success); }\n";
+  html += "    .coverage-med { background: var(--warning); }\n";
+  html += "    .coverage-low { background: var(--danger); }\n";
+  html += "    .meta { color: var(--text-secondary); font-size: 0.85em; }\n";
+  html += "    table {\n";
+  html += "      width: 100%;\n";
+  html += "      border-collapse: collapse;\n";
+  html += "      margin: 10px 0;\n";
+  html += "    }\n";
+  html += "    th, td {\n";
+  html += "      padding: 8px 12px;\n";
+  html += "      text-align: left;\n";
+  html += "      border-bottom: 1px solid rgba(255,255,255,0.1);\n";
+  html += "    }\n";
+  html += "    th { background: rgba(255,255,255,0.05); }\n";
+  html += "  </style>\n";
+  html += "</head>\n";
+  html += "<body>\n";
+  html += "  <div class=\"container\">\n";
+  html += "    <div class=\"header\">\n";
+  html += "      <h1>CIRCT Coverage Report</h1>\n";
+  html += "      <p class=\"meta\">Generated by circt-moore-runtime</p>\n";
+  html += "    </div>\n";
+
+  // Summary section
+  double totalCoverage = __moore_coverage_get_total();
+  int32_t numCovergroups = __moore_coverage_get_num_covergroups();
+  int32_t totalCoverpoints = 0;
+  int64_t totalHits = 0;
+
+  for (auto *cg : registeredCovergroups) {
+    if (cg) {
+      totalCoverpoints += cg->num_coverpoints;
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        if (cg->coverpoints[i])
+          totalHits += cg->coverpoints[i]->hits;
+      }
+    }
+  }
+
+  html += "    <div class=\"summary\">\n";
+  html += "      <div class=\"stat-card\">\n";
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.1f%%", totalCoverage);
+  html += "        <div class=\"stat-value\">" + std::string(buf) + "</div>\n";
+  html += "        <div class=\"stat-label\">Total Coverage</div>\n";
+  html += "      </div>\n";
+  html += "      <div class=\"stat-card\">\n";
+  html += "        <div class=\"stat-value\">" + std::to_string(numCovergroups) + "</div>\n";
+  html += "        <div class=\"stat-label\">Covergroups</div>\n";
+  html += "      </div>\n";
+  html += "      <div class=\"stat-card\">\n";
+  html += "        <div class=\"stat-value\">" + std::to_string(totalCoverpoints) + "</div>\n";
+  html += "        <div class=\"stat-label\">Coverpoints</div>\n";
+  html += "      </div>\n";
+  html += "      <div class=\"stat-card\">\n";
+  html += "        <div class=\"stat-value\">" + std::to_string(totalHits) + "</div>\n";
+  html += "        <div class=\"stat-label\">Total Samples</div>\n";
+  html += "      </div>\n";
+  html += "    </div>\n";
+
+  // Covergroup details
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+    double goal = __moore_covergroup_get_goal(cg);
+    bool goalMet = cgCoverage >= goal;
+
+    html += "    <div class=\"covergroup\">\n";
+    html += "      <h2>" + std::string(cg->name ? cg->name : "(unnamed)") + "</h2>\n";
+    html += "      <div class=\"progress-bar\">\n";
+    std::string coverageClass = cgCoverage >= 80 ? "coverage-high" :
+                                (cgCoverage >= 50 ? "coverage-med" : "coverage-low");
+    std::snprintf(buf, sizeof(buf), "%.1f", cgCoverage);
+    html += "        <div class=\"progress-fill " + coverageClass +
+            "\" style=\"width: " + std::string(buf) + "%\"></div>\n";
+    html += "      </div>\n";
+    std::snprintf(buf, sizeof(buf), "%.2f%% coverage (goal: %.0f%%)", cgCoverage, goal);
+    html += "      <p class=\"meta\">" + std::string(buf) +
+            (goalMet ? " - PASSED" : " - NOT MET") + "</p>\n";
+
+    // Coverpoints table
+    if (cg->num_coverpoints > 0) {
+      html += "      <table>\n";
+      html += "        <thead>\n";
+      html += "          <tr>\n";
+      html += "            <th>Coverpoint</th>\n";
+      html += "            <th>Hits</th>\n";
+      html += "            <th>Unique Values</th>\n";
+      html += "            <th>Range</th>\n";
+      html += "            <th>Coverage</th>\n";
+      html += "          </tr>\n";
+      html += "        </thead>\n";
+      html += "        <tbody>\n";
+
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        auto *cp = cg->coverpoints[i];
+        if (!cp)
+          continue;
+
+        double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+        auto trackerIt = coverpointTrackers.find(cp);
+        int64_t uniqueVals = 0;
+        if (trackerIt != coverpointTrackers.end()) {
+          uniqueVals = static_cast<int64_t>(trackerIt->second.valueCounts.size());
+        }
+
+        html += "          <tr>\n";
+        html += "            <td>" + std::string(cp->name ? cp->name : "(unnamed)") + "</td>\n";
+        html += "            <td>" + std::to_string(cp->hits) + "</td>\n";
+        html += "            <td>" + std::to_string(uniqueVals) + "</td>\n";
+
+        if (cp->hits > 0 && cp->min_val <= cp->max_val) {
+          html += "            <td>" + std::to_string(cp->min_val) + ".." +
+                  std::to_string(cp->max_val) + "</td>\n";
+        } else {
+          html += "            <td>-</td>\n";
+        }
+
+        std::snprintf(buf, sizeof(buf), "%.1f%%", cpCoverage);
+        std::string cpClass = cpCoverage >= 80 ? "coverage-high" :
+                              (cpCoverage >= 50 ? "coverage-med" : "coverage-low");
+        html += "            <td><span style=\"color: var(--" +
+                (cpCoverage >= 80 ? std::string("success") :
+                 (cpCoverage >= 50 ? std::string("warning") : std::string("danger"))) +
+                ")\">" + std::string(buf) + "</span></td>\n";
+        html += "          </tr>\n";
+      }
+
+      html += "        </tbody>\n";
+      html += "      </table>\n";
+    }
+
+    html += "    </div>\n";
+  }
+
+  html += "  </div>\n";
+  html += "</body>\n";
+  html += "</html>\n";
+
+  std::fwrite(html.c_str(), 1, html.size(), fp);
+  std::fclose(fp);
+
+  return 0;
+}
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //
@@ -3108,7 +3659,7 @@ extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
     regexPattern = convertGlobToRegex(regexPattern, true);
   }
 
-  auto isSupportedPattern = [](llvm::StringRef pat) -> bool {
+  auto isSupportedPattern = [](const std::string &pat) -> bool {
     for (size_t i = 0; i < pat.size(); ++i) {
       char c = pat[i];
       if (c == '\\') {
@@ -3147,7 +3698,7 @@ extern "C" int32_t uvm_re_exec(void *rexp, MooreString *str) {
     return -1;
   std::string target(str->data, str->len);
 
-  auto readToken = [](llvm::StringRef pat, size_t idx, char &tok, bool &any,
+  auto readToken = [](const std::string &pat, size_t idx, char &tok, bool &any,
                       size_t &nextIdx) -> bool {
     if (idx >= pat.size())
       return false;
@@ -3460,6 +4011,20 @@ extern "C" char *vpi_get_str(int32_t property, vpiHandle obj) {
 
 extern "C" void vpi_release_handle(vpiHandle obj) {
   releaseVpiHandle(obj);
+}
+
+extern "C" int32_t vpi_get_value(vpiHandle obj, vpi_value *value) {
+  if (!obj || !value || !value->value)
+    return 0;
+  auto *handle = static_cast<VpiHandleImpl *>(obj);
+  std::lock_guard<std::mutex> lock(hdlMutex);
+  auto it = hdlValues.find(handle->name);
+  if (it == hdlValues.end()) {
+    *static_cast<uvm_hdl_data_t *>(value->value) = 0;
+  } else {
+    *static_cast<uvm_hdl_data_t *>(value->value) = it->second.value;
+  }
+  return 1;
 }
 
 extern "C" int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,

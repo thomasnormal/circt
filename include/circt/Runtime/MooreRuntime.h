@@ -139,6 +139,14 @@ void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size);
 MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start, int64_t end,
                                int64_t element_size);
 
+/// Concatenate multiple queues into a single queue.
+/// @param queues Pointer to an array of queues
+/// @param count Number of queues in the array
+/// @param element_size Size of each element in bytes
+/// @return A new queue containing all elements in order
+MooreQueue __moore_queue_concat(MooreQueue *queues, int64_t count,
+                                int64_t element_size);
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//
@@ -711,6 +719,116 @@ void __moore_coverage_report_json_stdout(void);
 char *__moore_coverage_get_json(void);
 
 //===----------------------------------------------------------------------===//
+// Cross Coverage Operations
+//===----------------------------------------------------------------------===//
+//
+// Cross coverage tracks combinations of values from multiple coverpoints.
+// This implements the SystemVerilog `cross` construct within covergroups.
+//
+
+/// Cross coverage structure for tracking value combinations.
+/// @member name Name of the cross
+/// @member cp_indices Array of coverpoint indices participating in the cross
+/// @member num_cps Number of coverpoints in the cross
+/// @member bins Map of value combinations to hit counts (internal)
+typedef struct {
+  const char *name;
+  int32_t *cp_indices;
+  int32_t num_cps;
+  void *bins_data; // Opaque pointer to internal cross bin data
+} MooreCrossCoverage;
+
+/// Add a cross coverage item to a covergroup.
+/// Creates a cross that tracks combinations of the specified coverpoints.
+///
+/// @param cg Pointer to the covergroup
+/// @param name Name of the cross (for reporting)
+/// @param cp_indices Array of coverpoint indices to cross
+/// @param num_cps Number of coverpoints in the cross (typically 2 or more)
+/// @return Index of the created cross, or -1 on failure
+int32_t __moore_cross_create(void *cg, const char *name, int32_t *cp_indices,
+                             int32_t num_cps);
+
+/// Sample all crosses in a covergroup.
+/// Should be called after sampling all coverpoints to update cross bins.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_values Array of sampled values for each coverpoint
+/// @param num_values Number of values (must match num_coverpoints)
+void __moore_cross_sample(void *cg, int64_t *cp_values, int32_t num_values);
+
+/// Get the coverage percentage for a specific cross.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_cross_get_coverage(void *cg, int32_t cross_index);
+
+/// Get the total number of cross bins hit.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @return Number of unique cross bin combinations that were hit
+int64_t __moore_cross_get_bins_hit(void *cg, int32_t cross_index);
+
+//===----------------------------------------------------------------------===//
+// Coverage Reset and Aggregation
+//===----------------------------------------------------------------------===//
+
+/// Reset all coverage data for a covergroup.
+/// Clears all hit counts and value trackers, but preserves the structure.
+///
+/// @param cg Pointer to the covergroup
+void __moore_covergroup_reset(void *cg);
+
+/// Reset coverage data for a specific coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+void __moore_coverpoint_reset(void *cg, int32_t cp_index);
+
+/// Get total coverage across all registered covergroups.
+/// Returns the weighted average coverage of all covergroups.
+///
+/// @return Total coverage percentage (0.0 to 100.0)
+double __moore_coverage_get_total(void);
+
+/// Get the number of registered covergroups.
+///
+/// @return Number of covergroups currently registered
+int32_t __moore_coverage_get_num_covergroups(void);
+
+/// Set a coverage goal for a covergroup.
+/// Used for reporting whether coverage targets have been met.
+///
+/// @param cg Pointer to the covergroup
+/// @param goal Coverage goal percentage (0.0 to 100.0)
+void __moore_covergroup_set_goal(void *cg, double goal);
+
+/// Get the coverage goal for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return Coverage goal percentage (default: 100.0)
+double __moore_covergroup_get_goal(void *cg);
+
+/// Check if a covergroup has met its coverage goal.
+///
+/// @param cg Pointer to the covergroup
+/// @return true if coverage >= goal, false otherwise
+bool __moore_covergroup_goal_met(void *cg);
+
+//===----------------------------------------------------------------------===//
+// HTML Coverage Report
+//===----------------------------------------------------------------------===//
+
+/// Generate an HTML coverage report file.
+/// Creates a self-contained HTML file with interactive coverage visualization.
+///
+/// @param filename Path to the output HTML file
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_report_html(const char *filename);
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //
@@ -936,6 +1054,7 @@ typedef struct vpi_value_s {
 vpiHandle vpi_handle_by_name(const char *name, vpiHandle scope);
 int32_t vpi_get(int32_t property, vpiHandle obj);
 char *vpi_get_str(int32_t property, vpiHandle obj);
+int32_t vpi_get_value(vpiHandle obj, vpi_value *value);
 int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
                       int32_t flags);
 void vpi_release_handle(vpiHandle obj);

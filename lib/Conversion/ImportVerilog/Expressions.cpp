@@ -383,12 +383,11 @@ struct ExprVisitor {
       // Dynamic types (queues) use the index directly - always use dynamic
       // extract since we can't statically verify bounds.
       //
-      // For queues, we need to set the queue target value so that the `$`
+      // For queues and dynamic arrays, set the target value so that the `$`
       // (UnboundedLiteral) expression can be evaluated as `size - 1`.
       Value queueValue;
-      if (isa<moore::QueueType>(derefType)) {
-        // For queues, get an rvalue of the queue to pass to ArraySizeOp.
-        // If we're in lvalue context, we need to read the queue ref.
+      if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(derefType)) {
+        // For lvalue references, read the current array value.
         if (isLvalue) {
           queueValue = moore::ReadOp::create(builder, loc,
                                              cast<moore::RefType>(value.getType())
@@ -686,6 +685,16 @@ struct ExprVisitor {
     // and queue.
     bool isStringConcat = expr.type->isString();
     bool isQueueConcat = expr.type->isQueue();
+    moore::QueueType queueType;
+    if (isQueueConcat) {
+      auto resultType = context.convertType(*expr.type);
+      queueType = dyn_cast<moore::QueueType>(resultType);
+      if (!queueType) {
+        mlir::emitError(loc) << "queue concatenation expected queue result, got "
+                             << resultType;
+        return {};
+      }
+    }
 
     SmallVector<Value> operands;
     for (auto *operand : expr.operands()) {
@@ -699,6 +708,27 @@ struct ExprVisitor {
         return {};
       if (!isLvalue && !isStringConcat && !isQueueConcat)
         value = context.convertToSimpleBitVector(value);
+      if (isQueueConcat && !isLvalue) {
+        if (!isa<moore::QueueType>(value.getType())) {
+          auto elem = context.materializeConversion(
+              queueType.getElementType(), value, operand->type->isSigned(), loc);
+          if (!elem)
+            return {};
+          Value emptyQueue =
+              moore::QueueConcatOp::create(builder, loc, queueType, {});
+          auto refTy = moore::RefType::get(queueType);
+          auto tmpVar = moore::VariableOp::create(
+              builder, loc, refTy,
+              builder.getStringAttr("queue_concat_tmp"), emptyQueue);
+          moore::QueuePushBackOp::create(builder, loc, tmpVar, elem);
+          value = moore::ReadOp::create(builder, loc, tmpVar);
+        } else if (value.getType() != queueType) {
+          mlir::emitError(loc)
+              << "queue concatenation type mismatch: expected " << queueType
+              << ", got " << value.getType();
+          return {};
+        }
+      }
       if (!value)
         return {};
       operands.push_back(value);

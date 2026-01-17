@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -202,6 +203,8 @@ TEST(MooreRuntimeVpiTest, VpiStubsReturnDefaults) {
   EXPECT_EQ(vpi_handle_by_name("", nullptr), nullptr);
   EXPECT_EQ(vpi_get(0, nullptr), 0);
   EXPECT_EQ(vpi_get_str(0, nullptr), nullptr);
+  vpi_value getValue = {0, nullptr};
+  EXPECT_EQ(vpi_get_value(nullptr, &getValue), 0);
   vpi_value value = {0, nullptr};
   EXPECT_EQ(vpi_put_value(nullptr, &value, nullptr, 0), 0);
 }
@@ -275,6 +278,30 @@ TEST(MooreRuntimeVpiTest, VpiPutValueForceRelease) {
   EXPECT_EQ(uvm_hdl_read(&path, &readValue), 1);
   EXPECT_EQ(readValue, 33);
 
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiGetValueReadsHdl) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_get", nullptr);
+  ASSERT_NE(handle, nullptr);
+
+  MooreString path = makeMooreString("top.vpi_get");
+  EXPECT_EQ(uvm_hdl_deposit(&path, 55), 1);
+
+  uvm_hdl_data_t readValue = 0;
+  vpi_value value = {0, &readValue};
+  EXPECT_EQ(vpi_get_value(handle, &value), 1);
+  EXPECT_EQ(readValue, 55);
+
+  vpi_release_handle(handle);
+}
+
+TEST(MooreRuntimeVpiTest, VpiGetValueNullInput) {
+  vpiHandle handle = vpi_handle_by_name("top.vpi_get_null", nullptr);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(vpi_get_value(handle, nullptr), 0);
+  vpi_value value = {0, nullptr};
+  EXPECT_EQ(vpi_get_value(handle, &value), 0);
   vpi_release_handle(handle);
 }
 
@@ -678,6 +705,35 @@ static int compareInt32Asc(const void *a, const void *b) {
   int32_t va = *static_cast<const int32_t *>(a);
   int32_t vb = *static_cast<const int32_t *>(b);
   return (va > vb) - (va < vb);
+}
+
+TEST(MooreRuntimeQueueTest, QueueConcat) {
+  MooreQueue q1 = {nullptr, 0};
+  MooreQueue q2 = {nullptr, 0};
+  int64_t elementSize = sizeof(int64_t);
+
+  int64_t a = 10;
+  int64_t b = 20;
+  int64_t c = 30;
+  int64_t d = 40;
+  __moore_queue_push_back(&q1, &a, elementSize);
+  __moore_queue_push_back(&q1, &b, elementSize);
+  __moore_queue_push_back(&q2, &c, elementSize);
+  __moore_queue_push_back(&q2, &d, elementSize);
+
+  MooreQueue queues[2] = {q1, q2};
+  MooreQueue result = __moore_queue_concat(queues, 2, elementSize);
+
+  ASSERT_EQ(result.len, 4);
+  auto *values = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(values[0], 10);
+  EXPECT_EQ(values[1], 20);
+  EXPECT_EQ(values[2], 30);
+  EXPECT_EQ(values[3], 40);
+
+  std::free(q1.data);
+  std::free(q2.data);
+  std::free(result.data);
 }
 
 TEST(MooreRuntimeQueueTest, QueueSortIntegers) {
@@ -2062,6 +2118,372 @@ TEST(MooreRuntimeCoverageTest, NegativeValuesSample) {
   EXPECT_LT(cov, 30.0);
 
   __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// Cross Coverage Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCrossCoverageTest, CrossCreate) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossCreateInvalidIndices) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Invalid coverpoint index
+  int32_t badIndices[] = {0, 5};
+  int32_t crossIdx = __moore_cross_create(cg, "bad_cross", badIndices, 2);
+  EXPECT_EQ(crossIdx, -1);
+
+  // Null indices
+  crossIdx = __moore_cross_create(cg, "null_cross", nullptr, 2);
+  EXPECT_EQ(crossIdx, -1);
+
+  // Less than 2 coverpoints
+  int32_t singleIdx[] = {0};
+  crossIdx = __moore_cross_create(cg, "single_cross", singleIdx, 1);
+  EXPECT_EQ(crossIdx, -1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossSample) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Sample values for both coverpoints
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 1, 10);
+
+  // Sample the cross with values [1, 10]
+  int64_t cpValues[] = {1, 10};
+  __moore_cross_sample(cg, cpValues, 2);
+
+  // Should have 1 cross bin hit
+  int64_t binsHit = __moore_cross_get_bins_hit(cg, crossIdx);
+  EXPECT_EQ(binsHit, 1);
+
+  // Sample a different combination
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 1, 20);
+  int64_t cpValues2[] = {2, 20};
+  __moore_cross_sample(cg, cpValues2, 2);
+
+  // Should have 2 cross bins hit now
+  binsHit = __moore_cross_get_bins_hit(cg, crossIdx);
+  EXPECT_EQ(binsHit, 2);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossGetCoverage) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Sample 2 values for cp0 and 2 values for cp1 (4 cross combinations possible)
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 1, 10);
+  __moore_coverpoint_sample(cg, 1, 11);
+
+  // Sample 2 out of 4 combinations
+  int64_t vals1[] = {0, 10};
+  int64_t vals2[] = {1, 11};
+  __moore_cross_sample(cg, vals1, 2);
+  __moore_cross_sample(cg, vals2, 2);
+
+  // Coverage should be 50% (2 out of 4 possible combinations)
+  double coverage = __moore_cross_get_coverage(cg, crossIdx);
+  EXPECT_DOUBLE_EQ(coverage, 50.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Reset Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, CoverpointReset) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample some values
+  __moore_coverpoint_sample(cg, 0, 10);
+  __moore_coverpoint_sample(cg, 0, 20);
+  __moore_coverpoint_sample(cg, 0, 30);
+
+  // Verify we have coverage
+  double covBefore = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(covBefore, 0.0);
+
+  // Reset the coverpoint
+  __moore_coverpoint_reset(cg, 0);
+
+  // Coverage should be 0 after reset
+  double covAfter = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(covAfter, 0.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupReset) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Sample values
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 1, 2);
+
+  // Verify coverage before reset
+  double cov0Before = __moore_coverpoint_get_coverage(cg, 0);
+  double cov1Before = __moore_coverpoint_get_coverage(cg, 1);
+  EXPECT_GT(cov0Before, 0.0);
+  EXPECT_GT(cov1Before, 0.0);
+
+  // Reset the entire covergroup
+  __moore_covergroup_reset(cg);
+
+  // All coverpoints should have 0 coverage
+  double cov0After = __moore_coverpoint_get_coverage(cg, 0);
+  double cov1After = __moore_coverpoint_get_coverage(cg, 1);
+  EXPECT_DOUBLE_EQ(cov0After, 0.0);
+  EXPECT_DOUBLE_EQ(cov1After, 0.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointResetInvalidIndex) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // These should not crash
+  __moore_coverpoint_reset(cg, -1);
+  __moore_coverpoint_reset(cg, 5);
+  __moore_coverpoint_reset(nullptr, 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Goal Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, CovergroupGoalDefault) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Default goal should be 100%
+  double goal = __moore_covergroup_get_goal(cg);
+  EXPECT_DOUBLE_EQ(goal, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupSetGoal) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Set custom goal
+  __moore_covergroup_set_goal(cg, 80.0);
+  double goal = __moore_covergroup_get_goal(cg);
+  EXPECT_DOUBLE_EQ(goal, 80.0);
+
+  // Goal should be clamped to [0, 100]
+  __moore_covergroup_set_goal(cg, -10.0);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_goal(cg), 0.0);
+
+  __moore_covergroup_set_goal(cg, 150.0);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_goal(cg), 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CovergroupGoalMet) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Set a goal of 50%
+  __moore_covergroup_set_goal(cg, 50.0);
+
+  // With no samples, goal should not be met
+  EXPECT_FALSE(__moore_covergroup_goal_met(cg));
+
+  // Sample a single value (100% coverage for single-value range)
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Now goal should be met (100% >= 50%)
+  EXPECT_TRUE(__moore_covergroup_goal_met(cg));
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// Total Coverage Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, TotalCoverage) {
+  // Create two covergroups
+  void *cg1 = __moore_covergroup_create("cg1", 1);
+  void *cg2 = __moore_covergroup_create("cg2", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp1");
+  __moore_coverpoint_init(cg2, 0, "cp2");
+
+  // Sample single values (each gets 100% coverage)
+  __moore_coverpoint_sample(cg1, 0, 1);
+  __moore_coverpoint_sample(cg2, 0, 2);
+
+  // Total coverage should be 100% (average of two 100% covergroups)
+  double total = __moore_coverage_get_total();
+  EXPECT_DOUBLE_EQ(total, 100.0);
+
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageTest, NumCovergroups) {
+  int32_t initialCount = __moore_coverage_get_num_covergroups();
+
+  void *cg1 = __moore_covergroup_create("cg1", 1);
+  EXPECT_EQ(__moore_coverage_get_num_covergroups(), initialCount + 1);
+
+  void *cg2 = __moore_covergroup_create("cg2", 1);
+  EXPECT_EQ(__moore_coverage_get_num_covergroups(), initialCount + 2);
+
+  __moore_covergroup_destroy(cg1);
+  EXPECT_EQ(__moore_coverage_get_num_covergroups(), initialCount + 1);
+
+  __moore_covergroup_destroy(cg2);
+  EXPECT_EQ(__moore_coverage_get_num_covergroups(), initialCount);
+}
+
+//===----------------------------------------------------------------------===//
+// Explicit Bins Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, ExplicitBins) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Initialize with explicit bins
+  MooreCoverageBin bins[] = {
+    {"low", MOORE_BIN_RANGE, 0, 10, 0},
+    {"mid", MOORE_BIN_RANGE, 11, 20, 0},
+    {"high", MOORE_BIN_RANGE, 21, 30, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Sample values in different bins
+  __moore_coverpoint_sample(cg, 0, 5);   // low bin
+  __moore_coverpoint_sample(cg, 0, 15);  // mid bin
+
+  // Check bin hits
+  EXPECT_GE(__moore_coverpoint_get_bin_hits(cg, 0, 0), 1);  // low bin hit
+  EXPECT_GE(__moore_coverpoint_get_bin_hits(cg, 0, 1), 1);  // mid bin hit
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 2), 0);  // high bin not hit
+
+  // Coverage should be 2/3 = 66.67%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(cov, 60.0);
+  EXPECT_LT(cov, 70.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, AddBinDynamically) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Add bins dynamically
+  __moore_coverpoint_add_bin(cg, 0, "bin0", MOORE_BIN_VALUE, 0, 0);
+  __moore_coverpoint_add_bin(cg, 0, "bin1", MOORE_BIN_VALUE, 1, 1);
+
+  // Sample value 0
+  __moore_coverpoint_sample(cg, 0, 0);
+
+  // bin0 should be hit, bin1 should not
+  EXPECT_GE(__moore_coverpoint_get_bin_hits(cg, 0, 0), 1);
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 1), 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// HTML Report Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, HtmlReportGeneration) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "signal_a");
+  __moore_coverpoint_init(cg, 1, "signal_b");
+
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 1, 10);
+
+  // Generate HTML report
+  const char *filename = "/tmp/coverage_test_report.html";
+  int32_t result = __moore_coverage_report_html(filename);
+  EXPECT_EQ(result, 0);
+
+  // Verify file was created (we won't parse HTML, just check creation)
+  FILE *fp = std::fopen(filename, "r");
+  EXPECT_NE(fp, nullptr);
+  if (fp) {
+    std::fclose(fp);
+    std::remove(filename);
+  }
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, HtmlReportNullFilename) {
+  int32_t result = __moore_coverage_report_html(nullptr);
+  EXPECT_NE(result, 0);
 }
 
 } // namespace

@@ -2559,10 +2559,54 @@ struct ClassDeclVisitor {
       return success();
     }
     case slang::ast::ConstraintKind::Foreach: {
-      // Foreach constraints require more complex lowering with loop variables
-      // For now, emit a warning and skip
-      mlir::emitWarning(loc) << "foreach constraint not yet fully supported";
-      return success();
+      const auto &foreachCons = constraint.as<slang::ast::ForeachConstraint>();
+
+      // Convert the array expression
+      auto arrayValue = context.convertRvalueExpression(foreachCons.arrayRef);
+      if (!arrayValue)
+        return failure();
+
+      // Create the foreach constraint op
+      auto foreachOp =
+          moore::ConstraintForeachOp::create(builder, loc, arrayValue);
+
+      // Create the body block with arguments for each loop variable
+      Block *bodyBlock = &foreachOp.getBody().emplaceBlock();
+
+      // Collect the loop variables and their types
+      SmallVector<const slang::ast::IteratorSymbol *, 4> loopVars;
+      SmallVector<Type, 4> loopVarTypes;
+
+      for (const auto &loopDim : foreachCons.loopDims) {
+        if (loopDim.loopVar) {
+          auto varType =
+              context.convertType(*loopDim.loopVar->getDeclaredType());
+          if (!varType)
+            return failure();
+          loopVars.push_back(loopDim.loopVar);
+          loopVarTypes.push_back(varType);
+        }
+      }
+
+      // Add block arguments for each loop variable
+      for (size_t i = 0; i < loopVars.size(); ++i) {
+        bodyBlock->addArgument(loopVarTypes[i], loc);
+      }
+
+      // Set insertion point inside the body and register loop variables
+      OpBuilder::InsertionGuard ig(builder);
+      builder.setInsertionPointToStart(bodyBlock);
+
+      // Create a scope for the loop variables
+      Context::ValueSymbolScope loopScope(context.valueSymbols);
+
+      // Register each loop variable in the symbol table
+      for (size_t i = 0; i < loopVars.size(); ++i) {
+        context.valueSymbols.insert(loopVars[i], bodyBlock->getArgument(i));
+      }
+
+      // Convert the body constraint
+      return convertConstraint(foreachCons.body, loc);
     }
     case slang::ast::ConstraintKind::SolveBefore: {
       // Solve-before constraints require symbol references

@@ -2002,6 +2002,72 @@ static bool isMissingImportDiagnostic(llvm::StringRef message) {
          (message.contains("not found") && message.contains("package"));
 }
 
+/// Check if the type name looks like a UVM type.
+static bool isUVMTypeName(llvm::StringRef typeName) {
+  return typeName.starts_with("uvm_") || typeName.starts_with("UVM_");
+}
+
+/// Check if the diagnostic message mentions a UVM type.
+static bool mentionsUVMType(llvm::StringRef message) {
+  return message.contains("uvm_") || message.contains("UVM_");
+}
+
+/// Find the position for inserting an import statement.
+/// This looks for existing import statements or the start of the module/class.
+static llvm::lsp::Position findImportInsertionPoint(
+    std::string_view sourceText, const std::vector<uint32_t> &lineOffsets) {
+  if (lineOffsets.empty())
+    return llvm::lsp::Position(0, 0);
+
+  // Search for patterns to find a good insertion point
+  for (size_t line = 0; line < lineOffsets.size(); ++line) {
+    size_t lineStart = lineOffsets[line];
+    size_t lineEnd = (line + 1 < lineOffsets.size())
+                         ? lineOffsets[line + 1] - 1
+                         : sourceText.size();
+
+    std::string_view lineText = sourceText.substr(lineStart, lineEnd - lineStart);
+
+    // If there's an existing import, insert after it
+    if (lineText.find("import") != std::string_view::npos &&
+        lineText.find("::") != std::string_view::npos) {
+      // Find the end of this import statement (line with semicolon)
+      for (size_t i = line; i < lineOffsets.size(); ++i) {
+        size_t iLineStart = lineOffsets[i];
+        size_t iLineEnd = (i + 1 < lineOffsets.size())
+                             ? lineOffsets[i + 1] - 1
+                             : sourceText.size();
+        std::string_view iLineText = sourceText.substr(iLineStart, iLineEnd - iLineStart);
+        if (iLineText.find(';') != std::string_view::npos) {
+          return llvm::lsp::Position(static_cast<int>(i + 1), 0);
+        }
+      }
+    }
+
+    // If we find module/class/package, insert right after the declaration line
+    if (lineText.find("module ") != std::string_view::npos ||
+        lineText.find("class ") != std::string_view::npos ||
+        lineText.find("package ") != std::string_view::npos) {
+      // Find the end of the declaration (line with semicolon or closing paren)
+      for (size_t i = line; i < lineOffsets.size(); ++i) {
+        size_t iLineStart = lineOffsets[i];
+        size_t iLineEnd = (i + 1 < lineOffsets.size())
+                             ? lineOffsets[i + 1] - 1
+                             : sourceText.size();
+        std::string_view iLineText = sourceText.substr(iLineStart, iLineEnd - iLineStart);
+        if (iLineText.find(");") != std::string_view::npos ||
+            (iLineText.find(';') != std::string_view::npos &&
+             iLineText.find('(') == std::string_view::npos)) {
+          return llvm::lsp::Position(static_cast<int>(i + 1), 0);
+        }
+      }
+    }
+  }
+
+  // Fallback: insert at the beginning of the file
+  return llvm::lsp::Position(0, 0);
+}
+
 /// Extract identifier name from a diagnostic message.
 /// Common patterns: "use of undeclared identifier 'foo'"
 ///                  "unknown identifier 'bar'"
@@ -2256,14 +2322,77 @@ void VerilogDocument::getCodeActions(
       }
     }
 
-    // Check for missing import
-    if (isMissingImportDiagnostic(diag.message)) {
+    // Check for missing import or UVM type errors
+    if (isMissingImportDiagnostic(diag.message) || mentionsUVMType(diag.message)) {
       std::optional<std::string> typeName =
           extractIdentifierFromMessage(diag.message);
 
-      if (typeName && !typeName->empty()) {
-        // Suggest adding common package imports
-        std::vector<std::string> commonPackages = {"uvm_pkg", "std"};
+      // Find the best position for import insertion
+      llvm::lsp::Position importPos = findImportInsertionPoint(sourceText, lineOffsets);
+
+      // Check if this is a UVM-related error
+      bool isUVMError = mentionsUVMType(diag.message) ||
+                        (typeName && isUVMTypeName(*typeName));
+
+      if (isUVMError) {
+        // Add UVM-specific import as the preferred action
+        {
+          llvm::lsp::CodeAction uvmImportAction;
+          uvmImportAction.title = "Add 'import uvm_pkg::*;'";
+          uvmImportAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          uvmImportAction.diagnostics = {diag};
+          uvmImportAction.isPreferred = true; // Mark as preferred for UVM errors
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(importPos, importPos);
+          textEdit.newText = "import uvm_pkg::*;\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          uvmImportAction.edit = edit;
+
+          codeActions.push_back(std::move(uvmImportAction));
+        }
+
+        // Also suggest adding UVM macros include
+        {
+          llvm::lsp::CodeAction includeAction;
+          includeAction.title = "Add '`include \"uvm_macros.svh\"'";
+          includeAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          includeAction.diagnostics = {diag};
+
+          // Insert include at beginning of file
+          llvm::lsp::Position includePos(0, 0);
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(includePos, includePos);
+          textEdit.newText = "`include \"uvm_macros.svh\"\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          includeAction.edit = edit;
+
+          codeActions.push_back(std::move(includeAction));
+        }
+
+        // Suggest combined UVM setup (include + import)
+        {
+          llvm::lsp::CodeAction combinedAction;
+          combinedAction.title = "Add UVM boilerplate (include + import)";
+          combinedAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          combinedAction.diagnostics = {diag};
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(llvm::lsp::Position(0, 0),
+                                            llvm::lsp::Position(0, 0));
+          textEdit.newText = "`include \"uvm_macros.svh\"\nimport uvm_pkg::*;\n\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          combinedAction.edit = edit;
+
+          codeActions.push_back(std::move(combinedAction));
+        }
+      } else if (typeName && !typeName->empty()) {
+        // For non-UVM errors, suggest common packages
+        std::vector<std::string> commonPackages = {"std"};
 
         for (const auto &pkg : commonPackages) {
           llvm::lsp::CodeAction importAction;
@@ -2271,12 +2400,9 @@ void VerilogDocument::getCodeActions(
           importAction.kind = llvm::lsp::CodeAction::kQuickFix;
           importAction.diagnostics = {diag};
 
-          // Insert at the beginning of the file or after module declaration
-          llvm::lsp::Position insertPos(0, 0);
-
           llvm::lsp::WorkspaceEdit edit;
           llvm::lsp::TextEdit textEdit;
-          textEdit.range = llvm::lsp::Range(insertPos, insertPos);
+          textEdit.range = llvm::lsp::Range(importPos, importPos);
           textEdit.newText = "import " + pkg + "::*;\n";
           edit.changes[uri.uri().str()] = {textEdit};
           importAction.edit = edit;
