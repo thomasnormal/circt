@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 44 - January 17, 2026
+
+### UVM Parity Push - Multi-Track Progress
+
+**Real-World UVM Testing** (`~/mbit/*avip`, `~/uvm-core`)
+- ✅ UVM package (`uvm_pkg.sv`) compiles successfully
+- Identified critical gaps: DPI-C imports, class randomization, covergroups
+
+**Track A: UVM Class Method Patterns**
+- Verified all UVM patterns working (virtual methods, extern, super calls)
+- Added 21 comprehensive test cases
+- Test: `test/Conversion/ImportVerilog/uvm_method_patterns.sv`
+
+**Track B: Queue sort.with Operations**
+- Added `QueueSortWithOp`, `QueueRSortWithOp`, `QueueSortKeyYieldOp`
+- Implemented memory effect declarations to prevent CSE/DCE removal
+- Added import support for `q.sort() with (expr)` syntax
+- Files: `include/circt/Dialect/Moore/MooreOps.td`, `lib/Conversion/ImportVerilog/Expressions.cpp`
+- Test: `test/Conversion/ImportVerilog/queue-sort-comparator.sv`
+
+**Track C: SVA Implication Tests**
+- Verified `|->` and `|=>` implemented in VerifToSMT
+- Added 117 lines of comprehensive implication tests
+- Test: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
+
+**Track D: LSP Workspace Symbols**
+- Added `workspace/symbol` support
+- Verified find-references working
+- Files: `lib/Tools/circt-verilog-lsp-server/` (+102 lines)
+- Test: `test/Tools/circt-verilog-lsp-server/workspace-symbol.test`
+
+---
+
+## Iteration 43 - January 18, 2026
+
+### Workspace Symbol Indexing
+- Workspace symbol search scans workspace source files for module/interface/package
+- Ranges computed from basic regex matches
+- Deduplicates workspace symbols across open documents and workspace scan
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.h`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp`
+- Tests: `test/Tools/circt-verilog-lsp-server/workspace-symbol-project.test`
+
+---
+
 ## Iteration 42 - January 18, 2026
 
 ### LSP Workspace Symbols

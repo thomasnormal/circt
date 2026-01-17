@@ -4,20 +4,47 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 43 - WORKSPACE SYMBOL INDEXING (January 18, 2026)
+## Current Status: 🎉 ITERATION 44 - UVM PARITY PUSH (January 17, 2026)
 
-**Summary**: Workspace symbol search now scans workspace source files.
+**Summary**: Multi-track progress on queue sort.with, UVM patterns, SVA tests, LSP workspace symbols.
 
-### Iteration 43 Highlights
+### Real-World UVM Testing Results (~/mbit/*avip, ~/uvm-core)
 
-**Track D: Tooling & Debug (LSP)**
-- ✅ `workspace/symbol` scans workspace source files for module/interface/package
-- ✅ Captures ranges for matches with basic regex parsing
-- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.cpp`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.h`, `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp`
+**UVM Package Compilation**: ✅ `uvm_pkg.sv` compiles successfully
+- Warnings: Minor escape sequence, unreachable code
+- Remarks: DPI-C imports skipped (expected), class builtins dropped (expected)
+
+**Key Gaps Identified**:
+1. **DPI-C imports**: Skipped (needed for UVM HDL access, regex, command line)
+2. **Class randomization/constraints**: Not yet supported (needed for UVM sequences)
+3. **Covergroups**: Not yet supported (needed for UVM coverage)
+
+### Iteration 44 Highlights (commit 66b424f6e + 480081704)
+
+**Track A: UVM Class Method Patterns**
+- ✅ Verified all UVM patterns work (virtual methods, extern, super calls, constructors)
+- ✅ 21 comprehensive test cases passing
+- Tests: `test/Conversion/ImportVerilog/uvm_method_patterns.sv`
+
+**Track B: Queue sort.with Operations**
+- ✅ Added `QueueSortWithOp`, `QueueRSortWithOp`, `QueueSortKeyYieldOp`
+- ✅ Memory effect declarations prevent CSE/DCE removal
+- ✅ Import support for `q.sort() with (expr)` and `q.rsort() with (expr)`
+- Files: `include/circt/Dialect/Moore/MooreOps.td`, `lib/Conversion/ImportVerilog/Expressions.cpp`
+
+**Track C: SVA Implication Tests**
+- ✅ Verified `|->` and `|=>` implemented in VerifToSMT
+- ✅ Added 117 lines of comprehensive implication tests
+- Tests: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
+
+**Track D: LSP Workspace Symbols**
+- ✅ `workspace/symbol` support added
+- ✅ Find-references already working
+- Files: `lib/Tools/circt-verilog-lsp-server/` (+102 lines)
 
 ---
 
-## Previous: ITERATION 42 - LSP WORKSPACE SYMBOLS (January 18, 2026)
+## Previous: ITERATION 43 - WORKSPACE SYMBOL INDEXING (January 18, 2026)
 
 **Summary**: Added workspace symbol search for open documents.
 
@@ -196,33 +223,34 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **We should keep four agents running in parallel.**
 
 ### Track A: UVM Language Parity (ImportVerilog/Lowering)
-**Status**: Active | **Priority**: HIGH
-**Next Task**: Refine randsequence randjoin scheduling semantics
-- Define ordering/side-effect semantics for forked productions
-- Clarify break handling in randjoin/forked productions
-- Files: `lib/Conversion/ImportVerilog/Statements.cpp`
+**Status**: Active | **Priority**: CRITICAL
+**Next Task**: DPI-C Import Support (blocking for UVM)
+- UVM uses DPI-C for HDL access, regex, command line processing
+- Need to generate runtime stubs or implement DPI bridge
+- Start with `uvm_hdl_deposit`, `uvm_hdl_force`, `uvm_re_*` functions
+- Files: `lib/Conversion/ImportVerilog/Expressions.cpp`, `lib/Runtime/MooreRuntime.cpp`
 
-### Track B: Runtime & Array/Queue Semantics
-**Status**: ✅ sort/rsort in-place DONE | **Priority**: HIGH
-**Next Task**: Comparator support for non-integer keys (classes/strings)
-- Extend sort/rsort beyond integer/bytewise comparison
-- Required for UVM object queues with custom comparison
-- Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`
+### Track B: Class Randomization & Constraints
+**Status**: NOT STARTED | **Priority**: CRITICAL
+**Next Task**: Basic `rand`/`randc` support for class properties
+- Parse `rand`/`randc` modifiers on class members
+- Generate randomization calls in runtime
+- Start with simple random without constraints
+- Files: `lib/Conversion/ImportVerilog/Structure.cpp`, `lib/Runtime/MooreRuntime.cpp`
 
 ### Track C: SVA + Z3 Track
-**Status**: ✅ LTL + SEQUENCE OPS DONE | **Priority**: HIGH
-**Next Task**: SVA implication operators and repetition ranges
-- Need `|->` (overlapping implication) and `|=>` (non-overlapping)
-- Need range repetition `[*m:n]` beyond single-step semantics
-- Consider `throughout` and `within` operators
+**Status**: ✅ LTL + IMPLICATION DONE | **Priority**: HIGH
+**Next Task**: Multi-step BMC unrolling for temporal properties
+- Current BMC is single-step; need unrolling for `##N` and `[*N]`
+- Implement time-step state management
 - Test with: `LD_LIBRARY_PATH=~/z3-install/lib64 ./build/bin/circt-bmc`
-- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Files: `lib/Tools/circt-bmc/`, `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Track D: Tooling & Debug (LSP)
-**Status**: ✅ Workspace Symbols (workspace files) | **Priority**: MEDIUM
-**Next Task**: Improve workspace symbol accuracy
-- Replace regex scanning with parsed symbol extraction
-- Expand `textDocument/documentSymbol` coverage in tests
+**Status**: ✅ Workspace Symbols | **Priority**: MEDIUM
+**Next Task**: LSP rename support
+- Add `textDocument/rename` for symbol renaming
+- Leverages existing reference tracking
 - Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/`
 
 **Testing Cadence**
@@ -233,12 +261,13 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Project | Status | Next Milestone |
 |---------|--------|----------------|
-| **Full SVA + Z3** | ✅ LTL + SEQ OPS | Add implication (|->, |=>) and range repetition |
-| **Multi-core Arcilator** | MISSING | Architecture plan + task decomposition for parallel simulation |
-| **LSP + Debugging** | ✅ Workspace Symbols (open docs) | Index workspace-wide symbols |
+| **DPI-C Support** | 🔴 CRITICAL GAP | Implement runtime stubs for UVM DPI functions |
+| **Class Randomization** | 🔴 CRITICAL GAP | rand/randc properties, randomize() method |
+| **Full SVA + Z3** | ✅ LTL + IMPLICATION | Multi-step BMC unrolling |
+| **LSP + Debugging** | ✅ Workspace Symbols | Rename support |
+| **Covergroups** | 🟡 PARTIAL | Cross coverage + sampling expressions |
+| **Multi-core Arcilator** | MISSING | Architecture plan |
 | **Full 4-state (X/Z)** | MISSING | Type system + dataflow propagation plan |
-| **Coverage** | PARTIAL | Cross coverage + covergroup sampling expressions |
-| **DPI/VPI** | STUBS | FFI bridge + handle marshaling |
 
 **Z3 Configuration** (January 17, 2026):
 - Z3 4.12.4 installed at `~/z3-install/`
@@ -246,22 +275,31 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 - `circt-bmc` builds and runs with Z3 backend
 - Runtime: `export LD_LIBRARY_PATH=~/z3-install/lib64:$LD_LIBRARY_PATH`
 
-## Current Limitations (Key Gaps)
-- Randsequence randjoin>1 scheduling semantics (ordering and side-effects)
-- Randsequence break in forked productions exits only that production
-- Comparator-aware sort/rsort for queues/arrays (non-integer elements)
-- SVA implication operators and repetition ranges beyond single-step semantics
-- Workspace symbol search limited to open documents
-- 4-state X/Z propagation and DPI/VPI (architectural work)
+## Current Limitations (Key Gaps from UVM Testing)
 
-## Next Feature Targets (Top Impact)
-1. Randsequence randjoin>1 scheduling semantics (ordering, side effects)
-2. Comparator-aware sort/rsort for queues and arrays (non-integer keys)
-3. SVA implication operators and repetition ranges beyond single-step semantics
-4. LSP diagnostics and references
+**CRITICAL (Blocking UVM)**:
+1. **DPI-C imports skipped** - UVM depends on `uvm_hdl_*`, `uvm_re_*`, `uvm_dpi_*`
+2. **Class randomization not supported** - `rand`/`randc` properties, `randomize()` method
+3. **Covergroups dropped** - Needed for UVM coverage collection
+
+**HIGH PRIORITY**:
+4. Multi-step BMC unrolling for `##N` delays and `[*N]` repetition
+5. Constraint expressions for randomization
+6. Cross coverage and sampling expressions
+
+**MEDIUM**:
+7. 4-state X/Z propagation
+8. VPI handle support
+9. Multi-core Arcilator
+
+## Next Feature Targets (Top Impact for UVM)
+1. **DPI-C runtime stubs** - Implement `uvm_hdl_deposit`, `uvm_hdl_force`, `uvm_re_*`
+2. **Class randomization** - `rand`/`randc` properties, basic `randomize()` call
+3. **Multi-step BMC** - Unroll time steps for temporal assertions
+4. **LSP rename** - Symbol renaming support
 
 **Immediate Next Task**
-- Define and implement randsequence randjoin scheduling semantics.
+- Implement DPI-C import stubs for core UVM functions.
 
 ---
 
