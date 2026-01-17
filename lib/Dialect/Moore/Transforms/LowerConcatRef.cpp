@@ -16,6 +16,7 @@
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Moore/MoorePasses.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include <optional>
 
 namespace circt {
 namespace moore {
@@ -37,6 +38,17 @@ static void collectOperands(Value operand, SmallVectorImpl<Value> &operands) {
       collectOperands(nestedOperand, operands);
   else
     operands.push_back(operand);
+}
+
+static std::optional<RefType> getSliceRefType(Type nestedType, int64_t width) {
+  auto intType = dyn_cast<IntType>(nestedType);
+  if (!intType)
+    return std::nullopt;
+  auto *ctx = nestedType.getContext();
+  IntType sliceType = intType.getDomain() == Domain::TwoValued
+                          ? IntType::getInt(ctx, width)
+                          : IntType::getLogic(ctx, width);
+  return RefType::get(sliceType);
 }
 
 template <typename OpTy>
@@ -78,6 +90,88 @@ struct ConcatRefLowering : public OpConversionPattern<OpTy> {
   }
 };
 
+struct ExtractRefFromConcatRefLowering
+    : public OpConversionPattern<ExtractRefOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ExtractRefOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto concatRef = op.getInput().getDefiningOp<ConcatRefOp>();
+    if (!concatRef)
+      return failure();
+
+    SmallVector<Value, 4> operands;
+    collectOperands(concatRef, operands);
+
+    SmallVector<int64_t, 4> widths;
+    widths.reserve(operands.size());
+    for (auto operand : operands) {
+      auto refType = cast<RefType>(operand.getType());
+      auto nestedType = cast<UnpackedType>(refType.getNestedType());
+      auto bitSize = nestedType.getBitSize();
+      if (!bitSize)
+        return failure();
+      widths.push_back(*bitSize);
+    }
+
+    auto resultRefType = cast<RefType>(op.getResult().getType());
+    auto resultSize = resultRefType.getBitSize();
+    if (!resultSize)
+      return failure();
+
+    int64_t extractLow = op.getLowBit();
+    int64_t extractHigh = extractLow + *resultSize;
+
+    SmallVector<int64_t, 4> operandLow(operands.size());
+    int64_t offset = 0;
+    for (int i = static_cast<int>(operands.size()) - 1; i >= 0; --i) {
+      operandLow[i] = offset;
+      offset += widths[i];
+    }
+
+    SmallVector<Value, 4> slices;
+    for (size_t i = 0; i < operands.size(); ++i) {
+      int64_t opLow = operandLow[i];
+      int64_t opHigh = opLow + widths[i];
+      int64_t overlapLow = std::max(opLow, extractLow);
+      int64_t overlapHigh = std::min(opHigh, extractHigh);
+      if (overlapLow >= overlapHigh)
+        continue;
+
+      int64_t sliceLow = overlapLow - opLow;
+      int64_t sliceWidth = overlapHigh - overlapLow;
+      Value sliceRef = operands[i];
+
+      if (!(sliceLow == 0 && sliceWidth == widths[i] &&
+            operands[i].getType() == resultRefType)) {
+        auto nestedType =
+            cast<RefType>(operands[i].getType()).getNestedType();
+        auto sliceRefType = getSliceRefType(nestedType, sliceWidth);
+        if (!sliceRefType)
+          return failure();
+        sliceRef = ExtractRefOp::create(
+            rewriter, op.getLoc(), *sliceRefType, operands[i],
+            rewriter.getI32IntegerAttr(sliceLow));
+      }
+
+      slices.push_back(sliceRef);
+    }
+
+    if (slices.empty())
+      return failure();
+
+    if (slices.size() == 1) {
+      rewriter.replaceOp(op, slices.front());
+      return success();
+    }
+
+    auto concatSlice = ConcatRefOp::create(rewriter, op.getLoc(), slices);
+    rewriter.replaceOp(op, concatSlice.getResult());
+    return success();
+  }
+};
+
 struct LowerConcatRefPass
     : public circt::moore::impl::LowerConcatRefBase<LowerConcatRefPass> {
   void runOnOperation() override;
@@ -97,12 +191,16 @@ void LowerConcatRefPass::runOnOperation() {
                                NonBlockingAssignOp>([](auto op) {
     return !op->getOperand(0).template getDefiningOp<ConcatRefOp>();
   });
+  target.addDynamicallyLegalOp<ExtractRefOp>([](ExtractRefOp op) {
+    return !op.getInput().getDefiningOp<ConcatRefOp>();
+  });
 
   target.addLegalDialect<MooreDialect>();
   RewritePatternSet patterns(&context);
   patterns.add<ConcatRefLowering<ContinuousAssignOp>,
                ConcatRefLowering<BlockingAssignOp>,
-               ConcatRefLowering<NonBlockingAssignOp>>(&context);
+               ConcatRefLowering<NonBlockingAssignOp>,
+               ExtractRefFromConcatRefLowering>(&context);
 
   if (failed(
           applyPartialConversion(getOperation(), target, std::move(patterns))))

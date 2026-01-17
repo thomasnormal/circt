@@ -4251,6 +4251,39 @@ struct RealToIntOpConversion : public OpConversionPattern<RealToIntOp> {
   }
 };
 
+struct ConvertRealOpConversion : public OpConversionPattern<ConvertRealOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ConvertRealOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getType());
+    if (!resultType)
+      return failure();
+
+    Type inputType = adaptor.getInput().getType();
+    if (inputType == resultType) {
+      rewriter.replaceOp(op, adaptor.getInput());
+      return success();
+    }
+
+    auto inputFloat = dyn_cast<FloatType>(inputType);
+    auto resultFloat = dyn_cast<FloatType>(resultType);
+    if (!inputFloat || !resultFloat)
+      return failure();
+
+    if (inputFloat.getWidth() < resultFloat.getWidth()) {
+      rewriter.replaceOpWithNewOp<arith::ExtFOp>(op, resultType,
+                                                 adaptor.getInput());
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<arith::TruncFOp>(op, resultType,
+                                                 adaptor.getInput());
+    return success();
+  }
+};
+
 struct RealtobitsBIOpConversion : public OpConversionPattern<RealtobitsBIOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -9756,6 +9789,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     SIntToRealOpConversion,
     UIntToRealOpConversion,
     RealToIntOpConversion,
+    ConvertRealOpConversion,
 
     // Patterns of miscellaneous operations.
     ConstantOpConv,

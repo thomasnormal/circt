@@ -18,6 +18,7 @@
 #include "circt/Runtime/MooreRuntime.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <climits>
 #include <cstdio>
@@ -3323,6 +3324,215 @@ extern "C" int64_t __moore_randomize_with_ranges(int64_t *ranges,
 
   // Fallback (shouldn't reach here)
   return ranges[0];
+}
+
+//===----------------------------------------------------------------------===//
+// Constraint Solving with Iteration Limits
+//===----------------------------------------------------------------------===//
+//
+// These functions implement constraint-aware randomization with iteration
+// limits and fallback strategies. They prevent infinite loops on unsatisfiable
+// constraints and provide diagnostics for debugging.
+//
+
+namespace {
+
+/// Global constraint solving configuration and statistics.
+struct ConstraintSolverState {
+  std::atomic<int64_t> iterationLimit{MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT};
+  std::atomic<bool> warningsEnabled{true};
+
+  // Statistics (accessed atomically)
+  std::atomic<int64_t> totalAttempts{0};
+  std::atomic<int64_t> successfulSolves{0};
+  std::atomic<int64_t> fallbackCount{0};
+  std::atomic<int64_t> iterationLimitHits{0};
+
+  // Last solve info (thread-local for accuracy)
+  int64_t lastIterations{0};
+};
+
+/// Global constraint solver state.
+ConstraintSolverState constraintState;
+
+/// Thread-local statistics for the last operation.
+thread_local MooreConstraintStats localStats = {0, 0, 0, 0, 0};
+
+} // anonymous namespace
+
+extern "C" MooreConstraintStats *__moore_constraint_get_stats(void) {
+  // Update local stats from global atomics
+  localStats.totalAttempts = constraintState.totalAttempts.load();
+  localStats.successfulSolves = constraintState.successfulSolves.load();
+  localStats.fallbackCount = constraintState.fallbackCount.load();
+  localStats.iterationLimitHits = constraintState.iterationLimitHits.load();
+  // lastIterations is thread-local, keep as is
+  return &localStats;
+}
+
+extern "C" void __moore_constraint_reset_stats(void) {
+  constraintState.totalAttempts.store(0);
+  constraintState.successfulSolves.store(0);
+  constraintState.fallbackCount.store(0);
+  constraintState.iterationLimitHits.store(0);
+  localStats = {0, 0, 0, 0, 0};
+}
+
+extern "C" void __moore_constraint_set_iteration_limit(int64_t limit) {
+  if (limit <= 0) {
+    constraintState.iterationLimit.store(MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT);
+  } else {
+    constraintState.iterationLimit.store(limit);
+  }
+}
+
+extern "C" int64_t __moore_constraint_get_iteration_limit(void) {
+  return constraintState.iterationLimit.load();
+}
+
+extern "C" void __moore_constraint_set_warnings_enabled(bool enabled) {
+  constraintState.warningsEnabled.store(enabled);
+}
+
+extern "C" bool __moore_constraint_warnings_enabled(void) {
+  return constraintState.warningsEnabled.load();
+}
+
+extern "C" void __moore_constraint_warn(const char *message, int64_t iterations,
+                                         const char *variableName) {
+  if (!constraintState.warningsEnabled.load())
+    return;
+
+  std::fprintf(stderr, "** Warning: Constraint solving issue: %s\n", message);
+  if (variableName && variableName[0] != '\0') {
+    std::fprintf(stderr, "   Variable: %s\n", variableName);
+  }
+  std::fprintf(stderr, "   Iterations attempted: %ld\n",
+               static_cast<long>(iterations));
+  std::fprintf(stderr, "   Using fallback random value.\n");
+}
+
+extern "C" int64_t __moore_randomize_with_constraint(int64_t min, int64_t max,
+                                                      MooreConstraintPredicate predicate,
+                                                      void *userData,
+                                                      int64_t iterationLimit,
+                                                      int32_t *resultOut) {
+  // Update statistics
+  constraintState.totalAttempts.fetch_add(1);
+
+  // Determine effective iteration limit
+  int64_t limit = iterationLimit > 0 ? iterationLimit
+                                     : constraintState.iterationLimit.load();
+
+  // Handle edge case where min >= max
+  if (min > max) {
+    int64_t tmp = min;
+    min = max;
+    max = tmp;
+  }
+
+  // If no predicate, just do simple range randomization
+  if (!predicate) {
+    constraintState.successfulSolves.fetch_add(1);
+    localStats.lastIterations = 1;
+    if (resultOut)
+      *resultOut = MOORE_CONSTRAINT_SUCCESS;
+    return __moore_randomize_with_range(min, max);
+  }
+
+  // Try to find a value that satisfies the predicate
+  uint64_t range = static_cast<uint64_t>(max - min) + 1;
+  int64_t iterations = 0;
+
+  for (iterations = 0; iterations < limit; ++iterations) {
+    // Generate random value in range
+    int64_t value = __moore_randomize_with_range(min, max);
+
+    // Check if it satisfies the predicate
+    if (predicate(value, userData)) {
+      constraintState.successfulSolves.fetch_add(1);
+      localStats.lastIterations = iterations + 1;
+      if (resultOut)
+        *resultOut = MOORE_CONSTRAINT_SUCCESS;
+      return value;
+    }
+  }
+
+  // Hit iteration limit - use fallback
+  constraintState.iterationLimitHits.fetch_add(1);
+  constraintState.fallbackCount.fetch_add(1);
+  localStats.lastIterations = iterations;
+
+  // Emit warning
+  __moore_constraint_warn("Hit iteration limit, constraint may be unsatisfiable",
+                          iterations, nullptr);
+
+  if (resultOut)
+    *resultOut = MOORE_CONSTRAINT_ITERATION_LIMIT;
+
+  // Return an unconstrained random value within the range
+  return __moore_randomize_with_range(min, max);
+}
+
+extern "C" int64_t __moore_randomize_with_ranges_constrained(
+    int64_t *ranges, int64_t numRanges, MooreConstraintPredicate predicate,
+    void *userData, int64_t iterationLimit, int32_t *resultOut) {
+  // Update statistics
+  constraintState.totalAttempts.fetch_add(1);
+
+  // Validate inputs
+  if (!ranges || numRanges <= 0) {
+    constraintState.fallbackCount.fetch_add(1);
+    localStats.lastIterations = 0;
+    if (resultOut)
+      *resultOut = MOORE_CONSTRAINT_FALLBACK;
+    return 0;
+  }
+
+  // Determine effective iteration limit
+  int64_t limit = iterationLimit > 0 ? iterationLimit
+                                     : constraintState.iterationLimit.load();
+
+  // If no predicate, just do simple multi-range randomization
+  if (!predicate) {
+    constraintState.successfulSolves.fetch_add(1);
+    localStats.lastIterations = 1;
+    if (resultOut)
+      *resultOut = MOORE_CONSTRAINT_SUCCESS;
+    return __moore_randomize_with_ranges(ranges, numRanges);
+  }
+
+  // Try to find a value that satisfies the predicate
+  int64_t iterations = 0;
+
+  for (iterations = 0; iterations < limit; ++iterations) {
+    // Generate random value from ranges
+    int64_t value = __moore_randomize_with_ranges(ranges, numRanges);
+
+    // Check if it satisfies the predicate
+    if (predicate(value, userData)) {
+      constraintState.successfulSolves.fetch_add(1);
+      localStats.lastIterations = iterations + 1;
+      if (resultOut)
+        *resultOut = MOORE_CONSTRAINT_SUCCESS;
+      return value;
+    }
+  }
+
+  // Hit iteration limit - use fallback
+  constraintState.iterationLimitHits.fetch_add(1);
+  constraintState.fallbackCount.fetch_add(1);
+  localStats.lastIterations = iterations;
+
+  // Emit warning
+  __moore_constraint_warn("Hit iteration limit on multi-range constraint",
+                          iterations, nullptr);
+
+  if (resultOut)
+    *resultOut = MOORE_CONSTRAINT_ITERATION_LIMIT;
+
+  // Return an unconstrained random value from the ranges (ignore predicate)
+  return __moore_randomize_with_ranges(ranges, numRanges);
 }
 
 //===----------------------------------------------------------------------===//

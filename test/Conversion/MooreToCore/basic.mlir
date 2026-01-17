@@ -338,6 +338,17 @@ func.func @Expressions(%arg0: !moore.i1, %arg1: !moore.l1, %arg2: !moore.i6, %ar
   return
 }
 
+// CHECK-LABEL: func @ConvertReal
+// CHECK-SAME: (%arg0: f32, %arg1: f64) -> f32
+func.func @ConvertReal(%arg0: !moore.f32, %arg1: !moore.f64) -> !moore.f32 {
+  // CHECK-NEXT: %[[EXT:%.+]] = arith.extf %arg0 : f32 to f64
+  %0 = moore.convert_real %arg0 : !moore.f32 -> !moore.f64
+  // CHECK-NEXT: %[[TRUNC:%.+]] = arith.truncf %arg1 : f64 to f32
+  %1 = moore.convert_real %arg1 : !moore.f64 -> !moore.f32
+  // CHECK-NEXT: return %[[TRUNC]] : f32
+  return %1 : !moore.f32
+}
+
 // CHECK-LABEL: ExtractRefArrayElement
 func.func @ExtractRefArrayElement(%j: !moore.ref<array<1 x array<1 x l3>>>) -> (!moore.ref<array<1 x l3>>) {
   // CHECK: llhd.sig.array_get

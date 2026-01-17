@@ -736,6 +736,12 @@ TEST(MooreRuntimeQueueTest, QueueConcat) {
   std::free(result.data);
 }
 
+TEST(MooreRuntimeQueueTest, QueueConcatEmptyInputs) {
+  MooreQueue result = __moore_queue_concat(nullptr, 0, sizeof(int32_t));
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
 TEST(MooreRuntimeQueueTest, QueueSortIntegers) {
   // Create a queue with unsorted integers
   int32_t data[] = {5, 2, 8, 1, 9, 3};
@@ -1895,6 +1901,342 @@ TEST(MooreRuntimeConstraintTest, RandomizeWithModuloNegativeRemainder) {
     // -3 mod 10 = 7 (normalized)
     EXPECT_EQ(val % 10, 7);
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Constraint Solving with Iteration Limits Tests
+//===----------------------------------------------------------------------===//
+
+// Predicate that accepts values divisible by a given number
+static bool predicateDivisibleBy(int64_t value, void *userData) {
+  int64_t divisor = *static_cast<int64_t *>(userData);
+  return (value % divisor) == 0;
+}
+
+// Predicate that always returns false (unsatisfiable)
+static bool predicateNever(int64_t /*value*/, void * /*userData*/) {
+  return false;
+}
+
+// Predicate that always returns true (always satisfiable)
+static bool predicateAlways(int64_t /*value*/, void * /*userData*/) {
+  return true;
+}
+
+// Predicate that accepts only a specific value
+static bool predicateEquals(int64_t value, void *userData) {
+  int64_t target = *static_cast<int64_t *>(userData);
+  return value == target;
+}
+
+TEST(MooreRuntimeConstraintIterationTest, GetSetIterationLimit) {
+  // Reset to default
+  __moore_constraint_set_iteration_limit(0);
+  EXPECT_EQ(__moore_constraint_get_iteration_limit(),
+            MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT);
+
+  // Set custom limit
+  __moore_constraint_set_iteration_limit(500);
+  EXPECT_EQ(__moore_constraint_get_iteration_limit(), 500);
+
+  // Set negative (should reset to default)
+  __moore_constraint_set_iteration_limit(-1);
+  EXPECT_EQ(__moore_constraint_get_iteration_limit(),
+            MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT);
+
+  // Reset for other tests
+  __moore_constraint_set_iteration_limit(0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, GetResetStats) {
+  __moore_constraint_reset_stats();
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  ASSERT_NE(stats, nullptr);
+
+  EXPECT_EQ(stats->totalAttempts, 0);
+  EXPECT_EQ(stats->successfulSolves, 0);
+  EXPECT_EQ(stats->fallbackCount, 0);
+  EXPECT_EQ(stats->iterationLimitHits, 0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, WarningsEnabledFlag) {
+  // Should be enabled by default
+  EXPECT_TRUE(__moore_constraint_warnings_enabled());
+
+  // Disable warnings
+  __moore_constraint_set_warnings_enabled(false);
+  EXPECT_FALSE(__moore_constraint_warnings_enabled());
+
+  // Re-enable warnings
+  __moore_constraint_set_warnings_enabled(true);
+  EXPECT_TRUE(__moore_constraint_warnings_enabled());
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintNoPredicate) {
+  __moore_constraint_reset_stats();
+
+  // Without predicate, should just return value in range
+  int32_t result = -1;
+  int64_t value =
+      __moore_randomize_with_constraint(10, 20, nullptr, nullptr, 0, &result);
+
+  EXPECT_GE(value, 10);
+  EXPECT_LE(value, 20);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->totalAttempts, 1);
+  EXPECT_EQ(stats->successfulSolves, 1);
+  EXPECT_EQ(stats->fallbackCount, 0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintSatisfiable) {
+  __moore_constraint_reset_stats();
+
+  // Constraint: value must be divisible by 5
+  int64_t divisor = 5;
+  int32_t result = -1;
+
+  for (int i = 0; i < 100; ++i) {
+    int64_t value = __moore_randomize_with_constraint(
+        0, 100, predicateDivisibleBy, &divisor, 0, &result);
+
+    EXPECT_GE(value, 0);
+    EXPECT_LE(value, 100);
+    EXPECT_EQ(value % 5, 0) << "Value should be divisible by 5";
+    EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+  }
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->totalAttempts, 100);
+  EXPECT_EQ(stats->successfulSolves, 100);
+  EXPECT_EQ(stats->iterationLimitHits, 0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintUnsatisfiable) {
+  __moore_constraint_reset_stats();
+  // Disable warnings for this test
+  __moore_constraint_set_warnings_enabled(false);
+
+  // Set a small iteration limit for faster test
+  __moore_constraint_set_iteration_limit(100);
+
+  int32_t result = -1;
+  // Unsatisfiable constraint (predicate always returns false)
+  int64_t value = __moore_randomize_with_constraint(0, 100, predicateNever,
+                                                     nullptr, 0, &result);
+
+  // Should return fallback value (still in range)
+  EXPECT_GE(value, 0);
+  EXPECT_LE(value, 100);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_ITERATION_LIMIT);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->totalAttempts, 1);
+  EXPECT_EQ(stats->iterationLimitHits, 1);
+  EXPECT_EQ(stats->fallbackCount, 1);
+
+  // Re-enable warnings and reset limit
+  __moore_constraint_set_warnings_enabled(true);
+  __moore_constraint_set_iteration_limit(0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintAlwaysSatisfied) {
+  __moore_constraint_reset_stats();
+
+  int32_t result = -1;
+  // Always satisfied constraint should succeed quickly
+  int64_t value = __moore_randomize_with_constraint(0, 100, predicateAlways,
+                                                     nullptr, 0, &result);
+
+  EXPECT_GE(value, 0);
+  EXPECT_LE(value, 100);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->successfulSolves, 1);
+  EXPECT_EQ(stats->lastIterations, 1); // Should succeed on first try
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintSpecificValue) {
+  __moore_constraint_reset_stats();
+  __moore_urandom_seeded(42); // Seed for reproducibility
+
+  // Looking for a specific value - may take several iterations
+  int64_t target = 50;
+  int32_t result = -1;
+  int64_t value = __moore_randomize_with_constraint(0, 100, predicateEquals,
+                                                     &target, 0, &result);
+
+  // With a reasonable iteration limit, should eventually find target
+  EXPECT_EQ(value, target);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_GT(stats->lastIterations, 0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintCustomLimit) {
+  __moore_constraint_reset_stats();
+  __moore_constraint_set_warnings_enabled(false);
+
+  // Use custom iteration limit (small)
+  int32_t result = -1;
+  int64_t value = __moore_randomize_with_constraint(
+      0, 100, predicateNever, nullptr, 5, // Only 5 iterations
+      &result);
+
+  EXPECT_GE(value, 0);
+  EXPECT_LE(value, 100);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_ITERATION_LIMIT);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->lastIterations, 5);
+
+  __moore_constraint_set_warnings_enabled(true);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintSwappedRange) {
+  __moore_constraint_reset_stats();
+
+  // Test with min > max (should be swapped internally)
+  int32_t result = -1;
+  int64_t value =
+      __moore_randomize_with_constraint(100, 50, nullptr, nullptr, 0, &result);
+
+  EXPECT_GE(value, 50);
+  EXPECT_LE(value, 100);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithRangesConstrained) {
+  __moore_constraint_reset_stats();
+
+  // Multiple ranges: [0-10], [50-60], [90-100]
+  int64_t ranges[] = {0, 10, 50, 60, 90, 100};
+  int64_t divisor = 5;
+  int32_t result = -1;
+
+  for (int i = 0; i < 50; ++i) {
+    int64_t value = __moore_randomize_with_ranges_constrained(
+        ranges, 3, predicateDivisibleBy, &divisor, 0, &result);
+
+    // Value should be in one of the ranges
+    bool inRange = (value >= 0 && value <= 10) ||
+                   (value >= 50 && value <= 60) ||
+                   (value >= 90 && value <= 100);
+    EXPECT_TRUE(inRange) << "Value " << value << " not in any range";
+
+    // Value should satisfy constraint
+    EXPECT_EQ(value % 5, 0);
+    EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+  }
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithRangesConstrainedNullRanges) {
+  __moore_constraint_reset_stats();
+
+  int32_t result = -1;
+  int64_t value = __moore_randomize_with_ranges_constrained(
+      nullptr, 3, predicateAlways, nullptr, 0, &result);
+
+  EXPECT_EQ(value, 0); // Should return 0 for invalid input
+  EXPECT_EQ(result, MOORE_CONSTRAINT_FALLBACK);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->fallbackCount, 1);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithRangesConstrainedZeroRanges) {
+  __moore_constraint_reset_stats();
+
+  int64_t ranges[] = {0, 10};
+  int32_t result = -1;
+  int64_t value = __moore_randomize_with_ranges_constrained(
+      ranges, 0, predicateAlways, nullptr, 0, &result);
+
+  EXPECT_EQ(value, 0);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_FALLBACK);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithRangesConstrainedNoPredicate) {
+  __moore_constraint_reset_stats();
+
+  int64_t ranges[] = {10, 20, 30, 40};
+  int32_t result = -1;
+  int64_t value = __moore_randomize_with_ranges_constrained(
+      ranges, 2, nullptr, nullptr, 0, &result);
+
+  bool inRange = (value >= 10 && value <= 20) || (value >= 30 && value <= 40);
+  EXPECT_TRUE(inRange);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_SUCCESS);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, RandomizeWithRangesConstrainedUnsatisfiable) {
+  __moore_constraint_reset_stats();
+  __moore_constraint_set_warnings_enabled(false);
+  __moore_constraint_set_iteration_limit(50);
+
+  int64_t ranges[] = {0, 10, 20, 30};
+  int32_t result = -1;
+  int64_t value = __moore_randomize_with_ranges_constrained(
+      ranges, 2, predicateNever, nullptr, 0, &result);
+
+  // Should still return value in range (fallback)
+  bool inRange = (value >= 0 && value <= 10) || (value >= 20 && value <= 30);
+  EXPECT_TRUE(inRange);
+  EXPECT_EQ(result, MOORE_CONSTRAINT_ITERATION_LIMIT);
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->iterationLimitHits, 1);
+
+  __moore_constraint_set_warnings_enabled(true);
+  __moore_constraint_set_iteration_limit(0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, StatsAccumulateAcrossCalls) {
+  __moore_constraint_reset_stats();
+  __moore_constraint_set_warnings_enabled(false);
+  __moore_constraint_set_iteration_limit(10);
+
+  // Make several successful calls
+  for (int i = 0; i < 5; ++i) {
+    __moore_randomize_with_constraint(0, 100, predicateAlways, nullptr, 0,
+                                       nullptr);
+  }
+
+  // Make several failing calls
+  for (int i = 0; i < 3; ++i) {
+    __moore_randomize_with_constraint(0, 100, predicateNever, nullptr, 0,
+                                       nullptr);
+  }
+
+  MooreConstraintStats *stats = __moore_constraint_get_stats();
+  EXPECT_EQ(stats->totalAttempts, 8);
+  EXPECT_EQ(stats->successfulSolves, 5);
+  EXPECT_EQ(stats->iterationLimitHits, 3);
+  EXPECT_EQ(stats->fallbackCount, 3);
+
+  __moore_constraint_set_warnings_enabled(true);
+  __moore_constraint_set_iteration_limit(0);
+}
+
+TEST(MooreRuntimeConstraintIterationTest, ResultOutCanBeNull) {
+  __moore_constraint_reset_stats();
+
+  // Passing nullptr for resultOut should not crash
+  int64_t value =
+      __moore_randomize_with_constraint(0, 100, predicateAlways, nullptr, 0,
+                                         nullptr);
+  EXPECT_GE(value, 0);
+  EXPECT_LE(value, 100);
+
+  // Same for ranges version
+  int64_t ranges[] = {0, 10};
+  value = __moore_randomize_with_ranges_constrained(ranges, 1, predicateAlways,
+                                                     nullptr, 0, nullptr);
+  EXPECT_GE(value, 0);
+  EXPECT_LE(value, 10);
 }
 
 //===----------------------------------------------------------------------===//

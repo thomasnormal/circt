@@ -3158,9 +3158,30 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
         cpName = "cp";
       }
 
+      // Extract auto_bin_max option if present.
+      std::optional<int64_t> autoBinMax;
+      for (const auto &opt : cp->options) {
+        if (opt.getName() == "auto_bin_max") {
+          // The expression is an AssignmentExpression, we need the RHS.
+          const auto &expr = opt.getExpression();
+          const slang::ast::Expression *valueExpr = &expr;
+          if (expr.kind == slang::ast::ExpressionKind::Assignment) {
+            valueExpr =
+                &expr.as<slang::ast::AssignmentExpression>().right();
+          }
+          auto result = evaluateConstant(*valueExpr);
+          if (result.isInteger()) {
+            auto intVal = result.integer().as<int64_t>();
+            if (intVal)
+              autoBinMax = intVal.value();
+          }
+        }
+      }
+
       auto cpOp = moore::CoverpointDeclOp::create(
           builder, cpLoc, builder.getStringAttr(cpName),
-          mlir::TypeAttr::get(exprType));
+          mlir::TypeAttr::get(exprType),
+          autoBinMax ? builder.getI64IntegerAttr(*autoBinMax) : nullptr);
 
       // Create the coverpoint body block for bins.
       auto &cpBody = cpOp.getBody();
@@ -3206,9 +3227,26 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
             auto valuesAttr =
                 valueAttrs.empty() ? nullptr : builder.getArrayAttr(valueAttrs);
 
+            // Handle array bins (bins x[] or bins x[N]).
+            // isArray is true for both syntax forms.
+            // getNumberOfBinsExpr() returns the N expression for bins x[N].
+            std::optional<int64_t> numBins;
+            if (bin->isArray) {
+              if (const auto *numBinsExpr = bin->getNumberOfBinsExpr()) {
+                auto result = evaluateConstant(*numBinsExpr);
+                if (result.isInteger()) {
+                  auto intVal = result.integer().as<int64_t>();
+                  if (intVal)
+                    numBins = intVal.value();
+                }
+              }
+            }
+
             moore::CoverageBinDeclOp::create(
                 builder, binLoc, builder.getStringAttr(bin->name), binKind,
-                bin->isWildcard, bin->isDefault, valuesAttr);
+                bin->isWildcard, bin->isDefault, bin->isArray,
+                numBins ? builder.getI64IntegerAttr(*numBins) : nullptr,
+                valuesAttr);
           }
         }
       }
