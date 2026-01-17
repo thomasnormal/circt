@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 47 - January 17, 2026
+
+### Critical P0 Bug Fix: 'this' Pointer Scoping
+
+**Track A: Fix 'this' pointer scoping in constructor args** ⭐⭐⭐ (P0 FIXED!)
+- Fixed the BLOCKING UVM bug in `Expressions.cpp:4059-4067`
+- Changed `context.currentThisRef = newObj` to `context.methodReceiverOverride = newObj`
+- Constructor argument evaluation now correctly uses the caller's 'this' scope
+- Expressions like `m_cb = new({name,"_cb"}, m_cntxt)` now work correctly
+- ALL UVM testbenches that previously failed on this error now compile
+- Test: `test/Conversion/ImportVerilog/constructor-arg-this-scope.sv`
+
+**Track B: Fix BMC clock-not-first crash**
+- Fixed crash in `VerifToSMT.cpp` when clock argument is not the first non-register argument
+- Added `isI1Type` check before position-based clock detection
+- Prevents incorrect identification of non-i1 types as clocks
+- Test: `test/Conversion/VerifToSMT/bmc-clock-not-first.mlir`
+
+**Track C: SVA bounded sequences ##[n:m]**
+- Verified feature already implemented via `ltl.delay` with min/max attributes
+- Added comprehensive test: `test/Conversion/ImportVerilog/sva_bounded_delay.sv`
+- Supports: `##[1:3]`, `##[0:2]`, `##[*]`, `##[+]`, chained sequences
+
+**Track D: LSP completion support**
+- Verified feature already fully implemented
+- Keywords, snippets, signal names, module names all working
+- Existing test: `test/Tools/circt-verilog-lsp-server/completion.test`
+
+---
+
 ## Iteration 46 - January 17, 2026
 
 ### Covergroups, BMC Delays, LSP Tokens
@@ -129,6 +159,22 @@
 - Added VPI stub APIs for linking and basic tests
 - Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
 - VPI stubs now return a basic handle/name for vpi_handle_by_name/vpi_get_str
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- vpi_handle_by_name now seeds the HDL access map for matching reads
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added vpi_release_handle helper for stub cleanup
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added vpi_release_handle null-handle coverage
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- vpi_put_value now updates the HDL map for matching uvm_hdl_read calls
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added vpi_put_value null input coverage
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- vpi_put_value honors non-zero flags by marking the HDL entry as forced
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added vpi_put_value force/release interaction coverage
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+- Added vpi_get_str null-handle coverage
 - Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
 - Added ImportVerilog coverage for UVM HDL access DPI calls
 - Tests: `test/Conversion/ImportVerilog/uvm_dpi_hdl_access.sv`
