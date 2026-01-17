@@ -354,8 +354,12 @@ std::vector<Workspace::WorkspaceSymbolEntry> Workspace::findAllSymbols() const {
     return symbols;
   }
 
-  std::regex pattern(
-      R"(\\b(module|interface|package|class|program|checker)\\s+(?:automatic\\s+)?([A-Za-z_][A-Za-z0-9_$]*))");
+  // Pattern to find top-level SystemVerilog constructs.
+  // Also matches functions/tasks at module scope.
+  std::regex topLevelPattern(
+      R"(\b(module|interface|package|class|program|checker)\s+(?:automatic\s+)?([A-Za-z_][A-Za-z0-9_$]*))");
+  std::regex funcTaskPattern(
+      R"(\b(function|task)\s+(?:automatic\s+)?(?:\w+\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s*[;(])");
 
   for (const auto &file : *filesOrErr) {
     llvm::SmallString<256> absPath(file);
@@ -368,7 +372,10 @@ std::vector<Workspace::WorkspaceSymbolEntry> Workspace::findAllSymbols() const {
 
     llvm::StringRef contents = bufferOrErr->get()->getBuffer();
     std::string contentStr = contents.str();
-    for (std::sregex_iterator it(contentStr.begin(), contentStr.end(), pattern),
+
+    // Match top-level constructs (modules, interfaces, packages, classes, etc.)
+    for (std::sregex_iterator it(contentStr.begin(), contentStr.end(),
+                                 topLevelPattern),
                               end;
          it != end; ++it) {
       const std::smatch &match = *it;
@@ -389,6 +396,31 @@ std::vector<Workspace::WorkspaceSymbolEntry> Workspace::findAllSymbols() const {
         entry.kind = llvm::lsp::SymbolKind::Package;
       else if (kindStr == "class")
         entry.kind = llvm::lsp::SymbolKind::Class;
+
+      auto start = offsetToPosition(contents, namePos);
+      auto endPos = offsetToPosition(contents, nameEnd);
+      entry.range = llvm::lsp::Range(start, endPos);
+      symbols.push_back(std::move(entry));
+    }
+
+    // Match functions and tasks
+    for (std::sregex_iterator it(contentStr.begin(), contentStr.end(),
+                                 funcTaskPattern),
+                              end;
+         it != end; ++it) {
+      const std::smatch &match = *it;
+      if (match.size() < 3)
+        continue;
+      std::string kindStr = match[1].str();
+      std::string name = match[2].str();
+      size_t namePos = static_cast<size_t>(match.position(2));
+      size_t nameEnd = namePos + name.size();
+
+      WorkspaceSymbolEntry entry;
+      entry.name = std::move(name);
+      entry.filePath = absPath.str().str();
+      entry.kind = (kindStr == "function") ? llvm::lsp::SymbolKind::Function
+                                           : llvm::lsp::SymbolKind::Method;
 
       auto start = offsetToPosition(contents, namePos);
       auto endPos = offsetToPosition(contents, nameEnd);

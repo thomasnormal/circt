@@ -291,6 +291,12 @@ struct Context {
   /// Evaluate the constant value of an expression.
   slang::ConstantValue evaluateConstant(const slang::ast::Expression &expr);
 
+  /// Convert a slang constraint (from inline or block constraints) to MLIR ops.
+  /// This handles all constraint kinds: expression, implication, conditional,
+  /// uniqueness, foreach, solve-before, etc.
+  LogicalResult convertConstraint(const slang::ast::Constraint &constraint,
+                                  Location loc);
+
   const ImportVerilogOptions &options;
   slang::ast::Compilation &compilation;
   mlir::ModuleOp intoModuleOp;

@@ -4057,7 +4057,7 @@ def ConstraintUniqueOp
 }
 
 def RandomizeOp
-    : MooreOp<"randomize", []> {
+    : MooreOp<"randomize", [SingleBlock, NoTerminator]> {
   let summary = "Randomize an object";
   let description = [{
     Invokes the randomize() method on a class object. This operation
@@ -4066,23 +4066,40 @@ def RandomizeOp
 
     The result is a 1-bit value indicating success (1) or failure (0).
 
+    An optional `inline_constraints` region can contain inline constraints
+    specified with a `with` clause. These constraints are combined with
+    the class's declared constraints during randomization.
+
     Example:
     ```mlir
-    %success = moore.randomize %obj : !moore.class.object<@MyClass>
+    // Without inline constraints:
+    %success = moore.randomize %obj : !moore.class<@MyClass>
+
+    // With inline constraints (randomize() with { x > 0; }):
+    %success = moore.randomize %obj : !moore.class<@MyClass> {
+      %0 = moore.class.property_ref %obj[@x] : !moore.class<@MyClass> -> !moore.ref<i32>
+      %1 = moore.read %0 : <i32>
+      %2 = moore.constant 0 : i32
+      %3 = moore.sgt %1, %2 : i32 -> i1
+      moore.constraint.expr %3 : i1
+    }
     ```
 
     See IEEE 1800-2017 Section 18.6 "Randomization methods".
+    See IEEE 1800-2017 Section 18.7 "In-line constraints".
   }];
 
   let arguments = (ins ClassHandleType:$object);
   let results = (outs I1:$success);
+  let regions = (region AnyRegion:$inline_constraints);
   let assemblyFormat = [{
-    $object `:` type($object) attr-dict
+    $object `:` type($object) attr-dict-with-keyword ($inline_constraints^)?
   }];
+
 }
 
 def StdRandomizeOp
-    : MooreOp<"std_randomize", []> {
+    : MooreOp<"std_randomize", [SingleBlock, NoTerminator]> {
   let summary = "Scope randomize function (std::randomize)";
   let description = [{
     Randomizes one or more variables passed by reference. This is the
@@ -4091,9 +4108,21 @@ def StdRandomizeOp
 
     The result is a 1-bit value indicating success (1) or failure (0).
 
+    An optional `inline_constraints` region can contain inline constraints
+    specified with a `with` clause.
+
     Example:
     ```mlir
+    // Without inline constraints:
     %success = moore.std_randomize %x, %y : !moore.ref<i32>, !moore.ref<i32>
+
+    // With inline constraints (std::randomize(x, y) with { x < y; }):
+    %success = moore.std_randomize %x, %y : !moore.ref<i32>, !moore.ref<i32> {
+      %0 = moore.read %x : <i32>
+      %1 = moore.read %y : <i32>
+      %2 = moore.slt %0, %1 : i32 -> i1
+      moore.constraint.expr %2 : i1
+    }
     ```
 
     See IEEE 1800-2017 Section 18.12 "Scope randomize function".
@@ -4101,9 +4130,11 @@ def StdRandomizeOp
 
   let arguments = (ins Variadic<RefType>:$variables);
   let results = (outs I1:$success);
+  let regions = (region AnyRegion:$inline_constraints);
   let assemblyFormat = [{
-    $variables `:` type($variables) attr-dict
+    $variables `:` type($variables) attr-dict-with-keyword ($inline_constraints^)?
   }];
+
 }
 
 def ClassNewOp

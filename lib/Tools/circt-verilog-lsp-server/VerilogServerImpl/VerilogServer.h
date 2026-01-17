@@ -48,6 +48,7 @@ struct WorkspaceSymbol {
   llvm::lsp::SymbolKind kind;
   llvm::lsp::Location location;
   std::string containerName;
+  int score = 0; // Fuzzy match score for sorting (higher is better)
 };
 
 /// This class implements all of the Verilog related functionality necessary for
