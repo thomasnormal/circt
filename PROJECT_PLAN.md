@@ -4,38 +4,43 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 56 - Distribution Constraints + Transition Bins + LSP (January 17, 2026)
+## Current Status: ITERATION 57 - Coverage Options + Solve Constraints + Simulation (January 17, 2026)
 
-**Summary**: Implemented distribution constraints for randomization, transition coverage bins with state machine tracking, documented simulation alternatives, and enhanced LSP go-to-definition.
+**Summary**: Tested circt-sim simulation on AVIP patterns (works!), implemented solve-before constraints, comprehensive coverage options, verified LSP find references.
 
-### Iteration 56 Highlights
+### Iteration 57 Highlights
 
-**Track A: LLHD Simulation Alternatives** ⭐ DOCUMENTED
-- ✅ Documented `circt-sim` for event-driven LLHD simulation
-- ✅ Documented transformation passes for arcilator compatibility
-- Pipeline: `--llhd-hoist-signals --llhd-deseq --llhd-lower-processes --llhd-sig2reg`
-- Note: Class-based designs need circt-sim (interpreter-style)
+**Track A: circt-sim AVIP Testing** ⭐ SIMULATION VERIFIED!
+- ✅ Successfully tested `circt-sim` on AVIP-style patterns
+- ✅ Works: Event-driven simulation, APB protocol, state machines, VCD output
+- ❌ Limitations: UVM not supported, tasks with timing need work
+- Usage: `circt-sim test.mlir --top testbench --vcd waves.vcd`
 
-**Track B: Distribution Constraints** ⭐ MAJOR FEATURE
-- ✅ Implemented `DistExpression` visitor in Expressions.cpp
-- ✅ Added `moore.constraint.dist` operation
-- ✅ Added `__moore_randomize_with_dist` runtime function
-- ✅ Supports `:=` (per-value) and `:/` (per-range) weights
-- Tests: `dist-constraints.sv`, `dist-constraints-avip.sv` (new)
+**Track B: Unique/Solve Constraints** ⭐
+- ✅ Implemented `solve...before` constraint parsing
+- ✅ Extracts variables from NamedValue/HierarchicalValue expressions
+- ✅ Creates `moore.constraint.solve_before` operations
+- Test: `constraint-solve.sv` (new, 335 lines)
 
-**Track C: Transition Coverage Bins** ⭐ MAJOR FEATURE
-- ✅ Added `TransitionRepeatKind` enum (None, Consecutive, Nonconsecutive, GoTo)
-- ✅ Extended `CoverageBinDeclOp` with `transitions` attribute
-- ✅ Supports: `(A => B)`, `(A => B => C)`, `(A [*3] => B)`
-- ✅ Runtime transition tracking state machine
-- Test: `covergroup_transition_bins.sv` (new)
+**Track C: Coverage Options** ⭐ COMPREHENSIVE
+- ✅ CovergroupDeclOp: weight, goal, comment, per_instance, at_least, strobe
+- ✅ Type options: type_weight, type_goal, type_comment
+- ✅ CoverpointDeclOp: weight, goal, comment, at_least, auto_bin_max, detect_overlap
+- ✅ CoverCrossDeclOp: weight, goal, comment, at_least, cross_auto_bin_max
+- ✅ Runtime: weighted coverage, threshold checking
+- Test: `coverage-options.sv` (new)
 
-**Track D: LSP Go-to-Definition** ⭐
-- ✅ Added CallExpression visitor for function/task calls
-- ✅ Added compilation unit indexing
-- ✅ Added extends clause indexing for inheritance navigation
+**Track D: LSP Find References** ⭐
+- ✅ Verified already fully implemented
+- ✅ Enhanced tests for includeDeclaration option
 
-**Summary**: 918 insertions across 11 files
+**Summary**: 1,200 insertions across 9 files
+
+---
+
+## Previous: ITERATION 56 - Distribution Constraints + Transition Bins (January 17, 2026)
+
+**Summary**: Implemented distribution constraints for randomization, transition coverage bins with state machine tracking, documented simulation alternatives. 918 insertions.
 
 ---
 

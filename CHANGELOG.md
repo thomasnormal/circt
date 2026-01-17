@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 57 - January 17, 2026
+
+### Coverage Options, Solve-Before Constraints, circt-sim Testing, LSP References
+
+**Track A: circt-sim AVIP Testing** ⭐ SIMULATION VERIFIED!
+- Successfully tested `circt-sim` on AVIP-style patterns
+- Works: Event-driven simulation, APB protocol, state machines, VCD waveform output
+- Limitations: UVM not supported, tasks with timing need work
+- Generated test files demonstrating simulation capability
+- Usage: `circt-sim test.mlir --top testbench --vcd waves.vcd`
+
+**Track B: Unique/Solve Constraints** ⭐
+- Implemented `solve...before` constraint parsing in Structure.cpp
+- Extracts variable names from NamedValue and HierarchicalValue expressions
+- Creates `moore.constraint.solve_before` operations
+- Improved `ConstraintUniqueOp` documentation
+- Test: `constraint-solve.sv` (new, 335 lines)
+
+**Track C: Coverage Options** ⭐ COMPREHENSIVE
+- Added to `CovergroupDeclOp`: weight, goal, comment, per_instance, at_least, strobe
+- Added type_option variants: type_weight, type_goal, type_comment
+- Added to `CoverpointDeclOp`: weight, goal, comment, at_least, auto_bin_max, detect_overlap
+- Added to `CoverCrossDeclOp`: weight, goal, comment, at_least, cross_auto_bin_max
+- Implemented `extractCoverageOptions()` helper in Structure.cpp
+- Runtime: weighted coverage calculation, threshold checking
+- Test: `coverage-options.sv` (new, 101 lines)
+
+**Track D: LSP Find References** ⭐
+- Verified find references already fully implemented
+- Enhanced tests for `includeDeclaration` option
+- Works for variables, functions, parameters
+
+**Also**: LLHD InlineCalls now allows inlining into seq.initial/seq.always regions
+
+**Summary**: 1,200 insertions across 9 files
+
+---
+
 ## Iteration 56 - January 17, 2026
 
 ### Distribution Constraints, Transition Bins, LSP Go-to-Definition
@@ -124,6 +162,11 @@
 - Added MooreToCore lowering for `moore.convert_real` (f32/f64 trunc/extend)
 - Files: `lib/Conversion/MooreToCore/MooreToCore.cpp`
 - Test: `test/Conversion/MooreToCore/basic.mlir`
+
+**Track A: LLHD Inline Calls**
+- Allowed inlining into `seq.initial`/`seq.always` regions in LLHD inline pass
+- Files: `lib/Dialect/LLHD/Transforms/InlineCalls.cpp`
+- Test: `test/Dialect/LLHD/Transforms/inline-calls.mlir`
 
 ---
 
