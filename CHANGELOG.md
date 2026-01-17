@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 53 - January 17, 2026
+
+### Simulation Analysis, Soft Constraints, Coverage Research, LSP Document Symbols
+
+**Track A: AVIP Simulation Analysis** ⭐ CRITICAL FINDINGS!
+- Identified CRITICAL blocker: `llhd.process` not lowered in `--ir-hw` mode
+- Arc conversion fails with "failed to legalize operation 'llhd.process'"
+- Root cause: `--ir-hw` stops after MooreToCore, before LlhdToCorePipeline
+- All 1,342 AVIP files parse but cannot simulate due to this blocker
+- Also found: `moore.conversion` missing lowering pattern (affects ~5% of tests)
+- Priority fix for Iteration 54: Extend `--ir-hw` to include LlhdToCorePipeline
+
+**Track B: Soft Constraint Verification** ⭐
+- Verified soft constraints ALREADY IMPLEMENTED in Structure.cpp (lines 2489-2501)
+- ConstraintExprOp in MooreOps.td has `UnitAttr:$is_soft` attribute
+- MooreToCore.cpp has `SoftConstraintInfo` and `extractSoftConstraints()` for randomization
+- Created comprehensive test: `test/Conversion/ImportVerilog/soft-constraint.sv` (new)
+- Tests: basic soft, multiple soft, mixed hard/soft, conditional, implication, foreach
+
+**Track C: Coverage Feature Analysis** ⭐
+- Analyzed 59 covergroups across 21 files in 9 AVIPs (1,342 files)
+- Found 220+ cross coverage declarations with complex binsof/intersect usage
+- Coverage features supported: covergroups, coverpoints, bins, cross coverage
+- Gaps identified: binsof/intersect semantics not fully enforced, bin comments not in reports
+- Coverage runtime fully functional for basic to intermediate use cases
+
+**Track D: LSP Document Symbols** ⭐
+- Added class support with hierarchical method/property children
+- Added procedural block support (always_ff, always_comb, always_latch, initial, final)
+- Classes show as SymbolKind::Class (kind 5) with Method/Field children
+- Procedural blocks show as SymbolKind::Event (kind 24) with descriptive details
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+173 lines)
+- Test: `test/Tools/circt-verilog-lsp-server/document-symbols.test` (enhanced)
+
+---
+
 ## Iteration 52 - January 17, 2026
 
 ### All 9 AVIPs Validated, Foreach Constraints, Coverage Runtime Enhancement

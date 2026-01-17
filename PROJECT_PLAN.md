@@ -4,49 +4,44 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 52 - All 9 AVIPs Validated + Foreach Constraints (January 17, 2026)
+## Current Status: ITERATION 53 - Simulation Analysis + LSP Document Symbols (January 17, 2026)
+
+**Summary**: Identified CRITICAL blocker for AVIP simulation (llhd.process not lowered), verified soft constraints already implemented, analyzed coverage features, and added LSP document symbols support.
+
+### Iteration 53 Highlights
+
+**Track A: AVIP Simulation Analysis** ⭐ CRITICAL BLOCKER FOUND!
+- ❌ CRITICAL: `llhd.process` not lowered in `--ir-hw` mode
+- ❌ Arc conversion fails: "failed to legalize operation 'llhd.process'"
+- Root cause: `--ir-hw` stops after MooreToCore, doesn't run LlhdToCorePipeline
+- All 1,342 AVIP files parse perfectly but CANNOT SIMULATE
+- Priority fix for Iteration 54: Extend pipeline or add `--ir-core` mode
+- Also found: `moore.conversion` missing lowering pattern (~5% of tests)
+
+**Track B: Soft Constraint Verification** ⭐
+- ✅ Verified soft constraints ALREADY IMPLEMENTED in Structure.cpp
+- ✅ `ConstraintExprOp` has `UnitAttr:$is_soft` attribute
+- ✅ MooreToCore has `SoftConstraintInfo` for randomization
+- ✅ Created comprehensive test: `soft-constraint.sv` (new, 190 lines)
+- Tests: basic, multiple, mixed, conditional, implication, foreach soft constraints
+
+**Track C: Coverage Feature Analysis** ⭐
+- Analyzed 59 covergroups across 21 files in 9 AVIPs
+- Found 220+ cross coverage declarations with binsof/intersect
+- Gaps: binsof/intersect semantics not fully enforced
+- Coverage runtime fully functional for basic to intermediate use
+
+**Track D: LSP Document Symbols** ⭐
+- ✅ Added class support with hierarchical method/property children
+- ✅ Added procedural block support (always_ff, always_comb, initial, etc.)
+- Files: `VerilogDocument.cpp` (+173 lines)
+- Test: `document-symbols.test` (enhanced, +115 lines)
+
+---
+
+## Previous: ITERATION 52 - All 9 AVIPs Validated + Foreach Constraints (January 17, 2026)
 
 **Summary**: MAJOR MILESTONE! All 9 AVIPs (1,342 files total) now compile with ZERO errors. Implemented foreach constraint support, enhanced coverage runtime with cross coverage/goals/HTML reports, and improved LSP diagnostics.
-
-### Iteration 52 Highlights
-
-**Track A: AVIP Comprehensive Validation** ⭐⭐⭐ MAJOR MILESTONE!
-- ✅ Validated ALL 9 AVIPs (1,342 files total) compile with ZERO errors:
-  - APB AVIP: 132 files - 0 errors
-  - AHB AVIP: 151 files - 0 errors
-  - AXI4 AVIP: 196 files - 0 errors
-  - AXI4-Lite AVIP: 126 files - 0 errors
-  - UART AVIP: 116 files - 0 errors
-  - SPI AVIP: 173 files - 0 errors
-  - I2S AVIP: 161 files - 0 errors
-  - I3C AVIP: 155 files - 0 errors
-  - JTAG AVIP: 132 files - 0 errors
-- Key milestone: Complete AVIP ecosystem now parseable by CIRCT!
-
-**Track B: Foreach Constraint Support** ⭐
-- ✅ Implemented `foreach` constraint support in randomization
-- ✅ Handles single-dimensional arrays, multi-dimensional matrices, queues
-- ✅ Added implication constraint support within foreach
-- Files: `lib/Conversion/ImportVerilog/Structure.cpp`
-- Test: `test/Conversion/ImportVerilog/foreach-constraint.sv` (new)
-
-**Track C: Coverage Runtime Enhancement** ⭐
-- ✅ Added cross coverage API: `__moore_cross_create`, `__moore_cross_sample`
-- ✅ Added reset functions: `__moore_covergroup_reset`, `__moore_coverpoint_reset`
-- ✅ Added goal tracking: `__moore_covergroup_set_goal`, `__moore_covergroup_goal_met`
-- ✅ Added HTML report generation: `__moore_coverage_report_html` with CSS styling
-- Files: `include/circt/Runtime/MooreRuntime.h`, `lib/Runtime/MooreRuntime.cpp`
-- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
-
-**Track D: LSP Diagnostic Enhancement**
-- ✅ Added diagnostic category field (Parse Error, Type Error, etc.)
-- ✅ Improved diagnostic message formatting
-- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/LSPDiagnosticClient.cpp`
-- Test: `test/Tools/circt-verilog-lsp-server/diagnostics-comprehensive.test` (new)
-
-**Test Suite Fixes**
-- ✅ Fixed `types.sv` test: removed invalid `$` indexing on dynamic arrays
-- Note: `$` as an index is only valid for queues, not dynamic arrays
 
 ---
 
