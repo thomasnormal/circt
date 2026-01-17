@@ -15,6 +15,7 @@
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace circt;
@@ -2107,6 +2108,17 @@ struct ClassDeclVisitor {
     }
     classLowering.bodyConverted = true;
 
+    // Save and clear currentThisRef during class body conversion.
+    // This prevents stale values from a surrounding function conversion from
+    // being used when converting constraint expressions or other class members.
+    // Without this, if class A's method conversion triggers conversion of
+    // class B, and class B has constraints that access properties, the
+    // constraints would incorrectly try to upcast class A's 'this' to class B.
+    auto savedThisRef = context.currentThisRef;
+    context.currentThisRef = {};
+    auto restoreThisRef =
+        llvm::make_scope_exit([&] { context.currentThisRef = savedThisRef; });
+
     // The block is created in declareClass() to satisfy SingleBlock trait.
     Block &body = classLowering.op.getBody().front();
 
@@ -2406,6 +2418,28 @@ struct ClassDeclVisitor {
 
   // Empty members: ignore
   LogicalResult visit(const slang::ast::EmptyMemberSymbol &) {
+    return success();
+  }
+
+  // Covergroups declared inside a class: ensure the covergroup is converted.
+  // Note: The ClassPropertySymbol that references this covergroup is processed
+  // in Pass 1, which already triggers covergroup conversion through type
+  // conversion and creates the class property. This handler just ensures the
+  // covergroup is converted if it hasn't been already (which shouldn't happen
+  // in normal cases).
+  LogicalResult visit(const slang::ast::CovergroupType &covergroup) {
+    LLVM_DEBUG(llvm::dbgs() << "      CovergroupType: " << covergroup.name
+                            << "\n");
+
+    // The covergroup should already be converted by the ClassPropertySymbol
+    // handler through type conversion. If not, convert it now.
+    if (!context.covergroups.count(&covergroup)) {
+      if (failed(context.convertCovergroup(covergroup)))
+        return failure();
+    }
+
+    // Don't create a property here - the ClassPropertySymbol handler already
+    // created it.
     return success();
   }
 
@@ -2876,10 +2910,22 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
     samplingEventAttr = builder.getStringAttr(eventStr);
   }
 
+  // Get the covergroup name. For class-scoped covergroups, slang sets the
+  // CovergroupType name to empty and creates a ClassPropertySymbol with the
+  // actual name. In this case, we need to get the name from the syntax.
+  std::string_view cgName = covergroup.name;
+  if (cgName.empty()) {
+    if (const auto *syntax = covergroup.getSyntax()) {
+      if (const auto *cgSyntax =
+              syntax->as_if<slang::syntax::CovergroupDeclarationSyntax>()) {
+        cgName = cgSyntax->name.valueText();
+      }
+    }
+  }
+
   // Create the covergroup declaration op.
-  auto covergroupOp = moore::CovergroupDeclOp::create(builder, loc,
-                                                       covergroup.name,
-                                                       samplingEventAttr);
+  auto covergroupOp =
+      moore::CovergroupDeclOp::create(builder, loc, cgName, samplingEventAttr);
   orderedRootOps.insert({covergroup.location, covergroupOp});
   symbolTable.insert(covergroupOp);
 

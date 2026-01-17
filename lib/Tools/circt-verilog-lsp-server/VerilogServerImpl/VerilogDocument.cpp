@@ -1992,68 +1992,95 @@ static bool isWidthMismatchDiagnostic(llvm::StringRef message) {
 /// Check if a diagnostic message indicates an unknown module.
 static bool isUnknownModuleDiagnostic(llvm::StringRef message) {
   return message.contains("unknown module") ||
-         message.contains("definition of") && message.contains("not found");
+         (message.contains("definition of") && message.contains("not found"));
 }
 
-/// Generate quick fix code actions based on diagnostics.
-static void generateQuickFixes(
-    const llvm::lsp::URIForFile &uri, const llvm::lsp::Range &range,
-    const std::vector<llvm::lsp::Diagnostic> &diagnostics,
-    std::vector<llvm::lsp::CodeAction> &codeActions) {
+/// Check if a diagnostic message indicates a missing import.
+static bool isMissingImportDiagnostic(llvm::StringRef message) {
+  return message.contains("unknown type") ||
+         message.contains("unknown class") ||
+         (message.contains("not found") && message.contains("package"));
+}
 
-  for (const auto &diag : diagnostics) {
-    // Check for unknown identifier - suggest adding wire/logic declaration
-    if (isUnknownIdentifierDiagnostic(diag.message)) {
-      // Extract identifier name from the diagnostic message if possible
-      // For now, provide generic suggestions
+/// Extract identifier name from a diagnostic message.
+/// Common patterns: "use of undeclared identifier 'foo'"
+///                  "unknown identifier 'bar'"
+static std::optional<std::string> extractIdentifierFromMessage(llvm::StringRef message) {
+  // Look for pattern: 'identifier_name'
+  size_t quoteStart = message.find('\'');
+  if (quoteStart == llvm::StringRef::npos)
+    return std::nullopt;
 
-      llvm::lsp::CodeAction wireAction;
-      wireAction.title = "Declare as wire";
-      wireAction.kind = llvm::lsp::CodeAction::kQuickFix;
-      wireAction.diagnostics = {diag};
+  size_t quoteEnd = message.find('\'', quoteStart + 1);
+  if (quoteEnd == llvm::StringRef::npos)
+    return std::nullopt;
 
-      // The actual text edit would need the identifier name
-      // For now, just provide the action structure
-      llvm::lsp::WorkspaceEdit edit;
-      // Insert "wire <name>;" at the beginning of the module
-      wireAction.edit = edit;
-      codeActions.push_back(std::move(wireAction));
+  llvm::StringRef name = message.slice(quoteStart + 1, quoteEnd);
+  if (name.empty())
+    return std::nullopt;
 
-      llvm::lsp::CodeAction logicAction;
-      logicAction.title = "Declare as logic";
-      logicAction.kind = llvm::lsp::CodeAction::kQuickFix;
-      logicAction.diagnostics = {diag};
-      logicAction.edit = llvm::lsp::WorkspaceEdit{};
-      codeActions.push_back(std::move(logicAction));
-    }
+  return name.str();
+}
 
-    // Check for width mismatch
-    if (isWidthMismatchDiagnostic(diag.message)) {
-      llvm::lsp::CodeAction truncateAction;
-      truncateAction.title = "Add explicit truncation";
-      truncateAction.kind = llvm::lsp::CodeAction::kQuickFix;
-      truncateAction.diagnostics = {diag};
-      truncateAction.edit = llvm::lsp::WorkspaceEdit{};
-      codeActions.push_back(std::move(truncateAction));
+/// Extract the text at a given range from source.
+static std::string extractTextAtRange(std::string_view sourceText,
+                                       const std::vector<uint32_t> &lineOffsets,
+                                       const llvm::lsp::Range &range) {
+  if (lineOffsets.empty())
+    return "";
 
-      llvm::lsp::CodeAction extendAction;
-      extendAction.title = "Add explicit extension";
-      extendAction.kind = llvm::lsp::CodeAction::kQuickFix;
-      extendAction.diagnostics = {diag};
-      extendAction.edit = llvm::lsp::WorkspaceEdit{};
-      codeActions.push_back(std::move(extendAction));
-    }
+  // Validate line numbers
+  if (static_cast<size_t>(range.start.line) >= lineOffsets.size() ||
+      static_cast<size_t>(range.end.line) >= lineOffsets.size())
+    return "";
 
-    // Check for unknown module
-    if (isUnknownModuleDiagnostic(diag.message)) {
-      llvm::lsp::CodeAction createModuleAction;
-      createModuleAction.title = "Create module stub";
-      createModuleAction.kind = llvm::lsp::CodeAction::kQuickFix;
-      createModuleAction.diagnostics = {diag};
-      createModuleAction.edit = llvm::lsp::WorkspaceEdit{};
-      codeActions.push_back(std::move(createModuleAction));
+  size_t startOffset = lineOffsets[range.start.line] + range.start.character;
+  size_t endOffset = lineOffsets[range.end.line] + range.end.character;
+
+  if (startOffset >= sourceText.size() || endOffset > sourceText.size() ||
+      startOffset >= endOffset)
+    return "";
+
+  return std::string(sourceText.substr(startOffset, endOffset - startOffset));
+}
+
+/// Find a suitable insertion point for a signal declaration in a module.
+/// Returns the position just after the port list closing parenthesis and semicolon.
+static llvm::lsp::Position findDeclarationInsertionPoint(
+    std::string_view sourceText, const std::vector<uint32_t> &lineOffsets,
+    const llvm::lsp::Range &diagnosticRange) {
+
+  // Start from the diagnostic position and search backward for );
+  // which marks the end of the port list
+  if (lineOffsets.empty())
+    return llvm::lsp::Position(0, 0);
+
+  // Get the line where the diagnostic is
+  int diagLine = diagnosticRange.start.line;
+
+  // Search backwards from the diagnostic line to find ");", which ends the port list
+  for (int line = diagLine; line >= 0; --line) {
+    size_t lineStart = lineOffsets[line];
+    size_t lineEnd = (static_cast<size_t>(line + 1) < lineOffsets.size())
+                         ? lineOffsets[line + 1] - 1
+                         : sourceText.size();
+
+    std::string_view lineText = sourceText.substr(lineStart, lineEnd - lineStart);
+
+    // Look for ); which typically ends the port list
+    size_t pos = lineText.find(");");
+    if (pos != std::string_view::npos) {
+      // Return position at the start of the next line for clean insertion
+      if (static_cast<size_t>(line + 1) < lineOffsets.size()) {
+        return llvm::lsp::Position(line + 1, 0);
+      }
+      // Otherwise insert after the );
+      return llvm::lsp::Position(line, static_cast<int>(pos + 2));
     }
   }
+
+  // Fallback: insert at the beginning of the file
+  return llvm::lsp::Position(0, 0);
 }
 
 void VerilogDocument::getCodeActions(
@@ -2061,17 +2088,240 @@ void VerilogDocument::getCodeActions(
     const std::vector<llvm::lsp::Diagnostic> &diagnostics,
     std::vector<llvm::lsp::CodeAction> &codeActions) {
 
-  // Generate quick fixes based on diagnostics
-  generateQuickFixes(uri, range, diagnostics, codeActions);
+  // Get source text for extracting identifiers and finding insertion points
+  auto &sm = getSlangSourceManager();
+  std::string_view sourceText = sm.getSourceText(mainBufferId);
 
-  // Add refactoring actions that are always available
-  // Extract selection as new signal
-  llvm::lsp::CodeAction extractSignalAction;
-  extractSignalAction.title = "Extract to signal";
-  extractSignalAction.kind = llvm::lsp::CodeAction::kRefactor;
-  codeActions.push_back(std::move(extractSignalAction));
+  // Process diagnostics to generate quick fixes
+  for (const auto &diag : diagnostics) {
+    // Check for unknown identifier - suggest adding wire/logic declaration
+    if (isUnknownIdentifierDiagnostic(diag.message)) {
+      // Try to extract identifier from diagnostic message or from source range
+      std::optional<std::string> identifierName =
+          extractIdentifierFromMessage(diag.message);
 
-  // Add module instantiation template action
+      // If we couldn't get it from the message, try extracting from the range
+      if (!identifierName) {
+        std::string extracted =
+            extractTextAtRange(sourceText, lineOffsets, diag.range);
+        if (!extracted.empty())
+          identifierName = extracted;
+      }
+
+      if (identifierName && !identifierName->empty()) {
+        // Find insertion point for the declaration
+        llvm::lsp::Position insertPos =
+            findDeclarationInsertionPoint(sourceText, lineOffsets, diag.range);
+
+        // Create "Declare as wire" action with proper edit
+        {
+          llvm::lsp::CodeAction wireAction;
+          wireAction.title = "Declare '" + *identifierName + "' as wire";
+          wireAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          wireAction.diagnostics = {diag};
+          wireAction.isPreferred = false;
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(insertPos, insertPos);
+          textEdit.newText = "  wire " + *identifierName + ";\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          wireAction.edit = edit;
+
+          codeActions.push_back(std::move(wireAction));
+        }
+
+        // Create "Declare as logic" action with proper edit
+        {
+          llvm::lsp::CodeAction logicAction;
+          logicAction.title = "Declare '" + *identifierName + "' as logic";
+          logicAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          logicAction.diagnostics = {diag};
+          logicAction.isPreferred = true; // Prefer logic in SystemVerilog
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(insertPos, insertPos);
+          textEdit.newText = "  logic " + *identifierName + ";\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          logicAction.edit = edit;
+
+          codeActions.push_back(std::move(logicAction));
+        }
+
+        // Create "Declare as reg" action for Verilog compatibility
+        {
+          llvm::lsp::CodeAction regAction;
+          regAction.title = "Declare '" + *identifierName + "' as reg";
+          regAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          regAction.diagnostics = {diag};
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(insertPos, insertPos);
+          textEdit.newText = "  reg " + *identifierName + ";\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          regAction.edit = edit;
+
+          codeActions.push_back(std::move(regAction));
+        }
+      } else {
+        // Fallback: provide generic actions without workspace edits
+        llvm::lsp::CodeAction wireAction;
+        wireAction.title = "Declare as wire";
+        wireAction.kind = llvm::lsp::CodeAction::kQuickFix;
+        wireAction.diagnostics = {diag};
+        codeActions.push_back(std::move(wireAction));
+
+        llvm::lsp::CodeAction logicAction;
+        logicAction.title = "Declare as logic";
+        logicAction.kind = llvm::lsp::CodeAction::kQuickFix;
+        logicAction.diagnostics = {diag};
+        codeActions.push_back(std::move(logicAction));
+      }
+    }
+
+    // Check for width mismatch - suggest explicit cast
+    if (isWidthMismatchDiagnostic(diag.message)) {
+      // Extract the expression at the diagnostic range
+      std::string expr = extractTextAtRange(sourceText, lineOffsets, diag.range);
+
+      if (!expr.empty()) {
+        // Add truncation action
+        {
+          llvm::lsp::CodeAction truncateAction;
+          truncateAction.title = "Add explicit truncation";
+          truncateAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          truncateAction.diagnostics = {diag};
+
+          // Wrap expression with explicit size cast: expr[N-1:0]
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = diag.range;
+          // Use $bits() function for the cast placeholder
+          textEdit.newText = expr + "[/* width-1 */:0]";
+          edit.changes[uri.uri().str()] = {textEdit};
+          truncateAction.edit = edit;
+
+          codeActions.push_back(std::move(truncateAction));
+        }
+
+        // Add zero-extension action
+        {
+          llvm::lsp::CodeAction extendAction;
+          extendAction.title = "Add explicit zero-extension";
+          extendAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          extendAction.diagnostics = {diag};
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = diag.range;
+          textEdit.newText = "{/* padding */," + expr + "}";
+          edit.changes[uri.uri().str()] = {textEdit};
+          extendAction.edit = edit;
+
+          codeActions.push_back(std::move(extendAction));
+        }
+      }
+    }
+
+    // Check for unknown module - suggest creating module stub
+    if (isUnknownModuleDiagnostic(diag.message)) {
+      std::optional<std::string> moduleName =
+          extractIdentifierFromMessage(diag.message);
+
+      if (moduleName && !moduleName->empty()) {
+        llvm::lsp::CodeAction createModuleAction;
+        createModuleAction.title = "Create module stub for '" + *moduleName + "'";
+        createModuleAction.kind = llvm::lsp::CodeAction::kQuickFix;
+        createModuleAction.diagnostics = {diag};
+
+        // Insert module stub at the end of the file
+        llvm::lsp::Position endPos(static_cast<int>(lineOffsets.size()), 0);
+        std::string moduleStub = "\n// TODO: Implement module\n"
+                                 "module " + *moduleName + " (\n"
+                                 "  // Add ports here\n"
+                                 ");\n"
+                                 "  // Add implementation here\n"
+                                 "endmodule\n";
+
+        llvm::lsp::WorkspaceEdit edit;
+        llvm::lsp::TextEdit textEdit;
+        textEdit.range = llvm::lsp::Range(endPos, endPos);
+        textEdit.newText = moduleStub;
+        edit.changes[uri.uri().str()] = {textEdit};
+        createModuleAction.edit = edit;
+
+        codeActions.push_back(std::move(createModuleAction));
+      }
+    }
+
+    // Check for missing import
+    if (isMissingImportDiagnostic(diag.message)) {
+      std::optional<std::string> typeName =
+          extractIdentifierFromMessage(diag.message);
+
+      if (typeName && !typeName->empty()) {
+        // Suggest adding common package imports
+        std::vector<std::string> commonPackages = {"uvm_pkg", "std"};
+
+        for (const auto &pkg : commonPackages) {
+          llvm::lsp::CodeAction importAction;
+          importAction.title = "Add 'import " + pkg + "::*;'";
+          importAction.kind = llvm::lsp::CodeAction::kQuickFix;
+          importAction.diagnostics = {diag};
+
+          // Insert at the beginning of the file or after module declaration
+          llvm::lsp::Position insertPos(0, 0);
+
+          llvm::lsp::WorkspaceEdit edit;
+          llvm::lsp::TextEdit textEdit;
+          textEdit.range = llvm::lsp::Range(insertPos, insertPos);
+          textEdit.newText = "import " + pkg + "::*;\n";
+          edit.changes[uri.uri().str()] = {textEdit};
+          importAction.edit = edit;
+
+          codeActions.push_back(std::move(importAction));
+        }
+      }
+    }
+  }
+
+  // Add refactoring actions that are always available when there's a selection
+  if (range.start != range.end) {
+    std::string selectedText = extractTextAtRange(sourceText, lineOffsets, range);
+
+    if (!selectedText.empty() && selectedText.find('\n') == std::string::npos) {
+      // Extract selection as new signal
+      llvm::lsp::CodeAction extractSignalAction;
+      extractSignalAction.title = "Extract to signal";
+      extractSignalAction.kind = llvm::lsp::CodeAction::kRefactor;
+
+      // Find insertion point
+      llvm::lsp::Position insertPos =
+          findDeclarationInsertionPoint(sourceText, lineOffsets, range);
+
+      // Create the edit: declare the signal and replace selection with signal name
+      llvm::lsp::WorkspaceEdit edit;
+
+      // Add declaration
+      llvm::lsp::TextEdit declEdit;
+      declEdit.range = llvm::lsp::Range(insertPos, insertPos);
+      declEdit.newText = "  logic extracted_signal; // = " + selectedText + "\n";
+
+      // Replace selection with signal name
+      llvm::lsp::TextEdit replaceEdit;
+      replaceEdit.range = range;
+      replaceEdit.newText = "extracted_signal";
+
+      edit.changes[uri.uri().str()] = {declEdit, replaceEdit};
+      extractSignalAction.edit = edit;
+
+      codeActions.push_back(std::move(extractSignalAction));
+    }
+  }
+
+  // Add module instantiation template action (only if compilation succeeded)
   if (succeeded(compilation)) {
     for (const auto *def : (*compilation)->getDefinitions()) {
       llvm::lsp::CodeAction instantiateAction;

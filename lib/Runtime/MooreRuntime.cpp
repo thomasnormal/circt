@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <random>
@@ -3085,9 +3086,7 @@ extern "C" int32_t uvm_hdl_read(MooreString *path, uvm_hdl_data_t *value) {
 //===----------------------------------------------------------------------===//
 
 namespace {
-// Simple regex stub: just stores the pattern string for later matching.
-// A full implementation would use a regex library like PCRE2 that doesn't
-// require exception support.
+// Simple regex stub: stores the pattern string for minimal matching.
 struct UVMRegexStub {
   std::string pattern;
   bool deglob;
@@ -3109,10 +3108,23 @@ extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
     regexPattern = convertGlobToRegex(regexPattern, true);
   }
 
-  // Create a stub regex object
-  // Note: std::regex compilation can throw exceptions, but we build
-  // with -fno-exceptions. For now, use a simple substring match stub.
-  // A full implementation would use a regex library that doesn't need exceptions.
+  auto isSupportedPattern = [](llvm::StringRef pat) -> bool {
+    for (size_t i = 0; i < pat.size(); ++i) {
+      char c = pat[i];
+      if (c == '\\') {
+        if (i + 1 < pat.size())
+          ++i;
+        continue;
+      }
+      if (c == '[' || c == ']')
+        return false;
+    }
+    return true;
+  };
+
+  if (!isSupportedPattern(regexPattern))
+    return nullptr;
+
   auto *stub = new UVMRegexStub();
   stub->pattern = regexPattern;
   stub->deglob = useGlob;
@@ -3135,12 +3147,66 @@ extern "C" int32_t uvm_re_exec(void *rexp, MooreString *str) {
     return -1;
   std::string target(str->data, str->len);
 
-  // Simplified matching: just check if pattern is a substring
-  // A real implementation would use proper regex matching (e.g., PCRE2 library)
-  size_t pos = target.find(stub->pattern);
-  if (pos != std::string::npos) {
-    lastMatchBuffer = stub->pattern; // Store match for uvm_re_buffer
-    return static_cast<int32_t>(pos); // Return match position
+  auto readToken = [](llvm::StringRef pat, size_t idx, char &tok, bool &any,
+                      size_t &nextIdx) -> bool {
+    if (idx >= pat.size())
+      return false;
+    if (pat[idx] == '\\' && idx + 1 < pat.size()) {
+      tok = pat[idx + 1];
+      any = false;
+      nextIdx = idx + 2;
+      return true;
+    }
+    if (pat[idx] == '.') {
+      tok = 0;
+      any = true;
+      nextIdx = idx + 1;
+      return true;
+    }
+    tok = pat[idx];
+    any = false;
+    nextIdx = idx + 1;
+    return true;
+  };
+
+  std::function<bool(size_t, size_t, size_t &)> matchFrom =
+      [&](size_t patIdx, size_t strIdx, size_t &endIdx) -> bool {
+    if (patIdx >= stub->pattern.size()) {
+      endIdx = strIdx;
+      return true;
+    }
+    char tok = 0;
+    bool any = false;
+    size_t nextIdx = 0;
+    if (!readToken(stub->pattern, patIdx, tok, any, nextIdx))
+      return false;
+    bool hasStar =
+        (nextIdx < stub->pattern.size() && stub->pattern[nextIdx] == '*');
+    if (hasStar) {
+      size_t nextPat = nextIdx + 1;
+      if (matchFrom(nextPat, strIdx, endIdx))
+        return true;
+      size_t i = strIdx;
+      while (i < target.size() && (any || target[i] == tok)) {
+        ++i;
+        if (matchFrom(nextPat, i, endIdx))
+          return true;
+      }
+      return false;
+    }
+    if (strIdx >= target.size())
+      return false;
+    if (any || target[strIdx] == tok)
+      return matchFrom(nextIdx, strIdx + 1, endIdx);
+    return false;
+  };
+
+  for (size_t start = 0; start <= target.size(); ++start) {
+    size_t endIdx = 0;
+    if (matchFrom(0, start, endIdx)) {
+      lastMatchBuffer = target.substr(start, endIdx - start);
+      return static_cast<int32_t>(start);
+    }
   }
 
   lastMatchBuffer.clear();
