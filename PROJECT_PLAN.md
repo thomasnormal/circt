@@ -4,38 +4,44 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 55 - Constraint Limits + Coverage Auto-Bins + Simulation (January 17, 2026)
+## Current Status: ITERATION 56 - Distribution Constraints + Transition Bins + LSP (January 17, 2026)
 
-**Summary**: Added constraint solving iteration limits with fallback, implemented coverage auto-bin patterns, clarified simulation status (pure RTL works, UVM testbenches need alternative approach).
+**Summary**: Implemented distribution constraints for randomization, transition coverage bins with state machine tracking, documented simulation alternatives, and enhanced LSP go-to-definition.
 
-### Iteration 55 Highlights
+### Iteration 56 Highlights
 
-**Track A: AVIP Simulation Status** ⭐ IMPORTANT!
-- ✅ Pure RTL modules work with arcilator (combinational, sequential with sync reset)
-- ❌ AVIP BFM patterns BLOCKED: arcilator rejects llhd.sig/llhd.prb operations
-- Two paths forward:
-  1. Extract pure RTL for arcilator simulation (works today)
-  2. Need LLHD-aware simulator or different lowering for full UVM testbench support
+**Track A: LLHD Simulation Alternatives** ⭐ DOCUMENTED
+- ✅ Documented `circt-sim` for event-driven LLHD simulation
+- ✅ Documented transformation passes for arcilator compatibility
+- Pipeline: `--llhd-hoist-signals --llhd-deseq --llhd-lower-processes --llhd-sig2reg`
+- Note: Class-based designs need circt-sim (interpreter-style)
 
-**Track B: Constraint Iteration Limits** ⭐
-- ✅ Added `MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT` (10,000 attempts)
-- ✅ Added `MooreConstraintResult` enum and `MooreConstraintStats` struct
-- ✅ Added stats tracking, iteration limit control, constrained randomize functions
-- ✅ Warning output when constraints cannot be satisfied
-- Files: `MooreRuntime.h` (+110), `MooreRuntime.cpp` (+210)
-- Tests: `MooreRuntimeTest.cpp` (+342 lines)
+**Track B: Distribution Constraints** ⭐ MAJOR FEATURE
+- ✅ Implemented `DistExpression` visitor in Expressions.cpp
+- ✅ Added `moore.constraint.dist` operation
+- ✅ Added `__moore_randomize_with_dist` runtime function
+- ✅ Supports `:=` (per-value) and `:/` (per-range) weights
+- Tests: `dist-constraints.sv`, `dist-constraints-avip.sv` (new)
 
-**Track C: Coverage Auto-Bin Patterns** ⭐
-- ✅ Added `is_array` and `num_bins` to `CoverageBinDeclOp`
-- ✅ Added `auto_bin_max` to `CoverpointDeclOp`
-- ✅ Supports: `bins x[]`, `bins x[N]`, `option.auto_bin_max`
-- Test: `covergroup_auto_bins.sv` (new)
+**Track C: Transition Coverage Bins** ⭐ MAJOR FEATURE
+- ✅ Added `TransitionRepeatKind` enum (None, Consecutive, Nonconsecutive, GoTo)
+- ✅ Extended `CoverageBinDeclOp` with `transitions` attribute
+- ✅ Supports: `(A => B)`, `(A => B => C)`, `(A [*3] => B)`
+- ✅ Runtime transition tracking state machine
+- Test: `covergroup_transition_bins.sv` (new)
 
-**Track D: LSP Hover** ⭐
-- ✅ Verified hover already fully implemented
-- Supports: variables, ports, parameters, modules, functions, classes
+**Track D: LSP Go-to-Definition** ⭐
+- ✅ Added CallExpression visitor for function/task calls
+- ✅ Added compilation unit indexing
+- ✅ Added extends clause indexing for inheritance navigation
 
-**Summary**: 985 insertions across 10 files
+**Summary**: 918 insertions across 11 files
+
+---
+
+## Previous: ITERATION 55 - Constraint Limits + Coverage Auto-Bins (January 17, 2026)
+
+**Summary**: Added constraint solving iteration limits with fallback, implemented coverage auto-bin patterns. 985 insertions.
 
 ---
 

@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 56 - January 17, 2026
+
+### Distribution Constraints, Transition Bins, LSP Go-to-Definition
+
+**Track A: LLHD Simulation Alternatives** ⭐ DOCUMENTED
+- Documented `circt-sim` tool for event-driven LLHD simulation
+- Documented transformation passes: `llhd-deseq`, `llhd-lower-processes`, `llhd-sig2reg`
+- Recommended pipeline for arcilator compatibility:
+  `circt-opt --llhd-hoist-signals --llhd-deseq --llhd-lower-processes --llhd-sig2reg --canonicalize`
+- Limitations: class-based designs need circt-sim (interpreter-style)
+
+**Track B: Distribution Constraints** ⭐ MAJOR FEATURE
+- Implemented `DistExpression` visitor in Expressions.cpp (+96 lines)
+- Added `moore.constraint.dist` operation support
+- Added `__moore_randomize_with_dist` runtime with weighted random
+- Supports `:=` (per-value) and `:/` (per-range) weight semantics
+- Tests: `dist-constraints.sv`, `dist-constraints-avip.sv` (new)
+
+**Track C: Transition Coverage Bins** ⭐ MAJOR FEATURE
+- Added `TransitionRepeatKind` enum (None, Consecutive, Nonconsecutive, GoTo)
+- Extended `CoverageBinDeclOp` with `transitions` array attribute
+- Supports: `(A => B)`, `(A => B => C)`, `(A [*3] => B)`, etc.
+- Added runtime transition tracking state machine:
+  - `__moore_transition_tracker_create/destroy`
+  - `__moore_coverpoint_add_transition_bin`
+  - `__moore_transition_tracker_sample/reset`
+- Test: `covergroup_transition_bins.sv` (new, 94 lines)
+
+**Track D: LSP Go-to-Definition** ⭐
+- Added `CallExpression` visitor for function/task call indexing
+- Added compilation unit indexing for standalone classes
+- Added extends clause indexing for class inheritance navigation
+- Enhanced tests for function and task navigation
+
+**Summary**: 918 insertions across 11 files
+
+---
+
 ## Iteration 55 - January 17, 2026
 
 ### Constraint Iteration Limits, Coverage Auto-Bins, Simulation Analysis
