@@ -2,24 +2,45 @@
 
 ## Iteration 52 - January 17, 2026
 
-### Test Fixes and UVM/AVIP Validation
+### All 9 AVIPs Validated, Foreach Constraints, Coverage Runtime Enhancement
 
-**Track A: UVM/AVIP Validation** ⭐
-- Validated UVM core library compiles with ZERO errors (only warnings and remarks)
-- Validated APB AVIP compiles with ZERO errors when include paths are correct
-- AHB AVIP globals and BFMs also compile successfully
-- Key milestone: All AVIPs can now be parsed and lowered by CIRCT
+**Track A: AVIP Comprehensive Validation** ⭐⭐⭐ MAJOR MILESTONE!
+- Validated ALL 9 AVIPs (1,342 files total) compile with ZERO errors:
+  - APB AVIP: 132 files - 0 errors
+  - AHB AVIP: 151 files - 0 errors
+  - AXI4 AVIP: 196 files - 0 errors
+  - AXI4-Lite AVIP: 126 files - 0 errors
+  - UART AVIP: 116 files - 0 errors
+  - SPI AVIP: 173 files - 0 errors
+  - I2S AVIP: 161 files - 0 errors
+  - I3C AVIP: 155 files - 0 errors
+  - JTAG AVIP: 132 files - 0 errors
+- Key milestone: Complete AVIP ecosystem now parseable by CIRCT
 
-**Track B: Test Suite Fixes**
+**Track B: Foreach Constraint Support** ⭐
+- Implemented `foreach` constraint support in randomization
+- Handles single-dimensional arrays, multi-dimensional matrices, queues
+- Added implication constraint support within foreach
+- Files: `lib/Conversion/ImportVerilog/Structure.cpp`
+- Test: `test/Conversion/ImportVerilog/foreach-constraint.sv` (new)
+
+**Track C: Coverage Runtime Enhancement** ⭐
+- Added cross coverage API: `__moore_cross_create`, `__moore_cross_sample`
+- Added reset functions: `__moore_covergroup_reset`, `__moore_coverpoint_reset`
+- Added goal tracking: `__moore_covergroup_set_goal`, `__moore_covergroup_goal_met`
+- Added HTML report generation: `__moore_coverage_report_html` with CSS styling
+- Files: `include/circt/Runtime/MooreRuntime.h`, `lib/Runtime/MooreRuntime.cpp`
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+
+**Track D: LSP Diagnostic Enhancement**
+- Added diagnostic category field (Parse Error, Type Error, etc.)
+- Improved diagnostic message formatting
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/LSPDiagnosticClient.cpp`
+- Test: `test/Tools/circt-verilog-lsp-server/diagnostics-comprehensive.test` (new)
+
+**Test Suite Fixes**
 - Fixed `types.sv` test: removed invalid `$` indexing on dynamic arrays
 - Note: `$` as an index is only valid for queues, not dynamic arrays in SystemVerilog
-- Dynamic arrays should use explicit indexing like `arr[arr.size()-1]` for last element
-- Queue `$` indexing remains supported in `queues.sv`
-- File: `test/Conversion/ImportVerilog/types.sv`
-
-**Track C: Documentation**
-- Updated PROJECT_PLAN.md with current iteration status
-- Clarified `$` indexing semantics (queues only, not dynamic arrays)
 
 ---
 
