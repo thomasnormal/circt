@@ -62,9 +62,10 @@ public:
                       std::vector<llvm::lsp::Location> &locations);
 
   /// Return all references to an object pointed to by pos.
+  /// If includeDeclaration is true, also include the symbol's declaration.
   /// Thread-safe; acquires docMutex.
   void findReferencesOf(const llvm::lsp::URIForFile &uri,
-                        llvm::lsp::Position pos,
+                        llvm::lsp::Position pos, bool includeDeclaration,
                         std::vector<llvm::lsp::Location> &references);
 
   /// Return hover information for the object at the given position.

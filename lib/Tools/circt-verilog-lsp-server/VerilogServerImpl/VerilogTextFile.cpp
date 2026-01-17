@@ -152,9 +152,9 @@ void VerilogTextFile::getLocationsOf(
 
 void VerilogTextFile::findReferencesOf(
     const llvm::lsp::URIForFile &uri, llvm::lsp::Position pos,
-    std::vector<llvm::lsp::Location> &references) {
+    bool includeDeclaration, std::vector<llvm::lsp::Location> &references) {
   auto doc = getDocument();
-  doc->findReferencesOf(uri, pos, references);
+  doc->findReferencesOf(uri, pos, includeDeclaration, references);
 }
 
 std::optional<llvm::lsp::Hover>
