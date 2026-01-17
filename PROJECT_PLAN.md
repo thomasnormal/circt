@@ -4,7 +4,38 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 48 - Cross Coverage & LSP Improvements (January 17, 2026)
+## Current Status: ITERATION 49 - Virtual Interface Methods Fixed! (January 17, 2026)
+
+**Summary**: Fixed the last remaining UVM APB AVIP blocker! Virtual interface method calls like `vif.method()` from class methods now work correctly. APB AVIP compiles with ZERO "interface method call" errors.
+
+### Iteration 49 Highlights (commit c8825b649)
+
+**Track A: Virtual Interface Method Call Fix** ⭐⭐⭐ MAJOR FIX!
+- ✅ Fixed `vif.method()` calls from class methods failing with "interface method call requires interface instance"
+- ✅ Root cause: slang's `CallExpression::thisClass()` doesn't populate for vi method calls
+- ✅ Solution: Extract vi expression from syntax using `Expression::bind()` when `thisClass()` unavailable
+- ✅ APB AVIP now compiles with ZERO "interface method call" errors!
+- Files: `lib/Conversion/ImportVerilog/Expressions.cpp` (+35 lines)
+- Test: `test/Conversion/ImportVerilog/virtual-interface-methods.sv`
+
+**Track B: Coverage Runtime Documentation** ✓
+- ✅ Verified coverage infrastructure already comprehensive
+- ✅ Created test documenting runtime functions and reporting
+- ✅ Fixed syntax in `test/Conversion/MooreToCore/coverage-ops.mlir`
+- Test: `test/Conversion/ImportVerilog/coverage-runtime.sv`
+
+**Track C: SVA Sequence Declarations** ✓
+- ✅ Verified already supported via slang's AssertionInstanceExpression expansion
+- ✅ Created comprehensive test with sequences, properties, operators
+- Test: `test/Conversion/ImportVerilog/sva-sequence-decl.sv`
+
+**Track D: LSP Rename Symbol Support** ✓
+- ✅ Verified already fully implemented with prepareRename() and renameSymbol()
+- ✅ Comprehensive test coverage already exists
+
+---
+
+## Previous: ITERATION 48 - Cross Coverage & LSP Improvements (January 17, 2026)
 
 **Summary**: Added cross coverage support, improved LSP find-references, verified runtime randomization infrastructure. UVM APB AVIP now down to just 3 errors.
 
