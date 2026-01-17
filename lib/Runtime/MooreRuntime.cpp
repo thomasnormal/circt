@@ -3000,6 +3000,28 @@ thread_local std::map<MooreCovergroup *, CrossCoverageData> crossCoverageData;
 /// Map from covergroup to its coverage goal (default 100.0).
 thread_local std::map<MooreCovergroup *, double> covergroupGoals;
 
+/// Coverage options for covergroups (IEEE 1800-2017 Section 19.7.1).
+struct CovergroupOptions {
+  int64_t weight = 1;       ///< option.weight (default: 1)
+  bool perInstance = false; ///< option.per_instance (default: false)
+  int64_t atLeast = 1;      ///< option.at_least (default: 1)
+  std::string comment;      ///< option.comment (default: empty)
+};
+
+/// Map from covergroup to its options.
+thread_local std::map<MooreCovergroup *, CovergroupOptions> covergroupOptions;
+
+/// Coverage options for coverpoints (IEEE 1800-2017 Section 19.7.2).
+struct CoverpointOptions {
+  int64_t weight = 1;  ///< option.weight (default: 1)
+  double goal = 100.0; ///< option.goal (default: 100.0)
+  int64_t atLeast = 1; ///< option.at_least (default: 1)
+  std::string comment; ///< option.comment (default: empty)
+};
+
+/// Map from coverpoint to its options.
+thread_local std::map<MooreCoverpoint *, CoverpointOptions> coverpointOptions;
+
 } // anonymous namespace
 
 extern "C" int32_t __moore_cross_create(void *cg, const char *name,
@@ -3254,6 +3276,233 @@ extern "C" bool __moore_covergroup_goal_met(void *cg) {
   double goal = __moore_covergroup_get_goal(cg);
 
   return coverage >= goal;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Options - Covergroup Level
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_covergroup_set_weight(void *cg, int64_t weight) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+  covergroupOptions[covergroup].weight = weight > 0 ? weight : 1;
+}
+
+extern "C" int64_t __moore_covergroup_get_weight(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return 1;
+  auto it = covergroupOptions.find(covergroup);
+  return it != covergroupOptions.end() ? it->second.weight : 1;
+}
+
+extern "C" void __moore_covergroup_set_per_instance(void *cg, bool perInstance) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+  covergroupOptions[covergroup].perInstance = perInstance;
+}
+
+extern "C" bool __moore_covergroup_get_per_instance(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return false;
+  auto it = covergroupOptions.find(covergroup);
+  return it != covergroupOptions.end() ? it->second.perInstance : false;
+}
+
+extern "C" void __moore_covergroup_set_at_least(void *cg, int64_t atLeast) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+  covergroupOptions[covergroup].atLeast = atLeast > 0 ? atLeast : 1;
+}
+
+extern "C" int64_t __moore_covergroup_get_at_least(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return 1;
+  auto it = covergroupOptions.find(covergroup);
+  return it != covergroupOptions.end() ? it->second.atLeast : 1;
+}
+
+extern "C" void __moore_covergroup_set_comment(void *cg, const char *comment) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+  covergroupOptions[covergroup].comment = comment ? comment : "";
+}
+
+extern "C" const char *__moore_covergroup_get_comment(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return nullptr;
+  auto it = covergroupOptions.find(covergroup);
+  if (it != covergroupOptions.end() && !it->second.comment.empty())
+    return it->second.comment.c_str();
+  return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Options - Coverpoint Level
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_coverpoint_set_weight(void *cg, int32_t cp_index,
+                                               int64_t weight) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+  coverpointOptions[cp].weight = weight > 0 ? weight : 1;
+}
+
+extern "C" int64_t __moore_coverpoint_get_weight(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 1;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return 1;
+  auto it = coverpointOptions.find(cp);
+  return it != coverpointOptions.end() ? it->second.weight : 1;
+}
+
+extern "C" void __moore_coverpoint_set_goal(void *cg, int32_t cp_index,
+                                             double goal) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+  if (goal < 0.0)
+    goal = 0.0;
+  if (goal > 100.0)
+    goal = 100.0;
+  coverpointOptions[cp].goal = goal;
+}
+
+extern "C" double __moore_coverpoint_get_goal(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 100.0;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return 100.0;
+  auto it = coverpointOptions.find(cp);
+  return it != coverpointOptions.end() ? it->second.goal : 100.0;
+}
+
+extern "C" void __moore_coverpoint_set_at_least(void *cg, int32_t cp_index,
+                                                 int64_t atLeast) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+  coverpointOptions[cp].atLeast = atLeast > 0 ? atLeast : 1;
+}
+
+extern "C" int64_t __moore_coverpoint_get_at_least(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 1;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return 1;
+  auto it = coverpointOptions.find(cp);
+  return it != coverpointOptions.end() ? it->second.atLeast : 1;
+}
+
+extern "C" void __moore_coverpoint_set_comment(void *cg, int32_t cp_index,
+                                                const char *comment) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+  coverpointOptions[cp].comment = comment ? comment : "";
+}
+
+extern "C" const char *__moore_coverpoint_get_comment(void *cg,
+                                                       int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return nullptr;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return nullptr;
+  auto it = coverpointOptions.find(cp);
+  if (it != coverpointOptions.end() && !it->second.comment.empty())
+    return it->second.comment.c_str();
+  return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Weighted Coverage Calculation
+//===----------------------------------------------------------------------===//
+
+extern "C" double __moore_covergroup_get_weighted_coverage(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || covergroup->num_coverpoints == 0)
+    return 0.0;
+
+  double weightedSum = 0.0;
+  int64_t totalWeight = 0;
+
+  // Calculate weighted sum of coverpoint coverages
+  for (int32_t i = 0; i < covergroup->num_coverpoints; ++i) {
+    auto *cp = covergroup->coverpoints[i];
+    if (!cp)
+      continue;
+
+    int64_t weight = __moore_coverpoint_get_weight(cg, i);
+    double coverage = __moore_coverpoint_get_coverage(cg, i);
+
+    weightedSum += coverage * weight;
+    totalWeight += weight;
+  }
+
+  // Add cross coverage with weights (if implemented)
+  auto crossIt = crossCoverageData.find(covergroup);
+  if (crossIt != crossCoverageData.end()) {
+    for (size_t i = 0; i < crossIt->second.crosses.size(); ++i) {
+      // Cross coverage uses weight 1 by default
+      double crossCov = __moore_cross_get_coverage(cg, static_cast<int32_t>(i));
+      weightedSum += crossCov;
+      totalWeight += 1;
+    }
+  }
+
+  if (totalWeight == 0)
+    return 0.0;
+
+  return weightedSum / totalWeight;
+}
+
+extern "C" bool __moore_coverpoint_bin_covered(void *cg, int32_t cp_index,
+                                                int32_t bin_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return false;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp || !cp->bins || bin_index < 0 || bin_index >= cp->num_bins)
+    return false;
+
+  // Get the at_least threshold (coverpoint level overrides covergroup level)
+  int64_t atLeast = __moore_coverpoint_get_at_least(cg, cp_index);
+  if (atLeast <= 0) {
+    // Fall back to covergroup-level at_least
+    atLeast = __moore_covergroup_get_at_least(cg);
+  }
+
+  return cp->bins[bin_index] >= atLeast;
 }
 
 //===----------------------------------------------------------------------===//

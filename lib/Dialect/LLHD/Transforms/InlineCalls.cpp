@@ -9,6 +9,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
@@ -46,10 +47,12 @@ struct FunctionInliner : public InlinerInterface {
     if (!isa<func::FuncOp>(callable))
       return false;
 
-    // Only inline into SSACFG regions embedded within LLHD processes.
+    // Only inline into SSACFG regions embedded within procedural regions.
     if (!mayHaveSSADominance(*call->getParentRegion()))
       return false;
-    return call->getParentWithTrait<ProceduralRegion>();
+    if (call->getParentWithTrait<ProceduralRegion>())
+      return true;
+    return false;
   }
 
   bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned,
@@ -63,6 +66,11 @@ struct FunctionInliner : public InlinerInterface {
   }
 
   bool shouldAnalyzeRecursively(Operation *op) const override { return false; }
+
+  bool allowSingleBlockOptimization(
+      iterator_range<Region::iterator> inlinedBlocks) const override {
+    return false;
+  }
 };
 
 /// Pass implementation.
