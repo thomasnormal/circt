@@ -14,40 +14,20 @@
 // CHECK-NEXT:   "params": {
 // CHECK-NEXT:     "diagnostics": [
 // CHECK-NEXT:       {
-// CHECK-NEXT:         "message": "expected ';'",
-// CHECK-NEXT:         "range": {
-// CHECK-NEXT:           "end": {
-// CHECK-NEXT:             "character": 14,
-// CHECK-NEXT:             "line": 0
-// CHECK-NEXT:           },
-// CHECK-NEXT:           "start": {
-// CHECK-NEXT:             "character": 14,
-// CHECK-NEXT:             "line": 0
-// CHECK-NEXT:           }
-// CHECK-NEXT:         },
-// CHECK-NEXT:         "severity": 1,
-// CHECK-NEXT:         "source": "slang"
-// CHECK-NEXT:       },
-// CHECK-NEXT:       {
-// CHECK-NEXT:         "message": "initializing a static variable in a procedural context requires an explicit 'static' keyword",
-// CHECK-NEXT:         "range": {
-// CHECK-NEXT:           "end": {
-// CHECK-NEXT:             "character": 5,
-// CHECK-NEXT:             "line": 1
-// CHECK-NEXT:           },
-// CHECK-NEXT:           "start": {
-// CHECK-NEXT:             "character": 5,
-// CHECK-NEXT:             "line": 1
-// CHECK-NEXT:           }
-// CHECK-NEXT:         },
-// CHECK-NEXT:         "severity": 2,
-// CHECK-NEXT:         "source": "slang"
-// CHECK-NEXT:       }
-// CHECK-NEXT:     ],
-// CHECK-NEXT:     "uri": "test:///diagnostic.sv",
-// CHECK-NEXT:     "version": 1
-// CHECK-NEXT:   }
-// CHECK-NEXT: }
+// Check category field added for parse errors
+// CHECK:            "category": "Parse Error",
+// CHECK:            "message": "expected ';'",
+// CHECK:            "severity": 1,
+// CHECK:            "source": "slang"
+// CHECK:          },
+// CHECK:          {
+// CHECK:            "message": "initializing a static variable in a procedural context requires an explicit 'static' keyword",
+// CHECK:            "severity": 2,
+// CHECK:            "source": "slang"
+// CHECK:          }
+// CHECK:        ],
+// CHECK:        "uri": "test:///diagnostic.sv",
+// CHECK:        "version": 1
 // -----
 {"jsonrpc":"2.0","id":7,"method":"shutdown"}
 // -----
