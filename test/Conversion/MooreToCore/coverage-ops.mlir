@@ -15,8 +15,8 @@
 
 // Covergroup declaration with two coverpoints
 moore.covergroup.decl @TestCG {
-  moore.coverpoint.decl @data : i8
-  moore.coverpoint.decl @addr : i16
+  moore.coverpoint.decl @data : !moore.i8 {}
+  moore.coverpoint.decl @addr : !moore.i16 {}
 }
 
 // CHECK-LABEL: func @TestCovergroupInst
@@ -53,8 +53,8 @@ func.func @TestCovergroupGetCoverage(%cg: !moore.covergroup<@TestCG>) -> !moore.
 
 // Test covergroup with cross coverage (currently just erased)
 moore.covergroup.decl @CrossCG {
-  moore.coverpoint.decl @a : i4
-  moore.coverpoint.decl @b : i4
+  moore.coverpoint.decl @a : !moore.i4 {}
+  moore.coverpoint.decl @b : !moore.i4 {}
   moore.covercross.decl @ab targets [@a, @b]
 }
 

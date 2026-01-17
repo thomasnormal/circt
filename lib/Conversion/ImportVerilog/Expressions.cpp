@@ -2445,6 +2445,41 @@ struct RvalueExprVisitor : public ExprVisitor {
             interfaceInstance = context.convertRvalueExpression(*recvExpr);
           }
 
+          // For virtual interface method calls like `vif.method()`, slang
+          // doesn't populate thisClass(). We need to extract the virtual
+          // interface expression from the syntax.
+          if (!interfaceInstance && expr.syntax) {
+            // Look for MemberAccessExpressionSyntax or ScopedNameSyntax patterns
+            // that indicate a virtual interface method call.
+            const slang::syntax::ExpressionSyntax *viExprSyntax = nullptr;
+
+            if (auto *invocation = expr.syntax->as_if<
+                    slang::syntax::InvocationExpressionSyntax>()) {
+              // The left side of the invocation is the receiver expression
+              if (auto *memberAccess = invocation->left->as_if<
+                      slang::syntax::MemberAccessExpressionSyntax>()) {
+                viExprSyntax = memberAccess->left;
+              } else if (auto *scopedName = invocation->left->as_if<
+                             slang::syntax::ScopedNameSyntax>()) {
+                // For scoped names like `vi.wait_for_reset`, the left part
+                // is the virtual interface expression.
+                viExprSyntax = scopedName->left;
+              }
+            }
+
+            if (viExprSyntax && context.currentScope) {
+              // Create an AST context to bind the expression
+              slang::ast::ASTContext astContext(*context.currentScope,
+                                                slang::ast::LookupLocation::max);
+              // Use the general expression binding method
+              const auto &viExpr = slang::ast::Expression::bind(
+                  *viExprSyntax, astContext);
+              if (!viExpr.bad() && viExpr.type->isVirtualInterface()) {
+                interfaceInstance = context.convertRvalueExpression(viExpr);
+              }
+            }
+          }
+
           // If not available, check if we're inside an interface method calling
           // another method on the same interface. In this case, use the current
           // interface argument (the implicit first parameter of the interface
