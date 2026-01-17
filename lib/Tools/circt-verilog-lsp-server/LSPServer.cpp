@@ -172,6 +172,13 @@ struct LSPServer {
                     Callback<std::vector<InlayHint>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Signature Help
+  //===--------------------------------------------------------------------===//
+
+  void onSignatureHelp(const TextDocumentPositionParams &params,
+                       Callback<SignatureHelp> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -238,6 +245,11 @@ void LSPServer::onInitialize(const InitializeParams &params,
        llvm::json::Object{
            {"triggerCharacters", llvm::json::Array{"."}},
            {"resolveProvider", false},
+       }},
+      {"signatureHelpProvider",
+       llvm::json::Object{
+           {"triggerCharacters", llvm::json::Array{"(", ","}},
+           {"retriggerCharacters", llvm::json::Array{","}},
        }},
       {"codeActionProvider", true},
       {"renameProvider",
@@ -459,6 +471,15 @@ void LSPServer::onInlayHints(const InlayHintsParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Signature Help
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onSignatureHelp(const TextDocumentPositionParams &params,
+                                Callback<SignatureHelp> reply) {
+  reply(server.getSignatureHelp(params.textDocument.uri, params.position));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -531,6 +552,10 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Inlay Hints
   messageHandler.method("textDocument/inlayHint", &lspServer,
                         &LSPServer::onInlayHints);
+
+  // Signature Help
+  messageHandler.method("textDocument/signatureHelp", &lspServer,
+                        &LSPServer::onSignatureHelp);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

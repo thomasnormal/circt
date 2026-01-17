@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 50 - January 17, 2026
+
+### Interface Deduplication, BMC Repeat Patterns, LSP Signature Help
+
+**Track A: Full UVM AVIP Testing** (IN PROGRESS)
+- Testing APB AVIP with the virtual interface method fix from Iteration 49
+- Investigating interface signal resolution issues
+- Analyzing `interfaceSignalNames` map behavior for cross-interface method calls
+
+**Track B: Interface Deduplication Fix** ⭐
+- Fixed duplicate interface declarations when multiple classes use the same virtual interface type
+- Root cause: `InstanceBodySymbol*` used as cache key caused duplicates for same definition
+- Solution: Added `interfacesByDefinition` map indexed by `DefinitionSymbol*`
+- Now correctly deduplicates: `@my_if` instead of `@my_if`, `@my_if_0`, `@my_if_1`
+- Files: `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`, `Structure.cpp`
+- Test: `test/Conversion/ImportVerilog/virtual-interface-multiple-classes.sv`
+
+**Track C: BMC LTL Repeat Pattern Support** ⭐
+- Added `LTLGoToRepeatOpConversion` pattern for `a[->n]` sequences
+- Added `LTLNonConsecutiveRepeatOpConversion` pattern for `a[=n]` sequences
+- Registered patterns in `populateVerifToSMTConversionPatterns`
+- Both patterns now properly marked as illegal (must convert) in BMC
+- Documented LTL/SVA pattern support status for BMC
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Test: `test/Tools/circt-bmc/multi-step-assertions.mlir`
+
+**Track D: LSP Signature Help** ⭐
+- Implemented full `textDocument/signatureHelp` LSP support
+- Trigger characters: `(` and `,` for function/task calls
+- Features:
+  - Function/task signature display with return type
+  - Parameter information with highlighting
+  - Active parameter tracking (based on cursor position/comma count)
+  - Documentation in markdown format
+- Files: `VerilogDocument.h/.cpp`, `VerilogTextFile.h/.cpp`, `VerilogServer.h/.cpp`, `LSPServer.cpp`
+- Test: `test/Tools/circt-verilog-lsp-server/signature-help.test`
+
+---
+
 ## Iteration 49 - January 17, 2026
 
 ### Virtual Interface Method Calls Fixed! ⭐⭐⭐

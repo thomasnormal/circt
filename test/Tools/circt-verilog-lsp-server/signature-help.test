@@ -1,0 +1,68 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test signature help functionality for function and task calls.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// CHECK: "signatureHelpProvider"
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///signature.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_mod;\n  function int add(int a, int b);\n    return a + b;\n  endfunction\n\n  initial begin\n    int result;\n    result = add(\n  end\nendmodule"
+}}}
+// -----
+// Request signature help at position inside add( call (line 7, col 17)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/signatureHelp","params":{
+  "textDocument":{"uri":"test:///signature.sv"},
+  "position":{"line":7,"character":17}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "activeParameter": 0
+// CHECK:         "activeSignature": 0
+// CHECK:         "signatures": [
+// CHECK:           "documentation": "**Function**
+// CHECK:           "label": "function
+// CHECK:           add
+// CHECK:           "parameters": [
+// -----
+// Test signature help outside of a function call (should return empty signatures)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{
+  "textDocument":{"uri":"test:///signature.sv"},
+  "position":{"line":0,"character":5}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "activeParameter": 0
+// CHECK:         "activeSignature": 0
+// CHECK:         "signatures": []
+// -----
+// Test task signature help
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///task_sig.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module task_test;\n  task send_data(input logic [7:0] data, input logic valid, output logic ready);\n  endtask\n\n  initial begin\n    logic [7:0] d;\n    logic v, r;\n    send_data(d, \n  end\nendmodule"
+}}}
+// -----
+// Request signature help for task call with second parameter active
+{"jsonrpc":"2.0","id":3,"method":"textDocument/signatureHelp","params":{
+  "textDocument":{"uri":"test:///task_sig.sv"},
+  "position":{"line":7,"character":17}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "activeParameter": 1
+// CHECK:         "activeSignature": 0
+// CHECK:         "signatures": [
+// CHECK:           "documentation": "**Task**
+// CHECK:           "label": "task void send_data(input logic [7:0] data, input logic valid, output logic ready)"
+// CHECK:           "parameters": [
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

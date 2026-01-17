@@ -331,6 +331,71 @@ struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
   }
 };
 
+/// Convert ltl.goto_repeat to SMT boolean.
+/// goto_repeat is a non-consecutive repetition where the final repetition
+/// must hold at the end. For BMC single-step semantics:
+/// - goto_repeat(seq, 0, N) with base=0 means the sequence can match 0 times (true)
+/// - goto_repeat(seq, N, M) with N>0 means seq must hold at least once at this step
+/// The full temporal semantics (non-consecutive with final match) requires
+/// multi-step tracking which is handled by the BMC loop or LTLToCore pass.
+struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
+  using OpConversionPattern<ltl::GoToRepeatOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::GoToRepeatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    uint64_t base = op.getBase();
+
+    if (base == 0) {
+      // Zero repetitions: empty sequence, trivially true
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
+      return success();
+    }
+
+    // For base >= 1: at a single step, the sequence must hold
+    Value input = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getInput());
+    if (!input)
+      return failure();
+
+    rewriter.replaceOp(op, input);
+    return success();
+  }
+};
+
+/// Convert ltl.non_consecutive_repeat to SMT boolean.
+/// non_consecutive_repeat is like goto_repeat but the final match doesn't
+/// need to be at the end. For BMC single-step semantics:
+/// - non_consecutive_repeat(seq, 0, N) with base=0 means trivially true
+/// - non_consecutive_repeat(seq, N, M) with N>0 means seq must hold at this step
+struct LTLNonConsecutiveRepeatOpConversion
+    : OpConversionPattern<ltl::NonConsecutiveRepeatOp> {
+  using OpConversionPattern<ltl::NonConsecutiveRepeatOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::NonConsecutiveRepeatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    uint64_t base = op.getBase();
+
+    if (base == 0) {
+      // Zero repetitions: empty sequence, trivially true
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
+      return success();
+    }
+
+    // For base >= 1: at a single step, the sequence must hold
+    Value input = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+        adaptor.getInput());
+    if (!input)
+      return failure();
+
+    rewriter.replaceOp(op, input);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Verif Operation Conversion Patterns
 //===----------------------------------------------------------------------===//
@@ -1293,7 +1358,9 @@ void circt::populateVerifToSMTConversionPatterns(
                LTLImplicationOpConversion, LTLEventuallyOpConversion,
                LTLUntilOpConversion, LTLBooleanConstantOpConversion,
                LTLDelayOpConversion, LTLConcatOpConversion,
-               LTLRepeatOpConversion>(converter, patterns.getContext());
+               LTLRepeatOpConversion, LTLGoToRepeatOpConversion,
+               LTLNonConsecutiveRepeatOpConversion>(converter,
+                                                    patterns.getContext());
 
   // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
@@ -1423,7 +1490,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
   // Mark LTL operations as illegal so they get converted to SMT
   target.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::NotOp, ltl::ImplicationOp,
                       ltl::EventuallyOp, ltl::UntilOp, ltl::BooleanConstantOp,
-                      ltl::DelayOp, ltl::ConcatOp, ltl::RepeatOp>();
+                      ltl::DelayOp, ltl::ConcatOp, ltl::RepeatOp,
+                      ltl::GoToRepeatOp, ltl::NonConsecutiveRepeatOp>();
 
   SymbolCache symCache;
   symCache.addDefinitions(getOperation());

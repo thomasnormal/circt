@@ -146,6 +146,14 @@ public:
                      const llvm::lsp::Range &range,
                      std::vector<llvm::lsp::InlayHint> &hints);
 
+  //===--------------------------------------------------------------------===//
+  // Signature Help
+  //===--------------------------------------------------------------------===//
+
+  /// Return signature help for function/task calls at the given position.
+  llvm::lsp::SignatureHelp getSignatureHelp(const llvm::lsp::URIForFile &uri,
+                                            const llvm::lsp::Position &pos);
+
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 

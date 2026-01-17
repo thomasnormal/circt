@@ -126,6 +126,10 @@ public:
   void getInlayHints(const URIForFile &uri, const llvm::lsp::Range &range,
                      std::vector<llvm::lsp::InlayHint> &hints);
 
+  /// Return signature help for function/task calls at the given position.
+  llvm::lsp::SignatureHelp getSignatureHelp(const URIForFile &uri,
+                                            const llvm::lsp::Position &pos);
+
   /// Initialize workspace from LSP initialize parameters.
   void initializeWorkspace(const llvm::json::Value &initParams);
 

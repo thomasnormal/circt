@@ -118,6 +118,11 @@ public:
                      const llvm::lsp::Range &range,
                      std::vector<llvm::lsp::InlayHint> &hints);
 
+  /// Return signature help for function/task calls at the given position.
+  /// Thread-safe; acquires docMutex.
+  llvm::lsp::SignatureHelp getSignatureHelp(const llvm::lsp::URIForFile &uri,
+                                            llvm::lsp::Position pos);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

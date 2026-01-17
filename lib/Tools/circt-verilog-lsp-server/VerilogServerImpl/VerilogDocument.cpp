@@ -2824,3 +2824,242 @@ void VerilogDocument::getInlayHints(
       inst->body.visit(visitor);
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Signature Help
+//===----------------------------------------------------------------------===//
+
+/// Find the function/task call context at the given position.
+/// Returns the subroutine symbol and the active parameter index if found.
+static std::pair<const slang::ast::SubroutineSymbol *, int>
+findCallContext(std::string_view text, uint32_t offset,
+                slang::ast::Compilation &compilation,
+                slang::BufferID mainBufferId) {
+  // Find the opening parenthesis before the cursor
+  int parenDepth = 0;
+  int activeParam = 0;
+  int callStart = -1;
+
+  // Scan backwards from cursor to find the function call start
+  for (int i = offset - 1; i >= 0; --i) {
+    char c = text[i];
+    if (c == ')') {
+      ++parenDepth;
+    } else if (c == '(') {
+      if (parenDepth == 0) {
+        callStart = i;
+        break;
+      }
+      --parenDepth;
+    } else if (c == ',' && parenDepth == 0) {
+      ++activeParam;
+    }
+  }
+
+  if (callStart < 0)
+    return {nullptr, 0};
+
+  // Find the function name before the opening parenthesis
+  int nameEnd = callStart;
+  while (nameEnd > 0 && std::isspace(text[nameEnd - 1]))
+    --nameEnd;
+
+  int nameStart = nameEnd;
+  while (nameStart > 0 &&
+         (std::isalnum(text[nameStart - 1]) || text[nameStart - 1] == '_' ||
+          text[nameStart - 1] == '$'))
+    --nameStart;
+
+  if (nameStart >= nameEnd)
+    return {nullptr, 0};
+
+  std::string_view funcName = text.substr(nameStart, nameEnd - nameStart);
+
+  // Search for the function/task in the compilation
+  const slang::ast::SubroutineSymbol *foundSub = nullptr;
+
+  // Search in packages
+  for (auto *package : compilation.getPackages()) {
+    for (const auto &member : package->members()) {
+      if (member.kind == slang::ast::SymbolKind::Subroutine &&
+          member.name == funcName) {
+        foundSub = &member.as<slang::ast::SubroutineSymbol>();
+        break;
+      }
+    }
+    if (foundSub)
+      break;
+  }
+
+  // Search in top instances
+  if (!foundSub) {
+    for (auto *inst : compilation.getRoot().topInstances) {
+      for (const auto &member : inst->body.members()) {
+        if (member.kind == slang::ast::SymbolKind::Subroutine &&
+            member.name == funcName) {
+          foundSub = &member.as<slang::ast::SubroutineSymbol>();
+          break;
+        }
+      }
+      if (foundSub)
+        break;
+
+      // Also search in nested scopes (classes)
+      for (const auto &member : inst->body.members()) {
+        if (member.kind == slang::ast::SymbolKind::ClassType) {
+          const auto &classType = member.as<slang::ast::ClassType>();
+          for (const auto &classMember : classType.members()) {
+            if (classMember.kind == slang::ast::SymbolKind::Subroutine &&
+                classMember.name == funcName) {
+              foundSub = &classMember.as<slang::ast::SubroutineSymbol>();
+              break;
+            }
+          }
+        }
+        if (foundSub)
+          break;
+      }
+      if (foundSub)
+        break;
+    }
+  }
+
+  return {foundSub, activeParam};
+}
+
+/// Format a subroutine signature for display.
+static std::string formatSubroutineSignature(
+    const slang::ast::SubroutineSymbol &sub) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+
+  if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+    os << "function ";
+  else
+    os << "task ";
+
+  os << formatTypeDescription(sub.getReturnType()) << " " << sub.name << "(";
+
+  bool first = true;
+  for (const auto *arg : sub.getArguments()) {
+    if (!first)
+      os << ", ";
+    first = false;
+    switch (arg->direction) {
+    case slang::ast::ArgumentDirection::In:
+      os << "input ";
+      break;
+    case slang::ast::ArgumentDirection::Out:
+      os << "output ";
+      break;
+    case slang::ast::ArgumentDirection::InOut:
+      os << "inout ";
+      break;
+    case slang::ast::ArgumentDirection::Ref:
+      os << "ref ";
+      break;
+    }
+    os << formatTypeDescription(arg->getType()) << " " << arg->name;
+  }
+  os << ")";
+
+  return result;
+}
+
+llvm::lsp::SignatureHelp
+VerilogDocument::getSignatureHelp(const llvm::lsp::URIForFile &uri,
+                                  const llvm::lsp::Position &pos) {
+  llvm::lsp::SignatureHelp result;
+
+  if (failed(compilation))
+    return result;
+
+  auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+  auto offsetOpt = lspPositionToOffset(pos);
+  if (!offsetOpt)
+    return result;
+
+  uint32_t offset = *offsetOpt;
+
+  // Find the function/task call context
+  auto [sub, activeParam] =
+      findCallContext(text, offset, **compilation, mainBufferId);
+
+  if (!sub)
+    return result;
+
+  // Build the signature information
+  llvm::lsp::SignatureInformation sigInfo;
+  sigInfo.label = formatSubroutineSignature(*sub);
+
+  // Build the documentation
+  std::string doc;
+  llvm::raw_string_ostream docOs(doc);
+  if (sub->subroutineKind == slang::ast::SubroutineKind::Function)
+    docOs << "**Function** `" << sub->name << "`\n\n";
+  else
+    docOs << "**Task** `" << sub->name << "`\n\n";
+
+  if (!sub->getArguments().empty()) {
+    docOs << "**Parameters:**\n";
+    for (const auto *arg : sub->getArguments()) {
+      docOs << "- `" << arg->name << "`: "
+            << formatTypeDescription(arg->getType()) << "\n";
+    }
+  }
+  sigInfo.documentation = doc;
+
+  // Build parameter information
+  // Calculate label offsets for each parameter
+  std::string label = sigInfo.label;
+  size_t parenPos = label.find('(');
+  size_t currentPos = parenPos + 1;
+
+  for (const auto *arg : sub->getArguments()) {
+    llvm::lsp::ParameterInformation paramInfo;
+
+    // Find this parameter in the label
+    std::string paramLabel;
+    llvm::raw_string_ostream paramOs(paramLabel);
+    switch (arg->direction) {
+    case slang::ast::ArgumentDirection::In:
+      paramOs << "input ";
+      break;
+    case slang::ast::ArgumentDirection::Out:
+      paramOs << "output ";
+      break;
+    case slang::ast::ArgumentDirection::InOut:
+      paramOs << "inout ";
+      break;
+    case slang::ast::ArgumentDirection::Ref:
+      paramOs << "ref ";
+      break;
+    }
+    paramOs << formatTypeDescription(arg->getType()) << " " << arg->name;
+
+    paramInfo.labelString = paramLabel;
+
+    // Find the offset in the label
+    size_t paramStart = label.find(paramLabel, currentPos);
+    if (paramStart != std::string::npos) {
+      paramInfo.labelOffsets = {static_cast<unsigned>(paramStart),
+                                static_cast<unsigned>(paramStart + paramLabel.length())};
+      currentPos = paramStart + paramLabel.length();
+    }
+
+    paramInfo.documentation =
+        formatTypeDescription(arg->getType()) + " " + std::string(arg->name);
+
+    sigInfo.parameters.push_back(std::move(paramInfo));
+  }
+
+  result.signatures.push_back(std::move(sigInfo));
+  result.activeSignature = 0;
+  result.activeParameter = std::min(activeParam,
+                                    static_cast<int>(sub->getArguments().size()) - 1);
+  if (result.activeParameter < 0)
+    result.activeParameter = 0;
+
+  return result;
+}

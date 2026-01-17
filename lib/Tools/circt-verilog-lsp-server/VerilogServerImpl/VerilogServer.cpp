@@ -265,6 +265,15 @@ void circt::lsp::VerilogServer::getInlayHints(
     fileIt->second->getInlayHints(uri, range, hints);
 }
 
+llvm::lsp::SignatureHelp
+circt::lsp::VerilogServer::getSignatureHelp(const URIForFile &uri,
+                                            const Position &pos) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end())
+    return fileIt->second->getSignatureHelp(uri, pos);
+  return llvm::lsp::SignatureHelp();
+}
+
 //===----------------------------------------------------------------------===//
 // Workspace Management
 //===----------------------------------------------------------------------===//
