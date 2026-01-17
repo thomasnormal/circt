@@ -9,8 +9,7 @@ module test_coverage;
   logic [3:0] data;
 
   // CHECK: moore.module @test_coverage
-  // CHECK: moore.covergroup.decl @cg
-  // CHECK:   moore.coverpoint.decl @cp_data
+  // CHECK:   moore.covergroup.inst @cg
 
   // Basic covergroup with a coverpoint
   // Note: Explicit bin definitions are not yet fully supported in the import,
@@ -22,13 +21,15 @@ module test_coverage;
     // Future: bins high = {[12:15]};
   endgroup
 
-  // CHECK: moore.covergroup.inst @cg
   cg cg_inst = new();
 
   // Test sampling (implicit via clocking event)
   // The runtime will track coverage data when values are sampled.
 
 endmodule
+
+// CHECK: moore.covergroup.decl @cg
+// CHECK:   moore.coverpoint.decl @cp_data
 
 // Test multiple coverpoints in a single covergroup
 module test_multi_coverpoint;
@@ -38,10 +39,7 @@ module test_multi_coverpoint;
   logic wr_en;
 
   // CHECK: moore.module @test_multi_coverpoint
-  // CHECK: moore.covergroup.decl @transaction_cg
-  // CHECK:   moore.coverpoint.decl @addr_cp
-  // CHECK:   moore.coverpoint.decl @data_cp
-  // CHECK:   moore.coverpoint.decl @wr_en_cp
+  // CHECK:   moore.covergroup.inst @transaction_cg
 
   covergroup transaction_cg @(posedge clk);
     addr_cp: coverpoint addr;
@@ -49,10 +47,14 @@ module test_multi_coverpoint;
     wr_en_cp: coverpoint wr_en;
   endgroup
 
-  // CHECK: moore.covergroup.inst @transaction_cg
   transaction_cg cov = new();
 
 endmodule
+
+// CHECK: moore.covergroup.decl @transaction_cg
+// CHECK:   moore.coverpoint.decl @addr_cp
+// CHECK:   moore.coverpoint.decl @data_cp
+// CHECK:   moore.coverpoint.decl @wr_en_cp
 
 // Test covergroup with sampling method
 module test_sampling;
@@ -60,7 +62,6 @@ module test_sampling;
   logic [3:0] value;
 
   // CHECK: moore.module @test_sampling
-  // CHECK: moore.covergroup.decl @sample_cg
 
   covergroup sample_cg @(posedge clk);
     cp: coverpoint value;
@@ -72,3 +73,6 @@ module test_sampling;
   // which will trigger runtime coverage data collection.
 
 endmodule
+
+// CHECK: moore.covergroup.decl @sample_cg
+// CHECK:   moore.coverpoint.decl @cp

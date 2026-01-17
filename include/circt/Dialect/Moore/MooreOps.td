@@ -3384,16 +3384,105 @@ def CovergroupDeclOp
     : MooreOp<"covergroup.decl", [Symbol, SymbolTable, IsolatedFromAbove,
                                   NoTerminator, SingleBlock]> {
   let summary = "Covergroup declaration";
-  let arguments = (ins SymbolNameAttr:$sym_name);
+  let description = [{
+    Declares a covergroup type. A covergroup defines a set of coverpoints
+    and cross coverage items that track functional coverage during simulation.
+
+    The optional `sampling_event` attribute describes the event that triggers
+    coverage sampling (e.g., "@(posedge clk)").
+
+    Example:
+    ```mlir
+    moore.covergroup.decl @my_cg sampling_event<"@(posedge clk)"> {
+      moore.coverpoint.decl @data_cp : !moore.l8 {}
+    }
+    ```
+
+    See IEEE 1800-2017 Section 19 "Functional coverage".
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       OptionalAttr<StrAttr>:$sampling_event);
   let regions = (region AnyRegion:$body);
-  let assemblyFormat = [{ $sym_name attr-dict-with-keyword $body }];
+  let assemblyFormat = [{
+    $sym_name (`sampling_event` `<` $sampling_event^ `>`)?
+    attr-dict-with-keyword $body
+  }];
 }
 
 def CoverpointDeclOp
-    : MooreOp<"coverpoint.decl", [Symbol, HasParent<"CovergroupDeclOp">]> {
+    : MooreOp<"coverpoint.decl", [Symbol, SymbolTable,
+                                  HasParent<"CovergroupDeclOp">,
+                                  NoTerminator, SingleBlock]> {
   let summary = "Coverpoint declaration";
+  let description = [{
+    Declares a coverpoint within a covergroup. A coverpoint tracks coverage
+    of values or expressions. It may optionally contain bins that specify
+    how values should be grouped for coverage tracking.
+
+    Example without bins:
+    ```mlir
+    moore.coverpoint.decl @data_cp : !moore.l8 {}
+    ```
+
+    Example with bins:
+    ```mlir
+    moore.coverpoint.decl @data_cp : !moore.l8 {
+      moore.coverbin.decl @low kind<bins> values [0, 1, 2, 3]
+      moore.coverbin.decl @high kind<bins> values [4, 5, 6, 7]
+    }
+    ```
+
+    See IEEE 1800-2017 Section 19.5 "Defining coverage points".
+  }];
   let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type);
-  let assemblyFormat = [{ $sym_name `:` $type attr-dict }];
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{ $sym_name `:` $type attr-dict-with-keyword $body }];
+}
+
+def CoverageBinKind : I32EnumAttr<"CoverageBinKind", "coverage bin kind", [
+  I32EnumAttrCase<"Bins", 0, "bins">,
+  I32EnumAttrCase<"IllegalBins", 1, "illegal_bins">,
+  I32EnumAttrCase<"IgnoreBins", 2, "ignore_bins">
+]> {
+  let cppNamespace = "::circt::moore";
+}
+
+def CoverageBinDeclOp
+    : MooreOp<"coverbin.decl", [Symbol, HasParent<"CoverpointDeclOp">]> {
+  let summary = "Coverage bin declaration";
+  let description = [{
+    Declares a coverage bin within a coverpoint. Bins specify how values
+    should be grouped for coverage tracking.
+
+    The `kind` attribute specifies the bin type:
+    - `bins`: Normal coverage bins that count hits
+    - `illegal_bins`: Values that should not occur (violations are reported)
+    - `ignore_bins`: Values to exclude from coverage calculation
+
+    The `values` attribute contains an array of integer values or ranges
+    that belong to this bin.
+
+    Example:
+    ```mlir
+    moore.coverbin.decl @low kind<bins> values [0, 1, 2, 3]
+    moore.coverbin.decl @high kind<bins> values [4, 5, 6, 7]
+    moore.coverbin.decl @bad kind<illegal_bins> values [255]
+    ```
+
+    See IEEE 1800-2017 Section 19.5.1 "Defining bins for values".
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       CoverageBinKind:$kind,
+                       UnitAttr:$is_wildcard,
+                       UnitAttr:$is_default,
+                       OptionalAttr<ArrayAttr>:$values);
+  let assemblyFormat = [{
+    $sym_name `kind` `<` $kind `>`
+    (`wildcard` $is_wildcard^)?
+    (`default` $is_default^)?
+    (`values` $values^)?
+    attr-dict
+  }];
 }
 
 def CoverCrossDeclOp

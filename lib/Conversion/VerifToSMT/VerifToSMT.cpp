@@ -675,6 +675,15 @@ struct RefinementCheckingOpConversion
   }
 };
 
+/// Information about a ltl.delay operation that needs multi-step tracking.
+/// For delay N, we need N slots in the delay buffer to track the signal history.
+struct DelayInfo {
+  ltl::DelayOp op;           // The original delay operation
+  Value inputSignal;         // The signal being delayed
+  uint64_t delay;            // The delay amount (N cycles)
+  size_t bufferStartIndex;   // Index into the delay buffer iter_args
+};
+
 /// Lower a verif::BMCOp operation to an MLIR program that performs the bounded
 /// model check
 struct VerifBoundedModelCheckingOpConversion
@@ -775,6 +784,112 @@ struct VerifBoundedModelCheckingOpConversion
       if (isa<seq::ClockType>(ty))
         numInitClocks++;
 
+    // =========================================================================
+    // Multi-step delay tracking:
+    // Scan the circuit for ltl.delay operations with delay > 0 and set up
+    // the infrastructure to track delayed signals across time steps.
+    //
+    // For each ltl.delay(signal, N) with N > 0:
+    // 1. Add N new block arguments to the circuit (for the delay buffer)
+    // 2. Add N new yield operands (shifted buffer + current signal)
+    // 3. Replace the delay op with the oldest buffer entry (what was N steps ago)
+    //
+    // The delay buffer is a shift register: each iteration, values shift down
+    // and the current signal value enters at position N-1.
+    // buffer[0] contains the value from N steps ago (the delayed value to use).
+    // =========================================================================
+    SmallVector<DelayInfo> delayInfos;
+    size_t totalDelaySlots = 0;
+
+    // First pass: collect all delay ops with delay > 0
+    circuitBlock.walk([&](ltl::DelayOp delayOp) {
+      uint64_t delay = delayOp.getDelay();
+      if (delay > 0) {
+        DelayInfo info;
+        info.op = delayOp;
+        info.inputSignal = delayOp.getInput();
+        info.delay = delay;
+        info.bufferStartIndex = totalDelaySlots;
+        delayInfos.push_back(info);
+        totalDelaySlots += delay;
+      }
+    });
+
+    // Second pass: modify the circuit block to add delay buffer infrastructure
+    // We need to do this BEFORE region type conversion.
+    //
+    // Output order after modification:
+    // [original outputs (registers)] [delay buffer outputs] [final check outputs]
+    //
+    // We need to insert delay buffer outputs BEFORE final check outputs.
+    SmallVector<ltl::DelayOp> delayOpsToErase;
+    if (!delayInfos.empty()) {
+      // For each delay op, add buffer arguments and modify the yield
+      auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
+
+      // Get current operands and split off the final check values
+      SmallVector<Value> origOperands(yieldOp.getOperands().begin(),
+                                      yieldOp.getOperands().end());
+      // Final check values were appended last, so they're at the end
+      size_t numOrigOutputs = origOperands.size() - numFinalAsserts;
+      SmallVector<Value> newYieldOperands(origOperands.begin(),
+                                          origOperands.begin() + numOrigOutputs);
+      SmallVector<Value> delayBufferOutputs;
+
+      for (auto &info : delayInfos) {
+        // The input signal type - use i1 for LTL properties (they're booleans)
+        Type bufferElementType = rewriter.getI1Type();
+
+        // Add N block arguments for the delay buffer (oldest to newest)
+        SmallVector<Value> bufferArgs;
+        for (uint64_t i = 0; i < info.delay; ++i) {
+          auto arg = circuitBlock.addArgument(bufferElementType, loc);
+          bufferArgs.push_back(arg);
+        }
+
+        // Replace all uses of the delay op with the oldest buffer entry (index 0)
+        // This is the value from N steps ago
+        // Note: We save the input signal BEFORE replacing uses, as it comes from
+        // the delay op's input operand
+        Value inputSig = info.inputSignal;
+        info.op.replaceAllUsesWith(bufferArgs[0]);
+        delayOpsToErase.push_back(info.op);
+
+        // Add yield operands: shifted buffer (drop oldest, add current)
+        // new_buffer = [buffer[1], buffer[2], ..., buffer[N-1], current_signal]
+        for (uint64_t i = 1; i < info.delay; ++i) {
+          delayBufferOutputs.push_back(bufferArgs[i]);
+        }
+        delayBufferOutputs.push_back(inputSig);
+      }
+
+      // Construct final yield: [orig outputs] [delay buffers] [final checks]
+      newYieldOperands.append(delayBufferOutputs);
+      newYieldOperands.append(origOperands.begin() + numOrigOutputs,
+                              origOperands.end());  // final check values
+
+      // Update the yield with new operands
+      yieldOp->setOperands(newYieldOperands);
+
+      // Erase the delay ops (after all replacements are done)
+      for (auto delayOp : delayOpsToErase)
+        rewriter.eraseOp(delayOp);
+
+      // Update the type vectors to include the new arguments and outputs
+      oldCircuitInputTy.clear();
+      oldCircuitInputTy.append(op.getCircuit().getArgumentTypes().begin(),
+                               op.getCircuit().getArgumentTypes().end());
+    }
+
+    // Re-compute circuit types after potential modification
+    circuitInputTy.clear();
+    circuitOutputTy.clear();
+    if (failed(typeConverter->convertTypes(oldCircuitInputTy, circuitInputTy)))
+      return failure();
+    if (failed(typeConverter->convertTypes(
+            op.getCircuit().front().back().getOperandTypes(), circuitOutputTy)))
+      return failure();
+
     if (failed(rewriter.convertRegionTypes(&op.getInit(), *typeConverter)))
       return failure();
     if (failed(rewriter.convertRegionTypes(&op.getLoop(), *typeConverter)))
@@ -837,14 +952,31 @@ struct VerifBoundedModelCheckingOpConversion
     // InputDecls order should be <circuit arguments> <state arguments>
     // <finalChecks> <wasViolated>
     // Get list of clock indexes in circuit args
+    //
+    // Circuit arguments layout (after delay buffer modification):
+    // [original args (clocks, inputs, regs)] [delay buffer slots]
+    //
+    // Original args have size: oldCircuitInputTy.size() - totalDelaySlots
+    // Delay buffer slots have size: totalDelaySlots
+    size_t origCircuitArgsSize = oldCircuitInputTy.size() - totalDelaySlots;
+
     size_t initIndex = 0;
     SmallVector<Value> inputDecls;
     SmallVector<int> clockIndexes;
     size_t nonRegIndex = 0; // Track position among non-register inputs
     for (auto [curIndex, oldTy, newTy] :
          llvm::enumerate(oldCircuitInputTy, circuitInputTy)) {
-      // Check if this is a register input
-      bool isRegister = curIndex >= oldCircuitInputTy.size() - numRegs;
+      // Check if this is a delay buffer slot (added at the end)
+      bool isDelayBuffer = curIndex >= origCircuitArgsSize;
+      if (isDelayBuffer) {
+        // Initialize delay buffers to false (no prior history at step 0)
+        // The type is smt::BVType<1> after conversion (i1 -> bv<1>)
+        inputDecls.push_back(smt::BVConstantOp::create(rewriter, loc, 0, 1));
+        continue;
+      }
+
+      // Check if this is a register input (registers are at the end of original args)
+      bool isRegister = curIndex >= origCircuitArgsSize - numRegs;
 
       // Check if this is a clock - either explicit seq::ClockType or
       // an i1 that corresponds to an init clock (for i1 clocks converted via
@@ -862,7 +994,7 @@ struct VerifBoundedModelCheckingOpConversion
         nonRegIndex++;
       if (isRegister) {
         auto initVal =
-            initialValues[curIndex - oldCircuitInputTy.size() + numRegs];
+            initialValues[curIndex - origCircuitArgsSize + numRegs];
         if (auto initIntAttr = dyn_cast<IntegerAttr>(initVal)) {
           const auto &cstInt = initIntAttr.getValue();
           assert(cstInt.getBitWidth() ==
@@ -914,12 +1046,20 @@ struct VerifBoundedModelCheckingOpConversion
                   builder, loc, circuitFuncOp,
                   iterArgs.take_front(circuitFuncOp.getNumArguments()))
                   ->getResults();
-          ValueRange circuitOutputs =
-              numFinalAsserts == 0 ? circuitCallOuts
-                                   : circuitCallOuts.drop_back(numFinalAsserts);
+
+          // Circuit outputs are ordered as:
+          // [original outputs (registers)] [delay buffer outputs] [final checks]
+          //
+          // Note: totalDelaySlots is captured from the outer scope
           ValueRange finalCheckOutputs =
               numFinalAsserts == 0 ? ValueRange{}
                                    : circuitCallOuts.take_back(numFinalAsserts);
+          ValueRange nonFinalOutputs =
+              numFinalAsserts == 0 ? circuitCallOuts
+                                   : circuitCallOuts.drop_back(numFinalAsserts);
+          // Split non-final outputs into register outputs and delay buffer outputs
+          ValueRange delayBufferOutputs = nonFinalOutputs.take_back(totalDelaySlots);
+          ValueRange circuitOutputs = nonFinalOutputs.drop_back(totalDelaySlots);
 
           // If we have a cycle up to which we ignore assertions, we need an
           // IfOp to track this
@@ -993,9 +1133,12 @@ struct VerifBoundedModelCheckingOpConversion
           // Collect decls to yield at end of iteration
           SmallVector<Value> newDecls;
           size_t nonRegIdx = 0;
+          // Circuit args are: [clocks, inputs] [registers] [delay buffers]
+          // Drop both registers and delay buffers to get just clocks and inputs
+          size_t numNonStateArgs = oldCircuitInputTy.size() - numRegs - totalDelaySlots;
           for (auto [oldTy, newTy] :
-               llvm::zip(TypeRange(oldCircuitInputTy).drop_back(numRegs),
-                         TypeRange(circuitInputTy).drop_back(numRegs))) {
+               llvm::zip(TypeRange(oldCircuitInputTy).take_front(numNonStateArgs),
+                         TypeRange(circuitInputTy).take_front(numNonStateArgs))) {
             // Check if this is a clock - either explicit seq::ClockType or
             // an i1 that corresponds to an init clock
             bool isClock = isa<seq::ClockType>(oldTy) ||
@@ -1033,7 +1176,8 @@ struct VerifBoundedModelCheckingOpConversion
                   smt::EqOp::create(builder, loc, isPosedgeBV, trueBV);
               auto regStates =
                   iterArgs.take_front(circuitFuncOp.getNumArguments())
-                      .take_back(numRegs);
+                      .take_back(numRegs + totalDelaySlots)
+                      .drop_back(totalDelaySlots);
               SmallVector<Value> nextRegStates;
               for (auto [regState, regInput] :
                    llvm::zip(regStates, regInputs)) {
@@ -1046,6 +1190,11 @@ struct VerifBoundedModelCheckingOpConversion
               newDecls.append(nextRegStates);
             }
           }
+
+          // Add delay buffer outputs for the next iteration
+          // These are the shifted buffer values from the circuit
+          for (Value delayVal : delayBufferOutputs)
+            newDecls.push_back(delayVal);
 
           // Add the rest of the loop state args
           for (; loopIndex < loopVals.size(); ++loopIndex)

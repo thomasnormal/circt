@@ -9,6 +9,8 @@
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/Constraints.h"
+#include "slang/ast/EvalContext.h"
+#include "slang/ast/TimingControl.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
@@ -2817,9 +2819,40 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
   else
     builder.setInsertionPoint(it->second);
 
+  // Get the sampling event string, if present.
+  mlir::StringAttr samplingEventAttr;
+  if (auto *event = covergroup.getCoverageEvent()) {
+    // Convert the timing control to a descriptive string.
+    std::string eventStr;
+    llvm::raw_string_ostream os(eventStr);
+    os << "@(";
+    if (event->kind == slang::ast::TimingControlKind::SignalEvent) {
+      auto &signalEvent =
+          event->as<slang::ast::SignalEventControl>();
+      if (signalEvent.edge == slang::ast::EdgeKind::PosEdge)
+        os << "posedge ";
+      else if (signalEvent.edge == slang::ast::EdgeKind::NegEdge)
+        os << "negedge ";
+      // Get the expression text for the signal
+      if (auto *nameExpr =
+              signalEvent.expr.as_if<slang::ast::NamedValueExpression>()) {
+        os << nameExpr->symbol.name;
+      } else {
+        os << "signal";
+      }
+    } else if (event->kind == slang::ast::TimingControlKind::EventList) {
+      os << "event_list";
+    } else {
+      os << "event";
+    }
+    os << ")";
+    samplingEventAttr = builder.getStringAttr(eventStr);
+  }
+
   // Create the covergroup declaration op.
-  auto covergroupOp =
-      moore::CovergroupDeclOp::create(builder, loc, covergroup.name);
+  auto covergroupOp = moore::CovergroupDeclOp::create(builder, loc,
+                                                       covergroup.name,
+                                                       samplingEventAttr);
   orderedRootOps.insert({covergroup.location, covergroupOp});
   symbolTable.insert(covergroupOp);
 
@@ -2882,6 +2915,57 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
       auto cpOp = moore::CoverpointDeclOp::create(
           builder, cpLoc, builder.getStringAttr(cpName),
           mlir::TypeAttr::get(exprType));
+
+      // Create the coverpoint body block for bins.
+      auto &cpBody = cpOp.getBody();
+      cpBody.emplaceBlock();
+
+      // Convert bins within this coverpoint.
+      {
+        OpBuilder::InsertionGuard binGuard(builder);
+        builder.setInsertionPointToStart(&cpBody.front());
+
+        for (const auto &cpMember : cp->members()) {
+          if (auto *bin = cpMember.as_if<slang::ast::CoverageBinSymbol>()) {
+            auto binLoc = convertLocation(bin->location);
+
+            // Determine bin kind
+            moore::CoverageBinKind binKind;
+            switch (bin->binsKind) {
+            case slang::ast::CoverageBinSymbol::Bins:
+              binKind = moore::CoverageBinKind::Bins;
+              break;
+            case slang::ast::CoverageBinSymbol::IllegalBins:
+              binKind = moore::CoverageBinKind::IllegalBins;
+              break;
+            case slang::ast::CoverageBinSymbol::IgnoreBins:
+              binKind = moore::CoverageBinKind::IgnoreBins;
+              break;
+            }
+
+            // Collect bin values as integer attributes.
+            SmallVector<mlir::Attribute> valueAttrs;
+            auto binValues = bin->getValues();
+            for (const auto *valExpr : binValues) {
+              // Try to evaluate the expression as a constant.
+              auto result = evaluateConstant(*valExpr);
+              if (result.isInteger()) {
+                auto intVal = result.integer().as<int64_t>();
+                if (intVal)
+                  valueAttrs.push_back(
+                      builder.getI64IntegerAttr(intVal.value()));
+              }
+            }
+
+            auto valuesAttr =
+                valueAttrs.empty() ? nullptr : builder.getArrayAttr(valueAttrs);
+
+            moore::CoverageBinDeclOp::create(
+                builder, binLoc, builder.getStringAttr(bin->name), binKind,
+                bin->isWildcard, bin->isDefault, valuesAttr);
+          }
+        }
+      }
 
       // Store the symbol ref for cross references.
       coverpointSymbols[cpName] =

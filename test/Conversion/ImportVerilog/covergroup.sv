@@ -7,25 +7,30 @@ module test_covergroups;
   logic [3:0] data;
   logic       valid;
 
-  // CHECK: moore.covergroup.decl @cg1 {
-  // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8
+  // CHECK: moore.covergroup.decl @cg1 sampling_event<"@(posedge valid)"> {
+  // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8 {
+  // CHECK:   }
   // CHECK: }
   covergroup cg1 @(posedge valid);
     coverpoint addr;
   endgroup
 
-  // CHECK: moore.covergroup.decl @cg2 {
-  // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8
-  // CHECK:   moore.coverpoint.decl @data_cp : !moore.l4
+  // CHECK: moore.covergroup.decl @cg2 sampling_event<"@(posedge valid)"> {
+  // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8 {
+  // CHECK:   }
+  // CHECK:   moore.coverpoint.decl @data_cp : !moore.l4 {
+  // CHECK:   }
   // CHECK: }
   covergroup cg2 @(posedge valid);
     addr_cp: coverpoint addr;
     data_cp: coverpoint data;
   endgroup
 
-  // CHECK: moore.covergroup.decl @cg3 {
-  // CHECK:   moore.coverpoint.decl @a_cp : !moore.l8
-  // CHECK:   moore.coverpoint.decl @d_cp : !moore.l4
+  // CHECK: moore.covergroup.decl @cg3 sampling_event<"@(posedge valid)"> {
+  // CHECK:   moore.coverpoint.decl @a_cp : !moore.l8 {
+  // CHECK:   }
+  // CHECK:   moore.coverpoint.decl @d_cp : !moore.l4 {
+  // CHECK:   }
   // CHECK:   moore.covercross.decl @axd targets [@a_cp, @d_cp]
   // CHECK: }
   covergroup cg3 @(posedge valid);
