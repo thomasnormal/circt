@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 52 - January 17, 2026
+
+### Test Fixes and UVM/AVIP Validation
+
+**Track A: UVM/AVIP Validation** ⭐
+- Validated UVM core library compiles with ZERO errors (only warnings and remarks)
+- Validated APB AVIP compiles with ZERO errors when include paths are correct
+- AHB AVIP globals and BFMs also compile successfully
+- Key milestone: All AVIPs can now be parsed and lowered by CIRCT
+
+**Track B: Test Suite Fixes**
+- Fixed `types.sv` test: removed invalid `$` indexing on dynamic arrays
+- Note: `$` as an index is only valid for queues, not dynamic arrays in SystemVerilog
+- Dynamic arrays should use explicit indexing like `arr[arr.size()-1]` for last element
+- Queue `$` indexing remains supported in `queues.sv`
+- File: `test/Conversion/ImportVerilog/types.sv`
+
+**Track C: Documentation**
+- Updated PROJECT_PLAN.md with current iteration status
+- Clarified `$` indexing semantics (queues only, not dynamic arrays)
+
+---
+
 ## Iteration 51 - January 18, 2026
 
 ### DPI/VPI Runtime, Randc Fixes, LSP Code Actions
@@ -8,7 +31,8 @@
 - Added in-memory HDL path map for `uvm_hdl_*` access (force/release semantics)
 - `uvm_dpi_get_next_arg_c` now parses quoted args and reloads on env changes
 - Regex stubs now support basic `.` and `*` matching; unsupported bracket classes rejected
-- Added VPI stubs: `vpi_handle_by_name`, `vpi_get`, `vpi_get_str`, `vpi_put_value`, `vpi_release_handle`
+- Added VPI stubs: `vpi_handle_by_name`, `vpi_get`, `vpi_get_str`, `vpi_get_value`,
+  `vpi_put_value`, `vpi_release_handle`
 - Tests: `unittests/Runtime/MooreRuntimeTest.cpp`, `test/Conversion/ImportVerilog/uvm_dpi_hdl_access.sv`
 
 **Track B: Randomization / Randc** ⭐
@@ -19,7 +43,11 @@
 
 **Track C: Coverage / Class Features**
 - Covergroups declared inside classes now lower to class properties
-- File: `lib/Conversion/ImportVerilog/Structure.cpp`
+- Queue concatenation now accepts element operands by materializing a single-element queue
+- Queue concatenation runtime now implemented with element size
+- Files: `lib/Conversion/ImportVerilog/Structure.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`,
+  `lib/Conversion/MooreToCore/MooreToCore.cpp`, `lib/Runtime/MooreRuntime.cpp`
+- Tests: `test/Conversion/ImportVerilog/queues.sv`, `unittests/Runtime/MooreRuntimeTest.cpp`
 
 **Track D: LSP Code Actions**
 - Added quick fixes: declare wire/logic/reg, missing import, module stub, width fixes
