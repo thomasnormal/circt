@@ -46,6 +46,116 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ---
 
+## Iteration 47 In Progress
+
+| Track | Feature | Agent | Status |
+|-------|---------|-------|--------|
+| A | **FIX: 'this' scoping bug** (P0) | a3d74ff | Analyzing Expressions.cpp |
+| B | FIX: BMC clock-not-first crash | a9e19e1 | Analyzing VerifToSMT.cpp |
+| C | SVA bounded sequences `##[n:m]` | ad91dda | Checking slang support |
+| D | LSP completion enhancement | ad0a87a | Found existing impl! |
+
+---
+
+## Comprehensive Gap Analysis & Roadmap
+
+### P0 - BLOCKING UVM (Must fix for any UVM testbench)
+
+| Gap | Location | Impact | Est. Effort |
+|-----|----------|--------|-------------|
+| 'this' pointer scoping in constructor args | `Expressions.cpp:4059-4067` | Blocks ALL UVM | 0.5-1 day |
+
+### P1 - CRITICAL (Required for full UVM stimulus)
+
+| Gap | Component | Impact | Est. Effort |
+|-----|-----------|--------|-------------|
+| Runtime randomization | MooreToCore | No random stimulus | 2-3 days |
+| Constraint solving | MooreToCore | No constrained random | 3-5 days |
+| Covergroup runtime | MooreRuntime | No coverage collection | 2-3 days |
+
+### P2 - IMPORTANT (Needed for comprehensive UVM)
+
+| Gap | Component | Impact | Est. Effort |
+|-----|-----------|--------|-------------|
+| SVA bounded sequences `##[n:m]` | ImportVerilog | Limited temporal props | 1-2 days |
+| BMC clock-not-first bug | VerifToSMT | Crash on some circuits | 1 day |
+| Cross coverage | MooreOps | No cross bins | 1-2 days |
+| Functional coverage callbacks | MooreRuntime | Limited covergroup | 1 day |
+
+### P3 - NICE TO HAVE (Quality of life)
+
+| Gap | Component | Impact | Est. Effort |
+|-----|-----------|--------|-------------|
+| LSP find-references | VerilogDocument | No ref navigation | 1-2 days |
+| LSP rename symbol | VerilogDocument | No refactoring | 1 day |
+| More UVM snippets | VerilogDocument | Developer productivity | 0.5 day |
+
+---
+
+## Track Status & Next Tasks
+
+### Track A: UVM Core Support
+**Status**: P0 bug blocking all UVM
+**Current**: Fixing 'this' pointer scoping (Iteration 47)
+**Next Tasks**:
+1. Fix 'this' scoping in NewClassExpression
+2. Re-test ~/mbit/*avip testbenches
+3. Address any remaining UVM errors
+4. Add randomization runtime support
+
+### Track B: Formal Verification / BMC
+**Status**: Delay buffers implemented, crash to fix
+**Current**: Fixing clock-not-first crash (Iteration 47)
+**Next Tasks**:
+1. Fix index bounds error in BMC with non-first clock
+2. Add unbounded delay `##[*]` support
+3. Improve assertion coverage reporting
+4. Add BMC counterexample extraction
+
+### Track C: SystemVerilog Assertions
+**Status**: Basic SVA working, bounded sequences needed
+**Current**: SVA bounded sequences (Iteration 47)
+**Next Tasks**:
+1. Add `##[n:m]` bounded delay ranges
+2. Add `##[*]` and `##[+]` unbounded delays
+3. Improve SVA error messages
+4. Add `sequence` declarations
+
+### Track D: Tooling & LSP
+**Status**: Full-featured (goto-def, hover, completion, symbols, tokens)
+**Current**: Completion already exists, verifying (Iteration 47)
+**Next Tasks**:
+1. Add find-references
+2. Add rename symbol
+3. Add more UVM-specific snippets
+4. Add diagnostics improvements
+
+---
+
+## Testing Strategy
+
+### Regular Testing on Real-World Code
+```bash
+# UVM Core
+~/circt/build/bin/circt-verilog --ir-moore -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv 2>&1
+
+# APB AVIP (most comprehensive)
+cd ~/mbit/apb_avip && ~/circt/build/bin/circt-verilog --ir-moore \
+  -I ~/uvm-core/src -I src/globals -I src/hvl_top/master \
+  ~/uvm-core/src/uvm_pkg.sv src/globals/apb_global_pkg.sv ...
+
+# Run unit tests
+ninja -C build check-circt-unit
+```
+
+### Key Test Suites
+- `test/Conversion/ImportVerilog/*.sv` - Import tests
+- `test/Conversion/VerifToSMT/*.mlir` - BMC tests
+- `test/Tools/circt-verilog-lsp-server/*.test` - LSP tests
+- `unittests/Runtime/MooreRuntimeTest.cpp` - Runtime tests
+
+---
+
 ## Previous: ITERATION 45 - DPI-C STUBS + VERIFICATION (January 17, 2026)
 
 **Summary**: Major progress on DPI-C runtime stubs, class randomization verification, multi-step BMC analysis, and LSP workspace fixes.
@@ -328,6 +438,9 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 - UVM HDL access DPI calls covered by ImportVerilog tests
 - Added VPI stub API placeholders (no real simulator integration yet)
 - uvm_hdl_check_path initializes entries in the HDL map
+- VPI stubs now return basic handles/strings for smoke testing
+- vpi_handle_by_name seeds the HDL access map
+- vpi_release_handle added for cleanup
 - Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/ImportVerilog/Expressions.cpp`
 
 ### Track B: Class Randomization & Constraints
