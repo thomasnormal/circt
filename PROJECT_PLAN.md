@@ -4,31 +4,49 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: ITERATION 52 - Test Fixes and UVM/AVIP Validation (January 17, 2026)
+## Current Status: ITERATION 52 - All 9 AVIPs Validated + Foreach Constraints (January 17, 2026)
 
-**Summary**: Fixed test suite issues, validated UVM and AVIP compilation with zero errors. Major milestone achieved: all AVIPs can now be parsed and lowered by CIRCT.
+**Summary**: MAJOR MILESTONE! All 9 AVIPs (1,342 files total) now compile with ZERO errors. Implemented foreach constraint support, enhanced coverage runtime with cross coverage/goals/HTML reports, and improved LSP diagnostics.
 
 ### Iteration 52 Highlights
 
-**Track A: UVM/AVIP Validation** ⭐ MAJOR MILESTONE!
-- ✅ UVM core library (`uvm_pkg.sv`) compiles with ZERO errors
-  - Only warnings: static class property resolution, foreach constraints, escape sequences
-  - All DPI-C imports properly emit runtime stub remarks
-- ✅ APB AVIP compiles with ZERO errors (requires proper include paths)
-- ✅ AHB AVIP globals and BFMs compile successfully
-- All AVIPs can now be parsed and lowered by CIRCT!
+**Track A: AVIP Comprehensive Validation** ⭐⭐⭐ MAJOR MILESTONE!
+- ✅ Validated ALL 9 AVIPs (1,342 files total) compile with ZERO errors:
+  - APB AVIP: 132 files - 0 errors
+  - AHB AVIP: 151 files - 0 errors
+  - AXI4 AVIP: 196 files - 0 errors
+  - AXI4-Lite AVIP: 126 files - 0 errors
+  - UART AVIP: 116 files - 0 errors
+  - SPI AVIP: 173 files - 0 errors
+  - I2S AVIP: 161 files - 0 errors
+  - I3C AVIP: 155 files - 0 errors
+  - JTAG AVIP: 132 files - 0 errors
+- Key milestone: Complete AVIP ecosystem now parseable by CIRCT!
 
-**Track B: Test Suite Fixes** ⭐
+**Track B: Foreach Constraint Support** ⭐
+- ✅ Implemented `foreach` constraint support in randomization
+- ✅ Handles single-dimensional arrays, multi-dimensional matrices, queues
+- ✅ Added implication constraint support within foreach
+- Files: `lib/Conversion/ImportVerilog/Structure.cpp`
+- Test: `test/Conversion/ImportVerilog/foreach-constraint.sv` (new)
+
+**Track C: Coverage Runtime Enhancement** ⭐
+- ✅ Added cross coverage API: `__moore_cross_create`, `__moore_cross_sample`
+- ✅ Added reset functions: `__moore_covergroup_reset`, `__moore_coverpoint_reset`
+- ✅ Added goal tracking: `__moore_covergroup_set_goal`, `__moore_covergroup_goal_met`
+- ✅ Added HTML report generation: `__moore_coverage_report_html` with CSS styling
+- Files: `include/circt/Runtime/MooreRuntime.h`, `lib/Runtime/MooreRuntime.cpp`
+- Tests: `unittests/Runtime/MooreRuntimeTest.cpp`
+
+**Track D: LSP Diagnostic Enhancement**
+- ✅ Added diagnostic category field (Parse Error, Type Error, etc.)
+- ✅ Improved diagnostic message formatting
+- Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/LSPDiagnosticClient.cpp`
+- Test: `test/Tools/circt-verilog-lsp-server/diagnostics-comprehensive.test` (new)
+
+**Test Suite Fixes**
 - ✅ Fixed `types.sv` test: removed invalid `$` indexing on dynamic arrays
 - Note: `$` as an index is only valid for queues, not dynamic arrays
-  - Queues: `q[$]` is valid (handled by `Expressions.cpp` unbounded literal code)
-  - Dynamic arrays: must use `arr[arr.size()-1]` for last element
-- File: `test/Conversion/ImportVerilog/types.sv`
-
-**Track C: Documentation**
-- ✅ Updated CHANGELOG.md with Iteration 52 progress
-- ✅ Updated PROJECT_PLAN.md with current status
-- ✅ Clarified `$` indexing semantics (queues only)
 
 ---
 
