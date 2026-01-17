@@ -34,6 +34,7 @@
 
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/EvalContext.h"
+#include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
@@ -1124,6 +1125,114 @@ public:
           detail = "task";
         break;
       }
+      case slang::ast::SymbolKind::ClassType: {
+        // Handle class definitions inside modules
+        const auto &classType = member.as<slang::ast::ClassType>();
+        kind = llvm::lsp::SymbolKind::Class;
+        detail = "class";
+
+        // Create a class symbol with children for methods/properties
+        auto *classSyntax = classType.getSyntax();
+        llvm::lsp::Range classFullRange = classSyntax
+            ? doc.getLspRange(classSyntax->sourceRange())
+            : llvm::lsp::Range();
+        int cLine = sm.getLineNumber(classType.location) - 1;
+        int cCol = sm.getColumnNumber(classType.location) - 1;
+        llvm::lsp::Range classNameRange(llvm::lsp::Position(cLine, cCol),
+                                        llvm::lsp::Position(cLine, cCol + classType.name.size()));
+
+        llvm::lsp::DocumentSymbol classSym(classType.name, kind,
+                                           classSyntax ? classFullRange : classNameRange,
+                                           classNameRange);
+        classSym.detail = detail;
+
+        // Add class members (methods, properties)
+        std::vector<llvm::lsp::DocumentSymbol> classChildren;
+        for (const auto &classMember : classType.members()) {
+          if (classMember.location.buffer() != bufferId || classMember.name.empty())
+            continue;
+
+          llvm::lsp::SymbolKind memberKind = mapSymbolKind(classMember.kind);
+          std::string memberDetail;
+
+          switch (classMember.kind) {
+          case slang::ast::SymbolKind::ClassProperty: {
+            const auto &prop = classMember.as<slang::ast::ClassPropertySymbol>();
+            memberDetail = formatTypeDescription(prop.getType());
+            memberKind = llvm::lsp::SymbolKind::Field;
+            break;
+          }
+          case slang::ast::SymbolKind::Subroutine: {
+            const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
+            if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+              memberDetail = "function";
+            else
+              memberDetail = "task";
+            memberKind = llvm::lsp::SymbolKind::Method;
+            break;
+          }
+          default:
+            continue;
+          }
+
+          int cmLine = sm.getLineNumber(classMember.location) - 1;
+          int cmCol = sm.getColumnNumber(classMember.location) - 1;
+          llvm::lsp::Range cmRange(llvm::lsp::Position(cmLine, cmCol),
+                                   llvm::lsp::Position(cmLine, cmCol + classMember.name.size()));
+
+          llvm::lsp::DocumentSymbol classMemberSym(classMember.name, memberKind, cmRange, cmRange);
+          classMemberSym.detail = memberDetail;
+          classChildren.push_back(std::move(classMemberSym));
+        }
+
+        classSym.children = std::move(classChildren);
+        children.push_back(std::move(classSym));
+        continue; // Already added, skip the common path
+      }
+      case slang::ast::SymbolKind::ProceduralBlock: {
+        // Handle always blocks, initial blocks, final blocks
+        const auto &procBlock = member.as<slang::ast::ProceduralBlockSymbol>();
+        kind = llvm::lsp::SymbolKind::Event;
+
+        // Generate a name based on the block type
+        std::string blockName;
+        switch (procBlock.procedureKind) {
+        case slang::ast::ProceduralBlockKind::Initial:
+          blockName = "initial";
+          detail = "initial block";
+          break;
+        case slang::ast::ProceduralBlockKind::Final:
+          blockName = "final";
+          detail = "final block";
+          break;
+        case slang::ast::ProceduralBlockKind::Always:
+          blockName = "always";
+          detail = "always block";
+          break;
+        case slang::ast::ProceduralBlockKind::AlwaysComb:
+          blockName = "always_comb";
+          detail = "combinational block";
+          break;
+        case slang::ast::ProceduralBlockKind::AlwaysLatch:
+          blockName = "always_latch";
+          detail = "latch block";
+          break;
+        case slang::ast::ProceduralBlockKind::AlwaysFF:
+          blockName = "always_ff";
+          detail = "flip-flop block";
+          break;
+        }
+
+        int pLine = sm.getLineNumber(procBlock.location) - 1;
+        int pCol = sm.getColumnNumber(procBlock.location) - 1;
+        llvm::lsp::Range pRange(llvm::lsp::Position(pLine, pCol),
+                                llvm::lsp::Position(pLine, pCol + blockName.size()));
+
+        llvm::lsp::DocumentSymbol procSym(blockName, kind, pRange, pRange);
+        procSym.detail = detail;
+        children.push_back(std::move(procSym));
+        continue; // Already added, skip the common path
+      }
       default:
         continue; // Skip other member types
       }
@@ -1170,6 +1279,70 @@ public:
         continue;
 
       llvm::lsp::SymbolKind kind = mapSymbolKind(member.kind);
+
+      // Handle classes specially to include their methods/properties
+      if (member.kind == slang::ast::SymbolKind::ClassType) {
+        const auto &classType = member.as<slang::ast::ClassType>();
+        kind = llvm::lsp::SymbolKind::Class;
+
+        auto *classSyntax = classType.getSyntax();
+        llvm::lsp::Range classFullRange = classSyntax
+            ? doc.getLspRange(classSyntax->sourceRange())
+            : llvm::lsp::Range();
+        int cLine = sm.getLineNumber(classType.location) - 1;
+        int cCol = sm.getColumnNumber(classType.location) - 1;
+        llvm::lsp::Range classNameRange(llvm::lsp::Position(cLine, cCol),
+                                        llvm::lsp::Position(cLine, cCol + classType.name.size()));
+
+        llvm::lsp::DocumentSymbol classSym(classType.name, kind,
+                                           classSyntax ? classFullRange : classNameRange,
+                                           classNameRange);
+        classSym.detail = "class";
+
+        // Add class members (methods, properties)
+        std::vector<llvm::lsp::DocumentSymbol> classChildren;
+        for (const auto &classMember : classType.members()) {
+          if (classMember.location.buffer() != bufferId || classMember.name.empty())
+            continue;
+
+          llvm::lsp::SymbolKind memberKind = mapSymbolKind(classMember.kind);
+          std::string memberDetail;
+
+          switch (classMember.kind) {
+          case slang::ast::SymbolKind::ClassProperty: {
+            const auto &prop = classMember.as<slang::ast::ClassPropertySymbol>();
+            memberDetail = formatTypeDescription(prop.getType());
+            memberKind = llvm::lsp::SymbolKind::Field;
+            break;
+          }
+          case slang::ast::SymbolKind::Subroutine: {
+            const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
+            if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+              memberDetail = "function";
+            else
+              memberDetail = "task";
+            memberKind = llvm::lsp::SymbolKind::Method;
+            break;
+          }
+          default:
+            continue;
+          }
+
+          int cmLine = sm.getLineNumber(classMember.location) - 1;
+          int cmCol = sm.getColumnNumber(classMember.location) - 1;
+          llvm::lsp::Range cmRange(llvm::lsp::Position(cmLine, cmCol),
+                                   llvm::lsp::Position(cmLine, cmCol + classMember.name.size()));
+
+          llvm::lsp::DocumentSymbol classMemberSym(classMember.name, memberKind, cmRange, cmRange);
+          classMemberSym.detail = memberDetail;
+          classChildren.push_back(std::move(classMemberSym));
+        }
+
+        classSym.children = std::move(classChildren);
+        children.push_back(std::move(classSym));
+        continue;
+      }
+
       int mLine = sm.getLineNumber(member.location) - 1;
       int mCol = sm.getColumnNumber(member.location) - 1;
       llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),

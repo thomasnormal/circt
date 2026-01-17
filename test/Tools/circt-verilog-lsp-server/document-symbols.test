@@ -1,34 +1,140 @@
 // RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
 // REQUIRES: slang
 // UNSUPPORTED: valgrind
-// Test document symbol functionality for modules, ports, signals, and parameters.
+// Test document symbol functionality for modules, ports, signals, parameters,
+// classes, always blocks, interfaces, and packages.
 {"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}},"trace":"off"}}
 // -----
+// Test 1: Module with always blocks and various procedural blocks
 {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
-  "uri":"test:///foo.sv",
+  "uri":"test:///counter.sv",
   "languageId":"verilog",
   "version":1,
-  "text":"module counter #(parameter WIDTH = 8) (\n  input  logic clk,\n  input  logic rst,\n  output logic [WIDTH-1:0] count\n);\n  logic [WIDTH-1:0] counter_reg;\n  always_ff @(posedge clk) begin\n    if (rst)\n      counter_reg <= '0;\n    else\n      counter_reg <= counter_reg + 1;\n  end\n  assign count = counter_reg;\nendmodule"
+  "text":"module counter #(parameter WIDTH = 8) (\n  input  logic clk,\n  input  logic rst,\n  output logic [WIDTH-1:0] count\n);\n  logic [WIDTH-1:0] counter_reg;\n  always_ff @(posedge clk) begin\n    if (rst)\n      counter_reg <= '0;\n    else\n      counter_reg <= counter_reg + 1;\n  end\n  always_comb begin\n    count = counter_reg;\n  end\n  initial begin\n    $display(\"Counter initialized\");\n  end\nendmodule"
 }}}
 // -----
-// Request document symbols
+// Request document symbols for module with always blocks
 {"jsonrpc":"2.0","id":1,"method":"textDocument/documentSymbol","params":{
-  "textDocument":{"uri":"test:///foo.sv"}
+  "textDocument":{"uri":"test:///counter.sv"}
 }}
 // CHECK:       "id": 1,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
 // CHECK-NEXT:    {
 // CHECK:           "children": [
-// Module should have children for ports and variables
+// Module should have children for ports, variables, and always blocks
 // CHECK:             "name": "clk"
 // CHECK:             "name": "rst"
 // CHECK:             "name": "count"
 // CHECK:             "name": "counter_reg"
+// Check for always_ff block (Event kind = 24)
+// CHECK:             "detail": "flip-flop block"
+// CHECK-NEXT:        "kind": 24
+// CHECK-NEXT:        "name": "always_ff"
+// Check for always_comb block
+// CHECK:             "detail": "combinational block"
+// CHECK-NEXT:        "kind": 24
+// CHECK-NEXT:        "name": "always_comb"
+// Check for initial block
+// CHECK:             "detail": "initial block"
+// CHECK-NEXT:        "kind": 24
+// CHECK-NEXT:        "name": "initial"
 // CHECK:           "detail": "module",
-// CHECK:           "kind": 2,
-// CHECK:           "name": "counter",
+// CHECK-NEXT:      "kind": 2,
+// CHECK-NEXT:      "name": "counter",
 // -----
-{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+// Test 2: Class with methods and properties
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///class_test.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module top;\n  class Transaction;\n    int data;\n    bit valid;\n    function new(int d);\n      data = d;\n      valid = 1;\n    endfunction\n    function int get_data();\n      return data;\n    endfunction\n    task set_data(int d);\n      data = d;\n    endtask\n  endclass\nendmodule"
+}}}
+// -----
+// Request document symbols for class
+{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{
+  "textDocument":{"uri":"test:///class_test.sv"}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK:           "children": [
+// Check for class symbol (Class kind = 5)
+// CHECK:             "children": [
+// Class should have children for properties and methods
+// CHECK:               "name": "data"
+// CHECK:               "name": "valid"
+// CHECK:               "detail": "function"
+// CHECK:               "name": "new"
+// CHECK:               "detail": "function"
+// CHECK:               "name": "get_data"
+// CHECK:               "detail": "task"
+// CHECK:               "name": "set_data"
+// CHECK:             "detail": "class"
+// CHECK-NEXT:        "kind": 5
+// CHECK-NEXT:        "name": "Transaction"
+// -----
+// Test 3: Interface with modports
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///intf.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"interface simple_bus;\n  logic req;\n  logic gnt;\n  logic [7:0] addr;\n  logic [31:0] data;\n  modport master(output req, addr, data, input gnt);\n  modport slave(input req, addr, data, output gnt);\nendinterface"
+}}}
+// -----
+// Request document symbols for interface
+{"jsonrpc":"2.0","id":3,"method":"textDocument/documentSymbol","params":{
+  "textDocument":{"uri":"test:///intf.sv"}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// Interface should have children
+// CHECK:           "children": [
+// CHECK:             "name": "req"
+// CHECK:             "name": "gnt"
+// CHECK:             "name": "addr"
+// CHECK:             "name": "data"
+// CHECK:             "detail": "modport"
+// CHECK:             "name": "master"
+// CHECK:             "name": "slave"
+// Interface kind = 11
+// CHECK:           "detail": "interface"
+// CHECK-NEXT:      "kind": 11
+// CHECK-NEXT:      "name": "simple_bus"
+// -----
+// Test 4: Package with class
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///pkg.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"package my_pkg;\n  class MyClass;\n    int value;\n    function void set(int v);\n      value = v;\n    endfunction\n  endclass\n  function int helper(int x);\n    return x * 2;\n  endfunction\nendpackage"
+}}}
+// -----
+// Request document symbols for package
+{"jsonrpc":"2.0","id":4,"method":"textDocument/documentSymbol","params":{
+  "textDocument":{"uri":"test:///pkg.sv"}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// Package should have children including class
+// CHECK:           "children": [
+// CHECK:             "children": [
+// CHECK:               "name": "value"
+// CHECK:               "name": "set"
+// CHECK:             "detail": "class"
+// CHECK-NEXT:        "kind": 5
+// CHECK-NEXT:        "name": "MyClass"
+// CHECK:             "name": "helper"
+// Package kind = 4
+// CHECK:           "detail": "package"
+// CHECK-NEXT:      "kind": 4
+// CHECK-NEXT:      "name": "my_pkg"
+// -----
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
 // -----
 {"jsonrpc":"2.0","method":"exit"}
