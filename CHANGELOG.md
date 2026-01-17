@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 34 - January 17, 2026
+
+### Multi-Track Parallel Progress (commit 0621de47b)
+
+**Track A: randcase Statement (IEEE 1800-2017 §18.16)**
+- Implemented weighted random case selection
+- Uses `$urandom_range` with cascading comparisons
+- Edge cases: zero weights become uniform, single-item optimized
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp` (+100 lines)
+- Test: `test/Conversion/ImportVerilog/randcase.sv`
+
+**Track B: Queue delete(index) Runtime**
+- New runtime function `__moore_queue_delete_index(queue, index, element_size)`
+- Proper element shifting with memory management
+- MooreToCore lowering extracts element size from queue type
+- Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- Test: `test/Conversion/ImportVerilog/queue-delete-index.sv`
+
+**Track C: LTL Temporal Operators in VerifToSMT**
+- `ltl.and` → `smt.and`
+- `ltl.or` → `smt.or`
+- `ltl.not` → `smt.not`
+- `ltl.implication` → `smt.or(smt.not(a), b)`
+- `ltl.eventually` → identity at each step (BMC loop accumulates with OR)
+- `ltl.until` → `q || p` (weak until semantics for BMC)
+- `ltl.boolean_constant` → `smt.constant`
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+178 lines)
+- Test: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
+
+**Track D: LSP go-to-definition Verification**
+- Confirmed existing implementation works correctly
+- Added comprehensive test for modules, wires, ports
+- Files: `test/Tools/circt-verilog-lsp-server/goto-definition.test` (+133 lines)
+
+**Total**: 1,695 insertions across 13 files
+
+---
+
 ## Iteration 33 - January 17-18, 2026
 
 ### Z3 Configuration (January 17)
@@ -38,6 +76,7 @@
 - Tagged union PatternCase matching (tag compare/extract)
 - Tagged union matches in `if` / conditional expressions
 - Randsequence statement lowering restored (weights/if/case/repeat, randjoin(1))
+- Randcase weighted selection support
 
 **Tests**
 - Added randsequence arguments/defaults test case

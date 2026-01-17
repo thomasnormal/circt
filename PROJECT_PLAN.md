@@ -4,46 +4,37 @@
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
-## Current Status: 🎉 ITERATION 33 - UVM PARITY FIXES (January 18, 2026)
+## Current Status: 🎉 ITERATION 34 - MULTI-TRACK PARALLEL PROGRESS (January 17, 2026)
 
-**Summary**: UVM parity fixes across queues/arrays, file I/O, distribution functions, and lowering gaps.
+**Summary**: Four parallel agents completed: randcase, queue delete(index), LTL-to-SMT operators, LSP verification.
 
-### Iteration 33 Highlights
+### Iteration 34 Highlights (commit 0621de47b)
 
-**Queue/Array Operations**
-- ✅ Queue range slicing (queue `[start:end]`) with runtime slicing support
-- ✅ Dynamic array range slicing (`open_uarray` `[start:end]`) with runtime support
-- ✅ `unique_index()` lowering with runtime implementation
-- ✅ Array reductions: `sum()`, `product()`, `and()`, `or()`, `xor()`
-- ✅ `rsort()` and `shuffle()` queue methods wired to runtime
+**Track A: randcase Statement (IEEE 1800-2017 §18.16)**
+- ✅ Weighted random selection using `$urandom_range`
+- ✅ Cascading comparisons for branch selection
+- ✅ Edge case handling (zero weights, single-item optimization)
+- Files: `lib/Conversion/ImportVerilog/Statements.cpp` (+100 lines)
 
-**File I/O and System Tasks**
-- ✅ `$fgetc`, `$fgets`, `$feof`, `$fflush`, `$ftell` conversions
-- ✅ `$ferror`, `$ungetc`, `$fread` with runtime implementations
-- ✅ `$strobe`, `$monitor`, `$fstrobe`, `$fmonitor` tasks added
-- ✅ `$dumpfile/$dumpvars/$dumpports` treated as no-ops
+**Track B: Queue delete(index) Runtime**
+- ✅ `__moore_queue_delete_index(queue, index, element_size)` with proper shifting
+- ✅ MooreToCore lowering passes element size from queue type
+- ✅ Bounds checking and memory management
+- Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`
 
-**Distribution Functions (IEEE 1800-2017 Section 20.15)**
-- ✅ `$dist_uniform`, `$dist_normal`, `$dist_exponential`, `$dist_poisson`
-- ✅ `$dist_erlang`, `$dist_chi_square`, `$dist_t`
+**Track C: LTL Temporal Operators in VerifToSMT**
+- ✅ `ltl.and`, `ltl.or`, `ltl.not`, `ltl.implication` → SMT boolean ops
+- ✅ `ltl.eventually` → identity at each step (BMC accumulates with OR)
+- ✅ `ltl.until` → `q || p` (weak until for BMC)
+- ✅ `ltl.boolean_constant` → `smt.constant`
+- Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+178 lines)
 
-**Type System / Lowering**
-- ✅ Unpacked array comparison lowering (uarray_cmp) now bitcast-based
-- ✅ String → bitvector conversion fallback for UVM field automation
-- ✅ Randsequence randjoin(1) support
-- ✅ Streaming operator lvalue handling for open arrays/queues
-- ✅ Tagged union construction + member access (struct wrapper)
-- ✅ Tagged union pattern case matching (tag compare/extract)
-- ✅ Tagged union matching in `if` / conditional expressions
-- ✅ Randsequence statement lowering reintroduced (weights/if/case/repeat)
+**Track D: LSP go-to-definition Verification**
+- ✅ Confirmed existing implementation works correctly
+- ✅ Added comprehensive test coverage for modules, wires, ports
+- Files: `test/Tools/circt-verilog-lsp-server/goto-definition.test` (+133 lines)
 
-**Files Modified**
-- `lib/Conversion/ImportVerilog/Expressions.cpp`
-- `lib/Conversion/ImportVerilog/Statements.cpp`
-- `lib/Conversion/MooreToCore/MooreToCore.cpp`
-- `include/circt/Dialect/Moore/MooreOps.td`
-- `include/circt/Runtime/MooreRuntime.h`
-- `lib/Runtime/MooreRuntime.cpp`
+**Total**: 1,695 insertions across 13 files
 
 ---
 
@@ -55,30 +46,30 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 **Status**: Active | **Priority**: HIGH
 **Next Task**: Implement randsequence randjoin>1 semantics + concurrency
 - randjoin should select multiple productions (potentially concurrently)
-- Current support only selects a single production
+- Current support only selects a single production (randjoin(1))
 - Files: `lib/Conversion/ImportVerilog/Statements.cpp`
 
 ### Track B: Runtime & Array/Queue Semantics
-**Status**: Active | **Priority**: HIGH
-**Next Task**: Implement queue/array `delete(index)` method
-- Currently `delete()` clears entire collection; need single-element delete
-- Add runtime function `__moore_queue_delete_index`
+**Status**: ✅ delete(index) DONE | **Priority**: HIGH
+**Next Task**: Implement comparator-aware sort/rsort for queues
+- Current sort works for integers; need custom comparator support
+- Required for UVM testbenches sorting complex objects
 - Files: `lib/Runtime/MooreRuntime.cpp`, `lib/Conversion/MooreToCore/MooreToCore.cpp`
 
 ### Track C: SVA + Z3 Track
-**Status**: ✅ Z3 Wired | **Priority**: HIGH
-**Next Task**: Add LTL temporal operators to VerifToSMT
-- Z3 is now configured and `circt-bmc` works
-- Need to expand `VerifToSMT` to handle `ltl.eventually`, `ltl.until`, `ltl.release`
+**Status**: ✅ LTL BASICS DONE | **Priority**: HIGH
+**Next Task**: Add SVA sequence operators to VerifToSMT
+- Need `ltl.concat` (sequence concatenation)
+- Need `ltl.delay` (cycle delay ##n)
+- Need `ltl.repeat` (repetition [*n])
 - Test with: `LD_LIBRARY_PATH=~/z3-install/lib64 ./build/bin/circt-bmc`
 - Files: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Track D: Tooling & Debug (LSP)
-**Status**: Partial | **Priority**: MEDIUM
-**Next Task**: Implement go-to-definition for LSP server
-- LSP server exists at `tools/circt-verilog-lsp-server/`
-- Need to implement `textDocument/definition` handler
-- Use slang's symbol resolution to find declarations
+**Status**: ✅ Go-to-def WORKING | **Priority**: MEDIUM
+**Next Task**: LSP hover information and completion
+- Add `textDocument/hover` for type/doc info on symbols
+- Add `textDocument/completion` for code completion
 - Files: `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/`
 
 **Testing Cadence**
@@ -89,9 +80,9 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Project | Status | Next Milestone |
 |---------|--------|----------------|
-| **Full SVA + Z3** | ✅ Z3 WIRED | Expand sequence match + temporal operators in VerifToSMT |
+| **Full SVA + Z3** | ✅ LTL BASICS | Add sequence operators (concat, delay, repeat) |
 | **Multi-core Arcilator** | MISSING | Architecture plan + task decomposition for parallel simulation |
-| **LSP + Debugging** | PARTIAL | MVP LSP: go-to-def, completion, diagnostics; simulator debug hooks |
+| **LSP + Debugging** | ✅ Go-to-def | Add hover, completion, diagnostics |
 | **Full 4-state (X/Z)** | MISSING | Type system + dataflow propagation plan |
 | **Coverage** | PARTIAL | Cross coverage + covergroup sampling expressions |
 | **DPI/VPI** | STUBS | FFI bridge + handle marshaling |
@@ -105,16 +96,17 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ## Current Limitations (Key Gaps)
 - Randsequence randjoin>1 semantics and concurrency
 - Comparator-aware sort/rsort for queues/arrays (non-integer elements)
+- SVA sequence operators (concat, delay, repeat) for BMC
 - 4-state X/Z propagation and DPI/VPI (architectural work)
 
 ## Next Feature Targets (Top Impact)
 1. Randsequence randjoin>1 semantics and concurrency
 2. Comparator-aware sort/rsort for queues and arrays
-3. Randcase support (weighted selection)
-4. Pattern matching in conditional expressions with structure/variable patterns
+3. SVA sequence operators (##, [*], |->)
+4. LSP hover and completion
 
 **Immediate Next Task**
-- Implement randsequence randjoin>1 semantics and concurrency.
+- Launch four parallel agents for Iteration 35.
 
 ---
 
