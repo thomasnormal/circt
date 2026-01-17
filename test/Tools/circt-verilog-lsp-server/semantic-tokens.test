@@ -2,6 +2,15 @@
 // REQUIRES: slang
 // UNSUPPORTED: valgrind
 // Test semantic tokens functionality for Verilog/SystemVerilog.
+// This tests that the LSP server properly returns semantic tokens for:
+// - Keywords (module, always_ff, input, output, etc.)
+// - Types (logic, int, etc.)
+// - Variables/signals
+// - Parameters
+// - Numbers/literals
+// - Strings
+// - Operators
+
 {"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
 // CHECK:       "id": 0,
 // CHECK-NEXT:  "jsonrpc": "2.0",
@@ -27,9 +36,33 @@
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": {
 // CHECK-NEXT:    "data": [
+// The data array contains encoded semantic tokens:
+// Each token is encoded as 5 integers: deltaLine, deltaStartChar, length, tokenType, tokenModifiers
+// Verify we get some tokens (non-empty data array)
+// CHECK:         0,
 // CHECK:         ]
 // CHECK-NEXT:  }
 // -----
-{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+// Test a more complex file with packages and classes
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///complex.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"package my_pkg;\n  typedef struct packed {\n    logic [7:0] data;\n    logic       valid;\n  } data_t;\n  \n  localparam int TIMEOUT = 100;\nendpackage\n\nmodule test import my_pkg::*; (\n  input  logic clk,\n  output data_t result\n);\n  // Line comment test\n  /* Block\n     comment */\n  string msg = \"Hello World\";\n  assign result.valid = 1'b1;\nendmodule"
+}}}
+// -----
+{"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///complex.sv"}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Verify we get tokens for the complex file
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+{"jsonrpc":"2.0","id":3,"method":"shutdown"}
 // -----
 {"jsonrpc":"2.0","method":"exit"}

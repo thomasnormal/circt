@@ -42,8 +42,10 @@
 #include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/parsing/LexerFacts.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
+#include "slang/syntax/SyntaxVisitor.h"
 
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -2365,6 +2367,60 @@ SemanticTokenType mapToSemanticTokenType(slang::ast::SymbolKind kind) {
   }
 }
 
+/// Check if a token kind is an operator.
+bool isOperatorToken(slang::parsing::TokenKind kind) {
+  using TK = slang::parsing::TokenKind;
+  switch (kind) {
+  case TK::Plus:
+  case TK::DoublePlus:
+  case TK::Minus:
+  case TK::DoubleMinus:
+  case TK::Star:
+  case TK::DoubleStar:
+  case TK::Slash:
+  case TK::Percent:
+  case TK::Equals:
+  case TK::DoubleEquals:
+  case TK::TripleEquals:
+  case TK::ExclamationEquals:
+  case TK::ExclamationDoubleEquals:
+  case TK::LessThan:
+  case TK::LessThanEquals:
+  case TK::GreaterThan:
+  case TK::GreaterThanEquals:
+  case TK::And:
+  case TK::DoubleAnd:
+  case TK::Or:
+  case TK::DoubleOr:
+  case TK::Xor:
+  case TK::Tilde:
+  case TK::TildeAnd:
+  case TK::TildeOr:
+  case TK::TildeXor:
+  case TK::LeftShift:
+  case TK::RightShift:
+  case TK::TripleLeftShift:
+  case TK::TripleRightShift:
+  case TK::Question:
+  case TK::Exclamation:
+  case TK::PlusEqual:
+  case TK::MinusEqual:
+  case TK::StarEqual:
+  case TK::SlashEqual:
+  case TK::PercentEqual:
+  case TK::AndEqual:
+  case TK::OrEqual:
+  case TK::XorEqual:
+  case TK::LeftShiftEqual:
+  case TK::RightShiftEqual:
+  case TK::MinusArrow:
+  case TK::EqualsArrow:
+    return true;
+  default:
+    return false;
+  }
+}
+
 /// Visitor to collect semantic tokens from the AST.
 class SemanticTokenVisitor
     : public slang::ast::ASTVisitor<SemanticTokenVisitor, true, true> {
@@ -2466,6 +2522,125 @@ public:
   }
 };
 
+/// Visitor to collect lexer-level tokens (keywords, literals, comments) from
+/// syntax tree.
+class SyntaxTokenCollector
+    : public slang::syntax::SyntaxVisitor<SyntaxTokenCollector> {
+public:
+  SyntaxTokenCollector(std::vector<SemanticToken> &tokens,
+                       slang::BufferID bufferId,
+                       const slang::SourceManager &sm)
+      : tokens(tokens), bufferId(bufferId), sm(sm) {}
+
+  std::vector<SemanticToken> &tokens;
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+
+  void addToken(slang::SourceLocation loc, size_t length,
+                SemanticTokenType type, uint32_t modifiers = 0) {
+    if (!loc.valid() || loc.buffer() != bufferId || length == 0)
+      return;
+
+    uint32_t line = sm.getLineNumber(loc) - 1;
+    uint32_t col = sm.getColumnNumber(loc) - 1;
+
+    tokens.emplace_back(line, col, static_cast<uint32_t>(length),
+                        type, modifiers);
+  }
+
+  void visitToken(slang::parsing::Token token) {
+    if (!token.valid())
+      return;
+
+    // Process trivia (comments)
+    for (const auto &trivia : token.trivia()) {
+      processTrivia(trivia, token.location());
+    }
+
+    // Process the token itself
+    processLexerToken(token);
+  }
+
+  void processTrivia(const slang::parsing::Trivia &trivia,
+                     slang::SourceLocation tokenLoc) {
+    using TK = slang::parsing::TriviaKind;
+
+    switch (trivia.kind) {
+    case TK::LineComment:
+    case TK::BlockComment: {
+      auto explicitLoc = trivia.getExplicitLocation();
+      std::string_view text = trivia.getRawText();
+      if (!text.empty()) {
+        // For trivia without explicit location, we'd need to compute it
+        // from the token location. For now, skip if no explicit location.
+        if (explicitLoc) {
+          addToken(*explicitLoc, text.size(), SemanticTokenType::Comment);
+        }
+      }
+      break;
+    }
+    default:
+      break;
+    }
+  }
+
+  void processLexerToken(slang::parsing::Token token) {
+    using TK = slang::parsing::TokenKind;
+
+    slang::SourceLocation loc = token.location();
+    std::string_view rawText = token.rawText();
+
+    if (!loc.valid() || loc.buffer() != bufferId || rawText.empty())
+      return;
+
+    TK kind = token.kind;
+
+    // Keywords
+    if (slang::parsing::LexerFacts::isKeyword(kind)) {
+      addToken(loc, rawText.size(), SemanticTokenType::Keyword);
+      return;
+    }
+
+    // Literals
+    switch (kind) {
+    case TK::StringLiteral:
+      addToken(loc, rawText.size(), SemanticTokenType::String);
+      return;
+    case TK::IntegerLiteral:
+    case TK::IntegerBase:
+    case TK::UnbasedUnsizedLiteral:
+    case TK::RealLiteral:
+    case TK::TimeLiteral:
+      addToken(loc, rawText.size(), SemanticTokenType::Number);
+      return;
+    default:
+      break;
+    }
+
+    // Operators
+    if (isOperatorToken(kind)) {
+      addToken(loc, rawText.size(), SemanticTokenType::Operator);
+      return;
+    }
+  }
+
+  void handle(const slang::syntax::SyntaxNode &node) {
+    // Visit all children
+    for (size_t i = 0; i < node.getChildCount(); i++) {
+      auto child = node.childNode(i);
+      if (child) {
+        visit(*child);
+      } else {
+        // It's a token
+        auto token = node.childToken(i);
+        if (token.valid()) {
+          visitToken(token);
+        }
+      }
+    }
+  }
+};
+
 } // namespace
 
 void VerilogDocument::getSemanticTokens(
@@ -2474,6 +2649,16 @@ void VerilogDocument::getSemanticTokens(
   if (failed(compilation))
     return;
 
+  // First, collect lexer-level tokens (keywords, literals, operators)
+  // from the syntax trees
+  SyntaxTokenCollector syntaxCollector(tokens, mainBufferId,
+                                       getSlangSourceManager());
+  for (const auto &tree : driver.syntaxTrees) {
+    syntaxCollector.visit(tree->root());
+  }
+
+  // Then, collect AST-level tokens (symbol declarations and references)
+  // These will provide more accurate semantic information for identifiers
   SemanticTokenVisitor visitor(tokens, mainBufferId, getSlangSourceManager(),
                                lineOffsets);
 
