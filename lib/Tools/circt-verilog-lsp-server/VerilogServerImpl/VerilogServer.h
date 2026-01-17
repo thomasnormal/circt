@@ -43,6 +43,12 @@ using TextDocumentContentChangeEvent =
     llvm::lsp::TextDocumentContentChangeEvent;
 using URIForFile = llvm::lsp::URIForFile;
 using Diagnostic = llvm::lsp::Diagnostic;
+struct WorkspaceSymbol {
+  std::string name;
+  llvm::lsp::SymbolKind kind;
+  llvm::lsp::Location location;
+  std::string containerName;
+};
 
 /// This class implements all of the Verilog related functionality necessary for
 /// a language server. This class allows for keeping the Verilog specific logic
@@ -83,6 +89,10 @@ public:
   /// Return the document symbols for the given document.
   void getDocumentSymbols(const URIForFile &uri,
                           std::vector<llvm::lsp::DocumentSymbol> &symbols);
+
+  /// Return workspace symbols matching the query string.
+  void getWorkspaceSymbols(llvm::StringRef query,
+                           std::vector<WorkspaceSymbol> &symbols);
 
   /// Return completion items for the given position.
   void getCompletions(const URIForFile &uri, const llvm::lsp::Position &pos,

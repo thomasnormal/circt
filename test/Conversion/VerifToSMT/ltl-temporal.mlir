@@ -166,6 +166,51 @@ func.func @test_ltl_repeat_multiple(%a: i1) {
   return
 }
 
+// CHECK-LABEL: func.func @test_ltl_repeat_unbounded
+// CHECK:   smt.eq
+// CHECK:   return
+// repeat(seq, N) with N>1: at single step, still just seq
+func.func @test_ltl_repeat_unbounded(%a: i1) {
+  %seq = ltl.repeat %a, 2 : i1
+  return
+}
+
+// CHECK-LABEL: func.func @test_ltl_goto_repeat_zero
+// CHECK:   smt.constant true
+// CHECK:   return
+// goto_repeat(seq, 0, N) is empty sequence (true)
+func.func @test_ltl_goto_repeat_zero(%a: i1) {
+  %seq = ltl.goto_repeat %a, 0, 2 : i1
+  return
+}
+
+// CHECK-LABEL: func.func @test_ltl_goto_repeat_one
+// CHECK:   smt.eq
+// CHECK:   return
+// goto_repeat(seq, 1, N) is seq itself at a single step
+func.func @test_ltl_goto_repeat_one(%a: i1) {
+  %seq = ltl.goto_repeat %a, 1, 2 : i1
+  return
+}
+
+// CHECK-LABEL: func.func @test_ltl_non_consecutive_repeat_zero
+// CHECK:   smt.constant true
+// CHECK:   return
+// non_consecutive_repeat(seq, 0, N) is empty sequence (true)
+func.func @test_ltl_non_consecutive_repeat_zero(%a: i1) {
+  %seq = ltl.non_consecutive_repeat %a, 0, 2 : i1
+  return
+}
+
+// CHECK-LABEL: func.func @test_ltl_non_consecutive_repeat_one
+// CHECK:   smt.eq
+// CHECK:   return
+// non_consecutive_repeat(seq, 1, N) is seq itself at a single step
+func.func @test_ltl_non_consecutive_repeat_one(%a: i1) {
+  %seq = ltl.non_consecutive_repeat %a, 1, 2 : i1
+  return
+}
+
 // CHECK-LABEL: func.func @test_ltl_sequence_composition
 // CHECK:   smt.constant true
 // CHECK:   smt.eq
@@ -175,5 +220,77 @@ func.func @test_ltl_repeat_multiple(%a: i1) {
 func.func @test_ltl_sequence_composition(%a: i1, %b: i1) {
   %delayed = ltl.delay %b, 1, 0 : i1
   %seq = ltl.concat %a, %delayed : i1, !ltl.sequence
+  return
+}
+
+//===----------------------------------------------------------------------===//
+// SVA Implication Operators
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @test_overlapping_implication
+// CHECK:   smt.eq
+// CHECK:   smt.eq
+// CHECK:   smt.not
+// CHECK:   smt.or
+// CHECK:   return
+// Overlapping implication (|->): antecedent |-> consequent
+// Semantics: !antecedent || consequent (if antecedent holds, consequent must hold at same time)
+func.func @test_overlapping_implication(%antecedent: i1, %consequent: i1) {
+  %prop = ltl.implication %antecedent, %consequent : i1, i1
+  return
+}
+
+// CHECK-LABEL: func.func @test_non_overlapping_implication
+// CHECK:   builtin.unrealized_conversion_cast
+// CHECK:   smt.constant true
+// CHECK:   smt.bv.constant
+// CHECK:   smt.eq
+// CHECK:   smt.not
+// CHECK:   smt.or
+// CHECK:   return
+// Non-overlapping implication (|=>): antecedent |=> consequent
+// Represented as: implication(antecedent, delay(consequent, 1))
+// Semantics: !antecedent || true (at current step, since consequent is delayed)
+func.func @test_non_overlapping_implication(%antecedent: i1, %consequent: i1) {
+  %delayed_consequent = ltl.delay %consequent, 1, 0 : i1
+  %prop = ltl.implication %antecedent, %delayed_consequent : i1, !ltl.sequence
+  return
+}
+
+// CHECK-LABEL: func.func @test_implication_with_sequence
+// CHECK:   builtin.unrealized_conversion_cast
+// CHECK:   builtin.unrealized_conversion_cast
+// CHECK:   builtin.unrealized_conversion_cast
+// CHECK:   smt.bv.constant
+// CHECK:   smt.eq
+// CHECK:   smt.bv.constant
+// CHECK:   smt.eq
+// CHECK:   smt.and
+// CHECK:   smt.bv.constant
+// CHECK:   smt.eq
+// CHECK:   smt.not
+// CHECK:   smt.or
+// CHECK:   return
+// Implication with sequence antecedent: (a ##0 b) |-> c
+// The sequence a && b (concat of instantaneous sequences) is the antecedent
+func.func @test_implication_with_sequence(%a: i1, %b: i1, %c: i1) {
+  %seq = ltl.concat %a, %b : i1, i1
+  %prop = ltl.implication %seq, %c : !ltl.sequence, i1
+  return
+}
+
+// CHECK-LABEL: func.func @test_implication_with_delayed_antecedent
+// CHECK:   builtin.unrealized_conversion_cast
+// CHECK:   smt.constant true
+// CHECK:   smt.bv.constant
+// CHECK:   smt.eq
+// CHECK:   smt.not
+// CHECK:   smt.or
+// CHECK:   return
+// Implication with delayed sequence: (##2 a) |-> b
+// The delayed sequence evaluates to true at current step
+func.func @test_implication_with_delayed_antecedent(%a: i1, %b: i1) {
+  %delayed_seq = ltl.delay %a, 2, 0 : i1
+  %prop = ltl.implication %delayed_seq, %b : !ltl.sequence, i1
   return
 }

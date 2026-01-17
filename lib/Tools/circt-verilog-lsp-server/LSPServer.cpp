@@ -55,6 +55,17 @@ inline bool fromJSON(const json::Value &value, SemanticTokensParams &result,
   return o && o.map("textDocument", result.textDocument);
 }
 
+/// Parameters for workspace/symbol request.
+struct WorkspaceSymbolParams {
+  std::string query;
+};
+
+inline bool fromJSON(const json::Value &value, WorkspaceSymbolParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("query", result.query);
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -109,6 +120,13 @@ struct LSPServer {
 
   void onDocumentSymbol(const DocumentSymbolParams &params,
                         Callback<std::vector<DocumentSymbol>> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Workspace Symbols
+  //===--------------------------------------------------------------------===//
+
+  void onWorkspaceSymbol(const WorkspaceSymbolParams &params,
+                         Callback<json::Value> reply);
 
   //===--------------------------------------------------------------------===//
   // Auto-Completion
@@ -215,6 +233,7 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"referencesProvider", true},
       {"hoverProvider", true},
       {"documentSymbolProvider", true},
+      {"workspaceSymbolProvider", true},
       {"completionProvider",
        llvm::json::Object{
            {"triggerCharacters", llvm::json::Array{"."}},
@@ -334,6 +353,25 @@ void LSPServer::onDocumentSymbol(const DocumentSymbolParams &params,
   std::vector<DocumentSymbol> symbols;
   server.getDocumentSymbols(params.textDocument.uri, symbols);
   reply(std::move(symbols));
+}
+
+void LSPServer::onWorkspaceSymbol(const WorkspaceSymbolParams &params,
+                                  Callback<json::Value> reply) {
+  std::vector<circt::lsp::WorkspaceSymbol> symbols;
+  server.getWorkspaceSymbols(params.query, symbols);
+
+  json::Array result;
+  result.reserve(symbols.size());
+  for (const auto &symbol : symbols) {
+    json::Object obj;
+    obj["name"] = symbol.name;
+    obj["kind"] = static_cast<int>(symbol.kind);
+    obj["location"] = llvm::lsp::toJSON(symbol.location);
+    if (!symbol.containerName.empty())
+      obj["containerName"] = symbol.containerName;
+    result.push_back(std::move(obj));
+  }
+  reply(std::move(result));
 }
 
 //===----------------------------------------------------------------------===//
@@ -462,6 +500,10 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Document Symbols
   messageHandler.method("textDocument/documentSymbol", &lspServer,
                         &LSPServer::onDocumentSymbol);
+
+  // Workspace Symbols
+  messageHandler.method("workspace/symbol", &lspServer,
+                        &LSPServer::onWorkspaceSymbol);
 
   // Auto-Completion
   messageHandler.method("textDocument/completion", &lspServer,
