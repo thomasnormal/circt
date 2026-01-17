@@ -45,8 +45,18 @@
       }
       moore.return
     }
-    moore.output
-  }
+  moore.output
+}
+
+// CHECK-LABEL: moore.module @Extract()
+moore.module @Extract() {
+  %a = moore.variable : <i16>
+  %b = moore.variable : <i16>
+  %concat = moore.concat_ref %a, %b : (!moore.ref<i16>, !moore.ref<i16>) -> <i32>
+  // CHECK: %[[SLICE:.+]] = moore.extract_ref %b from 8 : <i16> -> <i8>
+  %slice = moore.extract_ref %concat from 8 : <i32> -> <i8>
+  moore.output
+}
 
 // CHECK-LABEL: moore.module @Nested()
 moore.module @Nested() {

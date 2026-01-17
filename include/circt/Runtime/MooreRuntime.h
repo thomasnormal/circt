@@ -858,6 +858,116 @@ int64_t __moore_randomize_with_range(int64_t min, int64_t max);
 /// @return A random value satisfying the modulo constraint
 int64_t __moore_randomize_with_modulo(int64_t mod, int64_t remainder);
 
+/// Randomize with multiple range constraints.
+/// Generates a random value that falls within one of the given ranges.
+/// @param ranges Array of range pairs [min1, max1, min2, max2, ...]
+/// @param numRanges Number of range pairs (not array length)
+/// @return A random value within one of the ranges
+int64_t __moore_randomize_with_ranges(int64_t *ranges, int64_t numRanges);
+
+//===----------------------------------------------------------------------===//
+// Constraint Solving with Iteration Limits
+//===----------------------------------------------------------------------===//
+//
+// These functions provide constraint solving with iteration limits and fallback
+// strategies. They prevent infinite loops on unsatisfiable constraints and
+// provide statistics for debugging.
+//
+
+/// Default iteration limit for constraint solving (10000 attempts).
+#define MOORE_CONSTRAINT_DEFAULT_ITERATION_LIMIT 10000
+
+/// Constraint solving result codes.
+enum MooreConstraintResult {
+  MOORE_CONSTRAINT_SUCCESS = 0,        ///< Constraint satisfied successfully
+  MOORE_CONSTRAINT_FALLBACK = 1,       ///< Used fallback (unconstrained random)
+  MOORE_CONSTRAINT_ITERATION_LIMIT = 2 ///< Hit iteration limit, used fallback
+};
+
+/// Statistics for constraint solving operations.
+/// Track solving attempts, successes, and failures for debugging.
+typedef struct {
+  int64_t totalAttempts;      ///< Total number of solve attempts
+  int64_t successfulSolves;   ///< Number of successful constraint solves
+  int64_t fallbackCount;      ///< Number of times fallback was used
+  int64_t iterationLimitHits; ///< Number of times iteration limit was hit
+  int64_t lastIterations;     ///< Iterations used in last solve attempt
+} MooreConstraintStats;
+
+/// Get global constraint solving statistics.
+/// Returns a pointer to the global statistics structure.
+/// Thread-safe: uses atomic operations for counters.
+/// @return Pointer to the global constraint statistics
+MooreConstraintStats *__moore_constraint_get_stats(void);
+
+/// Reset global constraint solving statistics to zero.
+void __moore_constraint_reset_stats(void);
+
+/// Set the global iteration limit for constraint solving.
+/// @param limit Maximum number of iterations (0 = use default)
+void __moore_constraint_set_iteration_limit(int64_t limit);
+
+/// Get the current global iteration limit.
+/// @return Current iteration limit
+int64_t __moore_constraint_get_iteration_limit(void);
+
+/// Constraint predicate function type.
+/// Used for custom constraint checking during randomization.
+/// @param value The value to check
+/// @param userData User-provided context data
+/// @return true if the constraint is satisfied, false otherwise
+typedef bool (*MooreConstraintPredicate)(int64_t value, void *userData);
+
+/// Randomize with a custom constraint predicate and iteration limit.
+/// Attempts to find a value within [min, max] that satisfies the predicate.
+/// Falls back to unconstrained random if constraint cannot be satisfied.
+///
+/// @param min Minimum value (inclusive)
+/// @param max Maximum value (inclusive)
+/// @param predicate Function to check if value satisfies constraints
+/// @param userData User data passed to predicate function
+/// @param iterationLimit Maximum solve attempts (0 = use global default)
+/// @param resultOut Pointer to store result code (can be NULL)
+/// @return A value that satisfies the constraint, or fallback random value
+int64_t __moore_randomize_with_constraint(int64_t min, int64_t max,
+                                          MooreConstraintPredicate predicate,
+                                          void *userData, int64_t iterationLimit,
+                                          int32_t *resultOut);
+
+/// Randomize with multiple range constraints and iteration limit.
+/// Attempts to find a value within one of the ranges that satisfies
+/// an optional predicate. Falls back to unconstrained random if needed.
+///
+/// @param ranges Array of range pairs [min1, max1, min2, max2, ...]
+/// @param numRanges Number of range pairs
+/// @param predicate Optional predicate for additional constraints (can be NULL)
+/// @param userData User data for predicate
+/// @param iterationLimit Maximum solve attempts (0 = use global default)
+/// @param resultOut Pointer to store result code (can be NULL)
+/// @return A value satisfying constraints, or fallback random value
+int64_t __moore_randomize_with_ranges_constrained(int64_t *ranges,
+                                                   int64_t numRanges,
+                                                   MooreConstraintPredicate predicate,
+                                                   void *userData,
+                                                   int64_t iterationLimit,
+                                                   int32_t *resultOut);
+
+/// Report a constraint solving warning to stderr.
+/// Called when constraint solving hits iteration limit or uses fallback.
+/// @param message Description of the constraint issue
+/// @param iterations Number of iterations attempted
+/// @param variableName Name of the constrained variable (can be NULL)
+void __moore_constraint_warn(const char *message, int64_t iterations,
+                             const char *variableName);
+
+/// Enable or disable constraint solving warnings.
+/// @param enabled true to enable warnings, false to suppress them
+void __moore_constraint_set_warnings_enabled(bool enabled);
+
+/// Check if constraint solving warnings are enabled.
+/// @return true if warnings are enabled, false otherwise
+bool __moore_constraint_warnings_enabled(void);
+
 //===----------------------------------------------------------------------===//
 // File I/O Operations
 //===----------------------------------------------------------------------===//

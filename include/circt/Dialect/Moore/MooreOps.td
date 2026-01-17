@@ -3419,9 +3419,18 @@ def CoverpointDeclOp
     of values or expressions. It may optionally contain bins that specify
     how values should be grouped for coverage tracking.
 
+    The optional `auto_bin_max` attribute limits the number of automatically
+    created bins when no explicit bins are defined. If not specified, the
+    default is 64 bins. Setting to 0 creates one bin per unique value.
+
     Example without bins:
     ```mlir
     moore.coverpoint.decl @data_cp : !moore.l8 {}
+    ```
+
+    Example with auto_bin_max:
+    ```mlir
+    moore.coverpoint.decl @data_cp : !moore.l8 auto_bin_max<16> {}
     ```
 
     Example with bins:
@@ -3434,9 +3443,15 @@ def CoverpointDeclOp
 
     See IEEE 1800-2017 Section 19.5 "Defining coverage points".
   }];
-  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$type);
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       TypeAttr:$type,
+                       OptionalAttr<I64Attr>:$auto_bin_max);
   let regions = (region SizedRegion<1>:$body);
-  let assemblyFormat = [{ $sym_name `:` $type attr-dict-with-keyword $body }];
+  let assemblyFormat = [{
+    $sym_name `:` $type
+    (`auto_bin_max` `<` $auto_bin_max^ `>`)?
+    attr-dict-with-keyword $body
+  }];
 }
 
 def CoverageBinKind : I32EnumAttr<"CoverageBinKind", "coverage bin kind", [
@@ -3462,11 +3477,17 @@ def CoverageBinDeclOp
     The `values` attribute contains an array of integer values or ranges
     that belong to this bin.
 
+    Array bin syntax:
+    - `is_array` with no `num_bins`: Creates one bin per value (e.g., `bins x[] = {[0:7]}`)
+    - `is_array` with `num_bins`: Creates N bins covering the range (e.g., `bins x[4] = {[0:255]}`)
+
     Example:
     ```mlir
     moore.coverbin.decl @low kind<bins> values [0, 1, 2, 3]
     moore.coverbin.decl @high kind<bins> values [4, 5, 6, 7]
     moore.coverbin.decl @bad kind<illegal_bins> values [255]
+    moore.coverbin.decl @auto_bins kind<bins> array values [0, 1, 2, 3, 4, 5, 6, 7]
+    moore.coverbin.decl @fixed_bins kind<bins> array num_bins<4> values [0, 1, 2, 3, 4, 5, 6, 7]
     ```
 
     See IEEE 1800-2017 Section 19.5.1 "Defining bins for values".
@@ -3475,11 +3496,15 @@ def CoverageBinDeclOp
                        CoverageBinKind:$kind,
                        UnitAttr:$is_wildcard,
                        UnitAttr:$is_default,
+                       UnitAttr:$is_array,
+                       OptionalAttr<I64Attr>:$num_bins,
                        OptionalAttr<ArrayAttr>:$values);
   let assemblyFormat = [{
     $sym_name `kind` `<` $kind `>`
     (`wildcard` $is_wildcard^)?
     (`default` $is_default^)?
+    (`array` $is_array^)?
+    (`num_bins` `<` $num_bins^ `>`)?
     (`values` $values^)?
     attr-dict
   }];
