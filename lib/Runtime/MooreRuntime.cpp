@@ -3744,6 +3744,1115 @@ extern "C" int32_t __moore_coverage_report_html(const char *filename) {
 }
 
 //===----------------------------------------------------------------------===//
+// Coverage Database Save/Load/Merge Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions support coverage database persistence and merging.
+// This enables verification flows that combine coverage from multiple
+// simulation runs: run1.db + run2.db + run3.db -> merged.db
+//
+
+/// Internal structure to hold loaded coverage database data.
+/// This must be outside the anonymous namespace to match the forward
+/// declaration in MooreRuntime.h (MooreCoverageDBHandle).
+struct MooreCoverageDB {
+  /// Covergroup data from the loaded database.
+  struct CoverpointData {
+    std::string name;
+    int64_t hits;
+    int64_t minVal;
+    int64_t maxVal;
+    std::map<int64_t, int64_t> valueCounts; // value -> hit count
+    std::vector<MooreCoverageBin> bins;
+    double coverage;
+  };
+
+  struct CovergroupData {
+    std::string name;
+    double coverage;
+    std::vector<CoverpointData> coverpoints;
+  };
+
+  std::vector<CovergroupData> covergroups;
+
+  /// Calculate total coverage across all covergroups.
+  double getTotalCoverage() const {
+    if (covergroups.empty())
+      return 0.0;
+    double total = 0.0;
+    for (const auto &cg : covergroups)
+      total += cg.coverage;
+    return total / covergroups.size();
+  }
+};
+
+namespace {
+
+/// Simple JSON parser for coverage database files.
+/// This is a minimal parser that handles the specific JSON format we generate.
+class SimpleJsonParser {
+public:
+  explicit SimpleJsonParser(const std::string &json) : json(json), pos(0) {}
+
+  bool parse(MooreCoverageDB &db) {
+    skipWhitespace();
+    if (!expect('{'))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == '}')
+        break;
+
+      std::string key = parseString();
+      skipWhitespace();
+      if (!expect(':'))
+        return false;
+      skipWhitespace();
+
+      if (key == "coverage_report") {
+        if (!parseCoverageReport(db))
+          return false;
+      } else {
+        // Skip unknown keys
+        if (!skipValue())
+          return false;
+      }
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    expect('}');
+    return true;
+  }
+
+private:
+  const std::string &json;
+  size_t pos;
+
+  char peek() const { return pos < json.size() ? json[pos] : '\0'; }
+  void advance() { if (pos < json.size()) ++pos; }
+
+  void skipWhitespace() {
+    while (pos < json.size() && std::isspace(json[pos]))
+      ++pos;
+  }
+
+  bool expect(char c) {
+    skipWhitespace();
+    if (peek() != c)
+      return false;
+    advance();
+    return true;
+  }
+
+  std::string parseString() {
+    skipWhitespace();
+    if (peek() != '"')
+      return "";
+    advance();
+    std::string result;
+    while (pos < json.size() && json[pos] != '"') {
+      if (json[pos] == '\\' && pos + 1 < json.size()) {
+        advance();
+        switch (json[pos]) {
+        case 'n': result += '\n'; break;
+        case 'r': result += '\r'; break;
+        case 't': result += '\t'; break;
+        case '"': result += '"'; break;
+        case '\\': result += '\\'; break;
+        default: result += json[pos]; break;
+        }
+      } else {
+        result += json[pos];
+      }
+      advance();
+    }
+    advance(); // Skip closing quote
+    return result;
+  }
+
+  int64_t parseNumber() {
+    skipWhitespace();
+    bool negative = false;
+    if (peek() == '-') {
+      negative = true;
+      advance();
+    }
+    int64_t result = 0;
+    while (pos < json.size() && std::isdigit(json[pos])) {
+      result = result * 10 + (json[pos] - '0');
+      advance();
+    }
+    // Skip decimal part if present
+    if (peek() == '.') {
+      advance();
+      while (pos < json.size() && std::isdigit(json[pos]))
+        advance();
+    }
+    return negative ? -result : result;
+  }
+
+  double parseDouble() {
+    skipWhitespace();
+    size_t startPos = pos;
+    if (peek() == '-')
+      advance();
+    while (pos < json.size() && (std::isdigit(json[pos]) || json[pos] == '.'))
+      advance();
+    std::string numStr = json.substr(startPos, pos - startPos);
+    return std::stod(numStr);
+  }
+
+  bool skipValue() {
+    skipWhitespace();
+    char c = peek();
+    if (c == '"') {
+      parseString();
+      return true;
+    } else if (c == '[') {
+      advance();
+      int depth = 1;
+      while (depth > 0 && pos < json.size()) {
+        if (json[pos] == '[') ++depth;
+        else if (json[pos] == ']') --depth;
+        else if (json[pos] == '"') {
+          advance();
+          while (pos < json.size() && json[pos] != '"') {
+            if (json[pos] == '\\') advance();
+            advance();
+          }
+        }
+        advance();
+      }
+      return true;
+    } else if (c == '{') {
+      advance();
+      int depth = 1;
+      while (depth > 0 && pos < json.size()) {
+        if (json[pos] == '{') ++depth;
+        else if (json[pos] == '}') --depth;
+        else if (json[pos] == '"') {
+          advance();
+          while (pos < json.size() && json[pos] != '"') {
+            if (json[pos] == '\\') advance();
+            advance();
+          }
+        }
+        advance();
+      }
+      return true;
+    } else if (c == 'n') { // null
+      pos += 4;
+      return true;
+    } else if (c == 't') { // true
+      pos += 4;
+      return true;
+    } else if (c == 'f') { // false
+      pos += 5;
+      return true;
+    } else {
+      // Number
+      parseNumber();
+      return true;
+    }
+  }
+
+  bool parseCoverageReport(MooreCoverageDB &db) {
+    if (!expect('{'))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == '}')
+        break;
+
+      std::string key = parseString();
+      skipWhitespace();
+      if (!expect(':'))
+        return false;
+      skipWhitespace();
+
+      if (key == "covergroups") {
+        if (!parseCovergroups(db))
+          return false;
+      } else {
+        if (!skipValue())
+          return false;
+      }
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect('}');
+  }
+
+  bool parseCovergroups(MooreCoverageDB &db) {
+    if (!expect('['))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == ']')
+        break;
+
+      MooreCoverageDB::CovergroupData cg;
+      if (!parseCovergroup(cg))
+        return false;
+      db.covergroups.push_back(std::move(cg));
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect(']');
+  }
+
+  bool parseCovergroup(MooreCoverageDB::CovergroupData &cg) {
+    if (!expect('{'))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == '}')
+        break;
+
+      std::string key = parseString();
+      skipWhitespace();
+      if (!expect(':'))
+        return false;
+      skipWhitespace();
+
+      if (key == "name") {
+        cg.name = parseString();
+      } else if (key == "coverage_percent") {
+        cg.coverage = parseDouble();
+      } else if (key == "coverpoints") {
+        if (!parseCoverpoints(cg))
+          return false;
+      } else {
+        if (!skipValue())
+          return false;
+      }
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect('}');
+  }
+
+  bool parseCoverpoints(MooreCoverageDB::CovergroupData &cg) {
+    if (!expect('['))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == ']')
+        break;
+
+      MooreCoverageDB::CoverpointData cp;
+      if (!parseCoverpoint(cp))
+        return false;
+      cg.coverpoints.push_back(std::move(cp));
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect(']');
+  }
+
+  bool parseCoverpoint(MooreCoverageDB::CoverpointData &cp) {
+    if (!expect('{'))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == '}')
+        break;
+
+      std::string key = parseString();
+      skipWhitespace();
+      if (!expect(':'))
+        return false;
+      skipWhitespace();
+
+      if (key == "name") {
+        cp.name = parseString();
+      } else if (key == "coverage_percent") {
+        cp.coverage = parseDouble();
+      } else if (key == "total_hits") {
+        cp.hits = parseNumber();
+      } else if (key == "min_value") {
+        cp.minVal = parseNumber();
+      } else if (key == "max_value") {
+        cp.maxVal = parseNumber();
+      } else if (key == "bins") {
+        if (!parseBins(cp))
+          return false;
+      } else if (key == "top_values") {
+        if (!parseTopValues(cp))
+          return false;
+      } else {
+        if (!skipValue())
+          return false;
+      }
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect('}');
+  }
+
+  bool parseBins(MooreCoverageDB::CoverpointData &cp) {
+    if (!expect('['))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == ']')
+        break;
+
+      MooreCoverageBin bin;
+      bin.name = nullptr;
+      bin.type = MOORE_BIN_VALUE;
+      bin.low = 0;
+      bin.high = 0;
+      bin.hit_count = 0;
+
+      if (!parseBin(bin, cp))
+        return false;
+      cp.bins.push_back(bin);
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect(']');
+  }
+
+  bool parseBin(MooreCoverageBin &bin, MooreCoverageDB::CoverpointData &cp) {
+    if (!expect('{'))
+      return false;
+
+    std::string binName;
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == '}')
+        break;
+
+      std::string key = parseString();
+      skipWhitespace();
+      if (!expect(':'))
+        return false;
+      skipWhitespace();
+
+      if (key == "name") {
+        binName = parseString();
+      } else if (key == "type") {
+        std::string typeStr = parseString();
+        if (typeStr == "value") bin.type = MOORE_BIN_VALUE;
+        else if (typeStr == "range") bin.type = MOORE_BIN_RANGE;
+        else if (typeStr == "wildcard") bin.type = MOORE_BIN_WILDCARD;
+        else if (typeStr == "transition") bin.type = MOORE_BIN_TRANSITION;
+      } else if (key == "low") {
+        bin.low = parseNumber();
+      } else if (key == "high") {
+        bin.high = parseNumber();
+      } else if (key == "hit_count") {
+        bin.hit_count = parseNumber();
+      } else {
+        if (!skipValue())
+          return false;
+      }
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    // Store the bin name (we need to allocate storage for it)
+    if (!binName.empty()) {
+      char *nameCopy = static_cast<char *>(std::malloc(binName.size() + 1));
+      if (nameCopy) {
+        std::strcpy(nameCopy, binName.c_str());
+        bin.name = nameCopy;
+      }
+    }
+
+    return expect('}');
+  }
+
+  bool parseTopValues(MooreCoverageDB::CoverpointData &cp) {
+    if (!expect('['))
+      return false;
+
+    while (pos < json.size()) {
+      skipWhitespace();
+      if (peek() == ']')
+        break;
+
+      if (!expect('{'))
+        return false;
+
+      int64_t value = 0;
+      int64_t count = 0;
+
+      while (pos < json.size()) {
+        skipWhitespace();
+        if (peek() == '}')
+          break;
+
+        std::string key = parseString();
+        skipWhitespace();
+        if (!expect(':'))
+          return false;
+        skipWhitespace();
+
+        if (key == "value") {
+          value = parseNumber();
+        } else if (key == "count") {
+          count = parseNumber();
+        }
+
+        skipWhitespace();
+        if (peek() == ',')
+          advance();
+      }
+
+      if (!expect('}'))
+        return false;
+
+      cp.valueCounts[value] = count;
+
+      skipWhitespace();
+      if (peek() == ',')
+        advance();
+    }
+
+    return expect(']');
+  }
+};
+
+/// Generate a complete coverage JSON with full value counts (not just top 10).
+/// This is used for save/merge operations where we need all the data.
+std::string generateFullCoverageJson() {
+  std::string json = "{\n";
+  json += "  \"coverage_report\": {\n";
+  json += "    \"version\": \"1.0\",\n";
+  json += "    \"generator\": \"circt-moore-runtime\",\n";
+  json += "    \"format\": \"coverage_database\",\n";
+  json += "    \"covergroups\": [\n";
+
+  bool firstCg = true;
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    if (!firstCg)
+      json += ",\n";
+    firstCg = false;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+
+    json += "      {\n";
+    json += "        \"name\": " + jsonEscapeString(cg->name) + ",\n";
+    json += "        \"coverage_percent\": " + std::to_string(cgCoverage) + ",\n";
+    json += "        \"num_coverpoints\": " + std::to_string(cg->num_coverpoints) + ",\n";
+    json += "        \"coverpoints\": [\n";
+
+    bool firstCp = true;
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      if (!firstCp)
+        json += ",\n";
+      firstCp = false;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      auto trackerIt = coverpointTrackers.find(cp);
+
+      json += "          {\n";
+      json += "            \"name\": " + jsonEscapeString(cp->name) + ",\n";
+      json += "            \"coverage_percent\": " + std::to_string(cpCoverage) + ",\n";
+      json += "            \"total_hits\": " + std::to_string(cp->hits) + ",\n";
+      json += "            \"min_value\": " + std::to_string(cp->min_val) + ",\n";
+      json += "            \"max_value\": " + std::to_string(cp->max_val) + ",\n";
+
+      // Add explicit bins if present
+      json += "            \"bins\": [\n";
+      auto binIt = explicitBinData.find(cp);
+      if (binIt != explicitBinData.end()) {
+        bool firstBin = true;
+        for (const auto &bin : binIt->second.bins) {
+          if (!firstBin)
+            json += ",\n";
+          firstBin = false;
+
+          const char *binTypeName = "unknown";
+          switch (bin.type) {
+          case MOORE_BIN_VALUE: binTypeName = "value"; break;
+          case MOORE_BIN_RANGE: binTypeName = "range"; break;
+          case MOORE_BIN_WILDCARD: binTypeName = "wildcard"; break;
+          case MOORE_BIN_TRANSITION: binTypeName = "transition"; break;
+          }
+
+          json += "              {\n";
+          json += "                \"name\": " + jsonEscapeString(bin.name) + ",\n";
+          json += "                \"type\": \"" + std::string(binTypeName) + "\",\n";
+          json += "                \"low\": " + std::to_string(bin.low) + ",\n";
+          json += "                \"high\": " + std::to_string(bin.high) + ",\n";
+          json += "                \"hit_count\": " + std::to_string(bin.hit_count) + "\n";
+          json += "              }";
+        }
+      }
+      json += "\n            ],\n";
+
+      // Add ALL value counts (not just top 10) for accurate merging
+      json += "            \"top_values\": [\n";
+      if (trackerIt != coverpointTrackers.end()) {
+        bool firstVal = true;
+        for (const auto &kv : trackerIt->second.valueCounts) {
+          if (!firstVal)
+            json += ",\n";
+          firstVal = false;
+          json += "              {\"value\": " + std::to_string(kv.first) +
+                  ", \"count\": " + std::to_string(kv.second) + "}";
+        }
+      }
+      json += "\n            ]\n";
+      json += "          }";
+    }
+
+    json += "\n        ]\n";
+    json += "      }";
+  }
+
+  json += "\n    ]\n";
+  json += "  }\n";
+  json += "}\n";
+
+  return json;
+}
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_coverage_save(const char *filename) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  std::string json = generateFullCoverageJson();
+  std::fwrite(json.c_str(), 1, json.size(), fp);
+  std::fclose(fp);
+
+  return 0;
+}
+
+extern "C" MooreCoverageDBHandle __moore_coverage_load(const char *filename) {
+  if (!filename)
+    return nullptr;
+
+  FILE *fp = std::fopen(filename, "r");
+  if (!fp)
+    return nullptr;
+
+  // Read the entire file
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  if (fileSize <= 0) {
+    std::fclose(fp);
+    return nullptr;
+  }
+
+  std::string json(fileSize, '\0');
+  size_t bytesRead = std::fread(&json[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  if (bytesRead != static_cast<size_t>(fileSize))
+    return nullptr;
+
+  // Parse the JSON
+  auto *db = new MooreCoverageDB();
+  SimpleJsonParser parser(json);
+  if (!parser.parse(*db)) {
+    delete db;
+    return nullptr;
+  }
+
+  return db;
+}
+
+extern "C" void __moore_coverage_db_free(MooreCoverageDBHandle db) {
+  if (!db)
+    return;
+
+  // Free any allocated bin names
+  for (auto &cg : db->covergroups) {
+    for (auto &cp : cg.coverpoints) {
+      for (auto &bin : cp.bins) {
+        if (bin.name) {
+          std::free(const_cast<char *>(bin.name));
+        }
+      }
+    }
+  }
+
+  delete db;
+}
+
+extern "C" int32_t __moore_coverage_merge(MooreCoverageDBHandle db) {
+  if (!db)
+    return 1;
+
+  // Merge each covergroup from the loaded database into the current state
+  for (const auto &loadedCg : db->covergroups) {
+    // Find matching covergroup by name
+    MooreCovergroup *targetCg = nullptr;
+    for (auto *cg : registeredCovergroups) {
+      if (cg && cg->name && loadedCg.name == cg->name) {
+        targetCg = cg;
+        break;
+      }
+    }
+
+    if (!targetCg)
+      continue; // No matching covergroup found
+
+    // Merge each coverpoint
+    for (const auto &loadedCp : loadedCg.coverpoints) {
+      // Find matching coverpoint by name
+      MooreCoverpoint *targetCp = nullptr;
+      for (int32_t i = 0; i < targetCg->num_coverpoints; ++i) {
+        auto *cp = targetCg->coverpoints[i];
+        if (cp && cp->name && loadedCp.name == cp->name) {
+          targetCp = cp;
+          break;
+        }
+      }
+
+      if (!targetCp)
+        continue; // No matching coverpoint found
+
+      // Merge hit counts
+      targetCp->hits += loadedCp.hits;
+
+      // Merge min/max values
+      if (loadedCp.minVal < targetCp->min_val)
+        targetCp->min_val = loadedCp.minVal;
+      if (loadedCp.maxVal > targetCp->max_val)
+        targetCp->max_val = loadedCp.maxVal;
+
+      // Merge value counts
+      auto trackerIt = coverpointTrackers.find(targetCp);
+      if (trackerIt != coverpointTrackers.end()) {
+        for (const auto &kv : loadedCp.valueCounts) {
+          trackerIt->second.valueCounts[kv.first] += kv.second;
+        }
+      }
+
+      // Merge explicit bin hit counts
+      auto binIt = explicitBinData.find(targetCp);
+      if (binIt != explicitBinData.end() && !loadedCp.bins.empty()) {
+        // Match bins by name and merge hit counts
+        for (const auto &loadedBin : loadedCp.bins) {
+          for (auto &targetBin : binIt->second.bins) {
+            // Match by name if available, otherwise by range
+            bool match = false;
+            if (loadedBin.name && targetBin.name) {
+              match = std::strcmp(loadedBin.name, targetBin.name) == 0;
+            } else {
+              match = (loadedBin.low == targetBin.low &&
+                       loadedBin.high == targetBin.high &&
+                       loadedBin.type == targetBin.type);
+            }
+            if (match) {
+              targetBin.hit_count += loadedBin.hit_count;
+              break;
+            }
+          }
+        }
+
+        // Also update the legacy bins array if present
+        if (targetCp->bins && targetCp->num_bins > 0) {
+          for (int32_t i = 0; i < targetCp->num_bins &&
+               i < static_cast<int32_t>(binIt->second.bins.size()); ++i) {
+            targetCp->bins[i] = binIt->second.bins[i].hit_count;
+          }
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
+extern "C" int32_t __moore_coverage_merge_file(const char *filename) {
+  MooreCoverageDBHandle db = __moore_coverage_load(filename);
+  if (!db)
+    return 1;
+
+  int32_t result = __moore_coverage_merge(db);
+  __moore_coverage_db_free(db);
+  return result;
+}
+
+extern "C" int32_t __moore_coverage_merge_files(const char *file1,
+                                                 const char *file2,
+                                                 const char *output) {
+  if (!file1 || !file2 || !output)
+    return 1;
+
+  // Load both databases
+  MooreCoverageDBHandle db1 = __moore_coverage_load(file1);
+  if (!db1)
+    return 1;
+
+  MooreCoverageDBHandle db2 = __moore_coverage_load(file2);
+  if (!db2) {
+    __moore_coverage_db_free(db1);
+    return 1;
+  }
+
+  // Create a merged database by combining data from both
+  MooreCoverageDB mergedDb;
+
+  // Start with data from db1
+  for (const auto &cg1 : db1->covergroups) {
+    MooreCoverageDB::CovergroupData mergedCg;
+    mergedCg.name = cg1.name;
+    mergedCg.coverage = cg1.coverage; // Will be recalculated
+
+    for (const auto &cp1 : cg1.coverpoints) {
+      MooreCoverageDB::CoverpointData mergedCp;
+      mergedCp.name = cp1.name;
+      mergedCp.hits = cp1.hits;
+      mergedCp.minVal = cp1.minVal;
+      mergedCp.maxVal = cp1.maxVal;
+      mergedCp.coverage = cp1.coverage;
+      mergedCp.valueCounts = cp1.valueCounts;
+
+      // Copy bins
+      for (const auto &bin : cp1.bins) {
+        MooreCoverageBin binCopy;
+        binCopy.type = bin.type;
+        binCopy.low = bin.low;
+        binCopy.high = bin.high;
+        binCopy.hit_count = bin.hit_count;
+        if (bin.name) {
+          char *nameCopy = static_cast<char *>(std::malloc(std::strlen(bin.name) + 1));
+          std::strcpy(nameCopy, bin.name);
+          binCopy.name = nameCopy;
+        } else {
+          binCopy.name = nullptr;
+        }
+        mergedCp.bins.push_back(binCopy);
+      }
+
+      mergedCg.coverpoints.push_back(std::move(mergedCp));
+    }
+
+    mergedDb.covergroups.push_back(std::move(mergedCg));
+  }
+
+  // Merge data from db2
+  for (const auto &cg2 : db2->covergroups) {
+    // Find matching covergroup
+    MooreCoverageDB::CovergroupData *targetCg = nullptr;
+    for (auto &cg : mergedDb.covergroups) {
+      if (cg.name == cg2.name) {
+        targetCg = &cg;
+        break;
+      }
+    }
+
+    if (!targetCg) {
+      // No matching covergroup, add it as new
+      MooreCoverageDB::CovergroupData newCg;
+      newCg.name = cg2.name;
+      newCg.coverage = cg2.coverage;
+
+      for (const auto &cp2 : cg2.coverpoints) {
+        MooreCoverageDB::CoverpointData newCp;
+        newCp.name = cp2.name;
+        newCp.hits = cp2.hits;
+        newCp.minVal = cp2.minVal;
+        newCp.maxVal = cp2.maxVal;
+        newCp.coverage = cp2.coverage;
+        newCp.valueCounts = cp2.valueCounts;
+
+        for (const auto &bin : cp2.bins) {
+          MooreCoverageBin binCopy;
+          binCopy.type = bin.type;
+          binCopy.low = bin.low;
+          binCopy.high = bin.high;
+          binCopy.hit_count = bin.hit_count;
+          if (bin.name) {
+            char *nameCopy = static_cast<char *>(std::malloc(std::strlen(bin.name) + 1));
+            std::strcpy(nameCopy, bin.name);
+            binCopy.name = nameCopy;
+          } else {
+            binCopy.name = nullptr;
+          }
+          newCp.bins.push_back(binCopy);
+        }
+
+        newCg.coverpoints.push_back(std::move(newCp));
+      }
+
+      mergedDb.covergroups.push_back(std::move(newCg));
+      continue;
+    }
+
+    // Merge coverpoints
+    for (const auto &cp2 : cg2.coverpoints) {
+      MooreCoverageDB::CoverpointData *targetCp = nullptr;
+      for (auto &cp : targetCg->coverpoints) {
+        if (cp.name == cp2.name) {
+          targetCp = &cp;
+          break;
+        }
+      }
+
+      if (!targetCp) {
+        // No matching coverpoint, add as new
+        MooreCoverageDB::CoverpointData newCp;
+        newCp.name = cp2.name;
+        newCp.hits = cp2.hits;
+        newCp.minVal = cp2.minVal;
+        newCp.maxVal = cp2.maxVal;
+        newCp.coverage = cp2.coverage;
+        newCp.valueCounts = cp2.valueCounts;
+
+        for (const auto &bin : cp2.bins) {
+          MooreCoverageBin binCopy;
+          binCopy.type = bin.type;
+          binCopy.low = bin.low;
+          binCopy.high = bin.high;
+          binCopy.hit_count = bin.hit_count;
+          if (bin.name) {
+            char *nameCopy = static_cast<char *>(std::malloc(std::strlen(bin.name) + 1));
+            std::strcpy(nameCopy, bin.name);
+            binCopy.name = nameCopy;
+          } else {
+            binCopy.name = nullptr;
+          }
+          newCp.bins.push_back(binCopy);
+        }
+
+        targetCg->coverpoints.push_back(std::move(newCp));
+        continue;
+      }
+
+      // Merge the coverpoint data
+      targetCp->hits += cp2.hits;
+      if (cp2.minVal < targetCp->minVal)
+        targetCp->minVal = cp2.minVal;
+      if (cp2.maxVal > targetCp->maxVal)
+        targetCp->maxVal = cp2.maxVal;
+
+      // Merge value counts
+      for (const auto &kv : cp2.valueCounts) {
+        targetCp->valueCounts[kv.first] += kv.second;
+      }
+
+      // Merge bin hit counts
+      for (const auto &bin2 : cp2.bins) {
+        bool found = false;
+        for (auto &targetBin : targetCp->bins) {
+          bool match = false;
+          if (bin2.name && targetBin.name) {
+            match = std::strcmp(bin2.name, targetBin.name) == 0;
+          } else {
+            match = (bin2.low == targetBin.low &&
+                     bin2.high == targetBin.high &&
+                     bin2.type == targetBin.type);
+          }
+          if (match) {
+            targetBin.hit_count += bin2.hit_count;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          // Add new bin
+          MooreCoverageBin binCopy;
+          binCopy.type = bin2.type;
+          binCopy.low = bin2.low;
+          binCopy.high = bin2.high;
+          binCopy.hit_count = bin2.hit_count;
+          if (bin2.name) {
+            char *nameCopy = static_cast<char *>(std::malloc(std::strlen(bin2.name) + 1));
+            std::strcpy(nameCopy, bin2.name);
+            binCopy.name = nameCopy;
+          } else {
+            binCopy.name = nullptr;
+          }
+          targetCp->bins.push_back(binCopy);
+        }
+      }
+    }
+  }
+
+  // Write the merged database to the output file
+  FILE *fp = std::fopen(output, "w");
+  if (!fp) {
+    __moore_coverage_db_free(db1);
+    __moore_coverage_db_free(db2);
+    return 1;
+  }
+
+  // Generate JSON for the merged database
+  std::string json = "{\n";
+  json += "  \"coverage_report\": {\n";
+  json += "    \"version\": \"1.0\",\n";
+  json += "    \"generator\": \"circt-moore-runtime\",\n";
+  json += "    \"format\": \"coverage_database\",\n";
+  json += "    \"merged_from\": [" + jsonEscapeString(file1) + ", " + jsonEscapeString(file2) + "],\n";
+  json += "    \"covergroups\": [\n";
+
+  bool firstCg = true;
+  for (const auto &cg : mergedDb.covergroups) {
+    if (!firstCg)
+      json += ",\n";
+    firstCg = false;
+
+    json += "      {\n";
+    json += "        \"name\": \"" + cg.name + "\",\n";
+    json += "        \"coverage_percent\": " + std::to_string(cg.coverage) + ",\n";
+    json += "        \"num_coverpoints\": " + std::to_string(cg.coverpoints.size()) + ",\n";
+    json += "        \"coverpoints\": [\n";
+
+    bool firstCp = true;
+    for (const auto &cp : cg.coverpoints) {
+      if (!firstCp)
+        json += ",\n";
+      firstCp = false;
+
+      json += "          {\n";
+      json += "            \"name\": \"" + cp.name + "\",\n";
+      json += "            \"coverage_percent\": " + std::to_string(cp.coverage) + ",\n";
+      json += "            \"total_hits\": " + std::to_string(cp.hits) + ",\n";
+      json += "            \"min_value\": " + std::to_string(cp.minVal) + ",\n";
+      json += "            \"max_value\": " + std::to_string(cp.maxVal) + ",\n";
+
+      json += "            \"bins\": [\n";
+      bool firstBin = true;
+      for (const auto &bin : cp.bins) {
+        if (!firstBin)
+          json += ",\n";
+        firstBin = false;
+
+        const char *binTypeName = "unknown";
+        switch (bin.type) {
+        case MOORE_BIN_VALUE: binTypeName = "value"; break;
+        case MOORE_BIN_RANGE: binTypeName = "range"; break;
+        case MOORE_BIN_WILDCARD: binTypeName = "wildcard"; break;
+        case MOORE_BIN_TRANSITION: binTypeName = "transition"; break;
+        }
+
+        json += "              {\n";
+        json += "                \"name\": " +
+                (bin.name ? ("\"" + std::string(bin.name) + "\"") : "null") + ",\n";
+        json += "                \"type\": \"" + std::string(binTypeName) + "\",\n";
+        json += "                \"low\": " + std::to_string(bin.low) + ",\n";
+        json += "                \"high\": " + std::to_string(bin.high) + ",\n";
+        json += "                \"hit_count\": " + std::to_string(bin.hit_count) + "\n";
+        json += "              }";
+      }
+      json += "\n            ],\n";
+
+      json += "            \"top_values\": [\n";
+      bool firstVal = true;
+      for (const auto &kv : cp.valueCounts) {
+        if (!firstVal)
+          json += ",\n";
+        firstVal = false;
+        json += "              {\"value\": " + std::to_string(kv.first) +
+                ", \"count\": " + std::to_string(kv.second) + "}";
+      }
+      json += "\n            ]\n";
+      json += "          }";
+    }
+
+    json += "\n        ]\n";
+    json += "      }";
+  }
+
+  json += "\n    ]\n";
+  json += "  }\n";
+  json += "}\n";
+
+  std::fwrite(json.c_str(), 1, json.size(), fp);
+  std::fclose(fp);
+
+  // Clean up merged database bin names
+  for (auto &cg : mergedDb.covergroups) {
+    for (auto &cp : cg.coverpoints) {
+      for (auto &bin : cp.bins) {
+        if (bin.name)
+          std::free(const_cast<char *>(bin.name));
+      }
+    }
+  }
+
+  __moore_coverage_db_free(db1);
+  __moore_coverage_db_free(db2);
+
+  return 0;
+}
+
+extern "C" int32_t __moore_coverage_db_get_num_covergroups(MooreCoverageDBHandle db) {
+  if (!db)
+    return -1;
+  return static_cast<int32_t>(db->covergroups.size());
+}
+
+extern "C" const char *__moore_coverage_db_get_covergroup_name(MooreCoverageDBHandle db,
+                                                                int32_t index) {
+  if (!db || index < 0 || index >= static_cast<int32_t>(db->covergroups.size()))
+    return nullptr;
+  return db->covergroups[index].name.c_str();
+}
+
+extern "C" double __moore_coverage_db_get_coverage(MooreCoverageDBHandle db,
+                                                    const char *cg_name) {
+  if (!db)
+    return -1.0;
+
+  if (!cg_name) {
+    // Return total coverage
+    return db->getTotalCoverage();
+  }
+
+  // Find covergroup by name
+  for (const auto &cg : db->covergroups) {
+    if (cg.name == cg_name)
+      return cg.coverage;
+  }
+
+  return -1.0;
+}
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //

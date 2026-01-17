@@ -40,6 +40,8 @@
 #include "VerilogTextFile.h"
 #include "Workspace.h"
 
+#include <algorithm>
+#include <cctype>
 #include <memory>
 #include <optional>
 
@@ -151,13 +153,79 @@ void circt::lsp::VerilogServer::getDocumentSymbols(
     fileIt->second->getDocumentSymbols(uri, symbols);
 }
 
-static bool matchesWorkspaceQuery(llvm::StringRef name,
-                                  llvm::StringRef query) {
+/// Compute a fuzzy match score for how well a name matches a query.
+/// Returns -1 if no match, otherwise a score where higher is better.
+/// The algorithm supports:
+/// - Exact prefix matches (highest score)
+/// - Substring matches
+/// - Fuzzy subsequence matches (e.g., "abc" matches "AlphaBetaClass")
+/// - CamelCase boundary matching (e.g., "ABC" matches "AlphaBetaClass")
+static int computeFuzzyMatchScore(llvm::StringRef name, llvm::StringRef query) {
   if (query.empty())
-    return true;
+    return 1000; // Empty query matches everything with high score
+  if (name.empty())
+    return -1;
+
   std::string nameLower = name.lower();
   std::string queryLower = query.lower();
-  return llvm::StringRef(nameLower).contains(queryLower);
+
+  // Exact match gets highest score
+  if (nameLower == queryLower)
+    return 10000;
+
+  // Exact prefix match gets very high score
+  if (llvm::StringRef(nameLower).starts_with(queryLower))
+    return 5000 + static_cast<int>(query.size()) * 10;
+
+  // Substring match
+  size_t substrPos = nameLower.find(queryLower);
+  if (substrPos != std::string::npos) {
+    // Earlier positions are better, shorter names are better
+    int positionBonus = 100 - static_cast<int>(substrPos);
+    int lengthBonus = 100 - static_cast<int>(name.size());
+    return 2000 + positionBonus + lengthBonus;
+  }
+
+  // Fuzzy subsequence match - all query chars must appear in order
+  size_t qi = 0; // Query index
+  size_t ni = 0; // Name index
+  int score = 0;
+  bool lastWasBoundary = true; // Start counts as a boundary
+
+  while (qi < queryLower.size() && ni < nameLower.size()) {
+    char qc = queryLower[qi];
+    char nc = nameLower[ni];
+
+    if (qc == nc) {
+      // Match found
+      if (lastWasBoundary) {
+        // CamelCase or underscore boundary match - bonus points
+        score += 20;
+      } else {
+        // Consecutive match - small bonus
+        score += (qi > 0 && static_cast<size_t>(qi - 1) < ni) ? 15 : 5;
+      }
+      qi++;
+    }
+
+    // Track CamelCase boundaries and underscore boundaries
+    if (ni + 1 < name.size()) {
+      char nextChar = name[ni + 1];
+      char currChar = name[ni];
+      lastWasBoundary =
+          currChar == '_' ||
+          (std::islower(static_cast<unsigned char>(currChar)) &&
+           std::isupper(static_cast<unsigned char>(nextChar)));
+    }
+    ni++;
+  }
+
+  // All query characters must be found
+  if (qi < queryLower.size())
+    return -1;
+
+  // Base score for fuzzy match, plus computed bonus
+  return 500 + score - static_cast<int>(name.size()); // Prefer shorter names
 }
 
 static void collectWorkspaceSymbols(
@@ -166,12 +234,14 @@ static void collectWorkspaceSymbols(
     llvm::ArrayRef<llvm::lsp::DocumentSymbol> symbols,
     std::vector<circt::lsp::WorkspaceSymbol> &out) {
   for (const auto &symbol : symbols) {
-    if (matchesWorkspaceQuery(symbol.name, query)) {
+    int score = computeFuzzyMatchScore(symbol.name, query);
+    if (score >= 0) {
       circt::lsp::WorkspaceSymbol entry;
       entry.name = symbol.name;
       entry.kind = symbol.kind;
       entry.location = llvm::lsp::Location(uri, symbol.range);
       entry.containerName = containerName.str();
+      entry.score = score;
       out.push_back(std::move(entry));
     }
     if (!symbol.children.empty())
@@ -183,6 +253,7 @@ void circt::lsp::VerilogServer::getWorkspaceSymbols(
     llvm::StringRef query, std::vector<WorkspaceSymbol> &symbols) {
   llvm::StringSet<> seen;
 
+  // Collect symbols from open documents (these have better semantic info)
   for (auto &entry : impl->files) {
     const auto &filePath = entry.first();
     auto uriOrErr = llvm::lsp::URIForFile::fromFile(filePath);
@@ -204,8 +275,10 @@ void circt::lsp::VerilogServer::getWorkspaceSymbols(
     }
   }
 
+  // Collect symbols from workspace files (regex-based scanning)
   for (const auto &entry : impl->workspace.findAllSymbols()) {
-    if (!matchesWorkspaceQuery(entry.name, query))
+    int score = computeFuzzyMatchScore(entry.name, query);
+    if (score < 0)
       continue;
     auto uriOrErr = llvm::lsp::URIForFile::fromFile(entry.filePath);
     if (!uriOrErr)
@@ -214,6 +287,7 @@ void circt::lsp::VerilogServer::getWorkspaceSymbols(
     symbol.name = entry.name;
     symbol.kind = entry.kind;
     symbol.location = llvm::lsp::Location(*uriOrErr, entry.range);
+    symbol.score = score;
 
     std::string key = symbol.location.uri.file().str();
     key.append(":");
@@ -225,6 +299,17 @@ void circt::lsp::VerilogServer::getWorkspaceSymbols(
     if (seen.insert(key).second)
       symbols.push_back(std::move(symbol));
   }
+
+  // Sort by score (descending) for best matches first
+  std::stable_sort(symbols.begin(), symbols.end(),
+                   [](const WorkspaceSymbol &a, const WorkspaceSymbol &b) {
+                     return a.score > b.score;
+                   });
+
+  // Limit to reasonable number of results
+  constexpr size_t maxResults = 100;
+  if (symbols.size() > maxResults)
+    symbols.resize(maxResults);
 }
 
 void circt::lsp::VerilogServer::getCompletions(

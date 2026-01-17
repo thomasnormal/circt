@@ -192,3 +192,134 @@ module testMethodRandomize;
         success = t.doRandomize();
     end
 endmodule
+
+//===----------------------------------------------------------------------===//
+// Inline Constraint Tests (with clause)
+//===----------------------------------------------------------------------===//
+
+/// Check randomize() with simple inline constraint
+
+// CHECK-LABEL: moore.class.classdecl @InlineConstraintTx {
+// CHECK:   moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK:   moore.class.propertydecl @y : !moore.i32 rand_mode rand
+// CHECK: }
+
+class InlineConstraintTx;
+    rand int x;
+    rand int y;
+endclass
+
+/// Test basic inline constraint: obj.randomize() with { x > 0; }
+/// The inline constraint is captured in the randomize op's region.
+
+// CHECK-LABEL: moore.module @testInlineConstraint() {
+// CHECK:   %t = moore.variable : <class<@InlineConstraintTx>>
+// CHECK:   %success = moore.variable : <i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[NEW:.+]] = moore.class.new : <@InlineConstraintTx>
+// CHECK:     moore.blocking_assign %t, %[[NEW]] : class<@InlineConstraintTx>
+// CHECK:     %[[OBJ:.+]] = moore.read %t : <class<@InlineConstraintTx>>
+// CHECK:     %[[RAND_RESULT:.+]] = moore.randomize %[[OBJ]] : <@InlineConstraintTx> {
+// CHECK:       %{{.+}} = moore.variable
+// CHECK:       %[[XVAL:.+]] = moore.read %{{.+}}
+// CHECK:       %[[CONST0:.+]] = moore.constant 0 : i32
+// CHECK:       %[[GT:.+]] = moore.sgt %[[XVAL]], %[[CONST0]] : i32 -> i1
+// CHECK:       moore.constraint.expr %[[GT]] : i1
+// CHECK:     }
+// CHECK:     %[[CONV:.+]] = moore.conversion %[[RAND_RESULT]] : i1 -> !moore.i32
+// CHECK:     moore.blocking_assign %success, %[[CONV]] : i32
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testInlineConstraint;
+    InlineConstraintTx t;
+    int success;
+    initial begin
+        t = new;
+        success = t.randomize() with { x > 0; };
+    end
+endmodule
+
+/// Test inline constraint with multiple expressions
+
+// CHECK-LABEL: moore.module @testMultipleInlineConstraints() {
+// CHECK:   %t = moore.variable : <class<@InlineConstraintTx>>
+// CHECK:   %success = moore.variable : <i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[NEW:.+]] = moore.class.new : <@InlineConstraintTx>
+// CHECK:     moore.blocking_assign %t, %[[NEW]] : class<@InlineConstraintTx>
+// CHECK:     %[[OBJ:.+]] = moore.read %t : <class<@InlineConstraintTx>>
+// CHECK:     %[[RAND_RESULT:.+]] = moore.randomize %[[OBJ]] : <@InlineConstraintTx> {
+// CHECK:       %{{.+}} = moore.sgt
+// CHECK:       moore.constraint.expr %{{.+}} : i1
+// CHECK:       %{{.+}} = moore.slt
+// CHECK:       moore.constraint.expr %{{.+}} : i1
+// CHECK:     }
+// CHECK:     %[[CONV:.+]] = moore.conversion %[[RAND_RESULT]] : i1 -> !moore.i32
+// CHECK:     moore.blocking_assign %success, %[[CONV]] : i32
+// CHECK:     moore.return
+// CHECK:   }
+// CHECK:   moore.output
+// CHECK: }
+
+module testMultipleInlineConstraints;
+    InlineConstraintTx t;
+    int success;
+    initial begin
+        t = new;
+        success = t.randomize() with { x > 0; x < 100; };
+    end
+endmodule
+
+/// Test inline constraint with equality
+
+// CHECK-LABEL: moore.module @testInlineConstraintEquality() {
+// CHECK:   %t = moore.variable : <class<@InlineConstraintTx>>
+// CHECK:   %success = moore.variable : <i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[NEW:.+]] = moore.class.new : <@InlineConstraintTx>
+// CHECK:     moore.blocking_assign %t, %[[NEW]] : class<@InlineConstraintTx>
+// CHECK:     %[[OBJ:.+]] = moore.read %t : <class<@InlineConstraintTx>>
+// CHECK:     %[[RAND_RESULT:.+]] = moore.randomize %[[OBJ]] : <@InlineConstraintTx> {
+// CHECK:       %{{.+}} = moore.eq
+// CHECK:       moore.constraint.expr %{{.+}} : i1
+// CHECK:     }
+// CHECK:   }
+// CHECK: }
+
+module testInlineConstraintEquality;
+    InlineConstraintTx t;
+    int success;
+    initial begin
+        t = new;
+        success = t.randomize() with { x == 42; };
+    end
+endmodule
+
+/// Test std::randomize() with inline constraints
+
+// CHECK-LABEL: moore.module @testStdRandomizeWithConstraint() {
+// CHECK:   %x = moore.variable : <i32>
+// CHECK:   %y = moore.variable : <i32>
+// CHECK:   %success = moore.variable : <i32>
+// CHECK:   moore.procedure initial {
+// CHECK:     %[[RAND_RESULT:.+]] = moore.std_randomize %x, %y : !moore.ref<i32>, !moore.ref<i32> {
+// CHECK:       %[[XVAL:.+]] = moore.read %x
+// CHECK:       %[[YVAL:.+]] = moore.read %y
+// CHECK:       %[[LT:.+]] = moore.slt %[[XVAL]], %[[YVAL]] : i32 -> i1
+// CHECK:       moore.constraint.expr %[[LT]] : i1
+// CHECK:     }
+// CHECK:     %[[CONV:.+]] = moore.conversion %[[RAND_RESULT]] : i1 -> !moore.i32
+// CHECK:     moore.blocking_assign %success, %[[CONV]] : i32
+// CHECK:   }
+// CHECK: }
+
+module testStdRandomizeWithConstraint;
+    int x, y;
+    int success;
+    initial begin
+        success = std::randomize(x, y) with { x < y; };
+    end
+endmodule

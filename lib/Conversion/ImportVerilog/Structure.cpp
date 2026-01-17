@@ -2469,210 +2469,10 @@ struct ClassDeclVisitor {
 
     // Get the constraint body from slang
     const auto &constraintBody = constraint.getConstraints();
-    if (failed(convertConstraint(constraintBody, loc)))
+    if (failed(context.convertConstraint(constraintBody, loc)))
       return failure();
 
     return success();
-  }
-
-  /// Convert a slang constraint to Moore IR operations.
-  LogicalResult convertConstraint(const slang::ast::Constraint &constraint,
-                                  Location loc) {
-    switch (constraint.kind) {
-    case slang::ast::ConstraintKind::List: {
-      const auto &list = constraint.as<slang::ast::ConstraintList>();
-      for (const auto *item : list.list) {
-        if (failed(convertConstraint(*item, loc)))
-          return failure();
-      }
-      return success();
-    }
-    case slang::ast::ConstraintKind::Expression: {
-      const auto &exprConstraint =
-          constraint.as<slang::ast::ExpressionConstraint>();
-      auto value = context.convertRvalueExpression(exprConstraint.expr);
-      if (!value)
-        return failure();
-      // Convert to boolean if needed
-      value = context.convertToBool(value);
-      if (!value)
-        return failure();
-      // Create the constraint.expr operation
-      moore::ConstraintExprOp::create(builder, loc, value,
-                                      exprConstraint.isSoft);
-      return success();
-    }
-    case slang::ast::ConstraintKind::Implication: {
-      const auto &impl = constraint.as<slang::ast::ImplicationConstraint>();
-      auto predicate = context.convertRvalueExpression(impl.predicate);
-      if (!predicate)
-        return failure();
-      predicate = context.convertToBool(predicate);
-      if (!predicate)
-        return failure();
-      // Create implication op with body
-      auto implOp = moore::ConstraintImplicationOp::create(builder, loc,
-                                                           predicate);
-      implOp.getConsequent().emplaceBlock();
-      OpBuilder::InsertionGuard ig(builder);
-      builder.setInsertionPointToEnd(&implOp.getConsequent().front());
-      return convertConstraint(impl.body, loc);
-    }
-    case slang::ast::ConstraintKind::Conditional: {
-      const auto &cond = constraint.as<slang::ast::ConditionalConstraint>();
-      auto predicate = context.convertRvalueExpression(cond.predicate);
-      if (!predicate)
-        return failure();
-      predicate = context.convertToBool(predicate);
-      if (!predicate)
-        return failure();
-      // Create if-else op
-      auto ifElseOp = moore::ConstraintIfElseOp::create(builder, loc,
-                                                        predicate);
-      // Then region
-      ifElseOp.getThenRegion().emplaceBlock();
-      {
-        OpBuilder::InsertionGuard ig(builder);
-        builder.setInsertionPointToEnd(&ifElseOp.getThenRegion().front());
-        if (failed(convertConstraint(cond.ifBody, loc)))
-          return failure();
-      }
-      // Else region (optional)
-      if (cond.elseBody) {
-        ifElseOp.getElseRegion().emplaceBlock();
-        OpBuilder::InsertionGuard ig(builder);
-        builder.setInsertionPointToEnd(&ifElseOp.getElseRegion().front());
-        if (failed(convertConstraint(*cond.elseBody, loc)))
-          return failure();
-      }
-      return success();
-    }
-    case slang::ast::ConstraintKind::Uniqueness: {
-      const auto &unique = constraint.as<slang::ast::UniquenessConstraint>();
-      SmallVector<Value> items;
-      for (const auto *item : unique.items) {
-        auto value = context.convertRvalueExpression(*item);
-        if (!value)
-          return failure();
-        items.push_back(value);
-      }
-      moore::ConstraintUniqueOp::create(builder, loc, items);
-      return success();
-    }
-    case slang::ast::ConstraintKind::Foreach: {
-      const auto &foreachCons = constraint.as<slang::ast::ForeachConstraint>();
-
-      // Convert the array expression
-      auto arrayValue = context.convertRvalueExpression(foreachCons.arrayRef);
-      if (!arrayValue)
-        return failure();
-
-      // Create the foreach constraint op
-      auto foreachOp =
-          moore::ConstraintForeachOp::create(builder, loc, arrayValue);
-
-      // Create the body block with arguments for each loop variable
-      Block *bodyBlock = &foreachOp.getBody().emplaceBlock();
-
-      // Collect the loop variables and their types
-      SmallVector<const slang::ast::IteratorSymbol *, 4> loopVars;
-      SmallVector<Type, 4> loopVarTypes;
-
-      for (const auto &loopDim : foreachCons.loopDims) {
-        if (loopDim.loopVar) {
-          auto varType =
-              context.convertType(*loopDim.loopVar->getDeclaredType());
-          if (!varType)
-            return failure();
-          loopVars.push_back(loopDim.loopVar);
-          loopVarTypes.push_back(varType);
-        }
-      }
-
-      // Add block arguments for each loop variable
-      for (size_t i = 0; i < loopVars.size(); ++i) {
-        bodyBlock->addArgument(loopVarTypes[i], loc);
-      }
-
-      // Set insertion point inside the body and register loop variables
-      OpBuilder::InsertionGuard ig(builder);
-      builder.setInsertionPointToStart(bodyBlock);
-
-      // Create a scope for the loop variables
-      Context::ValueSymbolScope loopScope(context.valueSymbols);
-
-      // Register each loop variable in the symbol table
-      for (size_t i = 0; i < loopVars.size(); ++i) {
-        context.valueSymbols.insert(loopVars[i], bodyBlock->getArgument(i));
-      }
-
-      // Convert the body constraint
-      return convertConstraint(foreachCons.body, loc);
-    }
-    case slang::ast::ConstraintKind::SolveBefore: {
-      const auto &solveBefore =
-          constraint.as<slang::ast::SolveBeforeConstraint>();
-
-      // Helper lambda to extract variable name from expression
-      auto extractVarName =
-          [&](const slang::ast::Expression *expr) -> std::optional<StringRef> {
-        // Handle NamedValueExpression - most common case for random variables
-        if (expr->kind == slang::ast::ExpressionKind::NamedValue) {
-          const auto &namedExpr =
-              expr->as<slang::ast::NamedValueExpression>();
-          return namedExpr.symbol.name;
-        }
-        // Handle HierarchicalValueExpression for hierarchical references
-        if (expr->kind == slang::ast::ExpressionKind::HierarchicalValue) {
-          const auto &hierExpr =
-              expr->as<slang::ast::HierarchicalValueExpression>();
-          return hierExpr.symbol.name;
-        }
-        return std::nullopt;
-      };
-
-      // Collect 'before' (solve) variables
-      SmallVector<Attribute> beforeRefs;
-      for (const auto *item : solveBefore.solve) {
-        if (auto varName = extractVarName(item)) {
-          beforeRefs.push_back(
-              mlir::FlatSymbolRefAttr::get(builder.getContext(), *varName));
-        } else {
-          mlir::emitWarning(loc)
-              << "solve-before: could not extract variable name from expression";
-        }
-      }
-
-      // Collect 'after' variables
-      SmallVector<Attribute> afterRefs;
-      for (const auto *item : solveBefore.after) {
-        if (auto varName = extractVarName(item)) {
-          afterRefs.push_back(
-              mlir::FlatSymbolRefAttr::get(builder.getContext(), *varName));
-        } else {
-          mlir::emitWarning(loc)
-              << "solve-before: could not extract variable name from expression";
-        }
-      }
-
-      // Only create the op if we have at least one variable in each list
-      if (!beforeRefs.empty() && !afterRefs.empty()) {
-        moore::ConstraintSolveBeforeOp::create(
-            builder, loc, builder.getArrayAttr(beforeRefs),
-            builder.getArrayAttr(afterRefs));
-      }
-      return success();
-    }
-    case slang::ast::ConstraintKind::DisableSoft: {
-      // Disable-soft constraints require symbol references
-      // For now, emit a warning and skip
-      mlir::emitWarning(loc) << "disable-soft constraint not yet fully supported";
-      return success();
-    }
-    case slang::ast::ConstraintKind::Invalid:
-      return failure();
-    }
-    llvm_unreachable("unknown constraint kind");
   }
 
   // Emit an error for all other members.
@@ -3693,4 +3493,206 @@ mlir::StringAttr circt::ImportVerilog::fullyQualifiedSymbolName(
   }
   name += sym.name; // symbol's own name
   return mlir::StringAttr::get(ctx.getContext(), name);
+}
+
+//===----------------------------------------------------------------------===//
+// Context::convertConstraint - Convert slang constraints to MLIR
+//===----------------------------------------------------------------------===//
+
+LogicalResult Context::convertConstraint(const slang::ast::Constraint &constraint,
+                                         Location loc) {
+  switch (constraint.kind) {
+  case slang::ast::ConstraintKind::List: {
+    const auto &list = constraint.as<slang::ast::ConstraintList>();
+    for (const auto *item : list.list) {
+      if (failed(convertConstraint(*item, loc)))
+        return failure();
+    }
+    return success();
+  }
+  case slang::ast::ConstraintKind::Expression: {
+    const auto &exprConstraint =
+        constraint.as<slang::ast::ExpressionConstraint>();
+    auto value = convertRvalueExpression(exprConstraint.expr);
+    if (!value)
+      return failure();
+    // Convert to boolean if needed
+    value = convertToBool(value);
+    if (!value)
+      return failure();
+    // Create the constraint.expr operation
+    moore::ConstraintExprOp::create(builder, loc, value,
+                                    exprConstraint.isSoft);
+    return success();
+  }
+  case slang::ast::ConstraintKind::Implication: {
+    const auto &impl = constraint.as<slang::ast::ImplicationConstraint>();
+    auto predicate = convertRvalueExpression(impl.predicate);
+    if (!predicate)
+      return failure();
+    predicate = convertToBool(predicate);
+    if (!predicate)
+      return failure();
+    // Create implication op with body
+    auto implOp = moore::ConstraintImplicationOp::create(builder, loc,
+                                                         predicate);
+    implOp.getConsequent().emplaceBlock();
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPointToEnd(&implOp.getConsequent().front());
+    return convertConstraint(impl.body, loc);
+  }
+  case slang::ast::ConstraintKind::Conditional: {
+    const auto &cond = constraint.as<slang::ast::ConditionalConstraint>();
+    auto predicate = convertRvalueExpression(cond.predicate);
+    if (!predicate)
+      return failure();
+    predicate = convertToBool(predicate);
+    if (!predicate)
+      return failure();
+    // Create if-else op
+    auto ifElseOp = moore::ConstraintIfElseOp::create(builder, loc,
+                                                      predicate);
+    // Then region
+    ifElseOp.getThenRegion().emplaceBlock();
+    {
+      OpBuilder::InsertionGuard ig(builder);
+      builder.setInsertionPointToEnd(&ifElseOp.getThenRegion().front());
+      if (failed(convertConstraint(cond.ifBody, loc)))
+        return failure();
+    }
+    // Else region (optional)
+    if (cond.elseBody) {
+      ifElseOp.getElseRegion().emplaceBlock();
+      OpBuilder::InsertionGuard ig(builder);
+      builder.setInsertionPointToEnd(&ifElseOp.getElseRegion().front());
+      if (failed(convertConstraint(*cond.elseBody, loc)))
+        return failure();
+    }
+    return success();
+  }
+  case slang::ast::ConstraintKind::Uniqueness: {
+    const auto &unique = constraint.as<slang::ast::UniquenessConstraint>();
+    SmallVector<Value> items;
+    for (const auto *item : unique.items) {
+      auto value = convertRvalueExpression(*item);
+      if (!value)
+        return failure();
+      items.push_back(value);
+    }
+    moore::ConstraintUniqueOp::create(builder, loc, items);
+    return success();
+  }
+  case slang::ast::ConstraintKind::Foreach: {
+    const auto &foreachCons = constraint.as<slang::ast::ForeachConstraint>();
+
+    // Convert the array expression
+    auto arrayValue = convertRvalueExpression(foreachCons.arrayRef);
+    if (!arrayValue)
+      return failure();
+
+    // Create the foreach constraint op
+    auto foreachOp =
+        moore::ConstraintForeachOp::create(builder, loc, arrayValue);
+
+    // Create the body block with arguments for each loop variable
+    Block *bodyBlock = &foreachOp.getBody().emplaceBlock();
+
+    // Collect the loop variables and their types
+    SmallVector<const slang::ast::IteratorSymbol *, 4> loopVars;
+    SmallVector<Type, 4> loopVarTypes;
+
+    for (const auto &loopDim : foreachCons.loopDims) {
+      if (loopDim.loopVar) {
+        auto varType = convertType(*loopDim.loopVar->getDeclaredType());
+        if (!varType)
+          return failure();
+        loopVars.push_back(loopDim.loopVar);
+        loopVarTypes.push_back(varType);
+      }
+    }
+
+    // Add block arguments for each loop variable
+    for (size_t i = 0; i < loopVars.size(); ++i) {
+      bodyBlock->addArgument(loopVarTypes[i], loc);
+    }
+
+    // Set insertion point inside the body and register loop variables
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPointToStart(bodyBlock);
+
+    // Create a scope for the loop variables
+    Context::ValueSymbolScope loopScope(valueSymbols);
+
+    // Register each loop variable in the symbol table
+    for (size_t i = 0; i < loopVars.size(); ++i) {
+      valueSymbols.insert(loopVars[i], bodyBlock->getArgument(i));
+    }
+
+    // Convert the body constraint
+    return convertConstraint(foreachCons.body, loc);
+  }
+  case slang::ast::ConstraintKind::SolveBefore: {
+    const auto &solveBefore =
+        constraint.as<slang::ast::SolveBeforeConstraint>();
+
+    // Helper lambda to extract variable name from expression
+    auto extractVarName =
+        [&](const slang::ast::Expression *expr) -> std::optional<StringRef> {
+      // Handle NamedValueExpression - most common case for random variables
+      if (expr->kind == slang::ast::ExpressionKind::NamedValue) {
+        const auto &namedExpr =
+            expr->as<slang::ast::NamedValueExpression>();
+        return namedExpr.symbol.name;
+      }
+      // Handle HierarchicalValueExpression for hierarchical references
+      if (expr->kind == slang::ast::ExpressionKind::HierarchicalValue) {
+        const auto &hierExpr =
+            expr->as<slang::ast::HierarchicalValueExpression>();
+        return hierExpr.symbol.name;
+      }
+      return std::nullopt;
+    };
+
+    // Collect 'before' (solve) variables
+    SmallVector<Attribute> beforeRefs;
+    for (const auto *item : solveBefore.solve) {
+      if (auto varName = extractVarName(item)) {
+        beforeRefs.push_back(
+            mlir::FlatSymbolRefAttr::get(getContext(), *varName));
+      } else {
+        mlir::emitWarning(loc)
+            << "solve-before: could not extract variable name from expression";
+      }
+    }
+
+    // Collect 'after' variables
+    SmallVector<Attribute> afterRefs;
+    for (const auto *item : solveBefore.after) {
+      if (auto varName = extractVarName(item)) {
+        afterRefs.push_back(
+            mlir::FlatSymbolRefAttr::get(getContext(), *varName));
+      } else {
+        mlir::emitWarning(loc)
+            << "solve-before: could not extract variable name from expression";
+      }
+    }
+
+    // Only create the op if we have at least one variable in each list
+    if (!beforeRefs.empty() && !afterRefs.empty()) {
+      moore::ConstraintSolveBeforeOp::create(
+          builder, loc, builder.getArrayAttr(beforeRefs),
+          builder.getArrayAttr(afterRefs));
+    }
+    return success();
+  }
+  case slang::ast::ConstraintKind::DisableSoft: {
+    // Disable-soft constraints require symbol references
+    // For now, emit a warning and skip
+    mlir::emitWarning(loc) << "disable-soft constraint not yet fully supported";
+    return success();
+  }
+  case slang::ast::ConstraintKind::Invalid:
+    return failure();
+  }
+  llvm_unreachable("unknown constraint kind");
 }

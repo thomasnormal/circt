@@ -7,8 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "ImportVerilogInternals.h"
+#include "slang/ast/Constraints.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -3127,8 +3129,19 @@ struct RvalueExprVisitor : public ExprVisitor {
     // Handle randomize() - both class method and std::randomize().
     // IEEE 1800-2017 Section 18.6 "Randomization methods" (class method)
     // IEEE 1800-2017 Section 18.12 "Scope randomize function" (std::randomize)
+    // IEEE 1800-2017 Section 18.7 "In-line constraints" (with clause)
     // randomize() returns 1 on success, 0 on failure.
     if (subroutine.name == "randomize" && !args.empty()) {
+      // Check for inline constraints from the with clause
+      const slang::ast::Constraint *inlineConstraints = nullptr;
+      if (info.extraInfo.index() == 2) {
+        // extraInfo index 2 is RandomizeCallInfo
+        const auto &randInfo =
+            std::get<slang::ast::CallExpression::RandomizeCallInfo>(
+                info.extraInfo);
+        inlineConstraints = randInfo.inlineConstraints;
+      }
+
       // Detect std::randomize() by checking if args are wrapped in
       // AssignmentExpression (slang wraps lvalue args this way for
       // std::randomize).
@@ -3156,6 +3169,19 @@ struct RvalueExprVisitor : public ExprVisitor {
         auto stdRandomizeOp =
             moore::StdRandomizeOp::create(builder, loc, varRefs);
 
+        // Handle inline constraints if present
+        if (inlineConstraints) {
+          // Create the inline constraint region
+          stdRandomizeOp.getInlineConstraints().emplaceBlock();
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(
+              &stdRandomizeOp.getInlineConstraints().front());
+
+          // Convert the inline constraints
+          if (failed(context.convertConstraint(*inlineConstraints, loc)))
+            return {};
+        }
+
         auto resultType = context.convertType(*expr.type);
         if (!resultType)
           return {};
@@ -3182,6 +3208,19 @@ struct RvalueExprVisitor : public ExprVisitor {
 
         // Create the randomize operation which returns i1 (success/failure)
         auto randomizeOp = moore::RandomizeOp::create(builder, loc, classObj);
+
+        // Handle inline constraints if present
+        if (inlineConstraints) {
+          // Create the inline constraint region
+          randomizeOp.getInlineConstraints().emplaceBlock();
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(
+              &randomizeOp.getInlineConstraints().front());
+
+          // Convert the inline constraints
+          if (failed(context.convertConstraint(*inlineConstraints, loc)))
+            return {};
+        }
 
         // The result is i1, but the expression type from slang is typically
         // int. Convert to the expected type.

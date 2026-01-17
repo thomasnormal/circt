@@ -1,0 +1,50 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test workspace/symbol fuzzy matching.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///fuzzy_symbols.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module AlphaBetaController;\nendmodule\n\nmodule SimpleModule;\nendmodule\n\nmodule alpha_processor;\nendmodule\n\ninterface my_interface;\nendinterface\n\nclass TestClass;\nendclass\n"
+}}}
+// -----
+// Test 1: Exact prefix match
+{"jsonrpc":"2.0","id":1,"method":"workspace/symbol","params":{"query":"Alpha"}}
+// CHECK:       "id": 1,
+// CHECK:       "result": [
+// CHECK:         "name": "AlphaBetaController"
+// CHECK:         "name": "alpha_processor"
+// CHECK:       ]
+// -----
+// Test 2: Case-insensitive substring match
+{"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"module"}}
+// CHECK:       "id": 2,
+// CHECK:       "result": [
+// CHECK:         "name": "SimpleModule"
+// CHECK:       ]
+// -----
+// Test 3: Fuzzy CamelCase match (abc -> AlphaBetaController)
+{"jsonrpc":"2.0","id":3,"method":"workspace/symbol","params":{"query":"abc"}}
+// CHECK:       "id": 3,
+// CHECK:       "result": [
+// CHECK:         "name": "AlphaBetaController"
+// CHECK:       ]
+// -----
+// Test 4: Empty query returns all symbols
+{"jsonrpc":"2.0","id":4,"method":"workspace/symbol","params":{"query":""}}
+// CHECK:       "id": 4,
+// CHECK:       "result": [
+// CHECK:         "name":
+// CHECK:       ]
+// -----
+// Test 5: Non-matching query returns empty result
+{"jsonrpc":"2.0","id":5,"method":"workspace/symbol","params":{"query":"xyz123"}}
+// CHECK:       "id": 5,
+// CHECK:       "result": []
+// -----
+{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

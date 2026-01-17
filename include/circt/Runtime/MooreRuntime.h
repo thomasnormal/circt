@@ -1080,6 +1080,91 @@ bool __moore_coverpoint_bin_covered(void *cg, int32_t cp_index,
 int32_t __moore_coverage_report_html(const char *filename);
 
 //===----------------------------------------------------------------------===//
+// Coverage Database Save/Load/Merge Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions support coverage database persistence and merging.
+// This enables verification flows that combine coverage from multiple
+// simulation runs: run1.db + run2.db + run3.db -> merged.db
+//
+// The database format is JSON-based for interoperability with other tools.
+//
+
+/// Opaque handle to a coverage database.
+/// Used for loading, merging, and manipulating coverage data from files.
+typedef struct MooreCoverageDB *MooreCoverageDBHandle;
+
+/// Save all current coverage data to a database file.
+/// Writes all registered covergroups and their data to a JSON file.
+///
+/// @param filename Path to the output file (null-terminated string)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_save(const char *filename);
+
+/// Load a coverage database from a file.
+/// Creates a new coverage database handle that can be used for merging.
+/// The returned handle must be freed with __moore_coverage_db_free.
+///
+/// @param filename Path to the input file (null-terminated string)
+/// @return Handle to the loaded database, or NULL on failure
+MooreCoverageDBHandle __moore_coverage_load(const char *filename);
+
+/// Free a coverage database handle.
+/// Releases all resources associated with a loaded coverage database.
+///
+/// @param db Handle to the database to free
+void __moore_coverage_db_free(MooreCoverageDBHandle db);
+
+/// Merge a loaded coverage database into the current coverage state.
+/// Combines bin hit counts and value tracking data from the loaded database
+/// with the current registered covergroups. Covergroups and coverpoints are
+/// matched by name.
+///
+/// @param db Handle to the database to merge
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_merge(MooreCoverageDBHandle db);
+
+/// Merge coverage from a file directly into the current state.
+/// Convenience function that combines load and merge operations.
+///
+/// @param filename Path to the coverage database file
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_merge_file(const char *filename);
+
+/// Merge two coverage database files into a new output file.
+/// Creates a new database containing the combined coverage from both inputs.
+/// Neither input is modified.
+///
+/// @param file1 Path to the first input database
+/// @param file2 Path to the second input database
+/// @param output Path to the output merged database
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_merge_files(const char *file1, const char *file2,
+                                      const char *output);
+
+/// Get the number of covergroups in a loaded database.
+///
+/// @param db Handle to the database
+/// @return Number of covergroups, or -1 on error
+int32_t __moore_coverage_db_get_num_covergroups(MooreCoverageDBHandle db);
+
+/// Get the name of a covergroup in a loaded database.
+///
+/// @param db Handle to the database
+/// @param index Index of the covergroup
+/// @return Name of the covergroup, or NULL on error
+const char *__moore_coverage_db_get_covergroup_name(MooreCoverageDBHandle db,
+                                                     int32_t index);
+
+/// Get coverage percentage from a loaded database.
+///
+/// @param db Handle to the database
+/// @param cg_name Name of the covergroup (NULL for total coverage)
+/// @return Coverage percentage, or -1.0 on error
+double __moore_coverage_db_get_coverage(MooreCoverageDBHandle db,
+                                         const char *cg_name);
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //
