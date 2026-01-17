@@ -2895,6 +2895,70 @@ struct RvalueExprVisitor : public ExprVisitor {
       return locatorOp.getResult();
     }
 
+    // Handle queue sort.with and rsort.with methods
+    // IEEE 1800-2017 Section 7.12.3 "Array ordering methods"
+    bool isSortWithMethod =
+        llvm::StringSwitch<bool>(subroutine.name)
+            .Cases({"sort", "rsort"}, true)
+            .Default(false);
+
+    if (isSortWithMethod) {
+      // Check if this has a 'with' clause
+      auto [iterExpr, iterVar] = info.getIteratorInfo();
+      if (iterExpr && iterVar) {
+        // This is sort.with or rsort.with
+        // The array is the first argument
+        if (args.empty()) {
+          mlir::emitError(loc) << "sort.with method requires an array argument";
+          return {};
+        }
+
+        // Convert the array as lvalue (it's modified in place)
+        Value arrayRef = context.convertLvalueExpression(*args[0]);
+        if (!arrayRef)
+          return {};
+
+        // Get the element type for the iterator variable
+        Type iterVarType = context.convertType(iterVar->getType());
+        if (!iterVarType)
+          return {};
+
+        // Create the appropriate sort.with operation
+        Operation *sortOp;
+        if (subroutine.name == "sort") {
+          sortOp = moore::QueueSortWithOp::create(builder, loc, arrayRef);
+        } else {
+          sortOp = moore::QueueRSortWithOp::create(builder, loc, arrayRef);
+        }
+
+        // Get the body region
+        Region &bodyRegion = sortOp->getRegion(0);
+        Block *bodyBlock = &bodyRegion.emplaceBlock();
+        bodyBlock->addArgument(iterVarType, loc);
+        Value iterArg = bodyBlock->getArgument(0);
+
+        // Set up the value symbol for the iterator variable within the region
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(bodyBlock);
+
+        // Temporarily bind the iterator variable to the block argument
+        Context::ValueSymbolScope scope(context.valueSymbols);
+        context.valueSymbols.insert(iterVar, iterArg);
+
+        // Convert the key expression inside the region
+        Value keyResult = context.convertRvalueExpression(*iterExpr);
+        if (!keyResult)
+          return {};
+
+        // Create the yield terminator
+        moore::QueueSortKeyYieldOp::create(builder, loc, keyResult);
+
+        // sort.with returns void, return a dummy value
+        auto intTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, intTy, 0);
+      }
+    }
+
     // $sformatf() and $sformat look like system tasks, but we handle string
     // formatting differently from expression evaluation, so handle them
     // separately.
@@ -3136,13 +3200,14 @@ struct RvalueExprVisitor : public ExprVisitor {
     // Handle queue methods that need special treatment (lvalue for queue).
     // push_back, push_front need queue as lvalue + element as rvalue.
     // pop_back, pop_front need queue as lvalue, no additional args.
-    // delete, sort need queue as lvalue, no additional args, return void.
+    // delete, sort, rsort, shuffle need queue as lvalue, no additional args, return void.
     bool isQueuePushMethod =
         (subroutine.name == "push_back" || subroutine.name == "push_front");
     bool isQueuePopMethod =
         (subroutine.name == "pop_back" || subroutine.name == "pop_front");
     bool isQueueVoidMethod =
-        (subroutine.name == "delete" || subroutine.name == "sort");
+        (subroutine.name == "delete" || subroutine.name == "sort" ||
+         subroutine.name == "rsort" || subroutine.name == "shuffle");
     bool isQueueInsertMethod = (subroutine.name == "insert");
 
     if (isQueuePushMethod && args.size() == 2) {

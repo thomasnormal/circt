@@ -1,0 +1,82 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test comprehensive textDocument/references functionality across various symbol types.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///refs_test.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module counter #(\n  parameter int WIDTH = 8\n) (\n  input  logic clk,\n  input  logic rst_n,\n  input  logic enable,\n  output logic [WIDTH-1:0] count\n);\n  logic [WIDTH-1:0] next_count;\n  \n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n)\n      count <= '0;\n    else if (enable)\n      count <= next_count;\n  end\n  \n  assign next_count = count + 1;\nendmodule\n\nmodule top;\n  logic clk, rst_n, en;\n  logic [7:0] counter_val;\n  \n  counter #(.WIDTH(8)) u_counter (\n    .clk(clk),\n    .rst_n(rst_n),\n    .enable(en),\n    .count(counter_val)\n  );\nendmodule"
+}}}
+// -----
+// Test 1: Find all references to 'count' output port (line 6, col 27)
+// Should find: declaration, all assignments and usages
+{"jsonrpc":"2.0","id":1,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs_test.sv"},
+  "position":{"line":6,"character":27},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs_test.sv"
+// Should find multiple references to 'count'
+// CHECK:       ]
+// -----
+// Test 2: Find all references to 'WIDTH' parameter (line 1, col 20)
+// Should find: declaration and all usages
+{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs_test.sv"},
+  "position":{"line":1,"character":20},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs_test.sv"
+// Should find references to WIDTH parameter
+// CHECK:       ]
+// -----
+// Test 3: Find all references to 'clk' signal (line 3, col 15)
+// Should find: port declaration and usage in always_ff
+{"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs_test.sv"},
+  "position":{"line":3,"character":15},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs_test.sv"
+// CHECK:       ]
+// -----
+// Test 4: Find all references to 'next_count' internal signal (line 8, col 23)
+// Should find: declaration and usages in assignment and expression
+{"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs_test.sv"},
+  "position":{"line":8,"character":23},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs_test.sv"
+// CHECK:       ]
+// -----
+// Test 5: Find all references to 'enable' port (line 5, col 15)
+{"jsonrpc":"2.0","id":5,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///refs_test.sv"},
+  "position":{"line":5,"character":15},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "uri": "test:///refs_test.sv"
+// CHECK:       ]
+// -----
+{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

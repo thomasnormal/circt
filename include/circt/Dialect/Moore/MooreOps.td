@@ -5220,6 +5220,92 @@ def QueueRSortOp : QueueBuiltin<"rsort"> {
   let assemblyFormat = "$queue `:` type($queue) attr-dict";
 }
 
+def QueueSortWithOp : QueueBuiltin<"sort.with", [
+  RecursiveMemoryEffects,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Sort the elements of a queue with a custom key expression";
+  let description = [{
+    Sorts the elements of a queue in ascending order using a custom key
+    expression. This corresponds to the SystemVerilog `.sort() with (expr)`
+    built-in method on queues and dynamic arrays.
+
+    The operation takes a queue reference and contains a single-block region
+    that defines the key expression. The region has a block argument
+    representing the current element being evaluated. The region must terminate
+    with a `moore.queue.sort.key.yield` operation that yields the sort key value.
+
+    Example:
+    ```mlir
+    // q.sort() with (item % 10) - sorts by the value modulo 10
+    moore.queue.sort.with %queue : !moore.ref<!moore.queue<i32, 0>> {
+    ^bb0(%item: !moore.i32):
+      %ten = moore.constant 10 : i32
+      %key = moore.smod %item, %ten : i32
+      moore.queue.sort.key.yield %key : i32
+    }
+    ```
+
+    See IEEE 1800-2017 Section 7.12.3 "Array ordering methods".
+  }];
+  let arguments = (ins RefType:$queue);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$queue `:` type($queue) $body attr-dict";
+}
+
+def QueueRSortWithOp : QueueBuiltin<"rsort.with", [
+  RecursiveMemoryEffects,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Sort the elements of a queue in descending order with a custom key expression";
+  let description = [{
+    Sorts the elements of a queue in descending order using a custom key
+    expression. This corresponds to the SystemVerilog `.rsort() with (expr)`
+    built-in method on queues and dynamic arrays.
+
+    The operation takes a queue reference and contains a single-block region
+    that defines the key expression. The region has a block argument
+    representing the current element being evaluated. The region must terminate
+    with a `moore.queue.sort.key.yield` operation that yields the sort key value.
+
+    Example:
+    ```mlir
+    // q.rsort() with (item % 10) - sorts descending by the value modulo 10
+    moore.queue.rsort.with %queue : !moore.ref<!moore.queue<i32, 0>> {
+    ^bb0(%item: !moore.i32):
+      %ten = moore.constant 10 : i32
+      %key = moore.smod %item, %ten : i32
+      moore.queue.sort.key.yield %key : i32
+    }
+    ```
+
+    See IEEE 1800-2017 Section 7.12.3 "Array ordering methods".
+  }];
+  let arguments = (ins RefType:$queue);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$queue `:` type($queue) $body attr-dict";
+}
+
+def QueueSortKeyYieldOp : MooreOp<"queue.sort.key.yield", [
+  Pure,
+  Terminator,
+  HasParent<"QueueSortWithOp, QueueRSortWithOp">,
+]> {
+  let summary = "Yield a sort key value from a queue sort.with body";
+  let description = [{
+    Terminates the body region of a `moore.queue.sort.with` or
+    `moore.queue.rsort.with` operation and yields the sort key value
+    for the current element.
+
+    Example:
+    ```mlir
+    moore.queue.sort.key.yield %key : i32
+    ```
+  }];
+  let arguments = (ins UnpackedType:$key);
+  let assemblyFormat = "$key `:` type($key) attr-dict";
+}
+
 def QueueShuffleOp : QueueBuiltin<"shuffle"> {
   let summary = "Shuffle the elements of a queue";
   let description = [{

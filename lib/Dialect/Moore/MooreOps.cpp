@@ -1559,6 +1559,20 @@ void DynArrayNewOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get());
 }
 
+void QueueSortWithOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // Declare that we write to memory (sorting modifies the queue in place).
+  effects.emplace_back(MemoryEffects::Write::get());
+}
+
+void QueueRSortWithOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // Declare that we write to memory (sorting modifies the queue in place).
+  effects.emplace_back(MemoryEffects::Write::get());
+}
+
 LogicalResult
 ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // 1) Type checks.

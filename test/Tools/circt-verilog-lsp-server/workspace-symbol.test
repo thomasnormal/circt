@@ -1,0 +1,23 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test workspace/symbol for open documents.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///workspace_symbols.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module alpha;\nendmodule\n\nmodule beta;\nendmodule\n"
+}}}
+// -----
+{"jsonrpc":"2.0","id":1,"method":"workspace/symbol","params":{"query":"alp"}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "alpha"
+// CHECK:       ]
+// -----
+{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

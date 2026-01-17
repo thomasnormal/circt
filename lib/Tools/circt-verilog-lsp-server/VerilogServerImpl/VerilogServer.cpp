@@ -130,6 +130,47 @@ void circt::lsp::VerilogServer::getDocumentSymbols(
     fileIt->second->getDocumentSymbols(uri, symbols);
 }
 
+static bool matchesWorkspaceQuery(llvm::StringRef name,
+                                  llvm::StringRef query) {
+  if (query.empty())
+    return true;
+  std::string nameLower = name.lower();
+  std::string queryLower = query.lower();
+  return llvm::StringRef(nameLower).contains(queryLower);
+}
+
+static void collectWorkspaceSymbols(
+    const llvm::lsp::URIForFile &uri, llvm::StringRef query,
+    llvm::StringRef containerName,
+    llvm::ArrayRef<llvm::lsp::DocumentSymbol> symbols,
+    std::vector<circt::lsp::WorkspaceSymbol> &out) {
+  for (const auto &symbol : symbols) {
+    if (matchesWorkspaceQuery(symbol.name, query)) {
+      circt::lsp::WorkspaceSymbol entry;
+      entry.name = symbol.name.str();
+      entry.kind = symbol.kind;
+      entry.location = llvm::lsp::Location(uri, symbol.range);
+      entry.containerName = containerName.str();
+      out.push_back(std::move(entry));
+    }
+    if (!symbol.children.empty())
+      collectWorkspaceSymbols(uri, query, symbol.name, symbol.children, out);
+  }
+}
+
+void circt::lsp::VerilogServer::getWorkspaceSymbols(
+    llvm::StringRef query, std::vector<WorkspaceSymbol> &symbols) {
+  for (auto &entry : impl->files) {
+    const auto &filePath = entry.first();
+    auto uriOrErr = llvm::lsp::URIForFile::fromFile(filePath);
+    if (!uriOrErr)
+      continue;
+    std::vector<llvm::lsp::DocumentSymbol> docSymbols;
+    entry.second->getDocumentSymbols(*uriOrErr, docSymbols);
+    collectWorkspaceSymbols(*uriOrErr, query, "", docSymbols, symbols);
+  }
+}
+
 void circt::lsp::VerilogServer::getCompletions(
     const URIForFile &uri, const Position &pos,
     llvm::lsp::CompletionList &completions) {

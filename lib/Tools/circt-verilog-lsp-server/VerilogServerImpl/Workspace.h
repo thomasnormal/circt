@@ -162,9 +162,15 @@ public:
   /// Find all source files across all workspaces.
   llvm::Expected<std::vector<std::string>> getAllSourceFiles() const;
 
-  /// Find all modules across all workspaces.
-  /// Returns a map from module name to file path.
-  std::vector<std::pair<std::string, std::string>> findAllModules() const;
+  struct WorkspaceSymbolEntry {
+    std::string name;
+    std::string filePath;
+    llvm::lsp::Range range;
+    llvm::lsp::SymbolKind kind;
+  };
+
+  /// Find all top-level symbols across all workspaces.
+  std::vector<WorkspaceSymbolEntry> findAllSymbols() const;
 
 private:
   /// The workspace roots.
