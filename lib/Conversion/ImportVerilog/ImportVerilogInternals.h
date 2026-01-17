@@ -394,6 +394,16 @@ struct Context {
   /// the correct block.
   SmallVector<LoopFrame> loopStack;
 
+  /// A stack of randsequence exit blocks. Each randsequence statement pushes
+  /// its exit block onto this stack. A 'return' statement within a randsequence
+  /// production branches to this block to exit the entire randsequence.
+  SmallVector<Block *> randSequenceReturnStack;
+
+  /// A stack of loop depths for randsequence break handling. This is used to
+  /// distinguish between a break that exits a loop within a production versus
+  /// a break that exits the production itself.
+  SmallVector<unsigned> randSequenceBreakDepthStack;
+
   /// A listener called for every variable or net being read. This can be used
   /// to collect all variables read as part of an expression or statement, for
   /// example to populate the list of observed signals in an implicit event
