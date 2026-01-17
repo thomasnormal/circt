@@ -1187,6 +1187,9 @@ struct StmtVisitor {
   LogicalResult visit(const slang::ast::BreakStatement &stmt) {
     if (context.loopStack.empty())
       return mlir::emitError(loc, "cannot `break` without a surrounding loop");
+
+    // In randsequence productions, a break exits the current production's code
+    // block. The executeRule function sets up a break block for this purpose.
     cf::BranchOp::create(builder, loc, context.loopStack.back().breakBlock);
     setTerminated();
     return success();
@@ -1757,15 +1760,11 @@ struct StmtVisitor {
     context.currentScope = rule.ruleBlock;
     auto scopeGuard =
         llvm::make_scope_exit([&] { context.currentScope = savedScope; });
-
-    Block &breakBlock = createBlock();
-    context.loopStack.push_back({&breakBlock, &breakBlock});
-    auto loopGuard =
-        llvm::make_scope_exit([&] { context.loopStack.pop_back(); });
-
     if (rule.codeBlock)
       if (failed(convertStatementBlock(*rule.codeBlock->block)))
         return failure();
+    if (isTerminated())
+      return success();
 
     if (rule.isRandJoin) {
       int64_t joinCount = 0;
@@ -1782,16 +1781,10 @@ struct StmtVisitor {
       if (joinCount <= 0 || rule.prods.empty()) {
         // Nothing to execute
       } else if (joinCount >= static_cast<int64_t>(rule.prods.size())) {
-        // N >= number of alternatives: execute all productions sequentially
-        // (concurrent execution via ForkOp would require single-block regions
-        // which is not always possible when productions have control flow)
-        for (auto prod : rule.prods) {
-          if (failed(executeProdBase(*prod)))
-            return failure();
-          if (isTerminated())
-            break;
-        }
-      } else if (joinCount == 1) {
+        joinCount = static_cast<int64_t>(rule.prods.size());
+      }
+
+      if (joinCount == 1) {
         auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
         Value maxVal = moore::ConstantOp::create(
             builder, loc, i32Ty,
@@ -1822,6 +1815,10 @@ struct StmtVisitor {
 
         for (size_t i = 0; i < rule.prods.size(); ++i) {
           builder.setInsertionPointToEnd(itemBlocks[i]);
+          context.randSequenceReturnStack.push_back(&exitBlock);
+          auto prodGuard = llvm::make_scope_exit([&] {
+            context.randSequenceReturnStack.pop_back();
+          });
           if (failed(executeProdBase(*rule.prods[i])))
             return failure();
           if (!isTerminated())
@@ -1834,15 +1831,12 @@ struct StmtVisitor {
         } else {
           builder.setInsertionPointToEnd(&exitBlock);
         }
-      } else {
-        // randjoin(N) where 1 < N < number of productions
+      } else if (joinCount > 1) {
+        // randjoin(N) where 1 < N <= number of productions
         // Select N distinct productions using Fisher-Yates partial shuffle
-        // and execute them sequentially (concurrent execution is allowed but
-        // not required by IEEE 1800-2017).
         auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
         size_t numProds = rule.prods.size();
 
-        // Create array of index variables initialized to [0, 1, 2, ..., n-1]
         SmallVector<Value> indexVars;
         for (size_t i = 0; i < numProds; ++i) {
           Value initVal = moore::ConstantOp::create(builder, loc, i32Ty,
@@ -1853,10 +1847,7 @@ struct StmtVisitor {
           indexVars.push_back(var);
         }
 
-        // Fisher-Yates partial shuffle: for i from 0 to joinCount-1,
-        // swap arr[i] with arr[random(i, numProds-1)]
         for (int64_t i = 0; i < joinCount; ++i) {
-          // Generate random index in range [i, numProds-1]
           Value minVal =
               moore::ConstantOp::create(builder, loc, i32Ty, i);
           Value maxVal = moore::ConstantOp::create(
@@ -1864,10 +1855,8 @@ struct StmtVisitor {
           Value randIdx =
               moore::UrandomRangeBIOp::create(builder, loc, maxVal, minVal);
 
-          // Read value at position i before any swap
           Value valAtI = moore::ReadOp::create(builder, loc, indexVars[i]);
 
-          // For each possible randIdx value j in [i, numProds-1], swap if match
           for (size_t j = i; j < numProds; ++j) {
             auto jConst = moore::ConstantOp::create(builder, loc, i32Ty,
                                                     static_cast<int64_t>(j));
@@ -1879,7 +1868,6 @@ struct StmtVisitor {
             cf::CondBranchOp::create(builder, loc, cond, &swapBlock, &nextBlock);
 
             builder.setInsertionPointToEnd(&swapBlock);
-            // Swap indexVars[i] and indexVars[j]
             Value valAtJ = moore::ReadOp::create(builder, loc, indexVars[j]);
             moore::BlockingAssignOp::create(builder, loc, indexVars[i], valAtJ);
             moore::BlockingAssignOp::create(builder, loc, indexVars[j], valAtI);
@@ -1889,18 +1877,14 @@ struct StmtVisitor {
           }
         }
 
-        // Execute the first joinCount selected productions sequentially
-        auto &exitBlock = createBlock();
         for (int64_t i = 0; i < joinCount; ++i) {
           Value selectedIdx = moore::ReadOp::create(builder, loc, indexVars[i]);
 
-          // Create blocks for each possible production
           SmallVector<Block *> prodBlocks;
           for (size_t p = 0; p < numProds; ++p)
             prodBlocks.push_back(&createBlock());
           auto &afterProdBlock = createBlock();
 
-          // Dispatch to the correct production based on selectedIdx
           for (size_t p = 0; p < numProds; ++p) {
             auto pConst = moore::ConstantOp::create(builder, loc, i32Ty,
                                                     static_cast<int64_t>(p));
@@ -1918,9 +1902,12 @@ struct StmtVisitor {
             }
           }
 
-          // Generate code for each production block
           for (size_t p = 0; p < numProds; ++p) {
             builder.setInsertionPointToEnd(prodBlocks[p]);
+            context.randSequenceReturnStack.push_back(&afterProdBlock);
+            auto prodGuard = llvm::make_scope_exit([&] {
+              context.randSequenceReturnStack.pop_back();
+            });
             if (failed(executeProdBase(*rule.prods[p])))
               return failure();
             if (!isTerminated())
@@ -1935,39 +1922,28 @@ struct StmtVisitor {
             builder.setInsertionPointToEnd(&afterProdBlock);
           }
         }
-
-        // Branch to exit block after all selected productions are executed
-        if (!isTerminated())
-          cf::BranchOp::create(builder, loc, &exitBlock);
-
-        if (exitBlock.hasNoPredecessors()) {
-          exitBlock.erase();
-          setTerminated();
-        } else {
-          builder.setInsertionPointToEnd(&exitBlock);
-        }
       }
     } else {
       for (auto prod : rule.prods) {
+        Block &prodExit = createBlock();
+        context.randSequenceReturnStack.push_back(&prodExit);
+        auto prodGuard = llvm::make_scope_exit([&] {
+          context.randSequenceReturnStack.pop_back();
+        });
+
         if (failed(executeProdBase(*prod)))
           return failure();
-        if (isTerminated())
-          break;
+        if (!isTerminated())
+          cf::BranchOp::create(builder, loc, &prodExit);
+        if (prodExit.hasNoPredecessors()) {
+          prodExit.erase();
+          if (isTerminated())
+            break;
+        } else {
+          builder.setInsertionPointToEnd(&prodExit);
+        }
       }
     }
-
-    if (!isTerminated())
-      cf::BranchOp::create(builder, loc, &breakBlock);
-
-    if (!breakBlock.hasNoPredecessors()) {
-      builder.setInsertionPointToEnd(&breakBlock);
-      return success();
-    }
-
-    if (isTerminated())
-      return success();
-
-    breakBlock.erase();
     return success();
   }
 
