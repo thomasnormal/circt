@@ -4442,3 +4442,423 @@ VerilogDocument::getSignatureHelp(const llvm::lsp::URIForFile &uri,
 
   return result;
 }
+
+//===----------------------------------------------------------------------===//
+// Document Formatting
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Check if a character is a Verilog keyword that should have space after it.
+/// Note: This function is currently unused but kept for potential future use
+/// in more sophisticated formatting.
+[[maybe_unused]]
+static bool isKeywordRequiringSpace(llvm::StringRef word) {
+  // Use a simple string comparison approach for keywords
+  return word == "if" || word == "else" || word == "for" || word == "while" ||
+         word == "do" || word == "case" || word == "casex" ||
+         word == "casez" || word == "begin" || word == "end" ||
+         word == "module" || word == "endmodule" || word == "function" ||
+         word == "endfunction" || word == "task" || word == "endtask" ||
+         word == "class" || word == "endclass" || word == "package" ||
+         word == "endpackage" || word == "always" || word == "always_ff" ||
+         word == "always_comb" || word == "always_latch" ||
+         word == "initial" || word == "final" || word == "assign" ||
+         word == "return" || word == "repeat" || word == "foreach" ||
+         word == "forever" || word == "wait" || word == "fork" ||
+         word == "join" || word == "join_any" || word == "join_none" ||
+         word == "disable" || word == "assert" || word == "assume" ||
+         word == "cover" || word == "expect" || word == "import" ||
+         word == "export" || word == "typedef" || word == "input" ||
+         word == "output" || word == "inout" || word == "ref" ||
+         word == "const" || word == "static" || word == "automatic" ||
+         word == "virtual" || word == "extends" || word == "implements" ||
+         word == "generate" || word == "endgenerate" || word == "interface" ||
+         word == "endinterface" || word == "property" ||
+         word == "endproperty" || word == "sequence" || word == "endsequence";
+}
+
+/// Check if a line is a preprocessor directive.
+static bool isPreprocessorLine(llvm::StringRef line) {
+  llvm::StringRef trimmed = line.ltrim();
+  return trimmed.starts_with("`");
+}
+
+/// Check if a line is a comment line.
+static bool isCommentLine(llvm::StringRef line) {
+  llvm::StringRef trimmed = line.ltrim();
+  return trimmed.starts_with("//") || trimmed.starts_with("/*");
+}
+
+/// Get the indentation level change for a line.
+/// Returns positive for lines that increase indent, negative for decrease.
+static int getIndentDelta(llvm::StringRef line) {
+  llvm::StringRef trimmed = line.ltrim();
+
+  // Skip empty lines, comments, and preprocessor directives
+  if (trimmed.empty() || isCommentLine(line) || isPreprocessorLine(line))
+    return 0;
+
+  int delta = 0;
+
+  // Keywords that increase indentation
+  if (trimmed.starts_with("begin") || trimmed.starts_with("module ") ||
+      trimmed.starts_with("function ") || trimmed.starts_with("task ") ||
+      trimmed.starts_with("class ") || trimmed.starts_with("package ") ||
+      trimmed.starts_with("interface ") || trimmed.starts_with("generate") ||
+      trimmed.starts_with("always") || trimmed.starts_with("initial") ||
+      trimmed.starts_with("final") || trimmed.starts_with("if ") ||
+      trimmed.starts_with("if(") || trimmed.starts_with("else ") ||
+      trimmed.starts_with("else\n") || trimmed.starts_with("for ") ||
+      trimmed.starts_with("for(") || trimmed.starts_with("while ") ||
+      trimmed.starts_with("while(") || trimmed.starts_with("case ") ||
+      trimmed.starts_with("case(") || trimmed.starts_with("casex ") ||
+      trimmed.starts_with("casex(") || trimmed.starts_with("casez ") ||
+      trimmed.starts_with("casez(") || trimmed.starts_with("fork") ||
+      trimmed.starts_with("property ") || trimmed.starts_with("sequence ") ||
+      trimmed.starts_with("covergroup ")) {
+    ++delta;
+  }
+
+  // Keywords that decrease indentation
+  if (trimmed.starts_with("end") || trimmed.starts_with("endmodule") ||
+      trimmed.starts_with("endfunction") || trimmed.starts_with("endtask") ||
+      trimmed.starts_with("endclass") || trimmed.starts_with("endpackage") ||
+      trimmed.starts_with("endinterface") || trimmed.starts_with("endgenerate") ||
+      trimmed.starts_with("endcase") || trimmed.starts_with("join") ||
+      trimmed.starts_with("endproperty") || trimmed.starts_with("endsequence") ||
+      trimmed.starts_with("endgroup")) {
+    --delta;
+  }
+
+  return delta;
+}
+
+/// Check if the line ends with a statement that should not increase indent.
+static bool endsWithSemicolon(llvm::StringRef line) {
+  llvm::StringRef trimmed = line.rtrim();
+  return !trimmed.empty() && trimmed.back() == ';';
+}
+
+/// Format a single line of Verilog code.
+static std::string formatLine(llvm::StringRef line, unsigned indentLevel,
+                              const VerilogDocument::FormattingOptions &options) {
+  // Preserve empty lines
+  if (line.trim().empty())
+    return "";
+
+  // Don't modify preprocessor directives
+  if (isPreprocessorLine(line))
+    return line.str();
+
+  std::string result;
+  llvm::raw_string_ostream os(result);
+
+  // Generate indentation
+  std::string indent;
+  if (options.insertSpaces) {
+    indent = std::string(indentLevel * options.tabSize, ' ');
+  } else {
+    indent = std::string(indentLevel, '\t');
+  }
+
+  os << indent;
+
+  // Process the trimmed content
+  llvm::StringRef content = line.ltrim();
+
+  // Add spaces after keywords and around operators
+  bool inString = false;
+  bool inComment = false;
+  bool prevWasSpace = false;
+
+  for (size_t i = 0; i < content.size(); ++i) {
+    char c = content[i];
+    char next = (i + 1 < content.size()) ? content[i + 1] : '\0';
+    char prev = (i > 0) ? content[i - 1] : '\0';
+
+    // Track string literals
+    if (c == '"' && prev != '\\')
+      inString = !inString;
+
+    // Track comments
+    if (!inString && c == '/' && next == '/')
+      inComment = true;
+
+    if (inString || inComment) {
+      os << c;
+      prevWasSpace = (c == ' ');
+      continue;
+    }
+
+    // Add space after comma if not present
+    if (c == ',' && next != ' ' && next != '\n' && next != '\0') {
+      os << ", ";
+      prevWasSpace = true;
+      continue;
+    }
+
+    // Add space around binary operators (=, ==, !=, etc.)
+    // But not for <= (less-than-or-equal or non-blocking assignment)
+    if ((c == '=' && prev != '!' && prev != '=' && prev != '<' &&
+         prev != '>' && prev != '+' && prev != '-' && prev != '*' &&
+         prev != '/' && prev != '&' && prev != '|' && prev != '^') &&
+        next != '=') {
+      if (!prevWasSpace && i > 0)
+        os << ' ';
+      os << c;
+      if (next != ' ' && next != '\0' && next != '\n')
+        os << ' ';
+      prevWasSpace = true;
+      continue;
+    }
+
+    os << c;
+    prevWasSpace = (c == ' ');
+  }
+
+  return result;
+}
+
+/// Calculate the expected indentation level for a line.
+static unsigned calculateIndentLevel(
+    const std::vector<std::string> &lines, size_t lineIndex) {
+  unsigned level = 0;
+
+  for (size_t i = 0; i < lineIndex; ++i) {
+    llvm::StringRef line(lines[i]);
+    llvm::StringRef trimmed = line.ltrim();
+
+    // Skip empty lines and comments
+    if (trimmed.empty() || isCommentLine(line) || isPreprocessorLine(line))
+      continue;
+
+    int delta = getIndentDelta(trimmed);
+
+    // If this line has a closing keyword, it decreases indent before itself
+    if (delta < 0) {
+      // The negative delta applies to this line and subsequent
+    } else if (delta > 0) {
+      // Check if the line ends with semicolon (single-line construct)
+      if (!endsWithSemicolon(trimmed)) {
+        level += delta;
+      }
+    }
+  }
+
+  // Check if current line starts with a closing keyword
+  if (lineIndex < lines.size()) {
+    llvm::StringRef currentLine(lines[lineIndex]);
+    llvm::StringRef trimmed = currentLine.ltrim();
+    if (trimmed.starts_with("end") || trimmed.starts_with("join") ||
+        trimmed.starts_with("else")) {
+      if (level > 0)
+        --level;
+    }
+  }
+
+  return level;
+}
+
+} // namespace
+
+void VerilogDocument::formatDocument(const llvm::lsp::URIForFile &uri,
+                                     const FormattingOptions &options,
+                                     std::vector<llvm::lsp::TextEdit> &edits) {
+  auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+
+  if (text.empty())
+    return;
+
+  // Remove trailing null characters from the text
+  while (!text.empty() && text.back() == '\0')
+    text = text.substr(0, text.size() - 1);
+
+  if (text.empty())
+    return;
+
+  // Split into lines
+  std::vector<std::string> lines;
+  size_t start = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '\n') {
+      lines.push_back(std::string(text.substr(start, i - start)));
+      start = i + 1;
+    }
+  }
+  if (start < text.size())
+    lines.push_back(std::string(text.substr(start)));
+
+  // Format each line and track changes
+  std::string formattedText;
+  llvm::raw_string_ostream os(formattedText);
+
+  unsigned currentIndent = 0;
+  bool inMultiLineComment = false;
+
+  for (size_t i = 0; i < lines.size(); ++i) {
+    llvm::StringRef line(lines[i]);
+    llvm::StringRef trimmed = line.ltrim();
+
+    // Track multi-line comments
+    if (trimmed.contains("/*") && !trimmed.contains("*/"))
+      inMultiLineComment = true;
+    if (inMultiLineComment) {
+      if (trimmed.contains("*/"))
+        inMultiLineComment = false;
+      os << line << "\n";
+      continue;
+    }
+
+    // Skip empty lines - just add newline
+    if (trimmed.empty()) {
+      os << "\n";
+      continue;
+    }
+
+    // Calculate expected indent for this line
+    // Decrease indent for closing keywords before processing
+    if (trimmed.starts_with("end") || trimmed.starts_with("join") ||
+        trimmed.starts_with("else")) {
+      if (currentIndent > 0)
+        --currentIndent;
+    }
+
+    // Format the line
+    std::string formatted = formatLine(line, currentIndent, options);
+    os << formatted << "\n";
+
+    // Update indent for next line
+    int delta = getIndentDelta(trimmed);
+    if (delta > 0 && !endsWithSemicolon(trimmed)) {
+      currentIndent += delta;
+    }
+  }
+
+  // Create a single edit replacing the entire document
+  llvm::lsp::TextEdit edit;
+  edit.range = llvm::lsp::Range(
+      llvm::lsp::Position(0, 0),
+      llvm::lsp::Position(static_cast<int>(lines.size()), 0));
+  edit.newText = formattedText;
+
+  // Only add the edit if there are actual changes
+  // Compare without potential trailing null
+  std::string originalText(text);
+  // Remove trailing null if present
+  while (!originalText.empty() && originalText.back() == '\0')
+    originalText.pop_back();
+  while (!edit.newText.empty() && edit.newText.back() == '\0')
+    edit.newText.pop_back();
+  if (edit.newText != originalText)
+    edits.push_back(std::move(edit));
+}
+
+void VerilogDocument::formatRange(const llvm::lsp::URIForFile &uri,
+                                  const llvm::lsp::Range &range,
+                                  const FormattingOptions &options,
+                                  std::vector<llvm::lsp::TextEdit> &edits) {
+  auto &sm = getSlangSourceManager();
+  std::string_view text = sm.getSourceText(mainBufferId);
+
+  if (text.empty())
+    return;
+
+  // Remove trailing null characters from the text
+  while (!text.empty() && text.back() == '\0')
+    text = text.substr(0, text.size() - 1);
+
+  if (text.empty())
+    return;
+
+  // Split into lines
+  std::vector<std::string> lines;
+  size_t start = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '\n') {
+      lines.push_back(std::string(text.substr(start, i - start)));
+      start = i + 1;
+    }
+  }
+  if (start < text.size())
+    lines.push_back(std::string(text.substr(start)));
+
+  // Determine the range of lines to format
+  int startLine = std::max(0, range.start.line);
+  int endLine = std::min(static_cast<int>(lines.size()) - 1, range.end.line);
+
+  if (startLine > endLine || startLine >= static_cast<int>(lines.size()))
+    return;
+
+  // Calculate the base indentation level at the start of the range
+  unsigned baseIndent = calculateIndentLevel(lines, startLine);
+
+  // Format the lines in the range
+  std::string formattedText;
+  llvm::raw_string_ostream os(formattedText);
+
+  unsigned currentIndent = baseIndent;
+  bool inMultiLineComment = false;
+
+  for (int i = startLine; i <= endLine; ++i) {
+    llvm::StringRef line(lines[i]);
+    llvm::StringRef trimmed = line.ltrim();
+
+    // Track multi-line comments
+    if (trimmed.contains("/*") && !trimmed.contains("*/"))
+      inMultiLineComment = true;
+    if (inMultiLineComment) {
+      if (trimmed.contains("*/"))
+        inMultiLineComment = false;
+      os << line;
+      if (i < endLine)
+        os << "\n";
+      continue;
+    }
+
+    // Skip empty lines - just add newline
+    if (trimmed.empty()) {
+      if (i < endLine)
+        os << "\n";
+      continue;
+    }
+
+    // Decrease indent for closing keywords before processing
+    if (trimmed.starts_with("end") || trimmed.starts_with("join") ||
+        trimmed.starts_with("else")) {
+      if (currentIndent > 0)
+        --currentIndent;
+    }
+
+    // Format the line
+    std::string formatted = formatLine(line, currentIndent, options);
+    os << formatted;
+    if (i < endLine)
+      os << "\n";
+
+    // Update indent for next line
+    int delta = getIndentDelta(trimmed);
+    if (delta > 0 && !endsWithSemicolon(trimmed)) {
+      currentIndent += delta;
+    }
+  }
+
+  // Create edit for the range
+  llvm::lsp::TextEdit edit;
+  edit.range = llvm::lsp::Range(
+      llvm::lsp::Position(startLine, 0),
+      llvm::lsp::Position(endLine, static_cast<int>(lines[endLine].size())));
+  edit.newText = formattedText;
+
+  // Only add the edit if there are actual changes
+  std::string originalRange;
+  for (int i = startLine; i <= endLine; ++i) {
+    originalRange += lines[i];
+    if (i < endLine)
+      originalRange += "\n";
+  }
+
+  if (edit.newText != originalRange)
+    edits.push_back(std::move(edit));
+}

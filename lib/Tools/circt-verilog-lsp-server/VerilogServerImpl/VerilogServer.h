@@ -148,6 +148,23 @@ public:
   llvm::lsp::SignatureHelp getSignatureHelp(const URIForFile &uri,
                                             const llvm::lsp::Position &pos);
 
+  /// Formatting options for document formatting.
+  struct FormattingOptions {
+    /// Number of spaces for indentation (ignored if insertSpaces is false).
+    unsigned tabSize = 2;
+    /// Use spaces for indentation instead of tabs.
+    bool insertSpaces = true;
+  };
+
+  /// Format the entire document.
+  void formatDocument(const URIForFile &uri, const FormattingOptions &options,
+                      std::vector<llvm::lsp::TextEdit> &edits);
+
+  /// Format a range within the document.
+  void formatRange(const URIForFile &uri, const llvm::lsp::Range &range,
+                   const FormattingOptions &options,
+                   std::vector<llvm::lsp::TextEdit> &edits);
+
   /// Initialize workspace from LSP initialize parameters.
   void initializeWorkspace(const llvm::json::Value &initParams);
 

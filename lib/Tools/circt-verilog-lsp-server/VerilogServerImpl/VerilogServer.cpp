@@ -379,6 +379,31 @@ circt::lsp::VerilogServer::getSignatureHelp(const URIForFile &uri,
   return llvm::lsp::SignatureHelp();
 }
 
+void circt::lsp::VerilogServer::formatDocument(
+    const URIForFile &uri, const FormattingOptions &options,
+    std::vector<llvm::lsp::TextEdit> &edits) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end()) {
+    VerilogDocument::FormattingOptions docOptions;
+    docOptions.tabSize = options.tabSize;
+    docOptions.insertSpaces = options.insertSpaces;
+    fileIt->second->formatDocument(uri, docOptions, edits);
+  }
+}
+
+void circt::lsp::VerilogServer::formatRange(
+    const URIForFile &uri, const llvm::lsp::Range &range,
+    const FormattingOptions &options,
+    std::vector<llvm::lsp::TextEdit> &edits) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt != impl->files.end()) {
+    VerilogDocument::FormattingOptions docOptions;
+    docOptions.tabSize = options.tabSize;
+    docOptions.insertSpaces = options.insertSpaces;
+    fileIt->second->formatRange(uri, range, docOptions, edits);
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Workspace Management
 //===----------------------------------------------------------------------===//

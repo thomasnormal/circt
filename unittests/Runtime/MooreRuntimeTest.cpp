@@ -3041,10 +3041,11 @@ TEST(MooreRuntimeCoverageTest, ExplicitBins) {
   ASSERT_NE(cg, nullptr);
 
   // Initialize with explicit bins
+  // MooreCoverageBin: {name, type, kind, low, high, hit_count}
   MooreCoverageBin bins[] = {
-    {"low", MOORE_BIN_RANGE, 0, 10, 0},
-    {"mid", MOORE_BIN_RANGE, 11, 20, 0},
-    {"high", MOORE_BIN_RANGE, 21, 30, 0}
+    {"low", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 10, 0},
+    {"mid", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 11, 20, 0},
+    {"high", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 21, 30, 0}
   };
   __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
 
@@ -3589,9 +3590,10 @@ TEST(MooreRuntimeCoverageMergeTest, MergeWithExplicitBins) {
   void *cg = __moore_covergroup_create("bin_merge_cg", 1);
   ASSERT_NE(cg, nullptr);
 
+  // MooreCoverageBin: {name, type, kind, low, high, hit_count}
   MooreCoverageBin bins[] = {
-      {"low", MOORE_BIN_RANGE, 0, 10, 0},
-      {"high", MOORE_BIN_RANGE, 11, 20, 0}};
+      {"low", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 10, 0},
+      {"high", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 11, 20, 0}};
   __moore_coverpoint_init_with_bins(cg, 0, "cp_bins", bins, 2);
 
   // Sample some values in the first bin
@@ -3633,7 +3635,8 @@ TEST(MooreRuntimeCoverageMergeTest, MergeCumulativeHitCounts) {
   void *cg = __moore_covergroup_create("cumulative_test", 1);
   ASSERT_NE(cg, nullptr);
 
-  MooreCoverageBin bins[] = {{"bin1", MOORE_BIN_VALUE, 1, 1, 0}};
+  // MooreCoverageBin: {name, type, kind, low, high, hit_count}
+  MooreCoverageBin bins[] = {{"bin1", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 1, 1, 0}};
   __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
 
   // Sample value 5 times
@@ -4089,6 +4092,374 @@ TEST(MooreRuntimeIllegalBinsTest, NullCovergroup) {
 
   EXPECT_FALSE(__moore_coverpoint_is_illegal(nullptr, 0, 5));
   EXPECT_FALSE(__moore_coverpoint_is_ignored(nullptr, 0, 5));
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Options Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageOptionsTest, CovergroupWeight) {
+  void *cg = __moore_covergroup_create("weight_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Default weight should be 1
+  EXPECT_EQ(__moore_covergroup_get_weight(cg), 1);
+
+  // Set custom weight
+  __moore_covergroup_set_weight(cg, 5);
+  EXPECT_EQ(__moore_covergroup_get_weight(cg), 5);
+
+  // Weight should be clamped to minimum 1
+  __moore_covergroup_set_weight(cg, 0);
+  EXPECT_EQ(__moore_covergroup_get_weight(cg), 1);
+
+  __moore_covergroup_set_weight(cg, -10);
+  EXPECT_EQ(__moore_covergroup_get_weight(cg), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, CovergroupAtLeast) {
+  void *cg = __moore_covergroup_create("at_least_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Default at_least should be 1
+  EXPECT_EQ(__moore_covergroup_get_at_least(cg), 1);
+
+  // Set custom at_least
+  __moore_covergroup_set_at_least(cg, 10);
+  EXPECT_EQ(__moore_covergroup_get_at_least(cg), 10);
+
+  // at_least should be clamped to minimum 1
+  __moore_covergroup_set_at_least(cg, 0);
+  EXPECT_EQ(__moore_covergroup_get_at_least(cg), 1);
+
+  __moore_covergroup_set_at_least(cg, -5);
+  EXPECT_EQ(__moore_covergroup_get_at_least(cg), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, CovergroupAutoBinMax) {
+  void *cg = __moore_covergroup_create("auto_bin_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Default auto_bin_max should be 64
+  EXPECT_EQ(__moore_covergroup_get_auto_bin_max(cg), 64);
+
+  // Set custom auto_bin_max
+  __moore_covergroup_set_auto_bin_max(cg, 128);
+  EXPECT_EQ(__moore_covergroup_get_auto_bin_max(cg), 128);
+
+  // auto_bin_max should fall back to 64 if set to <= 0
+  __moore_covergroup_set_auto_bin_max(cg, 0);
+  EXPECT_EQ(__moore_covergroup_get_auto_bin_max(cg), 64);
+
+  __moore_covergroup_set_auto_bin_max(cg, -1);
+  EXPECT_EQ(__moore_covergroup_get_auto_bin_max(cg), 64);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, CoverpointWeight) {
+  void *cg = __moore_covergroup_create("cp_weight_test", 2);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Default weight should be 1
+  EXPECT_EQ(__moore_coverpoint_get_weight(cg, 0), 1);
+  EXPECT_EQ(__moore_coverpoint_get_weight(cg, 1), 1);
+
+  // Set custom weights
+  __moore_coverpoint_set_weight(cg, 0, 3);
+  __moore_coverpoint_set_weight(cg, 1, 7);
+  EXPECT_EQ(__moore_coverpoint_get_weight(cg, 0), 3);
+  EXPECT_EQ(__moore_coverpoint_get_weight(cg, 1), 7);
+
+  // Invalid index should return default
+  EXPECT_EQ(__moore_coverpoint_get_weight(cg, -1), 1);
+  EXPECT_EQ(__moore_coverpoint_get_weight(cg, 10), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, CoverpointGoal) {
+  void *cg = __moore_covergroup_create("cp_goal_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Default goal should be 100.0
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_goal(cg, 0), 100.0);
+
+  // Set custom goal
+  __moore_coverpoint_set_goal(cg, 0, 80.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_goal(cg, 0), 80.0);
+
+  // Goal should be clamped to [0, 100]
+  __moore_coverpoint_set_goal(cg, 0, -10.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_goal(cg, 0), 0.0);
+
+  __moore_coverpoint_set_goal(cg, 0, 150.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_goal(cg, 0), 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, CoverpointAtLeast) {
+  void *cg = __moore_covergroup_create("cp_at_least_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Default at_least should be 1
+  EXPECT_EQ(__moore_coverpoint_get_at_least(cg, 0), 1);
+
+  // Set custom at_least
+  __moore_coverpoint_set_at_least(cg, 0, 5);
+  EXPECT_EQ(__moore_coverpoint_get_at_least(cg, 0), 5);
+
+  // at_least should be clamped to minimum 1
+  __moore_coverpoint_set_at_least(cg, 0, 0);
+  EXPECT_EQ(__moore_coverpoint_get_at_least(cg, 0), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, CoverpointAutoBinMax) {
+  void *cg = __moore_covergroup_create("cp_auto_bin_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Default auto_bin_max should be 64
+  EXPECT_EQ(__moore_coverpoint_get_auto_bin_max(cg, 0), 64);
+
+  // Set custom auto_bin_max
+  __moore_coverpoint_set_auto_bin_max(cg, 0, 256);
+  EXPECT_EQ(__moore_coverpoint_get_auto_bin_max(cg, 0), 256);
+
+  // auto_bin_max should fall back to 64 if set to <= 0
+  __moore_coverpoint_set_auto_bin_max(cg, 0, 0);
+  EXPECT_EQ(__moore_coverpoint_get_auto_bin_max(cg, 0), 64);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, GenericOptionAPI) {
+  void *cg = __moore_covergroup_create("generic_opt_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Test covergroup generic option API
+  __moore_covergroup_set_option(cg, MOORE_OPTION_GOAL, 90.0);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_option(cg, MOORE_OPTION_GOAL), 90.0);
+
+  __moore_covergroup_set_option(cg, MOORE_OPTION_WEIGHT, 3.0);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_option(cg, MOORE_OPTION_WEIGHT), 3.0);
+
+  __moore_covergroup_set_option(cg, MOORE_OPTION_AT_LEAST, 5.0);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_option(cg, MOORE_OPTION_AT_LEAST), 5.0);
+
+  __moore_covergroup_set_option(cg, MOORE_OPTION_AUTO_BIN_MAX, 100.0);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_option(cg, MOORE_OPTION_AUTO_BIN_MAX), 100.0);
+
+  // Test coverpoint generic option API
+  __moore_coverpoint_set_option(cg, 0, MOORE_OPTION_GOAL, 75.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_option(cg, 0, MOORE_OPTION_GOAL), 75.0);
+
+  __moore_coverpoint_set_option(cg, 0, MOORE_OPTION_WEIGHT, 2.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_option(cg, 0, MOORE_OPTION_WEIGHT), 2.0);
+
+  __moore_coverpoint_set_option(cg, 0, MOORE_OPTION_AT_LEAST, 10.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_option(cg, 0, MOORE_OPTION_AT_LEAST), 10.0);
+
+  __moore_coverpoint_set_option(cg, 0, MOORE_OPTION_AUTO_BIN_MAX, 50.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_option(cg, 0, MOORE_OPTION_AUTO_BIN_MAX), 50.0);
+
+  // Test unknown option returns 0
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_option(cg, 999), 0.0);
+  EXPECT_DOUBLE_EQ(__moore_coverpoint_get_option(cg, 0, 999), 0.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, AtLeastAffectsCoverage) {
+  // Test that at_least threshold affects coverage calculation
+  void *cg = __moore_covergroup_create("at_least_cov_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample the same value 3 times
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // With at_least=1 (default), we should have coverage > 0
+  double covDefault = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(covDefault, 0.0);
+
+  // Set at_least=5, coverage should still work but value isn't covered yet
+  __moore_coverpoint_set_at_least(cg, 0, 5);
+  double covAt5 = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(covAt5, 0.0);  // 3 hits < 5 threshold
+
+  // Add 2 more samples (total 5), now it should be covered
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_sample(cg, 0, 42);
+  double covAfter5 = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(covAfter5, 0.0);  // 5 hits >= 5 threshold
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, AtLeastWithExplicitBins) {
+  // Test at_least with explicit bins
+  void *cg = __moore_covergroup_create("at_least_bins_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Create coverpoint with explicit bins
+  MooreCoverageBin bins[] = {
+      {"bin0", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 0, 0, 0},
+      {"bin1", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 1, 1, 0},
+      {"bin2", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 2, 2, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Sample each bin once
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+
+  // With at_least=1, all 3 bins should be covered (100%)
+  double cov1 = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov1, 100.0);
+
+  // Set at_least=2, now bins aren't covered (only 1 hit each)
+  __moore_coverpoint_set_at_least(cg, 0, 2);
+  double cov2 = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov2, 0.0);  // 0 out of 3 bins covered
+
+  // Sample bin0 again (now has 2 hits)
+  __moore_coverpoint_sample(cg, 0, 0);
+  double cov3 = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_NEAR(cov3, 33.33, 0.5);  // 1 out of 3 bins covered
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, AutoBinMaxAffectsCoverage) {
+  // Test that auto_bin_max affects coverage calculation
+  // IEEE 1800-2017: auto_bin_max limits the maximum number of auto-generated bins.
+  // If the value range is smaller than auto_bin_max, bins are based on the range.
+  void *cg = __moore_covergroup_create("auto_bin_max_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Sample values across a wide range (0-99), so range = 100
+  for (int i = 0; i < 100; i++) {
+    __moore_coverpoint_sample(cg, 0, i);
+  }
+
+  // With default auto_bin_max=64, range (100) > auto_bin_max (64)
+  // So effective bins = 64, coverage = 100/64 = capped at 100%
+  double covDefault = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GE(covDefault, 100.0);  // 100 values in 64 bins = >100% (capped)
+
+  // Set auto_bin_max=200, range (100) < auto_bin_max (200)
+  // So effective bins = 100 (the actual range), coverage = 100/100 = 100%
+  __moore_coverpoint_set_auto_bin_max(cg, 0, 200);
+  double covLarge = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(covLarge, 100.0);  // 100 values in range of 100
+
+  // Now test with a smaller auto_bin_max to demonstrate the limiting effect
+  __moore_coverpoint_set_auto_bin_max(cg, 0, 50);
+  double covSmall = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GE(covSmall, 100.0);  // 100 values in 50 bins = 200% (capped to 100%)
+
+  // Sample only 25 of a 100-value range with auto_bin_max=50
+  void *cg2 = __moore_covergroup_create("auto_bin_max_test2", 1);
+  ASSERT_NE(cg2, nullptr);
+  __moore_coverpoint_init(cg2, 0, "cp");
+  __moore_coverpoint_set_auto_bin_max(cg2, 0, 50);
+
+  for (int i = 0; i < 100; i += 4) {  // Sample 25 values out of 100
+    __moore_coverpoint_sample(cg2, 0, i);
+  }
+  // Range is 96 (0 to 96), auto_bin_max is 50, so effective bins = 50
+  // 25 values in 50 bins = 50%
+  double covPartial = __moore_coverpoint_get_coverage(cg2, 0);
+  EXPECT_NEAR(covPartial, 50.0, 2.0);
+
+  __moore_covergroup_destroy(cg);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, WeightedCoverage) {
+  // Test weighted coverage calculation
+  void *cg = __moore_covergroup_create("weighted_test", 2);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // cp0 has single value (100% coverage), weight = 1
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_set_weight(cg, 0, 1);
+
+  // cp1 has no samples (0% coverage), weight = 3
+  __moore_coverpoint_set_weight(cg, 1, 3);
+
+  // Weighted coverage = (100*1 + 0*3) / (1+3) = 25%
+  double weighted = __moore_covergroup_get_weighted_coverage(cg);
+  EXPECT_NEAR(weighted, 25.0, 1.0);
+
+  // Sample cp1 to get 100% coverage there too
+  __moore_coverpoint_sample(cg, 1, 99);
+
+  // Now weighted = (100*1 + 100*3) / (1+3) = 100%
+  double weightedFull = __moore_covergroup_get_weighted_coverage(cg);
+  EXPECT_DOUBLE_EQ(weightedFull, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, NullCovergroupOptions) {
+  // Test that null covergroup doesn't crash
+  __moore_covergroup_set_weight(nullptr, 5);
+  __moore_covergroup_set_at_least(nullptr, 5);
+  __moore_covergroup_set_auto_bin_max(nullptr, 100);
+  __moore_covergroup_set_option(nullptr, MOORE_OPTION_GOAL, 50.0);
+
+  EXPECT_EQ(__moore_covergroup_get_weight(nullptr), 1);
+  EXPECT_EQ(__moore_covergroup_get_at_least(nullptr), 1);
+  EXPECT_EQ(__moore_covergroup_get_auto_bin_max(nullptr), 64);
+  EXPECT_DOUBLE_EQ(__moore_covergroup_get_option(nullptr, MOORE_OPTION_GOAL), 100.0);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, BinCoveredRespectAtLeast) {
+  // Test __moore_coverpoint_bin_covered respects at_least
+  void *cg = __moore_covergroup_create("bin_covered_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"bin0", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 0, 0, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Sample once
+  __moore_coverpoint_sample(cg, 0, 0);
+
+  // With at_least=1, bin should be covered
+  EXPECT_TRUE(__moore_coverpoint_bin_covered(cg, 0, 0));
+
+  // Set at_least=3, bin should not be covered
+  __moore_coverpoint_set_at_least(cg, 0, 3);
+  EXPECT_FALSE(__moore_coverpoint_bin_covered(cg, 0, 0));
+
+  // Sample 2 more times
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 0);
+  EXPECT_TRUE(__moore_coverpoint_bin_covered(cg, 0, 0));
+
+  __moore_covergroup_destroy(cg);
 }
 
 //===----------------------------------------------------------------------===//

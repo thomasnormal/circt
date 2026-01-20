@@ -2109,6 +2109,59 @@ struct CoverpointTracker {
 /// This is separate from the MooreCoverpoint struct to keep the C API simple.
 thread_local std::map<MooreCoverpoint *, CoverpointTracker> coverpointTrackers;
 
+/// Coverage options for covergroups (IEEE 1800-2017 Section 19.7.1).
+struct CovergroupOptions {
+  int64_t weight = 1;         ///< option.weight (default: 1)
+  bool perInstance = false;   ///< option.per_instance (default: false)
+  int64_t atLeast = 1;        ///< option.at_least (default: 1)
+  int64_t autoBinMax = 64;    ///< option.auto_bin_max (default: 64)
+  std::string comment;        ///< option.comment (default: empty)
+};
+
+/// Map from covergroup to its options.
+thread_local std::map<MooreCovergroup *, CovergroupOptions> covergroupOptions;
+
+/// Coverage options for coverpoints (IEEE 1800-2017 Section 19.7.2).
+struct CoverpointOptions {
+  int64_t weight = 1;       ///< option.weight (default: 1)
+  double goal = 100.0;      ///< option.goal (default: 100.0)
+  int64_t atLeast = 1;      ///< option.at_least (default: 1)
+  int64_t autoBinMax = 64;  ///< option.auto_bin_max (default: 64)
+  std::string comment;      ///< option.comment (default: empty)
+};
+
+/// Map from coverpoint to its options.
+thread_local std::map<MooreCoverpoint *, CoverpointOptions> coverpointOptions;
+
+/// Structure to store a transition bin with its sequences and state.
+struct TransitionBin {
+  const char *name;
+  std::vector<MooreTransitionSequence> sequences; // Alternative sequences
+  int64_t hit_count;
+
+  // State for tracking sequence progress per alternative
+  struct SequenceState {
+    int32_t currentStep;  // Which step in the sequence we're waiting for
+    int32_t repeatCount;  // For repeat patterns, count of matching values
+    bool active;          // Is this sequence currently being tracked
+
+    SequenceState() : currentStep(0), repeatCount(0), active(false) {}
+  };
+  std::vector<SequenceState> sequenceStates;
+
+  TransitionBin() : name(nullptr), hit_count(0) {}
+};
+
+/// Structure to store explicit bin data for a coverpoint.
+/// Stored separately to maintain backward compatibility with the C API.
+struct ExplicitBinData {
+  std::vector<MooreCoverageBin> bins;
+  std::vector<TransitionBin> transitionBins;
+};
+
+/// Map from coverpoint to its explicit bin data.
+thread_local std::map<MooreCoverpoint *, ExplicitBinData> explicitBinData;
+
 } // anonymous namespace
 
 extern "C" void *__moore_covergroup_create(const char *name,
@@ -2188,6 +2241,12 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
       // Remove from tracker map
       coverpointTrackers.erase(covergroup->coverpoints[i]);
 
+      // Remove from options map
+      coverpointOptions.erase(covergroup->coverpoints[i]);
+
+      // Remove from explicit bin data map
+      explicitBinData.erase(covergroup->coverpoints[i]);
+
       // Free bin array if present
       if (covergroup->coverpoints[i]->bins) {
         std::free(covergroup->coverpoints[i]->bins);
@@ -2204,6 +2263,9 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
   // Clean up cross coverage data (implemented later in file)
   extern void __moore_cross_cleanup_for_covergroup(MooreCovergroup *);
   __moore_cross_cleanup_for_covergroup(covergroup);
+
+  // Clean up covergroup options
+  covergroupOptions.erase(covergroup);
 
   // Free the covergroup itself
   std::free(covergroup);
@@ -2280,6 +2342,20 @@ extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
   if (!cp || cp->hits == 0)
     return 0.0;
 
+  // Get the at_least threshold for this coverpoint
+  // First check coverpoint-specific option, then fall back to covergroup option
+  int64_t atLeast = 1;
+  auto cpOptIt = coverpointOptions.find(cp);
+  if (cpOptIt != coverpointOptions.end()) {
+    atLeast = cpOptIt->second.atLeast;
+  } else {
+    // Fall back to covergroup-level at_least
+    auto cgOptIt = covergroupOptions.find(covergroup);
+    if (cgOptIt != covergroupOptions.end()) {
+      atLeast = cgOptIt->second.atLeast;
+    }
+  }
+
   // For auto bins, calculate coverage as the ratio of unique values seen
   // to the theoretical range. Since we don't know the type's range at runtime,
   // we use the actual range of values seen plus some margin.
@@ -2287,19 +2363,41 @@ extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
   if (trackerIt == coverpointTrackers.end())
     return 0.0;
 
-  int64_t uniqueValues = static_cast<int64_t>(trackerIt->second.valueCounts.size());
-
   // If we have explicit bins, use those
   if (cp->bins && cp->num_bins > 0) {
-    int64_t hitBins = 0;
+    int64_t coveredBins = 0;
+    int64_t totalBins = 0;
+
+    // Check explicit bin data for ignore bins (which shouldn't count)
+    auto binDataIt = explicitBinData.find(cp);
+
     for (int32_t i = 0; i < cp->num_bins; ++i) {
-      if (cp->bins[i] > 0)
-        hitBins++;
+      // Skip ignore bins - they don't count toward coverage
+      if (binDataIt != explicitBinData.end() &&
+          i < static_cast<int32_t>(binDataIt->second.bins.size()) &&
+          binDataIt->second.bins[i].kind == MOORE_BIN_KIND_IGNORE) {
+        continue;
+      }
+      totalBins++;
+      // A bin is covered if its hit count >= at_least threshold
+      if (cp->bins[i] >= atLeast)
+        coveredBins++;
     }
-    return (100.0 * hitBins) / cp->num_bins;
+
+    if (totalBins == 0)
+      return 100.0;  // No countable bins means 100% coverage
+
+    return (100.0 * coveredBins) / totalBins;
   }
 
   // For auto bins, estimate coverage based on unique values seen.
+  // Count values that have been hit at least 'atLeast' times
+  int64_t coveredValues = 0;
+  for (const auto &entry : trackerIt->second.valueCounts) {
+    if (entry.second >= atLeast)
+      coveredValues++;
+  }
+
   // We assume the goal is to cover the range [min_val, max_val].
   // If the range is 0 (single value), coverage is 100%.
   if (cp->min_val > cp->max_val)
@@ -2309,9 +2407,23 @@ extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
   if (range <= 0)
     return 100.0; // Single value = 100% coverage
 
+  // Get auto_bin_max to limit the number of bins considered
+  int64_t autoBinMax = 64;
+  if (cpOptIt != coverpointOptions.end()) {
+    autoBinMax = cpOptIt->second.autoBinMax;
+  } else {
+    auto cgOptIt = covergroupOptions.find(covergroup);
+    if (cgOptIt != covergroupOptions.end()) {
+      autoBinMax = cgOptIt->second.autoBinMax;
+    }
+  }
+
+  // If range exceeds auto_bin_max, clamp the effective range for coverage calc
+  int64_t effectiveRange = std::min(range, autoBinMax);
+
   // Calculate coverage percentage
-  // Cap at 100% since unique values might exceed expected range
-  double coverage = (100.0 * uniqueValues) / range;
+  // Cap at 100% since covered values might exceed expected range
+  double coverage = (100.0 * coveredValues) / effectiveRange;
   return coverage > 100.0 ? 100.0 : coverage;
 }
 
@@ -2392,38 +2504,9 @@ extern "C" void __moore_coverage_report(void) {
 // Explicit Bins Support
 //===----------------------------------------------------------------------===//
 
-namespace {
-
-/// Structure to store a transition bin with its sequences and state.
-struct TransitionBin {
-  const char *name;
-  std::vector<MooreTransitionSequence> sequences; // Alternative sequences
-  int64_t hit_count;
-
-  // State for tracking sequence progress per alternative
-  struct SequenceState {
-    int32_t currentStep;  // Which step in the sequence we're waiting for
-    int32_t repeatCount;  // For repeat patterns, count of matching values
-    bool active;          // Is this sequence currently being tracked
-
-    SequenceState() : currentStep(0), repeatCount(0), active(false) {}
-  };
-  std::vector<SequenceState> sequenceStates;
-
-  TransitionBin() : name(nullptr), hit_count(0) {}
-};
-
-/// Structure to store explicit bin data for a coverpoint.
-/// Stored separately to maintain backward compatibility with the C API.
-struct ExplicitBinData {
-  std::vector<MooreCoverageBin> bins;
-  std::vector<TransitionBin> transitionBins;
-};
-
-/// Map from coverpoint to its explicit bin data.
-thread_local std::map<MooreCoverpoint *, ExplicitBinData> explicitBinData;
-
-} // anonymous namespace
+// Note: TransitionBin, ExplicitBinData struct, and explicitBinData map are
+// defined earlier in the file (around line 2136) to be accessible from
+// __moore_coverpoint_get_coverage.
 
 extern "C" void __moore_coverpoint_init_with_bins(void *cg, int32_t cp_index,
                                                    const char *name,
@@ -3260,27 +3343,9 @@ thread_local void *illegalCrossBinCallbackUserData = nullptr;
 /// Map from covergroup to its coverage goal (default 100.0).
 thread_local std::map<MooreCovergroup *, double> covergroupGoals;
 
-/// Coverage options for covergroups (IEEE 1800-2017 Section 19.7.1).
-struct CovergroupOptions {
-  int64_t weight = 1;       ///< option.weight (default: 1)
-  bool perInstance = false; ///< option.per_instance (default: false)
-  int64_t atLeast = 1;      ///< option.at_least (default: 1)
-  std::string comment;      ///< option.comment (default: empty)
-};
-
-/// Map from covergroup to its options.
-thread_local std::map<MooreCovergroup *, CovergroupOptions> covergroupOptions;
-
-/// Coverage options for coverpoints (IEEE 1800-2017 Section 19.7.2).
-struct CoverpointOptions {
-  int64_t weight = 1;  ///< option.weight (default: 1)
-  double goal = 100.0; ///< option.goal (default: 100.0)
-  int64_t atLeast = 1; ///< option.at_least (default: 1)
-  std::string comment; ///< option.comment (default: empty)
-};
-
-/// Map from coverpoint to its options.
-thread_local std::map<MooreCoverpoint *, CoverpointOptions> coverpointOptions;
+// Note: CovergroupOptions and CoverpointOptions structs and their maps are
+// defined earlier in the file (around line 2112) to be accessible from
+// __moore_coverpoint_get_coverage.
 
 /// Helper function to check if a value matches a binsof filter.
 /// Returns true if the value satisfies the filter condition.
@@ -4043,6 +4108,128 @@ extern "C" const char *__moore_coverpoint_get_comment(void *cg,
   if (it != coverpointOptions.end() && !it->second.comment.empty())
     return it->second.comment.c_str();
   return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Auto Bin Max Options
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_covergroup_set_auto_bin_max(void *cg, int64_t maxBins) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+  // auto_bin_max must be positive; IEEE 1800-2017 default is 64
+  covergroupOptions[covergroup].autoBinMax = maxBins > 0 ? maxBins : 64;
+}
+
+extern "C" int64_t __moore_covergroup_get_auto_bin_max(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return 64;
+  auto it = covergroupOptions.find(covergroup);
+  return it != covergroupOptions.end() ? it->second.autoBinMax : 64;
+}
+
+extern "C" void __moore_coverpoint_set_auto_bin_max(void *cg, int32_t cp_index,
+                                                     int64_t maxBins) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+  // auto_bin_max must be positive; IEEE 1800-2017 default is 64
+  coverpointOptions[cp].autoBinMax = maxBins > 0 ? maxBins : 64;
+}
+
+extern "C" int64_t __moore_coverpoint_get_auto_bin_max(void *cg,
+                                                        int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 64;
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return 64;
+  auto it = coverpointOptions.find(cp);
+  return it != coverpointOptions.end() ? it->second.autoBinMax : 64;
+}
+
+//===----------------------------------------------------------------------===//
+// Generic Coverage Option API
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_covergroup_set_option(void *cg, int32_t option,
+                                               double value) {
+  switch (option) {
+  case MOORE_OPTION_GOAL:
+    __moore_covergroup_set_goal(cg, value);
+    break;
+  case MOORE_OPTION_WEIGHT:
+    __moore_covergroup_set_weight(cg, static_cast<int64_t>(value));
+    break;
+  case MOORE_OPTION_AT_LEAST:
+    __moore_covergroup_set_at_least(cg, static_cast<int64_t>(value));
+    break;
+  case MOORE_OPTION_AUTO_BIN_MAX:
+    __moore_covergroup_set_auto_bin_max(cg, static_cast<int64_t>(value));
+    break;
+  default:
+    // Unknown option - ignore
+    break;
+  }
+}
+
+extern "C" double __moore_covergroup_get_option(void *cg, int32_t option) {
+  switch (option) {
+  case MOORE_OPTION_GOAL:
+    return __moore_covergroup_get_goal(cg);
+  case MOORE_OPTION_WEIGHT:
+    return static_cast<double>(__moore_covergroup_get_weight(cg));
+  case MOORE_OPTION_AT_LEAST:
+    return static_cast<double>(__moore_covergroup_get_at_least(cg));
+  case MOORE_OPTION_AUTO_BIN_MAX:
+    return static_cast<double>(__moore_covergroup_get_auto_bin_max(cg));
+  default:
+    return 0.0;
+  }
+}
+
+extern "C" void __moore_coverpoint_set_option(void *cg, int32_t cp_index,
+                                               int32_t option, double value) {
+  switch (option) {
+  case MOORE_OPTION_GOAL:
+    __moore_coverpoint_set_goal(cg, cp_index, value);
+    break;
+  case MOORE_OPTION_WEIGHT:
+    __moore_coverpoint_set_weight(cg, cp_index, static_cast<int64_t>(value));
+    break;
+  case MOORE_OPTION_AT_LEAST:
+    __moore_coverpoint_set_at_least(cg, cp_index, static_cast<int64_t>(value));
+    break;
+  case MOORE_OPTION_AUTO_BIN_MAX:
+    __moore_coverpoint_set_auto_bin_max(cg, cp_index,
+                                         static_cast<int64_t>(value));
+    break;
+  default:
+    // Unknown option - ignore
+    break;
+  }
+}
+
+extern "C" double __moore_coverpoint_get_option(void *cg, int32_t cp_index,
+                                                 int32_t option) {
+  switch (option) {
+  case MOORE_OPTION_GOAL:
+    return __moore_coverpoint_get_goal(cg, cp_index);
+  case MOORE_OPTION_WEIGHT:
+    return static_cast<double>(__moore_coverpoint_get_weight(cg, cp_index));
+  case MOORE_OPTION_AT_LEAST:
+    return static_cast<double>(__moore_coverpoint_get_at_least(cg, cp_index));
+  case MOORE_OPTION_AUTO_BIN_MAX:
+    return static_cast<double>(__moore_coverpoint_get_auto_bin_max(cg, cp_index));
+  default:
+    return 0.0;
+  }
 }
 
 //===----------------------------------------------------------------------===//

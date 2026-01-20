@@ -66,6 +66,46 @@ inline bool fromJSON(const json::Value &value, WorkspaceSymbolParams &result,
   return o && o.map("query", result.query);
 }
 
+/// Formatting options from LSP.
+struct FormattingOptions {
+  unsigned tabSize = 2;
+  bool insertSpaces = true;
+};
+
+inline bool fromJSON(const json::Value &value, FormattingOptions &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("tabSize", result.tabSize) &&
+         o.map("insertSpaces", result.insertSpaces);
+}
+
+/// Parameters for textDocument/formatting request.
+struct DocumentFormattingParams {
+  TextDocumentIdentifier textDocument;
+  FormattingOptions options;
+};
+
+inline bool fromJSON(const json::Value &value, DocumentFormattingParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("textDocument", result.textDocument) &&
+         o.map("options", result.options);
+}
+
+/// Parameters for textDocument/rangeFormatting request.
+struct DocumentRangeFormattingParams {
+  TextDocumentIdentifier textDocument;
+  Range range;
+  FormattingOptions options;
+};
+
+inline bool fromJSON(const json::Value &value, DocumentRangeFormattingParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("textDocument", result.textDocument) &&
+         o.map("range", result.range) && o.map("options", result.options);
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -186,6 +226,16 @@ struct LSPServer {
                        Callback<SignatureHelp> reply);
 
   //===--------------------------------------------------------------------===//
+  // Document Formatting
+  //===--------------------------------------------------------------------===//
+
+  void onDocumentFormatting(const DocumentFormattingParams &params,
+                            Callback<std::vector<TextEdit>> reply);
+
+  void onDocumentRangeFormatting(const DocumentRangeFormattingParams &params,
+                                 Callback<std::vector<TextEdit>> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -270,6 +320,8 @@ void LSPServer::onInitialize(const InitializeParams &params,
        }},
       {"semanticTokensProvider", circt::lsp::getSemanticTokensOptions()},
       {"inlayHintProvider", true},
+      {"documentFormattingProvider", true},
+      {"documentRangeFormattingProvider", true},
       // Workspace capabilities
       {"workspace",
        llvm::json::Object{
@@ -514,6 +566,31 @@ void LSPServer::onSignatureHelp(const TextDocumentPositionParams &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Document Formatting
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onDocumentFormatting(const DocumentFormattingParams &params,
+                                     Callback<std::vector<TextEdit>> reply) {
+  std::vector<TextEdit> edits;
+  circt::lsp::VerilogServer::FormattingOptions options;
+  options.tabSize = params.options.tabSize;
+  options.insertSpaces = params.options.insertSpaces;
+  server.formatDocument(params.textDocument.uri, options, edits);
+  reply(std::move(edits));
+}
+
+void LSPServer::onDocumentRangeFormatting(
+    const DocumentRangeFormattingParams &params,
+    Callback<std::vector<TextEdit>> reply) {
+  std::vector<TextEdit> edits;
+  circt::lsp::VerilogServer::FormattingOptions options;
+  options.tabSize = params.options.tabSize;
+  options.insertSpaces = params.options.insertSpaces;
+  server.formatRange(params.textDocument.uri, params.range, options, edits);
+  reply(std::move(edits));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -594,6 +671,12 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
   // Signature Help
   messageHandler.method("textDocument/signatureHelp", &lspServer,
                         &LSPServer::onSignatureHelp);
+
+  // Document Formatting
+  messageHandler.method("textDocument/formatting", &lspServer,
+                        &LSPServer::onDocumentFormatting);
+  messageHandler.method("textDocument/rangeFormatting", &lspServer,
+                        &LSPServer::onDocumentRangeFormatting);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

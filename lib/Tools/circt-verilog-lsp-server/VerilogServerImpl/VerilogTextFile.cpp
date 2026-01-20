@@ -240,6 +240,23 @@ VerilogTextFile::getSignatureHelp(const llvm::lsp::URIForFile &uri,
   return doc->getSignatureHelp(uri, pos);
 }
 
+void VerilogTextFile::formatDocument(
+    const llvm::lsp::URIForFile &uri,
+    const VerilogDocument::FormattingOptions &options,
+    std::vector<llvm::lsp::TextEdit> &edits) {
+  auto doc = getDocument();
+  doc->formatDocument(uri, options, edits);
+}
+
+void VerilogTextFile::formatRange(
+    const llvm::lsp::URIForFile &uri,
+    const llvm::lsp::Range &range,
+    const VerilogDocument::FormattingOptions &options,
+    std::vector<llvm::lsp::TextEdit> &edits) {
+  auto doc = getDocument();
+  doc->formatRange(uri, range, options, edits);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;

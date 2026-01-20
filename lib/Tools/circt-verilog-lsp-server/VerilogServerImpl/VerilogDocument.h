@@ -175,6 +175,31 @@ public:
   llvm::lsp::SignatureHelp getSignatureHelp(const llvm::lsp::URIForFile &uri,
                                             const llvm::lsp::Position &pos);
 
+  //===--------------------------------------------------------------------===//
+  // Document Formatting
+  //===--------------------------------------------------------------------===//
+
+  /// Formatting options for document formatting.
+  struct FormattingOptions {
+    /// Number of spaces for indentation (ignored if insertSpaces is false).
+    unsigned tabSize = 2;
+    /// Use spaces for indentation instead of tabs.
+    bool insertSpaces = true;
+  };
+
+  /// Format the entire document.
+  /// Returns a list of text edits to apply.
+  void formatDocument(const llvm::lsp::URIForFile &uri,
+                      const FormattingOptions &options,
+                      std::vector<llvm::lsp::TextEdit> &edits);
+
+  /// Format a range within the document.
+  /// Returns a list of text edits to apply.
+  void formatRange(const llvm::lsp::URIForFile &uri,
+                   const llvm::lsp::Range &range,
+                   const FormattingOptions &options,
+                   std::vector<llvm::lsp::TextEdit> &edits);
+
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 

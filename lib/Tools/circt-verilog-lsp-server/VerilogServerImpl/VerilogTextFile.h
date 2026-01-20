@@ -130,6 +130,19 @@ public:
   llvm::lsp::SignatureHelp getSignatureHelp(const llvm::lsp::URIForFile &uri,
                                             llvm::lsp::Position pos);
 
+  /// Format the entire document.
+  /// Thread-safe; acquires docMutex.
+  void formatDocument(const llvm::lsp::URIForFile &uri,
+                      const VerilogDocument::FormattingOptions &options,
+                      std::vector<llvm::lsp::TextEdit> &edits);
+
+  /// Format a range within the document.
+  /// Thread-safe; acquires docMutex.
+  void formatRange(const llvm::lsp::URIForFile &uri,
+                   const llvm::lsp::Range &range,
+                   const VerilogDocument::FormattingOptions &options,
+                   std::vector<llvm::lsp::TextEdit> &edits);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

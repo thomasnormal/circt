@@ -2914,7 +2914,17 @@ struct RvalueExprVisitor : public ExprVisitor {
       // The interface instance is passed as the first argument.
       SmallVector<Value> argsWithIface;
       argsWithIface.reserve(arguments.size() + 1);
-      argsWithIface.push_back(interfaceInstance);
+
+      // If the interface instance has a modport-qualified type (e.g.,
+      // @interface::@modport), we need to convert it to the base interface type
+      // since interface methods are declared with the base interface type.
+      Value ifaceArg = interfaceInstance;
+      auto expectedType = lowering->op.getFunctionType().getInput(0);
+      if (ifaceArg.getType() != expectedType) {
+        ifaceArg = moore::ConversionOp::create(builder, loc, expectedType,
+                                               ifaceArg);
+      }
+      argsWithIface.push_back(ifaceArg);
       argsWithIface.append(arguments.begin(), arguments.end());
       callOp =
           mlir::func::CallOp::create(builder, loc, lowering->op, argsWithIface);
