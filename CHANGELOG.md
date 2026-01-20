@@ -1,5 +1,67 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 64 - January 20, 2026
+
+### Solve-Before Constraints + LSP Rename Refactoring + Coverage Instance APIs
+
+**Track A: Dynamic Legality for Timing Controls** ⭐ ARCHITECTURE
+- Added dynamic legality rules for WaitEventOp and DetectEventOp
+- Timing controls in class tasks remain unconverted until inlined into llhd.process
+- This unblocks AVIP tasks with `@(posedge clk)` timing controls
+- Operations become illegal (and get converted) only when inside llhd.process
+
+**Track B: Solve-Before Constraint Ordering** ⭐ FEATURE
+- Full MooreToCore lowering for IEEE 1800-2017 `solve a before b` constraints
+- Implements topological sort using Kahn's algorithm for constraint ordering
+- Supports chained solve-before: `solve a before b; solve b before c;`
+- Supports multiple 'after' variables: `solve mode before data, addr;`
+- 5 comprehensive test cases in solve-before.mlir:
+  - BasicSolveBefore: Two variable ordering
+  - SolveBeforeMultiple: One-to-many ordering
+  - ChainedSolveBefore: Transitive ordering
+  - PartialSolveBefore: Partial constraints
+  - SolveBeforeErased: Op cleanup verification
+
+**Track C: Coverage get_inst_coverage API** ⭐ FEATURE
+- `__moore_covergroup_get_inst_coverage()` - Instance-specific coverage
+- `__moore_coverpoint_get_inst_coverage()` - Coverpoint instance coverage
+- `__moore_cross_get_inst_coverage()` - Cross instance coverage
+- Enhanced `__moore_covergroup_get_coverage()` to respect per_instance option
+  - When per_instance=false (default), aggregates coverage across all instances
+  - When per_instance=true, returns instance-specific coverage
+- Enhanced `__moore_cross_get_coverage()` to respect at_least threshold
+
+**Track D: LSP Rename Refactoring** ⭐ FEATURE
+- Extended prepareRename() to support additional symbol kinds:
+  - ClassType, ClassProperty, InterfacePort, Modport, FormalArgument, TypeAlias
+- 10 comprehensive test scenarios in rename-refactoring.test:
+  - Variable rename with multiple references
+  - Function rename with declaration and call sites
+  - Class rename (critical for UVM refactoring)
+  - Task rename
+  - Function argument rename
+  - Invalid rename validation (empty name, numeric start)
+  - Special character support (SystemVerilog identifiers with $)
+
+**Bug Fix: llhd-mem2reg LLVM Pointer Types**
+- Fixed default value materialization for LLVM pointer types in Mem2Reg pass
+- Use `llvm.mlir.zero` instead of invalid integer bitcast for pointers
+- Added graceful error handling for unsupported types
+- Added regression test mem2reg-llvm-zero.mlir
+
+### Files Modified
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+190 lines for solve-before)
+- `lib/Runtime/MooreRuntime.cpp` (+66 lines for inst_coverage)
+- `include/circt/Runtime/MooreRuntime.h` (+32 lines for API)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+283 lines for tests)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+6 lines)
+- `lib/Dialect/LLHD/Transforms/Mem2Reg.cpp` (+26 lines for ptr fix)
+- `test/Conversion/MooreToCore/solve-before.mlir` (new, 179 lines)
+- `test/Tools/circt-verilog-lsp-server/rename-refactoring.test` (new, 232 lines)
+- `test/Dialect/LLHD/Transforms/mem2reg-llvm-zero.mlir` (new, 28 lines)
+
+---
+
 ## Iteration 63 - January 20, 2026
 
 ### Distribution Constraints + Coverage Callbacks + LSP Find References + AVIP Testing
