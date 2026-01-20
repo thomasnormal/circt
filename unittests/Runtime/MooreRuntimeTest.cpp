@@ -5038,6 +5038,280 @@ TEST(MooreRuntimeCoverageDBTest, MetadataPreservedAcrossLoadSave) {
 }
 
 //===----------------------------------------------------------------------===//
+// UCDB-Compatible Coverage File Format Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeUCDBTest, WriteAndReadUCDBFormat) {
+  // Create a covergroup with samples
+  void *cg = __moore_covergroup_create("ucdb_test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "addr_cp");
+  __moore_coverpoint_init(cg, 1, "data_cp");
+  __moore_coverpoint_sample(cg, 0, 0x100);
+  __moore_coverpoint_sample(cg, 0, 0x200);
+  __moore_coverpoint_sample(cg, 1, 42);
+
+  const char *filename = "/tmp/ucdb_test.json";
+
+  // Write with default metadata
+  int32_t result = __moore_coverage_write_ucdb(filename, nullptr);
+  EXPECT_EQ(result, 0);
+
+  // Read back
+  MooreCoverageDBHandle db = __moore_coverage_read_ucdb(filename);
+  ASSERT_NE(db, nullptr);
+
+  // Verify metadata was created
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  EXPECT_NE(meta, nullptr);
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeUCDBTest, WriteUCDBWithMetadata) {
+  void *cg = __moore_covergroup_create("ucdb_meta_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 10);
+
+  const char *filename = "/tmp/ucdb_meta_test.json";
+
+  // Create custom metadata
+  MooreUCDBMetadata metadata = {};
+  metadata.test_name = "my_ucdb_test";
+  metadata.test_seed = "12345";
+  metadata.comment = "UCDB format test";
+  metadata.tool_name = "test_tool";
+  metadata.tool_version = "2.0";
+
+  int32_t result = __moore_coverage_write_ucdb(filename, &metadata);
+  EXPECT_EQ(result, 0);
+
+  // Read back and verify
+  MooreCoverageDBHandle db = __moore_coverage_read_ucdb(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->test_name, "my_ucdb_test");
+  EXPECT_STREQ(meta->comment, "UCDB format test");
+  EXPECT_STREQ(meta->simulator, "test_tool");
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeUCDBTest, WriteUCDBNullFilename) {
+  int32_t result = __moore_coverage_write_ucdb(nullptr, nullptr);
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeUCDBTest, ReadUCDBNullFilename) {
+  MooreCoverageDBHandle db = __moore_coverage_read_ucdb(nullptr);
+  EXPECT_EQ(db, nullptr);
+}
+
+TEST(MooreRuntimeUCDBTest, ReadUCDBNonexistent) {
+  MooreCoverageDBHandle db = __moore_coverage_read_ucdb("/tmp/nonexistent_ucdb.json");
+  EXPECT_EQ(db, nullptr);
+}
+
+TEST(MooreRuntimeUCDBTest, IsUCDBFormat) {
+  void *cg = __moore_covergroup_create("ucdb_format_check_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  const char *ucdbFile = "/tmp/ucdb_format_check.json";
+  const char *legacyFile = "/tmp/legacy_format_check.json";
+
+  // Write UCDB format
+  __moore_coverage_write_ucdb(ucdbFile, nullptr);
+
+  // Write legacy format
+  __moore_coverage_save_db(legacyFile, "test", nullptr);
+
+  // Check UCDB format detection
+  int32_t isUcdb = __moore_coverage_is_ucdb_format(ucdbFile);
+  EXPECT_EQ(isUcdb, 1);
+
+  // Legacy format should not be detected as UCDB 2.0
+  int32_t isLegacy = __moore_coverage_is_ucdb_format(legacyFile);
+  EXPECT_EQ(isLegacy, 0);
+
+  // Null filename
+  EXPECT_EQ(__moore_coverage_is_ucdb_format(nullptr), -1);
+
+  // Nonexistent file
+  EXPECT_EQ(__moore_coverage_is_ucdb_format("/tmp/nonexistent.json"), -1);
+
+  __moore_covergroup_destroy(cg);
+  std::remove(ucdbFile);
+  std::remove(legacyFile);
+}
+
+TEST(MooreRuntimeUCDBTest, GetFileVersion) {
+  void *cg = __moore_covergroup_create("version_check_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  const char *filename = "/tmp/version_check.json";
+  __moore_coverage_write_ucdb(filename, nullptr);
+
+  const char *version = __moore_coverage_get_file_version(filename);
+  ASSERT_NE(version, nullptr);
+  EXPECT_STREQ(version, MOORE_UCDB_FORMAT_VERSION);
+
+  // Null filename
+  EXPECT_EQ(__moore_coverage_get_file_version(nullptr), nullptr);
+
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeUCDBTest, MergeUCDBFiles) {
+  // Create first coverage run
+  void *cg1 = __moore_covergroup_create("merge_ucdb_cg", 1);
+  ASSERT_NE(cg1, nullptr);
+  __moore_coverpoint_init(cg1, 0, "cp");
+  __moore_coverpoint_sample(cg1, 0, 1);
+  __moore_coverpoint_sample(cg1, 0, 2);
+
+  const char *file1 = "/tmp/ucdb_merge1.json";
+  MooreUCDBMetadata meta1 = {};
+  meta1.test_name = "run1";
+  __moore_coverage_write_ucdb(file1, &meta1);
+
+  // Reset and create second coverage run
+  __moore_coverpoint_reset(cg1, 0);
+  __moore_coverpoint_sample(cg1, 0, 3);
+  __moore_coverpoint_sample(cg1, 0, 4);
+
+  const char *file2 = "/tmp/ucdb_merge2.json";
+  MooreUCDBMetadata meta2 = {};
+  meta2.test_name = "run2";
+  __moore_coverage_write_ucdb(file2, &meta2);
+
+  __moore_covergroup_destroy(cg1);
+
+  // Merge files
+  const char *files[] = {file1, file2};
+  const char *outputFile = "/tmp/ucdb_merged.json";
+  int32_t result = __moore_coverage_merge_ucdb_files(files, 2, outputFile, "Merged coverage");
+  EXPECT_EQ(result, 0);
+
+  // Verify merged file exists and is UCDB format
+  EXPECT_EQ(__moore_coverage_is_ucdb_format(outputFile), 1);
+
+  // Load merged file
+  MooreCoverageDBHandle db = __moore_coverage_read_ucdb(outputFile);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  EXPECT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->comment, "Merged coverage");
+
+  __moore_coverage_db_free(db);
+  std::remove(file1);
+  std::remove(file2);
+  std::remove(outputFile);
+}
+
+TEST(MooreRuntimeUCDBTest, MergeUCDBFilesNullInputs) {
+  EXPECT_NE(__moore_coverage_merge_ucdb_files(nullptr, 2, "/tmp/out.json", nullptr), 0);
+  const char *files[] = {"/tmp/a.json"};
+  EXPECT_NE(__moore_coverage_merge_ucdb_files(files, 0, "/tmp/out.json", nullptr), 0);
+  EXPECT_NE(__moore_coverage_merge_ucdb_files(files, 1, nullptr, nullptr), 0);
+}
+
+TEST(MooreRuntimeUCDBTest, UserAttributes) {
+  // Test setting and getting user attributes
+  __moore_coverage_set_user_attr("project", "my_project");
+  __moore_coverage_set_user_attr("version", "1.0");
+
+  const char *project = __moore_coverage_get_user_attr("project");
+  ASSERT_NE(project, nullptr);
+  EXPECT_STREQ(project, "my_project");
+
+  const char *version = __moore_coverage_get_user_attr("version");
+  ASSERT_NE(version, nullptr);
+  EXPECT_STREQ(version, "1.0");
+
+  // Nonexistent attribute
+  EXPECT_EQ(__moore_coverage_get_user_attr("nonexistent"), nullptr);
+
+  // Null name
+  EXPECT_EQ(__moore_coverage_get_user_attr(nullptr), nullptr);
+
+  // Remove attribute
+  __moore_coverage_set_user_attr("project", nullptr);
+  EXPECT_EQ(__moore_coverage_get_user_attr("project"), nullptr);
+
+  // Clean up
+  __moore_coverage_set_user_attr("version", nullptr);
+}
+
+TEST(MooreRuntimeUCDBTest, UserAttributesInOutput) {
+  void *cg = __moore_covergroup_create("user_attr_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  // Set user attributes
+  __moore_coverage_set_user_attr("custom_key", "custom_value");
+
+  const char *filename = "/tmp/user_attr_test.json";
+  __moore_coverage_write_ucdb(filename, nullptr);
+
+  // Verify the file contains user attributes
+  // (We can read the file and check content)
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  char buffer[4096];
+  size_t bytesRead = std::fread(buffer, 1, sizeof(buffer) - 1, fp);
+  std::fclose(fp);
+  buffer[bytesRead] = '\0';
+
+  std::string content(buffer);
+  EXPECT_NE(content.find("user_attributes"), std::string::npos);
+  EXPECT_NE(content.find("custom_key"), std::string::npos);
+  EXPECT_NE(content.find("custom_value"), std::string::npos);
+
+  // Clean up
+  __moore_coverage_set_user_attr("custom_key", nullptr);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeUCDBTest, ReadLegacyFormatWithUCDBReader) {
+  // Create legacy format file
+  void *cg = __moore_covergroup_create("legacy_read_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 100);
+
+  const char *filename = "/tmp/legacy_for_ucdb_read.json";
+  __moore_coverage_save_db(filename, "legacy_test", "Legacy comment");
+  __moore_covergroup_destroy(cg);
+
+  // Read with UCDB reader (should fall back to legacy parsing)
+  MooreCoverageDBHandle db = __moore_coverage_read_ucdb(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  EXPECT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->test_name, "legacy_test");
+
+  __moore_coverage_db_free(db);
+  std::remove(filename);
+}
+
+//===----------------------------------------------------------------------===//
 // Illegal Bins and Ignore Bins Tests
 //===----------------------------------------------------------------------===//
 
@@ -7348,6 +7622,340 @@ TEST(MooreRuntimeUvmCoverageTest, CombinedCoverageModels) {
 
   // Reset
   __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+//===----------------------------------------------------------------------===//
+// Display System Task Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeDisplayTest, DisplayWithMessage) {
+  // Test __moore_display with a valid message
+  char data[] = "Test message";
+  MooreString str = {data, 12};
+
+  // Capture stdout to verify output
+  testing::internal::CaptureStdout();
+  __moore_display(&str);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "Test message\n");
+}
+
+TEST(MooreRuntimeDisplayTest, DisplayWithEmptyMessage) {
+  // Test __moore_display with an empty message
+  MooreString str = {nullptr, 0};
+
+  testing::internal::CaptureStdout();
+  __moore_display(&str);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Should still output newline
+  EXPECT_EQ(output, "\n");
+}
+
+TEST(MooreRuntimeDisplayTest, DisplayWithNullptr) {
+  // Test __moore_display with nullptr
+  testing::internal::CaptureStdout();
+  __moore_display(nullptr);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Should produce no output
+  EXPECT_EQ(output, "");
+}
+
+TEST(MooreRuntimeDisplayTest, WriteWithMessage) {
+  // Test __moore_write - no newline
+  char data[] = "Write test";
+  MooreString str = {data, 10};
+
+  testing::internal::CaptureStdout();
+  __moore_write(&str);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "Write test");
+}
+
+TEST(MooreRuntimeDisplayTest, WriteWithEmptyMessage) {
+  // Test __moore_write with empty message
+  MooreString str = {nullptr, 0};
+
+  testing::internal::CaptureStdout();
+  __moore_write(&str);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // No output for empty message
+  EXPECT_EQ(output, "");
+}
+
+TEST(MooreRuntimeDisplayTest, PrintDynString) {
+  // Test __moore_print_dyn_string
+  char data[] = "Dynamic string content";
+  MooreString str = {data, 22};
+
+  testing::internal::CaptureStdout();
+  __moore_print_dyn_string(&str);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "Dynamic string content");
+}
+
+TEST(MooreRuntimeDisplayTest, StrobeBasic) {
+  // Test __moore_strobe - should queue messages
+  char data1[] = "Strobe message 1";
+  MooreString str1 = {data1, 16};
+
+  __moore_strobe(&str1);
+
+  // Message should not appear yet
+  testing::internal::CaptureStdout();
+  // Nothing captured here since strobe is queued
+
+  // Flush strobe queue
+  __moore_strobe_flush();
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "Strobe message 1\n");
+}
+
+TEST(MooreRuntimeDisplayTest, StrobeMultipleMessages) {
+  // Test multiple strobe messages
+  char data1[] = "First";
+  char data2[] = "Second";
+  MooreString str1 = {data1, 5};
+  MooreString str2 = {data2, 6};
+
+  __moore_strobe(&str1);
+  __moore_strobe(&str2);
+
+  testing::internal::CaptureStdout();
+  __moore_strobe_flush();
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "First\nSecond\n");
+}
+
+TEST(MooreRuntimeDisplayTest, StrobeFlushClearsQueue) {
+  // Test that flush clears the queue
+  char data[] = "Test";
+  MooreString str = {data, 4};
+
+  __moore_strobe(&str);
+  __moore_strobe_flush();
+
+  // Second flush should produce no output
+  testing::internal::CaptureStdout();
+  __moore_strobe_flush();
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "");
+}
+
+TEST(MooreRuntimeDisplayTest, SimulationTime) {
+  // Test simulation time functions
+  __moore_set_time(1000);
+  EXPECT_EQ(__moore_get_time(), 1000);
+
+  __moore_set_time(12345);
+  EXPECT_EQ(__moore_get_time(), 12345);
+
+  __moore_set_time(0);
+  EXPECT_EQ(__moore_get_time(), 0);
+}
+
+TEST(MooreRuntimeDisplayTest, MonitorOnOff) {
+  // Test monitor enable/disable
+  char data[] = "Monitor test";
+  MooreString str = {data, 12};
+
+  // Capture initial monitor output
+  testing::internal::CaptureStdout();
+  __moore_monitor(&str, nullptr, 0, nullptr);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Should print immediately when set up
+  EXPECT_EQ(output, "Monitor test\n");
+
+  // Test monitoroff
+  __moore_monitoroff();
+
+  // Monitor check should not print when disabled
+  testing::internal::CaptureStdout();
+  __moore_monitor_check();
+  output = testing::internal::GetCapturedStdout();
+  EXPECT_EQ(output, "");
+
+  // Test monitoron
+  __moore_monitoron();
+}
+
+TEST(MooreRuntimeDisplayTest, MonitorValueChange) {
+  // Test monitor with value change detection
+  int32_t value = 42;
+  void *values[] = {&value};
+  int32_t sizes[] = {sizeof(value)};
+  char data[] = "Value changed";
+  MooreString str = {data, 13};
+
+  // Clear any previous monitor state
+  MooreString empty = {nullptr, 0};
+  __moore_monitor(&empty, nullptr, 0, nullptr);
+
+  // Set up monitor with a value pointer
+  testing::internal::CaptureStdout();
+  __moore_monitor(&str, values, 1, sizes);
+  std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_EQ(output, "Value changed\n");
+
+  // No change - check should not trigger
+  testing::internal::CaptureStdout();
+  __moore_monitor_check();
+  output = testing::internal::GetCapturedStdout();
+  EXPECT_EQ(output, "");
+
+  // Change value and check
+  value = 100;
+  testing::internal::CaptureStdout();
+  __moore_monitor_check();
+  output = testing::internal::GetCapturedStdout();
+  EXPECT_EQ(output, "Value changed\n");
+
+  // Clear monitor
+  __moore_monitor(&empty, nullptr, 0, nullptr);
+}
+
+//===----------------------------------------------------------------------===//
+// Implication Constraint Tests
+// IEEE 1800-2017 Section 18.5.6 "Implication constraints"
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeImplicationTest, BasicImplicationTruthTable) {
+  // Test all four cases of the implication truth table
+  // antecedent -> consequent
+
+  // Case 1: 0 -> 0 = 1 (vacuously true)
+  EXPECT_EQ(__moore_constraint_check_implication(0, 0), 1);
+
+  // Case 2: 0 -> 1 = 1 (vacuously true)
+  EXPECT_EQ(__moore_constraint_check_implication(0, 1), 1);
+
+  // Case 3: 1 -> 0 = 0 (violated)
+  EXPECT_EQ(__moore_constraint_check_implication(1, 0), 0);
+
+  // Case 4: 1 -> 1 = 1 (satisfied)
+  EXPECT_EQ(__moore_constraint_check_implication(1, 1), 1);
+}
+
+TEST(MooreRuntimeImplicationTest, ImplicationWithNonZeroValues) {
+  // Test with various non-zero values as "true"
+  EXPECT_EQ(__moore_constraint_check_implication(42, 0), 0);  // non-zero -> 0 = violated
+  EXPECT_EQ(__moore_constraint_check_implication(100, 50), 1); // non-zero -> non-zero = satisfied
+  EXPECT_EQ(__moore_constraint_check_implication(-1, 1), 1);  // negative -> positive = satisfied
+  EXPECT_EQ(__moore_constraint_check_implication(-1, 0), 0);  // negative -> 0 = violated
+}
+
+TEST(MooreRuntimeImplicationTest, NestedImplication) {
+  // Test a -> (b -> c) nested implication
+
+  // If outer (a) is false, entire implication is true
+  EXPECT_EQ(__moore_constraint_check_nested_implication(0, 0, 0), 1);
+  EXPECT_EQ(__moore_constraint_check_nested_implication(0, 0, 1), 1);
+  EXPECT_EQ(__moore_constraint_check_nested_implication(0, 1, 0), 1);
+  EXPECT_EQ(__moore_constraint_check_nested_implication(0, 1, 1), 1);
+
+  // If outer is true but inner is false, inner implication is true
+  EXPECT_EQ(__moore_constraint_check_nested_implication(1, 0, 0), 1);
+  EXPECT_EQ(__moore_constraint_check_nested_implication(1, 0, 1), 1);
+
+  // If both antecedents are true, consequent must be true
+  EXPECT_EQ(__moore_constraint_check_nested_implication(1, 1, 0), 0);  // violated
+  EXPECT_EQ(__moore_constraint_check_nested_implication(1, 1, 1), 1);  // satisfied
+}
+
+TEST(MooreRuntimeImplicationTest, SoftImplicationHard) {
+  // Test hard implication behavior
+
+  // Antecedent false - always satisfied (vacuously true)
+  EXPECT_EQ(__moore_constraint_check_implication_soft(0, 0, 0), 1);
+  EXPECT_EQ(__moore_constraint_check_implication_soft(0, 1, 0), 1);
+
+  // Antecedent true, consequent satisfied - satisfied
+  EXPECT_EQ(__moore_constraint_check_implication_soft(1, 1, 0), 1);
+
+  // Antecedent true, consequent not satisfied - hard constraint violated
+  EXPECT_EQ(__moore_constraint_check_implication_soft(1, 0, 0), 0);
+}
+
+TEST(MooreRuntimeImplicationTest, SoftImplicationSoft) {
+  // Test soft implication behavior
+
+  // Antecedent false - always satisfied
+  EXPECT_EQ(__moore_constraint_check_implication_soft(0, 0, 1), 1);
+  EXPECT_EQ(__moore_constraint_check_implication_soft(0, 1, 1), 1);
+
+  // Antecedent true, consequent satisfied - satisfied
+  EXPECT_EQ(__moore_constraint_check_implication_soft(1, 1, 1), 1);
+
+  // Antecedent true, consequent not satisfied - soft constraint uses fallback
+  EXPECT_EQ(__moore_constraint_check_implication_soft(1, 0, 1), 1);  // soft fallback
+}
+
+TEST(MooreRuntimeImplicationTest, StatisticsTracking) {
+  // Reset statistics before test
+  __moore_implication_reset_stats();
+
+  MooreImplicationStats *stats = __moore_implication_get_stats();
+  ASSERT_NE(stats, nullptr);
+
+  // Initial state should be zero
+  EXPECT_EQ(stats->totalImplications, 0);
+  EXPECT_EQ(stats->triggeredImplications, 0);
+  EXPECT_EQ(stats->satisfiedImplications, 0);
+  EXPECT_EQ(stats->softFallbacks, 0);
+
+  // Make some implication checks
+  __moore_constraint_check_implication(0, 0);  // vacuously true
+  __moore_constraint_check_implication(1, 1);  // triggered, satisfied
+  __moore_constraint_check_implication(1, 0);  // triggered, violated
+
+  EXPECT_EQ(stats->totalImplications, 3);
+  EXPECT_EQ(stats->triggeredImplications, 2);  // only when antecedent is true
+  EXPECT_EQ(stats->satisfiedImplications, 2);  // first two satisfied
+
+  // Reset and verify
+  __moore_implication_reset_stats();
+  EXPECT_EQ(stats->totalImplications, 0);
+  EXPECT_EQ(stats->triggeredImplications, 0);
+  EXPECT_EQ(stats->satisfiedImplications, 0);
+}
+
+TEST(MooreRuntimeImplicationTest, SoftFallbackStatistics) {
+  __moore_implication_reset_stats();
+
+  MooreImplicationStats *stats = __moore_implication_get_stats();
+
+  // Soft implication with violated consequent should use fallback
+  __moore_constraint_check_implication_soft(1, 0, 1);  // soft fallback
+
+  EXPECT_EQ(stats->softFallbacks, 1);
+  EXPECT_EQ(stats->satisfiedImplications, 1);  // soft fallback counts as satisfied
+
+  __moore_implication_reset_stats();
+}
+
+TEST(MooreRuntimeImplicationTest, NestedImplicationStatistics) {
+  __moore_implication_reset_stats();
+
+  MooreImplicationStats *stats = __moore_implication_get_stats();
+
+  // Nested implications
+  __moore_constraint_check_nested_implication(1, 1, 1);  // both triggered, satisfied
+  __moore_constraint_check_nested_implication(1, 0, 0);  // outer triggered, inner vacuous
+
+  EXPECT_EQ(stats->totalImplications, 2);
+  EXPECT_EQ(stats->triggeredImplications, 2);
+  EXPECT_EQ(stats->satisfiedImplications, 2);
+
+  __moore_implication_reset_stats();
 }
 
 } // namespace

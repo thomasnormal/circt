@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 70 - January 20, 2026
+
+### $display Runtime + Constraint Implication + UCDB Format + LSP Inlay Hints
+
+**Track A: $display Runtime Support** ⭐ FEATURE
+- Implemented system display task runtime functions:
+  - `__moore_display()` - Print with newline
+  - `__moore_write()` - Print without newline
+  - `__moore_strobe()` - Print at end of timestep
+  - `__moore_monitor()` - Print when values change
+- Added `FormatDynStringOp` support in LowerArcToLLVM
+- Simulation time tracking with `__moore_get_time()` / `__moore_set_time()`
+- 12 unit tests for display system tasks
+
+**Track B: Constraint Implication Lowering** ⭐ FEATURE
+- Extended constraint implication test coverage (7 new tests):
+  - Nested implication: `a -> (b -> c)`
+  - Triple nested: `a -> (b -> (c -> d))`
+  - Implication with distribution: `mode -> value dist {...}`
+  - Soft implication handling
+- Added runtime functions:
+  - `__moore_constraint_check_implication()`
+  - `__moore_constraint_check_nested_implication()`
+  - `__moore_constraint_check_implication_soft()`
+- Statistics tracking for implication evaluation
+- 8 unit tests for implication constraints
+
+**Track C: Coverage UCDB File Format** ⭐ FEATURE
+- UCDB-compatible JSON format for coverage persistence:
+  - `__moore_coverage_write_ucdb()` - Write to UCDB-like format
+  - `__moore_coverage_read_ucdb()` - Read from UCDB-like format
+  - `__moore_coverage_merge_ucdb_files()` - Merge multiple files
+- Rich metadata: timestamps, tool info, test parameters
+- User-defined attributes support
+- Merge history tracking for regression runs
+- 12 unit tests for UCDB functionality
+
+**Track D: LSP Inlay Hints** ⭐ FEATURE
+- Parameter name hints for function/task calls: `add(a: 5, b: 10)`
+- Port connection hints for positional module instantiations
+- Return type hints for functions: ` -> signed logic [31:0]`
+- Updated inlay-hints.test with comprehensive tests
+
+### Files Modified
+- `include/circt/Runtime/MooreRuntime.h` (+200 lines for display/implication/UCDB)
+- `lib/Runtime/MooreRuntime.cpp` (+400 lines for implementations)
+- `lib/Conversion/ArcToLLVM/LowerArcToLLVM.cpp` (FormatDynStringOp)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (inlay hints)
+- `test/Conversion/MooreToCore/constraint-implication.mlir` (+7 tests)
+- `test/Tools/circt-verilog-lsp-server/inlay-hints.test` (updated)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+32 tests)
+
+---
+
 ## Iteration 69 - January 20, 2026
 
 ### MOS Primitives + UVM Coverage Integration + LSP Type Hierarchy

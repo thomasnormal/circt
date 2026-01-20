@@ -2,42 +2,132 @@
 // REQUIRES: slang
 // UNSUPPORTED: valgrind
 // Test inlay hints functionality for Verilog/SystemVerilog.
+
+// Initialize the server
 {"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
 // CHECK:       "id": 0,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": {
 // CHECK:         "inlayHintProvider": true
 // -----
+
+// Test 1: Function return type hint and parameter hints for function calls
 {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
-  "uri":"test:///hints.sv",
+  "uri":"test:///func_hints.sv",
   "languageId":"verilog",
   "version":1,
-  "text":"module adder #(parameter WIDTH = 32) (\n  input  logic [WIDTH-1:0] a,\n  input  logic [WIDTH-1:0] b,\n  output logic [WIDTH-1:0] sum\n);\n  logic [WIDTH:0] carry;\n  assign {carry, sum} = a + b;\nendmodule\n\nmodule top;\n  logic [31:0] x, y, z;\n  adder my_adder (.a(x), .b(y), .sum(z));\nendmodule"
+  "text":"module func_test;\n  function int add(int a, int b);\n    return a + b;\n  endfunction\n\n  initial begin\n    int result;\n    result = add(5, 10);\n  end\nendmodule"
 }}}
 // -----
-// Request inlay hints for lines 0-15
+
+// Request inlay hints for function calls
 {"jsonrpc":"2.0","id":1,"method":"textDocument/inlayHint","params":{
-  "textDocument":{"uri":"test:///hints.sv"},
+  "textDocument":{"uri":"test:///func_hints.sv"},
   "range":{"start":{"line":0,"character":0},"end":{"line":15,"character":0}}
 }}
+// Should see: return type hint for function, and parameter hints for call
 // CHECK:       "id": 1,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
-// CHECK:         {
-// CHECK:           "kind": 1
-// CHECK:           "label":
-// CHECK:           "position":
-// CHECK:         }
+// Return type hint (kind=1 for Type)
+// CHECK:         "kind": 1
+// CHECK:         "label": " -> signed logic [31:0]"
+// Parameter hints (kind=2 for Parameter)
+// CHECK:         "kind": 2
+// CHECK:         "label": "a:"
+// CHECK:         "kind": 2
+// CHECK:         "label": "b:"
 // -----
-// Request inlay hints for a specific range (just the top module)
+
+// Test 2: Task parameter hints
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///task_hints.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module task_test;\n  task print_sum(input int x, input int y);\n    $display(\"Sum: %d\", x + y);\n  endtask\n\n  initial begin\n    print_sum(3, 7);\n  end\nendmodule"
+}}}
+// -----
+
+// Request inlay hints for task calls
 {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{
-  "textDocument":{"uri":"test:///hints.sv"},
-  "range":{"start":{"line":9,"character":0},"end":{"line":12,"character":0}}
+  "textDocument":{"uri":"test:///task_hints.sv"},
+  "range":{"start":{"line":0,"character":0},"end":{"line":10,"character":0}}
 }}
+// Should see parameter hints for task call
 // CHECK:       "id": 2,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result":
+// CHECK:         "kind": 2
+// CHECK:         "label": "x:"
+// CHECK:         "kind": 2
+// CHECK:         "label": "y:"
 // -----
-{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+
+// Test 3: Port connection hints for positional vs named connections
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///port_hints.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module adder(\n  input logic [7:0] a,\n  input logic [7:0] b,\n  output logic [7:0] sum\n);\n  assign sum = a + b;\nendmodule\n\nmodule top;\n  logic [7:0] x, y, z;\n  // Named connections - no port hints expected\n  adder named_inst (.a(x), .b(y), .sum(z));\n  // Positional connections - port hints expected\n  adder pos_inst (x, y, z);\nendmodule"
+}}}
 // -----
+
+// Request inlay hints for port connections
+{"jsonrpc":"2.0","id":3,"method":"textDocument/inlayHint","params":{
+  "textDocument":{"uri":"test:///port_hints.sv"},
+  "range":{"start":{"line":10,"character":0},"end":{"line":15,"character":0}}
+}}
+// Should see module type hints for both instances,
+// but port name hints ONLY for the positional instance (pos_inst)
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result":
+// Module type hints
+// CHECK:         "/* adder */"
+// CHECK:         "/* adder */"
+// Port hints only for positional connections
+// CHECK:         "a:"
+// CHECK:         "b:"
+// CHECK:         "sum:"
+// -----
+
+// Test 4: Variable width hints
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///width_hints.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module width_test;\n  logic [7:0] byte_val;\n  logic [15:0] short_val;\n  logic [31:0] word_val;\nendmodule"
+}}}
+// -----
+
+// Request inlay hints for variable widths
+{"jsonrpc":"2.0","id":4,"method":"textDocument/inlayHint","params":{
+  "textDocument":{"uri":"test:///width_hints.sv"},
+  "range":{"start":{"line":0,"character":0},"end":{"line":5,"character":0}}
+}}
+// Should see width hints for multi-bit variables
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "kind": 1
+// CHECK:         "8-bit"
+// CHECK:         "16-bit"
+// CHECK:         "32-bit"
+// -----
+
+// Test 5: Empty range should return empty results
+{"jsonrpc":"2.0","id":5,"method":"textDocument/inlayHint","params":{
+  "textDocument":{"uri":"test:///func_hints.sv"},
+  "range":{"start":{"line":100,"character":0},"end":{"line":101,"character":0}}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": []
+// -----
+
+// Shutdown
+{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+// -----
+
+// Exit
 {"jsonrpc":"2.0","method":"exit"}

@@ -390,3 +390,215 @@ func.func @test_uvm_transaction(%obj: !moore.class<@UVMTransaction>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@UVMTransaction>
   return %success : i1
 }
+
+//===----------------------------------------------------------------------===//
+// Test 13: Nested implications (a -> (b -> c))
+// Corresponds to: constraint c { a -> (b -> c); }
+// IEEE 1800-2017 Section 18.5.6: implications can be nested
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @NestedImplication {
+  moore.class.propertydecl @a : !moore.i1 rand_mode rand
+  moore.class.propertydecl @b : !moore.i1 rand_mode rand
+  moore.class.propertydecl @c : !moore.i1 rand_mode rand
+  moore.constraint.block @c_nested_impl {
+  ^bb0(%a: !moore.i1, %b: !moore.i1, %c: !moore.i1):
+    // a -> (b -> c)
+    // If a is true, then if b is true, c must be true
+    moore.constraint.implication %a : i1 {
+      moore.constraint.implication %b : i1 {
+        moore.constraint.expr %c : i1
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_nested_impl
+// CHECK-NOT: moore.constraint.block
+// CHECK-NOT: moore.constraint.implication
+func.func @test_nested_impl(%obj: !moore.class<@NestedImplication>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@NestedImplication>
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test 14: Triple nested implication (a -> (b -> (c -> d)))
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @TripleNestedImpl {
+  moore.class.propertydecl @a : !moore.i1 rand_mode rand
+  moore.class.propertydecl @b : !moore.i1 rand_mode rand
+  moore.class.propertydecl @c : !moore.i1 rand_mode rand
+  moore.class.propertydecl @d : !moore.i1 rand_mode rand
+  moore.constraint.block @c_triple_nested {
+  ^bb0(%a: !moore.i1, %b: !moore.i1, %c: !moore.i1, %d: !moore.i1):
+    // a -> (b -> (c -> d))
+    moore.constraint.implication %a : i1 {
+      moore.constraint.implication %b : i1 {
+        moore.constraint.implication %c : i1 {
+          moore.constraint.expr %d : i1
+        }
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_triple_nested_impl
+// CHECK-NOT: moore.constraint.implication
+func.func @test_triple_nested_impl(%obj: !moore.class<@TripleNestedImpl>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@TripleNestedImpl>
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test 15: Implication with distribution constraint
+// Corresponds to: constraint c { mode -> value dist { 0 := 10, [1:5] :/ 50 }; }
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @ImplWithDist {
+  moore.class.propertydecl @mode : !moore.i1 rand_mode rand
+  moore.class.propertydecl @value : !moore.i8 rand_mode rand
+  moore.constraint.block @c_impl_dist {
+  ^bb0(%mode: !moore.i1, %value: !moore.i8):
+    moore.constraint.implication %mode : i1 {
+      // value dist { 0 := 10, [1:5] :/ 50, [6:10] := 40 }
+      // values: [0, 0] single value 0, [1, 5] range, [6, 10] range
+      // weights: [10, 50, 40]
+      // per_range: [0, 1, 0] (0=:= per-item, 1=:/ per-range)
+      moore.constraint.dist %value, [0, 0, 1, 5, 6, 10], [10, 50, 40], [0, 1, 0] : !moore.i8
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_impl_with_dist
+// CHECK-NOT: moore.constraint.implication
+// CHECK-NOT: moore.constraint.dist
+func.func @test_impl_with_dist(%obj: !moore.class<@ImplWithDist>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@ImplWithDist>
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test 16: Combined nested implication with range constraint
+// Corresponds to: constraint c { a -> (b -> x inside {[0:100]}); }
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @NestedImplWithRange {
+  moore.class.propertydecl @a : !moore.i1 rand_mode rand
+  moore.class.propertydecl @b : !moore.i1 rand_mode rand
+  moore.class.propertydecl @x : !moore.i8 rand_mode rand
+  moore.constraint.block @c_nested_impl_range {
+  ^bb0(%a: !moore.i1, %b: !moore.i1, %x: !moore.i8):
+    moore.constraint.implication %a : i1 {
+      moore.constraint.implication %b : i1 {
+        moore.constraint.inside %x, [0, 100] : !moore.i8
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_nested_impl_range
+// CHECK-NOT: moore.constraint.implication
+// CHECK-NOT: moore.constraint.inside
+func.func @test_nested_impl_range(%obj: !moore.class<@NestedImplWithRange>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@NestedImplWithRange>
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test 17: Soft implication with nested implications
+// Corresponds to: constraint c { soft a -> (b -> c); }
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @SoftNestedImpl {
+  moore.class.propertydecl @a : !moore.i1 rand_mode rand
+  moore.class.propertydecl @b : !moore.i1 rand_mode rand
+  moore.class.propertydecl @c : !moore.i1 rand_mode rand
+  moore.constraint.block @c_soft_nested {
+  ^bb0(%a: !moore.i1, %b: !moore.i1, %c: !moore.i1):
+    // a -> (b -> soft c)
+    moore.constraint.implication %a : i1 {
+      moore.constraint.implication %b : i1 {
+        moore.constraint.expr %c : i1 soft
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_soft_nested_impl
+// CHECK-NOT: moore.constraint.implication
+func.func @test_soft_nested_impl(%obj: !moore.class<@SoftNestedImpl>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@SoftNestedImpl>
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test 18: Implication with soft inside constraint
+// Corresponds to: constraint c { mode -> soft value inside {[0:10]}; }
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @ImplSoftInside {
+  moore.class.propertydecl @mode : !moore.i1 rand_mode rand
+  moore.class.propertydecl @value : !moore.i8 rand_mode rand
+  moore.constraint.block @c_impl_soft_inside {
+  ^bb0(%mode: !moore.i1, %value: !moore.i8):
+    moore.constraint.implication %mode : i1 {
+      // soft value inside {[0:10]}
+      moore.constraint.inside %value, [0, 10] : !moore.i8 soft
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_impl_soft_inside
+// CHECK-NOT: moore.constraint.implication
+// CHECK-NOT: moore.constraint.inside
+func.func @test_impl_soft_inside(%obj: !moore.class<@ImplSoftInside>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@ImplSoftInside>
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test 19: Complex UVM-style sequence with nested implications
+// Simulates: mode -> (valid -> data inside {[0:255]})
+//===----------------------------------------------------------------------===//
+
+moore.class.classdecl @UVMSequenceItem {
+  moore.class.propertydecl @mode : !moore.i2 rand_mode rand
+  moore.class.propertydecl @valid : !moore.i1 rand_mode rand
+  moore.class.propertydecl @data : !moore.i8 rand_mode rand
+  moore.class.propertydecl @addr : !moore.i16 rand_mode rand
+  moore.constraint.block @c_mode_range {
+  ^bb0(%mode: !moore.i2):
+    // mode inside {[0:2]}
+    moore.constraint.inside %mode, [0, 2] : !moore.i2
+  }
+  moore.constraint.block @c_nested_valid {
+  ^bb0(%mode: !moore.i2, %valid: !moore.i1, %data: !moore.i8):
+    %c1 = moore.constant 1 : i2
+    %is_mode1 = moore.eq %mode, %c1 : i2 -> i1
+    // mode == 1 -> (valid -> data inside {[0:127]})
+    moore.constraint.implication %is_mode1 : i1 {
+      moore.constraint.implication %valid : i1 {
+        moore.constraint.inside %data, [0, 127] : !moore.i8
+      }
+    }
+  }
+  moore.constraint.block @c_addr {
+  ^bb0(%mode: !moore.i2, %addr: !moore.i16):
+    %c2 = moore.constant 2 : i2
+    %is_mode2 = moore.eq %mode, %c2 : i2 -> i1
+    // mode == 2 -> addr inside {[0x1000:0x2000]}
+    moore.constraint.implication %is_mode2 : i1 {
+      moore.constraint.inside %addr, [4096, 8192] : !moore.i16
+    }
+  }
+}
+
+// CHECK-LABEL: func.func @test_uvm_sequence
+// CHECK-NOT: moore.constraint.block
+// CHECK-NOT: moore.constraint.implication
+// CHECK-NOT: moore.constraint.inside
+func.func @test_uvm_sequence(%obj: !moore.class<@UVMSequenceItem>) -> i1 {
+  %success = moore.randomize %obj : !moore.class<@UVMSequenceItem>
+  return %success : i1
+}
