@@ -1025,6 +1025,153 @@ TEST(MooreRuntimeRandomizeTest, RandomizeBasicSeededConsistency) {
 }
 
 //===----------------------------------------------------------------------===//
+// Distribution Constraint Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistSingleValue) {
+  // Test distribution with single values using := weight
+  // x dist { 0 := 10, 1 := 20, 2 := 30 }
+  int64_t ranges[] = {0, 0, 1, 1, 2, 2}; // [0,0], [1,1], [2,2]
+  int64_t weights[] = {10, 20, 30};
+  int64_t perRange[] = {0, 0, 0}; // All := (per-value)
+
+  // Run multiple times and count occurrences
+  std::map<int64_t, int> counts;
+  for (int i = 0; i < 600; ++i) {
+    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 3);
+    EXPECT_GE(result, 0);
+    EXPECT_LE(result, 2);
+    counts[result]++;
+  }
+
+  // With weights 10:20:30, expect roughly 1:2:3 ratio
+  // Allow some statistical variation
+  EXPECT_GT(counts[0], 0);
+  EXPECT_GT(counts[1], 0);
+  EXPECT_GT(counts[2], 0);
+  // Value 2 should appear more often than value 0 (on average)
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistRange) {
+  // Test distribution with ranges using := weight
+  // x dist { [0:4] := 2 } means each value in [0,4] gets weight 2
+  int64_t ranges[] = {0, 4}; // [0,4]
+  int64_t weights[] = {2};
+  int64_t perRange[] = {0}; // := (per-value)
+
+  // All values 0-4 should appear
+  std::map<int64_t, int> counts;
+  for (int i = 0; i < 500; ++i) {
+    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 1);
+    EXPECT_GE(result, 0);
+    EXPECT_LE(result, 4);
+    counts[result]++;
+  }
+
+  // Each value should appear at least once
+  for (int v = 0; v <= 4; ++v) {
+    EXPECT_GT(counts[v], 0) << "Value " << v << " should appear";
+  }
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistPerRange) {
+  // Test distribution with :/ (per-range) weight
+  // x dist { [0:4] :/ 100 } means total weight 100 is divided among 5 values
+  int64_t ranges[] = {0, 4}; // [0,4]
+  int64_t weights[] = {100};
+  int64_t perRange[] = {1}; // :/ (per-range)
+
+  // All values 0-4 should appear with equal probability
+  std::map<int64_t, int> counts;
+  for (int i = 0; i < 500; ++i) {
+    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 1);
+    EXPECT_GE(result, 0);
+    EXPECT_LE(result, 4);
+    counts[result]++;
+  }
+
+  // Each value should appear at least once
+  for (int v = 0; v <= 4; ++v) {
+    EXPECT_GT(counts[v], 0) << "Value " << v << " should appear";
+  }
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistMixed) {
+  // Test mixed := and :/ weights
+  // x dist { 0 := 1, [1:10] :/ 4 }
+  // Value 0 gets weight 1, range [1:10] (10 values) shares weight 4
+  int64_t ranges[] = {0, 0, 1, 10}; // [0,0], [1,10]
+  int64_t weights[] = {1, 4};
+  int64_t perRange[] = {0, 1}; // := for first, :/ for second
+
+  // Total effective weight: 1 (for 0) + 4 (for range [1,10])
+  std::map<int64_t, int> counts;
+  for (int i = 0; i < 500; ++i) {
+    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 2);
+    EXPECT_GE(result, 0);
+    EXPECT_LE(result, 10);
+    counts[result]++;
+  }
+
+  // Both ranges should be hit
+  EXPECT_GT(counts[0], 0);
+  int rangeCount = 0;
+  for (int v = 1; v <= 10; ++v) {
+    rangeCount += counts[v];
+  }
+  EXPECT_GT(rangeCount, 0);
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistNullInputs) {
+  // Test with null inputs - should return default (first range low)
+  int64_t ranges[] = {5, 10};
+  int64_t weights[] = {1};
+  int64_t perRange[] = {0};
+
+  // Null ranges
+  int64_t result1 = __moore_randomize_with_dist(nullptr, weights, perRange, 1);
+  EXPECT_EQ(result1, 0);
+
+  // Null weights
+  int64_t result2 = __moore_randomize_with_dist(ranges, nullptr, perRange, 1);
+  EXPECT_EQ(result2, 0);
+
+  // Null perRange
+  int64_t result3 = __moore_randomize_with_dist(ranges, weights, nullptr, 1);
+  EXPECT_EQ(result3, 0);
+
+  // Zero numRanges
+  int64_t result4 = __moore_randomize_with_dist(ranges, weights, perRange, 0);
+  EXPECT_EQ(result4, 0);
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistZeroWeights) {
+  // Test with all zero weights - should return first range value
+  int64_t ranges[] = {5, 10, 15, 20};
+  int64_t weights[] = {0, 0};
+  int64_t perRange[] = {0, 0};
+
+  int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 2);
+  // With zero weights, should return first range's low value
+  EXPECT_EQ(result, 5);
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistSeededConsistency) {
+  // Test that seeding produces consistent distribution results
+  int64_t ranges[] = {0, 0, 1, 1, 2, 2};
+  int64_t weights[] = {10, 20, 30};
+  int64_t perRange[] = {0, 0, 0};
+
+  __moore_urandom_seeded(54321);
+  int64_t result1 = __moore_randomize_with_dist(ranges, weights, perRange, 3);
+
+  __moore_urandom_seeded(54321);
+  int64_t result2 = __moore_randomize_with_dist(ranges, weights, perRange, 3);
+
+  EXPECT_EQ(result1, result2);
+}
+
+//===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Tests
 //===----------------------------------------------------------------------===//
 
@@ -4937,6 +5084,347 @@ TEST(MooreRuntimeArrayConstraintTest, UniqueCheck64Bit) {
     0x0000000000000001LL
   };
   EXPECT_EQ(__moore_constraint_unique_check(arr, 3, sizeof(int64_t)), 1);
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Sample Callback Tests
+//===----------------------------------------------------------------------===//
+
+// Test data for callbacks
+namespace {
+struct SampleCallbackTestData {
+  int preSampleCount = 0;
+  int postSampleCount = 0;
+  void *lastCg = nullptr;
+  int64_t *lastArgs = nullptr;
+  int32_t lastNumArgs = 0;
+
+  void reset() {
+    preSampleCount = 0;
+    postSampleCount = 0;
+    lastCg = nullptr;
+    lastArgs = nullptr;
+    lastNumArgs = 0;
+  }
+};
+
+thread_local SampleCallbackTestData g_sampleCallbackData;
+
+void testPreSampleCallback(void *cg, int64_t *args, int32_t num_args, void *userData) {
+  auto *data = static_cast<SampleCallbackTestData *>(userData);
+  data->preSampleCount++;
+  data->lastCg = cg;
+  data->lastArgs = args;
+  data->lastNumArgs = num_args;
+}
+
+void testPostSampleCallback(void *cg, int64_t *args, int32_t num_args, void *userData) {
+  auto *data = static_cast<SampleCallbackTestData *>(userData);
+  data->postSampleCount++;
+  data->lastCg = cg;
+  data->lastArgs = args;
+  data->lastNumArgs = num_args;
+}
+} // anonymous namespace
+
+TEST(MooreRuntimeSampleCallbackTest, ExplicitSampleNoArgs) {
+  // Test basic sample() with no arguments
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Sample should not crash even without callbacks
+  __moore_covergroup_sample(cg);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, PreSampleCallback) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  SampleCallbackTestData data;
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &data);
+
+  __moore_covergroup_sample(cg);
+
+  EXPECT_EQ(data.preSampleCount, 1);
+  EXPECT_EQ(data.lastCg, cg);
+  EXPECT_EQ(data.lastNumArgs, 0);
+
+  // Sample again
+  __moore_covergroup_sample(cg);
+  EXPECT_EQ(data.preSampleCount, 2);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, PostSampleCallback) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  SampleCallbackTestData data;
+  __moore_covergroup_set_post_sample_callback(cg, testPostSampleCallback, &data);
+
+  __moore_covergroup_sample(cg);
+
+  EXPECT_EQ(data.postSampleCount, 1);
+  EXPECT_EQ(data.lastCg, cg);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, BothCallbacks) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  SampleCallbackTestData preData, postData;
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &preData);
+  __moore_covergroup_set_post_sample_callback(cg, testPostSampleCallback, &postData);
+
+  __moore_covergroup_sample(cg);
+
+  EXPECT_EQ(preData.preSampleCount, 1);
+  EXPECT_EQ(postData.postSampleCount, 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, SampleWithArguments) {
+  void *cg = __moore_covergroup_create("test_cg", 3);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+  __moore_coverpoint_init(cg, 2, "cp2");
+
+  SampleCallbackTestData data;
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &data);
+
+  int64_t args[] = {10, 20, 30};
+  __moore_covergroup_sample_with_args(cg, args, 3);
+
+  EXPECT_EQ(data.preSampleCount, 1);
+  EXPECT_EQ(data.lastNumArgs, 3);
+  EXPECT_EQ(data.lastArgs, args);
+
+  // Verify coverpoints were sampled with the arguments
+  // Coverage should be non-zero
+  double cov0 = __moore_coverpoint_get_coverage(cg, 0);
+  double cov1 = __moore_coverpoint_get_coverage(cg, 1);
+  double cov2 = __moore_coverpoint_get_coverage(cg, 2);
+  EXPECT_EQ(cov0, 100.0);  // Single value = 100%
+  EXPECT_EQ(cov1, 100.0);
+  EXPECT_EQ(cov2, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, SampleWithArgMapping) {
+  void *cg = __moore_covergroup_create("test_cg", 3);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+  __moore_coverpoint_init(cg, 2, "cp2");
+
+  // Map: cp0 <- arg1, cp1 <- arg0, cp2 <- skip
+  int32_t mapping[] = {1, 0, -1};
+  __moore_covergroup_set_sample_arg_mapping(cg, mapping, 3);
+
+  int64_t args[] = {100, 200};
+  __moore_covergroup_sample_with_args(cg, args, 2);
+
+  // cp0 should have sampled 200 (arg1), cp1 should have sampled 100 (arg0)
+  // cp2 should not have been sampled (coverage 0)
+  double cov0 = __moore_coverpoint_get_coverage(cg, 0);
+  double cov1 = __moore_coverpoint_get_coverage(cg, 1);
+  double cov2 = __moore_coverpoint_get_coverage(cg, 2);
+  EXPECT_EQ(cov0, 100.0);  // Sampled with value 200
+  EXPECT_EQ(cov1, 100.0);  // Sampled with value 100
+  EXPECT_EQ(cov2, 0.0);    // Not sampled
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, SampleEnabled) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  // Should be enabled by default
+  EXPECT_TRUE(__moore_covergroup_is_sample_enabled(cg));
+
+  SampleCallbackTestData data;
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &data);
+
+  // Sample while enabled
+  __moore_covergroup_sample(cg);
+  EXPECT_EQ(data.preSampleCount, 1);
+
+  // Disable and try sampling
+  __moore_covergroup_set_sample_enabled(cg, false);
+  EXPECT_FALSE(__moore_covergroup_is_sample_enabled(cg));
+  __moore_covergroup_sample(cg);
+  EXPECT_EQ(data.preSampleCount, 1);  // Should not have increased
+
+  // Re-enable
+  __moore_covergroup_set_sample_enabled(cg, true);
+  __moore_covergroup_sample(cg);
+  EXPECT_EQ(data.preSampleCount, 2);  // Should have increased
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, SampleEvent) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  // Should not have sample event by default
+  EXPECT_FALSE(__moore_covergroup_has_sample_event(cg));
+  EXPECT_EQ(__moore_covergroup_get_sample_event(cg), nullptr);
+
+  // Set sample event
+  __moore_covergroup_set_sample_event(cg, "posedge_clk");
+  EXPECT_TRUE(__moore_covergroup_has_sample_event(cg));
+  EXPECT_STREQ(__moore_covergroup_get_sample_event(cg), "posedge_clk");
+
+  // Track if sample happens
+  SampleCallbackTestData data;
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &data);
+
+  // Trigger wrong event - should not sample
+  __moore_covergroup_trigger_sample_event(cg, "negedge_clk");
+  EXPECT_EQ(data.preSampleCount, 0);
+
+  // Trigger correct event - should sample
+  __moore_covergroup_trigger_sample_event(cg, "posedge_clk");
+  EXPECT_EQ(data.preSampleCount, 1);
+
+  // Trigger with NULL - should sample any configured event
+  __moore_covergroup_trigger_sample_event(cg, nullptr);
+  EXPECT_EQ(data.preSampleCount, 2);
+
+  // Clear sample event
+  __moore_covergroup_set_sample_event(cg, nullptr);
+  EXPECT_FALSE(__moore_covergroup_has_sample_event(cg));
+
+  // Should not trigger after clearing
+  __moore_covergroup_trigger_sample_event(cg, "posedge_clk");
+  EXPECT_EQ(data.preSampleCount, 2);  // Unchanged
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, GlobalCallbacks) {
+  void *cg1 = __moore_covergroup_create("test_cg1", 1);
+  void *cg2 = __moore_covergroup_create("test_cg2", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp0");
+  __moore_coverpoint_init(cg2, 0, "cp0");
+
+  SampleCallbackTestData globalPreData, globalPostData;
+  __moore_coverage_set_global_pre_sample_callback(testPreSampleCallback, &globalPreData);
+  __moore_coverage_set_global_post_sample_callback(testPostSampleCallback, &globalPostData);
+
+  // Sample cg1
+  __moore_covergroup_sample(cg1);
+  EXPECT_EQ(globalPreData.preSampleCount, 1);
+  EXPECT_EQ(globalPostData.postSampleCount, 1);
+  EXPECT_EQ(globalPreData.lastCg, cg1);
+
+  // Sample cg2
+  __moore_covergroup_sample(cg2);
+  EXPECT_EQ(globalPreData.preSampleCount, 2);
+  EXPECT_EQ(globalPostData.postSampleCount, 2);
+  EXPECT_EQ(globalPreData.lastCg, cg2);
+
+  // Clear global callbacks
+  __moore_coverage_set_global_pre_sample_callback(nullptr, nullptr);
+  __moore_coverage_set_global_post_sample_callback(nullptr, nullptr);
+
+  // Sample again - global callbacks should not fire
+  __moore_covergroup_sample(cg1);
+  EXPECT_EQ(globalPreData.preSampleCount, 2);  // Unchanged
+  EXPECT_EQ(globalPostData.postSampleCount, 2);
+
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, GlobalAndLocalCallbacks) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  SampleCallbackTestData globalPreData, localPreData;
+  __moore_coverage_set_global_pre_sample_callback(testPreSampleCallback, &globalPreData);
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &localPreData);
+
+  __moore_covergroup_sample(cg);
+
+  // Both should be called
+  EXPECT_EQ(globalPreData.preSampleCount, 1);
+  EXPECT_EQ(localPreData.preSampleCount, 1);
+
+  // Cleanup
+  __moore_coverage_set_global_pre_sample_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeSampleCallbackTest, SampleNullCovergroup) {
+  // These should not crash
+  __moore_covergroup_sample(nullptr);
+
+  int64_t args[] = {1, 2, 3};
+  __moore_covergroup_sample_with_args(nullptr, args, 3);
+
+  __moore_covergroup_set_pre_sample_callback(nullptr, testPreSampleCallback, nullptr);
+  __moore_covergroup_set_post_sample_callback(nullptr, testPostSampleCallback, nullptr);
+
+  __moore_covergroup_set_sample_enabled(nullptr, true);
+  EXPECT_FALSE(__moore_covergroup_is_sample_enabled(nullptr));
+
+  __moore_covergroup_set_sample_event(nullptr, "event");
+  EXPECT_EQ(__moore_covergroup_get_sample_event(nullptr), nullptr);
+  EXPECT_FALSE(__moore_covergroup_has_sample_event(nullptr));
+
+  __moore_covergroup_trigger_sample_event(nullptr, "event");
+}
+
+TEST(MooreRuntimeSampleCallbackTest, DisableCallback) {
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+
+  SampleCallbackTestData data;
+  __moore_covergroup_set_pre_sample_callback(cg, testPreSampleCallback, &data);
+
+  __moore_covergroup_sample(cg);
+  EXPECT_EQ(data.preSampleCount, 1);
+
+  // Disable callback by setting it to nullptr
+  __moore_covergroup_set_pre_sample_callback(cg, nullptr, nullptr);
+
+  __moore_covergroup_sample(cg);
+  EXPECT_EQ(data.preSampleCount, 1);  // Unchanged
+
+  __moore_covergroup_destroy(cg);
 }
 
 } // namespace
