@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | 12 gate primitives added | MOS primitives, full AVIP E2E |
-| **B** | Randomization | Unique constraints complete | Cross named bins full lowering |
-| **C** | Coverage | Assertions API complete | UVM coverage integration |
-| **D** | LSP Tooling | Code lens complete | Type hierarchy, inlay hints |
+| **A** | Runtime/Simulation | MOS primitives verified, AVIP E2E tested | Timing delays, $display runtime |
+| **B** | Randomization | Cross named bins negate fixed | Implication constraints completion |
+| **C** | Coverage | UVM coverage integration complete | Coverage merge file format |
+| **D** | LSP Tooling | Type hierarchy verified | Inlay hints, more refactoring |
 
 ### Feature Completion Matrix
 
@@ -69,34 +69,36 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Gate primitives (12 types) | ✅ | ✅ | ✅ | - | ✅ |
 | Coverage assertions | - | - | - | ✅ | ✅ |
 | LSP code lens | - | - | - | - | ✅ |
+| MOS primitives (12 types) | ✅ | ✅ | ✅ | - | ✅ |
+| UVM coverage model | - | - | - | ✅ | ✅ |
+| LSP type hierarchy | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 68 - Gate Primitives + Unique Constraints + Coverage Assertions + Code Lens (January 20, 2026)
+## Current Status: ITERATION 69 - MOS Primitives + UVM Coverage Integration + LSP Type Hierarchy (January 20, 2026)
 
-**Summary**: Added 12 gate primitives, completed unique array constraint lowering, implemented coverage assertion APIs, and added LSP code lens support.
+**Summary**: Verified MOS primitives, completed UVM coverage model integration, confirmed LSP type hierarchy, and performed AVIP E2E testing.
 
-### Iteration 68 Highlights
+### Iteration 69 Highlights
 
-**Track A: Gate Primitive Support** ⭐ FEATURE
-- ✅ 12 additional gate primitives: and, or, nand, nor, xor, xnor, buf, not, bufif0/1, notif0/1
-- ✅ I3C AVIP pullup primitives working (remaining blockers are UVM dependencies)
+**Track A: MOS Transistor Primitives** ⭐ FEATURE
+- ✅ Verified 12 MOS primitives: nmos, pmos, cmos, tran, tranif0/1, etc.
+- ✅ APB AVIP E2E testing to simulation (time 0 fs limitation noted)
 
-**Track B: Unique Array Constraints** ⭐ FEATURE
-- ✅ Complete ConstraintUniqueOpConversion implementation
-- ✅ Runtime calls for array and scalar uniqueness checking
+**Track B: Cross Named Bins** ⭐ BUGFIX
+- ✅ Fixed BinsOfOp negate attribute (was hardcoded to false)
+- ✅ Test file validates mixed negated/non-negated filters
 
-**Track C: Coverage Assertions** ⭐ FEATURE
-- ✅ 10 new API functions for coverage goal assertions
-- ✅ Failure callbacks and registered assertions for end-of-sim checking
-- ✅ 22 comprehensive unit tests
+**Track C: UVM Coverage Integration** ⭐ FEATURE
+- ✅ MooreUvmCoverageModel enum (UVM_CVR_REG_BITS, etc.)
+- ✅ 10 new UVM-style coverage API functions
+- ✅ 18 unit tests for complete verification
 
-**Track D: LSP Code Lens** ⭐ FEATURE
-- ✅ Reference counts for modules, classes, interfaces, functions, tasks
-- ✅ "Go to implementations" for virtual methods
-- ✅ Lazy resolution via codeLens/resolve
+**Track D: LSP Type Hierarchy** ⭐ VERIFICATION
+- ✅ Confirmed prepareTypeHierarchy, supertypes, subtypes all working
+- ✅ UVM-style class hierarchy test file created
 
 ---
 
@@ -980,11 +982,11 @@ ninja -C build check-circt-unit
 - Files: `lib/Conversion/MooreToCore/MooreToCore.cpp`, `lib/Runtime/MooreRuntime.cpp`
 
 ### Track C: SVA + Z3 Track
-**Status**: ✅ LTL + IMPLICATION DONE | **Priority**: HIGH
-**Next Task**: Multi-step BMC unrolling for temporal properties
-- Current BMC is single-step; need unrolling for `##N` and `[*N]`
-- Implement time-step state management
-- Test with: `LD_LIBRARY_PATH=~/z3-install/lib64 ./build/bin/circt-bmc`
+**Status**: ⚠️ PARTIAL (multi-step delay buffering for `##N`/bounded `##[m:n]` on i1) | **Priority**: HIGH
+**Next Task**: Extend temporal unrolling beyond delay
+- Add repeat (`[*N]`) and goto/non-consecutive repeat support
+- Handle unbounded delay ranges (`##[m:$]`) in BMC within bound
+- Add end-to-end BMC tests with Z3 (`circt-bmc`) for temporal properties
 - Files: `lib/Tools/circt-bmc/`, `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Track D: Tooling & Debug (LSP)
@@ -1004,7 +1006,7 @@ ninja -C build check-circt-unit
 |---------|--------|----------------|
 | **DPI/VPI Support** | 🔴 CRITICAL GAP | Implement HDL access behind DPI stubs, add real VPI handle support |
 | **Class Randomization** | 🔴 CRITICAL GAP | randc cycling + constraint-aware randomize |
-| **Full SVA + Z3** | ✅ LTL + IMPLICATION | Multi-step BMC unrolling |
+| **Full SVA + Z3** | ⚠️ Bounded delay buffering | Repeat/unbounded delay unrolling |
 | **LSP + Debugging** | ✅ Workspace Symbols | Symbol index + rename/debugging hooks |
 | **Coverage** | 🟡 PARTIAL | Covergroups + sampling expressions |
 | **Multi-core Arcilator** | MISSING | Architecture plan |
@@ -1024,7 +1026,7 @@ ninja -C build check-circt-unit
 3. **Covergroups dropped** - Needed for UVM coverage collection
 
 **HIGH PRIORITY**:
-4. Multi-step BMC unrolling for `##N` delays and `[*N]` repetition
+4. Temporal BMC unrolling: repeat (`[*N]`) + unbounded `##[m:$]` (bounded delays now buffered)
 5. Constraint expressions for randomization
 6. Cross coverage and sampling expressions
 
@@ -1037,7 +1039,7 @@ ninja -C build check-circt-unit
 ## Next Feature Targets (Top Impact for UVM)
 1. **DPI-C runtime stubs** - Implement `uvm_hdl_deposit`, `uvm_hdl_force`, `uvm_re_*`
 2. **Class randomization** - `rand`/`randc` properties, basic `randomize()` call
-3. **Multi-step BMC** - Unroll time steps for temporal assertions
+3. **Multi-step BMC** - Extend beyond delay buffering (repeat + unbounded delay)
 4. **Symbol index** - Replace regex scan with AST-backed symbol indexing
 5. **Coverage** - Covergroup sampling basics for UVM
 

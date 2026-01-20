@@ -8829,6 +8829,357 @@ extern "C" MooreString uvm_dpi_get_tool_version_c(void) {
 }
 
 //===----------------------------------------------------------------------===//
+// UVM Coverage Model API
+//===----------------------------------------------------------------------===//
+//
+// Implementation of UVM-compatible coverage API for register and field coverage.
+// This integrates with the existing covergroup infrastructure to provide
+// UVM-style coverage collection tied to register and field access patterns.
+//
+
+namespace {
+
+/// State for UVM coverage tracking.
+struct UvmCoverageState {
+  /// Current coverage model bitmask.
+  int32_t coverageModel = UVM_NO_COVERAGE;
+
+  /// Map from register names to their covergroup handles.
+  std::unordered_map<std::string, void *> regCovergroups;
+
+  /// Map from field names to their covergroup handles.
+  std::unordered_map<std::string, void *> fieldCovergroups;
+
+  /// Map from address map names to their covergroup handles.
+  std::unordered_map<std::string, void *> addrMapCovergroups;
+
+  /// Map from register names to their bit widths (default: 64).
+  std::unordered_map<std::string, int32_t> regBitWidths;
+
+  /// Map from field names to their value ranges.
+  std::unordered_map<std::string, std::pair<int64_t, int64_t>> fieldRanges;
+
+  /// Register coverage callback.
+  MooreUvmRegCoverageCallback regCallback = nullptr;
+  void *regCallbackUserData = nullptr;
+
+  /// Field coverage callback.
+  MooreUvmFieldCoverageCallback fieldCallback = nullptr;
+  void *fieldCallbackUserData = nullptr;
+
+  /// Mutex for thread safety.
+  std::mutex mutex;
+};
+
+/// Global UVM coverage state.
+UvmCoverageState uvmCoverageState;
+
+/// Get or create a covergroup for a register.
+void *getOrCreateRegCovergroup(const std::string &regName) {
+  auto it = uvmCoverageState.regCovergroups.find(regName);
+  if (it != uvmCoverageState.regCovergroups.end()) {
+    return it->second;
+  }
+
+  // Create a covergroup with a single coverpoint for the register.
+  std::string cgName = "uvm_reg_" + regName;
+  void *cg = __moore_covergroup_create(cgName.c_str(), 1);
+  if (!cg)
+    return nullptr;
+
+  // Get bit width for this register (default: 8 for manageable auto bins).
+  int32_t bitWidth = 8;
+  auto bitWidthIt = uvmCoverageState.regBitWidths.find(regName);
+  if (bitWidthIt != uvmCoverageState.regBitWidths.end()) {
+    bitWidth = bitWidthIt->second;
+  }
+
+  // Initialize the coverpoint with auto bins.
+  // Auto bins track which values have been seen within the observed range.
+  __moore_coverpoint_init(cg, 0, regName.c_str());
+
+  // Set auto_bin_max based on bit width to limit bin count.
+  int64_t autoBinMax = std::min(static_cast<int64_t>(64),
+                                static_cast<int64_t>(1) << bitWidth);
+  __moore_coverpoint_set_auto_bin_max(cg, 0, autoBinMax);
+
+  uvmCoverageState.regCovergroups[regName] = cg;
+  return cg;
+}
+
+/// Get or create a covergroup for a field.
+void *getOrCreateFieldCovergroup(const std::string &fieldName) {
+  auto it = uvmCoverageState.fieldCovergroups.find(fieldName);
+  if (it != uvmCoverageState.fieldCovergroups.end()) {
+    return it->second;
+  }
+
+  // Create a covergroup with a single coverpoint for the field.
+  std::string cgName = "uvm_field_" + fieldName;
+  void *cg = __moore_covergroup_create(cgName.c_str(), 1);
+  if (!cg)
+    return nullptr;
+
+  // Get field range (default: 0-255 for 8-bit field).
+  int64_t minVal = 0;
+  int64_t maxVal = 255;
+  auto rangeIt = uvmCoverageState.fieldRanges.find(fieldName);
+  if (rangeIt != uvmCoverageState.fieldRanges.end()) {
+    minVal = rangeIt->second.first;
+    maxVal = rangeIt->second.second;
+  }
+
+  // Initialize the coverpoint with auto bins.
+  __moore_coverpoint_init(cg, 0, fieldName.c_str());
+
+  // Set auto_bin_max based on range size.
+  int64_t rangeSize = maxVal - minVal + 1;
+  int64_t autoBinMax = std::min(static_cast<int64_t>(64), rangeSize);
+  __moore_coverpoint_set_auto_bin_max(cg, 0, autoBinMax);
+
+  uvmCoverageState.fieldCovergroups[fieldName] = cg;
+  return cg;
+}
+
+/// Get or create a covergroup for an address map.
+void *getOrCreateAddrMapCovergroup(const std::string &mapName) {
+  auto it = uvmCoverageState.addrMapCovergroups.find(mapName);
+  if (it != uvmCoverageState.addrMapCovergroups.end()) {
+    return it->second;
+  }
+
+  // Create a covergroup with two coverpoints: address and access type.
+  std::string cgName = "uvm_addr_map_" + mapName;
+  void *cg = __moore_covergroup_create(cgName.c_str(), 2);
+  if (!cg)
+    return nullptr;
+
+  // Initialize address coverpoint (auto bins for address range).
+  std::string addrCpName = mapName + "_addr";
+  __moore_coverpoint_init(cg, 0, addrCpName.c_str());
+  __moore_coverpoint_set_auto_bin_max(cg, 0, 64);
+
+  // Initialize access type coverpoint (read=1, write=0).
+  std::string accessCpName = mapName + "_access";
+  __moore_coverpoint_init(cg, 1, accessCpName.c_str());
+  __moore_coverpoint_set_auto_bin_max(cg, 1, 2);  // Only 2 values: read/write
+
+  uvmCoverageState.addrMapCovergroups[mapName] = cg;
+  return cg;
+}
+
+} // anonymous namespace
+
+extern "C" void __moore_uvm_set_coverage_model(int32_t model) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  uvmCoverageState.coverageModel = model;
+}
+
+extern "C" int32_t __moore_uvm_get_coverage_model(void) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  return uvmCoverageState.coverageModel;
+}
+
+extern "C" bool __moore_uvm_has_coverage(int32_t model) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  return (uvmCoverageState.coverageModel & model) != 0;
+}
+
+extern "C" void __moore_uvm_coverage_sample_reg(const char *reg_name,
+                                                 int64_t value) {
+  if (!reg_name)
+    return;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  // Only sample if UVM_CVR_REG_BITS is enabled.
+  if ((uvmCoverageState.coverageModel & UVM_CVR_REG_BITS) == 0)
+    return;
+
+  // Invoke callback if registered.
+  if (uvmCoverageState.regCallback) {
+    uvmCoverageState.regCallback(reg_name, value,
+                                 uvmCoverageState.regCallbackUserData);
+  }
+
+  // Get or create the covergroup for this register.
+  void *cg = getOrCreateRegCovergroup(reg_name);
+  if (!cg)
+    return;
+
+  // Sample the value into the coverpoint.
+  __moore_coverpoint_sample(cg, 0, value);
+}
+
+extern "C" void __moore_uvm_coverage_sample_field(const char *field_name,
+                                                   int64_t value) {
+  if (!field_name)
+    return;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  // Only sample if UVM_CVR_FIELD_VALS is enabled.
+  if ((uvmCoverageState.coverageModel & UVM_CVR_FIELD_VALS) == 0)
+    return;
+
+  // Invoke callback if registered.
+  if (uvmCoverageState.fieldCallback) {
+    uvmCoverageState.fieldCallback(field_name, value,
+                                   uvmCoverageState.fieldCallbackUserData);
+  }
+
+  // Get or create the covergroup for this field.
+  void *cg = getOrCreateFieldCovergroup(field_name);
+  if (!cg)
+    return;
+
+  // Sample the value into the coverpoint.
+  __moore_coverpoint_sample(cg, 0, value);
+}
+
+extern "C" void __moore_uvm_coverage_sample_addr_map(const char *map_name,
+                                                      int64_t address,
+                                                      bool is_read) {
+  if (!map_name)
+    return;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  // Only sample if UVM_CVR_ADDR_MAP is enabled.
+  if ((uvmCoverageState.coverageModel & UVM_CVR_ADDR_MAP) == 0)
+    return;
+
+  // Get or create the covergroup for this address map.
+  void *cg = getOrCreateAddrMapCovergroup(map_name);
+  if (!cg)
+    return;
+
+  // Sample the address and access type.
+  __moore_coverpoint_sample(cg, 0, address);
+  __moore_coverpoint_sample(cg, 1, is_read ? 1 : 0);
+}
+
+extern "C" double __moore_uvm_get_reg_coverage(const char *reg_name) {
+  if (!reg_name)
+    return 0.0;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  auto it = uvmCoverageState.regCovergroups.find(reg_name);
+  if (it == uvmCoverageState.regCovergroups.end()) {
+    return 0.0; // No coverage data for this register.
+  }
+
+  return __moore_covergroup_get_coverage(it->second);
+}
+
+extern "C" double __moore_uvm_get_field_coverage(const char *field_name) {
+  if (!field_name)
+    return 0.0;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  auto it = uvmCoverageState.fieldCovergroups.find(field_name);
+  if (it == uvmCoverageState.fieldCovergroups.end()) {
+    return 0.0; // No coverage data for this field.
+  }
+
+  return __moore_covergroup_get_coverage(it->second);
+}
+
+extern "C" double __moore_uvm_get_coverage(void) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  double totalCoverage = 0.0;
+  int count = 0;
+
+  // Aggregate coverage from all register covergroups.
+  for (const auto &pair : uvmCoverageState.regCovergroups) {
+    totalCoverage += __moore_covergroup_get_coverage(pair.second);
+    count++;
+  }
+
+  // Aggregate coverage from all field covergroups.
+  for (const auto &pair : uvmCoverageState.fieldCovergroups) {
+    totalCoverage += __moore_covergroup_get_coverage(pair.second);
+    count++;
+  }
+
+  // Aggregate coverage from all address map covergroups.
+  for (const auto &pair : uvmCoverageState.addrMapCovergroups) {
+    totalCoverage += __moore_covergroup_get_coverage(pair.second);
+    count++;
+  }
+
+  if (count == 0)
+    return 0.0;
+
+  return totalCoverage / count;
+}
+
+extern "C" void __moore_uvm_reset_coverage(void) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  // Reset all register covergroups.
+  for (const auto &pair : uvmCoverageState.regCovergroups) {
+    __moore_covergroup_reset(pair.second);
+  }
+
+  // Reset all field covergroups.
+  for (const auto &pair : uvmCoverageState.fieldCovergroups) {
+    __moore_covergroup_reset(pair.second);
+  }
+
+  // Reset all address map covergroups.
+  for (const auto &pair : uvmCoverageState.addrMapCovergroups) {
+    __moore_covergroup_reset(pair.second);
+  }
+}
+
+extern "C" void __moore_uvm_set_reg_coverage_callback(
+    MooreUvmRegCoverageCallback callback, void *userData) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  uvmCoverageState.regCallback = callback;
+  uvmCoverageState.regCallbackUserData = userData;
+}
+
+extern "C" void __moore_uvm_set_field_coverage_callback(
+    MooreUvmFieldCoverageCallback callback, void *userData) {
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  uvmCoverageState.fieldCallback = callback;
+  uvmCoverageState.fieldCallbackUserData = userData;
+}
+
+extern "C" void __moore_uvm_set_reg_bit_width(const char *reg_name,
+                                               int32_t bit_width) {
+  if (!reg_name || bit_width < 1 || bit_width > 64)
+    return;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  uvmCoverageState.regBitWidths[reg_name] = bit_width;
+
+  // If the covergroup already exists, update its auto_bin_max.
+  auto it = uvmCoverageState.regCovergroups.find(reg_name);
+  if (it != uvmCoverageState.regCovergroups.end()) {
+    int64_t autoBinMax = std::min(static_cast<int64_t>(64),
+                                  static_cast<int64_t>(1) << bit_width);
+    __moore_coverpoint_set_auto_bin_max(it->second, 0, autoBinMax);
+  }
+}
+
+extern "C" void __moore_uvm_set_field_range(const char *field_name,
+                                             int64_t min_val, int64_t max_val) {
+  if (!field_name || min_val > max_val)
+    return;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+  uvmCoverageState.fieldRanges[field_name] = {min_val, max_val};
+
+  // Note: If the covergroup already exists, the range won't be updated.
+  // Users should set the range before sampling.
+}
+
+//===----------------------------------------------------------------------===//
 // VPI Stub Support
 //===----------------------------------------------------------------------===//
 

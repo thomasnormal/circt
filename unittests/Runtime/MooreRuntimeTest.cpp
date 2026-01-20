@@ -6977,4 +6977,377 @@ TEST(MooreRuntimeCoverageExclusionTest, ExclusionPreservedAfterSampling) {
   __moore_covergroup_destroy(cg);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Coverage Model API Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeUvmCoverageTest, CoverageModelSetGet) {
+  // Reset coverage model first
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+  EXPECT_EQ(__moore_uvm_get_coverage_model(), UVM_NO_COVERAGE);
+
+  // Set single coverage model
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  EXPECT_EQ(__moore_uvm_get_coverage_model(), UVM_CVR_REG_BITS);
+
+  // Set multiple coverage models
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS | UVM_CVR_FIELD_VALS);
+  EXPECT_EQ(__moore_uvm_get_coverage_model(),
+            UVM_CVR_REG_BITS | UVM_CVR_FIELD_VALS);
+
+  // Set all coverage models
+  __moore_uvm_set_coverage_model(UVM_CVR_ALL);
+  EXPECT_EQ(__moore_uvm_get_coverage_model(), UVM_CVR_ALL);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, HasCoverage) {
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+
+  // No coverage enabled
+  EXPECT_FALSE(__moore_uvm_has_coverage(UVM_CVR_REG_BITS));
+  EXPECT_FALSE(__moore_uvm_has_coverage(UVM_CVR_FIELD_VALS));
+  EXPECT_FALSE(__moore_uvm_has_coverage(UVM_CVR_ADDR_MAP));
+
+  // Enable register bits coverage
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  EXPECT_TRUE(__moore_uvm_has_coverage(UVM_CVR_REG_BITS));
+  EXPECT_FALSE(__moore_uvm_has_coverage(UVM_CVR_FIELD_VALS));
+  EXPECT_FALSE(__moore_uvm_has_coverage(UVM_CVR_ADDR_MAP));
+
+  // Enable all
+  __moore_uvm_set_coverage_model(UVM_CVR_ALL);
+  EXPECT_TRUE(__moore_uvm_has_coverage(UVM_CVR_REG_BITS));
+  EXPECT_TRUE(__moore_uvm_has_coverage(UVM_CVR_FIELD_VALS));
+  EXPECT_TRUE(__moore_uvm_has_coverage(UVM_CVR_ADDR_MAP));
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, SampleRegCoverageDisabled) {
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+  __moore_uvm_reset_coverage();
+
+  // Sampling should not record anything when coverage is disabled
+  __moore_uvm_coverage_sample_reg("test_reg", 42);
+
+  // Coverage should be 0 since no covergroup was created
+  double cov = __moore_uvm_get_reg_coverage("test_reg");
+  EXPECT_DOUBLE_EQ(cov, 0.0);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, SampleRegCoverageEnabled) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  __moore_uvm_reset_coverage();
+
+  // Sample a register value
+  __moore_uvm_coverage_sample_reg("status_reg", 0x55);
+
+  // Coverage should be non-zero now
+  double cov = __moore_uvm_get_reg_coverage("status_reg");
+  EXPECT_GT(cov, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, SampleFieldCoverageEnabled) {
+  __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
+  __moore_uvm_reset_coverage();
+
+  // Set field range first
+  __moore_uvm_set_field_range("my_field", 0, 15);
+
+  // Sample field values
+  __moore_uvm_coverage_sample_field("my_field", 5);
+  __moore_uvm_coverage_sample_field("my_field", 10);
+
+  // Coverage should be non-zero
+  double cov = __moore_uvm_get_field_coverage("my_field");
+  EXPECT_GT(cov, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, SampleAddrMapCoverage) {
+  __moore_uvm_set_coverage_model(UVM_CVR_ADDR_MAP);
+  __moore_uvm_reset_coverage();
+
+  // Sample address map accesses
+  __moore_uvm_coverage_sample_addr_map("apb_map", 0x1000, true);  // read
+  __moore_uvm_coverage_sample_addr_map("apb_map", 0x1004, false); // write
+
+  // Total coverage should be non-zero
+  double cov = __moore_uvm_get_coverage();
+  EXPECT_GT(cov, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, TotalCoverage) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS | UVM_CVR_FIELD_VALS);
+  __moore_uvm_reset_coverage();
+
+  // Sample both register and field
+  __moore_uvm_coverage_sample_reg("ctrl_reg", 0x12);
+  __moore_uvm_coverage_sample_field("enable_field", 1);
+
+  // Total coverage is average of all covergroups
+  double cov = __moore_uvm_get_coverage();
+  EXPECT_GT(cov, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, ResetCoverage) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  __moore_uvm_reset_coverage();
+
+  // Sample a value
+  __moore_uvm_coverage_sample_reg("reset_test_reg", 0xFF);
+  double cov1 = __moore_uvm_get_reg_coverage("reset_test_reg");
+  EXPECT_GT(cov1, 0.0);
+
+  // Reset coverage
+  __moore_uvm_reset_coverage();
+
+  // Coverage for the same register should be back to baseline
+  // (covergroup still exists but hits are reset)
+  double cov2 = __moore_uvm_get_reg_coverage("reset_test_reg");
+  EXPECT_LT(cov2, cov1);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, RegBitWidthSetting) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  __moore_uvm_reset_coverage();
+
+  // Set bit width for a register before sampling
+  __moore_uvm_set_reg_bit_width("narrow_reg", 8);
+
+  // Sample some values within the 8-bit range
+  __moore_uvm_coverage_sample_reg("narrow_reg", 0);
+  __moore_uvm_coverage_sample_reg("narrow_reg", 128);
+  __moore_uvm_coverage_sample_reg("narrow_reg", 255);
+
+  // Coverage should reflect the narrower range
+  double cov = __moore_uvm_get_reg_coverage("narrow_reg");
+  EXPECT_GT(cov, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, FieldRangeSetting) {
+  __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
+  __moore_uvm_reset_coverage();
+
+  // Set a custom range for the field before creating the covergroup.
+  // The range affects auto_bin_max setting.
+  __moore_uvm_set_field_range("custom_field", 10, 20);
+
+  // Sample values in range. With auto bins and auto_bin_max=11 (range size),
+  // each unique value contributes to coverage.
+  for (int i = 10; i <= 20; i++) {
+    __moore_uvm_coverage_sample_field("custom_field", i);
+  }
+
+  // Coverage should be non-zero (auto bins track observed values)
+  double cov = __moore_uvm_get_field_coverage("custom_field");
+  EXPECT_GT(cov, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, RegCoverageCallback) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  __moore_uvm_reset_coverage();
+
+  struct CallbackData {
+    std::string regName;
+    int64_t value;
+    int callCount;
+  };
+  CallbackData cbData = {"", 0, 0};
+
+  // Set callback
+  __moore_uvm_set_reg_coverage_callback(
+      [](const char *reg_name, int64_t value, void *userData) {
+        auto *data = static_cast<CallbackData *>(userData);
+        data->regName = reg_name;
+        data->value = value;
+        data->callCount++;
+      },
+      &cbData);
+
+  // Sample a value
+  __moore_uvm_coverage_sample_reg("callback_reg", 0xAB);
+
+  // Callback should have been invoked
+  EXPECT_EQ(cbData.regName, "callback_reg");
+  EXPECT_EQ(cbData.value, 0xAB);
+  EXPECT_EQ(cbData.callCount, 1);
+
+  // Sample another value
+  __moore_uvm_coverage_sample_reg("callback_reg", 0xCD);
+  EXPECT_EQ(cbData.value, 0xCD);
+  EXPECT_EQ(cbData.callCount, 2);
+
+  // Clear callback
+  __moore_uvm_set_reg_coverage_callback(nullptr, nullptr);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, FieldCoverageCallback) {
+  __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
+  __moore_uvm_reset_coverage();
+
+  struct CallbackData {
+    std::string fieldName;
+    int64_t value;
+    int callCount;
+  };
+  CallbackData cbData = {"", 0, 0};
+
+  // Set callback
+  __moore_uvm_set_field_coverage_callback(
+      [](const char *field_name, int64_t value, void *userData) {
+        auto *data = static_cast<CallbackData *>(userData);
+        data->fieldName = field_name;
+        data->value = value;
+        data->callCount++;
+      },
+      &cbData);
+
+  // Sample a value
+  __moore_uvm_coverage_sample_field("callback_field", 42);
+
+  // Callback should have been invoked
+  EXPECT_EQ(cbData.fieldName, "callback_field");
+  EXPECT_EQ(cbData.value, 42);
+  EXPECT_EQ(cbData.callCount, 1);
+
+  // Clear callback
+  __moore_uvm_set_field_coverage_callback(nullptr, nullptr);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, NullInputHandling) {
+  __moore_uvm_set_coverage_model(UVM_CVR_ALL);
+
+  // These should not crash
+  __moore_uvm_coverage_sample_reg(nullptr, 0);
+  __moore_uvm_coverage_sample_field(nullptr, 0);
+  __moore_uvm_coverage_sample_addr_map(nullptr, 0, true);
+
+  EXPECT_DOUBLE_EQ(__moore_uvm_get_reg_coverage(nullptr), 0.0);
+  EXPECT_DOUBLE_EQ(__moore_uvm_get_field_coverage(nullptr), 0.0);
+
+  __moore_uvm_set_reg_bit_width(nullptr, 8);
+  __moore_uvm_set_field_range(nullptr, 0, 10);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, InvalidBitWidth) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+
+  // Invalid bit widths should be ignored
+  __moore_uvm_set_reg_bit_width("test_reg", 0);   // too small
+  __moore_uvm_set_reg_bit_width("test_reg", 65);  // too large
+  __moore_uvm_set_reg_bit_width("test_reg", -1);  // negative
+
+  // These should not cause issues
+  __moore_uvm_coverage_sample_reg("test_reg", 0xFF);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, InvalidFieldRange) {
+  __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
+
+  // Invalid range (min > max) should be ignored
+  __moore_uvm_set_field_range("test_field", 100, 50);
+
+  // Sampling should still work with default range
+  __moore_uvm_coverage_sample_field("test_field", 10);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, MultipleRegisters) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  __moore_uvm_reset_coverage();
+
+  // Sample multiple different registers
+  __moore_uvm_coverage_sample_reg("reg_a", 0x11);
+  __moore_uvm_coverage_sample_reg("reg_b", 0x22);
+  __moore_uvm_coverage_sample_reg("reg_c", 0x33);
+
+  // Each should have independent coverage
+  double covA = __moore_uvm_get_reg_coverage("reg_a");
+  double covB = __moore_uvm_get_reg_coverage("reg_b");
+  double covC = __moore_uvm_get_reg_coverage("reg_c");
+
+  EXPECT_GT(covA, 0.0);
+  EXPECT_GT(covB, 0.0);
+  EXPECT_GT(covC, 0.0);
+
+  // Total coverage is average
+  double total = __moore_uvm_get_coverage();
+  EXPECT_GT(total, 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, CoverageModelEnumValues) {
+  // Verify enum values match UVM specification
+  EXPECT_EQ(UVM_CVR_REG_BITS, 1);
+  EXPECT_EQ(UVM_CVR_ADDR_MAP, 2);
+  EXPECT_EQ(UVM_CVR_FIELD_VALS, 4);
+  EXPECT_EQ(UVM_NO_COVERAGE, 0);
+  EXPECT_EQ(UVM_CVR_ALL, 7);  // All bits set (1 + 2 + 4)
+}
+
+TEST(MooreRuntimeUvmCoverageTest, CombinedCoverageModels) {
+  // Test with multiple coverage models enabled
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS | UVM_CVR_ADDR_MAP);
+  __moore_uvm_reset_coverage();
+
+  // REG_BITS should be enabled
+  EXPECT_TRUE(__moore_uvm_has_coverage(UVM_CVR_REG_BITS));
+  // ADDR_MAP should be enabled
+  EXPECT_TRUE(__moore_uvm_has_coverage(UVM_CVR_ADDR_MAP));
+  // FIELD_VALS should not be enabled
+  EXPECT_FALSE(__moore_uvm_has_coverage(UVM_CVR_FIELD_VALS));
+
+  // Sample register - should work
+  __moore_uvm_coverage_sample_reg("combo_reg", 0x99);
+  EXPECT_GT(__moore_uvm_get_reg_coverage("combo_reg"), 0.0);
+
+  // Sample field - should not record (not enabled)
+  __moore_uvm_coverage_sample_field("combo_field", 5);
+  EXPECT_DOUBLE_EQ(__moore_uvm_get_field_coverage("combo_field"), 0.0);
+
+  // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
 } // namespace
