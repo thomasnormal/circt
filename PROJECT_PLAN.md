@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | APB/SPI AVIPs verified working | pullup/pulldown primitives |
-| **B** | Randomization | Foreach implication tests complete | Inline constraint lowering |
-| **C** | Coverage | Database persistence complete | Coverage exclusions API |
-| **D** | LSP Tooling | Workspace symbols fixed | Code lens, semantic tokens |
+| **A** | Runtime/Simulation | Pullup/pulldown primitives added | Other gate primitives, I3C AVIP test |
+| **B** | Randomization | Inline constraints complete | Unique array constraints full lowering |
+| **C** | Coverage | Exclusions API complete | Coverage assertions |
+| **D** | LSP Tooling | Semantic tokens verified complete | Code lens, type hierarchy |
 
 ### Feature Completion Matrix
 
@@ -31,7 +31,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Constraints (basic) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Soft constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Distribution constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Inline constraints | ✅ | ✅ | ⚠️ | - | ✅ |
+| Inline constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | constraint_mode() | ✅ | ✅ | ✅ | ✅ | ✅ |
 | rand_mode() | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Covergroups | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -63,12 +63,42 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Array foreach constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverage DB persistence | - | - | - | ✅ | ✅ |
 | LSP workspace symbols | - | - | - | - | ✅ |
+| Pullup/pulldown primitives | ✅ | ✅ | ✅ | - | ✅ |
+| Coverage exclusions | - | - | - | ✅ | ✅ |
+| LSP semantic tokens | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 66 - AVIP Verification + Coverage DB Persistence + Workspace Symbols (January 20, 2026)
+## Current Status: ITERATION 67 - Pullup/Pulldown + Inline Constraints + Coverage Exclusions (January 20, 2026)
+
+**Summary**: Added pullup/pulldown primitive support, implemented full inline constraint lowering, and added coverage exclusion APIs.
+
+### Iteration 67 Highlights
+
+**Track A: Pullup/Pulldown Primitives** ⭐ FEATURE
+- ✅ Basic parsing support for pullup/pulldown Verilog primitives
+- ✅ Models as continuous assignment of constant value
+- ⚠️ Does not yet model drive strength or 4-state behavior
+- ✅ Unblocks I3C AVIP compilation
+
+**Track B: Inline Constraint Lowering** ⭐ FEATURE
+- ✅ Full support for `randomize() with { ... }` inline constraints
+- ✅ Inline constraints merged with class-level constraints
+- ✅ Comprehensive test coverage in inline-constraints.mlir
+
+**Track C: Coverage Exclusions API** ⭐ FEATURE
+- ✅ 7 new API functions for exclusion management
+- ✅ Exclusion file format with wildcard support
+- ✅ 13 unit tests for exclusion functionality
+
+**Track D: LSP Semantic Tokens** ⭐ VERIFICATION
+- ✅ Confirmed already fully implemented (23 token types, 9 modifiers)
+
+---
+
+## Previous: ITERATION 66 - AVIP Verification + Coverage DB Persistence + Workspace Symbols (January 20, 2026)
 
 **Summary**: Verified APB/SPI AVIPs compile with proper timing control conversion, implemented coverage database persistence with metadata, fixed workspace symbols deadlock.
 

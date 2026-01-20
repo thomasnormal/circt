@@ -1343,6 +1343,86 @@ bool __moore_coverpoint_bin_covered(void *cg, int32_t cp_index,
                                      int32_t bin_index);
 
 //===----------------------------------------------------------------------===//
+// Coverage Exclusion APIs
+//===----------------------------------------------------------------------===//
+//
+// Coverage exclusions allow users to mark certain bins as excluded from
+// coverage goals. This is useful for unreachable code paths, known limitations,
+// or bins that should not be considered for sign-off criteria.
+//
+// Exclusions differ from ignore_bins in that:
+// - ignore_bins are defined in the covergroup specification
+// - exclusions are applied at runtime, typically from exclusion files
+// - exclusions can be dynamically added/removed during simulation
+//
+// The exclusion file format is a simple text-based format:
+//   # Comment lines start with #
+//   # Empty lines are ignored
+//   # Format: covergroup_name.coverpoint_name.bin_name
+//   # Wildcards: * matches any sequence of characters
+//   cg_name.cp_name.bin_name
+//   cg_name.cp_name.*        # Exclude all bins in coverpoint
+//   cg_name.*.bin_name       # Exclude bin in all coverpoints
+//   *.*.excluded_bin         # Exclude bin in all covergroups/coverpoints
+//
+
+/// Exclude a bin from coverage calculation.
+/// The excluded bin will not count toward coverage goals, but will still
+/// track hits for reporting purposes.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the bin to exclude
+void __moore_coverpoint_exclude_bin(void *cg, int32_t cp_index,
+                                     const char *bin_name);
+
+/// Re-include a previously excluded bin in coverage calculation.
+/// Removes the bin from the exclusion list.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the bin to re-include
+void __moore_coverpoint_include_bin(void *cg, int32_t cp_index,
+                                     const char *bin_name);
+
+/// Check if a bin is currently excluded from coverage calculation.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the bin to check
+/// @return true if the bin is excluded, false otherwise
+bool __moore_coverpoint_is_bin_excluded(void *cg, int32_t cp_index,
+                                         const char *bin_name);
+
+/// Load exclusions from an exclusion file.
+/// Parses the file and applies exclusions to all matching covergroups,
+/// coverpoints, and bins. The file should use the simple text format
+/// described above.
+///
+/// @param filename Path to the exclusion file (null-terminated string)
+/// @return true on success, false if file could not be opened or parsed
+bool __moore_covergroup_set_exclusion_file(const char *filename);
+
+/// Get the current exclusion file path.
+///
+/// @return The path to the currently loaded exclusion file, or NULL if none
+const char *__moore_covergroup_get_exclusion_file(void);
+
+/// Get the number of excluded bins for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Number of bins currently excluded
+int32_t __moore_coverpoint_get_excluded_bin_count(void *cg, int32_t cp_index);
+
+/// Clear all exclusions for a coverpoint.
+/// Removes all bins from the exclusion list for the specified coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+void __moore_coverpoint_clear_exclusions(void *cg, int32_t cp_index);
+
+//===----------------------------------------------------------------------===//
 // Illegal Bins and Ignore Bins Runtime Support
 //===----------------------------------------------------------------------===//
 //

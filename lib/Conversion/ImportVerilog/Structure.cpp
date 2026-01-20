@@ -857,6 +857,100 @@ struct ModuleVisitor : public BaseVisitor {
     return success();
   }
 
+  // Handle primitive instances (pullup, pulldown, gate primitives).
+  LogicalResult visit(const slang::ast::PrimitiveInstanceSymbol &primNode) {
+    auto primName = primNode.primitiveType.name;
+
+    // Get the port connections for this primitive instance.
+    auto portConnections = primNode.getPortConnections();
+    if (portConnections.empty()) {
+      mlir::emitError(loc) << "primitive `" << primName
+                           << "` has no port connections";
+      return failure();
+    }
+
+    // Handle pullup and pulldown primitives.
+    // These drive a constant 1 or 0 onto the connected net.
+    if (primName == "pullup" || primName == "pulldown") {
+      // pullup/pulldown have exactly one output port.
+      if (portConnections.size() != 1) {
+        mlir::emitError(loc) << primName << " primitive expects 1 port, got "
+                             << portConnections.size();
+        return failure();
+      }
+
+      // Get the target net expression.
+      const auto *portExpr = portConnections[0];
+      auto target = context.convertLvalueExpression(*portExpr);
+      if (!target)
+        return failure();
+
+      // Get the type of the target to create an appropriately-sized constant.
+      auto refType = dyn_cast<moore::RefType>(target.getType());
+      if (!refType) {
+        mlir::emitError(loc) << primName
+                             << " target must be a reference type";
+        return failure();
+      }
+      auto targetType = refType.getNestedType();
+
+      // Create the constant value: 1 for pullup, 0 for pulldown.
+      // Note: In a full 4-state simulation, pullup drives a weak 1 and
+      // pulldown drives a weak 0. For now, we model this as a continuous
+      // assignment of a constant value.
+      bool isPullup = (primName == "pullup");
+      Value constVal;
+
+      // Try to get the bit size for the target type. This works for both
+      // IntType and packed array types.
+      auto packedType = dyn_cast<moore::PackedType>(targetType);
+      if (!packedType) {
+        mlir::emitError(loc) << primName
+                             << " target must be a packed type, got "
+                             << targetType;
+        return failure();
+      }
+
+      auto bitSize = packedType.getBitSize();
+      if (!bitSize) {
+        mlir::emitError(loc) << primName
+                             << " target must have a known bit size";
+        return failure();
+      }
+
+      // Get the simple bit vector type for this packed type.
+      auto sbvType = packedType.getSimpleBitVector();
+      if (!sbvType) {
+        mlir::emitError(loc) << primName
+                             << " target cannot be converted to a simple bit "
+                             << "vector type";
+        return failure();
+      }
+
+      // Create the constant with the appropriate value.
+      APInt value =
+          isPullup ? APInt::getAllOnes(*bitSize) : APInt::getZero(*bitSize);
+      constVal = moore::ConstantOp::create(builder, loc, sbvType, value);
+
+      // If the target type is different from the simple bit vector type,
+      // we need a conversion.
+      if (sbvType != targetType) {
+        constVal =
+            moore::ConversionOp::create(builder, loc, targetType, constVal);
+      }
+
+      // Create a continuous assignment to drive the constant onto the net.
+      moore::ContinuousAssignOp::create(builder, loc, target, constVal);
+      return success();
+    }
+
+    // For other gate primitives (and, or, nand, nor, xor, xnor, buf, not,
+    // bufif0, bufif1, notif0, notif1, nmos, pmos, cmos, etc.), emit an error
+    // for now. These would require more complex lowering.
+    mlir::emitError(loc) << "unsupported primitive type: " << primName;
+    return failure();
+  }
+
   /// Emit an error for all other members.
   template <typename T>
   LogicalResult visit(T &&node) {
