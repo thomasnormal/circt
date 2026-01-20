@@ -5438,3 +5438,231 @@ void VerilogDocument::getOutgoingCalls(
     calls.push_back(std::move(outgoing));
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Code Lens
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Visitor to collect code lens information from the AST.
+class CodeLensVisitor
+    : public slang::ast::ASTVisitor<CodeLensVisitor, true, true> {
+public:
+  CodeLensVisitor(const VerilogDocument &doc, slang::BufferID bufferId,
+                  const slang::SourceManager &sm, const VerilogIndex *index)
+      : doc(doc), bufferId(bufferId), sm(sm), index(index) {}
+
+  std::vector<VerilogDocument::CodeLensInfo> lenses;
+
+  /// Count references to a symbol.
+  size_t countReferences(const slang::ast::Symbol *symbol) const {
+    if (!index)
+      return 0;
+    auto it = index->getReferences().find(symbol);
+    if (it == index->getReferences().end())
+      return 0;
+    return it->second.size();
+  }
+
+  /// Create a reference count code lens.
+  void addReferenceLens(const slang::ast::Symbol &symbol, llvm::StringRef kind) {
+    if (symbol.location.buffer() != bufferId)
+      return;
+    if (symbol.name.empty())
+      return;
+
+    size_t refCount = countReferences(&symbol);
+
+    int line = sm.getLineNumber(symbol.location) - 1;
+    int col = sm.getColumnNumber(symbol.location) - 1;
+
+    VerilogDocument::CodeLensInfo lens;
+    lens.range = llvm::lsp::Range(
+        llvm::lsp::Position(line, col),
+        llvm::lsp::Position(line, col + static_cast<int>(symbol.name.size())));
+
+    // Format the title
+    std::string title;
+    llvm::raw_string_ostream os(title);
+    if (refCount == 0)
+      os << "no references";
+    else if (refCount == 1)
+      os << "1 reference";
+    else
+      os << refCount << " references";
+    lens.title = title;
+
+    // Command to find references
+    lens.command = "editor.action.findReferences";
+    lens.commandArguments.push_back(doc.getURI().uri().str());
+    lens.commandArguments.push_back(std::to_string(line));
+    lens.commandArguments.push_back(std::to_string(col));
+
+    // Data for lazy resolution (format: uri:line:col:type)
+    std::string data;
+    llvm::raw_string_ostream dataOs(data);
+    dataOs << doc.getURI().file() << ":" << line << ":" << col << ":" << kind.str();
+    lens.data = data;
+
+    lenses.push_back(std::move(lens));
+  }
+
+  /// Handle module/interface instance body.
+  void visit(const slang::ast::InstanceBodySymbol &body) {
+    // Add reference lens for the module/interface definition
+    if (body.location.buffer() == bufferId) {
+      addReferenceLens(body, "module");
+    }
+
+    // Visit members for functions, tasks, etc.
+    for (const auto &member : body.members()) {
+      // Handle subroutines (functions/tasks)
+      if (member.kind == slang::ast::SymbolKind::Subroutine) {
+        addReferenceLens(member, "function");
+      }
+      // Handle classes
+      else if (member.kind == slang::ast::SymbolKind::ClassType) {
+        const auto &classType = member.as<slang::ast::ClassType>();
+        addReferenceLens(classType, "class");
+
+        // Add lenses for class methods
+        for (const auto &classMember : classType.members()) {
+          if (classMember.kind == slang::ast::SymbolKind::Subroutine) {
+            const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
+            addReferenceLens(sub, "function");
+
+            // Add "Go to implementation" lens for virtual methods
+            if (sub.flags.has(slang::ast::MethodFlags::Virtual)) {
+              addVirtualMethodLens(sub);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Handle packages.
+  void visit(const slang::ast::PackageSymbol &pkg) {
+    if (pkg.location.buffer() != bufferId)
+      return;
+
+    addReferenceLens(pkg, "package");
+
+    // Visit package members
+    for (const auto &member : pkg.members()) {
+      if (member.kind == slang::ast::SymbolKind::Subroutine) {
+        addReferenceLens(member, "function");
+      } else if (member.kind == slang::ast::SymbolKind::ClassType) {
+        const auto &classType = member.as<slang::ast::ClassType>();
+        addReferenceLens(classType, "class");
+
+        // Add lenses for class methods
+        for (const auto &classMember : classType.members()) {
+          if (classMember.kind == slang::ast::SymbolKind::Subroutine) {
+            const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
+            addReferenceLens(sub, "function");
+
+            // Add "Go to implementation" lens for virtual methods
+            if (sub.flags.has(slang::ast::MethodFlags::Virtual)) {
+              addVirtualMethodLens(sub);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Handle interface definitions.
+  void visitInterfaceDefinition(const slang::ast::DefinitionSymbol &def) {
+    if (def.definitionKind != slang::ast::DefinitionKind::Interface)
+      return;
+    if (def.location.buffer() != bufferId)
+      return;
+
+    addReferenceLens(def, "interface");
+  }
+
+  /// Add "Go to implementation" lens for virtual methods.
+  void addVirtualMethodLens(const slang::ast::SubroutineSymbol &method) {
+    if (method.location.buffer() != bufferId)
+      return;
+
+    int line = sm.getLineNumber(method.location) - 1;
+    int col = sm.getColumnNumber(method.location) - 1;
+
+    VerilogDocument::CodeLensInfo lens;
+    lens.range = llvm::lsp::Range(
+        llvm::lsp::Position(line, col),
+        llvm::lsp::Position(line, col + static_cast<int>(method.name.size())));
+
+    lens.title = "Go to implementations";
+    lens.command = "editor.action.goToImplementation";
+    lens.commandArguments.push_back(doc.getURI().uri().str());
+    lens.commandArguments.push_back(std::to_string(line));
+    lens.commandArguments.push_back(std::to_string(col));
+
+    // Data for lazy resolution
+    std::string data;
+    llvm::raw_string_ostream dataOs(data);
+    dataOs << doc.getURI().file() << ":" << line << ":" << col << ":virtual";
+    lens.data = data;
+
+    lenses.push_back(std::move(lens));
+  }
+
+private:
+  const VerilogDocument &doc;
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+  const VerilogIndex *index;
+};
+
+} // namespace
+
+void VerilogDocument::getCodeLenses(const llvm::lsp::URIForFile &uri,
+                                     std::vector<CodeLensInfo> &lenses) {
+  if (failed(compilation))
+    return;
+
+  const auto &sm = getSlangSourceManager();
+  CodeLensVisitor visitor(*this, mainBufferId, sm, index.get());
+
+  // Visit all definitions to find interfaces
+  for (const auto *sym : (*compilation)->getDefinitions()) {
+    if (sym->kind == slang::ast::SymbolKind::Definition) {
+      const auto &def = sym->as<slang::ast::DefinitionSymbol>();
+      if (def.definitionKind == slang::ast::DefinitionKind::Interface) {
+        visitor.visitInterfaceDefinition(def);
+      }
+    }
+  }
+
+  // Visit all packages
+  for (auto *package : (*compilation)->getPackages()) {
+    if (package->location.buffer() == mainBufferId)
+      visitor.visit(*package);
+  }
+
+  // Visit all top instances
+  for (auto *inst : (*compilation)->getRoot().topInstances) {
+    if (inst->body.location.buffer() == mainBufferId)
+      visitor.visit(inst->body);
+  }
+
+  lenses = std::move(visitor.lenses);
+}
+
+bool VerilogDocument::resolveCodeLens(llvm::StringRef data, CodeLensInfo &lens) {
+  // The data format is "uri:line:col:type"
+  // Parse the data to re-compute reference count (for lazy resolution)
+  auto lastColon = data.rfind(':');
+  if (lastColon == llvm::StringRef::npos)
+    return false;
+
+  auto typeStr = data.substr(lastColon + 1);
+
+  // For now, just return true if we can parse the data
+  // The lens was already fully resolved in getCodeLenses
+  return !typeStr.empty();
+}

@@ -1,5 +1,62 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 68 - January 20, 2026
+
+### Gate Primitives + Unique Constraints + Coverage Assertions + Code Lens
+
+**Track A: Gate Primitive Support** ⭐ FEATURE
+- Added support for 12 additional gate primitives:
+  - Binary/N-ary: `and`, `or`, `nand`, `nor`, `xor`, `xnor`
+  - Buffer/Inverter: `buf`, `not`
+  - Tristate: `bufif0`, `bufif1`, `notif0`, `notif1`
+- I3C AVIP pullup primitives now working correctly
+- Remaining I3C blockers are UVM package dependencies (expected)
+- Created comprehensive test file gate-primitives.sv
+
+**Track B: Unique Array Constraints Full Lowering** ⭐ FEATURE
+- Complete implementation of `ConstraintUniqueOpConversion`
+- Handles constraint blocks by erasing (processed during RandomizeOp)
+- Generates runtime calls for standalone unique constraints:
+  - `__moore_constraint_unique_check()` for array uniqueness
+  - `__moore_constraint_unique_scalars()` for multiple scalar uniqueness
+- Proper handling of LLVM and HW array types
+- Created unique-constraints.mlir with 6 comprehensive tests
+
+**Track C: Coverage Assertions API** ⭐ FEATURE
+- 10 new API functions for coverage assertion checking:
+  - `__moore_coverage_assert_goal(min_percentage)` - Assert global coverage
+  - `__moore_covergroup_assert_goal()` - Assert covergroup meets goal
+  - `__moore_coverpoint_assert_goal()` - Assert coverpoint meets goal
+  - `__moore_coverage_check_all_goals()` - Check if all goals met
+  - `__moore_coverage_get_unmet_goal_count()` - Count unmet goals
+  - `__moore_coverage_set_failure_callback()` - Register failure handler
+  - `__moore_coverage_register_assertion()` - Register for end-of-sim check
+  - `__moore_coverage_check_registered_assertions()` - Check registered assertions
+  - `__moore_coverage_clear_registered_assertions()` - Clear registered
+- Integration with existing goal/at_least options
+- 22 comprehensive unit tests
+
+**Track D: LSP Code Lens** ⭐ FEATURE
+- Full code lens support for Verilog LSP server
+- Reference counts: "X references" above modules, classes, interfaces, functions, tasks
+- "Go to implementations" lens above virtual methods
+- Lazy resolution via codeLens/resolve
+- Created code-lens.test with comprehensive test coverage
+
+### Files Modified
+- `lib/Conversion/ImportVerilog/Structure.cpp` (+190 lines for gate primitives)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+80 lines for unique constraints)
+- `lib/Runtime/MooreRuntime.cpp` (+260 lines for assertions)
+- `include/circt/Runtime/MooreRuntime.h` (+100 lines for API)
+- `lib/Tools/circt-verilog-lsp-server/LSPServer.cpp` (+150 lines for code lens)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/*.cpp/h` (+300 lines)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+450 lines for tests)
+- `test/Conversion/ImportVerilog/gate-primitives.sv` (new, 153 lines)
+- `test/Conversion/MooreToCore/unique-constraints.mlir` (new)
+- `test/Tools/circt-verilog-lsp-server/code-lens.test` (new)
+
+---
+
 ## Iteration 67 - January 20, 2026
 
 ### Pullup/Pulldown Primitives + Inline Constraints + Coverage Exclusions

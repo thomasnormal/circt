@@ -3422,6 +3422,459 @@ TEST(MooreRuntimeCoverageTest, CovergroupGoalMet) {
 }
 
 //===----------------------------------------------------------------------===//
+// Coverage Assertion Tests
+//===----------------------------------------------------------------------===//
+
+// Helper struct for tracking callback invocations in tests
+struct CoverageAssertCallbackData {
+  int callCount = 0;
+  std::string lastCgName;
+  std::string lastCpName;
+  double lastActualCoverage = 0.0;
+  double lastRequiredGoal = 0.0;
+
+  void reset() {
+    callCount = 0;
+    lastCgName.clear();
+    lastCpName.clear();
+    lastActualCoverage = 0.0;
+    lastRequiredGoal = 0.0;
+  }
+};
+
+// Global callback data for tests
+static CoverageAssertCallbackData g_assertCallbackData;
+
+// Test callback function
+static void testAssertCallback(const char *cg_name, const char *cp_name,
+                               double actual_coverage, double required_goal,
+                               void *userData) {
+  auto *data = static_cast<CoverageAssertCallbackData *>(userData);
+  data->callCount++;
+  data->lastCgName = cg_name ? cg_name : "";
+  data->lastCpName = cp_name ? cp_name : "";
+  data->lastActualCoverage = actual_coverage;
+  data->lastRequiredGoal = required_goal;
+}
+
+TEST(MooreRuntimeCoverageAssertTest, SetFailureCallback) {
+  g_assertCallbackData.reset();
+
+  // Set the callback
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  // Create a covergroup with no samples (0% coverage)
+  void *cg = __moore_covergroup_create("assert_cb_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Assert with 50% goal should fail and invoke callback
+  bool result = __moore_covergroup_assert_goal(cg, 50.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(g_assertCallbackData.callCount, 1);
+  EXPECT_EQ(g_assertCallbackData.lastCgName, "assert_cb_test");
+  EXPECT_TRUE(g_assertCallbackData.lastCpName.empty());
+  EXPECT_DOUBLE_EQ(g_assertCallbackData.lastActualCoverage, 0.0);
+
+  // Clear callback
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertGlobalGoalPass) {
+  // Create covergroup with full coverage
+  void *cg = __moore_covergroup_create("global_assert_pass", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Assert with 50% goal should pass (coverage is 100%)
+  bool result = __moore_coverage_assert_goal(50.0);
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertGlobalGoalFail) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  // Create covergroup with no samples (0% coverage)
+  void *cg = __moore_covergroup_create("global_assert_fail", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Assert with 50% goal should fail
+  bool result = __moore_coverage_assert_goal(50.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(g_assertCallbackData.callCount, 1);
+  EXPECT_TRUE(g_assertCallbackData.lastCgName.empty()); // Global check has no cg name
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertCovergroupGoalPass) {
+  void *cg = __moore_covergroup_create("cg_assert_pass", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Assert with 50% goal should pass (coverage is 100%)
+  bool result = __moore_covergroup_assert_goal(cg, 50.0);
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertCovergroupGoalFail) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  void *cg = __moore_covergroup_create("cg_assert_fail", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Assert with 50% goal should fail (0% coverage)
+  bool result = __moore_covergroup_assert_goal(cg, 50.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(g_assertCallbackData.callCount, 1);
+  EXPECT_EQ(g_assertCallbackData.lastCgName, "cg_assert_fail");
+  EXPECT_DOUBLE_EQ(g_assertCallbackData.lastActualCoverage, 0.0);
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertCovergroupUsesHigherGoal) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  void *cg = __moore_covergroup_create("cg_higher_goal", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Set covergroup's configured goal to 80%
+  __moore_covergroup_set_goal(cg, 80.0);
+
+  // Assert with 50% should use 80% (the higher one)
+  bool result = __moore_covergroup_assert_goal(cg, 50.0);
+  EXPECT_FALSE(result);
+  EXPECT_DOUBLE_EQ(g_assertCallbackData.lastRequiredGoal, 80.0);
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertCoverpointGoalPass) {
+  void *cg = __moore_covergroup_create("cp_assert_pass", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Assert with 50% goal should pass (coverage is 100%)
+  bool result = __moore_coverpoint_assert_goal(cg, 0, 50.0);
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertCoverpointGoalFail) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  void *cg = __moore_covergroup_create("cp_assert_fail", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "my_coverpoint");
+
+  // Assert with 50% goal should fail (0% coverage)
+  bool result = __moore_coverpoint_assert_goal(cg, 0, 50.0);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(g_assertCallbackData.callCount, 1);
+  EXPECT_EQ(g_assertCallbackData.lastCgName, "cp_assert_fail");
+  EXPECT_EQ(g_assertCallbackData.lastCpName, "my_coverpoint");
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertCoverpointUsesHigherGoal) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  void *cg = __moore_covergroup_create("cp_higher_goal", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Set coverpoint's configured goal to 90%
+  __moore_coverpoint_set_goal(cg, 0, 90.0);
+
+  // Assert with 50% should use 90% (the higher one)
+  bool result = __moore_coverpoint_assert_goal(cg, 0, 50.0);
+  EXPECT_FALSE(result);
+  EXPECT_DOUBLE_EQ(g_assertCallbackData.lastRequiredGoal, 90.0);
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertInvalidCovergroup) {
+  // Null covergroup should return false
+  bool result = __moore_covergroup_assert_goal(nullptr, 50.0);
+  EXPECT_FALSE(result);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, AssertInvalidCoverpointIndex) {
+  void *cg = __moore_covergroup_create("cp_invalid_idx", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Invalid index should return false
+  bool result1 = __moore_coverpoint_assert_goal(cg, -1, 50.0);
+  EXPECT_FALSE(result1);
+
+  bool result2 = __moore_coverpoint_assert_goal(cg, 5, 50.0);
+  EXPECT_FALSE(result2);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, CheckAllGoalsPass) {
+  // Create covergroups with full coverage
+  void *cg1 = __moore_covergroup_create("all_goals_cg1", 1);
+  void *cg2 = __moore_covergroup_create("all_goals_cg2", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp1");
+  __moore_coverpoint_init(cg2, 0, "cp2");
+
+  // Set low goals
+  __moore_covergroup_set_goal(cg1, 50.0);
+  __moore_covergroup_set_goal(cg2, 50.0);
+  __moore_coverpoint_set_goal(cg1, 0, 50.0);
+  __moore_coverpoint_set_goal(cg2, 0, 50.0);
+
+  // Sample values to get 100% coverage
+  __moore_coverpoint_sample(cg1, 0, 1);
+  __moore_coverpoint_sample(cg2, 0, 2);
+
+  // All goals should be met
+  bool result = __moore_coverage_check_all_goals();
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, CheckAllGoalsFail) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+
+  // Create covergroup with no coverage but high goal
+  void *cg = __moore_covergroup_create("all_goals_fail", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Set high goals (default is 100%)
+  // No samples, so coverage is 0%
+
+  // All goals check should fail
+  bool result = __moore_coverage_check_all_goals();
+  EXPECT_FALSE(result);
+  EXPECT_GE(g_assertCallbackData.callCount, 1); // At least one failure callback
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, GetUnmetGoalCount) {
+  // Create covergroups with mixed coverage
+  void *cg1 = __moore_covergroup_create("unmet_cg1", 1);
+  void *cg2 = __moore_covergroup_create("unmet_cg2", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp1");
+  __moore_coverpoint_init(cg2, 0, "cp2");
+
+  // Set goals
+  __moore_covergroup_set_goal(cg1, 50.0);
+  __moore_covergroup_set_goal(cg2, 50.0);
+  __moore_coverpoint_set_goal(cg1, 0, 50.0);
+  __moore_coverpoint_set_goal(cg2, 0, 50.0);
+
+  // Sample only cg1 - it meets goals, cg2 does not
+  __moore_coverpoint_sample(cg1, 0, 1);
+
+  int32_t unmetCount = __moore_coverage_get_unmet_goal_count();
+  // cg2 covergroup goal (1) + cg2 coverpoint goal (1) = 2 unmet
+  EXPECT_EQ(unmetCount, 2);
+
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, RegisterAssertionGlobal) {
+  // Clear any existing assertions
+  __moore_coverage_clear_registered_assertions();
+
+  // Create a covergroup with coverage
+  void *cg = __moore_covergroup_create("reg_assert_global", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Register a global assertion with low goal
+  int32_t id = __moore_coverage_register_assertion(nullptr, -1, 50.0);
+  EXPECT_GE(id, 0);
+
+  // Check registered assertions - should pass
+  bool result = __moore_coverage_check_registered_assertions();
+  EXPECT_TRUE(result);
+
+  __moore_coverage_clear_registered_assertions();
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, RegisterAssertionCovergroup) {
+  __moore_coverage_clear_registered_assertions();
+
+  void *cg = __moore_covergroup_create("reg_assert_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Register a covergroup-level assertion
+  int32_t id = __moore_coverage_register_assertion(cg, -1, 50.0);
+  EXPECT_GE(id, 0);
+
+  // Check registered assertions - should pass
+  bool result = __moore_coverage_check_registered_assertions();
+  EXPECT_TRUE(result);
+
+  __moore_coverage_clear_registered_assertions();
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, RegisterAssertionCoverpoint) {
+  __moore_coverage_clear_registered_assertions();
+
+  void *cg = __moore_covergroup_create("reg_assert_cp", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Register a coverpoint-level assertion
+  int32_t id = __moore_coverage_register_assertion(cg, 0, 50.0);
+  EXPECT_GE(id, 0);
+
+  // Check registered assertions - should pass
+  bool result = __moore_coverage_check_registered_assertions();
+  EXPECT_TRUE(result);
+
+  __moore_coverage_clear_registered_assertions();
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, RegisterMultipleAssertions) {
+  g_assertCallbackData.reset();
+  __moore_coverage_set_failure_callback(testAssertCallback, &g_assertCallbackData);
+  __moore_coverage_clear_registered_assertions();
+
+  void *cg1 = __moore_covergroup_create("reg_multi_cg1", 1);
+  void *cg2 = __moore_covergroup_create("reg_multi_cg2", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp1");
+  __moore_coverpoint_init(cg2, 0, "cp2");
+
+  // Only cg1 has coverage
+  __moore_coverpoint_sample(cg1, 0, 42);
+
+  // Register assertions for both
+  int32_t id1 = __moore_coverage_register_assertion(cg1, -1, 50.0);
+  int32_t id2 = __moore_coverage_register_assertion(cg2, -1, 50.0);
+  EXPECT_GE(id1, 0);
+  EXPECT_GE(id2, 0);
+  EXPECT_NE(id1, id2); // Different IDs
+
+  // Check - should fail because cg2 doesn't meet goal
+  bool result = __moore_coverage_check_registered_assertions();
+  EXPECT_FALSE(result);
+  EXPECT_GE(g_assertCallbackData.callCount, 1);
+
+  __moore_coverage_set_failure_callback(nullptr, nullptr);
+  __moore_coverage_clear_registered_assertions();
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, RegisterAssertionInvalidCoverpoint) {
+  __moore_coverage_clear_registered_assertions();
+
+  void *cg = __moore_covergroup_create("reg_invalid", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Invalid coverpoint index should fail
+  int32_t id = __moore_coverage_register_assertion(cg, 5, 50.0);
+  EXPECT_EQ(id, -1);
+
+  __moore_coverage_clear_registered_assertions();
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, ClearRegisteredAssertions) {
+  __moore_coverage_clear_registered_assertions();
+
+  void *cg = __moore_covergroup_create("clear_assert", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Register assertion
+  __moore_coverage_register_assertion(cg, -1, 50.0);
+
+  // Clear
+  __moore_coverage_clear_registered_assertions();
+
+  // Check - should pass (no assertions registered)
+  bool result = __moore_coverage_check_registered_assertions();
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, GoalClampingMinPercentage) {
+  void *cg = __moore_covergroup_create("goal_clamp", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Negative percentage should be clamped to 0
+  bool result = __moore_coverage_assert_goal(-10.0);
+  // 0% coverage >= 0% goal = true
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageAssertTest, GoalClampingMaxPercentage) {
+  void *cg = __moore_covergroup_create("goal_clamp_max", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Percentage > 100 should be clamped to 100
+  bool result = __moore_coverage_assert_goal(150.0);
+  // 100% coverage >= 100% goal = true
+  EXPECT_TRUE(result);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
 // Total Coverage Tests
 //===----------------------------------------------------------------------===//
 

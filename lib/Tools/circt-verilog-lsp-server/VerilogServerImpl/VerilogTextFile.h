@@ -161,6 +161,16 @@ public:
                    const VerilogDocument::FormattingOptions &options,
                    std::vector<llvm::lsp::TextEdit> &edits);
 
+  /// Return code lenses for the document.
+  /// Thread-safe; acquires docMutex.
+  void getCodeLenses(const llvm::lsp::URIForFile &uri,
+                     std::vector<VerilogDocument::CodeLensInfo> &lenses);
+
+  /// Resolve a code lens with the given data.
+  /// Thread-safe; acquires docMutex.
+  bool resolveCodeLens(llvm::StringRef data,
+                       VerilogDocument::CodeLensInfo &lens);
+
   /// Return document for read access.
   /// Thread-safe; acquires docMutex.
   std::shared_ptr<VerilogDocument> getDocument();

@@ -278,6 +278,19 @@ void VerilogTextFile::getOutgoingCalls(
   doc->getOutgoingCalls(item, calls);
 }
 
+void VerilogTextFile::getCodeLenses(
+    const llvm::lsp::URIForFile &uri,
+    std::vector<VerilogDocument::CodeLensInfo> &lenses) {
+  auto doc = getDocument();
+  doc->getCodeLenses(uri, lenses);
+}
+
+bool VerilogTextFile::resolveCodeLens(llvm::StringRef data,
+                                       VerilogDocument::CodeLensInfo &lens) {
+  auto doc = getDocument();
+  return doc->resolveCodeLens(data, lens);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;

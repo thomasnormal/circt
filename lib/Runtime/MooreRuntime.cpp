@@ -4039,6 +4039,263 @@ extern "C" bool __moore_covergroup_goal_met(void *cg) {
 }
 
 //===----------------------------------------------------------------------===//
+// Coverage Assertion APIs
+//===----------------------------------------------------------------------===//
+//
+// These functions provide assertion-style coverage checking that can be used
+// to enforce coverage goals during simulation. When assertions fail, they
+// can invoke a user-registered callback.
+//
+
+namespace {
+
+/// State for coverage assertion functionality.
+struct CoverageAssertionState {
+  /// Callback for assertion failures.
+  MooreCoverageAssertCallback failureCallback = nullptr;
+  void *failureCallbackUserData = nullptr;
+
+  /// Registered assertions for end-of-simulation checking.
+  struct RegisteredAssertion {
+    MooreCovergroup *covergroup; // NULL for global coverage check
+    int32_t coverpointIndex;     // -1 for covergroup-level check
+    double minPercentage;
+  };
+  std::vector<RegisteredAssertion> registeredAssertions;
+};
+
+thread_local CoverageAssertionState coverageAssertionState;
+
+/// Helper to invoke the failure callback if set.
+void invokeFailureCallback(const char *cgName, const char *cpName,
+                           double actualCoverage, double requiredGoal) {
+  if (coverageAssertionState.failureCallback) {
+    coverageAssertionState.failureCallback(
+        cgName, cpName, actualCoverage, requiredGoal,
+        coverageAssertionState.failureCallbackUserData);
+  }
+}
+
+} // namespace
+
+extern "C" void __moore_coverage_set_failure_callback(
+    MooreCoverageAssertCallback callback, void *userData) {
+  coverageAssertionState.failureCallback = callback;
+  coverageAssertionState.failureCallbackUserData = userData;
+}
+
+extern "C" bool __moore_coverage_assert_goal(double min_percentage) {
+  // Clamp percentage to valid range
+  if (min_percentage < 0.0)
+    min_percentage = 0.0;
+  if (min_percentage > 100.0)
+    min_percentage = 100.0;
+
+  double totalCoverage = __moore_coverage_get_total();
+
+  if (totalCoverage >= min_percentage) {
+    return true;
+  }
+
+  // Assertion failed - invoke callback
+  invokeFailureCallback(nullptr, nullptr, totalCoverage, min_percentage);
+  return false;
+}
+
+extern "C" bool __moore_covergroup_assert_goal(void *cg, double min_percentage) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return false;
+
+  // Clamp percentage to valid range
+  if (min_percentage < 0.0)
+    min_percentage = 0.0;
+  if (min_percentage > 100.0)
+    min_percentage = 100.0;
+
+  // Use the higher of the specified percentage and the covergroup's configured goal
+  double configuredGoal = __moore_covergroup_get_goal(cg);
+  double effectiveGoal = std::max(min_percentage, configuredGoal);
+
+  double coverage = __moore_covergroup_get_coverage(cg);
+
+  if (coverage >= effectiveGoal) {
+    return true;
+  }
+
+  // Assertion failed - invoke callback
+  invokeFailureCallback(covergroup->name, nullptr, coverage, effectiveGoal);
+  return false;
+}
+
+extern "C" bool __moore_coverpoint_assert_goal(void *cg, int32_t cp_index,
+                                               double min_percentage) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return false;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return false;
+
+  // Clamp percentage to valid range
+  if (min_percentage < 0.0)
+    min_percentage = 0.0;
+  if (min_percentage > 100.0)
+    min_percentage = 100.0;
+
+  // Use the higher of the specified percentage and the coverpoint's configured goal
+  double configuredGoal = __moore_coverpoint_get_goal(cg, cp_index);
+  double effectiveGoal = std::max(min_percentage, configuredGoal);
+
+  double coverage = __moore_coverpoint_get_coverage(cg, cp_index);
+
+  if (coverage >= effectiveGoal) {
+    return true;
+  }
+
+  // Assertion failed - invoke callback
+  invokeFailureCallback(covergroup->name, cp->name, coverage, effectiveGoal);
+  return false;
+}
+
+extern "C" bool __moore_coverage_check_all_goals(void) {
+  bool allGoalsMet = true;
+
+  // Check all registered covergroups
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    // Check covergroup-level goal
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+    double cgGoal = __moore_covergroup_get_goal(cg);
+
+    if (cgCoverage < cgGoal) {
+      invokeFailureCallback(cg->name, nullptr, cgCoverage, cgGoal);
+      allGoalsMet = false;
+    }
+
+    // Check each coverpoint's goal
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      double cpGoal = __moore_coverpoint_get_goal(cg, i);
+
+      if (cpCoverage < cpGoal) {
+        invokeFailureCallback(cg->name, cp->name, cpCoverage, cpGoal);
+        allGoalsMet = false;
+      }
+    }
+  }
+
+  return allGoalsMet;
+}
+
+extern "C" int32_t __moore_coverage_get_unmet_goal_count(void) {
+  int32_t unmetCount = 0;
+
+  // Count unmet goals in all registered covergroups
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    // Check covergroup-level goal
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+    double cgGoal = __moore_covergroup_get_goal(cg);
+
+    if (cgCoverage < cgGoal) {
+      unmetCount++;
+    }
+
+    // Check each coverpoint's goal
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      double cpGoal = __moore_coverpoint_get_goal(cg, i);
+
+      if (cpCoverage < cpGoal) {
+        unmetCount++;
+      }
+    }
+  }
+
+  return unmetCount;
+}
+
+extern "C" int32_t __moore_coverage_register_assertion(void *cg, int32_t cp_index,
+                                                       double min_percentage) {
+  // Clamp percentage to valid range
+  if (min_percentage < 0.0)
+    min_percentage = 0.0;
+  if (min_percentage > 100.0)
+    min_percentage = 100.0;
+
+  // Validate covergroup if specified
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (cg && !covergroup)
+    return -1;
+
+  // Validate coverpoint index if specified
+  if (covergroup && cp_index >= 0) {
+    if (cp_index >= covergroup->num_coverpoints)
+      return -1;
+    if (!covergroup->coverpoints[cp_index])
+      return -1;
+  }
+
+  // Register the assertion
+  CoverageAssertionState::RegisteredAssertion assertion;
+  assertion.covergroup = covergroup;
+  assertion.coverpointIndex = cp_index;
+  assertion.minPercentage = min_percentage;
+
+  coverageAssertionState.registeredAssertions.push_back(assertion);
+
+  // Return the assertion ID (index in the vector)
+  return static_cast<int32_t>(
+      coverageAssertionState.registeredAssertions.size() - 1);
+}
+
+extern "C" bool __moore_coverage_check_registered_assertions(void) {
+  bool allPassed = true;
+
+  for (const auto &assertion : coverageAssertionState.registeredAssertions) {
+    bool passed = false;
+
+    if (!assertion.covergroup) {
+      // Global coverage check
+      passed = __moore_coverage_assert_goal(assertion.minPercentage);
+    } else if (assertion.coverpointIndex < 0) {
+      // Covergroup-level check
+      passed = __moore_covergroup_assert_goal(assertion.covergroup,
+                                              assertion.minPercentage);
+    } else {
+      // Coverpoint-level check
+      passed = __moore_coverpoint_assert_goal(
+          assertion.covergroup, assertion.coverpointIndex,
+          assertion.minPercentage);
+    }
+
+    if (!passed) {
+      allPassed = false;
+    }
+  }
+
+  return allPassed;
+}
+
+extern "C" void __moore_coverage_clear_registered_assertions(void) {
+  coverageAssertionState.registeredAssertions.clear();
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Options - Covergroup Level
 //===----------------------------------------------------------------------===//
 

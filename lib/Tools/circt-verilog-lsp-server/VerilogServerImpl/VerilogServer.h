@@ -204,6 +204,31 @@ public:
                    const FormattingOptions &options,
                    std::vector<llvm::lsp::TextEdit> &edits);
 
+  //===--------------------------------------------------------------------===//
+  // Code Lens
+  //===--------------------------------------------------------------------===//
+
+  /// Code lens information for LSP.
+  struct CodeLensInfo {
+    /// The range in which this code lens is valid.
+    llvm::lsp::Range range;
+    /// The command title (text shown to user).
+    std::string title;
+    /// The command identifier.
+    std::string command;
+    /// Arguments for the command.
+    std::vector<std::string> commandArguments;
+    /// Data for lazy resolution.
+    std::string data;
+  };
+
+  /// Return code lenses for the given document.
+  void getCodeLenses(const URIForFile &uri,
+                     std::vector<CodeLensInfo> &lenses);
+
+  /// Resolve a code lens with the given data.
+  bool resolveCodeLens(llvm::StringRef data, CodeLensInfo &lens);
+
   /// Initialize workspace from LSP initialize parameters.
   void initializeWorkspace(const llvm::json::Value &initParams);
 

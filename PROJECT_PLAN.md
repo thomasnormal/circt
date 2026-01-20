@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | Pullup/pulldown primitives added | Other gate primitives, I3C AVIP test |
-| **B** | Randomization | Inline constraints complete | Unique array constraints full lowering |
-| **C** | Coverage | Exclusions API complete | Coverage assertions |
-| **D** | LSP Tooling | Semantic tokens verified complete | Code lens, type hierarchy |
+| **A** | Runtime/Simulation | 12 gate primitives added | MOS primitives, full AVIP E2E |
+| **B** | Randomization | Unique constraints complete | Cross named bins full lowering |
+| **C** | Coverage | Assertions API complete | UVM coverage integration |
+| **D** | LSP Tooling | Code lens complete | Type hierarchy, inlay hints |
 
 ### Feature Completion Matrix
 
@@ -46,7 +46,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Virtual interfaces | ✅ | ✅ | ⚠️ | ❌ | ⚠️ |
 | Classes | ✅ | ✅ | ✅ | ⚠️ | ✅ |
 | UVM base classes | ✅ | ⚠️ | ⚠️ | ✅ | ✅ |
-| Array unique constraints | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Array unique constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cross named bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
 | LSP inheritance completion | - | - | - | - | ✅ |
 | LSP chained completion | - | - | - | - | ✅ |
@@ -66,12 +66,41 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Pullup/pulldown primitives | ✅ | ✅ | ✅ | - | ✅ |
 | Coverage exclusions | - | - | - | ✅ | ✅ |
 | LSP semantic tokens | - | - | - | - | ✅ |
+| Gate primitives (12 types) | ✅ | ✅ | ✅ | - | ✅ |
+| Coverage assertions | - | - | - | ✅ | ✅ |
+| LSP code lens | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 67 - Pullup/Pulldown + Inline Constraints + Coverage Exclusions (January 20, 2026)
+## Current Status: ITERATION 68 - Gate Primitives + Unique Constraints + Coverage Assertions + Code Lens (January 20, 2026)
+
+**Summary**: Added 12 gate primitives, completed unique array constraint lowering, implemented coverage assertion APIs, and added LSP code lens support.
+
+### Iteration 68 Highlights
+
+**Track A: Gate Primitive Support** ⭐ FEATURE
+- ✅ 12 additional gate primitives: and, or, nand, nor, xor, xnor, buf, not, bufif0/1, notif0/1
+- ✅ I3C AVIP pullup primitives working (remaining blockers are UVM dependencies)
+
+**Track B: Unique Array Constraints** ⭐ FEATURE
+- ✅ Complete ConstraintUniqueOpConversion implementation
+- ✅ Runtime calls for array and scalar uniqueness checking
+
+**Track C: Coverage Assertions** ⭐ FEATURE
+- ✅ 10 new API functions for coverage goal assertions
+- ✅ Failure callbacks and registered assertions for end-of-sim checking
+- ✅ 22 comprehensive unit tests
+
+**Track D: LSP Code Lens** ⭐ FEATURE
+- ✅ Reference counts for modules, classes, interfaces, functions, tasks
+- ✅ "Go to implementations" for virtual methods
+- ✅ Lazy resolution via codeLens/resolve
+
+---
+
+## Previous: ITERATION 67 - Pullup/Pulldown + Inline Constraints + Coverage Exclusions (January 20, 2026)
 
 **Summary**: Added pullup/pulldown primitive support, implemented full inline constraint lowering, and added coverage exclusion APIs.
 

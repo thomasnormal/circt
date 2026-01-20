@@ -1,0 +1,128 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test code lens functionality for modules, classes, functions, and tasks.
+
+// Initialize the LSP server
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// CHECK:       "id": 0
+// CHECK:       "codeLensProvider"
+// CHECK:       "resolveProvider": true
+// -----
+
+// Test code lens for a module with functions
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///code_lens_basic.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_mod;\n  function void my_func();\n    // function body\n  endfunction\n\n  task my_task();\n    my_func();\n  endtask\n\n  initial begin\n    my_task();\n  end\nendmodule"
+}}}
+// -----
+
+// Request code lenses for the basic module
+{"jsonrpc":"2.0","id":1,"method":"textDocument/codeLens","params":{
+  "textDocument":{"uri":"test:///code_lens_basic.sv"}
+}}
+// CHECK:       "id": 1
+// CHECK-NEXT:  "jsonrpc": "2.0"
+// CHECK-NEXT:  "result": [
+// Should have code lenses for the module and its functions/tasks
+// CHECK:         "command"
+// CHECK:         "range"
+// CHECK:         "title"
+// -----
+
+// Test code lens for a package with classes
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///code_lens_class.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"package test_pkg;\n  class base_class;\n    virtual function void run();\n    endfunction\n  endclass\n\n  class derived_class extends base_class;\n    function void run();\n    endfunction\n  endclass\nendpackage"
+}}}
+// -----
+
+// Request code lenses for the package with classes
+{"jsonrpc":"2.0","id":2,"method":"textDocument/codeLens","params":{
+  "textDocument":{"uri":"test:///code_lens_class.sv"}
+}}
+// CHECK:       "id": 2
+// CHECK-NEXT:  "jsonrpc": "2.0"
+// CHECK-NEXT:  "result": [
+// Should have code lenses for package, classes, and methods
+// Virtual method should have "Go to implementations" lens
+// CHECK:         "command"
+// CHECK:         "range"
+// -----
+
+// Test code lens for an interface
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///code_lens_interface.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"interface test_if;\n  logic clk;\n  logic data;\n  modport master(input clk, output data);\n  modport slave(input clk, input data);\nendinterface"
+}}}
+// -----
+
+// Request code lenses for the interface
+{"jsonrpc":"2.0","id":3,"method":"textDocument/codeLens","params":{
+  "textDocument":{"uri":"test:///code_lens_interface.sv"}
+}}
+// CHECK:       "id": 3
+// CHECK-NEXT:  "jsonrpc": "2.0"
+// CHECK-NEXT:  "result": [
+// Should have code lens for the interface
+// CHECK:         "range"
+// -----
+
+// Test code lens resolve
+{"jsonrpc":"2.0","id":4,"method":"codeLens/resolve","params":{
+  "range":{"start":{"line":0,"character":7},"end":{"line":0,"character":15}},
+  "data":"test:///code_lens_basic.sv:0:7:module"
+}}
+// CHECK:       "id": 4
+// CHECK-NEXT:  "jsonrpc": "2.0"
+// CHECK-NEXT:  "result": {
+// CHECK:         "range"
+// -----
+
+// Test code lens with references
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///code_lens_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module ref_test;\n  function int helper(int x);\n    return x + 1;\n  endfunction\n\n  function int caller();\n    int a = helper(1);\n    int b = helper(2);\n    int c = helper(3);\n    return a + b + c;\n  endfunction\nendmodule"
+}}}
+// -----
+
+// Request code lenses - helper should show reference count
+{"jsonrpc":"2.0","id":5,"method":"textDocument/codeLens","params":{
+  "textDocument":{"uri":"test:///code_lens_refs.sv"}
+}}
+// CHECK:       "id": 5
+// CHECK-NEXT:  "jsonrpc": "2.0"
+// CHECK-NEXT:  "result": [
+// The helper function should show references (called 3 times)
+// CHECK:         "command"
+// CHECK:         "title"
+// -----
+
+// Test empty document (no code lenses)
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///empty.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"// Just a comment\n"
+}}}
+// -----
+
+{"jsonrpc":"2.0","id":6,"method":"textDocument/codeLens","params":{
+  "textDocument":{"uri":"test:///empty.sv"}
+}}
+// CHECK:       "id": 6
+// CHECK-NEXT:  "jsonrpc": "2.0"
+// CHECK-NEXT:  "result": []
+// -----
+
+{"jsonrpc":"2.0","id":7,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
