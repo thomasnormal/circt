@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 63 - January 20, 2026
+
+### Distribution Constraints + Coverage Callbacks + LSP Find References + AVIP Testing
+
+**Track A: AVIP E2E Testbench Testing** ⭐ INVESTIGATION
+- Created comprehensive AVIP-style testbench test (avip-e2e-testbench.sv)
+- Identified main blocker: timing controls (`@(posedge clk)`) in class tasks
+  cause `'llhd.wait' op expects parent op 'llhd.process'` error
+- Parsing and basic lowering verified working for BFM patterns
+- This clarifies the remaining work needed for full AVIP simulation
+
+**Track B: Distribution Constraint Lowering** ⭐ FEATURE
+- Full implementation of `dist` constraints in MooreToCore
+- Support for `:=` (equal weights) and `:/` (divided weights)
+- `DistConstraintInfo` struct for clean range/weight tracking
+- Proper weighted random selection with cumulative probability
+- Added 7 new unit tests for distribution constraints
+- Created `dist-constraints.mlir` MooreToCore test
+
+**Track C: Coverage Callbacks and Sample Event** ⭐ FEATURE
+- 13 new runtime functions for coverage callbacks:
+  - `__moore_covergroup_sample()` - Manual sampling trigger
+  - `__moore_covergroup_sample_with_args()` - Sampling with arguments
+  - `__moore_covergroup_set_pre_sample_callback()` - Pre-sample hook
+  - `__moore_covergroup_set_post_sample_callback()` - Post-sample hook
+  - `__moore_covergroup_sample_event()` - Event-triggered sampling
+  - `__moore_covergroup_set_strobe_sample()` - Strobe-mode sampling
+  - `__moore_coverpoint_set_sample_callback()` - Per-coverpoint hooks
+  - `__moore_coverpoint_sample_with_condition()` - Conditional sampling
+  - `__moore_cross_sample_with_condition()` - Cross conditional sampling
+  - `__moore_covergroup_get_sample_count()` - Sample statistics
+  - `__moore_coverpoint_get_sample_count()` - Coverpoint statistics
+  - `__moore_covergroup_reset_samples()` - Reset sample counters
+  - `__moore_coverpoint_reset_samples()` - Reset coverpoint counters
+- Added 12 unit tests for callback functionality
+
+**Track D: LSP Find References Enhancement** ⭐ FEATURE
+- Enhanced find references to include class and typedef type references
+- Now finds references in variable declarations using class/typedef types
+- Added base class references in class declarations (`extends`)
+- Created comprehensive `find-references-comprehensive.test`
+
+### Files Modified
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+272 lines for dist lowering)
+- `lib/Runtime/MooreRuntime.cpp` (+288 lines for callbacks)
+- `include/circt/Runtime/MooreRuntime.h` (+136 lines for API)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+488 lines for tests)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogIndex.cpp` (+63 lines)
+- New tests: 1 AVIP test, 1 MooreToCore test, 1 LSP test
+
+---
+
 ## Iteration 62 - January 20, 2026
 
 ### Virtual Interface Fix + Coverage Options + LSP Formatting

@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | Virtual interface timing fixed | End-to-end AVIP simulation |
-| **B** | Randomization | Constraint implication verified | Distribution weights lowering |
-| **C** | Coverage | Coverage options complete | Coverage callbacks, sample_event |
-| **D** | LSP Tooling | Document formatting complete | Go-to-implementation, find references |
+| **A** | Runtime/Simulation | AVIP blocker identified (timing in class tasks) | Fix llhd.wait in class methods |
+| **B** | Randomization | Distribution constraints fully lowered | Solve-before constraints |
+| **C** | Coverage | Coverage callbacks complete (13 functions) | Coverage get_coverage() API |
+| **D** | LSP Tooling | Find references enhanced | Rename refactoring, call hierarchy |
 
 ### Feature Completion Matrix
 
@@ -30,7 +30,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | rand/randc | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Constraints (basic) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Soft constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Distribution constraints | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Distribution constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Inline constraints | ✅ | ✅ | ⚠️ | - | ✅ |
 | constraint_mode() | ✅ | ✅ | ✅ | ✅ | ✅ |
 | rand_mode() | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -53,12 +53,41 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | LSP document formatting | - | - | - | - | ✅ |
 | Coverage options | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Constraint implication | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Coverage callbacks | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LSP find references | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 62 - Virtual Interface Fix + Coverage Options + LSP Formatting (January 20, 2026)
+## Current Status: ITERATION 63 - Distribution Constraints + Coverage Callbacks + LSP Find References (January 20, 2026)
+
+**Summary**: Implemented distribution constraint lowering, added coverage callbacks API, enhanced LSP find references, investigated AVIP E2E blockers.
+
+### Iteration 63 Highlights
+
+**Track A: AVIP E2E Testing** ⭐ INVESTIGATION
+- ✅ Created comprehensive AVIP-style testbench test
+- ⚠️ Identified blocker: `@(posedge clk)` in class tasks causes llhd.wait error
+- ✅ Parsing and basic lowering verified working
+
+**Track B: Distribution Constraints** ⭐ FEATURE
+- ✅ Full MooreToCore lowering for `dist` constraints
+- ✅ Support for `:=` and `:/` weight operators
+- ✅ 7 new unit tests
+
+**Track C: Coverage Callbacks** ⭐ FEATURE
+- ✅ 13 new runtime functions for callbacks/sampling
+- ✅ pre/post sample hooks, conditional sampling
+- ✅ 12 new unit tests
+
+**Track D: LSP Find References** ⭐ FEATURE
+- ✅ Enhanced with class/typedef type references
+- ✅ Base class references in `extends` clauses
+
+---
+
+## Previous: ITERATION 62 - Virtual Interface Fix + Coverage Options + LSP Formatting (January 20, 2026)
 
 **Summary**: Fixed virtual interface timing bug, added coverage options, implemented LSP document formatting.
 
