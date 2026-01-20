@@ -1898,6 +1898,390 @@ public:
     visitDefault(node);
   }
 };
+
+/// Enumeration to distinguish completion contexts.
+enum class VerilogCompletionContext {
+  /// Normal context (keywords, symbols, etc.)
+  Normal,
+  /// Member access after '.' on an instance/variable
+  MemberAccess,
+  /// Port connection in module instantiation (e.g., .port_name())
+  PortConnection
+};
+
+/// Result of completion context analysis, including the chain of identifiers
+/// for chained member access (e.g., "obj.field1.field2" -> ["obj", "field1"]).
+struct CompletionContextResult {
+  VerilogCompletionContext context;
+  /// Chain of identifiers before the final dot (for member access).
+  /// E.g., for "obj.field1.field2", this would be ["obj", "field1"].
+  llvm::SmallVector<std::string, 4> identifierChain;
+};
+
+/// Analyze the completion context and extract the identifier chain if in member
+/// access or port connection context. Supports chained member access like
+/// "obj.field1.field2.".
+static CompletionContextResult analyzeCompletionContext(std::string_view text,
+                                                        uint32_t offset) {
+  // Find the start of the current identifier (prefix)
+  uint32_t prefixStart = offset;
+  while (prefixStart > 0 &&
+         (std::isalnum(text[prefixStart - 1]) || text[prefixStart - 1] == '_'))
+    --prefixStart;
+
+  // Check if there's a '.' before the prefix
+  uint32_t dotPos = prefixStart;
+  while (dotPos > 0 && std::isspace(text[dotPos - 1]))
+    --dotPos;
+
+  if (dotPos > 0 && text[dotPos - 1] == '.') {
+    // Parse the entire chain of identifiers separated by dots
+    // E.g., "obj.field1.field2" -> ["obj", "field1"]
+    llvm::SmallVector<std::string, 4> chain;
+    uint32_t parsePos = dotPos - 1; // Start at the first dot
+
+    while (true) {
+      // Skip whitespace before the dot
+      while (parsePos > 0 && std::isspace(text[parsePos - 1]))
+        --parsePos;
+
+      // Find the identifier before this position
+      uint32_t idEnd = parsePos;
+      uint32_t idStart = parsePos;
+      while (idStart > 0 &&
+             (std::isalnum(text[idStart - 1]) || text[idStart - 1] == '_'))
+        --idStart;
+
+      if (idStart == idEnd) {
+        // No identifier found, stop
+        break;
+      }
+
+      // Add the identifier to the front of the chain
+      chain.insert(chain.begin(),
+                   std::string(text.substr(idStart, idEnd - idStart)));
+
+      // Check if there's another dot before this identifier
+      parsePos = idStart;
+      while (parsePos > 0 && std::isspace(text[parsePos - 1]))
+        --parsePos;
+
+      if (parsePos == 0 || text[parsePos - 1] != '.') {
+        // No more dots, we've found the entire chain
+        break;
+      }
+
+      // Move past the dot to continue parsing
+      parsePos--;
+    }
+
+    // Try to detect if we're in a port connection context
+    // Look back from the start of the chain for opening paren '('
+    uint32_t scanPos = chain.empty() ? dotPos : prefixStart;
+    // Find the start of the first identifier in the chain
+    if (!chain.empty()) {
+      // Re-find the start of the first identifier
+      scanPos = dotPos - 1;
+      for (size_t i = 0; i < chain.size() - 1; ++i) {
+        // Skip back past each identifier and its preceding dot
+        while (scanPos > 0 && std::isspace(text[scanPos - 1]))
+          --scanPos;
+        while (scanPos > 0 &&
+               (std::isalnum(text[scanPos - 1]) || text[scanPos - 1] == '_'))
+          --scanPos;
+        while (scanPos > 0 && std::isspace(text[scanPos - 1]))
+          --scanPos;
+        if (scanPos > 0 && text[scanPos - 1] == '.')
+          --scanPos;
+      }
+      while (scanPos > 0 && std::isspace(text[scanPos - 1]))
+        --scanPos;
+      while (scanPos > 0 &&
+             (std::isalnum(text[scanPos - 1]) || text[scanPos - 1] == '_'))
+        --scanPos;
+    }
+
+    int parenDepth = 0;
+    bool foundParenContext = false;
+    while (scanPos > 0) {
+      --scanPos;
+      char c = text[scanPos];
+      if (c == ')') {
+        parenDepth++;
+      } else if (c == '(') {
+        if (parenDepth == 0) {
+          foundParenContext = true;
+          break;
+        }
+        parenDepth--;
+      } else if (c == ';' || c == '\n') {
+        // Stop at statement boundary or newline (simple heuristic)
+        // But continue if we're still in parentheses
+        if (parenDepth == 0)
+          break;
+      }
+    }
+
+    // If we found a paren context and the chain is empty, it might be
+    // a port connection like ".port_name(value)"
+    if (foundParenContext && chain.empty()) {
+      return {VerilogCompletionContext::PortConnection, {}};
+    }
+
+    return {VerilogCompletionContext::MemberAccess, std::move(chain)};
+  }
+
+  return {VerilogCompletionContext::Normal, {}};
+}
+
+/// Helper to search a scope for a symbol by name, recursively.
+static const slang::ast::Symbol *
+findSymbolInScope(const slang::ast::Scope &scope, llvm::StringRef name) {
+  // First, try direct lookup
+  for (const auto &member : scope.members()) {
+    if (name == llvm::StringRef(member.name.data(), member.name.size()))
+      return &member;
+
+    // If this is a scope, search inside it too (for procedural blocks, etc.)
+    if (auto *innerScope = member.as_if<slang::ast::Scope>()) {
+      if (auto *found = findSymbolInScope(*innerScope, name))
+        return found;
+    }
+  }
+  return nullptr;
+}
+
+/// Find a symbol by name in the compilation (search variables, instances,
+/// etc.)
+static const slang::ast::Symbol *
+findSymbolByName(slang::ast::Compilation &compilation, llvm::StringRef name) {
+  // Search in top instances first
+  for (auto *inst : compilation.getRoot().topInstances) {
+    // Search ports
+    for (const auto *port : inst->body.getPortList()) {
+      if (name == llvm::StringRef(port->name.data(), port->name.size()))
+        return port;
+    }
+
+    // Search members recursively
+    if (auto *found = findSymbolInScope(inst->body, name))
+      return found;
+  }
+
+  // Search in packages
+  for (auto *pkg : compilation.getPackages()) {
+    if (auto *found = findSymbolInScope(*pkg, name))
+      return found;
+  }
+
+  return nullptr;
+}
+
+/// Resolve a chain of member accesses starting from a base symbol.
+/// Returns the final type in the chain, or nullptr if resolution fails.
+/// E.g., for chain ["obj", "field1"], resolves obj, gets its type,
+/// finds field1 in that type, and returns the type of field1.
+struct ChainResolutionResult {
+  const slang::ast::Type *finalType = nullptr;
+  const slang::ast::InstanceBodySymbol *instanceBody = nullptr;
+  enum Kind { None, ClassType, InstanceType, InterfaceType } kind = None;
+};
+
+static ChainResolutionResult
+resolveIdentifierChain(slang::ast::Compilation &compilation,
+                       llvm::ArrayRef<std::string> chain) {
+  if (chain.empty())
+    return {};
+
+  // Start by finding the first symbol in the chain
+  const slang::ast::Symbol *currentSym =
+      findSymbolByName(compilation, chain[0]);
+  if (!currentSym)
+    return {};
+
+  ChainResolutionResult result;
+
+  // If chain has only one element, return info about that symbol
+  if (chain.size() == 1) {
+    if (auto *inst = currentSym->as_if<slang::ast::InstanceSymbol>()) {
+      result.kind = ChainResolutionResult::InstanceType;
+      result.instanceBody = &inst->body;
+      return result;
+    }
+    if (auto *valSym = currentSym->as_if<slang::ast::ValueSymbol>()) {
+      const auto &type = valSym->getType();
+      if (auto *classType = type.as_if<slang::ast::ClassType>()) {
+        result.kind = ChainResolutionResult::ClassType;
+        result.finalType = classType;
+        return result;
+      }
+      if (auto *ifaceType =
+              type.getCanonicalType().as_if<slang::ast::VirtualInterfaceType>()) {
+        result.kind = ChainResolutionResult::InterfaceType;
+        result.instanceBody = &ifaceType->iface.body;
+        return result;
+      }
+    }
+    return {};
+  }
+
+  // Walk through the rest of the chain
+  for (size_t i = 1; i < chain.size(); ++i) {
+    llvm::StringRef memberName = chain[i];
+    const slang::ast::Symbol *nextSym = nullptr;
+
+    // Check if current is an instance
+    if (auto *inst = currentSym->as_if<slang::ast::InstanceSymbol>()) {
+      // Search for member in the instance body
+      nextSym = findSymbolInScope(inst->body, memberName);
+    }
+    // Check if current is a value with a type
+    else if (auto *valSym = currentSym->as_if<slang::ast::ValueSymbol>()) {
+      const auto &type = valSym->getType();
+      if (auto *classType = type.as_if<slang::ast::ClassType>()) {
+        // Search for member in the class
+        for (const auto &member : classType->members()) {
+          if (memberName == llvm::StringRef(member.name.data(), member.name.size())) {
+            nextSym = &member;
+            break;
+          }
+        }
+      } else if (auto *ifaceType =
+                     type.getCanonicalType().as_if<slang::ast::VirtualInterfaceType>()) {
+        nextSym = findSymbolInScope(ifaceType->iface.body, memberName);
+      }
+    }
+
+    if (!nextSym)
+      return {}; // Failed to resolve this step
+
+    currentSym = nextSym;
+  }
+
+  // Return info about the final symbol
+  if (auto *inst = currentSym->as_if<slang::ast::InstanceSymbol>()) {
+    result.kind = ChainResolutionResult::InstanceType;
+    result.instanceBody = &inst->body;
+    return result;
+  }
+  if (auto *valSym = currentSym->as_if<slang::ast::ValueSymbol>()) {
+    const auto &type = valSym->getType();
+    if (auto *classType = type.as_if<slang::ast::ClassType>()) {
+      result.kind = ChainResolutionResult::ClassType;
+      result.finalType = classType;
+      return result;
+    }
+    if (auto *ifaceType =
+            type.getCanonicalType().as_if<slang::ast::VirtualInterfaceType>()) {
+      result.kind = ChainResolutionResult::InterfaceType;
+      result.instanceBody = &ifaceType->iface.body;
+      return result;
+    }
+  }
+
+  return {};
+}
+
+/// Add completion items for members of a class type.
+static void addClassMemberCompletions(const slang::ast::ClassType &classType,
+                                      llvm::StringRef prefix,
+                                      llvm::lsp::CompletionList &completions) {
+  for (const auto &member : classType.members()) {
+    if (member.name.empty())
+      continue;
+
+    // Filter by prefix if provided
+    if (!prefix.empty() &&
+        !llvm::StringRef(member.name).starts_with_insensitive(prefix))
+      continue;
+
+    llvm::lsp::CompletionItem item;
+    item.label = std::string(member.name);
+    item.kind = mapToCompletionKind(member.kind);
+    item.detail = getCompletionDetail(member);
+    item.insertText = std::string(member.name);
+    item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
+
+    // For methods, add parentheses
+    if (member.kind == slang::ast::SymbolKind::Subroutine) {
+      const auto &sub = member.as<slang::ast::SubroutineSymbol>();
+      if (sub.getArguments().empty()) {
+        item.insertText = std::string(member.name) + "()";
+      } else {
+        item.insertText = std::string(member.name) + "(${0})";
+        item.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
+      }
+      item.kind = llvm::lsp::CompletionItemKind::Method;
+    } else if (member.kind == slang::ast::SymbolKind::ClassProperty) {
+      item.kind = llvm::lsp::CompletionItemKind::Property;
+    }
+
+    completions.items.push_back(std::move(item));
+  }
+}
+
+/// Add completion items for ports of a module/interface instance.
+static void addPortCompletions(const slang::ast::InstanceBodySymbol &body,
+                               llvm::StringRef prefix,
+                               llvm::lsp::CompletionList &completions) {
+  for (const auto *port : body.getPortList()) {
+    if (port->name.empty())
+      continue;
+
+    // Filter by prefix if provided
+    if (!prefix.empty() &&
+        !llvm::StringRef(port->name).starts_with_insensitive(prefix))
+      continue;
+
+    llvm::lsp::CompletionItem item;
+    item.label = std::string(port->name);
+    item.kind = llvm::lsp::CompletionItemKind::Field;
+    item.detail = getCompletionDetail(*port);
+    item.insertText = std::string(port->name);
+    item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
+
+    completions.items.push_back(std::move(item));
+  }
+}
+
+/// Add completion items for members of an instance body (nets, variables,
+/// etc.)
+static void addInstanceMemberCompletions(
+    const slang::ast::InstanceBodySymbol &body, llvm::StringRef prefix,
+    llvm::lsp::CompletionList &completions) {
+  // Add ports
+  addPortCompletions(body, prefix, completions);
+
+  // Add internal members
+  for (const auto &member : body.members()) {
+    if (member.name.empty())
+      continue;
+
+    // Filter by prefix if provided
+    if (!prefix.empty() &&
+        !llvm::StringRef(member.name).starts_with_insensitive(prefix))
+      continue;
+
+    switch (member.kind) {
+    case slang::ast::SymbolKind::Net:
+    case slang::ast::SymbolKind::Variable:
+    case slang::ast::SymbolKind::Parameter:
+    case slang::ast::SymbolKind::Subroutine: {
+      llvm::lsp::CompletionItem item;
+      item.label = std::string(member.name);
+      item.kind = mapToCompletionKind(member.kind);
+      item.detail = getCompletionDetail(member);
+      item.insertText = std::string(member.name);
+      item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
+      completions.items.push_back(std::move(item));
+      break;
+    }
+    default:
+      break;
+    }
+  }
+}
+
 } // namespace
 
 void VerilogDocument::getCompletions(const llvm::lsp::URIForFile &uri,
@@ -1913,6 +2297,103 @@ void VerilogDocument::getCompletions(const llvm::lsp::URIForFile &uri,
     return;
 
   uint32_t offset = *offsetOpt;
+
+  // Analyze the completion context
+  CompletionContextResult contextResult = analyzeCompletionContext(text, offset);
+
+  // Handle member access completion (after '.')
+  // Supports chained access like obj.field1.field2.
+  if (contextResult.context == VerilogCompletionContext::MemberAccess &&
+      !contextResult.identifierChain.empty() && succeeded(compilation)) {
+    // Get the prefix after the '.'
+    uint32_t prefixStart = offset;
+    while (prefixStart > 0 && (std::isalnum(text[prefixStart - 1]) ||
+                               text[prefixStart - 1] == '_'))
+      --prefixStart;
+    llvm::StringRef memberPrefix(text.data() + prefixStart,
+                                 offset - prefixStart);
+
+    // Resolve the entire identifier chain to get the final type
+    ChainResolutionResult resolution =
+        resolveIdentifierChain(**compilation, contextResult.identifierChain);
+
+    switch (resolution.kind) {
+    case ChainResolutionResult::ClassType:
+      if (resolution.finalType) {
+        addClassMemberCompletions(
+            *resolution.finalType->as_if<slang::ast::ClassType>(), memberPrefix,
+            completions);
+        return;
+      }
+      break;
+    case ChainResolutionResult::InstanceType:
+      if (resolution.instanceBody) {
+        addInstanceMemberCompletions(*resolution.instanceBody, memberPrefix,
+                                     completions);
+        return;
+      }
+      break;
+    case ChainResolutionResult::InterfaceType:
+      if (resolution.instanceBody) {
+        addPortCompletions(*resolution.instanceBody, memberPrefix, completions);
+        return;
+      }
+      break;
+    case ChainResolutionResult::None:
+      // Fall through to normal completion
+      break;
+    }
+  }
+
+  // Handle port connection completion in module instantiation
+  if (contextResult.context == VerilogCompletionContext::PortConnection && succeeded(compilation)) {
+    // Try to find the module being instantiated by looking back in the text
+    // This is a simplified approach - in a real implementation, you'd use
+    // the AST to find the enclosing instantiation
+    uint32_t scanPos = offset;
+    while (scanPos > 0 && text[scanPos - 1] != '(')
+      --scanPos;
+    if (scanPos > 0) {
+      --scanPos; // Skip the '('
+      // Skip whitespace
+      while (scanPos > 0 && std::isspace(text[scanPos - 1]))
+        --scanPos;
+      // Skip the instance name
+      while (scanPos > 0 && (std::isalnum(text[scanPos - 1]) ||
+                             text[scanPos - 1] == '_'))
+        --scanPos;
+      // Now find the module name before the instance name
+      while (scanPos > 0 && std::isspace(text[scanPos - 1]))
+        --scanPos;
+      uint32_t moduleEnd = scanPos;
+      while (scanPos > 0 && (std::isalnum(text[scanPos - 1]) ||
+                             text[scanPos - 1] == '_'))
+        --scanPos;
+      std::string moduleName(text.substr(scanPos, moduleEnd - scanPos));
+
+      // Find the module definition
+      for (const auto *def : (*compilation)->getDefinitions()) {
+        if (def->name == moduleName) {
+          // Get the prefix after the '.'
+          uint32_t prefixStart = offset;
+          while (prefixStart > 0 && (std::isalnum(text[prefixStart - 1]) ||
+                                     text[prefixStart - 1] == '_'))
+            --prefixStart;
+          llvm::StringRef portPrefix(text.data() + prefixStart,
+                                     offset - prefixStart);
+
+          // Add port completions from the definition's instantiated form
+          for (auto *inst : (*compilation)->getRoot().topInstances) {
+            if (&inst->getDefinition() == def) {
+              addPortCompletions(inst->body, portPrefix, completions);
+              return;
+            }
+          }
+          break;
+        }
+      }
+    }
+  }
 
   // Find the start of the current identifier (prefix)
   uint32_t prefixStart = offset;
