@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | Second MooreToCore pass after inlining | Class task inlining improvements |
-| **B** | Randomization | Array foreach simplified | Implication constraints in arrays |
-| **C** | Coverage | HTML report generation complete | Coverage database persistence |
-| **D** | LSP Tooling | Call hierarchy complete | Workspace symbols, code lens |
+| **A** | Runtime/Simulation | APB/SPI AVIPs verified working | pullup/pulldown primitives |
+| **B** | Randomization | Foreach implication tests complete | Inline constraint lowering |
+| **C** | Coverage | Database persistence complete | Coverage exclusions API |
+| **D** | LSP Tooling | Workspace symbols fixed | Code lens, semantic tokens |
 
 ### Feature Completion Matrix
 
@@ -61,12 +61,44 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Coverage HTML reports | - | - | - | ✅ | ✅ |
 | LSP call hierarchy | - | - | - | - | ✅ |
 | Array foreach constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Coverage DB persistence | - | - | - | ✅ | ✅ |
+| LSP workspace symbols | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 65 - Second MooreToCore Pass + Coverage HTML + LSP Call Hierarchy (January 20, 2026)
+## Current Status: ITERATION 66 - AVIP Verification + Coverage DB Persistence + Workspace Symbols (January 20, 2026)
+
+**Summary**: Verified APB/SPI AVIPs compile with proper timing control conversion, implemented coverage database persistence with metadata, fixed workspace symbols deadlock.
+
+### Iteration 66 Highlights
+
+**Track A: AVIP Testbench Verification** ⭐ TESTING
+- ✅ APB and SPI AVIPs compile fully to HW IR with llhd.wait
+- ✅ Timing controls in interface tasks properly convert after inlining
+- ⚠️ I3C blocked by missing pullup primitive support
+- ✅ Documented remaining blockers for full AVIP support
+
+**Track B: Foreach Implication Constraint Tests** ⭐ FEATURE
+- ✅ 5 new test cases in array-foreach-constraints.mlir
+- ✅ New foreach-implication.mlir with 7 comprehensive tests
+- ✅ Verified all constraint ops properly erased during lowering
+
+**Track C: Coverage Database Persistence** ⭐ FEATURE
+- ✅ `__moore_coverage_save_db()` with metadata (test name, timestamp)
+- ✅ `__moore_coverage_load_db()` and `__moore_coverage_merge_db()`
+- ✅ `__moore_coverage_db_get_metadata()` for accessing saved metadata
+- ✅ 15 unit tests for database persistence
+
+**Track D: Workspace Symbols Fix** ⭐ BUG FIX
+- ✅ Fixed deadlock in Workspace.cpp findAllSymbols()
+- ✅ Created workspace-symbols.test with comprehensive coverage
+- ✅ All workspace symbol tests passing
+
+---
+
+## Previous: ITERATION 65 - Second MooreToCore Pass + Coverage HTML + LSP Call Hierarchy (January 20, 2026)
 
 **Summary**: Added second MooreToCore pass after inlining to convert timing controls in interface tasks, implemented coverage HTML report generation, and added full LSP call hierarchy support.
 

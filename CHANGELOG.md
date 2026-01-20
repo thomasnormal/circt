@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 66 - January 20, 2026
+
+### AVIP Testing Verification + Coverage DB Persistence + Workspace Symbols Fix
+
+**Track A: AVIP Testbench Verification** ⭐ TESTING
+- Tested APB, SPI, AXI4, I3C AVIPs from ~/mbit/ directory
+- APB and SPI AVIPs compile fully to HW IR with proper llhd.wait generation
+- Verified timing controls in interface tasks now properly convert after inlining
+- Identified remaining blockers:
+  - `pullup`/`pulldown` primitives not yet supported (needed for I3C)
+  - Some AVIP code has original bugs (not CIRCT issues)
+
+**Track B: Array Implication Constraint Tests** ⭐ FEATURE
+- Added 5 new test cases to array-foreach-constraints.mlir:
+  - ForeachElementImplication: `foreach (arr[i]) arr[i] -> constraint;`
+  - ForeachIfElse: `foreach (arr[i]) if (cond) constraint; else constraint;`
+  - ForeachIfOnly: If-only pattern within foreach
+  - NestedForeachImplication: Nested foreach with implication
+  - ForeachIndexImplication: Index-based implications
+- Created dedicated foreach-implication.mlir with 7 comprehensive tests
+- Verified all constraint ops properly erased during lowering
+
+**Track C: Coverage Database Persistence** ⭐ FEATURE
+- `__moore_coverage_save_db(filename, test_name, comment)` - Save with metadata
+- `__moore_coverage_load_db(filename)` - Load coverage database
+- `__moore_coverage_merge_db(filename)` - Load and merge in one step
+- `__moore_coverage_db_get_metadata(db)` - Access saved metadata
+- `__moore_coverage_set_test_name()` / `__moore_coverage_get_test_name()`
+- Database format includes: test_name, timestamp, simulator, version, comment
+- Added 15 unit tests for database persistence
+
+**Track D: LSP Workspace Symbols Fix** ⭐ BUG FIX
+- Fixed deadlock bug in Workspace.cpp `findAllSymbols()` function
+- Issue: `getAllSourceFiles()` called while holding mutex, then tried to re-lock
+- Fix: Inlined file gathering logic to avoid double-lock
+- Created workspace-symbols.test with comprehensive test coverage
+- Tests fuzzy matching, multiple documents, nested symbols
+
+### Files Modified
+- `include/circt/Runtime/MooreRuntime.h` (+25 lines for DB API)
+- `lib/Runtime/MooreRuntime.cpp` (+150 lines for DB persistence)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/Workspace.cpp` (deadlock fix)
+- `test/Conversion/MooreToCore/array-foreach-constraints.mlir` (+200 lines)
+- `test/Conversion/MooreToCore/foreach-implication.mlir` (new, 150 lines)
+- `test/Tools/circt-verilog-lsp-server/workspace-symbols.test` (new)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+150 lines for DB tests)
+
+---
+
 ## Iteration 65 - January 20, 2026
 
 ### Second MooreToCore Pass + Coverage HTML Report + LSP Call Hierarchy

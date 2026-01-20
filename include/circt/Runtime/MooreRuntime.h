@@ -1753,6 +1753,71 @@ double __moore_coverage_db_get_coverage(MooreCoverageDBHandle db,
                                          const char *cg_name);
 
 //===----------------------------------------------------------------------===//
+// Coverage Database Persistence with Metadata
+//===----------------------------------------------------------------------===//
+//
+// Enhanced coverage database functions that include metadata such as test name,
+// timestamp, and other information for tracking coverage across multiple runs.
+//
+
+/// Metadata structure for coverage database.
+/// Contains information about the test run that generated the coverage data.
+typedef struct {
+  const char *test_name;     ///< Name of the test that generated this coverage
+  int64_t timestamp;         ///< Unix timestamp when coverage was saved
+  const char *simulator;     ///< Name of the simulator (if known)
+  const char *version;       ///< Database format version
+  const char *comment;       ///< Optional user comment
+} MooreCoverageMetadata;
+
+/// Save coverage database with metadata.
+/// Includes test name, timestamp, and other metadata in the saved file.
+///
+/// @param filename Path to the output file (null-terminated string)
+/// @param test_name Name of the test (can be NULL)
+/// @param comment Optional comment (can be NULL)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_save_db(const char *filename, const char *test_name,
+                                  const char *comment);
+
+/// Load coverage database with metadata.
+/// Loads a coverage database and makes it available for merging.
+/// The returned handle must be freed with __moore_coverage_db_free.
+///
+/// @param filename Path to the input file (null-terminated string)
+/// @return Handle to the loaded database, or NULL on failure
+MooreCoverageDBHandle __moore_coverage_load_db(const char *filename);
+
+/// Merge another coverage database file into the current state.
+/// Loads the file, merges its data into all matching covergroups, then frees it.
+/// This is a convenience function combining load and merge operations.
+///
+/// @param filename Path to the coverage database file to merge
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_merge_db(const char *filename);
+
+/// Get metadata from a loaded coverage database.
+/// Returns a pointer to the metadata structure. The pointer is valid
+/// until the database handle is freed.
+///
+/// @param db Handle to the loaded database
+/// @return Pointer to metadata, or NULL if not available
+const MooreCoverageMetadata *__moore_coverage_db_get_metadata(
+    MooreCoverageDBHandle db);
+
+/// Set global test name for coverage operations.
+/// This test name will be used by __moore_coverage_save_db when no explicit
+/// test name is provided.
+///
+/// @param test_name Global test name (will be copied)
+void __moore_coverage_set_test_name(const char *test_name);
+
+/// Get the currently set global test name.
+///
+/// @return Current global test name, or NULL if not set
+const char *__moore_coverage_get_test_name(void);
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //

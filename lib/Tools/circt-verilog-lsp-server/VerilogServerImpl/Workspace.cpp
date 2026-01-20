@@ -348,11 +348,20 @@ std::vector<Workspace::WorkspaceSymbolEntry> Workspace::findAllSymbols() const {
 
   std::vector<WorkspaceSymbolEntry> symbols;
 
-  auto filesOrErr = getAllSourceFiles();
-  if (!filesOrErr) {
-    llvm::consumeError(filesOrErr.takeError());
-    return symbols;
+  // Inline the logic from getAllSourceFiles to avoid deadlock (both functions
+  // need the mutex, but std::mutex is not recursive)
+  std::vector<std::string> allFiles;
+  for (const auto &root : roots) {
+    auto filesOrErr = root->getSourceFiles();
+    if (!filesOrErr) {
+      llvm::consumeError(filesOrErr.takeError());
+      continue;
+    }
+    allFiles.insert(allFiles.end(), filesOrErr->begin(), filesOrErr->end());
   }
+
+  if (allFiles.empty())
+    return symbols;
 
   // Pattern to find top-level SystemVerilog constructs.
   // Also matches functions/tasks at module scope.
@@ -361,7 +370,7 @@ std::vector<Workspace::WorkspaceSymbolEntry> Workspace::findAllSymbols() const {
   std::regex funcTaskPattern(
       R"(\b(function|task)\s+(?:automatic\s+)?(?:\w+\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s*[;(])");
 
-  for (const auto &file : *filesOrErr) {
+  for (const auto &file : allFiles) {
     llvm::SmallString<256> absPath(file);
     llvm::sys::fs::make_absolute(absPath);
     llvm::sys::path::remove_dots(absPath, /*remove_dot_dot=*/true);

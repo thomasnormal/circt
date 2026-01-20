@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -2091,6 +2092,10 @@ namespace {
 /// Global list of all registered covergroups for reporting.
 /// Thread-local to avoid synchronization issues in multi-threaded simulations.
 thread_local std::vector<MooreCovergroup *> registeredCovergroups;
+
+/// Global test name for coverage database operations.
+/// This is used when saving coverage databases to identify the test run.
+thread_local std::string globalTestName;
 
 /// Helper to track unique values seen by a coverpoint using a simple set.
 /// For production use, this could be replaced with a more efficient data
@@ -5505,7 +5510,36 @@ struct MooreCoverageDB {
     std::vector<CoverpointData> coverpoints;
   };
 
+  /// Internal metadata storage (strings are owned by this struct).
+  struct MetadataStorage {
+    std::string testName;
+    int64_t timestamp = 0;
+    std::string simulator;
+    std::string version;
+    std::string comment;
+  };
+
   std::vector<CovergroupData> covergroups;
+  MetadataStorage metadataStorage;
+  MooreCoverageMetadata metadata = {nullptr, 0, nullptr, nullptr, nullptr};
+  bool hasMetadata = false;
+
+  /// Update the metadata pointers to point to the storage strings.
+  void updateMetadataPointers() {
+    metadata.test_name = metadataStorage.testName.empty()
+                             ? nullptr
+                             : metadataStorage.testName.c_str();
+    metadata.timestamp = metadataStorage.timestamp;
+    metadata.simulator = metadataStorage.simulator.empty()
+                             ? nullptr
+                             : metadataStorage.simulator.c_str();
+    metadata.version = metadataStorage.version.empty()
+                           ? nullptr
+                           : metadataStorage.version.c_str();
+    metadata.comment = metadataStorage.comment.empty()
+                           ? nullptr
+                           : metadataStorage.comment.c_str();
+  }
 
   /// Calculate total coverage across all covergroups.
   double getTotalCoverage() const {
@@ -6582,6 +6616,323 @@ extern "C" double __moore_coverage_db_get_coverage(MooreCoverageDBHandle db,
   }
 
   return -1.0;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Database Persistence with Metadata
+//===----------------------------------------------------------------------===//
+//
+// Enhanced coverage database functions that include metadata such as test name,
+// timestamp, and other information for tracking coverage across multiple runs.
+//
+
+namespace {
+
+/// Generate a complete coverage JSON with metadata.
+/// This is used for save_db operations where we need all the data plus metadata.
+std::string generateFullCoverageJsonWithMetadata(const char *testName,
+                                                  const char *comment) {
+  std::string json = "{\n";
+  json += "  \"coverage_report\": {\n";
+  json += "    \"version\": \"1.1\",\n";
+  json += "    \"generator\": \"circt-moore-runtime\",\n";
+  json += "    \"format\": \"coverage_database\",\n";
+
+  // Add metadata section
+  json += "    \"metadata\": {\n";
+
+  // Test name
+  if (testName && testName[0] != '\0') {
+    json += "      \"test_name\": " + jsonEscapeString(testName) + ",\n";
+  } else if (!globalTestName.empty()) {
+    json += "      \"test_name\": " + jsonEscapeString(globalTestName.c_str()) +
+            ",\n";
+  } else {
+    json += "      \"test_name\": null,\n";
+  }
+
+  // Timestamp (current time in seconds since epoch)
+  int64_t timestamp = static_cast<int64_t>(std::time(nullptr));
+  json += "      \"timestamp\": " + std::to_string(timestamp) + ",\n";
+
+  // Simulator name
+  json += "      \"simulator\": \"circt-moore\",\n";
+
+  // Comment
+  if (comment && comment[0] != '\0') {
+    json += "      \"comment\": " + jsonEscapeString(comment) + "\n";
+  } else {
+    json += "      \"comment\": null\n";
+  }
+
+  json += "    },\n";
+
+  json += "    \"covergroups\": [\n";
+
+  bool firstCg = true;
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    if (!firstCg)
+      json += ",\n";
+    firstCg = false;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+
+    json += "      {\n";
+    json += "        \"name\": " + jsonEscapeString(cg->name) + ",\n";
+    json +=
+        "        \"coverage_percent\": " + std::to_string(cgCoverage) + ",\n";
+    json += "        \"num_coverpoints\": " +
+            std::to_string(cg->num_coverpoints) + ",\n";
+    json += "        \"coverpoints\": [\n";
+
+    bool firstCp = true;
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      if (!firstCp)
+        json += ",\n";
+      firstCp = false;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      auto trackerIt = coverpointTrackers.find(cp);
+
+      json += "          {\n";
+      json += "            \"name\": " + jsonEscapeString(cp->name) + ",\n";
+      json += "            \"coverage_percent\": " +
+              std::to_string(cpCoverage) + ",\n";
+      json += "            \"total_hits\": " + std::to_string(cp->hits) + ",\n";
+      json +=
+          "            \"min_value\": " + std::to_string(cp->min_val) + ",\n";
+      json +=
+          "            \"max_value\": " + std::to_string(cp->max_val) + ",\n";
+
+      // Add explicit bins if present
+      json += "            \"bins\": [\n";
+      auto binIt = explicitBinData.find(cp);
+      if (binIt != explicitBinData.end()) {
+        bool firstBin = true;
+        for (const auto &bin : binIt->second.bins) {
+          if (!firstBin)
+            json += ",\n";
+          firstBin = false;
+
+          const char *binTypeName = "unknown";
+          switch (bin.type) {
+          case MOORE_BIN_VALUE:
+            binTypeName = "value";
+            break;
+          case MOORE_BIN_RANGE:
+            binTypeName = "range";
+            break;
+          case MOORE_BIN_WILDCARD:
+            binTypeName = "wildcard";
+            break;
+          case MOORE_BIN_TRANSITION:
+            binTypeName = "transition";
+            break;
+          }
+
+          json += "              {\n";
+          json += "                \"name\": " + jsonEscapeString(bin.name) +
+                  ",\n";
+          json += "                \"type\": \"" + std::string(binTypeName) +
+                  "\",\n";
+          json += "                \"low\": " + std::to_string(bin.low) + ",\n";
+          json +=
+              "                \"high\": " + std::to_string(bin.high) + ",\n";
+          json += "                \"hit_count\": " +
+                  std::to_string(bin.hit_count) + "\n";
+          json += "              }";
+        }
+      }
+      json += "\n            ],\n";
+
+      // Add ALL value counts (not just top 10) for accurate merging
+      json += "            \"top_values\": [\n";
+      if (trackerIt != coverpointTrackers.end()) {
+        bool firstVal = true;
+        for (const auto &kv : trackerIt->second.valueCounts) {
+          if (!firstVal)
+            json += ",\n";
+          firstVal = false;
+          json += "              {\"value\": " + std::to_string(kv.first) +
+                  ", \"count\": " + std::to_string(kv.second) + "}";
+        }
+      }
+      json += "\n            ]\n";
+      json += "          }";
+    }
+
+    json += "\n        ]\n";
+    json += "      }";
+  }
+
+  json += "\n    ]\n";
+  json += "  }\n";
+  json += "}\n";
+
+  return json;
+}
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_coverage_save_db(const char *filename,
+                                             const char *test_name,
+                                             const char *comment) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  std::string json = generateFullCoverageJsonWithMetadata(test_name, comment);
+  std::fwrite(json.c_str(), 1, json.size(), fp);
+  std::fclose(fp);
+
+  return 0;
+}
+
+extern "C" MooreCoverageDBHandle __moore_coverage_load_db(const char *filename) {
+  if (!filename)
+    return nullptr;
+
+  FILE *fp = std::fopen(filename, "r");
+  if (!fp)
+    return nullptr;
+
+  // Read the entire file
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  if (fileSize <= 0) {
+    std::fclose(fp);
+    return nullptr;
+  }
+
+  std::string json(fileSize, '\0');
+  size_t bytesRead = std::fread(&json[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  if (bytesRead != static_cast<size_t>(fileSize))
+    return nullptr;
+
+  // Parse the JSON using the existing parser
+  auto *db = new MooreCoverageDB();
+  SimpleJsonParser parser(json);
+  if (!parser.parse(*db)) {
+    delete db;
+    return nullptr;
+  }
+
+  // Parse metadata manually since it's a new field
+  // Look for "metadata" section in the JSON
+  size_t metadataPos = json.find("\"metadata\"");
+  if (metadataPos != std::string::npos) {
+    db->hasMetadata = true;
+
+    // Find test_name
+    size_t testNamePos = json.find("\"test_name\"", metadataPos);
+    if (testNamePos != std::string::npos) {
+      size_t colonPos = json.find(':', testNamePos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && json[valueStart] == '"') {
+          size_t valueEnd = json.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            db->metadataStorage.testName =
+                json.substr(valueStart + 1, valueEnd - valueStart - 1);
+          }
+        }
+      }
+    }
+
+    // Find timestamp
+    size_t timestampPos = json.find("\"timestamp\"", metadataPos);
+    if (timestampPos != std::string::npos) {
+      size_t colonPos = json.find(':', timestampPos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos) {
+          db->metadataStorage.timestamp = std::stoll(json.substr(valueStart));
+        }
+      }
+    }
+
+    // Find simulator
+    size_t simulatorPos = json.find("\"simulator\"", metadataPos);
+    if (simulatorPos != std::string::npos) {
+      size_t colonPos = json.find(':', simulatorPos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && json[valueStart] == '"') {
+          size_t valueEnd = json.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            db->metadataStorage.simulator =
+                json.substr(valueStart + 1, valueEnd - valueStart - 1);
+          }
+        }
+      }
+    }
+
+    // Find comment
+    size_t commentPos = json.find("\"comment\"", metadataPos);
+    if (commentPos != std::string::npos) {
+      size_t colonPos = json.find(':', commentPos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && json[valueStart] == '"') {
+          size_t valueEnd = json.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            db->metadataStorage.comment =
+                json.substr(valueStart + 1, valueEnd - valueStart - 1);
+          }
+        }
+      }
+    }
+
+    // Find version (in metadata section)
+    // Note: version is also at the top level, we look for it in metadata first
+    db->metadataStorage.version = "1.1"; // Default version for new format
+
+    db->updateMetadataPointers();
+  }
+
+  return db;
+}
+
+extern "C" int32_t __moore_coverage_merge_db(const char *filename) {
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  if (!db)
+    return 1;
+
+  int32_t result = __moore_coverage_merge(db);
+  __moore_coverage_db_free(db);
+  return result;
+}
+
+extern "C" const MooreCoverageMetadata *
+__moore_coverage_db_get_metadata(MooreCoverageDBHandle db) {
+  if (!db || !db->hasMetadata)
+    return nullptr;
+  return &db->metadata;
+}
+
+extern "C" void __moore_coverage_set_test_name(const char *test_name) {
+  if (test_name)
+    globalTestName = test_name;
+  else
+    globalTestName.clear();
+}
+
+extern "C" const char *__moore_coverage_get_test_name(void) {
+  return globalTestName.empty() ? nullptr : globalTestName.c_str();
 }
 
 //===----------------------------------------------------------------------===//

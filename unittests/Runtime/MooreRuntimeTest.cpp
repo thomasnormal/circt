@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string>
 
 namespace {
@@ -4276,6 +4277,309 @@ TEST(MooreRuntimeCoverageMergeTest, GoalTrackingAfterMerge) {
   EXPECT_GT(coverage, 0.0);
 
   // Clean up
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Database Persistence with Metadata Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageDBTest, SaveDBWithTestName) {
+  // Create a covergroup and sample some values
+  void *cg = __moore_covergroup_create("save_db_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+  __moore_coverpoint_sample(cg, 0, 100);
+
+  const char *filename = "/tmp/coverage_db_test.json";
+  int32_t result = __moore_coverage_save_db(filename, "my_test_run", "Test comment");
+  EXPECT_EQ(result, 0);
+
+  // Load and verify metadata
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->test_name, "my_test_run");
+  EXPECT_GT(meta->timestamp, 0);
+  EXPECT_STREQ(meta->simulator, "circt-moore");
+  EXPECT_STREQ(meta->comment, "Test comment");
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeCoverageDBTest, SaveDBNullFilename) {
+  int32_t result = __moore_coverage_save_db(nullptr, "test", nullptr);
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeCoverageDBTest, SaveDBNullTestName) {
+  // Create a covergroup
+  void *cg = __moore_covergroup_create("save_null_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  const char *filename = "/tmp/coverage_db_null_test.json";
+  int32_t result = __moore_coverage_save_db(filename, nullptr, nullptr);
+  EXPECT_EQ(result, 0);
+
+  // Load and verify metadata has null test_name
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_EQ(meta->test_name, nullptr);
+  EXPECT_GT(meta->timestamp, 0);
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeCoverageDBTest, LoadDBNullFilename) {
+  MooreCoverageDBHandle db = __moore_coverage_load_db(nullptr);
+  EXPECT_EQ(db, nullptr);
+}
+
+TEST(MooreRuntimeCoverageDBTest, LoadDBNonexistent) {
+  MooreCoverageDBHandle db = __moore_coverage_load_db("/tmp/nonexistent_coverage_db.json");
+  EXPECT_EQ(db, nullptr);
+}
+
+TEST(MooreRuntimeCoverageDBTest, MergeDBFromFile) {
+  // Create a covergroup with initial samples
+  void *cg = __moore_covergroup_create("merge_db_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+
+  const char *filename = "/tmp/merge_db_test.json";
+  __moore_coverage_save_db(filename, "first_run", nullptr);
+
+  // Reset and sample new values
+  __moore_coverpoint_reset(cg, 0);
+  __moore_coverpoint_sample(cg, 0, 3);
+  __moore_coverpoint_sample(cg, 0, 4);
+
+  // Merge the saved database
+  int32_t result = __moore_coverage_merge_db(filename);
+  EXPECT_EQ(result, 0);
+
+  // Coverage should include merged data
+  double coverage = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(coverage, 0.0);
+
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeCoverageDBTest, MergeDBNullFilename) {
+  int32_t result = __moore_coverage_merge_db(nullptr);
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeCoverageDBTest, MergeDBNonexistent) {
+  int32_t result = __moore_coverage_merge_db("/tmp/nonexistent_merge_db.json");
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeCoverageDBTest, GetMetadataNullHandle) {
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(nullptr);
+  EXPECT_EQ(meta, nullptr);
+}
+
+TEST(MooreRuntimeCoverageDBTest, SetAndGetGlobalTestName) {
+  // Initially should be null
+  EXPECT_EQ(__moore_coverage_get_test_name(), nullptr);
+
+  // Set a test name
+  __moore_coverage_set_test_name("global_test_name");
+  EXPECT_STREQ(__moore_coverage_get_test_name(), "global_test_name");
+
+  // Create and save - should use global test name
+  void *cg = __moore_covergroup_create("global_name_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  const char *filename = "/tmp/global_name_test.json";
+  __moore_coverage_save_db(filename, nullptr, nullptr);
+
+  // Load and verify global name was used
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->test_name, "global_test_name");
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+
+  // Clear global test name
+  __moore_coverage_set_test_name(nullptr);
+  EXPECT_EQ(__moore_coverage_get_test_name(), nullptr);
+}
+
+TEST(MooreRuntimeCoverageDBTest, ExplicitNameOverridesGlobal) {
+  // Set a global test name
+  __moore_coverage_set_test_name("global_name");
+
+  void *cg = __moore_covergroup_create("override_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  const char *filename = "/tmp/override_name_test.json";
+  __moore_coverage_save_db(filename, "explicit_name", nullptr);
+
+  // Load and verify explicit name was used
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->test_name, "explicit_name");
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+
+  // Clear global test name
+  __moore_coverage_set_test_name(nullptr);
+}
+
+TEST(MooreRuntimeCoverageDBTest, TimestampIsRecent) {
+  void *cg = __moore_covergroup_create("timestamp_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  int64_t beforeSave = static_cast<int64_t>(std::time(nullptr));
+
+  const char *filename = "/tmp/timestamp_test.json";
+  __moore_coverage_save_db(filename, "ts_test", nullptr);
+
+  int64_t afterSave = static_cast<int64_t>(std::time(nullptr));
+
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  ASSERT_NE(db, nullptr);
+
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_GE(meta->timestamp, beforeSave);
+  EXPECT_LE(meta->timestamp, afterSave);
+
+  __moore_coverage_db_free(db);
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeCoverageDBTest, LoadDBWithBinsAndMerge) {
+  // Create covergroup with explicit bins
+  void *cg = __moore_covergroup_create("bin_db_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"low", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 50, 0},
+      {"high", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 51, 100, 0}};
+  __moore_coverpoint_init_with_bins(cg, 0, "cp_bins", bins, 2);
+
+  // Sample low values
+  __moore_coverpoint_sample(cg, 0, 10);
+  __moore_coverpoint_sample(cg, 0, 20);
+
+  const char *filename = "/tmp/bin_db_test.json";
+  __moore_coverage_save_db(filename, "bin_test", nullptr);
+
+  // Reset and sample high values
+  __moore_coverpoint_reset(cg, 0);
+  __moore_coverpoint_sample(cg, 0, 60);
+  __moore_coverpoint_sample(cg, 0, 70);
+
+  // Merge
+  int32_t result = __moore_coverage_merge_db(filename);
+  EXPECT_EQ(result, 0);
+
+  // Both bins should now have hits
+  EXPECT_GT(__moore_coverpoint_get_bin_hits(cg, 0, 0), 0);
+  EXPECT_GT(__moore_coverpoint_get_bin_hits(cg, 0, 1), 0);
+
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeCoverageDBTest, MultipleMerges) {
+  // Create covergroup
+  void *cg = __moore_covergroup_create("multi_merge_test", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"bin1", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 1, 1, 0}};
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Sample and save first run
+  for (int i = 0; i < 3; i++) {
+    __moore_coverpoint_sample(cg, 0, 1);
+  }
+  const char *file1 = "/tmp/multi_merge1.json";
+  __moore_coverage_save_db(file1, "run1", nullptr);
+
+  // Reset, sample, and save second run
+  __moore_coverpoint_reset(cg, 0);
+  for (int i = 0; i < 5; i++) {
+    __moore_coverpoint_sample(cg, 0, 1);
+  }
+  const char *file2 = "/tmp/multi_merge2.json";
+  __moore_coverage_save_db(file2, "run2", nullptr);
+
+  // Reset and start fresh
+  __moore_coverpoint_reset(cg, 0);
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 0);
+
+  // Merge both files
+  __moore_coverage_merge_db(file1);
+  __moore_coverage_merge_db(file2);
+
+  // Should have 8 hits total (3 + 5)
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 8);
+
+  __moore_covergroup_destroy(cg);
+  std::remove(file1);
+  std::remove(file2);
+}
+
+TEST(MooreRuntimeCoverageDBTest, MetadataPreservedAcrossLoadSave) {
+  // Create and save with metadata
+  void *cg = __moore_covergroup_create("preserve_meta_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  const char *filename = "/tmp/preserve_meta_test.json";
+  __moore_coverage_save_db(filename, "original_test", "Original comment");
+
+  // Load
+  MooreCoverageDBHandle db = __moore_coverage_load_db(filename);
+  ASSERT_NE(db, nullptr);
+
+  // Verify original metadata
+  const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+  ASSERT_NE(meta, nullptr);
+  EXPECT_STREQ(meta->test_name, "original_test");
+  EXPECT_STREQ(meta->comment, "Original comment");
+  EXPECT_GT(meta->timestamp, 0);
+
+  __moore_coverage_db_free(db);
   __moore_covergroup_destroy(cg);
   std::remove(filename);
 }
