@@ -1,0 +1,1 @@
+notify = ["python3", "/home/thomas-ahle/circt/.codex/auto_continue.py"]

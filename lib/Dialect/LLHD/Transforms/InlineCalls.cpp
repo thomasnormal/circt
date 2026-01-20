@@ -12,6 +12,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Threading.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CallInterfaces.h"
@@ -73,6 +74,37 @@ struct FunctionInliner : public InlinerInterface {
   }
 };
 
+static LogicalResult inlineSingleBlockCall(func::CallOp callOp,
+                                           func::FuncOp funcOp) {
+  if (!funcOp || funcOp.empty())
+    return failure();
+  if (!funcOp.getBody().hasOneBlock())
+    return failure();
+
+  auto &calleeBlock = funcOp.getBody().front();
+  auto returnOp = dyn_cast<func::ReturnOp>(calleeBlock.getTerminator());
+  if (!returnOp)
+    return failure();
+
+  IRMapping mapping;
+  for (auto [arg, operand] :
+       llvm::zip(calleeBlock.getArguments(), callOp.getOperands()))
+    mapping.map(arg, operand);
+
+  OpBuilder builder(callOp);
+  for (auto &op : calleeBlock.without_terminator())
+    builder.clone(op, mapping);
+
+  SmallVector<Value> results;
+  results.reserve(returnOp.getNumOperands());
+  for (auto value : returnOp.getOperands())
+    results.push_back(mapping.lookup(value));
+
+  if (!results.empty())
+    callOp.replaceAllUsesWith(results);
+  return success();
+}
+
 /// Pass implementation.
 struct InlineCallsPass
     : public llhd::impl::InlineCallsPassBase<InlineCallsPass> {
@@ -85,13 +117,13 @@ struct InlineCallsPass
 
 void InlineCallsPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
-  if (failed(failableParallelForEach(
-          &getContext(), getOperation().getOps<hw::HWModuleOp>(),
-          [&](auto module) {
-            CallStack callStack;
-            return runOnRegion(module.getBody(), symbolTable, callStack);
-          })))
-    signalPassFailure();
+  for (auto module : getOperation().getOps<hw::HWModuleOp>()) {
+    CallStack callStack;
+    if (failed(runOnRegion(module.getBody(), symbolTable, callStack))) {
+      signalPassFailure();
+      return;
+    }
+  }
 }
 
 LogicalResult InlineCallsPass::runOnRegion(Region &region,
@@ -140,10 +172,33 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
         return failure();
       }
 
+      if (!callOp->getParentWithTrait<ProceduralRegion>() &&
+          callOp->getParentRegion()->hasOneBlock()) {
+        if (!callStack.insert(funcOp)) {
+          auto diag = callOp.emitError(
+              "recursive function call cannot be inlined (unsupported in --ir-hw)");
+          diag.attachNote(funcOp.getLoc())
+              << "callee is " << funcOp.getSymName();
+          return failure();
+        }
+        if (failed(inlineSingleBlockCall(callOp, funcOp)))
+          return callOp.emitError(
+              "function call cannot be inlined in this region");
+        callStack.remove(funcOp);
+        ++numInlined;
+        callsToErase.push_back(callOp);
+        continue;
+      }
+
       // Ensure that we are not recursively inlining a function, which would
       // just expand infinitely in the IR.
-      if (!callStack.insert(funcOp))
-        return callOp.emitError("recursive function call cannot be inlined");
+      if (!callStack.insert(funcOp)) {
+        auto diag = callOp.emitError(
+            "recursive function call cannot be inlined (unsupported in --ir-hw)");
+        diag.attachNote(funcOp.getLoc())
+            << "callee is " << funcOp.getSymName();
+        return failure();
+      }
       inlineEndMarkers.push_back({op.getNextNode(), funcOp});
 
       // Inline the function body and remember the call for later removal. The

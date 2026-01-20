@@ -286,6 +286,9 @@ struct ModuleVisitor : public BaseVisitor {
   // Skip ports which are already handled by the module itself.
   LogicalResult visit(const slang::ast::PortSymbol &) { return success(); }
   LogicalResult visit(const slang::ast::MultiPortSymbol &) { return success(); }
+  LogicalResult visit(const slang::ast::InterfacePortSymbol &) {
+    return success();
+  }
 
   // Skip genvars.
   LogicalResult visit(const slang::ast::GenvarSymbol &genvarNode) {
@@ -301,12 +304,50 @@ struct ModuleVisitor : public BaseVisitor {
     return success();
   }
 
+  SmallString<64>
+  formatInstanceName(const slang::ast::InstanceSymbolBase &instNode) {
+    SmallString<64> name(blockNamePrefix);
+    if (!instNode.arrayPath.empty()) {
+      slang::SmallVector<slang::ConstantRange, 4> dimensions;
+      instNode.getArrayDimensions(dimensions);
+      name += instNode.getArrayName();
+      auto dimCount = std::min(dimensions.size(), instNode.arrayPath.size());
+      for (size_t i = 0; i < dimCount; ++i) {
+        auto &range = dimensions[i];
+        int32_t relIndex = static_cast<int32_t>(instNode.arrayPath[i]);
+        int32_t actualIndex =
+            range.isLittleEndian() ? range.lower() + relIndex
+                                   : range.upper() - relIndex;
+        name += '_';
+        Twine(actualIndex).toVector(name);
+      }
+      return name;
+    }
+
+    name += instNode.name;
+    return name;
+  }
+
+  // Handle instance arrays.
+  LogicalResult visit(const slang::ast::InstanceArraySymbol &arrayNode) {
+    for (const auto *element : arrayNode.elements) {
+      if (!element)
+        continue;
+      if (failed(element->visit(ModuleVisitor(context, loc, blockNamePrefix))))
+        return failure();
+    }
+    return success();
+  }
+
   // Handle instances.
   LogicalResult visit(const slang::ast::InstanceSymbol &instNode) {
     using slang::ast::ArgumentDirection;
     using slang::ast::AssignmentExpression;
+    using slang::ast::InterfacePortSymbol;
     using slang::ast::MultiPortSymbol;
     using slang::ast::PortSymbol;
+
+    auto instanceName = formatInstanceName(instNode);
 
     // Check if this is an interface instance
     auto kind = instNode.body.getDefinition().definitionKind;
@@ -327,7 +368,7 @@ struct ModuleVisitor : public BaseVisitor {
       // Create the interface instance op and store it for later lookup
       auto instOp = moore::InterfaceInstanceOp::create(
           builder, loc, vifRefType,
-          builder.getStringAttr(Twine(blockNamePrefix) + instNode.name),
+          builder.getStringAttr(instanceName),
           ifaceRef);
 
       // Store the interface instance for lookup when it's referenced
@@ -350,60 +391,95 @@ struct ModuleVisitor : public BaseVisitor {
     // rvalues for input ports and appropriate lvalues for output, inout, and
     // ref ports. We also separate multi-ports into the individual underlying
     // ports with their corresponding connection.
-    SmallDenseMap<const PortSymbol *, Value> portValues;
+    SmallDenseMap<const slang::ast::Symbol *, Value> portValues;
     portValues.reserve(moduleType.getNumPorts());
 
+    auto canonicalPortSymbol =
+        [&](const slang::ast::Symbol &symbol) -> const slang::ast::Symbol * {
+      if (auto *existing =
+              moduleLowering->portsBySyntaxNode.lookup(symbol.getSyntax()))
+        return existing;
+      return &symbol;
+    };
+
     for (const auto *con : instNode.getPortConnections()) {
+      const auto *portSymbol = canonicalPortSymbol(con->port);
+
+      if (auto *ifacePort = portSymbol->as_if<InterfacePortSymbol>()) {
+        auto [ifaceConn, modportSym] = con->getIfaceConn();
+        (void)modportSym;
+        if (!ifaceConn) {
+          return mlir::emitError(loc)
+                 << "unsupported unconnected interface port `"
+                 << ifacePort->name << "`";
+        }
+        auto *instSym = ifaceConn->as_if<slang::ast::InstanceSymbol>();
+        if (!instSym) {
+          return mlir::emitError(loc)
+                 << "unsupported interface port connection for `"
+                 << ifacePort->name << "`";
+        }
+        auto it = context.interfaceInstances.find(instSym);
+        if (it == context.interfaceInstances.end()) {
+          return mlir::emitError(loc)
+                 << "unknown interface instance for port `" << ifacePort->name
+                 << "`";
+        }
+        portValues.insert({portSymbol, it->second});
+        continue;
+      }
+
       const auto *expr = con->getExpression();
 
       // Handle unconnected behavior. The expression is null if it have no
       // connection for the port.
       if (!expr) {
-        auto *port = con->port.as_if<PortSymbol>();
-        if (auto *existingPort =
-                moduleLowering->portsBySyntaxNode.lookup(port->getSyntax()))
-          port = existingPort;
+        if (auto *port = portSymbol->as_if<PortSymbol>()) {
+          switch (port->direction) {
+          case ArgumentDirection::In: {
+            auto refType = moore::RefType::get(
+                cast<moore::UnpackedType>(context.convertType(port->getType())));
 
-        switch (port->direction) {
-        case ArgumentDirection::In: {
-          auto refType = moore::RefType::get(
-              cast<moore::UnpackedType>(context.convertType(port->getType())));
-
-          if (const auto *net =
-                  port->internalSymbol->as_if<slang::ast::NetSymbol>()) {
-            auto netOp = moore::NetOp::create(
-                builder, loc, refType,
-                StringAttr::get(builder.getContext(), net->name),
-                convertNetKind(net->netType.netKind), nullptr);
-            auto readOp = moore::ReadOp::create(builder, loc, netOp);
-            portValues.insert({port, readOp});
-          } else if (const auto *var =
-                         port->internalSymbol
-                             ->as_if<slang::ast::VariableSymbol>()) {
-            auto varOp = moore::VariableOp::create(
-                builder, loc, refType,
-                StringAttr::get(builder.getContext(), var->name), nullptr);
-            auto readOp = moore::ReadOp::create(builder, loc, varOp);
-            portValues.insert({port, readOp});
-          } else {
-            return mlir::emitError(loc)
-                   << "unsupported internal symbol for unconnected port `"
-                   << port->name << "`";
+            if (const auto *net =
+                    port->internalSymbol->as_if<slang::ast::NetSymbol>()) {
+              auto netOp = moore::NetOp::create(
+                  builder, loc, refType,
+                  StringAttr::get(builder.getContext(), net->name),
+                  convertNetKind(net->netType.netKind), nullptr);
+              auto readOp = moore::ReadOp::create(builder, loc, netOp);
+              portValues.insert({portSymbol, readOp});
+            } else if (const auto *var =
+                           port->internalSymbol
+                               ->as_if<slang::ast::VariableSymbol>()) {
+              auto varOp = moore::VariableOp::create(
+                  builder, loc, refType,
+                  StringAttr::get(builder.getContext(), var->name), nullptr);
+              auto readOp = moore::ReadOp::create(builder, loc, varOp);
+              portValues.insert({portSymbol, readOp});
+            } else {
+              return mlir::emitError(loc)
+                     << "unsupported internal symbol for unconnected port `"
+                     << port->name << "`";
+            }
+            continue;
           }
-          continue;
+
+          // No need to express unconnected behavior for output port, skip to the
+          // next iteration of the loop.
+          case ArgumentDirection::Out:
+            continue;
+
+          // TODO: Mark Inout port as unsupported and it will be supported later.
+          default:
+            return mlir::emitError(loc)
+                   << "unsupported port `" << port->name << "` ("
+                   << slang::ast::toString(port->kind) << ")";
+          }
         }
 
-        // No need to express unconnected behavior for output port, skip to the
-        // next iteration of the loop.
-        case ArgumentDirection::Out:
-          continue;
-
-        // TODO: Mark Inout port as unsupported and it will be supported later.
-        default:
-          return mlir::emitError(loc)
-                 << "unsupported port `" << port->name << "` ("
-                 << slang::ast::toString(port->kind) << ")";
-        }
+        return mlir::emitError(loc)
+               << "unsupported port `" << portSymbol->name << "` ("
+               << slang::ast::toString(portSymbol->kind) << ")";
       }
 
       // Unpack the `<expr> = EmptyArgument` pattern emitted by Slang for
@@ -414,33 +490,27 @@ struct ModuleVisitor : public BaseVisitor {
       // Regular ports lower the connected expression to an lvalue or rvalue and
       // either attach it to the instance as an operand (for input, inout, and
       // ref ports), or assign an instance output to it (for output ports).
-      if (auto *port = con->port.as_if<PortSymbol>()) {
+      if (auto *port = portSymbol->as_if<PortSymbol>()) {
         // Convert as rvalue for inputs, lvalue for all others.
         auto value = (port->direction == ArgumentDirection::In)
                          ? context.convertRvalueExpression(*expr)
                          : context.convertLvalueExpression(*expr);
         if (!value)
           return failure();
-        if (auto *existingPort =
-                moduleLowering->portsBySyntaxNode.lookup(con->port.getSyntax()))
-          port = existingPort;
-        portValues.insert({port, value});
+        portValues.insert({portSymbol, value});
         continue;
       }
 
       // Multi-ports lower the connected expression to an lvalue and then slice
       // it up into multiple sub-values, one for each of the ports in the
       // multi-port.
-      if (const auto *multiPort = con->port.as_if<MultiPortSymbol>()) {
+      if (const auto *multiPort = portSymbol->as_if<MultiPortSymbol>()) {
         // Convert as lvalue.
         auto value = context.convertLvalueExpression(*expr);
         if (!value)
           return failure();
         unsigned offset = 0;
         for (const auto *port : llvm::reverse(multiPort->ports)) {
-          if (auto *existingPort = moduleLowering->portsBySyntaxNode.lookup(
-                  con->port.getSyntax()))
-            port = existingPort;
           unsigned width = port->getType().getBitWidth();
           auto sliceType = context.convertType(port->getType());
           if (!sliceType)
@@ -452,7 +522,9 @@ struct ModuleVisitor : public BaseVisitor {
           // Create the "ReadOp" for input ports.
           if (port->direction == ArgumentDirection::In)
             slice = moore::ReadOp::create(builder, loc, slice);
-          portValues.insert({port, slice});
+          if (const auto *slicePort =
+                  canonicalPortSymbol(*port)->as_if<PortSymbol>())
+            portValues.insert({slicePort, slice});
           offset += width;
         }
         continue;
@@ -471,11 +543,15 @@ struct ModuleVisitor : public BaseVisitor {
     outputValues.reserve(moduleType.getNumOutputs());
 
     for (auto &port : moduleLowering->ports) {
-      auto value = portValues.lookup(&port.ast);
-      if (port.ast.direction == ArgumentDirection::Out)
-        outputValues.push_back(value);
-      else
+      auto value = portValues.lookup(port.symbol);
+      if (auto *portSym = port.symbol->as_if<PortSymbol>()) {
+        if (portSym->direction == ArgumentDirection::Out)
+          outputValues.push_back(value);
+        else
+          inputValues.push_back(value);
+      } else {
         inputValues.push_back(value);
+      }
     }
 
     // Insert conversions for input ports.
@@ -496,7 +572,7 @@ struct ModuleVisitor : public BaseVisitor {
     auto outputNames = builder.getArrayAttr(moduleType.getOutputNames());
     auto inst = moore::InstanceOp::create(
         builder, loc, moduleType.getOutputTypes(),
-        builder.getStringAttr(Twine(blockNamePrefix) + instNode.name),
+        builder.getStringAttr(instanceName),
         FlatSymbolRefAttr::get(module.getSymNameAttr()), inputValues,
         inputNames, outputNames);
 
@@ -572,9 +648,20 @@ struct ModuleVisitor : public BaseVisitor {
 
   // Handle continuous assignments.
   LogicalResult visit(const slang::ast::ContinuousAssignSymbol &assignNode) {
-    const auto &expr =
-        assignNode.getAssignment().as<slang::ast::AssignmentExpression>();
-    auto lhs = context.convertLvalueExpression(expr.left());
+    const auto *expr =
+        assignNode.getAssignment().as_if<slang::ast::AssignmentExpression>();
+    if (!expr) {
+      if (context.options.allowNonProceduralDynamic.value_or(false)) {
+        mlir::emitWarning(loc)
+            << "skipping continuous assignment without an assignment "
+               "expression after DynamicNotProcedural downgrade";
+        return success();
+      }
+      mlir::emitError(loc)
+          << "expected assignment expression in continuous assignment";
+      return failure();
+    }
+    auto lhs = context.convertLvalueExpression(expr->left());
     if (!lhs)
       return failure();
 
@@ -591,7 +678,7 @@ struct ModuleVisitor : public BaseVisitor {
       return failure();
     }
 
-    auto rhs = context.convertRvalueExpression(expr.right(), lhsNestedType);
+    auto rhs = context.convertRvalueExpression(expr->right(), lhsNestedType);
     if (!rhs)
       return failure();
 
@@ -875,6 +962,7 @@ LogicalResult Context::convertCompilation() {
 ModuleLowering *
 Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
   using slang::ast::ArgumentDirection;
+  using slang::ast::InterfacePortSymbol;
   using slang::ast::MultiPortSymbol;
   using slang::ast::ParameterSymbol;
   using slang::ast::PortSymbol;
@@ -978,7 +1066,44 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
         arg = block->addArgument(type, portLoc);
         inputIdx++;
       }
-      lowering.ports.push_back({port, portLoc, arg});
+      lowering.ports.push_back({&port, portLoc, arg});
+      return success();
+    };
+
+    auto handleInterfacePort = [&](const InterfacePortSymbol &port) {
+      auto portLoc = convertLocation(port.location);
+      if (!port.interfaceDef) {
+        mlir::emitError(portLoc)
+            << "unsupported generic interface port `" << port.name << "`";
+        return failure();
+      }
+
+      auto &ifaceBody = slang::ast::InstanceBodySymbol::fromDefinition(
+          compilation, *port.interfaceDef, port.location,
+          slang::ast::InstanceFlags::None, nullptr, nullptr, nullptr);
+      auto *ifaceLowering = convertInterfaceHeader(&ifaceBody);
+      if (!ifaceLowering)
+        return failure();
+
+      auto ifaceName = ifaceLowering->op.getSymName();
+      mlir::SymbolRefAttr ifaceRef;
+      if (!port.modport.empty()) {
+        ifaceRef = mlir::SymbolRefAttr::get(
+            getContext(),
+            ifaceName,
+            {mlir::FlatSymbolRefAttr::get(getContext(),
+                                          port.modport)});
+      } else {
+        ifaceRef = mlir::FlatSymbolRefAttr::get(getContext(), ifaceName);
+      }
+
+      auto vifType = moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+      auto portType = moore::RefType::get(vifType);
+      auto portName = builder.getStringAttr(port.name);
+      modulePorts.push_back({portName, portType, hw::ModulePort::Input});
+      auto arg = block->addArgument(portType, portLoc);
+      lowering.ports.push_back({&port, portLoc, arg});
+      inputIdx++;
       return success();
     };
 
@@ -989,6 +1114,9 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
       for (auto *port : multiPort->ports)
         if (failed(handlePort(*port)))
           return {};
+    } else if (const auto *ifacePort = symbol->as_if<InterfacePortSymbol>()) {
+      if (failed(handleInterfacePort(*ifacePort)))
+        return {};
     } else {
       mlir::emitError(convertLocation(symbol->location))
           << "unsupported module port `" << symbol->name << "` ("
@@ -1043,7 +1171,8 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
 
   // Map duplicate port by Syntax
   for (const auto &port : lowering.ports)
-    lowering.portsBySyntaxNode.insert({port.ast.getSyntax(), &port.ast});
+    if (auto *syntax = port.symbol->getSyntax())
+      lowering.portsBySyntaxNode.insert({syntax, port.symbol});
 
   return &lowering;
 }
@@ -1057,6 +1186,19 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   builder.setInsertionPointToEnd(lowering.op.getBody());
 
   ValueSymbolScope scope(valueSymbols);
+  SmallVector<const slang::ast::InterfacePortSymbol *> ifacePortSymbols;
+  auto ifacePortGuard = llvm::make_scope_exit([&] {
+    for (auto *ifacePort : ifacePortSymbols)
+      interfacePortValues.erase(ifacePort);
+  });
+
+  for (auto &port : lowering.ports) {
+    if (auto *ifacePort =
+            port.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
+      interfacePortValues[ifacePort] = port.arg;
+      ifacePortSymbols.push_back(ifacePort);
+    }
+  }
 
   // Keep track of the current scope for %m format specifier.
   auto prevScope = currentScope;
@@ -1089,21 +1231,36 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   // terminator.
   SmallVector<Value> outputs;
   for (auto &port : lowering.ports) {
+    if (auto *ifacePort =
+            port.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
+      auto [ifaceConn, modportSym] = ifacePort->getConnection();
+      (void)modportSym;
+      if (auto *instSym =
+              ifaceConn ? ifaceConn->as_if<slang::ast::InstanceSymbol>()
+                        : nullptr)
+        interfaceInstances[instSym] = port.arg;
+      continue;
+    }
+
+    auto *portSym = port.symbol->as_if<slang::ast::PortSymbol>();
+    if (!portSym)
+      return mlir::emitError(port.loc, "unsupported port: `")
+             << port.symbol->name << "` has no PortSymbol mapping";
     Value value;
-    if (auto *expr = port.ast.getInternalExpr()) {
+    if (auto *expr = portSym->getInternalExpr()) {
       value = convertLvalueExpression(*expr);
-    } else if (port.ast.internalSymbol) {
+    } else if (portSym->internalSymbol) {
       if (const auto *sym =
-              port.ast.internalSymbol->as_if<slang::ast::ValueSymbol>())
+              portSym->internalSymbol->as_if<slang::ast::ValueSymbol>())
         value = valueSymbols.lookup(sym);
     }
     if (!value)
       return mlir::emitError(port.loc, "unsupported port: `")
-             << port.ast.name
+             << portSym->name
              << "` does not map to an internal symbol or expression";
 
     // Collect output port values to be returned in the terminator.
-    if (port.ast.direction == slang::ast::ArgumentDirection::Out) {
+    if (portSym->direction == slang::ast::ArgumentDirection::Out) {
       if (isa<moore::RefType>(value.getType()))
         value = moore::ReadOp::create(builder, value.getLoc(), value);
       outputs.push_back(value);
@@ -1113,7 +1270,7 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     // Assign the value coming in through the port to the internal net or symbol
     // of that port.
     Value portArg = port.arg;
-    if (port.ast.direction != slang::ast::ArgumentDirection::In)
+    if (portSym->direction != slang::ast::ArgumentDirection::In)
       portArg = moore::ReadOp::create(builder, port.loc, port.arg);
     moore::ContinuousAssignOp::create(builder, port.loc, value, portArg);
   }
@@ -2753,6 +2910,27 @@ LogicalResult Context::convertStaticClassProperty(
   return success();
 }
 
+void Context::captureRef(Value ref) {
+  if (!currentFunctionLowering || !ref)
+    return;
+
+  auto *lowering = currentFunctionLowering;
+  if (!isa<moore::RefType>(ref.getType()))
+    return;
+
+  mlir::Region *defReg = ref.getParentRegion();
+  if (defReg && lowering->op.getBody().isAncestor(defReg))
+    return;
+
+  if (lowering->captureIndex.count(ref))
+    return;
+
+  auto [it, inserted] =
+      lowering->captureIndex.try_emplace(ref, lowering->captures.size());
+  if (inserted)
+    lowering->captures.push_back(ref);
+}
+
 //===----------------------------------------------------------------------===//
 // Covergroup Conversion
 //===----------------------------------------------------------------------===//
@@ -2919,7 +3097,9 @@ static CoverageOptions extractCoverageOptions(
     const auto &expr = opt.getExpression();
     const slang::ast::Expression *valueExpr = &expr;
     if (expr.kind == slang::ast::ExpressionKind::Assignment) {
-      valueExpr = &expr.as<slang::ast::AssignmentExpression>().right();
+      if (const auto *assignExpr =
+              expr.as_if<slang::ast::AssignmentExpression>())
+        valueExpr = &assignExpr->right();
     }
 
     // Extract integer value if possible

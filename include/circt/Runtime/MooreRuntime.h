@@ -671,6 +671,15 @@ enum MooreBinType {
   MOORE_BIN_TRANSITION = 3 ///< Transition bin: bins x = (1 => 2);
 };
 
+/// Coverage bin kind (normal, illegal, or ignore).
+/// These correspond to SystemVerilog bin declarations.
+/// IEEE 1800-2017 Section 19.5.
+enum MooreBinKind {
+  MOORE_BIN_KIND_NORMAL = 0,  ///< Regular bin: bins x = {...}
+  MOORE_BIN_KIND_ILLEGAL = 1, ///< Illegal bin: illegal_bins x = {...}
+  MOORE_BIN_KIND_IGNORE = 2   ///< Ignore bin: ignore_bins x = {...}
+};
+
 /// Transition repeat kinds for sequence coverage bins.
 /// Corresponds to SystemVerilog transition repeat specifications.
 enum MooreTransitionRepeatKind {
@@ -703,12 +712,17 @@ typedef struct {
 /// Coverage bin definition structure.
 /// @member name Name of the bin
 /// @member type Type of bin (value, range, wildcard, transition)
-/// @member low Lower bound of range (or single value for value bins)
-/// @member high Upper bound of range (same as low for value bins)
+/// @member kind Kind of bin (normal, illegal, ignore)
+/// @member low For value/range bins: lower bound of range (or single value).
+///             For wildcard bins: the pattern value (don't care bits are 0).
+/// @member high For value/range bins: upper bound of range (same as low for value bins).
+///              For wildcard bins: the mask (1 = don't care, 0 = must match).
+///              Wildcard match formula: ((value ^ low) & ~high) == 0
 /// @member hit_count Number of times this bin was hit
 typedef struct {
   const char *name;
   int32_t type;
+  int32_t kind;  ///< MooreBinKind: normal, illegal, or ignore
   int64_t low;
   int64_t high;
   int64_t hit_count;
@@ -889,6 +903,152 @@ double __moore_cross_get_coverage(void *cg, int32_t cross_index);
 int64_t __moore_cross_get_bins_hit(void *cg, int32_t cross_index);
 
 //===----------------------------------------------------------------------===//
+// Cross Coverage Named Bins and Filtering
+//===----------------------------------------------------------------------===//
+//
+// Enhanced cross coverage supporting named bins with binsof expressions,
+// ignore_bins, and illegal_bins. This implements SystemVerilog cross coverage
+// constructs like:
+//   cross cp1, cp2 {
+//     bins both_low = binsof(cp1.low) && binsof(cp2.low);
+//     ignore_bins skip = binsof(cp1.high) && binsof(cp2.low);
+//     illegal_bins bad = binsof(cp1) intersect {0} && binsof(cp2) intersect {0};
+//   }
+//
+
+/// Cross bin filter type for named cross bins.
+/// Specifies how a named cross bin filters the cross product space.
+enum MooreCrossBinKind {
+  MOORE_CROSS_BIN_NORMAL = 0,  ///< Normal named cross bin
+  MOORE_CROSS_BIN_IGNORE = 1,  ///< Ignore bin (excluded from coverage)
+  MOORE_CROSS_BIN_ILLEGAL = 2  ///< Illegal bin (triggers error if hit)
+};
+
+/// Binsof filter for a single coverpoint in a cross bin expression.
+/// Specifies which bins of a coverpoint are included in the cross bin.
+/// @member cp_index Index of the coverpoint in the cross
+/// @member bin_indices Array of bin indices to include (NULL = all bins)
+/// @member num_bins Number of bin indices (0 = all bins)
+/// @member values Array of specific values to intersect (NULL = no value filter)
+/// @member num_values Number of intersect values (0 = no value filter)
+/// @member negate If true, negate the filter (!binsof)
+typedef struct {
+  int32_t cp_index;
+  int32_t *bin_indices;
+  int32_t num_bins;
+  int64_t *values;
+  int32_t num_values;
+  bool negate;
+} MooreCrossBinsofFilter;
+
+/// Named cross bin definition.
+/// @member name Name of the cross bin
+/// @member kind Type of bin (normal, ignore, illegal)
+/// @member filters Array of binsof filters (AND-ed together)
+/// @member num_filters Number of filters in the expression
+/// @member hit_count Number of times this named bin was hit
+typedef struct {
+  const char *name;
+  int32_t kind;
+  MooreCrossBinsofFilter *filters;
+  int32_t num_filters;
+  int64_t hit_count;
+} MooreCrossBinDef;
+
+/// Add a named bin to a cross coverage item.
+/// Named bins allow filtering the cross product space using binsof expressions.
+///
+/// Example: bins both_high = binsof(cp1.high) && binsof(cp2.high);
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross (from __moore_cross_create)
+/// @param name Name of the cross bin
+/// @param kind Type of bin (normal, ignore, illegal)
+/// @param filters Array of binsof filters
+/// @param num_filters Number of filters
+/// @return Index of the created cross bin, or -1 on failure
+int32_t __moore_cross_add_named_bin(void *cg, int32_t cross_index,
+                                     const char *name, int32_t kind,
+                                     MooreCrossBinsofFilter *filters,
+                                     int32_t num_filters);
+
+/// Add an ignore_bins entry to a cross coverage item.
+/// Shorthand for __moore_cross_add_named_bin with MOORE_CROSS_BIN_IGNORE.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @param name Name of the ignore bin
+/// @param filters Array of binsof filters
+/// @param num_filters Number of filters
+/// @return Index of the created cross bin, or -1 on failure
+int32_t __moore_cross_add_ignore_bin(void *cg, int32_t cross_index,
+                                      const char *name,
+                                      MooreCrossBinsofFilter *filters,
+                                      int32_t num_filters);
+
+/// Add an illegal_bins entry to a cross coverage item.
+/// Shorthand for __moore_cross_add_named_bin with MOORE_CROSS_BIN_ILLEGAL.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @param name Name of the illegal bin
+/// @param filters Array of binsof filters
+/// @param num_filters Number of filters
+/// @return Index of the created cross bin, or -1 on failure
+int32_t __moore_cross_add_illegal_bin(void *cg, int32_t cross_index,
+                                       const char *name,
+                                       MooreCrossBinsofFilter *filters,
+                                       int32_t num_filters);
+
+/// Get the hit count for a named cross bin.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @param bin_index Index of the named cross bin
+/// @return Number of times the named bin was hit
+int64_t __moore_cross_get_named_bin_hits(void *cg, int32_t cross_index,
+                                          int32_t bin_index);
+
+/// Check if a value tuple matches any illegal cross bin.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @param values Array of values (one per coverpoint in the cross)
+/// @return true if the value tuple matches an illegal cross bin
+bool __moore_cross_is_illegal(void *cg, int32_t cross_index, int64_t *values);
+
+/// Check if a value tuple matches any ignore cross bin.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @param values Array of values (one per coverpoint in the cross)
+/// @return true if the value tuple matches an ignore cross bin
+bool __moore_cross_is_ignored(void *cg, int32_t cross_index, int64_t *values);
+
+/// Get the number of named bins defined for a cross.
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @return Number of named bins (including ignore and illegal bins)
+int32_t __moore_cross_get_num_named_bins(void *cg, int32_t cross_index);
+
+/// Illegal cross bin callback function type.
+/// Called when an illegal cross bin is hit during sampling.
+typedef void (*MooreIllegalCrossBinCallback)(const char *cg_name,
+                                              const char *cross_name,
+                                              const char *bin_name,
+                                              int64_t *values,
+                                              int32_t num_values,
+                                              void *userData);
+
+/// Register a callback for illegal cross bin hits.
+///
+/// @param callback The callback function to register
+/// @param userData User data to pass to the callback
+void __moore_cross_set_illegal_bin_callback(MooreIllegalCrossBinCallback callback,
+                                             void *userData);
+
+//===----------------------------------------------------------------------===//
 // Coverage Reset and Aggregation
 //===----------------------------------------------------------------------===//
 
@@ -1067,6 +1227,184 @@ double __moore_covergroup_get_weighted_coverage(void *cg);
 /// @return true if bin hits >= at_least threshold
 bool __moore_coverpoint_bin_covered(void *cg, int32_t cp_index,
                                      int32_t bin_index);
+
+//===----------------------------------------------------------------------===//
+// Illegal Bins and Ignore Bins Runtime Support
+//===----------------------------------------------------------------------===//
+//
+// These functions implement runtime enforcement for illegal_bins and
+// ignore_bins as specified in IEEE 1800-2017 Section 19.5.
+//
+// - illegal_bins: Values that should never occur. Hitting an illegal bin
+//   triggers an error/warning at runtime.
+// - ignore_bins: Values to exclude from coverage calculation. These values
+//   do not count toward coverage metrics.
+//
+
+/// Result code for illegal bin detection.
+enum MooreIllegalBinResult {
+  MOORE_ILLEGAL_BIN_OK = 0,       ///< No illegal bin was hit
+  MOORE_ILLEGAL_BIN_HIT = 1,      ///< An illegal bin was hit
+  MOORE_ILLEGAL_BIN_WARNING = 2   ///< Warning-only mode (non-fatal)
+};
+
+/// Illegal bin callback function type.
+/// Called when an illegal bin is hit during sampling.
+/// @param cg_name Name of the covergroup
+/// @param cp_name Name of the coverpoint
+/// @param bin_name Name of the illegal bin that was hit
+/// @param value The sampled value that matched the illegal bin
+/// @param userData User-provided context data
+typedef void (*MooreIllegalBinCallback)(const char *cg_name, const char *cp_name,
+                                         const char *bin_name, int64_t value,
+                                         void *userData);
+
+/// Set illegal bins for a coverpoint.
+/// Marks specified value ranges as illegal. Sampling a value that matches
+/// an illegal bin will trigger an error or warning.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bins Array of bin definitions (must have kind = MOORE_BIN_KIND_ILLEGAL)
+/// @param num_bins Number of bins in the array
+void __moore_coverpoint_set_illegal_bins(void *cg, int32_t cp_index,
+                                          MooreCoverageBin *bins,
+                                          int32_t num_bins);
+
+/// Set ignore bins for a coverpoint.
+/// Marks specified value ranges as ignored. Sampling a value that matches
+/// an ignore bin will not count toward coverage metrics.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bins Array of bin definitions (must have kind = MOORE_BIN_KIND_IGNORE)
+/// @param num_bins Number of bins in the array
+void __moore_coverpoint_set_ignore_bins(void *cg, int32_t cp_index,
+                                         MooreCoverageBin *bins,
+                                         int32_t num_bins);
+
+/// Add a single illegal bin to a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the illegal bin
+/// @param low Lower bound of the illegal range
+/// @param high Upper bound of the illegal range
+void __moore_coverpoint_add_illegal_bin(void *cg, int32_t cp_index,
+                                         const char *bin_name,
+                                         int64_t low, int64_t high);
+
+/// Add a single ignore bin to a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param bin_name Name of the ignore bin
+/// @param low Lower bound of the ignore range
+/// @param high Upper bound of the ignore range
+void __moore_coverpoint_add_ignore_bin(void *cg, int32_t cp_index,
+                                        const char *bin_name,
+                                        int64_t low, int64_t high);
+
+/// Register a callback for illegal bin hits.
+/// The callback will be invoked whenever an illegal bin is hit during sampling.
+/// Set to NULL to disable the callback.
+///
+/// @param callback The callback function to register
+/// @param userData User data to pass to the callback
+void __moore_coverage_set_illegal_bin_callback(MooreIllegalBinCallback callback,
+                                                void *userData);
+
+/// Enable or disable fatal errors on illegal bin hits.
+/// When enabled (default), hitting an illegal bin will cause the simulation
+/// to terminate with an error. When disabled, only a warning is issued.
+///
+/// @param fatal true for fatal errors, false for warnings only
+void __moore_coverage_set_illegal_bin_fatal(bool fatal);
+
+/// Check if illegal bin hits are configured as fatal.
+///
+/// @return true if illegal bin hits cause fatal errors
+bool __moore_coverage_illegal_bin_is_fatal(void);
+
+/// Get the count of illegal bin hits since the start of simulation.
+///
+/// @return Total number of illegal bin hits
+int64_t __moore_coverage_get_illegal_bin_hits(void);
+
+/// Reset the illegal bin hit counter.
+void __moore_coverage_reset_illegal_bin_hits(void);
+
+/// Check if a value matches any ignore bin for a coverpoint.
+/// This can be used to filter samples before processing.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param value The value to check
+/// @return true if the value matches an ignore bin
+bool __moore_coverpoint_is_ignored(void *cg, int32_t cp_index, int64_t value);
+
+/// Check if a value matches any illegal bin for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param value The value to check
+/// @return true if the value matches an illegal bin
+bool __moore_coverpoint_is_illegal(void *cg, int32_t cp_index, int64_t value);
+
+//===----------------------------------------------------------------------===//
+// Coverage Exclusion API
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime coverage exclusion/filtering capabilities.
+// Exclusions can be added programmatically or loaded from exclusion files.
+// This implements functionality similar to commercial simulator exclusion
+// file formats.
+//
+
+/// Add a coverage exclusion pattern.
+/// Excludes matching covergroups/coverpoints/bins from coverage calculation.
+/// Pattern format: "covergroup_name.coverpoint_name.bin_name"
+/// Supports wildcards: "*" matches any sequence, "?" matches single character.
+///
+/// @param pattern The exclusion pattern (null-terminated string)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_add_exclusion(const char *pattern);
+
+/// Remove a coverage exclusion pattern.
+///
+/// @param pattern The pattern to remove
+/// @return 0 if pattern was found and removed, non-zero otherwise
+int32_t __moore_coverage_remove_exclusion(const char *pattern);
+
+/// Clear all coverage exclusion patterns.
+void __moore_coverage_clear_exclusions(void);
+
+/// Load exclusion patterns from a file.
+/// File format: one pattern per line, lines starting with '#' are comments.
+///
+/// @param filename Path to the exclusion file
+/// @return Number of patterns loaded, or -1 on error
+int32_t __moore_coverage_load_exclusions(const char *filename);
+
+/// Save current exclusion patterns to a file.
+///
+/// @param filename Path to the output file
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_save_exclusions(const char *filename);
+
+/// Check if a specific bin is excluded by the current exclusion patterns.
+///
+/// @param cg_name Name of the covergroup
+/// @param cp_name Name of the coverpoint
+/// @param bin_name Name of the bin
+/// @return true if the bin is excluded
+bool __moore_coverage_is_excluded(const char *cg_name, const char *cp_name,
+                                   const char *bin_name);
+
+/// Get the number of active exclusion patterns.
+///
+/// @return Number of exclusion patterns
+int32_t __moore_coverage_get_exclusion_count(void);
 
 //===----------------------------------------------------------------------===//
 // HTML Coverage Report
@@ -1303,6 +1641,193 @@ void __moore_constraint_set_warnings_enabled(bool enabled);
 /// Check if constraint solving warnings are enabled.
 /// @return true if warnings are enabled, false otherwise
 bool __moore_constraint_warnings_enabled(void);
+
+//===----------------------------------------------------------------------===//
+// Pre/Post Randomize Callbacks
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog supports pre_randomize() and post_randomize() callback methods
+// that are invoked before and after randomization respectively.
+// IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
+//
+
+/// Call pre_randomize() callback on a class object.
+/// This is called before the randomization process begins.
+/// @param classPtr Pointer to the class instance
+///
+/// NOTE: The MooreToCore lowering now generates direct calls to user-defined
+/// pre_randomize methods. This runtime function is a fallback stub.
+void __moore_call_pre_randomize(void *classPtr);
+
+/// Call post_randomize() callback on a class object.
+/// This is called after randomization succeeds.
+/// @param classPtr Pointer to the class instance
+///
+/// NOTE: The MooreToCore lowering now generates direct calls to user-defined
+/// post_randomize methods. This runtime function is a fallback stub.
+void __moore_call_post_randomize(void *classPtr);
+
+//===----------------------------------------------------------------------===//
+// Constraint Mode Control
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog supports constraint_mode() to enable/disable constraints.
+// IEEE 1800-2017 Section 18.8 "Disabling random variables and constraints".
+//
+// constraint_mode(0) disables a constraint
+// constraint_mode(1) enables a constraint
+// constraint_mode() returns the current mode (0 or 1)
+//
+
+/// Get the current constraint mode (1 = enabled, 0 = disabled).
+/// Returns 1 if the constraint has not been explicitly disabled.
+/// @param classPtr Pointer to the class instance
+/// @param constraintName Name of the constraint (NULL for class-level query)
+/// @return Current mode (0 = disabled, 1 = enabled)
+int32_t __moore_constraint_mode_get(void *classPtr, const char *constraintName);
+
+/// Set the constraint mode and return the previous mode.
+/// @param classPtr Pointer to the class instance
+/// @param constraintName Name of the constraint (NULL for class-level)
+/// @param mode New mode: 0 = disable, 1 = enable
+/// @return Previous mode value
+int32_t __moore_constraint_mode_set(void *classPtr, const char *constraintName,
+                                    int32_t mode);
+
+/// Disable all constraints on a class object.
+/// @param classPtr Pointer to the class instance
+/// @return 1 if any constraints were enabled, 0 otherwise
+int32_t __moore_constraint_mode_disable_all(void *classPtr);
+
+/// Enable all constraints on a class object.
+/// @param classPtr Pointer to the class instance
+/// @return 1 if any constraints were disabled, 0 otherwise
+int32_t __moore_constraint_mode_enable_all(void *classPtr);
+
+/// Check if a specific constraint is enabled.
+/// Takes into account both individual constraint mode and "disable all" flag.
+/// @param classPtr Pointer to the class instance
+/// @param constraintName Name of the constraint to check
+/// @return 1 if enabled, 0 if disabled
+int32_t __moore_is_constraint_enabled(void *classPtr,
+                                      const char *constraintName);
+
+//===----------------------------------------------------------------------===//
+// Array Constraint Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for array constraint features:
+// - Unique constraints: ensure all elements have distinct values
+// - Foreach constraints: element-wise constraint validation
+// - Size constraints: array size validation
+// - Sum constraints: aggregate constraint validation
+//
+// IEEE 1800-2017 Section 18.5.5 "Uniqueness constraints"
+// IEEE 1800-2017 Section 18.5.8 "Foreach constraints"
+//
+
+/// Check if all elements in an array are unique.
+/// This implements the SystemVerilog `unique {arr}` constraint.
+/// @param array Pointer to the array data
+/// @param numElements Number of elements in the array
+/// @param elementSize Size of each element in bytes
+/// @return 1 if all elements are unique, 0 if duplicates exist
+int32_t __moore_constraint_unique_check(void *array, int64_t numElements,
+                                        int64_t elementSize);
+
+/// Check if multiple scalar variables are all unique.
+/// This implements the SystemVerilog `unique {a, b, c}` constraint.
+/// @param values Pointer to array of values to check
+/// @param numValues Number of values in the array
+/// @param valueSize Size of each value in bytes
+/// @return 1 if all values are unique, 0 if duplicates exist
+int32_t __moore_constraint_unique_scalars(void *values, int64_t numValues,
+                                          int64_t valueSize);
+
+/// Randomize an array ensuring all elements are unique.
+/// Generates random values for each element such that no two elements are equal.
+/// @param array Pointer to the array data (modified in place)
+/// @param numElements Number of elements in the array
+/// @param elementSize Size of each element in bytes
+/// @param minValue Minimum allowed value for elements
+/// @param maxValue Maximum allowed value for elements
+/// @return 1 on success, 0 if unable to generate unique values
+int32_t __moore_randomize_unique_array(void *array, int64_t numElements,
+                                       int64_t elementSize, int64_t minValue,
+                                       int64_t maxValue);
+
+/// Validate a foreach constraint on an array.
+/// Checks that all elements satisfy a predicate function.
+/// @param array Pointer to the array data
+/// @param numElements Number of elements in the array
+/// @param elementSize Size of each element in bytes
+/// @param predicate Function to check each element
+/// @param userData User data passed to predicate
+/// @return 1 if all elements satisfy the predicate, 0 otherwise
+int32_t __moore_constraint_foreach_validate(void *array, int64_t numElements,
+                                            int64_t elementSize,
+                                            MooreConstraintPredicate predicate,
+                                            void *userData);
+
+/// Validate an array size constraint.
+/// Checks that the array has exactly the expected number of elements.
+/// @param array Pointer to the array structure (queue or dynamic array)
+/// @param expectedSize Expected number of elements
+/// @return 1 if size matches, 0 otherwise
+int32_t __moore_constraint_size_check(MooreQueue *array, int64_t expectedSize);
+
+/// Validate an array sum constraint.
+/// Checks that the sum of all elements equals the expected value.
+/// @param array Pointer to the array structure
+/// @param elementSize Size of each element in bytes
+/// @param expectedSum Expected sum of all elements
+/// @return 1 if sum matches, 0 otherwise
+int32_t __moore_constraint_sum_check(MooreQueue *array, int64_t elementSize,
+                                     int64_t expectedSum);
+
+//===----------------------------------------------------------------------===//
+// Rand Mode Control
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog supports rand_mode() to enable/disable random variables.
+// IEEE 1800-2017 Section 18.8 "Disabling random variables and constraints".
+//
+// rand_mode(0) disables a random variable or all variables on an object
+// rand_mode(1) enables a random variable or all variables on an object
+// rand_mode() returns the current mode (0 or 1)
+//
+
+/// Get the current rand mode (1 = enabled, 0 = disabled).
+/// Returns 1 if the variable has not been explicitly disabled.
+/// @param classPtr Pointer to the class instance
+/// @param propertyName Name of the property (NULL for class-level query)
+/// @return Current mode (0 = disabled, 1 = enabled)
+int32_t __moore_rand_mode_get(void *classPtr, const char *propertyName);
+
+/// Set the rand mode and return the previous mode.
+/// @param classPtr Pointer to the class instance
+/// @param propertyName Name of the property (NULL for class-level)
+/// @param mode New mode: 0 = disable, 1 = enable
+/// @return Previous mode value
+int32_t __moore_rand_mode_set(void *classPtr, const char *propertyName,
+                              int32_t mode);
+
+/// Disable all random variables on a class object.
+/// @param classPtr Pointer to the class instance
+/// @return 1 if any variables were enabled, 0 otherwise
+int32_t __moore_rand_mode_disable_all(void *classPtr);
+
+/// Enable all random variables on a class object.
+/// @param classPtr Pointer to the class instance
+/// @return 1 if any variables were disabled, 0 otherwise
+int32_t __moore_rand_mode_enable_all(void *classPtr);
+
+/// Check if a specific random variable is enabled.
+/// Takes into account both individual rand mode and "disable all" flag.
+/// @param classPtr Pointer to the class instance
+/// @param propertyName Name of the property to check
+/// @return 1 if enabled, 0 if disabled
+int32_t __moore_is_rand_enabled(void *classPtr, const char *propertyName);
 
 //===----------------------------------------------------------------------===//
 // File I/O Operations

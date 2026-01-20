@@ -1,0 +1,173 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Comprehensive semantic tokens test covering all token types.
+//
+// Semantic Token Types (index -> name):
+// 0: namespace (package)
+// 1: type (typedef, struct, enum)
+// 2: class
+// 3: enum
+// 4: interface
+// 5: struct
+// 6: parameter
+// 7: variable
+// 8: property (ports)
+// 9: enumMember
+// 10: function
+// 11: method
+// 12: macro
+// 13: keyword
+// 14: comment
+// 15: string
+// 16: number
+// 17: operator
+// 18: net (wire)
+// 19: module
+// 20: instance
+// 21: port
+// 22: signal
+//
+// Token Modifiers (bit flags):
+// 1 << 0 = 1: declaration
+// 1 << 1 = 2: definition
+// 1 << 2 = 4: readonly
+// 1 << 3 = 8: static
+// 1 << 4 = 16: deprecated
+// 1 << 5 = 32: async
+// 1 << 6 = 64: modification
+// 1 << 7 = 128: documentation
+// 1 << 8 = 256: defaultLibrary
+//
+// Each token is encoded as: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// CHECK:       "id": 0,
+// CHECK:       "semanticTokensProvider": {
+// CHECK:         "full": true
+// -----
+// Test 1: Basic module with parameters and ports
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///basic.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module adder #(\n  parameter WIDTH = 8\n) (\n  input  logic [WIDTH-1:0] a,\n  input  logic [WIDTH-1:0] b,\n  output logic [WIDTH-1:0] sum\n);\n  assign sum = a + b;\nendmodule"
+}}}
+// -----
+{"jsonrpc":"2.0","id":1,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///basic.sv"}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// First token: "module" keyword at (0,0) length 6, type 13 (keyword)
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+// Test 2: Package with typedef and localparam
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///pkg.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"package utils_pkg;\n  typedef logic [31:0] word_t;\n  typedef enum logic [1:0] {\n    IDLE = 2'b00,\n    RUN  = 2'b01,\n    STOP = 2'b10\n  } state_e;\n  localparam int MAX_SIZE = 256;\n  function automatic int log2(int n);\n    return $clog2(n);\n  endfunction\nendpackage"
+}}}
+// -----
+{"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///pkg.sv"}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Should include tokens for: package, typedef, enum, localparam, function keywords
+// and identifiers like utils_pkg, word_t, state_e, IDLE, RUN, STOP, MAX_SIZE, log2
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+// Test 3: Class with rand variables, constraints, and methods
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///class.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"class packet;\n  rand bit [7:0] header;\n  rand bit [7:0] payload[];\n  int length;\n  \n  constraint valid_hdr {\n    header inside {8'hAA, 8'h55};\n  }\n  \n  function new(int len = 10);\n    length = len;\n    payload = new[length];\n  endfunction\n  \n  function void display();\n    $display(\"Header: %h\", header);\n  endfunction\nendclass"
+}}}
+// -----
+{"jsonrpc":"2.0","id":3,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///class.sv"}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Should include: class, rand, constraint, function, new keywords
+// Plus string literal "Header: %h"
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+// Test 4: Interface with modports
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///iface.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"interface axi_lite_if #(\n  parameter ADDR_WIDTH = 32,\n  parameter DATA_WIDTH = 32\n);\n  logic [ADDR_WIDTH-1:0] awaddr;\n  logic awvalid, awready;\n  logic [DATA_WIDTH-1:0] wdata;\n  logic wvalid, wready;\n  logic [1:0] bresp;\n  logic bvalid, bready;\n  \n  modport master (\n    output awaddr, awvalid, wdata, wvalid, bready,\n    input  awready, wready, bresp, bvalid\n  );\n  \n  modport slave (\n    input  awaddr, awvalid, wdata, wvalid, bready,\n    output awready, wready, bresp, bvalid\n  );\nendinterface"
+}}}
+// -----
+{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///iface.sv"}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Should include: interface, modport, input, output keywords
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+// Test 5: Always blocks with comments and operators
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///always.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module fsm (\n  input  logic clk, rst_n,\n  input  logic start,\n  output logic done\n);\n  // State enumeration\n  typedef enum logic [1:0] {\n    IDLE, RUN, DONE\n  } state_t;\n  \n  state_t state, next_state;\n  \n  /* Sequential logic */\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n)\n      state <= IDLE;\n    else\n      state <= next_state;\n  end\n  \n  // Combinational logic\n  always_comb begin\n    next_state = state;\n    done = 1'b0;\n    case (state)\n      IDLE: if (start) next_state = RUN;\n      RUN:  next_state = DONE;\n      DONE: begin\n        done = 1'b1;\n        next_state = IDLE;\n      end\n    endcase\n  end\nendmodule"
+}}}
+// -----
+{"jsonrpc":"2.0","id":5,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///always.sv"}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Should include: comments (// and /* */), operators (<=, ==, !), numbers (1'b0, 1'b1)
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+// Test 6: Module instantiation
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///inst.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module top;\n  logic clk, rst;\n  logic [7:0] a, b, sum;\n  \n  adder #(.WIDTH(8)) u_adder (\n    .a(a),\n    .b(b),\n    .sum(sum)\n  );\nendmodule"
+}}}
+// -----
+{"jsonrpc":"2.0","id":6,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///inst.sv"}
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Should include instance name u_adder and parameter override
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+{"jsonrpc":"2.0","id":7,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

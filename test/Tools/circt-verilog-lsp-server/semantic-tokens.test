@@ -63,6 +63,46 @@
 // CHECK:         ]
 // CHECK-NEXT:  }
 // -----
-{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+// Test classes with methods (UVM-style)
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///class.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"class my_transaction;\n  rand bit [7:0] data;\n  rand bit [3:0] addr;\n  constraint valid_addr { addr < 10; }\n  function void display();\n    $display(\"data=%0d\", data);\n  endfunction\nendclass"
+}}}
+// -----
+{"jsonrpc":"2.0","id":3,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///class.sv"}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Verify we get tokens for class, rand, constraint, function keywords
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+// Test interface with modports
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///iface.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"interface simple_bus;\n  logic req, gnt;\n  logic [7:0] addr, data;\n  modport master(output req, addr, input gnt, data);\n  modport slave(input req, addr, output gnt, data);\nendinterface"
+}}}
+// -----
+{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{
+  "textDocument":{"uri":"test:///iface.sv"}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "data": [
+// Verify tokens for interface, modport keywords
+// CHECK:         0,
+// CHECK:         ]
+// CHECK-NEXT:  }
+// -----
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
 // -----
 {"jsonrpc":"2.0","method":"exit"}

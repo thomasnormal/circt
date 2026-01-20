@@ -131,6 +131,13 @@ struct ImportVerilogOptions {
   /// A list of paths in which to suppress warnings.
   std::vector<std::string> suppressWarningsPaths;
 
+  /// If true, ignore timing controls (event/delay waits) during lowering.
+  std::optional<bool> ignoreTimingControls;
+
+  /// If true, allow dynamic type members in non-procedural contexts.
+  std::optional<bool> allowNonProceduralDynamic;
+
+
   //===--------------------------------------------------------------------===//
   // File lists
   //===--------------------------------------------------------------------===//

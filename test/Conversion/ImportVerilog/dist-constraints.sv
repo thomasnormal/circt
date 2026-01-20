@@ -27,6 +27,13 @@ class DistTest;
     mode dist { [1:5] :/ 100 };
   }
 
+  // Distribution with unbounded range
+  // CHECK: moore.constraint.block @c_unbounded
+  constraint c_unbounded {
+    // CHECK: moore.constraint.dist %{{.*}}, [11, 255], [1], [0]
+    value dist { [11:$] := 1 };
+  }
+
   // Mixed distribution
   // CHECK: moore.constraint.block @c_mixed
   constraint c_mixed {

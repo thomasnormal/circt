@@ -2571,6 +2571,299 @@ TEST(MooreRuntimeCrossCoverageTest, CrossGetCoverage) {
 }
 
 //===----------------------------------------------------------------------===//
+// Cross Coverage Named Bins Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCrossCoverageTest, CrossAddNamedBin) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add a named bin with no filters (matches everything)
+  int32_t binIdx = __moore_cross_add_named_bin(cg, crossIdx, "all_bins",
+                                                MOORE_CROSS_BIN_NORMAL,
+                                                nullptr, 0);
+  EXPECT_GE(binIdx, 0);
+
+  // Verify the bin was added
+  EXPECT_EQ(__moore_cross_get_num_named_bins(cg, crossIdx), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossNamedBinHits) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add a named bin that matches everything
+  int32_t binIdx = __moore_cross_add_named_bin(cg, crossIdx, "all_bins",
+                                                MOORE_CROSS_BIN_NORMAL,
+                                                nullptr, 0);
+  EXPECT_GE(binIdx, 0);
+
+  // Sample a value
+  __moore_coverpoint_sample(cg, 0, 5);
+  __moore_coverpoint_sample(cg, 1, 10);
+  int64_t vals[] = {5, 10};
+  __moore_cross_sample(cg, vals, 2);
+
+  // The named bin should have been hit
+  EXPECT_EQ(__moore_cross_get_named_bin_hits(cg, crossIdx, binIdx), 1);
+
+  // Sample another value
+  int64_t vals2[] = {6, 11};
+  __moore_cross_sample(cg, vals2, 2);
+
+  // The named bin should have been hit again
+  EXPECT_EQ(__moore_cross_get_named_bin_hits(cg, crossIdx, binIdx), 2);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossIgnoreBins) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add an ignore bin that filters out cp0 == 0 (using intersect values)
+  MooreCrossBinsofFilter filter;
+  filter.cp_index = 0;
+  filter.bin_indices = nullptr;
+  filter.num_bins = 0;
+  int64_t ignoreValues[] = {0};
+  filter.values = ignoreValues;
+  filter.num_values = 1;
+  filter.negate = false;
+
+  int32_t ignoreBinIdx = __moore_cross_add_ignore_bin(cg, crossIdx,
+                                                       "ignore_zero",
+                                                       &filter, 1);
+  EXPECT_GE(ignoreBinIdx, 0);
+
+  // Sample values - one should be ignored
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 1, 10);
+
+  // Sample with cp0=0 (should be ignored)
+  int64_t vals1[] = {0, 10};
+  __moore_cross_sample(cg, vals1, 2);
+
+  // Sample with cp0=1 (should NOT be ignored)
+  int64_t vals2[] = {1, 10};
+  __moore_cross_sample(cg, vals2, 2);
+
+  // Only 1 cross bin should be recorded (the non-ignored one)
+  EXPECT_EQ(__moore_cross_get_bins_hit(cg, crossIdx), 1);
+
+  // Check if values are correctly identified as ignored
+  EXPECT_TRUE(__moore_cross_is_ignored(cg, crossIdx, vals1));
+  EXPECT_FALSE(__moore_cross_is_ignored(cg, crossIdx, vals2));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBins) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add an illegal bin that matches cp0 == 100 AND cp1 == 200
+  MooreCrossBinsofFilter filters[2];
+
+  // Filter for cp0
+  int64_t cp0Values[] = {100};
+  filters[0].cp_index = 0;
+  filters[0].bin_indices = nullptr;
+  filters[0].num_bins = 0;
+  filters[0].values = cp0Values;
+  filters[0].num_values = 1;
+  filters[0].negate = false;
+
+  // Filter for cp1
+  int64_t cp1Values[] = {200};
+  filters[1].cp_index = 1;
+  filters[1].bin_indices = nullptr;
+  filters[1].num_bins = 0;
+  filters[1].values = cp1Values;
+  filters[1].num_values = 1;
+  filters[1].negate = false;
+
+  int32_t illegalBinIdx = __moore_cross_add_illegal_bin(cg, crossIdx,
+                                                         "bad_combo",
+                                                         filters, 2);
+  EXPECT_GE(illegalBinIdx, 0);
+
+  // Check that illegal combination is detected
+  int64_t illegalVals[] = {100, 200};
+  EXPECT_TRUE(__moore_cross_is_illegal(cg, crossIdx, illegalVals));
+
+  // Check that non-illegal combinations are not detected
+  int64_t normalVals1[] = {100, 199};
+  int64_t normalVals2[] = {99, 200};
+  int64_t normalVals3[] = {1, 2};
+  EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, normalVals1));
+  EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, normalVals2));
+  EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, normalVals3));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBinCallback) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add an illegal bin
+  MooreCrossBinsofFilter filter;
+  int64_t illegalValues[] = {999};
+  filter.cp_index = 0;
+  filter.bin_indices = nullptr;
+  filter.num_bins = 0;
+  filter.values = illegalValues;
+  filter.num_values = 1;
+  filter.negate = false;
+
+  __moore_cross_add_illegal_bin(cg, crossIdx, "illegal_999", &filter, 1);
+
+  // Track callback invocations
+  static bool callbackCalled = false;
+  static std::string lastCgName;
+  static std::string lastCrossName;
+  static std::string lastBinName;
+
+  auto callback = [](const char *cg_name, const char *cross_name,
+                     const char *bin_name, int64_t *values, int32_t num_values,
+                     void *userData) {
+    callbackCalled = true;
+    lastCgName = cg_name ? cg_name : "";
+    lastCrossName = cross_name ? cross_name : "";
+    lastBinName = bin_name ? bin_name : "";
+  };
+
+  callbackCalled = false;
+  __moore_cross_set_illegal_bin_callback(callback, nullptr);
+
+  // Sample the illegal value
+  __moore_coverpoint_sample(cg, 0, 999);
+  __moore_coverpoint_sample(cg, 1, 1);
+  int64_t vals[] = {999, 1};
+  __moore_cross_sample(cg, vals, 2);
+
+  // Verify callback was called with correct info
+  EXPECT_TRUE(callbackCalled);
+  EXPECT_EQ(lastCgName, "test_cg");
+  EXPECT_EQ(lastCrossName, "cross01");
+  EXPECT_EQ(lastBinName, "illegal_999");
+
+  // Clean up
+  __moore_cross_set_illegal_bin_callback(nullptr, nullptr);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossBinsofNegate) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add an ignore bin that uses negation: !binsof(cp0) intersect {5}
+  // This should ignore everything EXCEPT cp0 == 5
+  MooreCrossBinsofFilter filter;
+  int64_t values[] = {5};
+  filter.cp_index = 0;
+  filter.bin_indices = nullptr;
+  filter.num_bins = 0;
+  filter.values = values;
+  filter.num_values = 1;
+  filter.negate = true;  // Negate: ignore when cp0 != 5
+
+  int32_t ignoreBinIdx = __moore_cross_add_ignore_bin(cg, crossIdx,
+                                                       "ignore_not_5",
+                                                       &filter, 1);
+  EXPECT_GE(ignoreBinIdx, 0);
+
+  // Sample with cp0=5 (should NOT be ignored because filter is negated)
+  int64_t vals1[] = {5, 10};
+  EXPECT_FALSE(__moore_cross_is_ignored(cg, crossIdx, vals1));
+
+  // Sample with cp0=3 (should be ignored because 3 != 5 and filter is negated)
+  int64_t vals2[] = {3, 10};
+  EXPECT_TRUE(__moore_cross_is_ignored(cg, crossIdx, vals2));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossResetNamedBins) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Add a named bin
+  int32_t binIdx = __moore_cross_add_named_bin(cg, crossIdx, "all_bins",
+                                                MOORE_CROSS_BIN_NORMAL,
+                                                nullptr, 0);
+  EXPECT_GE(binIdx, 0);
+
+  // Sample some values
+  int64_t vals[] = {1, 2};
+  __moore_cross_sample(cg, vals, 2);
+
+  // Verify the bin was hit
+  EXPECT_EQ(__moore_cross_get_named_bin_hits(cg, crossIdx, binIdx), 1);
+
+  // Reset the covergroup
+  __moore_covergroup_reset(cg);
+
+  // Verify hit count is reset
+  EXPECT_EQ(__moore_cross_get_named_bin_hits(cg, crossIdx, binIdx), 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Reset Tests
 //===----------------------------------------------------------------------===//
 
@@ -2788,6 +3081,225 @@ TEST(MooreRuntimeCoverageTest, AddBinDynamically) {
   // bin0 should be hit, bin1 should not
   EXPECT_GE(__moore_coverpoint_get_bin_hits(cg, 0, 0), 1);
   EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 1), 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// Wildcard Bin Matching Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, WildcardBinBasicMatch) {
+  // Test wildcard bin matching using mask+value encoding
+  // For pattern 4'b1??? (match any 4-bit value starting with 1):
+  // - pattern value (low) = 0b1000 = 8
+  // - mask (high) = 0b0111 = 7 (bits 0-2 are don't care)
+  void *cg = __moore_covergroup_create("wildcard_test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Initialize with a wildcard bin: 4'b1??? matches values 8-15
+  MooreCoverageBin bins[] = {
+      {"high_nibble", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_NORMAL, 8, 7, 0}
+      // low=8 (0b1000), high=7 (0b0111 mask)
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Sample values that should match (8-15)
+  __moore_coverpoint_sample(cg, 0, 8);   // 0b1000 - should match
+  __moore_coverpoint_sample(cg, 0, 9);   // 0b1001 - should match
+  __moore_coverpoint_sample(cg, 0, 15);  // 0b1111 - should match
+
+  // Check that the bin was hit 3 times
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 3);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinNoMatch) {
+  // Test that values not matching the wildcard pattern don't hit the bin
+  void *cg = __moore_covergroup_create("wildcard_nomatch_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Wildcard bin: 4'b1??? matches values 8-15
+  MooreCoverageBin bins[] = {
+      {"high_nibble", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_NORMAL, 8, 7, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Sample values that should NOT match (0-7)
+  __moore_coverpoint_sample(cg, 0, 0);   // 0b0000 - should not match
+  __moore_coverpoint_sample(cg, 0, 1);   // 0b0001 - should not match
+  __moore_coverpoint_sample(cg, 0, 7);   // 0b0111 - should not match
+
+  // The bin should not be hit
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinMiddleBits) {
+  // Test wildcard pattern with don't care in the middle: 8'b10??01??
+  // Pattern: 0b10000100 = 132
+  // Mask: 0b00110011 = 51 (bits 0,1,4,5 are don't care)
+  void *cg = __moore_covergroup_create("wildcard_middle_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"middle_wildcard", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_NORMAL, 132, 51, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Values matching 10xx01xx pattern:
+  // 0b10000100 = 132 - should match
+  // 0b10110111 = 183 - should match (0b10110111)
+  // 0b10000111 = 135 - should match
+  __moore_coverpoint_sample(cg, 0, 132);  // 0b10000100 - should match
+  __moore_coverpoint_sample(cg, 0, 183);  // 0b10110111 - should match
+  __moore_coverpoint_sample(cg, 0, 135);  // 0b10000111 - should match
+
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 3);
+
+  // Values NOT matching:
+  // 0b00000100 = 4 - wrong bit 7
+  // 0b11000100 = 196 - wrong bit 6
+  __moore_coverpoint_sample(cg, 0, 4);    // should not match
+  __moore_coverpoint_sample(cg, 0, 196);  // should not match
+
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 3);  // Still 3
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinAllDontCare) {
+  // Test wildcard pattern where all bits are don't care: ????
+  // This should match any 4-bit value
+  // Pattern: 0, Mask: 0xF (all bits are don't care)
+  void *cg = __moore_covergroup_create("wildcard_alldc_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"all_dontcare", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_NORMAL, 0, 0xF, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // All values 0-15 should match
+  for (int i = 0; i <= 15; i++) {
+    __moore_coverpoint_sample(cg, 0, i);
+  }
+
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 16);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinNoDontCare) {
+  // Test wildcard pattern with no don't care bits (equivalent to value bin)
+  // Pattern: 0b1010 = 10, Mask: 0 (all bits must match)
+  void *cg = __moore_covergroup_create("wildcard_nodc_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"exact_value", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_NORMAL, 10, 0, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Only exact value 10 should match
+  __moore_coverpoint_sample(cg, 0, 9);   // should not match
+  __moore_coverpoint_sample(cg, 0, 10);  // should match
+  __moore_coverpoint_sample(cg, 0, 11);  // should not match
+
+  EXPECT_EQ(__moore_coverpoint_get_bin_hits(cg, 0, 0), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinIllegal) {
+  // Test wildcard pattern for illegal bins
+  // illegal_bins high = 4'b1??? should flag values 8-15 as illegal
+  void *cg = __moore_covergroup_create("wildcard_illegal_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Reset illegal bin state
+  __moore_coverage_reset_illegal_bin_hits();
+  __moore_coverage_set_illegal_bin_fatal(false);  // Don't exit on illegal
+
+  // Set illegal wildcard bin via the set_illegal_bins function
+  MooreCoverageBin illegalBins[] = {
+      {"high_values", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_ILLEGAL, 8, 7, 0}
+  };
+  __moore_coverpoint_set_illegal_bins(cg, 0, illegalBins, 1);
+
+  // Sample legal values (0-7)
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 5);
+  __moore_coverpoint_sample(cg, 0, 7);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 0);
+
+  // Sample illegal values (8-15)
+  __moore_coverpoint_sample(cg, 0, 8);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 1);
+
+  __moore_coverpoint_sample(cg, 0, 15);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 2);
+
+  __moore_covergroup_destroy(cg);
+  __moore_coverage_reset_illegal_bin_hits();
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinIgnore) {
+  // Test wildcard pattern for ignore bins
+  // ignore_bins reserved = 8'b1111???? should ignore values 240-255
+  void *cg = __moore_covergroup_create("wildcard_ignore_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Set ignore wildcard bin
+  // Pattern: 0b11110000 = 240, Mask: 0b00001111 = 15
+  MooreCoverageBin ignoreBins[] = {
+      {"reserved", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_IGNORE, 240, 15, 0}
+  };
+  __moore_coverpoint_set_ignore_bins(cg, 0, ignoreBins, 1);
+
+  // Check ignored values
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 240));   // 0b11110000
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 255));   // 0b11111111
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 245));   // 0b11110101
+
+  // Check non-ignored values
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 0));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 128));  // 0b10000000
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 239));  // 0b11101111
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, WildcardBinIsIllegalCheck) {
+  // Test __moore_coverpoint_is_illegal with wildcard bins
+  void *cg = __moore_covergroup_create("wildcard_is_illegal_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Add wildcard illegal bin: 4'b11?? (values 12-15)
+  // Pattern: 0b1100 = 12, Mask: 0b0011 = 3
+  MooreCoverageBin illegalBins[] = {
+      {"top_quarter", MOORE_BIN_WILDCARD, MOORE_BIN_KIND_ILLEGAL, 12, 3, 0}
+  };
+  __moore_coverpoint_set_illegal_bins(cg, 0, illegalBins, 1);
+
+  // Check illegal values (12-15)
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 12));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 13));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 14));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 15));
+
+  // Check legal values (0-11)
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 0));
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 8));
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 11));
 
   __moore_covergroup_destroy(cg);
 }
@@ -3187,6 +3699,873 @@ TEST(MooreRuntimeCoverageMergeTest, GoalTrackingAfterMerge) {
   // Clean up
   __moore_covergroup_destroy(cg);
   std::remove(filename);
+}
+
+//===----------------------------------------------------------------------===//
+// Illegal Bins and Ignore Bins Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeIllegalBinsTest, DetectIllegalBinHit) {
+  // Create a covergroup with a coverpoint
+  void *cg = __moore_covergroup_create("illegal_test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Reset the illegal bin hit counter
+  __moore_coverage_reset_illegal_bin_hits();
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 0);
+
+  // Set illegal bin fatal mode to false (just warning) for testing
+  __moore_coverage_set_illegal_bin_fatal(false);
+  EXPECT_FALSE(__moore_coverage_illegal_bin_is_fatal());
+
+  // Add an illegal bin for values 256 and above
+  __moore_coverpoint_add_illegal_bin(cg, 0, "invalid_high", 256, 511);
+
+  // Sample a valid value - should not trigger illegal bin
+  __moore_coverpoint_sample(cg, 0, 100);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 0);
+
+  // Sample an illegal value - should trigger illegal bin
+  __moore_coverpoint_sample(cg, 0, 300);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 1);
+
+  // Sample another illegal value
+  __moore_coverpoint_sample(cg, 0, 256);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 2);
+
+  // Clean up
+  __moore_covergroup_destroy(cg);
+  __moore_coverage_reset_illegal_bin_hits();
+}
+
+TEST(MooreRuntimeIllegalBinsTest, IllegalBinSingleValue) {
+  void *cg = __moore_covergroup_create("illegal_single_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  __moore_coverage_reset_illegal_bin_hits();
+  __moore_coverage_set_illegal_bin_fatal(false);
+
+  // Add illegal bin for a single value
+  __moore_coverpoint_add_illegal_bin(cg, 0, "forbidden_value", 42, 42);
+
+  // Sample adjacent values - should not trigger
+  __moore_coverpoint_sample(cg, 0, 41);
+  __moore_coverpoint_sample(cg, 0, 43);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 0);
+
+  // Sample the forbidden value
+  __moore_coverpoint_sample(cg, 0, 42);
+  EXPECT_EQ(__moore_coverage_get_illegal_bin_hits(), 1);
+
+  __moore_covergroup_destroy(cg);
+  __moore_coverage_reset_illegal_bin_hits();
+}
+
+TEST(MooreRuntimeIllegalBinsTest, IsIllegalCheck) {
+  void *cg = __moore_covergroup_create("is_illegal_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Add illegal bins
+  __moore_coverpoint_add_illegal_bin(cg, 0, "illegal_range", 100, 200);
+
+  // Check values
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 50));
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 99));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 100));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 150));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 200));
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 201));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeIgnoreBinsTest, IgnoreBinsNotCounted) {
+  void *cg = __moore_covergroup_create("ignore_test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Add ignore bin for value 0 (skip zeros)
+  __moore_coverpoint_add_ignore_bin(cg, 0, "skip_zero", 0, 0);
+
+  // Sample values including ignored ones
+  __moore_coverpoint_sample(cg, 0, 0);  // Should be ignored
+  __moore_coverpoint_sample(cg, 0, 0);  // Should be ignored
+  __moore_coverpoint_sample(cg, 0, 1);  // Should count
+  __moore_coverpoint_sample(cg, 0, 2);  // Should count
+
+  // Check that coverage doesn't include ignored samples
+  // The coverpoint should only have 2 hits (values 1 and 2)
+  double coverage = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_GT(coverage, 0.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeIgnoreBinsTest, IgnoreBinsRange) {
+  void *cg = __moore_covergroup_create("ignore_range_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Add ignore bins for a range (values 10-20)
+  __moore_coverpoint_add_ignore_bin(cg, 0, "skip_range", 10, 20);
+
+  // Check is_ignored function
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 5));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 9));
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 10));
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 15));
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 20));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 21));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeIgnoreBinsTest, SetIgnoreBinsBatch) {
+  void *cg = __moore_covergroup_create("batch_ignore_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Create array of ignore bins
+  MooreCoverageBin bins[2];
+  bins[0].name = "ignore1";
+  bins[0].type = MOORE_BIN_RANGE;
+  bins[0].kind = MOORE_BIN_KIND_IGNORE;
+  bins[0].low = 0;
+  bins[0].high = 10;
+  bins[0].hit_count = 0;
+
+  bins[1].name = "ignore2";
+  bins[1].type = MOORE_BIN_RANGE;
+  bins[1].kind = MOORE_BIN_KIND_IGNORE;
+  bins[1].low = 100;
+  bins[1].high = 110;
+  bins[1].hit_count = 0;
+
+  __moore_coverpoint_set_ignore_bins(cg, 0, bins, 2);
+
+  // Check both ranges are ignored
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 5));
+  EXPECT_TRUE(__moore_coverpoint_is_ignored(cg, 0, 105));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 0, 50));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeIllegalBinsTest, SetIllegalBinsBatch) {
+  void *cg = __moore_covergroup_create("batch_illegal_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Create array of illegal bins
+  MooreCoverageBin bins[2];
+  bins[0].name = "illegal1";
+  bins[0].type = MOORE_BIN_RANGE;
+  bins[0].kind = MOORE_BIN_KIND_ILLEGAL;
+  bins[0].low = 1000;
+  bins[0].high = 2000;
+  bins[0].hit_count = 0;
+
+  bins[1].name = "illegal2";
+  bins[1].type = MOORE_BIN_VALUE;
+  bins[1].kind = MOORE_BIN_KIND_ILLEGAL;
+  bins[1].low = -1;
+  bins[1].high = -1;
+  bins[1].hit_count = 0;
+
+  __moore_coverpoint_set_illegal_bins(cg, 0, bins, 2);
+
+  // Check both are detected as illegal
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, 1500));
+  EXPECT_TRUE(__moore_coverpoint_is_illegal(cg, 0, -1));
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 0, 500));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeIllegalBinsTest, IllegalBinCallback) {
+  static int callbackCount = 0;
+  static int64_t lastValue = 0;
+
+  // Reset
+  callbackCount = 0;
+  lastValue = 0;
+
+  void *cg = __moore_covergroup_create("callback_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  __moore_coverage_reset_illegal_bin_hits();
+  __moore_coverage_set_illegal_bin_fatal(false);
+
+  // Set callback
+  __moore_coverage_set_illegal_bin_callback(
+      [](const char *cg_name, const char *cp_name, const char *bin_name,
+         int64_t value, void *userData) {
+        callbackCount++;
+        lastValue = value;
+      },
+      nullptr);
+
+  // Add illegal bin
+  __moore_coverpoint_add_illegal_bin(cg, 0, "illegal_val", 999, 999);
+
+  // Sample illegal value
+  __moore_coverpoint_sample(cg, 0, 999);
+
+  EXPECT_EQ(callbackCount, 1);
+  EXPECT_EQ(lastValue, 999);
+
+  // Clear callback
+  __moore_coverage_set_illegal_bin_callback(nullptr, nullptr);
+
+  __moore_covergroup_destroy(cg);
+  __moore_coverage_reset_illegal_bin_hits();
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Exclusion Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeExclusionTest, AddAndClearExclusions) {
+  // Clear any existing exclusions
+  __moore_coverage_clear_exclusions();
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 0);
+
+  // Add exclusions
+  EXPECT_EQ(__moore_coverage_add_exclusion("cg1.*.*"), 0);
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 1);
+
+  EXPECT_EQ(__moore_coverage_add_exclusion("cg2.cp1.*"), 0);
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 2);
+
+  // Clear all
+  __moore_coverage_clear_exclusions();
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 0);
+}
+
+TEST(MooreRuntimeExclusionTest, RemoveExclusion) {
+  __moore_coverage_clear_exclusions();
+
+  __moore_coverage_add_exclusion("pattern1");
+  __moore_coverage_add_exclusion("pattern2");
+  __moore_coverage_add_exclusion("pattern3");
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 3);
+
+  // Remove one
+  EXPECT_EQ(__moore_coverage_remove_exclusion("pattern2"), 0);
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 2);
+
+  // Try to remove non-existent
+  EXPECT_NE(__moore_coverage_remove_exclusion("nonexistent"), 0);
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 2);
+
+  __moore_coverage_clear_exclusions();
+}
+
+TEST(MooreRuntimeExclusionTest, IsExcludedWildcard) {
+  __moore_coverage_clear_exclusions();
+
+  // Add wildcard patterns
+  __moore_coverage_add_exclusion("test_cg.*.*");
+
+  // Check exclusions
+  EXPECT_TRUE(__moore_coverage_is_excluded("test_cg", "any_cp", "any_bin"));
+  EXPECT_TRUE(__moore_coverage_is_excluded("test_cg", "cp1", "bin1"));
+  EXPECT_FALSE(__moore_coverage_is_excluded("other_cg", "any_cp", "any_bin"));
+
+  __moore_coverage_clear_exclusions();
+}
+
+TEST(MooreRuntimeExclusionTest, IsExcludedExact) {
+  __moore_coverage_clear_exclusions();
+
+  // Add exact pattern
+  __moore_coverage_add_exclusion("my_cg.my_cp.my_bin");
+
+  // Only exact match should be excluded
+  EXPECT_TRUE(__moore_coverage_is_excluded("my_cg", "my_cp", "my_bin"));
+  EXPECT_FALSE(__moore_coverage_is_excluded("my_cg", "my_cp", "other_bin"));
+  EXPECT_FALSE(__moore_coverage_is_excluded("my_cg", "other_cp", "my_bin"));
+
+  __moore_coverage_clear_exclusions();
+}
+
+TEST(MooreRuntimeExclusionTest, IsExcludedQuestionMark) {
+  __moore_coverage_clear_exclusions();
+
+  // Add pattern with ? wildcard
+  __moore_coverage_add_exclusion("cg?.cp?.bin?");
+
+  // Single character wildcard
+  EXPECT_TRUE(__moore_coverage_is_excluded("cg1", "cp2", "bin3"));
+  EXPECT_TRUE(__moore_coverage_is_excluded("cgA", "cpB", "binC"));
+  EXPECT_FALSE(__moore_coverage_is_excluded("cg12", "cp1", "bin1"));  // cg12 doesn't match cg?
+  EXPECT_FALSE(__moore_coverage_is_excluded("cg1", "cp12", "bin1"));  // cp12 doesn't match cp?
+
+  __moore_coverage_clear_exclusions();
+}
+
+TEST(MooreRuntimeExclusionTest, SaveAndLoadExclusions) {
+  __moore_coverage_clear_exclusions();
+
+  // Add some exclusions
+  __moore_coverage_add_exclusion("save_cg1.*.*");
+  __moore_coverage_add_exclusion("save_cg2.cp1.bin?");
+  __moore_coverage_add_exclusion("save_cg3.*.exact_bin");
+
+  // Save to file
+  const char *filename = "/tmp/test_exclusions.txt";
+  EXPECT_EQ(__moore_coverage_save_exclusions(filename), 0);
+
+  // Clear and reload
+  __moore_coverage_clear_exclusions();
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 0);
+
+  int32_t loaded = __moore_coverage_load_exclusions(filename);
+  EXPECT_EQ(loaded, 3);
+  EXPECT_EQ(__moore_coverage_get_exclusion_count(), 3);
+
+  // Verify patterns work
+  EXPECT_TRUE(__moore_coverage_is_excluded("save_cg1", "any", "thing"));
+  EXPECT_TRUE(__moore_coverage_is_excluded("save_cg2", "cp1", "bin1"));
+
+  // Clean up
+  __moore_coverage_clear_exclusions();
+  std::remove(filename);
+}
+
+TEST(MooreRuntimeExclusionTest, LoadNonexistentFile) {
+  int32_t result = __moore_coverage_load_exclusions("/tmp/nonexistent_exclusions.txt");
+  EXPECT_EQ(result, -1);
+}
+
+TEST(MooreRuntimeExclusionTest, LoadNullFilename) {
+  int32_t result = __moore_coverage_load_exclusions(nullptr);
+  EXPECT_EQ(result, -1);
+}
+
+TEST(MooreRuntimeExclusionTest, SaveNullFilename) {
+  int32_t result = __moore_coverage_save_exclusions(nullptr);
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeExclusionTest, AddNullPattern) {
+  int32_t result = __moore_coverage_add_exclusion(nullptr);
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeExclusionTest, AddEmptyPattern) {
+  int32_t result = __moore_coverage_add_exclusion("");
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeIllegalBinsTest, InvalidIndex) {
+  void *cg = __moore_covergroup_create("invalid_idx_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // These should not crash
+  __moore_coverpoint_add_illegal_bin(cg, -1, "bad", 0, 10);
+  __moore_coverpoint_add_illegal_bin(cg, 5, "bad", 0, 10);
+  __moore_coverpoint_add_ignore_bin(cg, -1, "bad", 0, 10);
+  __moore_coverpoint_add_ignore_bin(cg, 5, "bad", 0, 10);
+
+  // Check with invalid index returns false
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, -1, 5));
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(cg, 5, 5));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, -1, 5));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(cg, 5, 5));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeIllegalBinsTest, NullCovergroup) {
+  // These should not crash with null covergroup
+  __moore_coverpoint_add_illegal_bin(nullptr, 0, "bad", 0, 10);
+  __moore_coverpoint_add_ignore_bin(nullptr, 0, "bad", 0, 10);
+
+  EXPECT_FALSE(__moore_coverpoint_is_illegal(nullptr, 0, 5));
+  EXPECT_FALSE(__moore_coverpoint_is_ignored(nullptr, 0, 5));
+}
+
+//===----------------------------------------------------------------------===//
+// Transition Bin Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeTransitionBinTest, SimpleTwoStepTransition) {
+  // Test a simple two-step transition: (0 => 1)
+  void *cg = __moore_covergroup_create("trans_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  // Create a transition sequence: 0 => 1
+  MooreTransitionStep steps[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},  // value 0
+      {1, MOORE_TRANS_NONE, 0, 0}   // value 1
+  };
+  MooreTransitionSequence seq = {steps, 2};
+
+  // Add the transition bin
+  __moore_coverpoint_add_transition_bin(cg, 0, "rise", &seq, 1);
+
+  // Initial: no hits
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  // Sample values that don't trigger the transition
+  __moore_coverpoint_sample(cg, 0, 5);  // No previous value yet
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  __moore_coverpoint_sample(cg, 0, 3);  // 5 => 3, not 0 => 1
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  // Sample values that trigger the transition
+  __moore_coverpoint_sample(cg, 0, 0);  // 3 => 0, not triggered
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  __moore_coverpoint_sample(cg, 0, 1);  // 0 => 1, TRIGGERED!
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  // Trigger again
+  __moore_coverpoint_sample(cg, 0, 0);  // 1 => 0, not triggered
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  __moore_coverpoint_sample(cg, 0, 1);  // 0 => 1, TRIGGERED again!
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 2);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, MultipleTransitionBins) {
+  // Test multiple transition bins on one coverpoint
+  // bins rise = (0 => 1);
+  // bins fall = (1 => 0);
+  void *cg = __moore_covergroup_create("trans_multi_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  // Create rise transition: 0 => 1
+  MooreTransitionStep riseSteps[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {1, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence riseSeq = {riseSteps, 2};
+  __moore_coverpoint_add_transition_bin(cg, 0, "rise", &riseSeq, 1);
+
+  // Create fall transition: 1 => 0
+  MooreTransitionStep fallSteps[] = {
+      {1, MOORE_TRANS_NONE, 0, 0},
+      {0, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence fallSeq = {fallSteps, 2};
+  __moore_coverpoint_add_transition_bin(cg, 0, "fall", &fallSeq, 1);
+
+  // Initial state
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);  // rise
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 0);  // fall
+
+  // Sample sequence: 0 -> 1 -> 0 -> 1
+  __moore_coverpoint_sample(cg, 0, 0);  // First sample (no previous)
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 0);
+
+  __moore_coverpoint_sample(cg, 0, 1);  // 0 => 1 (rise triggered)
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 0);
+
+  __moore_coverpoint_sample(cg, 0, 0);  // 1 => 0 (fall triggered)
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 1);
+
+  __moore_coverpoint_sample(cg, 0, 1);  // 0 => 1 (rise triggered again)
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 2);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, ThreeStepTransition) {
+  // Test a three-step transition sequence: (0 => 1 => 2)
+  void *cg = __moore_covergroup_create("trans_seq_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  // Create sequence: 0 => 1 => 2
+  MooreTransitionStep steps[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {1, MOORE_TRANS_NONE, 0, 0},
+      {2, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq = {steps, 3};
+  __moore_coverpoint_add_transition_bin(cg, 0, "count_up", &seq, 1);
+
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  // Sample 0 -> 1 (starts sequence)
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);  // 0 => 1 matches first two steps
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);  // Not complete yet
+
+  // Complete the sequence with 2
+  __moore_coverpoint_sample(cg, 0, 2);  // => 2 completes the sequence!
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  // Break and restart sequence
+  __moore_coverpoint_sample(cg, 0, 0);  // Start fresh
+  __moore_coverpoint_sample(cg, 0, 1);  // 0 => 1
+  __moore_coverpoint_sample(cg, 0, 5);  // Sequence broken! 1 => 5, not 1 => 2
+  __moore_coverpoint_sample(cg, 0, 2);  // Doesn't continue
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);  // Still 1
+
+  // Complete again
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 2);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, FourStepTransition) {
+  // Test a four-step transition sequence: (0 => 1 => 2 => 3)
+  void *cg = __moore_covergroup_create("trans_4step_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "data");
+
+  MooreTransitionStep steps[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {1, MOORE_TRANS_NONE, 0, 0},
+      {2, MOORE_TRANS_NONE, 0, 0},
+      {3, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq = {steps, 4};
+  __moore_coverpoint_add_transition_bin(cg, 0, "sequence", &seq, 1);
+
+  // Complete the full sequence
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 0, 3);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, TransitionBinReset) {
+  // Test that reset clears transition bin hits and state
+  void *cg = __moore_covergroup_create("trans_reset_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  MooreTransitionStep steps[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {1, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq = {steps, 2};
+  __moore_coverpoint_add_transition_bin(cg, 0, "rise", &seq, 1);
+
+  // Trigger transition
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  // Reset
+  __moore_coverpoint_reset(cg, 0);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  // Trigger again after reset
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, TransitionBinInvalidIndex) {
+  void *cg = __moore_covergroup_create("trans_invalid_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  // Get hits with invalid indices should return 0
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);   // No bins yet
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, -1), 0);  // Negative index
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 100), 0); // Out of bounds
+
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, -1, 0), 0);  // Invalid cp_index
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 5, 0), 0);   // Invalid cp_index
+
+  EXPECT_EQ(__moore_transition_bin_get_hits(nullptr, 0, 0), 0);  // Null cg
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, AddTransitionBinInvalidArgs) {
+  void *cg = __moore_covergroup_create("trans_invalid_add_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  // These should not crash
+  __moore_coverpoint_add_transition_bin(nullptr, 0, "bad", nullptr, 0);
+  __moore_coverpoint_add_transition_bin(cg, -1, "bad", nullptr, 0);
+  __moore_coverpoint_add_transition_bin(cg, 5, "bad", nullptr, 0);
+  __moore_coverpoint_add_transition_bin(cg, 0, "bad", nullptr, 0);
+  __moore_coverpoint_add_transition_bin(cg, 0, "bad", nullptr, -1);
+
+  // No bins should have been added
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, SelfTransition) {
+  // Test a self-transition: (5 => 5)
+  void *cg = __moore_covergroup_create("trans_self_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  MooreTransitionStep steps[] = {
+      {5, MOORE_TRANS_NONE, 0, 0},
+      {5, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq = {steps, 2};
+  __moore_coverpoint_add_transition_bin(cg, 0, "stay", &seq, 1);
+
+  // Self-transition requires two consecutive 5s
+  __moore_coverpoint_sample(cg, 0, 5);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 0);  // First 5, no prev
+
+  __moore_coverpoint_sample(cg, 0, 5);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);  // 5 => 5 triggered
+
+  __moore_coverpoint_sample(cg, 0, 5);
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 2);  // 5 => 5 again
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, CoverageWithMixedBins) {
+  // Test that transition bins work alongside value bins
+  void *cg = __moore_covergroup_create("mixed_bins_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Initialize with value bins
+  MooreCoverageBin valueBins[] = {
+      {"low", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 3, 0},
+      {"high", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 4, 7, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "data", valueBins, 2);
+
+  // Add a transition bin
+  MooreTransitionStep steps[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {7, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq = {steps, 2};
+  __moore_coverpoint_add_transition_bin(cg, 0, "low_to_high", &seq, 1);
+
+  // Sample values
+  __moore_coverpoint_sample(cg, 0, 0);  // Hits "low" bin
+  __moore_coverpoint_sample(cg, 0, 7);  // Hits "high" bin AND transition
+
+  // Check value bin hits
+  EXPECT_GE(__moore_coverpoint_get_bin_hits(cg, 0, 0), 1);  // low
+  EXPECT_GE(__moore_coverpoint_get_bin_hits(cg, 0, 1), 1);  // high
+
+  // Check transition bin hit
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeTransitionBinTest, OverlappingTransitions) {
+  // Test overlapping transition sequences
+  // bins t1 = (0 => 1);
+  // bins t2 = (0 => 1 => 2);
+  // Sampling 0 -> 1 -> 2 should hit t1 once and t2 once
+  void *cg = __moore_covergroup_create("overlap_trans_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "state");
+
+  // Short transition
+  MooreTransitionStep steps1[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {1, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq1 = {steps1, 2};
+  __moore_coverpoint_add_transition_bin(cg, 0, "short", &seq1, 1);
+
+  // Longer transition
+  MooreTransitionStep steps2[] = {
+      {0, MOORE_TRANS_NONE, 0, 0},
+      {1, MOORE_TRANS_NONE, 0, 0},
+      {2, MOORE_TRANS_NONE, 0, 0}
+  };
+  MooreTransitionSequence seq2 = {steps2, 3};
+  __moore_coverpoint_add_transition_bin(cg, 0, "long", &seq2, 1);
+
+  // Sample sequence: 0 -> 1 -> 2
+  __moore_coverpoint_sample(cg, 0, 0);
+  __moore_coverpoint_sample(cg, 0, 1);  // Triggers "short"
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);  // short
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 0);  // long (not yet)
+
+  __moore_coverpoint_sample(cg, 0, 2);  // Triggers "long"
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 0), 1);  // short still 1
+  EXPECT_EQ(__moore_transition_bin_get_hits(cg, 0, 1), 1);  // long now 1
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
+// Array Constraint Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueCheckAllUnique) {
+  // Test unique check with all unique elements
+  int32_t arr[] = {1, 5, 3, 9, 7, 2};
+  EXPECT_EQ(__moore_constraint_unique_check(arr, 6, sizeof(int32_t)), 1);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueCheckDuplicates) {
+  // Test unique check with duplicates
+  int32_t arr[] = {1, 5, 3, 5, 7, 2};  // 5 appears twice
+  EXPECT_EQ(__moore_constraint_unique_check(arr, 6, sizeof(int32_t)), 0);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueCheckSingleElement) {
+  // Single element is trivially unique
+  int32_t arr[] = {42};
+  EXPECT_EQ(__moore_constraint_unique_check(arr, 1, sizeof(int32_t)), 1);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueCheckEmpty) {
+  // Empty array is trivially unique
+  EXPECT_EQ(__moore_constraint_unique_check(nullptr, 0, sizeof(int32_t)), 1);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueScalars) {
+  // Test unique scalars check
+  int64_t values[] = {10, 20, 30, 40};
+  EXPECT_EQ(__moore_constraint_unique_scalars(values, 4, sizeof(int64_t)), 1);
+
+  int64_t duplicates[] = {10, 20, 10, 40};  // 10 appears twice
+  EXPECT_EQ(__moore_constraint_unique_scalars(duplicates, 4, sizeof(int64_t)), 0);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, RandomizeUniqueArray) {
+  // Test randomizing an array with unique constraint
+  int32_t arr[5] = {0, 0, 0, 0, 0};
+  int32_t result = __moore_randomize_unique_array(arr, 5, sizeof(int32_t), 0, 100);
+  EXPECT_EQ(result, 1);  // Should succeed
+
+  // Verify all elements are unique
+  EXPECT_EQ(__moore_constraint_unique_check(arr, 5, sizeof(int32_t)), 1);
+
+  // Verify all elements are in range
+  for (int i = 0; i < 5; i++) {
+    EXPECT_GE(arr[i], 0);
+    EXPECT_LE(arr[i], 100);
+  }
+}
+
+TEST(MooreRuntimeArrayConstraintTest, RandomizeUniqueArrayInsufficientRange) {
+  // Test with range too small for unique values
+  int32_t arr[10] = {0};
+  int32_t result = __moore_randomize_unique_array(arr, 10, sizeof(int32_t), 0, 5);
+  EXPECT_EQ(result, 0);  // Should fail - can't generate 10 unique values from range 0-5
+}
+
+TEST(MooreRuntimeArrayConstraintTest, SizeCheck) {
+  // Test size constraint validation
+  MooreQueue queue;
+  queue.data = malloc(5 * sizeof(int32_t));
+  queue.len = 5;
+
+  EXPECT_EQ(__moore_constraint_size_check(&queue, 5), 1);  // Correct size
+  EXPECT_EQ(__moore_constraint_size_check(&queue, 4), 0);  // Wrong size
+  EXPECT_EQ(__moore_constraint_size_check(&queue, 6), 0);  // Wrong size
+
+  free(queue.data);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, SizeCheckNull) {
+  // Test size check on null array
+  EXPECT_EQ(__moore_constraint_size_check(nullptr, 0), 1);
+  EXPECT_EQ(__moore_constraint_size_check(nullptr, 5), 0);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, SumCheck) {
+  // Test sum constraint validation
+  MooreQueue queue;
+  int32_t data[] = {10, 20, 30, 40};  // Sum = 100
+  queue.data = data;
+  queue.len = 4;
+
+  EXPECT_EQ(__moore_constraint_sum_check(&queue, sizeof(int32_t), 100), 1);  // Correct sum
+  EXPECT_EQ(__moore_constraint_sum_check(&queue, sizeof(int32_t), 99), 0);   // Wrong sum
+  EXPECT_EQ(__moore_constraint_sum_check(&queue, sizeof(int32_t), 101), 0);  // Wrong sum
+}
+
+TEST(MooreRuntimeArrayConstraintTest, SumCheckEmpty) {
+  // Test sum check on empty array
+  MooreQueue queue;
+  queue.data = nullptr;
+  queue.len = 0;
+
+  EXPECT_EQ(__moore_constraint_sum_check(&queue, sizeof(int32_t), 0), 1);  // Empty sum is 0
+  EXPECT_EQ(__moore_constraint_sum_check(&queue, sizeof(int32_t), 1), 0);  // Non-zero expected
+}
+
+TEST(MooreRuntimeArrayConstraintTest, ForeachValidate) {
+  // Test foreach constraint validation
+  auto lessThan100 = [](int64_t value, void *) -> bool {
+    return value < 100;
+  };
+
+  int32_t validArr[] = {10, 20, 30, 50, 99};
+  EXPECT_EQ(__moore_constraint_foreach_validate(validArr, 5, sizeof(int32_t),
+                                                 lessThan100, nullptr), 1);
+
+  int32_t invalidArr[] = {10, 20, 100, 50, 30};  // 100 violates < 100
+  EXPECT_EQ(__moore_constraint_foreach_validate(invalidArr, 5, sizeof(int32_t),
+                                                 lessThan100, nullptr), 0);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, ForeachValidateEmpty) {
+  // Empty array trivially satisfies any constraint
+  auto alwaysFalse = [](int64_t, void *) -> bool { return false; };
+  EXPECT_EQ(__moore_constraint_foreach_validate(nullptr, 0, sizeof(int32_t),
+                                                 alwaysFalse, nullptr), 1);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueCheckByteSized) {
+  // Test with byte-sized elements
+  uint8_t arr[] = {0x01, 0x02, 0x03, 0x04, 0xFF};
+  EXPECT_EQ(__moore_constraint_unique_check(arr, 5, sizeof(uint8_t)), 1);
+
+  uint8_t dupArr[] = {0x01, 0x02, 0x01, 0x04};  // 0x01 appears twice
+  EXPECT_EQ(__moore_constraint_unique_check(dupArr, 4, sizeof(uint8_t)), 0);
+}
+
+TEST(MooreRuntimeArrayConstraintTest, UniqueCheck64Bit) {
+  // Test with 64-bit elements
+  int64_t arr[] = {
+    0x123456789ABCDEF0LL,
+    static_cast<int64_t>(0xFEDCBA9876543210ULL),
+    0x0000000000000001LL
+  };
+  EXPECT_EQ(__moore_constraint_unique_check(arr, 3, sizeof(int64_t)), 1);
 }
 
 } // namespace

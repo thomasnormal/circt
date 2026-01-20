@@ -1,0 +1,84 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test context-aware completion for member access (after '.').
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// Test class member completion
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///class_completion.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"class MyClass;\n  int counter;\n  string name;\n  function void reset();\n    counter = 0;\n  endfunction\n  task run();\n    // task body\n  endtask\nendclass\n\nmodule test;\n  MyClass obj;\n  initial begin\n    obj.\n  end\nendmodule"
+}}}
+// -----
+// Request completion after "obj." - should show class members and methods
+{"jsonrpc":"2.0","id":1,"method":"textDocument/completion","params":{
+  "textDocument":{"uri":"test:///class_completion.sv"},
+  "position":{"line":14,"character":8}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "isIncomplete": false,
+// CHECK:         "items": [
+// Should include class properties
+// CHECK:           "label": "counter"
+// CHECK:           "label": "name"
+// Should include class methods
+// CHECK:           "label": "reset"
+// CHECK:           "label": "run"
+// -----
+// Test module instance member completion
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///instance_completion.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"module child(\n  input logic clk,\n  input logic rst,\n  output logic [7:0] data_out\n);\n  logic [7:0] internal_reg;\nendmodule\n\nmodule top;\n  logic clk, rst;\n  logic [7:0] data;\n  child u_child(\n    .clk(clk),\n    .rst(rst),\n    .data_out(data)\n  );\n  initial begin\n    $display(u_child.);\n  end\nendmodule"
+}}}
+// -----
+// Request completion after "u_child." - should show ports and internal signals
+{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{
+  "textDocument":{"uri":"test:///instance_completion.sv"},
+  "position":{"line":17,"character":22}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "isIncomplete": false,
+// CHECK:         "items": [
+// Should include ports
+// CHECK:           "label": "clk"
+// CHECK:           "label": "rst"
+// CHECK:           "label": "data_out"
+// Should include internal signals
+// CHECK:           "label": "internal_reg"
+// -----
+// Test completion with partial prefix after '.'
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///prefix_completion.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"class DataClass;\n  int data_count;\n  int data_size;\n  string data_name;\n  int other_field;\n  function void data_reset();\n  endfunction\nendclass\n\nmodule test;\n  DataClass dc;\n  initial begin\n    dc.dat\n  end\nendmodule"
+}}}
+// -----
+// Request completion after "dc.dat" - should filter to members starting with "dat"
+{"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{
+  "textDocument":{"uri":"test:///prefix_completion.sv"},
+  "position":{"line":12,"character":10}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "isIncomplete": false,
+// CHECK:         "items": [
+// Should include members starting with "dat"
+// CHECK:           "label": "data_count"
+// CHECK:           "label": "data_name"
+// CHECK:           "label": "data_reset"
+// CHECK:           "label": "data_size"
+// Should NOT include other_field since it doesn't match prefix
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

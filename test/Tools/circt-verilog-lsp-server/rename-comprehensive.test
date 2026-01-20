@@ -1,0 +1,83 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test comprehensive rename functionality including parameters, functions, and module instances.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///rename_comprehensive.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module top #(\n  parameter WIDTH = 8\n)(\n  input  logic clk,\n  input  logic [WIDTH-1:0] data_in,\n  output logic [WIDTH-1:0] data_out\n);\n  logic [WIDTH-1:0] buffer;\n  \n  function automatic [WIDTH-1:0] process_data(input [WIDTH-1:0] din);\n    return din + 1;\n  endfunction\n  \n  always_ff @(posedge clk) begin\n    buffer <= process_data(data_in);\n  end\n  \n  assign data_out = buffer;\nendmodule"
+}}}
+// -----
+// Test rename of parameter WIDTH
+{"jsonrpc":"2.0","id":1,"method":"textDocument/prepareRename","params":{
+  "textDocument":{"uri":"test:///rename_comprehensive.sv"},
+  "position":{"line":1,"character":14}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "end":
+// CHECK:         "start":
+// -----
+// Rename WIDTH parameter to BUS_WIDTH
+{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///rename_comprehensive.sv"},
+  "position":{"line":1,"character":14},
+  "newName":"BUS_WIDTH"
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///rename_comprehensive.sv": [
+// Should include all WIDTH references
+// CHECK:             "newText": "BUS_WIDTH"
+// CHECK:             "newText": "BUS_WIDTH"
+// -----
+// Test rename of function name
+{"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{
+  "textDocument":{"uri":"test:///rename_comprehensive.sv"},
+  "position":{"line":9,"character":35}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "end":
+// CHECK:         "start":
+// -----
+// Rename function process_data to transform_data
+{"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///rename_comprehensive.sv"},
+  "position":{"line":9,"character":35},
+  "newName":"transform_data"
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///rename_comprehensive.sv": [
+// Should include function declaration and call
+// CHECK:             "newText": "transform_data"
+// CHECK:             "newText": "transform_data"
+// -----
+// Test rename of local variable buffer
+{"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///rename_comprehensive.sv"},
+  "position":{"line":7,"character":20},
+  "newName":"temp_buffer"
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///rename_comprehensive.sv": [
+// Should include all buffer references
+// CHECK:             "newText": "temp_buffer"
+// CHECK:             "newText": "temp_buffer"
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

@@ -17,10 +17,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | circt-sim works for basic RTL | UVM base class stubs, task timing |
-| **B** | Randomization | Full constraint support | pre/post_randomize callbacks |
-| **C** | Coverage | Illegal/ignore bins lowering complete | Wildcard bins, exclusion API |
-| **D** | LSP Tooling | Chained member access complete | Semantic tokens, inheritance completion |
+| **A** | Runtime/Simulation | UVM stubs extended, circt-sim enhanced | Virtual interface tasks, timing |
+| **B** | Randomization | Array constraints (unique, foreach, size, sum) | Constraint distribution, implication |
+| **C** | Coverage | Cross coverage with named bins, binsof | Coverage options (goal, at_least) |
+| **D** | LSP Tooling | Inheritance completion, code actions | Refactoring, document formatting |
 
 ### Feature Completion Matrix
 
@@ -36,19 +36,87 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Covergroups | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverpoints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cross coverage | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Transition bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Transition bins | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Wildcard bins | ✅ | ✅ | ✅ | ✅ | ✅ |
+| pre/post_randomize | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LSP code actions | - | - | - | - | ✅ |
 | Illegal/ignore bins | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverage merge | - | - | - | ✅ | ✅ |
 | Virtual interfaces | ✅ | ✅ | ⚠️ | ❌ | ⚠️ |
 | Classes | ✅ | ✅ | ✅ | ⚠️ | ✅ |
-| UVM base classes | ❌ | ❌ | ❌ | ❌ | ❌ |
+| UVM base classes | ✅ | ⚠️ | ⚠️ | ✅ | ✅ |
+| Array unique constraints | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Cross named bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| LSP inheritance completion | - | - | - | - | ✅ |
 | LSP chained completion | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 59 - Coverage Illegal/Ignore Bins + LSP Chained Access (January 20, 2026)
+## Current Status: ITERATION 61 - UVM Stubs + Array Constraints + Cross Coverage (January 20, 2026)
+
+**Summary**: Extended UVM stubs, added array constraint support, enhanced cross coverage with named bins, LSP inheritance completion.
+
+### Iteration 61 Highlights
+
+**Track A: UVM Base Class Stubs** ⭐ FEATURE
+- ✅ Extended with `uvm_cmdline_processor`, `uvm_report_server`, `uvm_report_catcher`
+- ✅ All 12 UVM test files compile successfully
+
+**Track B: Array Constraints** ⭐ FEATURE
+- ✅ unique check, foreach validation, size/sum constraints
+- ✅ 15 unit tests added
+
+**Track C: Cross Coverage** ⭐ FEATURE
+- ✅ Named bins with binsof, ignore_bins, illegal_bins
+- ✅ 7 unit tests added
+
+**Track D: LSP Inheritance** ⭐ FEATURE
+- ✅ Inherited members show "(from ClassName)" annotation
+
+---
+
+## Previous: ITERATION 60 - circt-sim Expansion + Coverage Enhancements + LSP Actions (January 20, 2026)
+
+**Summary**: Major circt-sim interpreter expansion, pre/post_randomize callbacks, wildcard and transition bin coverage, LSP code actions. 6 parallel work tracks completed.
+
+### Iteration 60 Highlights
+
+**Track A: circt-sim LLHD Process Interpreter** ⭐ MAJOR FEATURE
+- ✅ Added 20+ arith dialect operations (addi, subi, muli, cmpi, etc.)
+- ✅ Implemented SCF operations: scf.if, scf.for, scf.while
+- ✅ Added func.call/func.return for function invocation
+- ✅ Added hw.array operations: array_create, array_get, array_slice, array_concat
+- ✅ X-propagation and loop safety limits (100K max)
+- Tests: 6 new circt-sim tests
+
+**Track B: pre/post_randomize Callbacks** ⭐ FEATURE
+- ✅ Direct method call generation for pre_randomize/post_randomize
+- ✅ Searches ClassMethodDeclOp or func.func with conventional naming
+- ✅ Graceful fallback when callbacks don't exist
+- Tests: `pre-post-randomize.mlir`, `pre-post-randomize-func.mlir`, `pre-post-randomize.sv`
+
+**Track C: Wildcard Bin Matching** ⭐ FEATURE
+- ✅ Implemented wildcard formula: `((value ^ bin.low) & ~bin.high) == 0`
+- Tests: 8 unit tests for wildcard patterns
+
+**Track E: Transition Bin Coverage** ⭐ FEATURE
+- ✅ Multi-step sequence state machine for transition tracking
+- ✅ Integrated with __moore_coverpoint_sample()
+- Tests: 10+ unit tests for transition sequences
+
+**Track F: LSP Code Actions** ⭐ FEATURE
+- ✅ Missing semicolon quick fix
+- ✅ Common typo fixes (rge→reg, wrie→wire, etc.)
+- ✅ Begin/end block wrapping
+- Tests: `code-actions.test`
+
+**AVIP Validation**: APB, AXI4, SPI, UART all compile successfully
+
+---
+
+## Previous: ITERATION 59 - Coverage Illegal/Ignore Bins + LSP Chained Access (January 20, 2026)
 
 **Summary**: Implemented illegal/ignore bins MooreToCore lowering and chained member access for LSP completion.
 

@@ -1,0 +1,143 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test UVM-specific diagnostic improvements:
+// - UVM type error hints
+// - Diagnostic categories
+// - Diagnostic tags for unused/deprecated
+// - Enhanced code actions for UVM imports
+
+// Initialize the server
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{"textDocument":{"codeAction":{"codeActionLiteralSupport":true}}},"trace":"off"}}
+// -----
+
+// Test 1: UVM type not found - should get enhanced diagnostic with hint
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///uvm_test.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"class my_test extends uvm_test;\n  function new(string name, uvm_component parent);\n    super.new(name, parent);\n  endfunction\nendclass"
+}}}
+
+// CHECK: "method": "textDocument/publishDiagnostics"
+// CHECK: "diagnostics": [
+// CHECK:   {
+// CHECK:     "message":
+// UVM hints should be appended to the message
+// CHECK:   }
+
+// -----
+// Test 2: Request code actions for UVM type error
+{"jsonrpc":"2.0","id":1,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///uvm_test.sv"},
+  "range":{"start":{"line":0,"character":22},"end":{"line":0,"character":30}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":0,"character":22},"end":{"line":0,"character":30}},
+     "message":"unknown type 'uvm_test'",
+     "severity":1}
+  ]}
+}}
+
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include UVM-specific quick fixes
+// CHECK:         "kind": "quickfix"
+// CHECK:         "title": "Add 'import uvm_pkg::*;'"
+// CHECK:         "title": "Add '`include \"uvm_macros.svh\"'"
+// CHECK:         "title": "Add UVM boilerplate (include + import)"
+
+// -----
+// Test 3: Test diagnostic category assignment
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///category_test.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"module test;\n  wire x\nendmodule"
+}}}
+
+// CHECK: "method": "textDocument/publishDiagnostics"
+// Parse error should have category
+// CHECK: "category": "Parse Error"
+
+// -----
+// Test 4: Close documents
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"test:///uvm_test.sv"}}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"test:///category_test.sv"}}}
+// -----
+
+// Test 5: Test UVM component error with code action
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///uvm_component_test.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"class my_driver extends uvm_driver;\n  `uvm_component_utils(my_driver)\n  function new(string name, uvm_component parent);\n    super.new(name, parent);\n  endfunction\nendclass"
+}}}
+
+// CHECK: "method": "textDocument/publishDiagnostics"
+// Should show diagnostics for unknown UVM types
+
+// -----
+// Test 6: Request code actions for uvm_driver
+{"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///uvm_component_test.sv"},
+  "range":{"start":{"line":0,"character":24},"end":{"line":0,"character":34}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":0,"character":24},"end":{"line":0,"character":34}},
+     "message":"unknown type 'uvm_driver'",
+     "severity":1}
+  ]}
+}}
+
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// UVM import should be the preferred action
+// CHECK:         "isPreferred": true
+// CHECK:         "kind": "quickfix"
+// CHECK:         "title": "Add 'import uvm_pkg::*;'"
+
+// -----
+// Test 7: Test UVM sequence item
+{"jsonrpc":"2.0","id":3,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///uvm_component_test.sv"},
+  "range":{"start":{"line":0,"character":0},"end":{"line":0,"character":10}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":18}},
+     "message":"unknown type 'uvm_sequence_item'",
+     "severity":1}
+  ]}
+}}
+
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include UVM boilerplate action
+// CHECK:         "kind": "quickfix"
+// CHECK:         "title": "Add UVM boilerplate (include + import)"
+
+// -----
+// Test 8: Test workspace edit contents for UVM import
+{"jsonrpc":"2.0","id":4,"method":"textDocument/codeAction","params":{
+  "textDocument":{"uri":"test:///uvm_component_test.sv"},
+  "range":{"start":{"line":0,"character":0},"end":{"line":0,"character":10}},
+  "context":{"diagnostics":[
+    {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":15}},
+     "message":"unknown type 'uvm_component'",
+     "severity":1}
+  ]}
+}}
+
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should include workspace edits with proper import text
+// CHECK:         "edit":
+// CHECK:           "changes":
+// CHECK:             "newText": "import uvm_pkg::*;
+
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

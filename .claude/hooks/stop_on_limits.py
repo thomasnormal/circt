@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+import time
 
 
 # Stop hook semantics:
@@ -22,6 +23,7 @@ Continue!
 
 
 def main() -> int:
+    global CONTINUE_MESSAGE
     payload = json.load(sys.stdin)
 
     with open("/home/thomas-ahle/debug_stop_on_limits.txt", "a") as debug_file:
@@ -30,13 +32,30 @@ def main() -> int:
         transcript_path = payload.get("transcript_path")
         with open(transcript_path) as tf:
             lines = tf.readlines()
-        last_msg = json.loads(lines[-1])
+
+        for line in lines[-10::-1]:
+            last_msg = json.loads(line)
+            if last_msg.get("type") == "assistant":
+                break
+        else:
+            raise ("Unable to find last assistant message. Stop" + "\n".join(lines[-10::-1]))
+            return 0
         print(f"last msg: {last_msg}", file=debug_file)
 
         error = last_msg.get("error")
         if error:
             print(f"Error detected ({error}); allowing stop.", file=debug_file)
-            return 0
+            # return 0
+            time.sleep(3600)  # Sleep for an hour
+
+        # last msg: {'type': 'queue-operation', 'operation': 'enqueue', 'timestamp': '2026-01-17T12:34:54.040Z', 'sessionId': '6785cec7-3fb3-48b9-8758-87cb4f0a07c1', 'content': '<task-notification>\n<task-id>a4b5a02</task-id>\n<status>completed</status>\n<summary>Agent "Track A: APB AVIP full compilation" completed</summary>\n<result>You\'ve hit your limit · resets 2pm (UTC)</result>\n</task-notification>\nFull transcript available at: /tmp/claude/-home-thomas-ahle-circt/tasks/a4b5a02.output'}
+        content = last_msg.get("content")
+        if content and "hit your limit" in content:
+            print(f"Limit detected ({content}); sleeping for an hour.", file=debug_file)
+            time.sleep(3600)  # Sleep for an hour
+
+        # for i in range(-10,0):
+        #     CONTINUE_MESSAGE += "\n" + lines[i]
 
     sys.stderr.write(CONTINUE_MESSAGE)
     print(json.dumps({

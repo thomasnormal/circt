@@ -40,10 +40,13 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
+#include <cstdlib>
 
 using namespace mlir;
 using namespace circt;
@@ -151,6 +154,11 @@ struct CLOptions {
                             cl::aliasopt(includeDirs), cl::NotHidden,
                             cl::cat(cat)};
 
+  cl::opt<std::string> uvmPath{
+      "uvm-path",
+      cl::desc("Path to UVM library root (defaults to $UVM_HOME)"),
+      cl::value_desc("dir"), cl::cat(cat)};
+
   cl::list<std::string> includeSystemDirs{
       "isystem", cl::desc("Additional system include search paths"),
       cl::value_desc("dir"), cl::cat(cat)};
@@ -226,6 +234,16 @@ struct CLOptions {
                "interface, and programs."),
       cl::init(false), cl::cat(cat)};
 
+  cl::opt<bool> ignoreTimingControls{
+      "ignore-timing-controls",
+      cl::desc("Ignore timing controls (event/delay waits) during lowering"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<bool> allowNonProceduralDynamic{
+      "allow-nonprocedural-dynamic",
+      cl::desc("Allow dynamic type members in non-procedural contexts"),
+      cl::init(false), cl::cat(cat)};
+
   cl::list<std::string> topModules{
       "top",
       cl::desc("One or more top-level modules to instantiate (instead of "
@@ -299,6 +317,92 @@ struct CLOptions {
 
 static CLOptions opts;
 
+static bool hasUvmPkgInput() {
+  for (const auto &inputFilename : opts.inputFilenames) {
+    if (llvm::sys::path::filename(inputFilename) == "uvm_pkg.sv")
+      return true;
+  }
+  return false;
+}
+
+static bool hasUvmMacrosInput() {
+  for (const auto &inputFilename : opts.inputFilenames) {
+    if (llvm::sys::path::filename(inputFilename) == "uvm_macros.svh")
+      return true;
+  }
+  return false;
+}
+
+static void addUvmSupportIfAvailable() {
+  if (opts.format != Format::SV)
+    return;
+
+  if (opts.uvmPath.empty()) {
+    if (const char *uvmHome = std::getenv("UVM_HOME"))
+      opts.uvmPath = uvmHome;
+  }
+
+  std::string uvmPkgPath;
+  std::string uvmMacrosPath;
+  std::string uvmIncludeDir;
+  if (!opts.uvmPath.empty()) {
+    llvm::SmallString<256> candidate(opts.uvmPath);
+    llvm::sys::path::append(candidate, "uvm_pkg.sv");
+    if (llvm::sys::fs::exists(candidate)) {
+      uvmPkgPath = candidate.str().str();
+      llvm::SmallString<256> macrosCandidate(opts.uvmPath);
+      llvm::sys::path::append(macrosCandidate, "uvm_macros.svh");
+      if (llvm::sys::fs::exists(macrosCandidate))
+        uvmMacrosPath = macrosCandidate.str().str();
+      uvmIncludeDir = opts.uvmPath;
+    } else {
+      candidate = opts.uvmPath;
+      llvm::sys::path::append(candidate, "src", "uvm_pkg.sv");
+      if (llvm::sys::fs::exists(candidate)) {
+        uvmPkgPath = candidate.str().str();
+        llvm::SmallString<256> includeDir(opts.uvmPath);
+        llvm::sys::path::append(includeDir, "src");
+        uvmIncludeDir = includeDir.str().str();
+        llvm::SmallString<256> macrosCandidate(opts.uvmPath);
+        llvm::sys::path::append(macrosCandidate, "src", "uvm_macros.svh");
+        if (llvm::sys::fs::exists(macrosCandidate))
+          uvmMacrosPath = macrosCandidate.str().str();
+      }
+    }
+  }
+
+  if (uvmPkgPath.empty()) {
+    llvm::SmallString<256> repoUvmPath("lib/Runtime/uvm/uvm_pkg.sv");
+    if (llvm::sys::fs::exists(repoUvmPath)) {
+      uvmPkgPath = repoUvmPath.str().str();
+      uvmIncludeDir = "lib/Runtime/uvm";
+      llvm::SmallString<256> repoMacrosPath("lib/Runtime/uvm/uvm_macros.svh");
+      if (llvm::sys::fs::exists(repoMacrosPath))
+        uvmMacrosPath = repoMacrosPath.str().str();
+    }
+  }
+
+  if (uvmPkgPath.empty())
+    return;
+
+  if (!uvmIncludeDir.empty() &&
+      llvm::find(opts.includeDirs, uvmIncludeDir) == opts.includeDirs.end())
+    opts.includeDirs.push_back(uvmIncludeDir);
+
+  if (!uvmMacrosPath.empty() && !hasUvmMacrosInput()) {
+    opts.inputFilenames.insert(opts.inputFilenames.begin(), uvmMacrosPath);
+    if (opts.singleUnit.getNumOccurrences() == 0)
+      opts.singleUnit = true;
+  }
+
+  if (!hasUvmPkgInput()) {
+    auto insertIt = opts.inputFilenames.begin();
+    if (!uvmMacrosPath.empty() && hasUvmMacrosInput())
+      ++insertIt;
+    opts.inputFilenames.insert(insertIt, uvmPkgPath);
+  }
+}
+
 /// Populate the given pass manager with transformations as configured by the
 /// command line options.
 static void populatePasses(PassManager &pm) {
@@ -353,6 +457,8 @@ static LogicalResult executeWithSources(MLIRContext *context,
     options.timeScale = opts.timeScale;
   options.allowUseBeforeDeclare = opts.allowUseBeforeDeclare;
   options.ignoreUnknownModules = opts.ignoreUnknownModules;
+  options.ignoreTimingControls = opts.ignoreTimingControls;
+  options.allowNonProceduralDynamic = opts.allowNonProceduralDynamic;
   if (opts.loweringMode != LoweringMode::OnlyLint)
     options.topModules = opts.topModules;
   options.paramOverrides = opts.paramOverrides;
@@ -457,7 +563,7 @@ static LogicalResult execute(MLIRContext *context) {
       }
       detectedFormat = format;
     }
-    if (!detectedFormat) {
+  if (!detectedFormat) {
       if (!opts.commandFiles.empty()) {
         detectedFormat = Format::SV;
       } else {
@@ -467,6 +573,8 @@ static LogicalResult execute(MLIRContext *context) {
     }
     opts.format = *detectedFormat;
   }
+
+  addUvmSupportIfAvailable();
 
   // Open the input files.
   llvm::SourceMgr sourceMgr;

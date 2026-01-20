@@ -105,6 +105,33 @@ module QueueDollarAccessTest;
     end
 endmodule
 
+/// Test queue slice with $ unbounded literal
+// CHECK-LABEL: moore.module @QueueDollarSliceTest() {
+module QueueDollarSliceTest;
+    int q[$];
+    int slice1[$];
+    int slice2[$];
+
+    initial begin
+        q.push_back(1);
+        q.push_back(2);
+        q.push_back(3);
+        q.push_back(4);
+
+        // slice using $ as end index
+        // CHECK: moore.array.size
+        // CHECK: moore.sub
+        // CHECK: moore.queue.slice
+        slice1 = q[1:$];
+
+        // slice using $ in arithmetic expression
+        // CHECK: moore.array.size
+        // CHECK: moore.sub
+        // CHECK: moore.queue.slice
+        slice2 = q[0:$-1];
+    end
+endmodule
+
 /// Test queue with different element types
 // CHECK-LABEL: moore.module @QueueTypesTest() {
 module QueueTypesTest;
@@ -214,6 +241,29 @@ module QueueConcatTest;
         // CHECK: [[CONCAT:%.+]] = moore.queue.concat([[Q1]], [[Q2]]) : !moore.queue<i32, 0>, !moore.queue<i32, 0> -> <i32, 0>
         // CHECK: moore.blocking_assign %result, [[CONCAT]] : queue<i32, 0>
         result = { q1, q2 };
+    end
+endmodule
+
+//===----------------------------------------------------------------------===//
+// Queue Concatenation With Elements
+//===----------------------------------------------------------------------===//
+
+/// Test queue concatenation with single element operands
+// CHECK-LABEL: moore.module @QueueConcatElementTest() {
+module QueueConcatElementTest;
+    int q[$];
+    int result[$];
+
+    initial begin
+        // CHECK: [[Q:%.+]] = moore.read %q : <queue<i32, 0>>
+        // CHECK: moore.queue.push_back
+        // CHECK: moore.queue.concat
+        result = { q, 5 };
+
+        // CHECK: [[Q2:%.+]] = moore.read %q : <queue<i32, 0>>
+        // CHECK: moore.queue.push_back
+        // CHECK: moore.queue.concat
+        result = { 6, q };
     end
 endmodule
 

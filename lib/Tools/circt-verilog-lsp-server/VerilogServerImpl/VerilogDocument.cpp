@@ -2182,10 +2182,48 @@ resolveIdentifierChain(slang::ast::Compilation &compilation,
   return {};
 }
 
-/// Add completion items for members of a class type.
+/// Helper to unwrap a TransparentMemberSymbol if present, returning the
+/// underlying symbol. If not a transparent member, returns the original symbol.
+static const slang::ast::Symbol &
+unwrapTransparentMember(const slang::ast::Symbol &member) {
+  if (member.kind == slang::ast::SymbolKind::TransparentMember)
+    return member.as<slang::ast::TransparentMemberSymbol>().wrapped;
+  return member;
+}
+
+/// Helper to find the class name where a member was originally defined.
+/// Returns empty string if defined in the class being examined (not inherited).
+/// For TransparentMemberSymbol, we unwrap and check the actual symbol's scope.
+static std::string getInheritedFromClassName(const slang::ast::Symbol &member,
+                                             const slang::ast::ClassType &currentClass) {
+  // If this is a TransparentMember, it wraps an inherited symbol
+  if (member.kind == slang::ast::SymbolKind::TransparentMember) {
+    const auto &transparentMember =
+        member.as<slang::ast::TransparentMemberSymbol>();
+    const slang::ast::Symbol &wrapped = transparentMember.wrapped;
+
+    // Get the scope where this symbol was originally declared
+    const slang::ast::Scope *wrappedScope = wrapped.getParentScope();
+    if (wrappedScope) {
+      const slang::ast::Symbol *scopeSymbol = &wrappedScope->asSymbol();
+      if (scopeSymbol->kind == slang::ast::SymbolKind::ClassType)
+        return std::string(scopeSymbol->name);
+    }
+    return "";
+  }
+
+  // Not a transparent member - it's directly defined in the current class
+  return "";
+}
+
+/// Add completion items for members of a class type, including inherited
+/// members from base classes and implemented interfaces.
+/// Inherited members are annotated with "(from ClassName)" in the detail.
 static void addClassMemberCompletions(const slang::ast::ClassType &classType,
                                       llvm::StringRef prefix,
                                       llvm::lsp::CompletionList &completions) {
+  // classType.members() already includes inherited members from the class
+  // hierarchy. Inherited members are wrapped in TransparentMemberSymbol.
   for (const auto &member : classType.members()) {
     if (member.name.empty())
       continue;
@@ -2195,16 +2233,29 @@ static void addClassMemberCompletions(const slang::ast::ClassType &classType,
         !llvm::StringRef(member.name).starts_with_insensitive(prefix))
       continue;
 
+    // Unwrap TransparentMemberSymbol to get the actual symbol for completion
+    const slang::ast::Symbol &actualMember = unwrapTransparentMember(member);
+
     llvm::lsp::CompletionItem item;
     item.label = std::string(member.name);
-    item.kind = mapToCompletionKind(member.kind);
-    item.detail = getCompletionDetail(member);
+    item.kind = mapToCompletionKind(actualMember.kind);
+
+    // Build detail string, including inheritance info if applicable
+    std::string detail = getCompletionDetail(actualMember);
+    std::string inheritedFrom = getInheritedFromClassName(member, classType);
+    if (!inheritedFrom.empty()) {
+      if (!detail.empty())
+        detail += " ";
+      detail += "(from " + inheritedFrom + ")";
+    }
+    item.detail = std::move(detail);
+
     item.insertText = std::string(member.name);
     item.insertTextFormat = llvm::lsp::InsertTextFormat::PlainText;
 
     // For methods, add parentheses
-    if (member.kind == slang::ast::SymbolKind::Subroutine) {
-      const auto &sub = member.as<slang::ast::SubroutineSymbol>();
+    if (actualMember.kind == slang::ast::SymbolKind::Subroutine) {
+      const auto &sub = actualMember.as<slang::ast::SubroutineSymbol>();
       if (sub.getArguments().empty()) {
         item.insertText = std::string(member.name) + "()";
       } else {
@@ -2212,7 +2263,7 @@ static void addClassMemberCompletions(const slang::ast::ClassType &classType,
         item.insertTextFormat = llvm::lsp::InsertTextFormat::Snippet;
       }
       item.kind = llvm::lsp::CompletionItemKind::Method;
-    } else if (member.kind == slang::ast::SymbolKind::ClassProperty) {
+    } else if (actualMember.kind == slang::ast::SymbolKind::ClassProperty) {
       item.kind = llvm::lsp::CompletionItemKind::Property;
     }
 
@@ -2731,6 +2782,169 @@ static bool mentionsUVMType(llvm::StringRef message) {
   return message.contains("uvm_") || message.contains("UVM_");
 }
 
+/// Check if a diagnostic message indicates a missing semicolon.
+static bool isMissingSemicolonDiagnostic(llvm::StringRef message) {
+  // Common patterns from slang/verilog compilers for missing semicolon
+  return (message.contains("expected") && message.contains(";")) ||
+         (message.contains("expected") && message.contains("semicolon")) ||
+         message.contains("missing ';'") ||
+         message.contains("missing semicolon");
+}
+
+/// Check if a diagnostic message indicates a begin/end block is needed.
+static bool isBeginEndNeededDiagnostic(llvm::StringRef message) {
+  // Patterns indicating multiple statements where only one is expected
+  return message.contains("expected single statement") ||
+         message.contains("begin/end required") ||
+         (message.contains("multiple statements") &&
+          message.contains("begin")) ||
+         (message.contains("statement") && message.contains("after") &&
+          message.contains("if")) ||
+         (message.contains("statement") && message.contains("after") &&
+          message.contains("else"));
+}
+
+/// Common typos in Verilog/SystemVerilog and their corrections.
+/// Returns the corrected keyword if the input is a known typo, otherwise empty.
+static std::optional<std::string> getTypoCorrection(llvm::StringRef typo) {
+  // Map of common typos to correct keywords
+  static const llvm::StringMap<std::string> typoMap = {
+      // Type keywords
+      {"rge", "reg"},
+      {"regg", "reg"},
+      {"reg ", "reg"},
+      {"wrie", "wire"},
+      {"wirre", "wire"},
+      {"wir", "wire"},
+      {"lgic", "logic"},
+      {"logc", "logic"},
+      {"loigc", "logic"},
+      {"iteger", "integer"},
+      {"integr", "integer"},
+      {"intger", "integer"},
+      {"inout ", "inout"},
+      {"iput", "input"},
+      {"intpu", "input"},
+      {"inptu", "input"},
+      {"otuput", "output"},
+      {"outpu", "output"},
+      {"ouput", "output"},
+      {"otput", "output"},
+      // Module keywords
+      {"modle", "module"},
+      {"modul", "module"},
+      {"moduel", "module"},
+      {"endmodle", "endmodule"},
+      {"endmodul", "endmodule"},
+      {"endmoduel", "endmodule"},
+      // Block keywords
+      {"alawys", "always"},
+      {"alwyas", "always"},
+      {"alwasy", "always"},
+      {"asign", "assign"},
+      {"assgin", "assign"},
+      {"assgn", "assign"},
+      {"intial", "initial"},
+      {"inital", "initial"},
+      {"iniital", "initial"},
+      {"begn", "begin"},
+      {"bgin", "begin"},
+      {"bigin", "begin"},
+      {"ned", "end"},
+      {"endd", "end"},
+      // Control flow
+      {"esle", "else"},
+      {"els", "else"},
+      {"fi", "if"},
+      {"iff", "if"},
+      {"fro", "for"},
+      {"fo", "for"},
+      {"whlie", "while"},
+      {"whle", "while"},
+      {"wihle", "while"},
+      {"csae", "case"},
+      {"caes", "case"},
+      {"cas", "case"},
+      {"endcsae", "endcase"},
+      {"endcaes", "endcase"},
+      // Task/Function
+      {"fucntion", "function"},
+      {"funtion", "function"},
+      {"funciton", "function"},
+      {"endfucntion", "endfunction"},
+      {"endfuntion", "endfunction"},
+      {"taks", "task"},
+      {"tak", "task"},
+      {"endtaks", "endtask"},
+      {"endtak", "endtask"},
+      // Other common typos
+      {"parmeter", "parameter"},
+      {"paramter", "parameter"},
+      {"parmaeter", "parameter"},
+      {"localpram", "localparam"},
+      {"localpaarm", "localparam"},
+      {"genvar ", "genvar"},
+      {"gnevar", "genvar"},
+      {"geerate", "generate"},
+      {"genrate", "generate"},
+      {"pacakge", "package"},
+      {"packge", "package"},
+      {"endpackge", "endpackage"},
+      {"endpacakge", "endpackage"},
+      {"calss", "class"},
+      {"clss", "class"},
+      {"endcalss", "endclass"},
+      {"endclss", "endclass"},
+      {"interfce", "interface"},
+      {"interafce", "interface"},
+      {"endinterfce", "endinterface"},
+      {"posege", "posedge"},
+      {"posedeg", "posedge"},
+      {"negedeg", "negedge"},
+      {"negege", "negedge"},
+  };
+
+  auto it = typoMap.find(typo.lower());
+  if (it != typoMap.end())
+    return it->second;
+
+  return std::nullopt;
+}
+
+/// Check if a diagnostic indicates a possible typo (unknown keyword/identifier
+/// that looks like a keyword).
+static bool isPossibleTypoDiagnostic(llvm::StringRef message) {
+  return message.contains("unknown") || message.contains("unexpected") ||
+         message.contains("expected") || message.contains("invalid");
+}
+
+// Forward declaration for use in getTypoAndCorrection.
+static std::optional<std::string>
+extractIdentifierFromMessage(llvm::StringRef message);
+
+/// Extract a potential typo from a diagnostic message and source text.
+static std::optional<std::pair<std::string, std::string>>
+getTypoAndCorrection(llvm::StringRef message, llvm::StringRef sourceAtRange) {
+  // First try to get the identifier from the message
+  auto extracted = extractIdentifierFromMessage(message);
+
+  // Check if extracted or source text is a known typo
+  if (extracted) {
+    auto correction = getTypoCorrection(*extracted);
+    if (correction)
+      return std::make_pair(*extracted, *correction);
+  }
+
+  // Try the source text at range
+  if (!sourceAtRange.empty()) {
+    auto correction = getTypoCorrection(sourceAtRange);
+    if (correction)
+      return std::make_pair(sourceAtRange.str(), *correction);
+  }
+
+  return std::nullopt;
+}
+
 /// Find the position for inserting an import statement.
 /// This looks for existing import statements or the start of the module/class.
 static llvm::lsp::Position findImportInsertionPoint(
@@ -3128,6 +3342,76 @@ void VerilogDocument::getCodeActions(
 
           codeActions.push_back(std::move(importAction));
         }
+      }
+    }
+
+    // Check for missing semicolon - suggest inserting semicolon
+    if (isMissingSemicolonDiagnostic(diag.message)) {
+      llvm::lsp::CodeAction semicolonAction;
+      semicolonAction.title = "Insert missing semicolon";
+      semicolonAction.kind = llvm::lsp::CodeAction::kQuickFix;
+      semicolonAction.diagnostics = {diag};
+      semicolonAction.isPreferred = true; // This is usually the correct fix
+
+      llvm::lsp::WorkspaceEdit edit;
+      llvm::lsp::TextEdit textEdit;
+      // Insert semicolon at the end of the diagnostic range
+      textEdit.range = llvm::lsp::Range(diag.range.end, diag.range.end);
+      textEdit.newText = ";";
+      edit.changes[uri.uri().str()] = {textEdit};
+      semicolonAction.edit = edit;
+
+      codeActions.push_back(std::move(semicolonAction));
+    }
+
+    // Check for possible typos and suggest corrections
+    if (isPossibleTypoDiagnostic(diag.message)) {
+      std::string sourceAtRange =
+          extractTextAtRange(sourceText, lineOffsets, diag.range);
+      auto typoCorrection =
+          getTypoAndCorrection(diag.message, sourceAtRange);
+
+      if (typoCorrection) {
+        llvm::lsp::CodeAction typoAction;
+        typoAction.title =
+            "Fix typo: '" + typoCorrection->first + "' -> '" +
+            typoCorrection->second + "'";
+        typoAction.kind = llvm::lsp::CodeAction::kQuickFix;
+        typoAction.diagnostics = {diag};
+        typoAction.isPreferred = true; // Typo fixes are usually correct
+
+        llvm::lsp::WorkspaceEdit edit;
+        llvm::lsp::TextEdit textEdit;
+        textEdit.range = diag.range;
+        textEdit.newText = typoCorrection->second;
+        edit.changes[uri.uri().str()] = {textEdit};
+        typoAction.edit = edit;
+
+        codeActions.push_back(std::move(typoAction));
+      }
+    }
+
+    // Check for begin/end block needed - suggest wrapping in begin/end
+    if (isBeginEndNeededDiagnostic(diag.message)) {
+      // Get the statement text that needs to be wrapped
+      std::string stmtText =
+          extractTextAtRange(sourceText, lineOffsets, diag.range);
+
+      if (!stmtText.empty()) {
+        llvm::lsp::CodeAction beginEndAction;
+        beginEndAction.title = "Wrap in begin/end block";
+        beginEndAction.kind = llvm::lsp::CodeAction::kQuickFix;
+        beginEndAction.diagnostics = {diag};
+
+        llvm::lsp::WorkspaceEdit edit;
+        llvm::lsp::TextEdit textEdit;
+        textEdit.range = diag.range;
+        // Preserve indentation by adding proper formatting
+        textEdit.newText = "begin\n    " + stmtText + "\n  end";
+        edit.changes[uri.uri().str()] = {textEdit};
+        beginEndAction.edit = edit;
+
+        codeActions.push_back(std::move(beginEndAction));
       }
     }
   }

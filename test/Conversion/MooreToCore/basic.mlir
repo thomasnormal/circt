@@ -1509,3 +1509,12 @@ func.func @RefToRefConversionWidthChange(%arg0: !moore.ref<i8>) -> !moore.ref<i1
   %0 = moore.conversion %arg0 : !moore.ref<i8> -> !moore.ref<i16>
   return %0 : !moore.ref<i16>
 }
+
+// CHECK-LABEL: func.func @ValueToRefConversion
+// CHECK-SAME: (%[[ARG0:.*]]: i32)
+func.func @ValueToRefConversion(%arg0: !moore.i32) -> !moore.ref<i32> {
+  // CHECK: [[SIG:%.+]] = llhd.sig %[[ARG0]] : i32
+  // CHECK: return [[SIG]] : !llhd.ref<i32>
+  %0 = moore.conversion %arg0 : !moore.i32 -> !moore.ref<i32>
+  return %0 : !moore.ref<i32>
+}

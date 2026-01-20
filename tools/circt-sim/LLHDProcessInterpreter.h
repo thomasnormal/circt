@@ -28,6 +28,19 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
+// Forward declarations for SCF and Func dialects
+namespace mlir {
+namespace scf {
+class IfOp;
+class ForOp;
+class WhileOp;
+} // namespace scf
+namespace func {
+class CallOp;
+class FuncOp;
+} // namespace func
+} // namespace mlir
+
 namespace circt {
 namespace sim {
 
@@ -228,6 +241,46 @@ private:
   /// Interpret a general operation (dispatches to specific handlers).
   mlir::LogicalResult interpretOperation(ProcessId procId,
                                          mlir::Operation *op);
+
+  //===--------------------------------------------------------------------===//
+  // SCF Dialect Operation Handlers
+  //===--------------------------------------------------------------------===//
+
+  /// Interpret an scf.if operation.
+  mlir::LogicalResult interpretSCFIf(ProcessId procId, mlir::scf::IfOp ifOp);
+
+  /// Interpret an scf.for operation.
+  mlir::LogicalResult interpretSCFFor(ProcessId procId, mlir::scf::ForOp forOp);
+
+  /// Interpret an scf.while operation.
+  mlir::LogicalResult interpretSCFWhile(ProcessId procId,
+                                         mlir::scf::WhileOp whileOp);
+
+  /// Interpret the condition region of an scf.while operation.
+  mlir::LogicalResult
+  interpretWhileCondition(ProcessId procId, mlir::Region &region,
+                          llvm::ArrayRef<InterpretedValue> args,
+                          llvm::SmallVectorImpl<InterpretedValue> &results);
+
+  /// Interpret a region (used for scf.if/for/while bodies).
+  mlir::LogicalResult
+  interpretRegion(ProcessId procId, mlir::Region &region,
+                  llvm::ArrayRef<InterpretedValue> args,
+                  llvm::SmallVectorImpl<InterpretedValue> &results);
+
+  //===--------------------------------------------------------------------===//
+  // Func Dialect Operation Handlers
+  //===--------------------------------------------------------------------===//
+
+  /// Interpret a func.call operation.
+  mlir::LogicalResult interpretFuncCall(ProcessId procId,
+                                         mlir::func::CallOp callOp);
+
+  /// Interpret a function body.
+  mlir::LogicalResult
+  interpretFuncBody(ProcessId procId, mlir::func::FuncOp funcOp,
+                    llvm::ArrayRef<InterpretedValue> args,
+                    llvm::SmallVectorImpl<InterpretedValue> &results);
 
   //===--------------------------------------------------------------------===//
   // Value Management

@@ -1,5 +1,112 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 61 - January 20, 2026
+
+### UVM Stubs + Array Constraints + Cross Coverage + LSP Inheritance
+
+**Track A: UVM Base Class Stubs Extension** ⭐ FEATURE
+- Extended UVM stubs with `uvm_cmdline_processor` for command line argument processing
+- Added `uvm_report_server` singleton for report statistics
+- Added `uvm_report_catcher` for message filtering/modification
+- Added `uvm_default_report_server` default implementation
+- Created 3 test files demonstrating UVM patterns
+- All 12 UVM test files compile successfully
+
+**Track B: Array Constraint Enhancements** ⭐ FEATURE
+- `__moore_constraint_unique_check()` - Check if array elements are unique
+- `__moore_constraint_unique_scalars()` - Check multiple scalars uniqueness
+- `__moore_randomize_unique_array()` - Randomize array with unique constraint
+- `__moore_constraint_foreach_validate()` - Validate foreach constraints
+- `__moore_constraint_size_check()` - Validate array size
+- `__moore_constraint_sum_check()` - Validate array sum
+- Added 15 unit tests for array constraints
+
+**Track C: Cross Coverage Enhancements** ⭐ FEATURE
+- Named cross bins with `binsof` support
+- `__moore_cross_add_named_bin()` with filter specifications
+- `__moore_cross_add_ignore_bin()` for ignore_bins in cross
+- `__moore_cross_add_illegal_bin()` with callback support
+- `__moore_cross_is_ignored()` and `__moore_cross_is_illegal()`
+- `__moore_cross_get_named_bin_hits()` for hit counting
+- Added 7 unit tests for cross coverage
+
+**Track D: LSP Inheritance Completion** ⭐ FEATURE
+- Added `unwrapTransparentMember()` helper for Slang's inherited members
+- Added `getInheritedFromClassName()` to determine member origin
+- Inherited members show "(from ClassName)" annotation in completions
+- Handles multi-level inheritance and method overrides
+- Created comprehensive test for inheritance patterns
+
+### Files Modified
+- `lib/Runtime/uvm/uvm_pkg.sv` (+100 lines for utility classes)
+- `lib/Runtime/MooreRuntime.cpp` (+400 lines for array/cross)
+- `include/circt/Runtime/MooreRuntime.h` (+50 lines for declarations)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+350 lines for tests)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+60 lines)
+- New tests: 3 UVM tests, 1 array constraint test, 1 LSP inheritance test
+
+---
+
+## Iteration 60 - January 20, 2026
+
+### circt-sim Interpreter Expansion + Coverage Enhancements + LSP Code Actions
+
+**Track A: circt-sim LLHD Process Interpreter Expansion** ⭐ MAJOR FEATURE
+- Added 20+ arith dialect operations (addi, subi, muli, divsi/ui, cmpi, etc.)
+- Implemented SCF operations: scf.if, scf.for, scf.while with full loop support
+- Added func.call and func.return for function invocation within processes
+- Added hw.array operations: array_create, array_get, array_slice, array_concat
+- Added LLHD time operations: current_time, time_to_int, int_to_time
+- Enhanced type system with index type, hw.array, and hw.struct support
+- X-propagation properly handled in all operations
+- Loop safety limits (100,000 iterations max)
+- Created 6 new test files in `test/circt-sim/`
+
+**Track B: pre_randomize/post_randomize Callback Invocation** ⭐ FEATURE
+- Modified CallPreRandomizeOpConversion to generate direct method calls
+- Modified CallPostRandomizeOpConversion to generate direct method calls
+- Searches for ClassMethodDeclOp or func.func with conventional naming
+- Falls back gracefully (no-op) when callbacks don't exist
+- Created tests: `pre-post-randomize.mlir`, `pre-post-randomize-func.mlir`, `pre-post-randomize.sv`
+
+**Track C: Wildcard Bin Matching** ⭐ FEATURE
+- Implemented wildcard formula: `((value ^ bin.low) & ~bin.high) == 0`
+- Updated matchesBin() and valueMatchesBin() in MooreRuntime.cpp
+- Added 8 unit tests for wildcard patterns
+
+**Track E: Transition Bin Coverage Matching** ⭐ FEATURE
+- Extended CoverpointTracker with previous value tracking (prevValue, hasPrevValue)
+- Added TransitionBin structure with multi-step sequence state machine
+- Added transition matching helpers: valueMatchesTransitionStep, advanceTransitionSequenceState
+- Modified __moore_coverpoint_sample() to track and check transitions
+- Implemented __moore_coverpoint_add_transition_bin() and __moore_transition_bin_get_hits()
+- Added 10+ unit tests for transition sequences
+
+**Track F: LSP Code Actions / Quick Fixes** ⭐ FEATURE
+- Added textDocument/codeAction handler
+- Implemented "Insert missing semicolon" quick fix
+- Implemented common typo fixes (rge→reg, wrie→wire, lgic→logic, etc.)
+- Implemented "Wrap in begin/end block" for multi-statement blocks
+- Created test: `code-actions.test`
+
+**AVIP Testbench Validation**
+- APB AVIP: Compiles successfully
+- AXI4 AVIP: Compiles with warnings (no errors)
+- SPI AVIP: Compiles successfully
+- UART AVIP: Compiles successfully
+
+### Files Modified
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (+800 lines for interpreter expansion)
+- `tools/circt-sim/LLHDProcessInterpreter.h` (new method declarations)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+100 lines for pre/post_randomize)
+- `lib/Runtime/MooreRuntime.cpp` (+300 lines for wildcard + transition bins)
+- `include/circt/Runtime/MooreRuntime.h` (transition structs and functions)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+400 lines for wildcard + transition tests)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+200 lines for code actions)
+- New test files: 6 circt-sim tests, 3 MooreToCore tests, 1 ImportVerilog test, 1 LSP test
+
+---
+
 ## Iteration 59b - January 20, 2026
 
 ### Coverage Illegal/Ignore Bins Lowering + LSP Chained Member Access
