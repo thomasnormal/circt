@@ -2395,6 +2395,155 @@ int32_t __moore_ftell(int32_t fd);
 void __moore_free(void *ptr);
 
 //===----------------------------------------------------------------------===//
+// UVM Coverage Model API
+//===----------------------------------------------------------------------===//
+//
+// These functions provide UVM-compatible coverage API for register and field
+// coverage tracking. They implement the uvm_coverage_model_e semantics from
+// IEEE 1800.2 UVM standard, enabling coverage collection tied to register
+// and field access patterns.
+//
+// UVM Coverage Models (from uvm_reg_model.svh):
+// - UVM_CVR_REG_BITS: Coverage of individual register bits
+// - UVM_CVR_ADDR_MAP: Coverage of address map accesses
+// - UVM_CVR_FIELD_VALS: Coverage of field value ranges
+// - UVM_CVR_ALL: All coverage models enabled
+//
+// Usage:
+//   __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS | UVM_CVR_FIELD_VALS);
+//   __moore_uvm_coverage_sample_reg("my_reg", value);
+//   __moore_uvm_coverage_sample_field("my_field", value);
+//
+
+/// UVM coverage model enum values (matches uvm_coverage_model_e).
+/// These can be combined using bitwise OR.
+enum MooreUvmCoverageModel {
+  UVM_CVR_REG_BITS = (1 << 0),   ///< Individual register bit coverage
+  UVM_CVR_ADDR_MAP = (1 << 1),   ///< Address map access coverage
+  UVM_CVR_FIELD_VALS = (1 << 2), ///< Field value range coverage
+  UVM_NO_COVERAGE = 0,           ///< No coverage enabled
+  UVM_CVR_ALL = ((1 << 3) - 1)   ///< All coverage models enabled
+};
+
+/// Set the UVM coverage model.
+/// Specifies which coverage models are active for register/field sampling.
+/// Multiple models can be combined using bitwise OR.
+///
+/// @param model Bitmask of MooreUvmCoverageModel values
+void __moore_uvm_set_coverage_model(int32_t model);
+
+/// Get the current UVM coverage model.
+///
+/// @return Bitmask of currently active MooreUvmCoverageModel values
+int32_t __moore_uvm_get_coverage_model(void);
+
+/// Check if a specific coverage model is enabled.
+///
+/// @param model The coverage model to check
+/// @return true if the model is enabled
+bool __moore_uvm_has_coverage(int32_t model);
+
+/// Sample register access for UVM coverage.
+/// Records register access for coverage tracking. Coverage is only recorded
+/// if UVM_CVR_REG_BITS is enabled in the current coverage model.
+/// Integrates with the existing covergroup infrastructure.
+///
+/// @param reg_name Name of the register being accessed
+/// @param value Value being read/written
+void __moore_uvm_coverage_sample_reg(const char *reg_name, int64_t value);
+
+/// Sample field access for UVM coverage.
+/// Records field access for coverage tracking. Coverage is only recorded
+/// if UVM_CVR_FIELD_VALS is enabled in the current coverage model.
+/// Integrates with the existing covergroup infrastructure.
+///
+/// @param field_name Name of the field being accessed
+/// @param value Value being read/written
+void __moore_uvm_coverage_sample_field(const char *field_name, int64_t value);
+
+/// Sample address map access for UVM coverage.
+/// Records address map access for coverage tracking. Coverage is only recorded
+/// if UVM_CVR_ADDR_MAP is enabled in the current coverage model.
+///
+/// @param map_name Name of the address map
+/// @param address Address being accessed
+/// @param is_read true for read access, false for write access
+void __moore_uvm_coverage_sample_addr_map(const char *map_name, int64_t address,
+                                          bool is_read);
+
+/// Get register coverage percentage.
+/// Returns the coverage percentage for a specific register.
+/// Creates an implicit covergroup for the register if it doesn't exist.
+///
+/// @param reg_name Name of the register
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_uvm_get_reg_coverage(const char *reg_name);
+
+/// Get field coverage percentage.
+/// Returns the coverage percentage for a specific field.
+/// Creates an implicit covergroup for the field if it doesn't exist.
+///
+/// @param field_name Name of the field
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_uvm_get_field_coverage(const char *field_name);
+
+/// Get total UVM register model coverage.
+/// Returns the aggregate coverage across all sampled registers and fields.
+///
+/// @return Total coverage percentage (0.0 to 100.0)
+double __moore_uvm_get_coverage(void);
+
+/// Reset all UVM coverage data.
+/// Clears all register and field coverage data while preserving the structure.
+void __moore_uvm_reset_coverage(void);
+
+/// UVM register coverage callback function type.
+/// Called when a register is sampled for coverage.
+typedef void (*MooreUvmRegCoverageCallback)(const char *reg_name,
+                                            int64_t value,
+                                            void *userData);
+
+/// UVM field coverage callback function type.
+/// Called when a field is sampled for coverage.
+typedef void (*MooreUvmFieldCoverageCallback)(const char *field_name,
+                                              int64_t value,
+                                              void *userData);
+
+/// Register a callback for register coverage sampling.
+/// The callback is invoked each time __moore_uvm_coverage_sample_reg is called.
+///
+/// @param callback Function to call on register sampling (NULL to disable)
+/// @param userData User data passed to the callback
+void __moore_uvm_set_reg_coverage_callback(MooreUvmRegCoverageCallback callback,
+                                           void *userData);
+
+/// Register a callback for field coverage sampling.
+/// The callback is invoked each time __moore_uvm_coverage_sample_field is called.
+///
+/// @param callback Function to call on field sampling (NULL to disable)
+/// @param userData User data passed to the callback
+void __moore_uvm_set_field_coverage_callback(MooreUvmFieldCoverageCallback callback,
+                                             void *userData);
+
+/// Set the coverage sample bit width for a register.
+/// Specifies how many bits are tracked for UVM_CVR_REG_BITS coverage.
+/// Default is 64 bits.
+///
+/// @param reg_name Name of the register
+/// @param bit_width Number of bits to track (1-64)
+void __moore_uvm_set_reg_bit_width(const char *reg_name, int32_t bit_width);
+
+/// Set the coverage sample range for a field.
+/// Specifies the value range for UVM_CVR_FIELD_VALS coverage.
+/// Coverage tracks how many values in [min_val, max_val] have been seen.
+///
+/// @param field_name Name of the field
+/// @param min_val Minimum value of the field range
+/// @param max_val Maximum value of the field range
+void __moore_uvm_set_field_range(const char *field_name, int64_t min_val,
+                                 int64_t max_val);
+
+//===----------------------------------------------------------------------===//
 // DPI-C Import Stubs for UVM Support
 //===----------------------------------------------------------------------===//
 //

@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 69 - January 20, 2026
+
+### MOS Primitives + UVM Coverage Integration + LSP Type Hierarchy
+
+**Track A: MOS Transistor Primitives** ⭐ FEATURE
+- Verified existing MOS primitive support in ImportVerilog:
+  - Basic MOS: `nmos`, `pmos`, `rnmos`, `rpmos`
+  - Complementary MOS: `cmos`, `rcmos`
+  - Bidirectional switches: `tran`, `rtran`
+  - Controlled switches: `tranif0`, `tranif1`, `rtranif0`, `rtranif1`
+- Created comprehensive test file `mos-primitives.sv` with 16 test cases
+- APB AVIP E2E testing: compilation through Moore IR successful
+- AVIP simulation runs to completion (time 0 fs limitation documented)
+
+**Track B: Cross Named Bins Negate Attribute** ⭐ BUGFIX
+- Fixed `BinsOfOp` lowering to properly use `getNegate()` attribute
+- Previously hardcoded to false, now correctly reads from operation
+- Test file `cross-named-bins.mlir` validates negate behavior
+
+**Track C: UVM Coverage Integration** ⭐ FEATURE
+- 10 new API functions for UVM-style coverage:
+  - `__moore_uvm_set_coverage_model(model)` - Set coverage model flags
+  - `__moore_uvm_get_coverage_model()` - Get current coverage model
+  - `__moore_uvm_has_coverage(model)` - Check if model is enabled
+  - `__moore_uvm_coverage_sample_reg(name, value)` - Sample register coverage
+  - `__moore_uvm_coverage_sample_field(name, value)` - Sample field coverage
+  - `__moore_uvm_coverage_sample_addr_map(name, addr, is_read)` - Sample address map
+- `MooreUvmCoverageModel` enum: UVM_CVR_REG_BITS, UVM_CVR_ADDR_MAP, UVM_CVR_FIELD_VALS
+- 18 unit tests for complete API verification
+
+**Track D: LSP Type Hierarchy** ⭐ VERIFICATION
+- Confirmed type hierarchy is fully implemented:
+  - `textDocument/prepareTypeHierarchy` - Find class at position
+  - `typeHierarchy/supertypes` - Navigate to parent classes
+  - `typeHierarchy/subtypes` - Navigate to child classes
+- Created `type-hierarchy.test` with UVM-style class hierarchy tests
+- Tests uvm_object → uvm_component → uvm_driver/uvm_monitor → my_driver
+
+### Files Modified
+- `include/circt/Runtime/MooreRuntime.h` (+49 lines for UVM coverage API)
+- `lib/Runtime/MooreRuntime.cpp` (+91 lines for UVM coverage implementation)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (negate attribute fix)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+90 lines for UVM tests)
+- `test/Conversion/ImportVerilog/mos-primitives.sv` (new, 178 lines)
+- `test/Conversion/MooreToCore/cross-named-bins.mlir` (new, 190 lines)
+- `test/Tools/circt-verilog-lsp-server/type-hierarchy.test` (new, 168 lines)
+
+---
+
 ## Iteration 68 - January 20, 2026
 
 ### Gate Primitives + Unique Constraints + Coverage Assertions + Code Lens
@@ -43,6 +92,11 @@
 - Lazy resolution via codeLens/resolve
 - Created code-lens.test with comprehensive test coverage
 
+**Track E: SVA BMC Multi-step Delay Buffering** ⭐ FEATURE
+- Added bounded delay buffering for `##N` and `##[m:n]` in BMC lowering
+- Delay buffers now scale with delay range (i1 sequences only)
+- Extended `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir` coverage
+
 ### Files Modified
 - `lib/Conversion/ImportVerilog/Structure.cpp` (+190 lines for gate primitives)
 - `lib/Conversion/MooreToCore/MooreToCore.cpp` (+80 lines for unique constraints)
@@ -50,9 +104,11 @@
 - `include/circt/Runtime/MooreRuntime.h` (+100 lines for API)
 - `lib/Tools/circt-verilog-lsp-server/LSPServer.cpp` (+150 lines for code lens)
 - `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/*.cpp/h` (+300 lines)
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+120 lines for BMC delay buffering)
 - `unittests/Runtime/MooreRuntimeTest.cpp` (+450 lines for tests)
 - `test/Conversion/ImportVerilog/gate-primitives.sv` (new, 153 lines)
 - `test/Conversion/MooreToCore/unique-constraints.mlir` (new)
+- `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir` (extended)
 - `test/Tools/circt-verilog-lsp-server/code-lens.test` (new)
 
 ---

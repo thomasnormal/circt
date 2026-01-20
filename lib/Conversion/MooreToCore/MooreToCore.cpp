@@ -2015,6 +2015,274 @@ struct CovergroupDeclOpConversion
           ++cpIndex;
         }
 
+        // Build a map from coverpoint symbol name to index for cross coverage
+        DenseMap<StringAttr, int32_t> cpNameToIndex;
+        cpIndex = 0;
+        for (auto cp : coverpoints) {
+          cpNameToIndex[cp.getSymNameAttr()] = cpIndex++;
+        }
+
+        // Collect cross coverage declarations from the covergroup body
+        SmallVector<CoverCrossDeclOp> crosses;
+        for (auto &bodyOp : op.getBody().front()) {
+          if (auto cross = dyn_cast<CoverCrossDeclOp>(&bodyOp))
+            crosses.push_back(cross);
+        }
+
+        // Initialize cross coverage items
+        if (!crosses.empty()) {
+          // Get or create __moore_cross_create function
+          // int32_t __moore_cross_create(void *cg, const char *name,
+          //                              int32_t *cp_indices, int32_t num_cps)
+          auto crossCreateFnTy = LLVM::LLVMFunctionType::get(
+              i32Ty, {ptrTy, ptrTy, ptrTy, i32Ty});
+          auto crossCreateFn = getOrCreateRuntimeFunc(
+              mod, rewriter, "__moore_cross_create", crossCreateFnTy);
+
+          // Get or create __moore_cross_add_named_bin function
+          // int32_t __moore_cross_add_named_bin(void *cg, int32_t cross_index,
+          //     const char *name, int32_t kind,
+          //     MooreCrossBinsofFilter *filters, int32_t num_filters)
+          auto crossAddNamedBinFnTy = LLVM::LLVMFunctionType::get(
+              i32Ty, {ptrTy, i32Ty, ptrTy, i32Ty, ptrTy, i32Ty});
+          auto crossAddNamedBinFn = getOrCreateRuntimeFunc(
+              mod, rewriter, "__moore_cross_add_named_bin", crossAddNamedBinFnTy);
+
+          // Define the MooreCrossBinsofFilter struct type:
+          // { i32 cp_index, ptr bin_indices, i32 num_bins,
+          //   ptr values, i32 num_values, i1 negate }
+          auto i1Ty = IntegerType::get(ctx, 1);
+          auto filterStructTy = LLVM::LLVMStructType::getLiteral(
+              ctx, {i32Ty, ptrTy, i32Ty, ptrTy, i32Ty, i1Ty});
+
+          for (auto cross : crosses) {
+            StringRef crossName = cross.getSymName();
+            std::string crossNameGlobal =
+                ("__cross_name_" + cgName + "_" + crossName).str();
+            Value crossNamePtr = createGlobalStringConstant(
+                loc, mod, rewriter, crossName, crossNameGlobal);
+
+            // Build the array of coverpoint indices for this cross
+            ArrayAttr targets = cross.getTargets();
+            int32_t numCps = targets.size();
+
+            // Allocate stack space for the indices array
+            auto indicesArrayTy = LLVM::LLVMArrayType::get(i32Ty, numCps);
+            auto indicesAlloca = LLVM::AllocaOp::create(
+                rewriter, loc, ptrTy, indicesArrayTy,
+                LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                         rewriter.getI32IntegerAttr(1)));
+
+            // Store the coverpoint indices
+            for (int32_t i = 0; i < numCps; ++i) {
+              auto targetRef = cast<FlatSymbolRefAttr>(targets[i]);
+              StringAttr targetName = targetRef.getAttr();
+              int32_t targetIdx = 0;
+              auto it = cpNameToIndex.find(targetName);
+              if (it != cpNameToIndex.end())
+                targetIdx = it->second;
+
+              auto idxVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(targetIdx));
+              SmallVector<LLVM::GEPArg> gepIndices = {0, i};
+              auto elemPtr = LLVM::GEPOp::create(
+                  rewriter, loc, ptrTy, indicesArrayTy, indicesAlloca,
+                  gepIndices);
+              LLVM::StoreOp::create(rewriter, loc, idxVal, elemPtr);
+            }
+
+            // Call __moore_cross_create
+            auto numCpsConst = LLVM::ConstantOp::create(
+                rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numCps));
+            auto crossCreateCall = LLVM::CallOp::create(
+                rewriter, loc, TypeRange{i32Ty},
+                SymbolRefAttr::get(crossCreateFn),
+                ValueRange{cgHandle, crossNamePtr, indicesAlloca, numCpsConst});
+            Value crossIdx = crossCreateCall.getResult();
+
+            // Process named bins in this cross (CrossBinDeclOp)
+            for (auto &crossBodyOp : cross.getBody().front()) {
+              auto crossBin = dyn_cast<CrossBinDeclOp>(&crossBodyOp);
+              if (!crossBin)
+                continue;
+
+              StringRef binName = crossBin.getSymName();
+              std::string binNameGlobal =
+                  ("__crossbin_name_" + cgName + "_" + crossName + "_" + binName)
+                      .str();
+              Value binNamePtr = createGlobalStringConstant(
+                  loc, mod, rewriter, binName, binNameGlobal);
+
+              // Get the bin kind
+              auto binKind = crossBin.getKind();
+              int32_t kindVal = 0; // MOORE_CROSS_BIN_NORMAL
+              if (binKind == CoverageBinKind::IgnoreBins)
+                kindVal = 1; // MOORE_CROSS_BIN_IGNORE
+              else if (binKind == CoverageBinKind::IllegalBins)
+                kindVal = 2; // MOORE_CROSS_BIN_ILLEGAL
+
+              auto kindConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(kindVal));
+
+              // Collect binsof filters from the cross bin body
+              SmallVector<BinsOfOp> binsofOps;
+              for (auto &binBodyOp : crossBin.getBody().front()) {
+                if (auto binsof = dyn_cast<BinsOfOp>(&binBodyOp))
+                  binsofOps.push_back(binsof);
+              }
+
+              int32_t numFilters = binsofOps.size();
+              Value filtersPtr;
+              Value numFiltersConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numFilters));
+
+              if (numFilters > 0) {
+                // Allocate array of filter structs
+                auto filtersArrayTy =
+                    LLVM::LLVMArrayType::get(filterStructTy, numFilters);
+                auto filtersAlloca = LLVM::AllocaOp::create(
+                    rewriter, loc, ptrTy, filtersArrayTy,
+                    LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                             rewriter.getI32IntegerAttr(1)));
+
+                // Fill in each filter
+                for (int32_t fi = 0; fi < numFilters; ++fi) {
+                  auto binsof = binsofOps[fi];
+                  auto targetRef = binsof.getTarget();
+
+                  // Get the coverpoint index from the target symbol
+                  // The target is either a coverpoint (@cp) or a bin (@cp::@bin)
+                  StringRef cpSymName = targetRef.getRootReference().getValue();
+                  int32_t cpIdxVal = 0;
+                  auto cpIt = cpNameToIndex.find(
+                      StringAttr::get(ctx, cpSymName));
+                  if (cpIt != cpNameToIndex.end())
+                    cpIdxVal = cpIt->second;
+
+                  // GEP to the filter struct at index fi
+                  SmallVector<LLVM::GEPArg> filterGepIndices = {0, fi};
+                  auto filterPtr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filtersArrayTy, filtersAlloca,
+                      filterGepIndices);
+
+                  // Store cp_index (field 0)
+                  auto cpIdxConst = LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty,
+                      rewriter.getI32IntegerAttr(cpIdxVal));
+                  SmallVector<LLVM::GEPArg> field0Indices = {0, 0};
+                  auto field0Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field0Indices);
+                  LLVM::StoreOp::create(rewriter, loc, cpIdxConst, field0Ptr);
+
+                  // Store bin_indices = nullptr (field 1)
+                  auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+                  SmallVector<LLVM::GEPArg> field1Indices = {0, 1};
+                  auto field1Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field1Indices);
+                  LLVM::StoreOp::create(rewriter, loc, nullPtr, field1Ptr);
+
+                  // Store num_bins = 0 (field 2)
+                  auto zeroI32 = LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
+                  SmallVector<LLVM::GEPArg> field2Indices = {0, 2};
+                  auto field2Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field2Indices);
+                  LLVM::StoreOp::create(rewriter, loc, zeroI32, field2Ptr);
+
+                  // Handle intersect values (field 3 and 4)
+                  auto intersectValues = binsof.getIntersectValues();
+                  if (intersectValues && !intersectValues->empty()) {
+                    int32_t numValues = intersectValues->size();
+
+                    // Allocate array for intersect values
+                    auto valuesArrayTy =
+                        LLVM::LLVMArrayType::get(i64Ty, numValues);
+                    auto valuesAlloca = LLVM::AllocaOp::create(
+                        rewriter, loc, ptrTy, valuesArrayTy,
+                        LLVM::ConstantOp::create(
+                            rewriter, loc, i32Ty,
+                            rewriter.getI32IntegerAttr(1)));
+
+                    // Store each value
+                    for (int32_t vi = 0; vi < numValues; ++vi) {
+                      int64_t val = 0;
+                      if (auto intAttr =
+                              dyn_cast<IntegerAttr>((*intersectValues)[vi])) {
+                        val = intAttr.getInt();
+                      }
+                      auto valConst = LLVM::ConstantOp::create(
+                          rewriter, loc, i64Ty,
+                          rewriter.getI64IntegerAttr(val));
+                      SmallVector<LLVM::GEPArg> valGepIndices = {0, vi};
+                      auto valPtr = LLVM::GEPOp::create(
+                          rewriter, loc, ptrTy, valuesArrayTy, valuesAlloca,
+                          valGepIndices);
+                      LLVM::StoreOp::create(rewriter, loc, valConst, valPtr);
+                    }
+
+                    // Store values pointer (field 3)
+                    SmallVector<LLVM::GEPArg> field3Indices = {0, 3};
+                    auto field3Ptr = LLVM::GEPOp::create(
+                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                        field3Indices);
+                    LLVM::StoreOp::create(rewriter, loc, valuesAlloca,
+                                          field3Ptr);
+
+                    // Store num_values (field 4)
+                    auto numValuesConst = LLVM::ConstantOp::create(
+                        rewriter, loc, i32Ty,
+                        rewriter.getI32IntegerAttr(numValues));
+                    SmallVector<LLVM::GEPArg> field4Indices = {0, 4};
+                    auto field4Ptr = LLVM::GEPOp::create(
+                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                        field4Indices);
+                    LLVM::StoreOp::create(rewriter, loc, numValuesConst,
+                                          field4Ptr);
+                  } else {
+                    // No intersect values: null pointer and 0 count
+                    SmallVector<LLVM::GEPArg> field3Indices = {0, 3};
+                    auto field3Ptr = LLVM::GEPOp::create(
+                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                        field3Indices);
+                    LLVM::StoreOp::create(rewriter, loc, nullPtr, field3Ptr);
+
+                    SmallVector<LLVM::GEPArg> field4Indices = {0, 4};
+                    auto field4Ptr = LLVM::GEPOp::create(
+                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                        field4Indices);
+                    LLVM::StoreOp::create(rewriter, loc, zeroI32, field4Ptr);
+                  }
+
+                  // Store negate field (field 5) - get from BinsOfOp attribute
+                  bool isNegated = binsof.getNegate();
+                  auto negateBool = LLVM::ConstantOp::create(
+                      rewriter, loc, i1Ty, rewriter.getBoolAttr(isNegated));
+                  SmallVector<LLVM::GEPArg> field5Indices = {0, 5};
+                  auto field5Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field5Indices);
+                  LLVM::StoreOp::create(rewriter, loc, negateBool, field5Ptr);
+                }
+
+                filtersPtr = filtersAlloca;
+              } else {
+                // No filters: pass null
+                filtersPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+              }
+
+              // Call __moore_cross_add_named_bin
+              LLVM::CallOp::create(
+                  rewriter, loc, TypeRange{i32Ty},
+                  SymbolRefAttr::get(crossAddNamedBinFn),
+                  ValueRange{cgHandle, crossIdx, binNamePtr, kindConst,
+                             filtersPtr, numFiltersConst});
+            }
+          }
+        }
+
         // Store the handle to the global variable
         auto handleGlobalPtr =
             LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalHandleName);
@@ -2069,7 +2337,8 @@ struct CoverageBinDeclOpConversion
 };
 
 /// Lowering for CoverCrossDeclOp.
-/// Currently erases the declaration. Cross coverage support is future work.
+/// Cross coverage declarations are processed by the parent CovergroupDeclOp
+/// during its conversion. This pattern just erases the declaration.
 struct CoverCrossDeclOpConversion
     : public OpConversionPattern<CoverCrossDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2077,39 +2346,40 @@ struct CoverCrossDeclOpConversion
   LogicalResult
   matchAndRewrite(CoverCrossDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: Cross coverage requires additional runtime support.
-    // The cross bins and binsof expressions are captured in the IR
-    // but not yet lowered to runtime calls.
+    // Cross coverage is handled by the parent CovergroupDeclOp conversion.
+    // Just erase this op.
     rewriter.eraseOp(op);
     return success();
   }
 };
 
 /// Lowering for CrossBinDeclOp.
-/// Currently erases the declaration. Cross bin support is future work.
+/// Cross bins are processed by the parent CovergroupDeclOp during its
+/// conversion. This pattern just erases the declaration.
 struct CrossBinDeclOpConversion : public OpConversionPattern<CrossBinDeclOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(CrossBinDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: Cross bin lowering requires runtime support for
-    // binsof/intersect semantics.
+    // Cross bins are handled by the parent CovergroupDeclOp conversion.
+    // Just erase this op.
     rewriter.eraseOp(op);
     return success();
   }
 };
 
 /// Lowering for BinsOfOp.
-/// Currently erases the operation. Binsof lowering is future work.
+/// BinsOf operations are processed by the parent CovergroupDeclOp during
+/// cross bin lowering. This pattern just erases the operation.
 struct BinsOfOpConversion : public OpConversionPattern<BinsOfOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(BinsOfOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: BinsOf operations will be processed during cross bin
-    // lowering to implement the select expression semantics.
+    // BinsOf operations are handled by the parent CovergroupDeclOp conversion.
+    // Just erase this op.
     rewriter.eraseOp(op);
     return success();
   }
@@ -2159,7 +2429,8 @@ struct CovergroupInstOpConversion
 };
 
 /// Lowering for CovergroupSampleOp.
-/// Calls __moore_coverpoint_sample for each coverpoint in the covergroup.
+/// Calls __moore_coverpoint_sample for each coverpoint in the covergroup,
+/// then calls __moore_cross_sample to sample all cross coverage items.
 struct CovergroupSampleOpConversion
     : public OpConversionPattern<CovergroupSampleOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2183,8 +2454,20 @@ struct CovergroupSampleOpConversion
                                            "__moore_coverpoint_sample",
                                            sampleFnTy);
 
+    // Get or create __moore_cross_sample function.
+    // void __moore_cross_sample(void *cg, int64_t *cp_values, int32_t num_values)
+    auto crossSampleFnTy =
+        LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i32Ty});
+    auto crossSampleFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                                "__moore_cross_sample",
+                                                crossSampleFnTy);
+
     // Get the covergroup handle.
     Value cgHandle = adaptor.getCovergroup();
+
+    // Collect i64 values for cross sampling
+    SmallVector<Value> i64Values;
+    int32_t numValues = adaptor.getValues().size();
 
     // Sample each value.
     int32_t cpIndex = 0;
@@ -2205,10 +2488,12 @@ struct CovergroupSampleOpConversion
         }
       } else {
         // For non-integer types, bitcast to integer first if possible.
-        // For now, skip non-integer values.
-        ++cpIndex;
-        continue;
+        // For now, use 0 as placeholder.
+        i64Val = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(0));
       }
+
+      i64Values.push_back(i64Val);
 
       auto idxConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIndex));
@@ -2217,6 +2502,32 @@ struct CovergroupSampleOpConversion
                            SymbolRefAttr::get(sampleFn),
                            ValueRange{cgHandle, idxConst, i64Val});
       ++cpIndex;
+    }
+
+    // Call __moore_cross_sample with an array of all sampled values.
+    // This samples all cross coverage items in the covergroup.
+    if (numValues > 0) {
+      // Allocate stack space for the values array
+      auto valuesArrayTy = LLVM::LLVMArrayType::get(i64Ty, numValues);
+      auto valuesAlloca = LLVM::AllocaOp::create(
+          rewriter, loc, ptrTy, valuesArrayTy,
+          LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                   rewriter.getI32IntegerAttr(1)));
+
+      // Store each i64 value in the array
+      for (int32_t i = 0; i < numValues; ++i) {
+        SmallVector<LLVM::GEPArg> gepIndices = {0, i};
+        auto elemPtr = LLVM::GEPOp::create(
+            rewriter, loc, ptrTy, valuesArrayTy, valuesAlloca, gepIndices);
+        LLVM::StoreOp::create(rewriter, loc, i64Values[i], elemPtr);
+      }
+
+      // Call __moore_cross_sample
+      auto numValuesConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numValues));
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(crossSampleFn),
+                           ValueRange{cgHandle, valuesAlloca, numValuesConst});
     }
 
     rewriter.eraseOp(op);

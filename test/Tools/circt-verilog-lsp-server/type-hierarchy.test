@@ -1,0 +1,167 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test type hierarchy functionality for SystemVerilog classes.
+// This is critical for UVM code navigation to understand class inheritance.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// CHECK: "typeHierarchyProvider": true
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///type_hierarchy.sv",
+  "languageId":"systemverilog",
+  "version":1,
+  "text":"// UVM-style class hierarchy\nclass uvm_object;\n  string name;\n  function new(string n);\n    name = n;\n  endfunction\n  virtual function void print();\n    $display(\"name=%s\", name);\n  endfunction\nendclass\n\nclass uvm_component extends uvm_object;\n  uvm_component parent;\n  function new(string n, uvm_component p = null);\n    super.new(n);\n    parent = p;\n  endfunction\n  virtual function void build_phase();\n  endfunction\nendclass\n\nclass uvm_driver extends uvm_component;\n  function new(string n, uvm_component p = null);\n    super.new(n, p);\n  endfunction\n  virtual task run_phase();\n  endtask\nendclass\n\nclass uvm_monitor extends uvm_component;\n  function new(string n, uvm_component p = null);\n    super.new(n, p);\n  endfunction\n  virtual task run_phase();\n  endtask\nendclass\n\nclass my_driver extends uvm_driver;\n  function new(string n, uvm_component p = null);\n    super.new(n, p);\n  endfunction\nendclass\n\nmodule test;\n  my_driver drv;\n  initial begin\n    drv = new(\"drv\");\n  end\nendmodule"
+}}}
+// -----
+// Test prepareTypeHierarchy on the uvm_object class (line 1, col 6 - on "uvm_object")
+{"jsonrpc":"2.0","id":1,"method":"textDocument/prepareTypeHierarchy","params":{
+  "textDocument":{"uri":"test:///type_hierarchy.sv"},
+  "position":{"line":1,"character":6}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "uvm_object"
+// CHECK:         "kind": 5
+// CHECK:         "selectionRange"
+// -----
+// Test prepareTypeHierarchy on the uvm_component class (line 11, col 6)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/prepareTypeHierarchy","params":{
+  "textDocument":{"uri":"test:///type_hierarchy.sv"},
+  "position":{"line":11,"character":6}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "uvm_component"
+// CHECK:         "detail": "class uvm_component extends uvm_object"
+// -----
+// Test prepareTypeHierarchy on a non-class (should return null)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/prepareTypeHierarchy","params":{
+  "textDocument":{"uri":"test:///type_hierarchy.sv"},
+  "position":{"line":0,"character":5}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": null
+// -----
+// Test supertypes for uvm_component (should return uvm_object)
+{"jsonrpc":"2.0","id":4,"method":"typeHierarchy/supertypes","params":{
+  "item":{
+    "name":"uvm_component",
+    "kind":5,
+    "detail":"class uvm_component extends uvm_object",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":11,"character":0},"end":{"line":19,"character":8}},
+    "selectionRange":{"start":{"line":11,"character":6},"end":{"line":11,"character":19}},
+    "data":"/type_hierarchy.sv:11:6"
+  }
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "uvm_object"
+// -----
+// Test supertypes for uvm_object (should return empty - no base class)
+{"jsonrpc":"2.0","id":5,"method":"typeHierarchy/supertypes","params":{
+  "item":{
+    "name":"uvm_object",
+    "kind":5,
+    "detail":"class uvm_object",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":1,"character":0},"end":{"line":9,"character":8}},
+    "selectionRange":{"start":{"line":1,"character":6},"end":{"line":1,"character":16}},
+    "data":"/type_hierarchy.sv:1:6"
+  }
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": []
+// -----
+// Test subtypes for uvm_object (should return uvm_component)
+{"jsonrpc":"2.0","id":6,"method":"typeHierarchy/subtypes","params":{
+  "item":{
+    "name":"uvm_object",
+    "kind":5,
+    "detail":"class uvm_object",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":1,"character":0},"end":{"line":9,"character":8}},
+    "selectionRange":{"start":{"line":1,"character":6},"end":{"line":1,"character":16}},
+    "data":"/type_hierarchy.sv:1:6"
+  }
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "uvm_component"
+// -----
+// Test subtypes for uvm_component (should return uvm_driver and uvm_monitor)
+{"jsonrpc":"2.0","id":7,"method":"typeHierarchy/subtypes","params":{
+  "item":{
+    "name":"uvm_component",
+    "kind":5,
+    "detail":"class uvm_component extends uvm_object",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":11,"character":0},"end":{"line":19,"character":8}},
+    "selectionRange":{"start":{"line":11,"character":6},"end":{"line":11,"character":19}},
+    "data":"/type_hierarchy.sv:11:6"
+  }
+}}
+// CHECK:       "id": 7,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "uvm_driver"
+// -----
+// Test subtypes for uvm_driver (should return my_driver)
+{"jsonrpc":"2.0","id":8,"method":"typeHierarchy/subtypes","params":{
+  "item":{
+    "name":"uvm_driver",
+    "kind":5,
+    "detail":"class uvm_driver extends uvm_component",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":21,"character":0},"end":{"line":27,"character":8}},
+    "selectionRange":{"start":{"line":21,"character":6},"end":{"line":21,"character":16}},
+    "data":"/type_hierarchy.sv:21:6"
+  }
+}}
+// CHECK:       "id": 8,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "my_driver"
+// -----
+// Test subtypes for my_driver (should return empty - leaf class)
+{"jsonrpc":"2.0","id":9,"method":"typeHierarchy/subtypes","params":{
+  "item":{
+    "name":"my_driver",
+    "kind":5,
+    "detail":"class my_driver extends uvm_driver",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":37,"character":0},"end":{"line":41,"character":8}},
+    "selectionRange":{"start":{"line":37,"character":6},"end":{"line":37,"character":15}},
+    "data":"/type_hierarchy.sv:37:6"
+  }
+}}
+// CHECK:       "id": 9,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": []
+// -----
+// Test supertypes for my_driver (should return uvm_driver)
+{"jsonrpc":"2.0","id":10,"method":"typeHierarchy/supertypes","params":{
+  "item":{
+    "name":"my_driver",
+    "kind":5,
+    "detail":"class my_driver extends uvm_driver",
+    "uri":"test:///type_hierarchy.sv",
+    "range":{"start":{"line":37,"character":0},"end":{"line":41,"character":8}},
+    "selectionRange":{"start":{"line":37,"character":6},"end":{"line":37,"character":15}},
+    "data":"/type_hierarchy.sv:37:6"
+  }
+}}
+// CHECK:       "id": 10,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "uvm_driver"
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
