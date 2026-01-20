@@ -4868,3 +4868,573 @@ void VerilogDocument::formatRange(const llvm::lsp::URIForFile &uri,
   if (edit.newText != originalRange)
     edits.push_back(std::move(edit));
 }
+
+//===----------------------------------------------------------------------===//
+// Call Hierarchy
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Helper to encode subroutine location for data field.
+static std::string encodeSubroutineData(const llvm::lsp::URIForFile &uri,
+                                        int line, int col) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  os << uri.file() << ":" << line << ":" << col;
+  return result;
+}
+
+/// Helper to decode subroutine location from data field.
+static bool decodeSubroutineData(llvm::StringRef data, std::string &file,
+                                 int &line, int &col) {
+  auto lastColon = data.rfind(':');
+  if (lastColon == llvm::StringRef::npos)
+    return false;
+
+  auto secondLastColon = data.rfind(':', lastColon - 1);
+  if (secondLastColon == llvm::StringRef::npos)
+    return false;
+
+  file = data.substr(0, secondLastColon).str();
+  if (data.substr(secondLastColon + 1, lastColon - secondLastColon - 1)
+          .getAsInteger(10, line))
+    return false;
+  if (data.substr(lastColon + 1).getAsInteger(10, col))
+    return false;
+  return true;
+}
+
+/// Visitor to collect call expressions within a subroutine.
+class CallExpressionCollector
+    : public slang::ast::ASTVisitor<CallExpressionCollector, true, true> {
+public:
+  CallExpressionCollector(slang::BufferID bufferId,
+                          const slang::SourceManager &sm)
+      : bufferId(bufferId), sm(sm) {}
+
+  struct CallInfo {
+    const slang::ast::SubroutineSymbol *callee;
+    slang::SourceRange callRange;
+  };
+
+  std::vector<CallInfo> calls;
+
+  void handle(const slang::ast::CallExpression &expr) {
+    if (expr.isSystemCall())
+      return;
+
+    const auto *sub =
+        std::get_if<const slang::ast::SubroutineSymbol *>(&expr.subroutine);
+    if (!sub || !*sub)
+      return;
+
+    // Get the call site location
+    slang::SourceRange callRange;
+    if (expr.syntax) {
+      if (auto *invocation =
+              expr.syntax->as_if<slang::syntax::InvocationExpressionSyntax>()) {
+        callRange = invocation->left->sourceRange();
+      }
+    }
+    if (!callRange.start().valid()) {
+      callRange = expr.sourceRange;
+    }
+
+    // Only include calls from this buffer
+    if (callRange.start().buffer() == bufferId) {
+      calls.push_back({*sub, callRange});
+    }
+
+    visitDefault(expr);
+  }
+
+  template <typename T>
+  void visit(const T &node) {
+    if constexpr (std::is_same_v<T, slang::ast::CallExpression>) {
+      handle(node);
+    } else {
+      visitDefault(node);
+    }
+  }
+
+private:
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+};
+
+/// Visitor to find all call sites of a specific subroutine.
+class IncomingCallsCollector
+    : public slang::ast::ASTVisitor<IncomingCallsCollector, true, true> {
+public:
+  IncomingCallsCollector(const slang::ast::SubroutineSymbol *target,
+                         slang::BufferID bufferId,
+                         const slang::SourceManager &sm)
+      : target(target), bufferId(bufferId), sm(sm) {}
+
+  struct CallerInfo {
+    const slang::ast::SubroutineSymbol *caller;
+    slang::SourceRange callRange;
+  };
+
+  std::vector<CallerInfo> callers;
+  const slang::ast::SubroutineSymbol *currentSubroutine = nullptr;
+
+  void handle(const slang::ast::SubroutineSymbol &sub) {
+    auto *prevSub = currentSubroutine;
+    currentSubroutine = &sub;
+    visitDefault(sub);
+    currentSubroutine = prevSub;
+  }
+
+  void handle(const slang::ast::CallExpression &expr) {
+    if (expr.isSystemCall()) {
+      visitDefault(expr);
+      return;
+    }
+
+    const auto *sub =
+        std::get_if<const slang::ast::SubroutineSymbol *>(&expr.subroutine);
+    if (!sub || !*sub) {
+      visitDefault(expr);
+      return;
+    }
+
+    // Check if this call is to our target subroutine
+    if (*sub == target && currentSubroutine) {
+      slang::SourceRange callRange;
+      if (expr.syntax) {
+        if (auto *invocation =
+                expr.syntax->as_if<slang::syntax::InvocationExpressionSyntax>()) {
+          callRange = invocation->left->sourceRange();
+        }
+      }
+      if (!callRange.start().valid()) {
+        callRange = expr.sourceRange;
+      }
+
+      if (callRange.start().buffer() == bufferId) {
+        callers.push_back({currentSubroutine, callRange});
+      }
+    }
+
+    visitDefault(expr);
+  }
+
+  template <typename T>
+  void visit(const T &node) {
+    if constexpr (std::is_same_v<T, slang::ast::SubroutineSymbol>) {
+      handle(node);
+    } else if constexpr (std::is_same_v<T, slang::ast::CallExpression>) {
+      handle(node);
+    } else {
+      visitDefault(node);
+    }
+  }
+
+private:
+  const slang::ast::SubroutineSymbol *target;
+  slang::BufferID bufferId;
+  const slang::SourceManager &sm;
+};
+
+} // namespace
+
+std::optional<VerilogDocument::CallHierarchyItem>
+VerilogDocument::prepareCallHierarchy(const llvm::lsp::URIForFile &uri,
+                                      const llvm::lsp::Position &pos) {
+  if (!index || failed(compilation))
+    return std::nullopt;
+
+  const auto *slangBufferPointer = getPointerFor(pos);
+  if (!slangBufferPointer)
+    return std::nullopt;
+
+  const auto &intervalMap = index->getIntervalMap();
+  auto it = intervalMap.find(slangBufferPointer);
+
+  if (!it.valid() || slangBufferPointer < it.start())
+    return std::nullopt;
+
+  auto element = it.value();
+
+  // Check if it's a symbol
+  const auto *symbol = dyn_cast<const slang::ast::Symbol *>(element);
+  if (!symbol)
+    return std::nullopt;
+
+  // Only handle subroutines (functions and tasks)
+  if (symbol->kind != slang::ast::SymbolKind::Subroutine)
+    return std::nullopt;
+
+  const auto &sub = symbol->as<slang::ast::SubroutineSymbol>();
+  const auto &sm = getSlangSourceManager();
+
+  // Build the call hierarchy item
+  CallHierarchyItem item;
+  item.name = sub.name;
+  item.kind = llvm::lsp::SymbolKind::Function;
+
+  // Build detail string (signature)
+  std::string detail;
+  llvm::raw_string_ostream detailOs(detail);
+  if (sub.subroutineKind == slang::ast::SubroutineKind::Function)
+    detailOs << "function ";
+  else
+    detailOs << "task ";
+  detailOs << formatTypeDescription(sub.getReturnType()) << " " << sub.name
+           << "(";
+  bool first = true;
+  for (const auto *arg : sub.getArguments()) {
+    if (!first)
+      detailOs << ", ";
+    first = false;
+    detailOs << formatTypeDescription(arg->getType()) << " " << arg->name;
+  }
+  detailOs << ")";
+  item.detail = detail;
+
+  item.uri = uri;
+
+  // Get the range of the entire subroutine
+  if (auto *syntax = sub.getSyntax()) {
+    auto syntaxRange = syntax->sourceRange();
+    int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
+    int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
+    int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
+    int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+    item.range =
+        llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                         llvm::lsp::Position(endLine, endCol));
+  } else {
+    // Fallback to just the name location
+    int line = sm.getLineNumber(sub.location) - 1;
+    int col = sm.getColumnNumber(sub.location) - 1;
+    item.range = llvm::lsp::Range(llvm::lsp::Position(line, col),
+                                  llvm::lsp::Position(line, col + sub.name.size()));
+  }
+
+  // Selection range is just the name
+  int nameLine = sm.getLineNumber(sub.location) - 1;
+  int nameCol = sm.getColumnNumber(sub.location) - 1;
+  item.selectionRange =
+      llvm::lsp::Range(llvm::lsp::Position(nameLine, nameCol),
+                       llvm::lsp::Position(nameLine, nameCol + sub.name.size()));
+
+  // Encode location for later lookup
+  item.data = encodeSubroutineData(uri, nameLine, nameCol);
+
+  return item;
+}
+
+void VerilogDocument::getIncomingCalls(
+    const CallHierarchyItem &item,
+    std::vector<CallHierarchyIncomingCall> &calls) {
+  if (failed(compilation))
+    return;
+
+  // Decode the target subroutine location from item.data
+  std::string file;
+  int targetLine, targetCol;
+  if (!decodeSubroutineData(item.data, file, targetLine, targetCol))
+    return;
+
+  const auto &sm = getSlangSourceManager();
+
+  // Find the target subroutine by matching name and checking if it matches
+  // the expected location
+  const slang::ast::SubroutineSymbol *targetSub = nullptr;
+
+  auto findSubroutine = [&](const slang::ast::Scope &scope) {
+    for (const auto &member : scope.members()) {
+      if (member.kind == slang::ast::SymbolKind::Subroutine &&
+          member.name == item.name) {
+        const auto &sub = member.as<slang::ast::SubroutineSymbol>();
+        int line = sm.getLineNumber(sub.location) - 1;
+        int col = sm.getColumnNumber(sub.location) - 1;
+        if (line == targetLine && col == targetCol) {
+          targetSub = &sub;
+          return true;
+        }
+      }
+      // Check nested scopes (classes)
+      if (member.kind == slang::ast::SymbolKind::ClassType) {
+        const auto &classType = member.as<slang::ast::ClassType>();
+        for (const auto &classMember : classType.members()) {
+          if (classMember.kind == slang::ast::SymbolKind::Subroutine &&
+              classMember.name == item.name) {
+            const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
+            int line = sm.getLineNumber(sub.location) - 1;
+            int col = sm.getColumnNumber(sub.location) - 1;
+            if (line == targetLine && col == targetCol) {
+              targetSub = &sub;
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  // Search in packages
+  for (auto *package : (*compilation)->getPackages()) {
+    if (findSubroutine(*package))
+      break;
+  }
+
+  // Search in top instances
+  if (!targetSub) {
+    for (auto *inst : (*compilation)->getRoot().topInstances) {
+      if (findSubroutine(inst->body))
+        break;
+    }
+  }
+
+  if (!targetSub)
+    return;
+
+  // Now find all calls to this subroutine
+  IncomingCallsCollector collector(targetSub, mainBufferId, sm);
+
+  // Visit all scopes
+  for (auto *package : (*compilation)->getPackages()) {
+    if (package->location.buffer() == mainBufferId)
+      package->visit(collector);
+  }
+  for (auto *inst : (*compilation)->getRoot().topInstances) {
+    if (inst->body.location.buffer() == mainBufferId)
+      inst->body.visit(collector);
+  }
+
+  // Group calls by caller
+  llvm::DenseMap<const slang::ast::SubroutineSymbol *,
+                 std::vector<slang::SourceRange>>
+      callerMap;
+  for (const auto &callerInfo : collector.callers) {
+    callerMap[callerInfo.caller].push_back(callerInfo.callRange);
+  }
+
+  // Build the incoming calls list
+  for (const auto &[caller, ranges] : callerMap) {
+    CallHierarchyIncomingCall incoming;
+
+    // Build the caller item
+    incoming.from.name = caller->name;
+    incoming.from.kind = llvm::lsp::SymbolKind::Function;
+
+    // Build detail
+    std::string detail;
+    llvm::raw_string_ostream detailOs(detail);
+    if (caller->subroutineKind == slang::ast::SubroutineKind::Function)
+      detailOs << "function ";
+    else
+      detailOs << "task ";
+    detailOs << caller->name;
+    incoming.from.detail = detail;
+
+    incoming.from.uri = uri;
+
+    // Range of the caller
+    if (auto *syntax = caller->getSyntax()) {
+      auto syntaxRange = syntax->sourceRange();
+      int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
+      int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
+      int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
+      int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+      incoming.from.range =
+          llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                           llvm::lsp::Position(endLine, endCol));
+    } else {
+      int line = sm.getLineNumber(caller->location) - 1;
+      int col = sm.getColumnNumber(caller->location) - 1;
+      incoming.from.range =
+          llvm::lsp::Range(llvm::lsp::Position(line, col),
+                           llvm::lsp::Position(line, col + caller->name.size()));
+    }
+
+    // Selection range
+    int callerLine = sm.getLineNumber(caller->location) - 1;
+    int callerCol = sm.getColumnNumber(caller->location) - 1;
+    incoming.from.selectionRange = llvm::lsp::Range(
+        llvm::lsp::Position(callerLine, callerCol),
+        llvm::lsp::Position(callerLine, callerCol + caller->name.size()));
+
+    incoming.from.data = encodeSubroutineData(uri, callerLine, callerCol);
+
+    // Convert call ranges
+    for (const auto &range : ranges) {
+      int startLine = sm.getLineNumber(range.start()) - 1;
+      int startCol = sm.getColumnNumber(range.start()) - 1;
+      int endLine = sm.getLineNumber(range.end()) - 1;
+      int endCol = sm.getColumnNumber(range.end()) - 1;
+      incoming.fromRanges.push_back(
+          llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                           llvm::lsp::Position(endLine, endCol)));
+    }
+
+    calls.push_back(std::move(incoming));
+  }
+}
+
+void VerilogDocument::getOutgoingCalls(
+    const CallHierarchyItem &item,
+    std::vector<CallHierarchyOutgoingCall> &calls) {
+  if (failed(compilation))
+    return;
+
+  // Decode the source subroutine location from item.data
+  std::string file;
+  int sourceLine, sourceCol;
+  if (!decodeSubroutineData(item.data, file, sourceLine, sourceCol))
+    return;
+
+  const auto &sm = getSlangSourceManager();
+
+  // Find the source subroutine
+  const slang::ast::SubroutineSymbol *sourceSub = nullptr;
+
+  auto findSubroutine = [&](const slang::ast::Scope &scope) {
+    for (const auto &member : scope.members()) {
+      if (member.kind == slang::ast::SymbolKind::Subroutine &&
+          member.name == item.name) {
+        const auto &sub = member.as<slang::ast::SubroutineSymbol>();
+        int line = sm.getLineNumber(sub.location) - 1;
+        int col = sm.getColumnNumber(sub.location) - 1;
+        if (line == sourceLine && col == sourceCol) {
+          sourceSub = &sub;
+          return true;
+        }
+      }
+      // Check nested scopes (classes)
+      if (member.kind == slang::ast::SymbolKind::ClassType) {
+        const auto &classType = member.as<slang::ast::ClassType>();
+        for (const auto &classMember : classType.members()) {
+          if (classMember.kind == slang::ast::SymbolKind::Subroutine &&
+              classMember.name == item.name) {
+            const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
+            int line = sm.getLineNumber(sub.location) - 1;
+            int col = sm.getColumnNumber(sub.location) - 1;
+            if (line == sourceLine && col == sourceCol) {
+              sourceSub = &sub;
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  // Search in packages
+  for (auto *package : (*compilation)->getPackages()) {
+    if (findSubroutine(*package))
+      break;
+  }
+
+  // Search in top instances
+  if (!sourceSub) {
+    for (auto *inst : (*compilation)->getRoot().topInstances) {
+      if (findSubroutine(inst->body))
+        break;
+    }
+  }
+
+  if (!sourceSub)
+    return;
+
+  // Collect all calls from this subroutine
+  CallExpressionCollector collector(mainBufferId, sm);
+  sourceSub->visit(collector);
+
+  // Group calls by callee
+  llvm::DenseMap<const slang::ast::SubroutineSymbol *,
+                 std::vector<slang::SourceRange>>
+      calleeMap;
+  for (const auto &callInfo : collector.calls) {
+    calleeMap[callInfo.callee].push_back(callInfo.callRange);
+  }
+
+  // Build the outgoing calls list
+  for (const auto &[callee, ranges] : calleeMap) {
+    CallHierarchyOutgoingCall outgoing;
+
+    // Build the callee item
+    outgoing.to.name = callee->name;
+    outgoing.to.kind = llvm::lsp::SymbolKind::Function;
+
+    // Build detail
+    std::string detail;
+    llvm::raw_string_ostream detailOs(detail);
+    if (callee->subroutineKind == slang::ast::SubroutineKind::Function)
+      detailOs << "function ";
+    else
+      detailOs << "task ";
+    detailOs << callee->name;
+    outgoing.to.detail = detail;
+
+    // Determine URI - callee might be in a different file
+    llvm::lsp::URIForFile calleeUri = uri;
+    if (callee->location.valid() && callee->location.buffer() != mainBufferId) {
+      auto fileName = sm.getFileName(callee->location);
+      if (!fileName.empty()) {
+        llvm::SmallString<256> absPath(fileName);
+        if (!llvm::sys::path::is_absolute(absPath)) {
+          llvm::sys::fs::make_absolute(absPath);
+        }
+        if (auto uriOrErr = llvm::lsp::URIForFile::fromFile(absPath)) {
+          calleeUri = *uriOrErr;
+        }
+      }
+    }
+    outgoing.to.uri = calleeUri;
+
+    // Range of the callee
+    if (auto *syntax = callee->getSyntax()) {
+      auto syntaxRange = syntax->sourceRange();
+      if (syntaxRange.start().valid()) {
+        int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
+        int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
+        int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
+        int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+        outgoing.to.range =
+            llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                             llvm::lsp::Position(endLine, endCol));
+      } else {
+        int line = sm.getLineNumber(callee->location) - 1;
+        int col = sm.getColumnNumber(callee->location) - 1;
+        outgoing.to.range = llvm::lsp::Range(
+            llvm::lsp::Position(line, col),
+            llvm::lsp::Position(line, col + callee->name.size()));
+      }
+    } else {
+      int line = sm.getLineNumber(callee->location) - 1;
+      int col = sm.getColumnNumber(callee->location) - 1;
+      outgoing.to.range = llvm::lsp::Range(
+          llvm::lsp::Position(line, col),
+          llvm::lsp::Position(line, col + callee->name.size()));
+    }
+
+    // Selection range
+    int calleeLine = sm.getLineNumber(callee->location) - 1;
+    int calleeCol = sm.getColumnNumber(callee->location) - 1;
+    outgoing.to.selectionRange = llvm::lsp::Range(
+        llvm::lsp::Position(calleeLine, calleeCol),
+        llvm::lsp::Position(calleeLine, calleeCol + callee->name.size()));
+
+    outgoing.to.data = encodeSubroutineData(calleeUri, calleeLine, calleeCol);
+
+    // Convert call ranges (these are the locations in the source subroutine
+    // where the call is made)
+    for (const auto &range : ranges) {
+      int startLine = sm.getLineNumber(range.start()) - 1;
+      int startCol = sm.getColumnNumber(range.start()) - 1;
+      int endLine = sm.getLineNumber(range.end()) - 1;
+      int endCol = sm.getColumnNumber(range.end()) - 1;
+      outgoing.fromRanges.push_back(
+          llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                           llvm::lsp::Position(endLine, endCol)));
+    }
+
+    calls.push_back(std::move(outgoing));
+  }
+}

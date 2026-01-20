@@ -257,6 +257,27 @@ void VerilogTextFile::formatRange(
   doc->formatRange(uri, range, options, edits);
 }
 
+std::optional<VerilogDocument::CallHierarchyItem>
+VerilogTextFile::prepareCallHierarchy(const llvm::lsp::URIForFile &uri,
+                                      llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->prepareCallHierarchy(uri, pos);
+}
+
+void VerilogTextFile::getIncomingCalls(
+    const VerilogDocument::CallHierarchyItem &item,
+    std::vector<VerilogDocument::CallHierarchyIncomingCall> &calls) {
+  auto doc = getDocument();
+  doc->getIncomingCalls(item, calls);
+}
+
+void VerilogTextFile::getOutgoingCalls(
+    const VerilogDocument::CallHierarchyItem &item,
+    std::vector<VerilogDocument::CallHierarchyOutgoingCall> &calls) {
+  auto doc = getDocument();
+  doc->getOutgoingCalls(item, calls);
+}
+
 std::shared_ptr<VerilogDocument> VerilogTextFile::getDocument() {
   std::scoped_lock<std::shared_mutex> lk(docMutex);
   return document;

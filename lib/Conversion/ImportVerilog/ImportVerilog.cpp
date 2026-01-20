@@ -430,11 +430,11 @@ void circt::populateVerilogToMoorePipeline(OpPassManager &pm) {
 
   // Remove unused symbols.
   pm.addPass(mlir::createSymbolDCEPass());
+  pm.addPass(moore::createLowerConcatRefPass());
 
   {
     // Perform module-specific transformations.
     auto &modulePM = pm.nest<moore::SVModuleOp>();
-    modulePM.addPass(moore::createLowerConcatRefPass());
     // TODO: Enable the following once it not longer interferes with @(...)
     // event control checks. The introduced dummy variables make the event
     // control observe a static local variable that never changes, instead of
@@ -473,6 +473,14 @@ void circt::populateLlhdToCorePipeline(
   pm.addNestedPass<hw::HWModuleOp>(llhd::createWrapProceduralOpsPass());
   pm.addPass(mlir::createSCFToControlFlowPass());
   pm.addPass(llhd::createInlineCallsPass());
+
+  // Run MooreToCore again to convert moore.wait_event/detect_event ops that
+  // were in functions (e.g., interface tasks) and have now been inlined into
+  // llhd.process ops. The first MooreToCore pass leaves these unconverted when
+  // they're in func.func, using dynamic legality rules. After inlining, they
+  // are now inside llhd.process and can be converted.
+  pm.addPass(createConvertMooreToCorePass());
+
   pm.addPass(mlir::createSymbolDCEPass());
 
   // Simplify processes, replace signals with process results, and detect

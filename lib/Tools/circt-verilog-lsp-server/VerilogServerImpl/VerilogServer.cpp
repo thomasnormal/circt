@@ -405,6 +405,103 @@ void circt::lsp::VerilogServer::formatRange(
 }
 
 //===----------------------------------------------------------------------===//
+// Call Hierarchy
+//===----------------------------------------------------------------------===//
+
+std::optional<circt::lsp::VerilogServer::CallHierarchyItem>
+circt::lsp::VerilogServer::prepareCallHierarchy(const URIForFile &uri,
+                                                const llvm::lsp::Position &pos) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt == impl->files.end())
+    return std::nullopt;
+
+  auto docItem = fileIt->second->prepareCallHierarchy(uri, pos);
+  if (!docItem)
+    return std::nullopt;
+
+  // Convert from VerilogDocument type to VerilogServer type
+  CallHierarchyItem item;
+  item.name = docItem->name;
+  item.kind = docItem->kind;
+  item.detail = docItem->detail;
+  item.uri = docItem->uri;
+  item.range = docItem->range;
+  item.selectionRange = docItem->selectionRange;
+  item.data = docItem->data;
+  return item;
+}
+
+void circt::lsp::VerilogServer::getIncomingCalls(
+    const CallHierarchyItem &item,
+    std::vector<CallHierarchyIncomingCall> &calls) {
+  auto fileIt = impl->files.find(item.uri.file());
+  if (fileIt == impl->files.end())
+    return;
+
+  // Convert to VerilogDocument type
+  VerilogDocument::CallHierarchyItem docItem;
+  docItem.name = item.name;
+  docItem.kind = item.kind;
+  docItem.detail = item.detail;
+  docItem.uri = item.uri;
+  docItem.range = item.range;
+  docItem.selectionRange = item.selectionRange;
+  docItem.data = item.data;
+
+  std::vector<VerilogDocument::CallHierarchyIncomingCall> docCalls;
+  fileIt->second->getIncomingCalls(docItem, docCalls);
+
+  // Convert back to VerilogServer types
+  for (const auto &docCall : docCalls) {
+    CallHierarchyIncomingCall call;
+    call.from.name = docCall.from.name;
+    call.from.kind = docCall.from.kind;
+    call.from.detail = docCall.from.detail;
+    call.from.uri = docCall.from.uri;
+    call.from.range = docCall.from.range;
+    call.from.selectionRange = docCall.from.selectionRange;
+    call.from.data = docCall.from.data;
+    call.fromRanges = docCall.fromRanges;
+    calls.push_back(std::move(call));
+  }
+}
+
+void circt::lsp::VerilogServer::getOutgoingCalls(
+    const CallHierarchyItem &item,
+    std::vector<CallHierarchyOutgoingCall> &calls) {
+  auto fileIt = impl->files.find(item.uri.file());
+  if (fileIt == impl->files.end())
+    return;
+
+  // Convert to VerilogDocument type
+  VerilogDocument::CallHierarchyItem docItem;
+  docItem.name = item.name;
+  docItem.kind = item.kind;
+  docItem.detail = item.detail;
+  docItem.uri = item.uri;
+  docItem.range = item.range;
+  docItem.selectionRange = item.selectionRange;
+  docItem.data = item.data;
+
+  std::vector<VerilogDocument::CallHierarchyOutgoingCall> docCalls;
+  fileIt->second->getOutgoingCalls(docItem, docCalls);
+
+  // Convert back to VerilogServer types
+  for (const auto &docCall : docCalls) {
+    CallHierarchyOutgoingCall call;
+    call.to.name = docCall.to.name;
+    call.to.kind = docCall.to.kind;
+    call.to.detail = docCall.to.detail;
+    call.to.uri = docCall.to.uri;
+    call.to.range = docCall.to.range;
+    call.to.selectionRange = docCall.to.selectionRange;
+    call.to.data = docCall.to.data;
+    call.fromRanges = docCall.fromRanges;
+    calls.push_back(std::move(call));
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Workspace Management
 //===----------------------------------------------------------------------===//
 

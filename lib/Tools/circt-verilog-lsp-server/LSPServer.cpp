@@ -106,6 +106,104 @@ inline bool fromJSON(const json::Value &value, DocumentRangeFormattingParams &re
          o.map("range", result.range) && o.map("options", result.options);
 }
 
+//===----------------------------------------------------------------------===//
+// Call Hierarchy Types
+//===----------------------------------------------------------------------===//
+
+/// Call hierarchy item for LSP communication.
+struct CallHierarchyItem {
+  std::string name;
+  SymbolKind kind;
+  std::string detail;
+  URIForFile uri;
+  Range range;
+  Range selectionRange;
+  std::string data;
+};
+
+inline json::Value toJSON(const CallHierarchyItem &item) {
+  return json::Object{
+      {"name", item.name},
+      {"kind", static_cast<int>(item.kind)},
+      {"detail", item.detail},
+      {"uri", item.uri},
+      {"range", item.range},
+      {"selectionRange", item.selectionRange},
+      {"data", item.data},
+  };
+}
+
+inline bool fromJSON(const json::Value &value, CallHierarchyItem &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  int kindInt;
+  if (!o || !o.map("name", result.name) || !o.map("kind", kindInt) ||
+      !o.map("uri", result.uri) || !o.map("range", result.range) ||
+      !o.map("selectionRange", result.selectionRange))
+    return false;
+  result.kind = static_cast<SymbolKind>(kindInt);
+  o.map("detail", result.detail);
+  o.map("data", result.data);
+  return true;
+}
+
+/// Parameters for textDocument/prepareCallHierarchy request.
+struct CallHierarchyPrepareParams : public TextDocumentPositionParams {};
+
+/// Parameters for callHierarchy/incomingCalls request.
+struct CallHierarchyIncomingCallsParams {
+  CallHierarchyItem item;
+};
+
+inline bool fromJSON(const json::Value &value, CallHierarchyIncomingCallsParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("item", result.item);
+}
+
+/// Incoming call result.
+struct CallHierarchyIncomingCall {
+  CallHierarchyItem from;
+  std::vector<Range> fromRanges;
+};
+
+inline json::Value toJSON(const CallHierarchyIncomingCall &call) {
+  json::Array ranges;
+  for (const auto &r : call.fromRanges)
+    ranges.push_back(toJSON(r));
+  return json::Object{
+      {"from", toJSON(call.from)},
+      {"fromRanges", std::move(ranges)},
+  };
+}
+
+/// Parameters for callHierarchy/outgoingCalls request.
+struct CallHierarchyOutgoingCallsParams {
+  CallHierarchyItem item;
+};
+
+inline bool fromJSON(const json::Value &value, CallHierarchyOutgoingCallsParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("item", result.item);
+}
+
+/// Outgoing call result.
+struct CallHierarchyOutgoingCall {
+  CallHierarchyItem to;
+  std::vector<Range> fromRanges;
+};
+
+inline json::Value toJSON(const CallHierarchyOutgoingCall &call) {
+  json::Array ranges;
+  for (const auto &r : call.fromRanges)
+    ranges.push_back(toJSON(r));
+  return json::Object{
+      {"to", toJSON(call.to)},
+      {"fromRanges", std::move(ranges)},
+  };
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -236,6 +334,19 @@ struct LSPServer {
                                  Callback<std::vector<TextEdit>> reply);
 
   //===--------------------------------------------------------------------===//
+  // Call Hierarchy
+  //===--------------------------------------------------------------------===//
+
+  void onPrepareCallHierarchy(const TextDocumentPositionParams &params,
+                              Callback<json::Value> reply);
+
+  void onCallHierarchyIncomingCalls(const CallHierarchyIncomingCallsParams &params,
+                                     Callback<json::Value> reply);
+
+  void onCallHierarchyOutgoingCalls(const CallHierarchyOutgoingCallsParams &params,
+                                     Callback<json::Value> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -322,6 +433,7 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"inlayHintProvider", true},
       {"documentFormattingProvider", true},
       {"documentRangeFormattingProvider", true},
+      {"callHierarchyProvider", true},
       // Workspace capabilities
       {"workspace",
        llvm::json::Object{
@@ -591,6 +703,98 @@ void LSPServer::onDocumentRangeFormatting(
 }
 
 //===----------------------------------------------------------------------===//
+// Call Hierarchy
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onPrepareCallHierarchy(const TextDocumentPositionParams &params,
+                                       Callback<json::Value> reply) {
+  auto result = server.prepareCallHierarchy(params.textDocument.uri,
+                                            params.position);
+  if (!result) {
+    reply(json::Value(nullptr));
+    return;
+  }
+
+  // Convert to local CallHierarchyItem and then to JSON
+  CallHierarchyItem item;
+  item.name = result->name;
+  item.kind = result->kind;
+  item.detail = result->detail;
+  item.uri = result->uri;
+  item.range = result->range;
+  item.selectionRange = result->selectionRange;
+  item.data = result->data;
+
+  json::Array items;
+  items.push_back(toJSON(item));
+  reply(std::move(items));
+}
+
+void LSPServer::onCallHierarchyIncomingCalls(
+    const CallHierarchyIncomingCallsParams &params,
+    Callback<json::Value> reply) {
+  // Convert local type to server type
+  circt::lsp::VerilogServer::CallHierarchyItem serverItem;
+  serverItem.name = params.item.name;
+  serverItem.kind = params.item.kind;
+  serverItem.detail = params.item.detail;
+  serverItem.uri = params.item.uri;
+  serverItem.range = params.item.range;
+  serverItem.selectionRange = params.item.selectionRange;
+  serverItem.data = params.item.data;
+
+  std::vector<circt::lsp::VerilogServer::CallHierarchyIncomingCall> calls;
+  server.getIncomingCalls(serverItem, calls);
+
+  json::Array result;
+  for (const auto &call : calls) {
+    CallHierarchyIncomingCall lspCall;
+    lspCall.from.name = call.from.name;
+    lspCall.from.kind = call.from.kind;
+    lspCall.from.detail = call.from.detail;
+    lspCall.from.uri = call.from.uri;
+    lspCall.from.range = call.from.range;
+    lspCall.from.selectionRange = call.from.selectionRange;
+    lspCall.from.data = call.from.data;
+    lspCall.fromRanges = call.fromRanges;
+    result.push_back(toJSON(lspCall));
+  }
+  reply(std::move(result));
+}
+
+void LSPServer::onCallHierarchyOutgoingCalls(
+    const CallHierarchyOutgoingCallsParams &params,
+    Callback<json::Value> reply) {
+  // Convert local type to server type
+  circt::lsp::VerilogServer::CallHierarchyItem serverItem;
+  serverItem.name = params.item.name;
+  serverItem.kind = params.item.kind;
+  serverItem.detail = params.item.detail;
+  serverItem.uri = params.item.uri;
+  serverItem.range = params.item.range;
+  serverItem.selectionRange = params.item.selectionRange;
+  serverItem.data = params.item.data;
+
+  std::vector<circt::lsp::VerilogServer::CallHierarchyOutgoingCall> calls;
+  server.getOutgoingCalls(serverItem, calls);
+
+  json::Array result;
+  for (const auto &call : calls) {
+    CallHierarchyOutgoingCall lspCall;
+    lspCall.to.name = call.to.name;
+    lspCall.to.kind = call.to.kind;
+    lspCall.to.detail = call.to.detail;
+    lspCall.to.uri = call.to.uri;
+    lspCall.to.range = call.to.range;
+    lspCall.to.selectionRange = call.to.selectionRange;
+    lspCall.to.data = call.to.data;
+    lspCall.fromRanges = call.fromRanges;
+    result.push_back(toJSON(lspCall));
+  }
+  reply(std::move(result));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -677,6 +881,14 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
                         &LSPServer::onDocumentFormatting);
   messageHandler.method("textDocument/rangeFormatting", &lspServer,
                         &LSPServer::onDocumentRangeFormatting);
+
+  // Call Hierarchy
+  messageHandler.method("textDocument/prepareCallHierarchy", &lspServer,
+                        &LSPServer::onPrepareCallHierarchy);
+  messageHandler.method("callHierarchy/incomingCalls", &lspServer,
+                        &LSPServer::onCallHierarchyIncomingCalls);
+  messageHandler.method("callHierarchy/outgoingCalls", &lspServer,
+                        &LSPServer::onCallHierarchyOutgoingCalls);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

@@ -29,7 +29,7 @@ def SimplifyProcedures : Pass<"moore-simplify-procedures", "moore::SVModuleOp"> 
     let constructor = "circt::moore::createSimplifyProceduresPass()";
 }
 
-def LowerConcatRef : Pass<"moore-lower-concatref", "moore::SVModuleOp"> {
+def LowerConcatRef : Pass<"moore-lower-concatref", "mlir::ModuleOp"> {
     let summary = "Lower moore.concat_ref ops";
     let description = [{
       It's used to disassemble the LHS of assignments that have a form like

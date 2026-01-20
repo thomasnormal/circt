@@ -176,6 +176,49 @@ public:
                                             const llvm::lsp::Position &pos);
 
   //===--------------------------------------------------------------------===//
+  // Call Hierarchy
+  //===--------------------------------------------------------------------===//
+
+  /// Represents a call hierarchy item (function or task).
+  struct CallHierarchyItem {
+    std::string name;
+    llvm::lsp::SymbolKind kind;
+    std::string detail;
+    llvm::lsp::URIForFile uri;
+    llvm::lsp::Range range;
+    llvm::lsp::Range selectionRange;
+    std::string data; // Encoded symbol info for later lookup
+  };
+
+  /// Represents an incoming call (a caller of a function/task).
+  struct CallHierarchyIncomingCall {
+    CallHierarchyItem from;
+    std::vector<llvm::lsp::Range> fromRanges;
+  };
+
+  /// Represents an outgoing call (a callee from a function/task).
+  struct CallHierarchyOutgoingCall {
+    CallHierarchyItem to;
+    std::vector<llvm::lsp::Range> fromRanges;
+  };
+
+  /// Prepare call hierarchy at the given position.
+  /// Returns the call hierarchy item for the function/task at position if any.
+  std::optional<CallHierarchyItem>
+  prepareCallHierarchy(const llvm::lsp::URIForFile &uri,
+                       const llvm::lsp::Position &pos);
+
+  /// Get incoming calls for a call hierarchy item.
+  /// Returns all call sites that call the given function/task.
+  void getIncomingCalls(const CallHierarchyItem &item,
+                        std::vector<CallHierarchyIncomingCall> &calls);
+
+  /// Get outgoing calls from a call hierarchy item.
+  /// Returns all functions/tasks called from the given function/task.
+  void getOutgoingCalls(const CallHierarchyItem &item,
+                        std::vector<CallHierarchyOutgoingCall> &calls);
+
+  //===--------------------------------------------------------------------===//
   // Document Formatting
   //===--------------------------------------------------------------------===//
 

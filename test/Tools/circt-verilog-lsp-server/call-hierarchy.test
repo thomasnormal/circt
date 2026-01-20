@@ -1,0 +1,161 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test call hierarchy functionality for functions and tasks.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// CHECK: "callHierarchyProvider": true
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///call_hierarchy.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_mod;\n  function int helper(int x);\n    return x * 2;\n  endfunction\n\n  function int compute(int a, int b);\n    int temp;\n    temp = helper(a);\n    return temp + helper(b);\n  endfunction\n\n  function int outer(int val);\n    return compute(val, val + 1);\n  endfunction\n\n  initial begin\n    int result;\n    result = outer(5);\n  end\nendmodule"
+}}}
+// -----
+// Test prepareCallHierarchy on the helper function (line 1, col 15 - on "helper")
+{"jsonrpc":"2.0","id":1,"method":"textDocument/prepareCallHierarchy","params":{
+  "textDocument":{"uri":"test:///call_hierarchy.sv"},
+  "position":{"line":1,"character":15}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "helper"
+// CHECK:         "kind": 12
+// CHECK:         "selectionRange"
+// -----
+// Test prepareCallHierarchy on the compute function
+{"jsonrpc":"2.0","id":2,"method":"textDocument/prepareCallHierarchy","params":{
+  "textDocument":{"uri":"test:///call_hierarchy.sv"},
+  "position":{"line":5,"character":15}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "compute"
+// -----
+// Test prepareCallHierarchy on a non-function (should return null)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/prepareCallHierarchy","params":{
+  "textDocument":{"uri":"test:///call_hierarchy.sv"},
+  "position":{"line":0,"character":5}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": null
+// -----
+// Test incoming calls for helper function (called by compute)
+{"jsonrpc":"2.0","id":4,"method":"callHierarchy/incomingCalls","params":{
+  "item":{
+    "name":"helper",
+    "kind":12,
+    "detail":"function int helper(int x)",
+    "uri":"test:///call_hierarchy.sv",
+    "range":{"start":{"line":1,"character":2},"end":{"line":3,"character":13}},
+    "selectionRange":{"start":{"line":1,"character":15},"end":{"line":1,"character":21}},
+    "data":"test:///call_hierarchy.sv:1:15"
+  }
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "from":
+// CHECK:           "name": "compute"
+// CHECK:         "fromRanges"
+// -----
+// Test outgoing calls from compute function (calls helper)
+{"jsonrpc":"2.0","id":5,"method":"callHierarchy/outgoingCalls","params":{
+  "item":{
+    "name":"compute",
+    "kind":12,
+    "detail":"function int compute(int a, int b)",
+    "uri":"test:///call_hierarchy.sv",
+    "range":{"start":{"line":5,"character":2},"end":{"line":9,"character":13}},
+    "selectionRange":{"start":{"line":5,"character":15},"end":{"line":5,"character":22}},
+    "data":"test:///call_hierarchy.sv:5:15"
+  }
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "to":
+// CHECK:           "name": "helper"
+// CHECK:         "fromRanges"
+// -----
+// Test outgoing calls from outer function (calls compute)
+{"jsonrpc":"2.0","id":6,"method":"callHierarchy/outgoingCalls","params":{
+  "item":{
+    "name":"outer",
+    "kind":12,
+    "detail":"function int outer(int val)",
+    "uri":"test:///call_hierarchy.sv",
+    "range":{"start":{"line":11,"character":2},"end":{"line":13,"character":13}},
+    "selectionRange":{"start":{"line":11,"character":15},"end":{"line":11,"character":20}},
+    "data":"test:///call_hierarchy.sv:11:15"
+  }
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "to":
+// CHECK:           "name": "compute"
+// CHECK:         "fromRanges"
+// -----
+// Test incoming calls for compute function (called by outer)
+{"jsonrpc":"2.0","id":7,"method":"callHierarchy/incomingCalls","params":{
+  "item":{
+    "name":"compute",
+    "kind":12,
+    "detail":"function int compute(int a, int b)",
+    "uri":"test:///call_hierarchy.sv",
+    "range":{"start":{"line":5,"character":2},"end":{"line":9,"character":13}},
+    "selectionRange":{"start":{"line":5,"character":15},"end":{"line":5,"character":22}},
+    "data":"test:///call_hierarchy.sv:5:15"
+  }
+}}
+// CHECK:       "id": 7,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "from":
+// CHECK:           "name": "outer"
+// CHECK:         "fromRanges"
+// -----
+// Test with task
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///task_hierarchy.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module task_test;\n  task send_byte(input logic [7:0] data);\n    // Send byte\n  endtask\n\n  task send_packet(input logic [31:0] packet);\n    send_byte(packet[7:0]);\n    send_byte(packet[15:8]);\n    send_byte(packet[23:16]);\n    send_byte(packet[31:24]);\n  endtask\n\n  initial begin\n    send_packet(32'hDEADBEEF);\n  end\nendmodule"
+}}}
+// -----
+// Test prepareCallHierarchy on a task
+{"jsonrpc":"2.0","id":8,"method":"textDocument/prepareCallHierarchy","params":{
+  "textDocument":{"uri":"test:///task_hierarchy.sv"},
+  "position":{"line":1,"character":7}
+}}
+// CHECK:       "id": 8,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "name": "send_byte"
+// -----
+// Test outgoing calls from send_packet (calls send_byte 4 times)
+{"jsonrpc":"2.0","id":9,"method":"callHierarchy/outgoingCalls","params":{
+  "item":{
+    "name":"send_packet",
+    "kind":12,
+    "detail":"task send_packet",
+    "uri":"test:///task_hierarchy.sv",
+    "range":{"start":{"line":5,"character":2},"end":{"line":10,"character":9}},
+    "selectionRange":{"start":{"line":5,"character":7},"end":{"line":5,"character":18}},
+    "data":"test:///task_hierarchy.sv:5:7"
+  }
+}}
+// CHECK:       "id": 9,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK:         "to":
+// CHECK:           "name": "send_byte"
+// CHECK:         "fromRanges"
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

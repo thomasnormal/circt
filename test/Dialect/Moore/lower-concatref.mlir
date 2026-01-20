@@ -86,3 +86,16 @@ moore.module @Nested() {
   }
   moore.output
 }
+
+// CHECK-LABEL: func.func @ConcatRefFunc
+func.func @ConcatRefFunc(%arg0: !moore.ref<i1>, %arg1: !moore.ref<i1>,
+                         %val: !moore.i2) {
+  // CHECK: moore.concat_ref %arg0, %arg1
+  %0 = moore.concat_ref %arg0, %arg1 : (!moore.ref<i1>, !moore.ref<i1>) -> <i2>
+  // CHECK: moore.extract %val from 1 : i2 -> i1
+  // CHECK: moore.blocking_assign %arg0
+  // CHECK: moore.extract %val from 0 : i2 -> i1
+  // CHECK: moore.blocking_assign %arg1
+  moore.blocking_assign %0, %val : i2
+  return
+}
