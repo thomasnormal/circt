@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 67 - January 20, 2026
+
+### Pullup/Pulldown Primitives + Inline Constraints + Coverage Exclusions
+
+**Track A: Pullup/Pulldown Primitive Support** ⭐ FEATURE
+- Implemented basic parsing support for pullup/pulldown Verilog primitives
+- Models as continuous assignment of constant (1 for pullup, 0 for pulldown)
+- Added visitor for `PrimitiveInstanceSymbol` in Structure.cpp
+- Unblocks I3C AVIP compilation (main remaining blocker was pullup primitive)
+- Created test file pullup-pulldown.sv
+- Note: Does not yet model drive strength or 4-state behavior
+
+**Track B: Inline Constraint Lowering** ⭐ FEATURE
+- Full support for `randomize() with { ... }` inline constraints
+- Added `traceToPropertyName()` helper to trace constraint operands back to properties
+- Added `extractInlineRangeConstraints()`, `extractInlineDistConstraints()`, `extractInlineSoftConstraints()`
+- Modified `RandomizeOpConversion` to merge inline and class-level constraints
+- Inline constraints properly override class-level constraints per IEEE 1800-2017
+- Created comprehensive test file inline-constraints.mlir
+
+**Track C: Coverage Exclusions API** ⭐ FEATURE
+- `__moore_coverpoint_exclude_bin(cg, cp_index, bin_name)` - Exclude bin from coverage
+- `__moore_coverpoint_include_bin(cg, cp_index, bin_name)` - Re-include excluded bin
+- `__moore_coverpoint_is_bin_excluded(cg, cp_index, bin_name)` - Check exclusion status
+- `__moore_covergroup_set_exclusion_file(filename)` - Load exclusions from file
+- `__moore_covergroup_get_exclusion_file()` - Get current exclusion file path
+- `__moore_coverpoint_get_excluded_bin_count()` - Count excluded bins
+- `__moore_coverpoint_clear_exclusions()` - Clear all exclusions
+- Exclusion file format supports wildcards: `cg_name.cp_name.bin_name`
+- 13 unit tests for exclusion functionality
+
+**Track D: LSP Semantic Tokens** ⭐ VERIFICATION
+- Confirmed semantic tokens are already fully implemented
+- 23 token types: Namespace, Type, Class, Enum, Interface, etc.
+- 9 token modifiers: Declaration, Definition, Readonly, etc.
+- Comprehensive tests in semantic-tokens.test and semantic-tokens-comprehensive.test
+
+### Files Modified
+- `lib/Conversion/ImportVerilog/Structure.cpp` (+60 lines for pullup/pulldown)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+200 lines for inline constraints)
+- `lib/Runtime/MooreRuntime.cpp` (+200 lines for exclusions)
+- `include/circt/Runtime/MooreRuntime.h` (+80 lines for API)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+200 lines for tests)
+- `test/Conversion/ImportVerilog/pullup-pulldown.sv` (new)
+- `test/Conversion/MooreToCore/inline-constraints.mlir` (new)
+
+---
+
 ## Iteration 66 - January 20, 2026
 
 ### AVIP Testing Verification + Coverage DB Persistence + Workspace Symbols Fix
@@ -451,6 +499,33 @@
   `test/Dialect/Moore/lower-concatref.mlir`.
 - Re-ran SPI AVIP with virtual sequencer include path after concat-ref fix
   (success; log: `/tmp/spi_avip_full_ignore_timing_dynamic3.log`).
+- Ran circt-verilog on verilator-verification
+  `tests/randomize-constraints/constraint_if.sv` with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic` (log:
+  `/tmp/verilator_verification_constraint_if_ignore_timing7.log`).
+- Ran circt-verilog on verilator-verification
+  `tests/randomize-constraints/constraint_range.sv` with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic` (log:
+  `/tmp/verilator_verification_constraint_range_ignore_timing7.log`).
+- Ran sv-tests `chapter-11/11.10.1--string_copy.sv` with
+  `--ignore-timing-controls` (log:
+  `/tmp/svtests_string_copy_ignore_timing7.log`).
+- Added virtual sequencer include paths to `apb_avip_files.txt` and
+  `spi_avip_files.txt` so AVIP runs no longer require manual `-I` flags.
+- Ran circt-verilog on APB AVIP file list with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic` (log:
+  `/tmp/apb_avip_full_ignore_timing_dynamic5.log`).
+- Ran circt-verilog on SPI AVIP file list with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic` (log:
+  `/tmp/spi_avip_full_ignore_timing_dynamic4.log`).
+- Ran circt-verilog across all verilator-verification
+  `tests/randomize-constraints/*.sv` with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic`
+  (failure: `constraint_enum.sv` enum inside on type name; log:
+  `/tmp/verilator_verification_constraint_enum_ignore_timing8.log`).
+- Ran sv-tests `chapter-11/11.10.3--empty_string.sv` with
+  `--ignore-timing-controls` (log:
+  `/tmp/svtests_empty_string_ignore_timing7.log`).
 - Ran circt-verilog on verilator-verification
   `tests/randomize-constraints/constraint_dist.sv` with
   `--ignore-timing-controls --allow-nonprocedural-dynamic` (success; log:

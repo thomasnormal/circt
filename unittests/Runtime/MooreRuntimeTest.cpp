@@ -6160,4 +6160,368 @@ TEST(MooreRuntimeSampleCallbackTest, DisableCallback) {
   __moore_covergroup_destroy(cg);
 }
 
+//===----------------------------------------------------------------------===//
+// Coverage Exclusion Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageExclusionTest, ExcludeBinBasic) {
+  // Test basic bin exclusion functionality
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Set up explicit bins
+  MooreCoverageBin bins[3];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Sample all bins
+  __moore_coverpoint_sample(cg, 0, 5);   // bin0
+  __moore_coverpoint_sample(cg, 0, 15);  // bin1
+  __moore_coverpoint_sample(cg, 0, 25);  // bin2
+
+  // All 3 bins hit, coverage should be 100%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  // Exclude bin1
+  __moore_coverpoint_exclude_bin(cg, 0, "bin1");
+
+  // Now only 2 bins count (bin0 and bin2), both still hit, so 100%
+  cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ExcludeBinAffectsCoverage) {
+  // Test that excluding an unhit bin affects coverage calculation
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[4];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+  bins[3] = {.name = "bin3", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 30, .high = 39, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 4);
+
+  // Sample only bin0 and bin1 (2/4 = 50% coverage)
+  __moore_coverpoint_sample(cg, 0, 5);   // bin0
+  __moore_coverpoint_sample(cg, 0, 15);  // bin1
+
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 50.0);
+
+  // Exclude bin2 and bin3 (the unhit bins)
+  __moore_coverpoint_exclude_bin(cg, 0, "bin2");
+  __moore_coverpoint_exclude_bin(cg, 0, "bin3");
+
+  // Now only bin0 and bin1 count, both hit, so 100%
+  cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, IncludeBin) {
+  // Test re-including an excluded bin
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[2];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 2);
+
+  // Sample only bin0
+  __moore_coverpoint_sample(cg, 0, 5);
+
+  // 1/2 bins hit = 50%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 50.0);
+
+  // Exclude bin1
+  __moore_coverpoint_exclude_bin(cg, 0, "bin1");
+
+  // Now 1/1 bin hit = 100%
+  cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  // Re-include bin1
+  __moore_coverpoint_include_bin(cg, 0, "bin1");
+
+  // Back to 1/2 bins hit = 50%
+  cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 50.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, IsBinExcluded) {
+  // Test checking exclusion status
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[2];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 2);
+
+  // Initially no bins are excluded
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin0"));
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin1"));
+
+  // Exclude bin0
+  __moore_coverpoint_exclude_bin(cg, 0, "bin0");
+
+  EXPECT_TRUE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin0"));
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin1"));
+
+  // Include bin0 again
+  __moore_coverpoint_include_bin(cg, 0, "bin0");
+
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin0"));
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin1"));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, GetExcludedBinCount) {
+  // Test getting the count of excluded bins
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[3];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Initially no exclusions
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 0);
+
+  // Exclude one bin
+  __moore_coverpoint_exclude_bin(cg, 0, "bin1");
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 1);
+
+  // Exclude another bin
+  __moore_coverpoint_exclude_bin(cg, 0, "bin2");
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 2);
+
+  // Re-include one
+  __moore_coverpoint_include_bin(cg, 0, "bin1");
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 1);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ClearExclusions) {
+  // Test clearing all exclusions for a coverpoint
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[3];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Exclude all bins
+  __moore_coverpoint_exclude_bin(cg, 0, "bin0");
+  __moore_coverpoint_exclude_bin(cg, 0, "bin1");
+  __moore_coverpoint_exclude_bin(cg, 0, "bin2");
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 3);
+
+  // Clear all exclusions
+  __moore_coverpoint_clear_exclusions(cg, 0);
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 0);
+
+  // Verify all bins are no longer excluded
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin0"));
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin1"));
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin2"));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ExclusionWithIgnoreBins) {
+  // Test that exclusions work alongside ignore_bins
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Set up bins: 2 normal, 1 ignore
+  MooreCoverageBin bins[3];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_IGNORE,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Sample bin0 only
+  __moore_coverpoint_sample(cg, 0, 5);
+
+  // 2 normal bins (bin0, bin2), 1 hit (bin0) = 50%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 50.0);
+
+  // Exclude bin2
+  __moore_coverpoint_exclude_bin(cg, 0, "bin2");
+
+  // Now only bin0 counts, which is hit = 100%
+  cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ExclusionNullInputs) {
+  // Test that null inputs don't crash
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[1];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 1);
+
+  // Test with null covergroup
+  __moore_coverpoint_exclude_bin(nullptr, 0, "bin0");
+  __moore_coverpoint_include_bin(nullptr, 0, "bin0");
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(nullptr, 0, "bin0"));
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(nullptr, 0), 0);
+  __moore_coverpoint_clear_exclusions(nullptr, 0);
+
+  // Test with null bin_name
+  __moore_coverpoint_exclude_bin(cg, 0, nullptr);
+  __moore_coverpoint_include_bin(cg, 0, nullptr);
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, nullptr));
+
+  // Test with invalid index
+  __moore_coverpoint_exclude_bin(cg, -1, "bin0");
+  __moore_coverpoint_exclude_bin(cg, 100, "bin0");
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, -1, "bin0"));
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 100, "bin0"));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ExclusionFileNullFilename) {
+  // Test that null filename returns false
+  EXPECT_FALSE(__moore_covergroup_set_exclusion_file(nullptr));
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ExclusionFileNonexistent) {
+  // Test that nonexistent file returns false
+  EXPECT_FALSE(__moore_covergroup_set_exclusion_file("/nonexistent/path/file.excl"));
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, GetExclusionFile) {
+  // Initially no exclusion file is set
+  const char *file = __moore_covergroup_get_exclusion_file();
+  // Note: file may or may not be nullptr depending on previous test state
+
+  // After attempting to set a nonexistent file, the path is still stored
+  __moore_covergroup_set_exclusion_file("/some/path/exclusions.txt");
+  file = __moore_covergroup_get_exclusion_file();
+  EXPECT_NE(file, nullptr);
+  EXPECT_STREQ(file, "/some/path/exclusions.txt");
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, MultipleExclusionsSameBin) {
+  // Test that excluding the same bin multiple times is idempotent
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[2];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 2);
+
+  // Exclude bin0 multiple times
+  __moore_coverpoint_exclude_bin(cg, 0, "bin0");
+  __moore_coverpoint_exclude_bin(cg, 0, "bin0");
+  __moore_coverpoint_exclude_bin(cg, 0, "bin0");
+
+  // Should still only count as 1 exclusion
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 1);
+
+  // Re-including once should remove it
+  __moore_coverpoint_include_bin(cg, 0, "bin0");
+  EXPECT_EQ(__moore_coverpoint_get_excluded_bin_count(cg, 0), 0);
+  EXPECT_FALSE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin0"));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageExclusionTest, ExclusionPreservedAfterSampling) {
+  // Test that exclusions are preserved when sampling continues
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[2];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 2);
+
+  // Exclude bin1 before sampling
+  __moore_coverpoint_exclude_bin(cg, 0, "bin1");
+
+  // Sample bin0 multiple times
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 0, 3);
+
+  // bin1 should still be excluded
+  EXPECT_TRUE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin1"));
+
+  // Coverage should be 100% (only bin0 counts and it's hit)
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  // Sample into bin1 as well
+  __moore_coverpoint_sample(cg, 0, 15);
+
+  // bin1 still excluded, coverage still 100%
+  EXPECT_TRUE(__moore_coverpoint_is_bin_excluded(cg, 0, "bin1"));
+  cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
 } // namespace

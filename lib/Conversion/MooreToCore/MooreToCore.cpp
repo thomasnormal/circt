@@ -2403,6 +2403,13 @@ struct ConstraintDistOpConversion : public OpConversionPattern<ConstraintDistOp>
   LogicalResult
   matchAndRewrite(ConstraintDistOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Skip ops inside RandomizeOp's inline_constraints region - they are
+    // processed by RandomizeOpConversion which has higher benefit.
+    if (auto randomizeOp = op->getParentOfType<RandomizeOp>())
+      return failure();
+    if (auto stdRandomizeOp = op->getParentOfType<StdRandomizeOp>())
+      return failure();
+
     // Distribution constraints are processed during RandomizeOp conversion.
     // TODO: Generate weighted random number generation calls.
     rewriter.eraseOp(op);
@@ -2420,6 +2427,13 @@ struct ConstraintInsideOpConversion
   LogicalResult
   matchAndRewrite(ConstraintInsideOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Skip ops inside RandomizeOp's inline_constraints region - they are
+    // processed by RandomizeOpConversion which has higher benefit.
+    if (auto randomizeOp = op->getParentOfType<RandomizeOp>())
+      return failure();
+    if (auto stdRandomizeOp = op->getParentOfType<StdRandomizeOp>())
+      return failure();
+
     // Inside constraints are processed by extractRangeConstraints().
     rewriter.eraseOp(op);
     return success();
@@ -9318,6 +9332,282 @@ static void sortConstraintsBySolveOrder(
   });
 }
 
+/// Helper to trace a value back through ReadOp to ClassPropertyRefOp.
+/// Returns the property name if found, empty StringRef otherwise.
+static StringRef traceToPropertyName(Value variable) {
+  // In inline constraints, the variable is typically:
+  //   %0 = moore.class.property_ref %obj[@propertyName] : ...
+  //   %1 = moore.read %0 : ...
+  //   moore.constraint.inside %1, [...] : ...
+  // So we need to trace back through the read operation.
+
+  // If it's directly a ClassPropertyRefOp, get the property name
+  if (auto propRef = variable.getDefiningOp<ClassPropertyRefOp>())
+    return propRef.getProperty();
+
+  // If it's a ReadOp, look at its input
+  if (auto readOp = variable.getDefiningOp<ReadOp>()) {
+    Value input = readOp.getInput();
+    if (auto propRef = input.getDefiningOp<ClassPropertyRefOp>())
+      return propRef.getProperty();
+  }
+
+  return StringRef();
+}
+
+/// Extract range constraints from an inline constraint region.
+/// In inline constraints, the variable operand traces back through ReadOp to
+/// ClassPropertyRefOp, rather than being a block argument.
+static SmallVector<RangeConstraintInfo>
+extractInlineRangeConstraints(Region &inlineRegion,
+                              ClassDeclOp classDecl,
+                              ClassTypeCache &cache,
+                              SymbolRefAttr classSym) {
+  SmallVector<RangeConstraintInfo> constraints;
+
+  if (inlineRegion.empty())
+    return constraints;
+
+  // Build a map from property names to their indices and types
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = 0;
+
+  // Account for type ID field (index 0 in root classes) or base class
+  if (classDecl && classDecl.getBaseAttr())
+    propIdx = 1;
+  else
+    propIdx = 1; // Type ID is at index 0
+
+  if (classDecl) {
+    for (auto &op : classDecl.getBody().getOps()) {
+      if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+        propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+        propIdx++;
+      }
+    }
+  }
+
+  // Walk through the inline constraint region looking for ConstraintInsideOp
+  for (auto &op : inlineRegion.front().getOperations()) {
+    if (auto insideOp = dyn_cast<ConstraintInsideOp>(op)) {
+      // Get the variable being constrained
+      Value variable = insideOp.getVariable();
+
+      // Trace back to find the property name
+      StringRef propName = traceToPropertyName(variable);
+      if (propName.empty())
+        continue;
+
+      // Get the ranges array
+      ArrayRef<int64_t> rangesArr = insideOp.getRanges();
+      if (rangesArr.size() < 2 || rangesArr.size() % 2 != 0)
+        continue;
+
+      // Find the property index and bit width
+      auto it = propertyMap.find(propName);
+      if (it == propertyMap.end())
+        continue;
+
+      unsigned fieldIdx = it->second.first;
+      Type fieldType = it->second.second;
+
+      // Get bit width from the type
+      unsigned bitWidth = 32; // Default
+      if (auto intType = dyn_cast<IntType>(fieldType))
+        bitWidth = intType.getWidth();
+
+      RangeConstraintInfo info;
+      info.propertyName = propName;
+      info.constraintName = ""; // Inline constraints don't have a name
+      info.fieldIndex = fieldIdx;
+      info.bitWidth = bitWidth;
+      info.isSoft = insideOp.getIsSoft();
+
+      // Check if this is a single range or multiple ranges
+      if (rangesArr.size() == 2) {
+        info.minValue = rangesArr[0];
+        info.maxValue = rangesArr[1];
+        info.isMultiRange = false;
+      } else {
+        info.isMultiRange = true;
+        info.minValue = rangesArr[0];
+        info.maxValue = rangesArr[1];
+        for (size_t i = 0; i < rangesArr.size(); i += 2)
+          info.ranges.push_back({rangesArr[i], rangesArr[i + 1]});
+      }
+      constraints.push_back(info);
+    }
+  }
+
+  return constraints;
+}
+
+/// Extract distribution constraints from an inline constraint region.
+static SmallVector<DistConstraintInfo>
+extractInlineDistConstraints(Region &inlineRegion,
+                             ClassDeclOp classDecl,
+                             ClassTypeCache &cache,
+                             SymbolRefAttr classSym) {
+  SmallVector<DistConstraintInfo> distConstraints;
+
+  if (inlineRegion.empty())
+    return distConstraints;
+
+  // Build a map from property names to their indices and types
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = 0;
+
+  // Account for type ID field (index 0 in root classes) or base class
+  if (classDecl && classDecl.getBaseAttr())
+    propIdx = 1;
+  else
+    propIdx = 1; // Type ID is at index 0
+
+  if (classDecl) {
+    for (auto &op : classDecl.getBody().getOps()) {
+      if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+        propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+        propIdx++;
+      }
+    }
+  }
+
+  // Walk through the inline constraint region looking for ConstraintDistOp
+  for (auto &op : inlineRegion.front().getOperations()) {
+    if (auto distOp = dyn_cast<ConstraintDistOp>(op)) {
+      Value variable = distOp.getVariable();
+
+      // Trace back to find the property name
+      StringRef propName = traceToPropertyName(variable);
+      if (propName.empty())
+        continue;
+
+      // Get the distribution data from the op
+      ArrayRef<int64_t> values = distOp.getValues();
+      ArrayRef<int64_t> weights = distOp.getWeights();
+      ArrayRef<int64_t> perRange = distOp.getPerRange();
+
+      // Values come in pairs: [low0, high0, low1, high1, ...]
+      if (values.size() < 2 || values.size() % 2 != 0)
+        continue;
+      if (weights.size() != values.size() / 2)
+        continue;
+      if (perRange.size() != weights.size())
+        continue;
+
+      // Find the property index and bit width
+      auto it = propertyMap.find(propName);
+      if (it == propertyMap.end())
+        continue;
+
+      unsigned fieldIdx = it->second.first;
+      Type fieldType = it->second.second;
+
+      // Get bit width from the type
+      unsigned bitWidth = 32; // Default
+      if (auto intType = dyn_cast<IntType>(fieldType))
+        bitWidth = intType.getWidth();
+
+      DistConstraintInfo info;
+      info.propertyName = propName;
+      info.constraintName = ""; // Inline constraints don't have a name
+      info.fieldIndex = fieldIdx;
+      info.bitWidth = bitWidth;
+
+      // Convert values array to ranges vector
+      for (size_t i = 0; i < values.size(); i += 2)
+        info.ranges.push_back({values[i], values[i + 1]});
+
+      // Copy weights and perRange
+      for (int64_t w : weights)
+        info.weights.push_back(w);
+      for (int64_t p : perRange)
+        info.perRange.push_back(p);
+
+      distConstraints.push_back(info);
+    }
+  }
+
+  return distConstraints;
+}
+
+/// Extract soft constraints from an inline constraint region.
+static SmallVector<SoftConstraintInfo>
+extractInlineSoftConstraints(Region &inlineRegion,
+                             ClassDeclOp classDecl,
+                             ClassTypeCache &cache,
+                             SymbolRefAttr classSym) {
+  SmallVector<SoftConstraintInfo> softConstraints;
+
+  if (inlineRegion.empty())
+    return softConstraints;
+
+  // Build a map from property names to their indices and types
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = 0;
+
+  // Account for type ID field (index 0 in root classes) or base class
+  if (classDecl && classDecl.getBaseAttr())
+    propIdx = 1;
+  else
+    propIdx = 1; // Type ID is at index 0
+
+  if (classDecl) {
+    for (auto &op : classDecl.getBody().getOps()) {
+      if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+        propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+        propIdx++;
+      }
+    }
+  }
+
+  // Walk through the inline constraint region looking for soft ConstraintInsideOp
+  for (auto &op : inlineRegion.front().getOperations()) {
+    if (auto insideOp = dyn_cast<ConstraintInsideOp>(op)) {
+      // Only process soft constraints
+      if (!insideOp.getIsSoft())
+        continue;
+
+      Value variable = insideOp.getVariable();
+
+      // Trace back to find the property name
+      StringRef propName = traceToPropertyName(variable);
+      if (propName.empty())
+        continue;
+
+      // Get the ranges array
+      ArrayRef<int64_t> ranges = insideOp.getRanges();
+      if (ranges.size() < 2)
+        continue;
+
+      int64_t defaultValue = ranges[0];
+
+      // Find the property index and bit width
+      auto it = propertyMap.find(propName);
+      if (it == propertyMap.end())
+        continue;
+
+      unsigned fieldIdx = it->second.first;
+      Type fieldType = it->second.second;
+
+      // Get bit width from the type
+      unsigned bitWidth = 32; // Default
+      if (auto intType = dyn_cast<IntType>(fieldType))
+        bitWidth = intType.getWidth();
+
+      SoftConstraintInfo info;
+      info.propertyName = propName;
+      info.constraintName = ""; // Inline constraints don't have a name
+      info.defaultValue = defaultValue;
+      info.fieldIndex = fieldIdx;
+      info.bitWidth = bitWidth;
+      softConstraints.push_back(info);
+    }
+  }
+
+  return softConstraints;
+}
+
 static Type resolveStructFieldType(LLVM::LLVMStructType structTy,
                                    ArrayRef<unsigned> path) {
   Type current = structTy;
@@ -9339,7 +9629,9 @@ static Type resolveStructFieldType(LLVM::LLVMStructType structTy,
 struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
   RandomizeOpConversion(TypeConverter &tc, MLIRContext *ctx,
                         ClassTypeCache &cache)
-      : OpConversionPattern<RandomizeOp>(tc, ctx), cache(cache) {}
+      // Use high benefit (10) to ensure this pattern runs before
+      // ConstraintInsideOpConversion erases ops in the inline region.
+      : OpConversionPattern<RandomizeOp>(tc, ctx, /*benefit=*/10), cache(cache) {}
 
   LogicalResult
   matchAndRewrite(RandomizeOp op, OpAdaptor adaptor,
@@ -9553,6 +9845,38 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       softConstraints = extractSoftConstraints(classDecl, cache, classSym);
       distConstraints = extractDistConstraints(classDecl, cache, classSym);
       solveBeforeOrdering = extractSolveBeforeOrdering(classDecl);
+    }
+
+    // Also extract constraints from the inline constraint region (if present)
+    // Inline constraints are specified with `randomize() with { ... }` syntax
+    // and are combined with class-level constraints (IEEE 1800-2017 Section 18.7)
+    Region &inlineRegion = op.getInlineConstraints();
+    if (!inlineRegion.empty()) {
+      auto inlineRangeConstraints =
+          extractInlineRangeConstraints(inlineRegion, classDecl, cache, classSym);
+      auto inlineSoftConstraints =
+          extractInlineSoftConstraints(inlineRegion, classDecl, cache, classSym);
+      auto inlineDistConstraints =
+          extractInlineDistConstraints(inlineRegion, classDecl, cache, classSym);
+
+      // Merge inline constraints with class-level constraints
+      // Inline constraints take precedence (they are appended last)
+      rangeConstraints.append(inlineRangeConstraints.begin(),
+                              inlineRangeConstraints.end());
+      softConstraints.append(inlineSoftConstraints.begin(),
+                             inlineSoftConstraints.end());
+      distConstraints.append(inlineDistConstraints.begin(),
+                             inlineDistConstraints.end());
+
+      // Erase all ops in the inline constraint region now that we've extracted
+      // the constraint information. This prevents other patterns from trying
+      // to convert these ops (which would fail since we skip them).
+      Block &inlineBlock = inlineRegion.front();
+      SmallVector<Operation *> opsToErase;
+      for (auto &op : inlineBlock.getOperations())
+        opsToErase.push_back(&op);
+      for (auto *op : llvm::reverse(opsToErase))
+        rewriter.eraseOp(op);
     }
 
     // Separate hard constraints from soft range constraints

@@ -2167,6 +2167,14 @@ struct ExplicitBinData {
 /// Map from coverpoint to its explicit bin data.
 thread_local std::map<MooreCoverpoint *, ExplicitBinData> explicitBinData;
 
+/// Set of excluded bin names for each coverpoint.
+/// Excluded bins are not counted toward coverage goals.
+/// This supports IEEE 1800-2017 coverage exclusion semantics.
+thread_local std::map<MooreCoverpoint *, std::set<std::string>> excludedBins;
+
+/// Global exclusion file path for bulk exclusion loading.
+thread_local std::string globalExclusionFile;
+
 } // anonymous namespace
 
 extern "C" void *__moore_covergroup_create(const char *name,
@@ -2251,6 +2259,9 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
 
       // Remove from explicit bin data map
       explicitBinData.erase(covergroup->coverpoints[i]);
+
+      // Remove from excluded bins map
+      excludedBins.erase(covergroup->coverpoints[i]);
 
       // Free bin array if present
       if (covergroup->coverpoints[i]->bins) {
@@ -2380,6 +2391,9 @@ extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
     // Check explicit bin data for ignore bins (which shouldn't count)
     auto binDataIt = explicitBinData.find(cp);
 
+    // Check excluded bins set
+    auto excludedIt = excludedBins.find(cp);
+
     for (int32_t i = 0; i < cp->num_bins; ++i) {
       // Skip ignore bins - they don't count toward coverage
       if (binDataIt != explicitBinData.end() &&
@@ -2387,6 +2401,16 @@ extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
           binDataIt->second.bins[i].kind == MOORE_BIN_KIND_IGNORE) {
         continue;
       }
+
+      // Skip excluded bins - they don't count toward coverage
+      if (binDataIt != explicitBinData.end() &&
+          i < static_cast<int32_t>(binDataIt->second.bins.size()) &&
+          excludedIt != excludedBins.end() &&
+          binDataIt->second.bins[i].name != nullptr &&
+          excludedIt->second.count(binDataIt->second.bins[i].name) > 0) {
+        continue;
+      }
+
       totalBins++;
       // A bin is covered if its hit count >= at_least threshold
       if (cp->bins[i] >= atLeast)
@@ -4299,6 +4323,203 @@ extern "C" double __moore_coverpoint_get_option(void *cg, int32_t cp_index,
   default:
     return 0.0;
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Exclusion APIs
+//===----------------------------------------------------------------------===//
+//
+// Coverage exclusions allow users to mark certain bins as excluded from
+// coverage goals. This is useful for unreachable code paths, known limitations,
+// or bins that should not be considered for sign-off criteria.
+//
+// Exclusions differ from ignore_bins in that:
+// - ignore_bins are defined in the covergroup specification
+// - exclusions are applied at runtime, typically from exclusion files
+// - exclusions can be dynamically added/removed during simulation
+//
+
+extern "C" void __moore_coverpoint_exclude_bin(void *cg, int32_t cp_index,
+                                                const char *bin_name) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp || !bin_name)
+    return;
+
+  // Add bin name to excluded set
+  excludedBins[cp].insert(bin_name);
+}
+
+extern "C" void __moore_coverpoint_include_bin(void *cg, int32_t cp_index,
+                                                const char *bin_name) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp || !bin_name)
+    return;
+
+  // Remove bin name from excluded set
+  auto it = excludedBins.find(cp);
+  if (it != excludedBins.end()) {
+    it->second.erase(bin_name);
+  }
+}
+
+extern "C" bool __moore_coverpoint_is_bin_excluded(void *cg, int32_t cp_index,
+                                                    const char *bin_name) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return false;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp || !bin_name)
+    return false;
+
+  auto it = excludedBins.find(cp);
+  if (it != excludedBins.end()) {
+    return it->second.count(bin_name) > 0;
+  }
+  return false;
+}
+
+namespace {
+
+/// Parse an exclusion file and apply exclusions.
+/// File format (simple text-based):
+///   # Comment lines start with #
+///   # Empty lines are ignored
+///   # Format: covergroup_name.coverpoint_name.bin_name
+///   # Wildcards: * matches any sequence of characters
+///   cg_name.cp_name.bin_name
+///   cg_name.cp_name.*        # Exclude all bins in coverpoint
+///   cg_name.*.bin_name       # Exclude bin in all coverpoints
+///   *.*.excluded_bin         # Exclude bin in all covergroups/coverpoints
+///
+bool parseExclusionFile(const char *filename) {
+  if (!filename)
+    return false;
+
+  FILE *file = std::fopen(filename, "r");
+  if (!file)
+    return false;
+
+  char line[1024];
+  while (std::fgets(line, sizeof(line), file)) {
+    // Skip empty lines and comments
+    char *start = line;
+    while (*start && std::isspace(static_cast<unsigned char>(*start)))
+      ++start;
+    if (!*start || *start == '#')
+      continue;
+
+    // Remove trailing whitespace/newline
+    char *end = start + std::strlen(start) - 1;
+    while (end > start && std::isspace(static_cast<unsigned char>(*end)))
+      *end-- = '\0';
+
+    // Parse format: covergroup.coverpoint.bin
+    std::string entry(start);
+    size_t firstDot = entry.find('.');
+    size_t lastDot = entry.rfind('.');
+
+    if (firstDot == std::string::npos || lastDot == std::string::npos ||
+        firstDot == lastDot) {
+      // Invalid format - skip
+      continue;
+    }
+
+    std::string cgPattern = entry.substr(0, firstDot);
+    std::string cpPattern = entry.substr(firstDot + 1, lastDot - firstDot - 1);
+    std::string binPattern = entry.substr(lastDot + 1);
+
+    // Apply exclusion to matching covergroups/coverpoints/bins
+    for (auto *cg : registeredCovergroups) {
+      if (!cg || !cg->name)
+        continue;
+
+      // Check covergroup name match (simple wildcard: * matches all)
+      bool cgMatch = (cgPattern == "*" || cgPattern == cg->name);
+      if (!cgMatch)
+        continue;
+
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        auto *cp = cg->coverpoints[i];
+        if (!cp || !cp->name)
+          continue;
+
+        // Check coverpoint name match
+        bool cpMatch = (cpPattern == "*" || cpPattern == cp->name);
+        if (!cpMatch)
+          continue;
+
+        // Check explicit bins
+        auto binDataIt = explicitBinData.find(cp);
+        if (binDataIt != explicitBinData.end()) {
+          for (const auto &bin : binDataIt->second.bins) {
+            if (!bin.name)
+              continue;
+
+            // Check bin name match
+            bool binMatch = (binPattern == "*" || binPattern == bin.name);
+            if (binMatch) {
+              excludedBins[cp].insert(bin.name);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  std::fclose(file);
+  return true;
+}
+
+} // anonymous namespace
+
+extern "C" bool __moore_covergroup_set_exclusion_file(const char *filename) {
+  if (!filename)
+    return false;
+
+  globalExclusionFile = filename;
+  return parseExclusionFile(filename);
+}
+
+extern "C" const char *__moore_covergroup_get_exclusion_file(void) {
+  return globalExclusionFile.empty() ? nullptr : globalExclusionFile.c_str();
+}
+
+extern "C" int32_t __moore_coverpoint_get_excluded_bin_count(void *cg,
+                                                              int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 0;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return 0;
+
+  auto it = excludedBins.find(cp);
+  if (it != excludedBins.end()) {
+    return static_cast<int32_t>(it->second.size());
+  }
+  return 0;
+}
+
+extern "C" void __moore_coverpoint_clear_exclusions(void *cg, int32_t cp_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  excludedBins.erase(cp);
 }
 
 //===----------------------------------------------------------------------===//
