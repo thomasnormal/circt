@@ -16,6 +16,7 @@
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/AllTypes.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/text/SourceManager.h"
 
@@ -117,8 +118,54 @@ struct VerilogIndexer : slang::ast::ASTVisitor<VerilogIndexer, true, true> {
     recurseIfInMainBuffer(expr);
   }
 
+  // Helper to get the DataDeclarationSyntax from a variable's syntax node
+  // Variable symbols point to DeclaratorSyntax, need to walk up to parent
+  const slang::syntax::DataDeclarationSyntax *
+  getDataDeclFromSyntax(const slang::syntax::SyntaxNode *syntax) {
+    if (!syntax)
+      return nullptr;
+    // Check if it's directly a DataDeclarationSyntax
+    if (auto *dataDecl = syntax->as_if<slang::syntax::DataDeclarationSyntax>())
+      return dataDecl;
+    // Variable symbols point to DeclaratorSyntax, walk up to parent
+    if (syntax->kind == slang::syntax::SyntaxKind::Declarator) {
+      auto *parent = syntax->parent;
+      if (parent)
+        return parent->as_if<slang::syntax::DataDeclarationSyntax>();
+    }
+    return nullptr;
+  }
+
+  // Helper to extract and index type references from a variable's type
+  void indexTypeReference(const slang::ast::Type &type,
+                          const slang::syntax::SyntaxNode *syntax) {
+    auto *dataDecl = getDataDeclFromSyntax(syntax);
+    if (!dataDecl)
+      return;
+
+    // Handle class types - track usage of class names as types
+    if (type.isClass()) {
+      const auto &classType = type.getCanonicalType().as<slang::ast::ClassType>();
+      auto typeRange = dataDecl->type->sourceRange();
+      if (typeRange.start().valid() && typeRange.end().valid()) {
+        insertSymbol(&classType, typeRange, /*isDefinition=*/false);
+      }
+    }
+    // Handle typedef/type alias - index reference to the alias
+    if (type.isAlias()) {
+      const auto &aliasType = type.as<slang::ast::TypeAliasType>();
+      auto typeRange = dataDecl->type->sourceRange();
+      if (typeRange.start().valid() && typeRange.end().valid()) {
+        // TypeAliasType is a Symbol (via Type), so we can use it directly
+        insertSymbol(&aliasType, typeRange, /*isDefinition=*/false);
+      }
+    }
+  }
+
   void visit(const slang::ast::VariableSymbol &expr) {
     insertSymbol(&expr, expr.location, /*isDefinition=*/true);
+    // Index the type reference if it's a class or typedef
+    indexTypeReference(expr.getType(), expr.getSyntax());
     recurseIfInMainBuffer(expr);
   }
 
@@ -218,6 +265,14 @@ struct VerilogIndexer : slang::ast::ASTVisitor<VerilogIndexer, true, true> {
     recurseIfInMainBuffer(classType);
   }
 
+  // Handle type aliases (typedefs) - important for UVM and code organization
+  void visit(const slang::ast::TypeAliasType &typeAlias) {
+    // Index the typedef name as a definition
+    // TypeAliasType inherits from Type which inherits from Symbol
+    insertSymbol(&typeAlias, typeAlias.location, /*isDefinition=*/true);
+    recurseIfInMainBuffer(typeAlias);
+  }
+
   // Handle subroutines (functions and tasks) - important for UVM methods
   void visit(const slang::ast::SubroutineSymbol &sub) {
     insertSymbol(&sub, sub.location, /*isDefinition=*/true);
@@ -264,6 +319,14 @@ struct VerilogIndexer : slang::ast::ASTVisitor<VerilogIndexer, true, true> {
         }
       }
     }
+    recurseIfInMainBuffer(expr);
+  }
+
+  // Handle new expressions (class instantiation) - important for UVM
+  void visit(const slang::ast::NewClassExpression &expr) {
+    // The type reference for class instantiation is already captured via
+    // variable declaration indexing (e.g., MyClass obj = new();)
+    // We just need to recurse into the expression tree.
     recurseIfInMainBuffer(expr);
   }
 

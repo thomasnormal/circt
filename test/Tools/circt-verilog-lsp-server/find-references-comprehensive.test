@@ -1,0 +1,214 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test comprehensive textDocument/references functionality for various symbol types.
+// This test covers: modules, classes, functions, tasks, signals, parameters, and typedefs.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// Test 1: Module references - finding where a module is instantiated
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///module_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module adder (\n  input  logic [7:0] a, b,\n  output logic [7:0] sum\n);\n  assign sum = a + b;\nendmodule\n\nmodule top;\n  logic [7:0] x, y, z;\n  adder u_adder1(.a(x), .b(y), .sum(z));\n  adder u_adder2(.a(z), .b(x), .sum(y));\nendmodule"
+}}}
+// -----
+// Find references to 'adder' module from its definition (line 0, col 7)
+{"jsonrpc":"2.0","id":1,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///module_refs.sv"},
+  "position":{"line":0,"character":7},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find module definition and instantiation sites
+// CHECK-DAG:     "uri": "test:///module_refs.sv"
+// CHECK:       ]
+// -----
+// Test 2: Class references - finding where a class is used
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///class_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"class Transaction;\n  rand bit [7:0] data;\n  rand bit [3:0] addr;\n  \n  function void display();\n    $display(\"data=%0h addr=%0h\", data, addr);\n  endfunction\nendclass\n\nmodule test;\n  initial begin\n    Transaction tr;\n    tr = new();\n    tr.data = 8'hFF;\n    tr.display();\n  end\nendmodule"
+}}}
+// -----
+// Find references to 'Transaction' class from definition (line 0, col 6)
+{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///class_refs.sv"},
+  "position":{"line":0,"character":6},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find class definition and variable declaration
+// CHECK:         "uri": "test:///class_refs.sv"
+// CHECK:       ]
+// -----
+// Test 3: Function references - finding all call sites
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///func_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module func_test;\n  function int multiply(int a, int b);\n    return a * b;\n  endfunction\n  \n  task print_result(int val);\n    $display(\"Result: %0d\", val);\n  endtask\n  \n  int x, y, z;\n  \n  initial begin\n    x = multiply(2, 3);\n    y = multiply(4, 5);\n    z = multiply(x, y);\n    print_result(x);\n    print_result(y);\n    print_result(z);\n  end\nendmodule"
+}}}
+// -----
+// Find references to 'multiply' function (line 1, col 15)
+{"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///func_refs.sv"},
+  "position":{"line":1,"character":15},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find function definition and 3 call sites (4 total)
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:       ]
+// -----
+// Find references to 'print_result' task (line 5, col 7)
+{"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///func_refs.sv"},
+  "position":{"line":5,"character":7},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find task definition and 3 call sites (4 total)
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:         "uri": "test:///func_refs.sv"
+// CHECK:       ]
+// -----
+// Test 4: Signal references - tracking variable usage
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///signal_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module counter (\n  input  logic clk,\n  input  logic rst_n,\n  input  logic enable,\n  output logic [7:0] count\n);\n  logic [7:0] next_count;\n  \n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n)\n      count <= 8'h0;\n    else if (enable)\n      count <= next_count;\n  end\n  \n  assign next_count = count + 8'h1;\nendmodule"
+}}}
+// -----
+// Find references to 'count' output (line 4, col 22)
+{"jsonrpc":"2.0","id":5,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///signal_refs.sv"},
+  "position":{"line":4,"character":22},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find port declaration and all assignments/usages
+// CHECK:         "uri": "test:///signal_refs.sv"
+// CHECK:       ]
+// -----
+// Find references to 'next_count' without including declaration
+{"jsonrpc":"2.0","id":6,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///signal_refs.sv"},
+  "position":{"line":6,"character":18},
+  "context":{"includeDeclaration":false}
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find only usages, not the declaration
+// CHECK:         "uri": "test:///signal_refs.sv"
+// CHECK:       ]
+// -----
+// Test 5: Parameter references
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///param_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module fifo #(\n  parameter int DEPTH = 16,\n  parameter int WIDTH = 8\n) (\n  input  logic clk,\n  input  logic [WIDTH-1:0] data_in,\n  output logic [WIDTH-1:0] data_out,\n  output logic [$clog2(DEPTH):0] count\n);\n  logic [WIDTH-1:0] mem [0:DEPTH-1];\nendmodule"
+}}}
+// -----
+// Find references to 'WIDTH' parameter (line 2, col 16)
+{"jsonrpc":"2.0","id":7,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///param_refs.sv"},
+  "position":{"line":2,"character":16},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 7,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find parameter declaration and usages in port widths and memory
+// CHECK:         "uri": "test:///param_refs.sv"
+// CHECK:       ]
+// -----
+// Find references to 'DEPTH' parameter (line 1, col 16)
+{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///param_refs.sv"},
+  "position":{"line":1,"character":16},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 8,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find parameter declaration and usages
+// CHECK:         "uri": "test:///param_refs.sv"
+// CHECK:       ]
+// -----
+// Test 6: Class member references
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///member_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"class Packet;\n  bit [7:0] data;\n  bit [3:0] id;\n  \n  function void set_data(bit [7:0] d);\n    data = d;\n  endfunction\n  \n  function bit [7:0] get_data();\n    return data;\n  endfunction\nendclass\n\nmodule test;\n  initial begin\n    Packet p;\n    p = new();\n    p.data = 8'hAB;\n    p.set_data(8'hCD);\n    $display(\"data=%0h\", p.get_data());\n  end\nendmodule"
+}}}
+// -----
+// Find references to 'data' class member (line 1, col 12)
+{"jsonrpc":"2.0","id":9,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///member_refs.sv"},
+  "position":{"line":1,"character":12},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 9,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find member declaration and all usages (inside methods and external access)
+// CHECK:         "uri": "test:///member_refs.sv"
+// CHECK:       ]
+// -----
+// Test 7: Empty results for unknown position
+{"jsonrpc":"2.0","id":10,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///module_refs.sv"},
+  "position":{"line":0,"character":0},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 10,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should return empty array when clicking on keyword
+// CHECK:       ]
+// -----
+// Test 8: Typedef references
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///typedef_refs.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"typedef logic [7:0] byte_t;\ntypedef logic [15:0] word_t;\n\nmodule test;\n  byte_t data1;\n  byte_t data2;\n  word_t addr;\n  \n  assign data1 = data2;\nendmodule"
+}}}
+// -----
+// Find references to 'byte_t' typedef (line 0, col 20)
+{"jsonrpc":"2.0","id":11,"method":"textDocument/references","params":{
+  "textDocument":{"uri":"test:///typedef_refs.sv"},
+  "position":{"line":0,"character":20},
+  "context":{"includeDeclaration":true}
+}}
+// CHECK:       "id": 11,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// Should find typedef definition and variable type usages
+// CHECK:         "uri": "test:///typedef_refs.sv"
+// CHECK:       ]
+// -----
+{"jsonrpc":"2.0","id":12,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

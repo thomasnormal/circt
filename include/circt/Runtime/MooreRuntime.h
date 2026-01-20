@@ -1434,6 +1434,142 @@ bool __moore_coverpoint_is_ignored(void *cg, int32_t cp_index, int64_t value);
 bool __moore_coverpoint_is_illegal(void *cg, int32_t cp_index, int64_t value);
 
 //===----------------------------------------------------------------------===//
+// Coverage Sample Callbacks and Explicit Sample API
+//===----------------------------------------------------------------------===//
+//
+// These functions implement explicit sample() method and callback support for
+// covergroups, as specified in IEEE 1800-2017 Section 19.8.
+//
+// SystemVerilog supports:
+// - Explicit sample() method: cg.sample();
+// - Sample with arguments: cg.sample(val1, val2);
+// - Sample events: covergroup cg @(posedge clk);
+// - pre_sample() and post_sample() callbacks
+//
+
+/// Sample callback function type.
+/// Called before or after sampling a covergroup.
+/// @param cg Pointer to the covergroup being sampled
+/// @param args Array of sample arguments (NULL if no arguments)
+/// @param num_args Number of sample arguments (0 if no arguments)
+/// @param userData User-provided context data
+typedef void (*MooreSampleCallback)(void *cg, int64_t *args, int32_t num_args,
+                                     void *userData);
+
+/// Explicitly sample a covergroup with no arguments.
+/// Triggers the sample() method on a covergroup, invoking pre/post callbacks.
+/// IEEE 1800-2017 Section 19.8: sample() built-in method.
+///
+/// @param cg Pointer to the covergroup
+void __moore_covergroup_sample(void *cg);
+
+/// Explicitly sample a covergroup with arguments.
+/// Triggers sample() with the provided arguments, which are passed to
+/// coverpoints based on the configured sample argument mapping.
+/// IEEE 1800-2017 Section 19.6: covergroup with arguments.
+///
+/// Example: covergroup cg with function sample(bit [7:0] data, bit valid);
+///          cg.sample(my_data, my_valid);
+///
+/// @param cg Pointer to the covergroup
+/// @param args Array of sample argument values
+/// @param num_args Number of arguments in the array
+void __moore_covergroup_sample_with_args(void *cg, int64_t *args,
+                                          int32_t num_args);
+
+/// Register a pre-sample callback for a covergroup.
+/// The callback is invoked before any coverpoints are sampled.
+/// IEEE 1800-2017 Section 19.8.1: pre_sample() method.
+///
+/// @param cg Pointer to the covergroup
+/// @param callback The callback function to register (NULL to disable)
+/// @param userData User data to pass to the callback
+void __moore_covergroup_set_pre_sample_callback(
+    void *cg, void (*callback)(void *, int64_t *, int32_t, void *),
+    void *userData);
+
+/// Register a post-sample callback for a covergroup.
+/// The callback is invoked after all coverpoints are sampled.
+/// IEEE 1800-2017 Section 19.8.1: post_sample() method.
+///
+/// @param cg Pointer to the covergroup
+/// @param callback The callback function to register (NULL to disable)
+/// @param userData User data to pass to the callback
+void __moore_covergroup_set_post_sample_callback(
+    void *cg, void (*callback)(void *, int64_t *, int32_t, void *),
+    void *userData);
+
+/// Register a global pre-sample callback for all covergroups.
+/// This callback is invoked before any covergroup-specific callback.
+///
+/// @param callback The callback function to register (NULL to disable)
+/// @param userData User data to pass to the callback
+void __moore_coverage_set_global_pre_sample_callback(
+    void (*callback)(void *, int64_t *, int32_t, void *), void *userData);
+
+/// Register a global post-sample callback for all covergroups.
+/// This callback is invoked after any covergroup-specific callback.
+///
+/// @param callback The callback function to register (NULL to disable)
+/// @param userData User data to pass to the callback
+void __moore_coverage_set_global_post_sample_callback(
+    void (*callback)(void *, int64_t *, int32_t, void *), void *userData);
+
+/// Set the sample argument mapping for a covergroup.
+/// Maps sample() arguments to coverpoint indices.
+/// Mapping array: index = coverpoint index, value = argument index (-1 = skip).
+///
+/// Example: For covergroup with 3 coverpoints and sample(a, b):
+///   mapping = {0, 1, -1}  // cp0 gets arg0, cp1 gets arg1, cp2 is not sampled
+///
+/// @param cg Pointer to the covergroup
+/// @param mapping Array of argument indices for each coverpoint
+/// @param num_mappings Number of entries in the mapping array
+void __moore_covergroup_set_sample_arg_mapping(void *cg, int32_t *mapping,
+                                                int32_t num_mappings);
+
+/// Enable or disable sampling for a covergroup.
+/// When disabled, sample() calls are ignored.
+///
+/// @param cg Pointer to the covergroup
+/// @param enabled true to enable sampling, false to disable
+void __moore_covergroup_set_sample_enabled(void *cg, bool enabled);
+
+/// Check if sampling is enabled for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return true if sampling is enabled (default), false if disabled
+bool __moore_covergroup_is_sample_enabled(void *cg);
+
+/// Set the sample event for a covergroup.
+/// Associates a named event with the covergroup for automatic sampling.
+/// IEEE 1800-2017 Section 19.3: covergroup cg @(event);
+///
+/// @param cg Pointer to the covergroup
+/// @param eventName Name of the sampling event (NULL to disable)
+void __moore_covergroup_set_sample_event(void *cg, const char *eventName);
+
+/// Get the sample event name for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return The event name, or NULL if no event is set
+const char *__moore_covergroup_get_sample_event(void *cg);
+
+/// Check if a covergroup has a sample event configured.
+///
+/// @param cg Pointer to the covergroup
+/// @return true if a sample event is set
+bool __moore_covergroup_has_sample_event(void *cg);
+
+/// Trigger a sample event.
+/// If the event name matches the covergroup's configured sample event,
+/// the covergroup is sampled.
+///
+/// @param cg Pointer to the covergroup
+/// @param eventName Name of the triggered event (NULL triggers any event)
+void __moore_covergroup_trigger_sample_event(void *cg, const char *eventName);
+
+//===----------------------------------------------------------------------===//
 // Coverage Exclusion API
 //===----------------------------------------------------------------------===//
 //

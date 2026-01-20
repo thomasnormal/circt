@@ -2264,6 +2264,10 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
   extern void __moore_cross_cleanup_for_covergroup(MooreCovergroup *);
   __moore_cross_cleanup_for_covergroup(covergroup);
 
+  // Clean up sample callbacks (implemented later in file)
+  extern void __moore_sample_callbacks_cleanup_for_covergroup(MooreCovergroup *);
+  __moore_sample_callbacks_cleanup_for_covergroup(covergroup);
+
   // Clean up covergroup options
   covergroupOptions.erase(covergroup);
 
@@ -4568,6 +4572,290 @@ extern "C" bool __moore_coverpoint_is_illegal(void *cg, int32_t cp_index,
   }
 
   return false;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Sample Callbacks and Explicit Sample API
+//===----------------------------------------------------------------------===//
+//
+// These functions implement explicit sample() method and callback support for
+// covergroups, as specified in IEEE 1800-2017 Section 19.8.
+//
+// SystemVerilog supports:
+// - Explicit sample() method: cg.sample();
+// - Sample with arguments: cg.sample(val1, val2);
+// - Sample events: covergroup cg @(posedge clk);
+// - pre_sample() and post_sample() callbacks
+//
+
+namespace {
+
+/// Sample callback function signature.
+/// @param cg Pointer to the covergroup being sampled
+/// @param args Array of sample arguments (NULL if no arguments)
+/// @param num_args Number of sample arguments (0 if no arguments)
+/// @param userData User-provided context data
+using MooreSampleCallback = void (*)(void *cg, int64_t *args, int32_t num_args,
+                                      void *userData);
+
+/// Structure to store sample callback data for a covergroup.
+struct CovergroupSampleCallbacks {
+  MooreSampleCallback preSampleCallback = nullptr;
+  void *preSampleUserData = nullptr;
+  MooreSampleCallback postSampleCallback = nullptr;
+  void *postSampleUserData = nullptr;
+
+  // Sample argument mapping: which coverpoint gets which sample argument
+  // Index i = coverpoint index, value = sample argument index (-1 = none)
+  std::vector<int32_t> sampleArgMapping;
+
+  // Enable/disable flag for sampling
+  bool enabled = true;
+
+  // Sample event trigger (for @(event) syntax support)
+  bool sampleEventEnabled = false;
+  const char *sampleEventName = nullptr;
+};
+
+/// Map from covergroup to its sample callback data.
+thread_local std::map<MooreCovergroup *, CovergroupSampleCallbacks>
+    covergroupSampleCallbacks;
+
+/// Global pre/post sample callbacks (apply to all covergroups).
+thread_local MooreSampleCallback globalPreSampleCallback = nullptr;
+thread_local void *globalPreSampleUserData = nullptr;
+thread_local MooreSampleCallback globalPostSampleCallback = nullptr;
+thread_local void *globalPostSampleUserData = nullptr;
+
+} // anonymous namespace
+
+extern "C" void __moore_covergroup_sample(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  // Check if sampling is enabled
+  auto callbackIt = covergroupSampleCallbacks.find(covergroup);
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      !callbackIt->second.enabled)
+    return;
+
+  // Invoke global pre-sample callback
+  if (globalPreSampleCallback) {
+    globalPreSampleCallback(cg, nullptr, 0, globalPreSampleUserData);
+  }
+
+  // Invoke covergroup-specific pre-sample callback
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      callbackIt->second.preSampleCallback) {
+    callbackIt->second.preSampleCallback(cg, nullptr, 0,
+                                         callbackIt->second.preSampleUserData);
+  }
+
+  // For a basic sample() call with no arguments, we don't sample any
+  // coverpoints directly - the user is expected to have set up sample_event
+  // triggers or explicit coverpoint sample calls elsewhere.
+  // This function is primarily for triggering callbacks.
+
+  // Invoke covergroup-specific post-sample callback
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      callbackIt->second.postSampleCallback) {
+    callbackIt->second.postSampleCallback(cg, nullptr, 0,
+                                          callbackIt->second.postSampleUserData);
+  }
+
+  // Invoke global post-sample callback
+  if (globalPostSampleCallback) {
+    globalPostSampleCallback(cg, nullptr, 0, globalPostSampleUserData);
+  }
+}
+
+extern "C" void __moore_covergroup_sample_with_args(void *cg, int64_t *args,
+                                                     int32_t num_args) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  // Check if sampling is enabled
+  auto callbackIt = covergroupSampleCallbacks.find(covergroup);
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      !callbackIt->second.enabled)
+    return;
+
+  // Invoke global pre-sample callback
+  if (globalPreSampleCallback) {
+    globalPreSampleCallback(cg, args, num_args, globalPreSampleUserData);
+  }
+
+  // Invoke covergroup-specific pre-sample callback
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      callbackIt->second.preSampleCallback) {
+    callbackIt->second.preSampleCallback(cg, args, num_args,
+                                         callbackIt->second.preSampleUserData);
+  }
+
+  // Sample coverpoints based on argument mapping
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      !callbackIt->second.sampleArgMapping.empty()) {
+    for (int32_t cpIdx = 0;
+         cpIdx < static_cast<int32_t>(callbackIt->second.sampleArgMapping.size());
+         ++cpIdx) {
+      int32_t argIdx = callbackIt->second.sampleArgMapping[cpIdx];
+      if (argIdx >= 0 && argIdx < num_args) {
+        __moore_coverpoint_sample(cg, cpIdx, args[argIdx]);
+      }
+    }
+  } else if (args && num_args > 0) {
+    // Default behavior: sample first num_args coverpoints with corresponding args
+    int32_t maxIdx = std::min(num_args, covergroup->num_coverpoints);
+    for (int32_t i = 0; i < maxIdx; ++i) {
+      __moore_coverpoint_sample(cg, i, args[i]);
+    }
+  }
+
+  // Invoke covergroup-specific post-sample callback
+  if (callbackIt != covergroupSampleCallbacks.end() &&
+      callbackIt->second.postSampleCallback) {
+    callbackIt->second.postSampleCallback(cg, args, num_args,
+                                          callbackIt->second.postSampleUserData);
+  }
+
+  // Invoke global post-sample callback
+  if (globalPostSampleCallback) {
+    globalPostSampleCallback(cg, args, num_args, globalPostSampleUserData);
+  }
+}
+
+extern "C" void __moore_covergroup_set_pre_sample_callback(
+    void *cg, void (*callback)(void *, int64_t *, int32_t, void *),
+    void *userData) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  covergroupSampleCallbacks[covergroup].preSampleCallback = callback;
+  covergroupSampleCallbacks[covergroup].preSampleUserData = userData;
+}
+
+extern "C" void __moore_covergroup_set_post_sample_callback(
+    void *cg, void (*callback)(void *, int64_t *, int32_t, void *),
+    void *userData) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  covergroupSampleCallbacks[covergroup].postSampleCallback = callback;
+  covergroupSampleCallbacks[covergroup].postSampleUserData = userData;
+}
+
+extern "C" void __moore_coverage_set_global_pre_sample_callback(
+    void (*callback)(void *, int64_t *, int32_t, void *), void *userData) {
+  globalPreSampleCallback = callback;
+  globalPreSampleUserData = userData;
+}
+
+extern "C" void __moore_coverage_set_global_post_sample_callback(
+    void (*callback)(void *, int64_t *, int32_t, void *), void *userData) {
+  globalPostSampleCallback = callback;
+  globalPostSampleUserData = userData;
+}
+
+extern "C" void __moore_covergroup_set_sample_arg_mapping(void *cg,
+                                                           int32_t *mapping,
+                                                           int32_t num_mappings) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  auto &callbacks = covergroupSampleCallbacks[covergroup];
+  callbacks.sampleArgMapping.clear();
+  if (mapping && num_mappings > 0) {
+    callbacks.sampleArgMapping.assign(mapping, mapping + num_mappings);
+  }
+}
+
+extern "C" void __moore_covergroup_set_sample_enabled(void *cg, bool enabled) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  covergroupSampleCallbacks[covergroup].enabled = enabled;
+}
+
+extern "C" bool __moore_covergroup_is_sample_enabled(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return false;
+
+  auto it = covergroupSampleCallbacks.find(covergroup);
+  if (it == covergroupSampleCallbacks.end())
+    return true; // Default is enabled
+
+  return it->second.enabled;
+}
+
+extern "C" void __moore_covergroup_set_sample_event(void *cg,
+                                                     const char *eventName) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  auto &callbacks = covergroupSampleCallbacks[covergroup];
+  callbacks.sampleEventEnabled = (eventName != nullptr);
+  callbacks.sampleEventName = eventName;
+}
+
+extern "C" const char *__moore_covergroup_get_sample_event(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return nullptr;
+
+  auto it = covergroupSampleCallbacks.find(covergroup);
+  if (it == covergroupSampleCallbacks.end())
+    return nullptr;
+
+  return it->second.sampleEventName;
+}
+
+extern "C" bool __moore_covergroup_has_sample_event(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return false;
+
+  auto it = covergroupSampleCallbacks.find(covergroup);
+  if (it == covergroupSampleCallbacks.end())
+    return false;
+
+  return it->second.sampleEventEnabled;
+}
+
+extern "C" void __moore_covergroup_trigger_sample_event(void *cg,
+                                                         const char *eventName) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup)
+    return;
+
+  auto it = covergroupSampleCallbacks.find(covergroup);
+  if (it == covergroupSampleCallbacks.end())
+    return;
+
+  // Check if this event matches the configured sample event
+  if (!it->second.sampleEventEnabled)
+    return;
+
+  // If eventName is NULL, always trigger; otherwise check for match
+  if (eventName && it->second.sampleEventName) {
+    if (std::strcmp(eventName, it->second.sampleEventName) != 0)
+      return;
+  }
+
+  // Trigger the sample
+  __moore_covergroup_sample(cg);
+}
+
+// Cleanup function called from __moore_covergroup_destroy
+void __moore_sample_callbacks_cleanup_for_covergroup(MooreCovergroup *cg) {
+  covergroupSampleCallbacks.erase(cg);
 }
 
 //===----------------------------------------------------------------------===//

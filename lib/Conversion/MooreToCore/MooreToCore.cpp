@@ -8778,6 +8778,19 @@ struct SoftConstraintInfo {
   unsigned bitWidth;      // Bit width of the property
 };
 
+/// Helper structure to hold extracted distribution constraint information.
+/// Distribution constraints specify weighted probability distributions.
+/// Pattern: `x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }`
+struct DistConstraintInfo {
+  StringRef propertyName;   // Name of the constrained property
+  StringRef constraintName; // Name of the constraint block
+  SmallVector<std::pair<int64_t, int64_t>> ranges; // Ranges as [low, high] pairs
+  SmallVector<int64_t> weights;   // Weight for each range
+  SmallVector<int64_t> perRange;  // 0 = := (per-value), 1 = :/ (per-range)
+  unsigned fieldIndex;      // Index of the field in the struct
+  unsigned bitWidth;        // Bit width of the property
+};
+
 /// Extract simple range constraints from a class declaration.
 /// Returns a list of range constraints found in ConstraintInsideOp operations.
 /// Only extracts constraints that can be expressed as simple [min, max] ranges.
@@ -9018,6 +9031,125 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
   return softConstraints;
 }
 
+/// Extract distribution constraints from a class declaration.
+/// Distribution constraints specify weighted probability distributions using
+/// the `dist` keyword. Pattern: `x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }`
+static SmallVector<DistConstraintInfo>
+extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
+                       SymbolRefAttr classSym) {
+  SmallVector<DistConstraintInfo> distConstraints;
+
+  // Build a map from property names to their indices and types
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = 0;
+
+  // Account for type ID field (index 0 in root classes) or base class
+  if (classDecl.getBaseAttr())
+    propIdx = 1;
+  else
+    propIdx = 1; // Type ID is at index 0
+
+  for (auto &op : classDecl.getBody().getOps()) {
+    if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+      propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+      propIdx++;
+    }
+  }
+
+  // Walk through constraint blocks looking for ConstraintDistOp
+  for (auto &op : classDecl.getBody().getOps()) {
+    auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+    if (!constraintBlock)
+      continue;
+
+    StringRef constraintName = constraintBlock.getSymName();
+
+    // Walk the constraint block body looking for ConstraintDistOp
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      if (auto distOp = dyn_cast<ConstraintDistOp>(constraintOp)) {
+        // Get the variable being constrained
+        Value variable = distOp.getVariable();
+
+        // The variable should be a block argument referencing a property
+        auto blockArg = dyn_cast<BlockArgument>(variable);
+        if (!blockArg)
+          continue;
+
+        // Get the argument index - this corresponds to the order of rand
+        // properties
+        unsigned argIdx = blockArg.getArgNumber();
+
+        // Find the corresponding property by counting rand properties
+        unsigned randPropCount = 0;
+        StringRef propName;
+        Type propType;
+        for (auto &innerOp : classDecl.getBody().getOps()) {
+          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(innerOp)) {
+            if (propDecl.isRandomizable()) {
+              if (randPropCount == argIdx) {
+                propName = propDecl.getSymName();
+                propType = propDecl.getPropertyType();
+                break;
+              }
+              randPropCount++;
+            }
+          }
+        }
+
+        if (propName.empty())
+          continue;
+
+        // Get the distribution data from the op
+        ArrayRef<int64_t> values = distOp.getValues();
+        ArrayRef<int64_t> weights = distOp.getWeights();
+        ArrayRef<int64_t> perRange = distOp.getPerRange();
+
+        // Values come in pairs: [low0, high0, low1, high1, ...]
+        if (values.size() < 2 || values.size() % 2 != 0)
+          continue;
+        if (weights.size() != values.size() / 2)
+          continue;
+        if (perRange.size() != weights.size())
+          continue;
+
+        // Find the property index and bit width
+        auto it = propertyMap.find(propName);
+        if (it == propertyMap.end())
+          continue;
+
+        unsigned fieldIdx = it->second.first;
+        Type fieldType = it->second.second;
+
+        // Get bit width from the type
+        unsigned bitWidth = 32; // Default
+        if (auto intType = dyn_cast<IntType>(fieldType))
+          bitWidth = intType.getWidth();
+
+        DistConstraintInfo info;
+        info.propertyName = propName;
+        info.constraintName = constraintName;
+        info.fieldIndex = fieldIdx;
+        info.bitWidth = bitWidth;
+
+        // Convert values array to ranges vector
+        for (size_t i = 0; i < values.size(); i += 2) {
+          info.ranges.push_back({values[i], values[i + 1]});
+        }
+
+        // Copy weights and perRange
+        for (int64_t w : weights)
+          info.weights.push_back(w);
+        for (int64_t p : perRange)
+          info.perRange.push_back(p);
+
+        distConstraints.push_back(info);
+      }
+    }
+  }
+
+  return distConstraints;
+}
+
 static Type resolveStructFieldType(LLVM::LLVMStructType structTy,
                                    ArrayRef<unsigned> path) {
   Type current = structTy;
@@ -9246,9 +9378,11 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     // Extract range constraints from the class (includes both hard and soft)
     SmallVector<RangeConstraintInfo> rangeConstraints;
     SmallVector<SoftConstraintInfo> softConstraints;
+    SmallVector<DistConstraintInfo> distConstraints;
     if (classDecl) {
       rangeConstraints = extractRangeConstraints(classDecl, cache, classSym);
       softConstraints = extractSoftConstraints(classDecl, cache, classSym);
+      distConstraints = extractDistConstraints(classDecl, cache, classSym);
     }
 
     // Separate hard constraints from soft range constraints
@@ -9259,6 +9393,11 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         hardConstraints.push_back(constraint);
         hardConstrainedProps.insert(constraint.propertyName);
       }
+    }
+
+    // Distribution constraints also mark properties as having hard constraints
+    for (const auto &dist : distConstraints) {
+      hardConstrainedProps.insert(dist.propertyName);
     }
 
     // Filter soft constraints to only those without hard constraints
@@ -9276,6 +9415,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         constraintsByProperty[constraint.propertyName].push_back(
             constraint.constraintName);
     }
+    for (const auto &dist : distConstraints) {
+      if (!dist.constraintName.empty())
+        constraintsByProperty[dist.propertyName].push_back(dist.constraintName);
+    }
     for (const auto &soft : effectiveSoftConstraints) {
       if (!soft.constraintName.empty())
         constraintsByProperty[soft.propertyName].push_back(
@@ -9283,7 +9426,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     }
 
     // If we have any constraints, use constraint-aware randomization
-    if (!hardConstraints.empty() || !effectiveSoftConstraints.empty()) {
+    if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
+        !distConstraints.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -9412,6 +9556,132 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                                 classPtr, gepIndices);
 
             // Store the constrained random value
+            LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
+          }
+        }
+      }
+
+      // Apply distribution constraints - generate weighted random values
+      // using __moore_randomize_with_dist(ranges, weights, perRange, numRanges)
+      if (!distConstraints.empty()) {
+        // Function type: __moore_randomize_with_dist(ptr, ptr, ptr, i64) -> i64
+        auto distFnTy =
+            LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, ptrTy, ptrTy, i64Ty});
+        auto distFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                             "__moore_randomize_with_dist",
+                                             distFnTy);
+
+        for (const auto &dist : distConstraints) {
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(dist.propertyName);
+          Value applyCond = randEnabled;
+          if (!dist.constraintName.empty()) {
+            Value enabled = createConstraintEnabledCheck(dist.constraintName);
+            applyCond =
+                arith::AndIOp::create(rewriter, loc, randEnabled, enabled);
+          }
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+          size_t numRanges = dist.ranges.size();
+
+          // Allocate stack space for ranges array: [numRanges * 2 x i64]
+          auto rangesArrayTy = LLVM::LLVMArrayType::get(i64Ty, numRanges * 2);
+          auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                              rewriter.getI64IntegerAttr(1));
+          auto rangesAlloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, rangesArrayTy, one);
+
+          // Allocate stack space for weights array: [numRanges x i64]
+          auto weightsArrayTy = LLVM::LLVMArrayType::get(i64Ty, numRanges);
+          auto weightsAlloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, weightsArrayTy, one);
+
+          // Allocate stack space for perRange array: [numRanges x i64]
+          auto perRangeArrayTy = LLVM::LLVMArrayType::get(i64Ty, numRanges);
+          auto perRangeAlloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, perRangeArrayTy, one);
+
+          // Store ranges (as pairs of [low, high])
+          for (size_t i = 0; i < numRanges; ++i) {
+            // Store low value at index i*2
+            auto lowIdx = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2)));
+            auto lowPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                              rangesAlloca, ValueRange{lowIdx});
+            auto lowVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(dist.ranges[i].first));
+            LLVM::StoreOp::create(rewriter, loc, lowVal, lowPtr);
+
+            // Store high value at index i*2+1
+            auto highIdx = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2 + 1)));
+            auto highPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                               rangesAlloca,
+                                               ValueRange{highIdx});
+            auto highVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(dist.ranges[i].second));
+            LLVM::StoreOp::create(rewriter, loc, highVal, highPtr);
+
+            // Store weight at index i
+            auto weightIdx = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(i)));
+            auto weightPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                 weightsAlloca,
+                                                 ValueRange{weightIdx});
+            auto weightVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(dist.weights[i]));
+            LLVM::StoreOp::create(rewriter, loc, weightVal, weightPtr);
+
+            // Store perRange flag at index i
+            auto perRangePtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                   perRangeAlloca,
+                                                   ValueRange{weightIdx});
+            auto perRangeVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(dist.perRange[i]));
+            LLVM::StoreOp::create(rewriter, loc, perRangeVal, perRangePtr);
+          }
+
+          // Call __moore_randomize_with_dist(ranges, weights, perRange, numRanges)
+          auto numRangesConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(static_cast<int64_t>(numRanges)));
+          auto distResult = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(distFn),
+              ValueRange{rangesAlloca, weightsAlloca, perRangeAlloca,
+                         numRangesConst});
+
+          // Truncate to the field's bit width if needed
+          Type fieldIntTy = IntegerType::get(ctx, dist.bitWidth);
+          Value truncatedVal = distResult.getResult();
+          if (dist.bitWidth < 64) {
+            truncatedVal = arith::TruncIOp::create(rewriter, loc, fieldIntTy,
+                                                   distResult.getResult());
+          }
+
+          // Get GEP to the field using the property path
+          auto it = structInfo->propertyPath.find(dist.propertyName);
+          if (it != structInfo->propertyPath.end()) {
+            // Build GEP indices
+            SmallVector<LLVM::GEPArg> gepIndices;
+            gepIndices.push_back(0); // Initial pointer dereference
+            for (unsigned idx : it->second) {
+              gepIndices.push_back(static_cast<int32_t>(idx));
+            }
+
+            // Create GEP to the field
+            auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                                classPtr, gepIndices);
+
+            // Store the distribution-constrained random value
             LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
           }
         }
