@@ -2436,7 +2436,43 @@ extern "C" double __moore_covergroup_get_coverage(void *cg) {
   if (!covergroup || covergroup->num_coverpoints == 0)
     return 0.0;
 
-  // Calculate average coverage across all coverpoints
+  // Check if per_instance is false - if so, aggregate across all instances
+  // with the same type name
+  auto cgOptIt = covergroupOptions.find(covergroup);
+  bool perInstance = false;
+  if (cgOptIt != covergroupOptions.end()) {
+    perInstance = cgOptIt->second.perInstance;
+  }
+
+  if (!perInstance && covergroup->name) {
+    // Aggregate coverage across all instances with the same name
+    double totalCoverage = 0.0;
+    int32_t instanceCount = 0;
+
+    for (auto *otherCg : registeredCovergroups) {
+      if (otherCg && otherCg->name &&
+          std::strcmp(otherCg->name, covergroup->name) == 0) {
+        totalCoverage += __moore_covergroup_get_inst_coverage(otherCg);
+        instanceCount++;
+      }
+    }
+
+    if (instanceCount == 0)
+      return 0.0;
+
+    return totalCoverage / instanceCount;
+  }
+
+  // per_instance mode or no name - return instance-specific coverage
+  return __moore_covergroup_get_inst_coverage(cg);
+}
+
+extern "C" double __moore_covergroup_get_inst_coverage(void *cg) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || covergroup->num_coverpoints == 0)
+    return 0.0;
+
+  // Calculate average coverage across all coverpoints for this instance
   double totalCoverage = 0.0;
   int32_t validCoverpoints = 0;
 
@@ -2451,6 +2487,13 @@ extern "C" double __moore_covergroup_get_coverage(void *cg) {
     return 0.0;
 
   return totalCoverage / validCoverpoints;
+}
+
+extern "C" double __moore_coverpoint_get_inst_coverage(void *cg,
+                                                        int32_t cp_index) {
+  // For coverpoints, instance coverage is the same as regular coverage
+  // since coverpoints are always instance-specific
+  return __moore_coverpoint_get_coverage(cg, cp_index);
 }
 
 extern "C" void __moore_coverage_report(void) {
@@ -3577,6 +3620,13 @@ extern "C" double __moore_cross_get_coverage(void *cg, int32_t cross_index) {
       cross_index >= static_cast<int32_t>(it->second.crosses.size()))
     return 0.0;
 
+  // Get the at_least threshold from the covergroup options
+  int64_t atLeast = 1;
+  auto cgOptIt = covergroupOptions.find(covergroup);
+  if (cgOptIt != covergroupOptions.end()) {
+    atLeast = cgOptIt->second.atLeast;
+  }
+
   // Count unique cross bins hit for this cross
   const auto &cross = it->second.crosses[cross_index];
   int64_t binsHit = 0;
@@ -3601,10 +3651,14 @@ extern "C" double __moore_cross_get_coverage(void *cg, int32_t cross_index) {
   }
 
   // Count actual cross bins hit for this specific cross
+  // A bin is considered covered only if its hit count >= at_least
   for (const auto &kv : it->second.crossBins) {
-    // Check if this bin belongs to this cross by comparing with first cp index
+    // Check if this bin belongs to this cross by comparing size
     if (kv.first.size() == static_cast<size_t>(cross.num_cps)) {
-      binsHit++;
+      // Check if this bin meets the at_least threshold
+      if (kv.second >= atLeast) {
+        binsHit++;
+      }
     }
   }
 
@@ -3613,6 +3667,12 @@ extern "C" double __moore_cross_get_coverage(void *cg, int32_t cross_index) {
 
   double coverage = (100.0 * binsHit) / totalPossibleBins;
   return coverage > 100.0 ? 100.0 : coverage;
+}
+
+extern "C" double __moore_cross_get_inst_coverage(void *cg, int32_t cross_index) {
+  // For crosses, instance coverage is the same as regular coverage
+  // since crosses are always instance-specific within their covergroup
+  return __moore_cross_get_coverage(cg, cross_index);
 }
 
 extern "C" int64_t __moore_cross_get_bins_hit(void *cg, int32_t cross_index) {

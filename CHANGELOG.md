@@ -249,6 +249,13 @@
   `--ignore-timing-controls --allow-nonprocedural-dynamic` (crash: integer
   bitwidth limit assertion; log:
   `/tmp/verilator_verification_constraint_dist_ignore_timing7.log`).
+- Fixed llhd-mem2reg to materialize zero values for LLVM pointer types when
+  inserting block arguments, avoiding invalid integer widths; added regression
+  test `test/Dialect/LLHD/Transforms/mem2reg-llvm-zero.mlir`.
+- Re-ran circt-verilog on verilator-verification
+  `tests/randomize-constraints/constraint_dist.sv` with
+  `--allow-nonprocedural-dynamic --ir-hw` (success; log:
+  `/tmp/verilator_verification_constraint_dist_ir_hw_fixed2.log`).
 - Ran circt-verilog on AXI4Lite master write test package with BFMs and
   dependencies using `--ignore-timing-controls` (log:
   `/tmp/axi4lite_master_write_test_pkg_ignore_timing2.log`).

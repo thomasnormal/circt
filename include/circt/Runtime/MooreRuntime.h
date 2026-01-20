@@ -649,10 +649,31 @@ double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index);
 
 /// Get the overall coverage percentage for a covergroup.
 /// Returns the average coverage across all coverpoints.
+/// When per_instance is false (default), this aggregates coverage across
+/// all instances of the same covergroup type (by name).
 ///
 /// @param cg Pointer to the covergroup
 /// @return Coverage percentage (0.0 to 100.0)
 double __moore_covergroup_get_coverage(void *cg);
+
+/// Get the instance-specific coverage percentage for a covergroup.
+/// Always returns the coverage for this specific instance, regardless
+/// of the per_instance option setting.
+/// IEEE 1800-2017 Section 19.8.1: get_inst_coverage()
+///
+/// @param cg Pointer to the covergroup
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_covergroup_get_inst_coverage(void *cg);
+
+/// Get the instance-specific coverage percentage for a coverpoint.
+/// For coverpoints, this is equivalent to get_coverage since coverpoints
+/// are always instance-specific within their covergroup.
+/// IEEE 1800-2017 Section 19.8.1: get_inst_coverage()
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_coverpoint_get_inst_coverage(void *cg, int32_t cp_index);
 
 /// Print a coverage report for all registered covergroups.
 /// Outputs coverage statistics to stdout, including:
@@ -889,11 +910,22 @@ int32_t __moore_cross_create(void *cg, const char *name, int32_t *cp_indices,
 void __moore_cross_sample(void *cg, int64_t *cp_values, int32_t num_values);
 
 /// Get the coverage percentage for a specific cross.
+/// Respects the at_least threshold from covergroup options.
 ///
 /// @param cg Pointer to the covergroup
 /// @param cross_index Index of the cross
 /// @return Coverage percentage (0.0 to 100.0)
 double __moore_cross_get_coverage(void *cg, int32_t cross_index);
+
+/// Get the instance-specific coverage percentage for a cross.
+/// For crosses, this is equivalent to get_coverage since crosses
+/// are always instance-specific within their covergroup.
+/// IEEE 1800-2017 Section 19.8.1: get_inst_coverage()
+///
+/// @param cg Pointer to the covergroup
+/// @param cross_index Index of the cross
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_cross_get_inst_coverage(void *cg, int32_t cross_index);
 
 /// Get the total number of cross bins hit.
 ///

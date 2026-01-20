@@ -36,6 +36,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/DerivedTypes.h"
+#include <queue>
 
 namespace circt {
 #define GEN_PASS_DEF_CONVERTMOORETOCORE
@@ -2404,7 +2405,9 @@ struct ConstraintInsideOpConversion
 
 /// Lowering for ConstraintSolveBeforeOp.
 /// Solve-before constraints specify variable ordering for the solver.
-/// Currently erased as ordering hints are not yet implemented.
+/// These are processed by extractSolveBeforeOrdering() during RandomizeOp
+/// lowering to determine the order in which constraints are applied.
+/// The op is erased after constraint ordering has been computed.
 struct ConstraintSolveBeforeOpConversion
     : public OpConversionPattern<ConstraintSolveBeforeOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -2412,8 +2415,9 @@ struct ConstraintSolveBeforeOpConversion
   LogicalResult
   matchAndRewrite(ConstraintSolveBeforeOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Solve ordering is a hint to the constraint solver.
-    // Currently not implemented; erase the op.
+    // Solve-before ordering is processed during RandomizeOp conversion.
+    // The ordering information has already been extracted and used to sort
+    // constraints, so this op can be safely erased.
     rewriter.eraseOp(op);
     return success();
   }
@@ -9150,6 +9154,147 @@ extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
   return distConstraints;
 }
 
+/// Helper structure to hold solve-before ordering information.
+/// Specifies that variables in 'before' should be randomized before 'after'.
+/// Pattern: `solve a before b, c;` -> before={a}, after={b, c}
+struct SolveBeforeInfo {
+  SmallVector<StringRef> before; // Variables to solve first
+  SmallVector<StringRef> after;  // Variables to solve after
+};
+
+/// Extract solve-before ordering from a class declaration.
+/// Returns a list of solve-before constraints found in constraint blocks.
+static SmallVector<SolveBeforeInfo>
+extractSolveBeforeOrdering(ClassDeclOp classDecl) {
+  SmallVector<SolveBeforeInfo> ordering;
+
+  // Walk through constraint blocks looking for ConstraintSolveBeforeOp
+  for (auto &op : classDecl.getBody().getOps()) {
+    auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+    if (!constraintBlock)
+      continue;
+
+    // Walk the constraint block body looking for ConstraintSolveBeforeOp
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      if (auto solveBeforeOp = dyn_cast<ConstraintSolveBeforeOp>(constraintOp)) {
+        SolveBeforeInfo info;
+
+        // Extract 'before' variable names
+        for (auto beforeRef : solveBeforeOp.getBefore()) {
+          auto symRef = cast<FlatSymbolRefAttr>(beforeRef);
+          info.before.push_back(symRef.getValue());
+        }
+
+        // Extract 'after' variable names
+        for (auto afterRef : solveBeforeOp.getAfter()) {
+          auto symRef = cast<FlatSymbolRefAttr>(afterRef);
+          info.after.push_back(symRef.getValue());
+        }
+
+        if (!info.before.empty() && !info.after.empty())
+          ordering.push_back(std::move(info));
+      }
+    }
+  }
+
+  return ordering;
+}
+
+/// Build a dependency graph for solve-before ordering.
+/// Returns a map from property name to the set of properties that must be
+/// solved before it.
+static llvm::DenseMap<StringRef, llvm::DenseSet<StringRef>>
+buildSolveBeforeDependencies(const SmallVector<SolveBeforeInfo> &ordering) {
+  llvm::DenseMap<StringRef, llvm::DenseSet<StringRef>> deps;
+
+  for (const auto &info : ordering) {
+    // For each 'after' variable, add all 'before' variables as dependencies
+    for (StringRef afterVar : info.after) {
+      for (StringRef beforeVar : info.before) {
+        deps[afterVar].insert(beforeVar);
+      }
+    }
+  }
+
+  return deps;
+}
+
+/// Compute priority values for properties based on solve-before ordering.
+/// Properties with lower priority values should be solved first.
+/// Uses topological sort to assign priorities.
+static llvm::DenseMap<StringRef, unsigned>
+computeSolveOrder(const SmallVector<SolveBeforeInfo> &ordering,
+                  const llvm::DenseSet<StringRef> &allProperties) {
+  llvm::DenseMap<StringRef, unsigned> priority;
+
+  // Build dependency graph
+  auto deps = buildSolveBeforeDependencies(ordering);
+
+  // Collect all properties that appear in solve-before constraints
+  llvm::DenseSet<StringRef> constrainedProps;
+  for (const auto &info : ordering) {
+    for (StringRef prop : info.before)
+      constrainedProps.insert(prop);
+    for (StringRef prop : info.after)
+      constrainedProps.insert(prop);
+  }
+
+  // Compute in-degree for topological sort
+  llvm::DenseMap<StringRef, unsigned> inDegree;
+  for (StringRef prop : constrainedProps) {
+    inDegree[prop] = 0;
+  }
+  for (const auto &[prop, depSet] : deps) {
+    inDegree[prop] = depSet.size();
+  }
+
+  // Kahn's algorithm for topological sort
+  std::queue<StringRef> queue;
+  for (StringRef prop : constrainedProps) {
+    if (inDegree[prop] == 0)
+      queue.push(prop);
+  }
+
+  unsigned currentPriority = 0;
+  while (!queue.empty()) {
+    StringRef current = queue.front();
+    queue.pop();
+    priority[current] = currentPriority++;
+
+    // Find all properties that depend on 'current' and decrease their in-degree
+    for (const auto &[prop, depSet] : deps) {
+      if (depSet.contains(current)) {
+        inDegree[prop]--;
+        if (inDegree[prop] == 0)
+          queue.push(prop);
+      }
+    }
+  }
+
+  // Assign default priority to unconstrained properties (they can be solved
+  // in any order relative to solve-before constraints)
+  unsigned defaultPriority = currentPriority;
+  for (StringRef prop : allProperties) {
+    if (!priority.count(prop))
+      priority[prop] = defaultPriority;
+  }
+
+  return priority;
+}
+
+/// Sort constraints based on solve-before ordering.
+/// Constraints for properties with lower priority are placed first.
+template <typename T>
+static void sortConstraintsBySolveOrder(
+    SmallVector<T> &constraints,
+    const llvm::DenseMap<StringRef, unsigned> &solveOrder) {
+  llvm::stable_sort(constraints, [&](const T &a, const T &b) {
+    unsigned prioA = solveOrder.lookup(a.propertyName);
+    unsigned prioB = solveOrder.lookup(b.propertyName);
+    return prioA < prioB;
+  });
+}
+
 static Type resolveStructFieldType(LLVM::LLVMStructType structTy,
                                    ArrayRef<unsigned> path) {
   Type current = structTy;
@@ -9379,10 +9524,12 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     SmallVector<RangeConstraintInfo> rangeConstraints;
     SmallVector<SoftConstraintInfo> softConstraints;
     SmallVector<DistConstraintInfo> distConstraints;
+    SmallVector<SolveBeforeInfo> solveBeforeOrdering;
     if (classDecl) {
       rangeConstraints = extractRangeConstraints(classDecl, cache, classSym);
       softConstraints = extractSoftConstraints(classDecl, cache, classSym);
       distConstraints = extractDistConstraints(classDecl, cache, classSym);
+      solveBeforeOrdering = extractSolveBeforeOrdering(classDecl);
     }
 
     // Separate hard constraints from soft range constraints
@@ -9406,6 +9553,27 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       if (!hardConstrainedProps.contains(soft.propertyName)) {
         effectiveSoftConstraints.push_back(soft);
       }
+    }
+
+    // Apply solve-before ordering to constraints if any ordering is specified
+    if (!solveBeforeOrdering.empty()) {
+      // Collect all properties that have constraints
+      llvm::DenseSet<StringRef> allConstrainedProps;
+      for (const auto &c : hardConstraints)
+        allConstrainedProps.insert(c.propertyName);
+      for (const auto &c : effectiveSoftConstraints)
+        allConstrainedProps.insert(c.propertyName);
+      for (const auto &c : distConstraints)
+        allConstrainedProps.insert(c.propertyName);
+
+      // Compute solve order (priority values for each property)
+      auto solveOrder = computeSolveOrder(solveBeforeOrdering, allConstrainedProps);
+
+      // Sort constraints by solve order so that 'before' variables are
+      // randomized first
+      sortConstraintsBySolveOrder(hardConstraints, solveOrder);
+      sortConstraintsBySolveOrder(effectiveSoftConstraints, solveOrder);
+      sortConstraintsBySolveOrder(distConstraints, solveOrder);
     }
 
     // Build a map of properties to constraint names for randc gating.
@@ -10235,6 +10403,22 @@ private:
 static void populateLegality(ConversionTarget &target,
                              const TypeConverter &converter) {
   target.addIllegalDialect<MooreDialect>();
+
+  // WaitEventOp and DetectEventOp need special handling: they can only be
+  // converted to llhd.wait when inside an llhd.process. When they appear in
+  // func.func (e.g., class tasks with timing controls), they must remain
+  // unconverted until the function is inlined into a process by the
+  // InlineCalls pass. Mark them as dynamically legal based on context.
+  target.addDynamicallyLegalOp<WaitEventOp>([](WaitEventOp op) {
+    // Legal (keep unconverted) if NOT inside an llhd.process.
+    // After inlining into a process, this will become illegal and get
+    // converted.
+    return !op->getParentOfType<llhd::ProcessOp>();
+  });
+  target.addDynamicallyLegalOp<DetectEventOp>([](DetectEventOp op) {
+    // DetectEventOp is always inside WaitEventOp, so follow the same rule.
+    return !op->getParentOfType<llhd::ProcessOp>();
+  });
   target.addLegalDialect<comb::CombDialect>();
   target.addLegalDialect<hw::HWDialect>();
   target.addLegalDialect<seq::SeqDialect>();

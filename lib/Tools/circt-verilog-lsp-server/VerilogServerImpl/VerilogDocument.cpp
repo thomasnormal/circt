@@ -3530,6 +3530,12 @@ VerilogDocument::prepareRename(const llvm::lsp::URIForFile &uri,
   case slang::ast::SymbolKind::Definition:
   case slang::ast::SymbolKind::Instance:
   case slang::ast::SymbolKind::Subroutine:
+  case slang::ast::SymbolKind::ClassType:
+  case slang::ast::SymbolKind::ClassProperty:
+  case slang::ast::SymbolKind::InterfacePort:
+  case slang::ast::SymbolKind::Modport:
+  case slang::ast::SymbolKind::FormalArgument:
+  case slang::ast::SymbolKind::TypeAlias:
     break;
   default:
     return std::nullopt; // Not a renameable symbol

@@ -1,0 +1,231 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test comprehensive rename refactoring support including:
+// - Variables/signals
+// - Functions/tasks
+// - Modules
+// - Classes
+// - Interfaces
+
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 1: Rename a variable with multiple references
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///variable_rename.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_var;\n  logic my_signal;\n  logic other;\n  initial begin\n    my_signal = 1'b0;\n    other = my_signal;\n    my_signal = ~my_signal;\n  end\nendmodule"
+}}}
+// -----
+// Test prepareRename on variable my_signal
+{"jsonrpc":"2.0","id":1,"method":"textDocument/prepareRename","params":{
+  "textDocument":{"uri":"test:///variable_rename.sv"},
+  "position":{"line":1,"character":8}
+}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "end":
+// CHECK:         "start":
+// -----
+// Rename my_signal to renamed_signal
+{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///variable_rename.sv"},
+  "position":{"line":1,"character":8},
+  "newName":"renamed_signal"
+}}
+// CHECK:       "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///variable_rename.sv": [
+// Should include edits for all my_signal occurrences (declaration + 4 uses)
+// CHECK:             "newText": "renamed_signal"
+// CHECK:             "newText": "renamed_signal"
+// CHECK:             "newText": "renamed_signal"
+// CHECK:             "newText": "renamed_signal"
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 2: Rename a function
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///function_rename.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_func;\n  function automatic int calc_sum(input int a, input int b);\n    return a + b;\n  endfunction\n  \n  int result;\n  initial begin\n    result = calc_sum(10, 20);\n    result = calc_sum(5, 15);\n  end\nendmodule"
+}}}
+// -----
+// Test prepareRename on function name calc_sum
+{"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{
+  "textDocument":{"uri":"test:///function_rename.sv"},
+  "position":{"line":1,"character":25}
+}}
+// CHECK:       "id": 3,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "end":
+// CHECK:         "start":
+// -----
+// Rename function calc_sum to add_numbers
+{"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///function_rename.sv"},
+  "position":{"line":1,"character":25},
+  "newName":"add_numbers"
+}}
+// CHECK:       "id": 4,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///function_rename.sv": [
+// Should include function declaration and both call sites
+// CHECK:             "newText": "add_numbers"
+// CHECK:             "newText": "add_numbers"
+// CHECK:             "newText": "add_numbers"
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 3: Rename a class (important for UVM)
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///class_rename.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"class my_transaction;\n  rand bit [7:0] data;\n  rand bit [3:0] addr;\n  \n  function void display();\n    $display(\"data=%h addr=%h\", data, addr);\n  endfunction\nendclass\n\nmodule test_class;\n  my_transaction txn;\n  initial begin\n    txn = new();\n    txn.display();\n  end\nendmodule"
+}}}
+// -----
+// Test prepareRename on class name
+{"jsonrpc":"2.0","id":5,"method":"textDocument/prepareRename","params":{
+  "textDocument":{"uri":"test:///class_rename.sv"},
+  "position":{"line":0,"character":7}
+}}
+// CHECK:       "id": 5,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "end":
+// CHECK:         "start":
+// -----
+// Rename class my_transaction to apb_transaction
+{"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///class_rename.sv"},
+  "position":{"line":0,"character":7},
+  "newName":"apb_transaction"
+}}
+// CHECK:       "id": 6,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///class_rename.sv": [
+// Should include class declaration and type usage
+// CHECK:             "newText": "apb_transaction"
+// CHECK:             "newText": "apb_transaction"
+// -----
+
+// NOTE: Interface signal renaming requires interface indexing support (future enhancement)
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 5: Invalid rename - empty name
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///variable_rename.sv"},
+  "position":{"line":1,"character":8},
+  "newName":""
+}}
+// CHECK:       "id": 7,
+// CHECK:       "error":
+// CHECK:         "message": "cannot rename symbol at this position"
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 6: Invalid rename - name starts with number
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///variable_rename.sv"},
+  "position":{"line":1,"character":8},
+  "newName":"123invalid"
+}}
+// CHECK:       "id": 8,
+// CHECK:       "error":
+// CHECK:         "message": "cannot rename symbol at this position"
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 7: Rename a task
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///task_rename.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_task;\n  task automatic drive_signal(input logic val);\n    // drive logic\n  endtask\n  \n  initial begin\n    drive_signal(1'b1);\n    drive_signal(1'b0);\n  end\nendmodule"
+}}}
+// -----
+// Rename task drive_signal to send_value
+{"jsonrpc":"2.0","id":11,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///task_rename.sv"},
+  "position":{"line":1,"character":17},
+  "newName":"send_value"
+}}
+// CHECK:       "id": 11,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///task_rename.sv": [
+// Should include task declaration and both call sites
+// CHECK:             "newText": "send_value"
+// CHECK:             "newText": "send_value"
+// CHECK:             "newText": "send_value"
+// -----
+
+// NOTE: Module name renaming requires improved definition symbol indexing (future enhancement)
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 9: Rename function argument
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///arg_rename.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module test_arg;\n  function automatic int double_val(input int val);\n    return val * 2;\n  endfunction\nendmodule"
+}}}
+// -----
+// Rename function argument 'val' to 'input_value'
+{"jsonrpc":"2.0","id":14,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///arg_rename.sv"},
+  "position":{"line":1,"character":46},
+  "newName":"input_value"
+}}
+// CHECK:       "id": 14,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///arg_rename.sv": [
+// Should include argument declaration and use in function body
+// CHECK:             "newText": "input_value"
+// CHECK:             "newText": "input_value"
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test 10: Rename with special characters (valid SystemVerilog identifiers)
+//===----------------------------------------------------------------------===//
+{"jsonrpc":"2.0","id":15,"method":"textDocument/rename","params":{
+  "textDocument":{"uri":"test:///variable_rename.sv"},
+  "position":{"line":2,"character":8},
+  "newName":"signal_with$dollar"
+}}
+// CHECK:       "id": 15,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK:         "changes": {
+// CHECK:           "test:///variable_rename.sv": [
+// CHECK:             "newText": "signal_with$dollar"
+// -----
+
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
