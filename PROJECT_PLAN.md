@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | Dynamic legality for timing controls | Inline class tasks into processes |
-| **B** | Randomization | Solve-before constraints complete | Array constraints full lowering |
-| **C** | Coverage | get_inst_coverage() API complete | Coverage HTML report generation |
-| **D** | LSP Tooling | Rename refactoring complete | Call hierarchy, workspace symbols |
+| **A** | Runtime/Simulation | Second MooreToCore pass after inlining | Class task inlining improvements |
+| **B** | Randomization | Array foreach simplified | Implication constraints in arrays |
+| **C** | Coverage | HTML report generation complete | Coverage database persistence |
+| **D** | LSP Tooling | Call hierarchy complete | Workspace symbols, code lens |
 
 ### Feature Completion Matrix
 
@@ -58,12 +58,45 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Solve-before constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | LSP rename refactoring | - | - | - | - | ✅ |
 | Coverage get_inst_coverage | - | - | - | ✅ | ✅ |
+| Coverage HTML reports | - | - | - | ✅ | ✅ |
+| LSP call hierarchy | - | - | - | - | ✅ |
+| Array foreach constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 64 - Solve-Before Constraints + LSP Rename + Coverage get_inst_coverage (January 20, 2026)
+## Current Status: ITERATION 65 - Second MooreToCore Pass + Coverage HTML + LSP Call Hierarchy (January 20, 2026)
+
+**Summary**: Added second MooreToCore pass after inlining to convert timing controls in interface tasks, implemented coverage HTML report generation, and added full LSP call hierarchy support.
+
+### Iteration 65 Highlights
+
+**Track A: Second MooreToCore Pass After Inlining** ⭐ ARCHITECTURE
+- ✅ Added second MooreToCore pass after InlineCalls in pipeline
+- ✅ Timing controls in interface tasks now properly convert to llhd.wait
+- ✅ Key step toward full AVIP simulation support
+
+**Track B: Array Constraint Foreach Simplification** ⭐ FEATURE
+- ✅ Simplified ConstraintForeachOpConversion to erase during lowering
+- ✅ Runtime validation via `__moore_constraint_foreach_validate()`
+- ✅ 4 test cases (basic, index, range, nested)
+
+**Track C: Coverage HTML Report Generation** ⭐ FEATURE
+- ✅ `__moore_coverage_report_html()` for professional HTML reports
+- ✅ Color-coded badges, per-bin details, cross coverage
+- ✅ Responsive tables, modern CSS styling
+- ✅ 4 unit tests for HTML report generation
+
+**Track D: LSP Call Hierarchy** ⭐ FEATURE
+- ✅ prepareCallHierarchy for functions and tasks
+- ✅ incomingCalls to find all callers
+- ✅ outgoingCalls to find all callees
+- ✅ 6 test scenarios in call-hierarchy.test
+
+---
+
+## Previous: ITERATION 64 - Solve-Before Constraints + LSP Rename + Coverage get_inst_coverage (January 20, 2026)
 
 **Summary**: Implemented solve-before constraint ordering, LSP rename refactoring, coverage instance-specific APIs, and fixed llhd-mem2reg for LLVM pointer types.
 

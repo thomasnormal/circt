@@ -148,6 +148,45 @@ public:
   llvm::lsp::SignatureHelp getSignatureHelp(const URIForFile &uri,
                                             const llvm::lsp::Position &pos);
 
+  //===--------------------------------------------------------------------===//
+  // Call Hierarchy
+  //===--------------------------------------------------------------------===//
+
+  /// Call hierarchy item structure for LSP.
+  struct CallHierarchyItem {
+    std::string name;
+    llvm::lsp::SymbolKind kind;
+    std::string detail;
+    URIForFile uri;
+    llvm::lsp::Range range;
+    llvm::lsp::Range selectionRange;
+    std::string data;
+  };
+
+  /// Incoming call structure for LSP.
+  struct CallHierarchyIncomingCall {
+    CallHierarchyItem from;
+    std::vector<llvm::lsp::Range> fromRanges;
+  };
+
+  /// Outgoing call structure for LSP.
+  struct CallHierarchyOutgoingCall {
+    CallHierarchyItem to;
+    std::vector<llvm::lsp::Range> fromRanges;
+  };
+
+  /// Prepare call hierarchy at the given position.
+  std::optional<CallHierarchyItem>
+  prepareCallHierarchy(const URIForFile &uri, const llvm::lsp::Position &pos);
+
+  /// Get incoming calls for a call hierarchy item.
+  void getIncomingCalls(const CallHierarchyItem &item,
+                        std::vector<CallHierarchyIncomingCall> &calls);
+
+  /// Get outgoing calls from a call hierarchy item.
+  void getOutgoingCalls(const CallHierarchyItem &item,
+                        std::vector<CallHierarchyOutgoingCall> &calls);
+
   /// Formatting options for document formatting.
   struct FormattingOptions {
     /// Number of spaces for indentation (ignored if insertSpaces is false).

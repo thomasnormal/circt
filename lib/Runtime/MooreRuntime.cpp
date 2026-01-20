@@ -5285,6 +5285,7 @@ extern "C" int32_t __moore_coverage_report_html(const char *filename) {
 
     // Coverpoints table
     if (cg->num_coverpoints > 0) {
+      html += "      <h3>Coverpoints</h3>\n";
       html += "      <table>\n";
       html += "        <thead>\n";
       html += "          <tr>\n";
@@ -5321,12 +5322,138 @@ extern "C" int32_t __moore_coverage_report_html(const char *filename) {
           html += "            <td>-</td>\n";
         }
 
+        // Color coding: green (100%), yellow (50-99%), red (<50%)
         std::snprintf(buf, sizeof(buf), "%.1f%%", cpCoverage);
-        std::string cpClass = cpCoverage >= 80 ? "coverage-high" :
-                              (cpCoverage >= 50 ? "coverage-med" : "coverage-low");
-        html += "            <td><span style=\"color: var(--" +
-                (cpCoverage >= 80 ? std::string("success") :
-                 (cpCoverage >= 50 ? std::string("warning") : std::string("danger"))) +
+        std::string cpColorVar = cpCoverage >= 100.0 ? "success" :
+                                 (cpCoverage >= 50.0 ? "warning" : "danger");
+        html += "            <td><span style=\"color: var(--" + cpColorVar +
+                ")\">" + std::string(buf) + "</span></td>\n";
+        html += "          </tr>\n";
+      }
+
+      html += "        </tbody>\n";
+      html += "      </table>\n";
+
+      // Per-coverpoint bin details
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        auto *cp = cg->coverpoints[i];
+        if (!cp)
+          continue;
+
+        auto binDataIt = explicitBinData.find(cp);
+        if (binDataIt != explicitBinData.end() && !binDataIt->second.bins.empty()) {
+          html += "      <div class=\"coverpoint\">\n";
+          html += "        <h4>" + std::string(cp->name ? cp->name : "(unnamed)") + " - Bins</h4>\n";
+          html += "        <table>\n";
+          html += "          <thead>\n";
+          html += "            <tr>\n";
+          html += "              <th>Bin Name</th>\n";
+          html += "              <th>Type</th>\n";
+          html += "              <th>Kind</th>\n";
+          html += "              <th>Range/Value</th>\n";
+          html += "              <th>Hit Count</th>\n";
+          html += "            </tr>\n";
+          html += "          </thead>\n";
+          html += "          <tbody>\n";
+
+          for (size_t binIdx = 0; binIdx < binDataIt->second.bins.size(); ++binIdx) {
+            const auto &bin = binDataIt->second.bins[binIdx];
+            html += "            <tr>\n";
+            html += "              <td>" + std::string(bin.name ? bin.name : "(unnamed)") + "</td>\n";
+
+            // Bin type
+            std::string binType;
+            switch (bin.type) {
+              case MOORE_BIN_VALUE: binType = "value"; break;
+              case MOORE_BIN_RANGE: binType = "range"; break;
+              case MOORE_BIN_WILDCARD: binType = "wildcard"; break;
+              case MOORE_BIN_TRANSITION: binType = "transition"; break;
+              default: binType = "unknown"; break;
+            }
+            html += "              <td>" + binType + "</td>\n";
+
+            // Bin kind
+            std::string binKind;
+            switch (bin.kind) {
+              case MOORE_BIN_KIND_NORMAL: binKind = "normal"; break;
+              case MOORE_BIN_KIND_IGNORE: binKind = "ignore"; break;
+              case MOORE_BIN_KIND_ILLEGAL: binKind = "illegal"; break;
+              default: binKind = "unknown"; break;
+            }
+            html += "              <td>" + binKind + "</td>\n";
+
+            // Range/value
+            if (bin.type == MOORE_BIN_VALUE) {
+              html += "              <td>" + std::to_string(bin.low) + "</td>\n";
+            } else if (bin.type == MOORE_BIN_RANGE) {
+              html += "              <td>" + std::to_string(bin.low) + ".." +
+                      std::to_string(bin.high) + "</td>\n";
+            } else if (bin.type == MOORE_BIN_WILDCARD) {
+              html += "              <td>pattern: " + std::to_string(bin.low) +
+                      ", mask: " + std::to_string(bin.high) + "</td>\n";
+            } else {
+              html += "              <td>-</td>\n";
+            }
+
+            // Hit count - use stored bin hit count from coverpoint bins array
+            int64_t hitCount = (cp->bins && static_cast<int32_t>(binIdx) < cp->num_bins) ?
+                               cp->bins[binIdx] : bin.hit_count;
+            std::string hitColor = hitCount > 0 ? "success" : "danger";
+            html += "              <td><span style=\"color: var(--" + hitColor +
+                    ")\">" + std::to_string(hitCount) + "</span></td>\n";
+            html += "            </tr>\n";
+          }
+
+          html += "          </tbody>\n";
+          html += "        </table>\n";
+          html += "      </div>\n";
+        }
+      }
+    }
+
+    // Cross coverage section
+    auto crossIt = crossCoverageData.find(cg);
+    if (crossIt != crossCoverageData.end() && !crossIt->second.crosses.empty()) {
+      html += "      <h3>Cross Coverage</h3>\n";
+      html += "      <table>\n";
+      html += "        <thead>\n";
+      html += "          <tr>\n";
+      html += "            <th>Cross Name</th>\n";
+      html += "            <th>Coverpoints</th>\n";
+      html += "            <th>Bins Hit</th>\n";
+      html += "            <th>Coverage</th>\n";
+      html += "          </tr>\n";
+      html += "        </thead>\n";
+      html += "        <tbody>\n";
+
+      for (size_t crossIdx = 0; crossIdx < crossIt->second.crosses.size(); ++crossIdx) {
+        const auto &cross = crossIt->second.crosses[crossIdx];
+        double crossCov = __moore_cross_get_coverage(cg, static_cast<int32_t>(crossIdx));
+        int64_t binsHit = __moore_cross_get_bins_hit(cg, static_cast<int32_t>(crossIdx));
+
+        html += "          <tr>\n";
+        html += "            <td>" + std::string(cross.name ? cross.name : "(unnamed)") + "</td>\n";
+
+        // List crossed coverpoints
+        std::string cpList;
+        for (int32_t cpIdx = 0; cpIdx < cross.num_cps; ++cpIdx) {
+          if (cpIdx > 0) cpList += ", ";
+          int32_t realCpIdx = cross.cp_indices[cpIdx];
+          if (realCpIdx >= 0 && realCpIdx < cg->num_coverpoints &&
+              cg->coverpoints[realCpIdx] && cg->coverpoints[realCpIdx]->name) {
+            cpList += cg->coverpoints[realCpIdx]->name;
+          } else {
+            cpList += "cp" + std::to_string(realCpIdx);
+          }
+        }
+        html += "            <td>" + cpList + "</td>\n";
+        html += "            <td>" + std::to_string(binsHit) + "</td>\n";
+
+        // Color coding: green (100%), yellow (50-99%), red (<50%)
+        std::snprintf(buf, sizeof(buf), "%.1f%%", crossCov);
+        std::string crossColorVar = crossCov >= 100.0 ? "success" :
+                                    (crossCov >= 50.0 ? "warning" : "danger");
+        html += "            <td><span style=\"color: var(--" + crossColorVar +
                 ")\">" + std::string(buf) + "</span></td>\n";
         html += "          </tr>\n";
       }

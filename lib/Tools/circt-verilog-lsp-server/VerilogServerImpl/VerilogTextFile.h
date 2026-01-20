@@ -130,6 +130,24 @@ public:
   llvm::lsp::SignatureHelp getSignatureHelp(const llvm::lsp::URIForFile &uri,
                                             llvm::lsp::Position pos);
 
+  /// Prepare call hierarchy at the given position.
+  /// Thread-safe; acquires docMutex.
+  std::optional<VerilogDocument::CallHierarchyItem>
+  prepareCallHierarchy(const llvm::lsp::URIForFile &uri,
+                       llvm::lsp::Position pos);
+
+  /// Get incoming calls for a call hierarchy item.
+  /// Thread-safe; acquires docMutex.
+  void getIncomingCalls(
+      const VerilogDocument::CallHierarchyItem &item,
+      std::vector<VerilogDocument::CallHierarchyIncomingCall> &calls);
+
+  /// Get outgoing calls from a call hierarchy item.
+  /// Thread-safe; acquires docMutex.
+  void getOutgoingCalls(
+      const VerilogDocument::CallHierarchyItem &item,
+      std::vector<VerilogDocument::CallHierarchyOutgoingCall> &calls);
+
   /// Format the entire document.
   /// Thread-safe; acquires docMutex.
   void formatDocument(const llvm::lsp::URIForFile &uri,

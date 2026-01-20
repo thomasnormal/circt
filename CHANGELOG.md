@@ -1,5 +1,62 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 65 - January 20, 2026
+
+### Second MooreToCore Pass + Coverage HTML Report + LSP Call Hierarchy
+
+**Track A: Second MooreToCore Pass After Inlining** ⭐ ARCHITECTURE
+- Added second MooreToCore pass after InlineCalls in ImportVerilog pipeline
+- Timing controls (`@(posedge clk)`) in interface tasks now properly convert
+- Before: Interface task bodies stayed as `moore.wait_event` after first pass
+- After: Once inlined into `llhd.process`, second pass converts to `llhd.wait`
+- This is a key step toward full AVIP simulation support
+
+**Track B: Array Constraint Foreach Simplification** ⭐ FEATURE
+- Simplified ConstraintForeachOpConversion to erase the op during lowering
+- Validation of foreach constraints happens at runtime via `__moore_constraint_foreach_validate()`
+- Added test file array-foreach-constraints.mlir with 4 test cases:
+  - BasicForEach: Simple value constraint
+  - ForEachWithIndex: Index-based constraints
+  - ForEachRange: Range constraints
+  - NestedForEach: Multi-dimensional arrays
+
+**Track C: Coverage HTML Report Generation** ⭐ FEATURE
+- Implemented `__moore_coverage_report_html()` for professional HTML reports
+- Features include:
+  - Color-coded coverage badges (green/yellow/red based on thresholds)
+  - Per-bin details with hit counts and goal tracking
+  - Cross coverage with product bin visualization
+  - Responsive tables with hover effects
+  - Summary statistics header
+- CSS styling matches modern EDA tool output
+- Added 4 unit tests for HTML report generation
+
+**Track D: LSP Call Hierarchy** ⭐ FEATURE
+- Implemented full LSP call hierarchy support:
+  - `textDocument/prepareCallHierarchy` - Identify callable at cursor
+  - `callHierarchy/incomingCalls` - Find all callers of a function/task
+  - `callHierarchy/outgoingCalls` - Find all callees from a function/task
+- Supports functions, tasks, and system tasks
+- Builds call graph by tracking function call statements and expressions
+- Added 6 test scenarios in call-hierarchy.test
+
+### Files Modified
+- `lib/Conversion/ImportVerilog/ImportVerilog.cpp` (+10 lines for second pass)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+15 lines for foreach simplification)
+- `lib/Runtime/MooreRuntime.cpp` (+137 lines for HTML report)
+- `lib/Tools/circt-verilog-lsp-server/LSPServer.cpp` (+212 lines for call hierarchy)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` (+570 lines)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.h` (+43 lines)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.cpp` (+97 lines)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogServer.h` (+39 lines)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogTextFile.cpp` (+21 lines)
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogTextFile.h` (+18 lines)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+146 lines for HTML tests)
+- `test/Conversion/MooreToCore/array-foreach-constraints.mlir` (new)
+- `test/Tools/circt-verilog-lsp-server/call-hierarchy.test` (new)
+
+---
+
 ## Iteration 64 - January 20, 2026
 
 ### Solve-Before Constraints + LSP Rename Refactoring + Coverage Instance APIs
@@ -318,6 +375,40 @@
   `tests/randomize-constraints/constraint_dist.sv` with
   `--allow-nonprocedural-dynamic --ir-hw` (success; log:
   `/tmp/verilator_verification_constraint_dist_ir_hw_fixed2.log`).
+- Ran circt-verilog on APB AVIP file list with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic -I
+  /home/thomas-ahle/mbit/apb_avip/src/hvl_top/env/virtual_sequencer`
+  (error: llhd.wait operand on `!llvm.ptr` in `hdl_top.sv`; log:
+  `/tmp/apb_avip_full_ignore_timing_dynamic3.log`).
+- Filtered always_comb wait observations to HW value types to avoid invalid
+  `llhd.wait` operands when non-HW values (e.g., class handles) are used.
+- Re-ran circt-verilog on APB AVIP file list with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic -I
+  /home/thomas-ahle/mbit/apb_avip/src/hvl_top/env/virtual_sequencer`
+  (success; log: `/tmp/apb_avip_full_ignore_timing_dynamic4.log`).
+- Added MooreToCore regression test
+  `test/Conversion/MooreToCore/always-comb-observe-non-hw.mlir` to ensure
+  `always_comb` wait observation skips non-HW values.
+- Ran circt-verilog on SPI AVIP file list with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic` (error: missing
+  `SpiVirtualSequencer.sv` include; log:
+  `/tmp/spi_avip_full_ignore_timing_dynamic.log`).
+- Re-ran SPI AVIP with virtual sequencer include path
+  `-I /home/thomas-ahle/mbit/spi_avip/src/hvlTop/spiEnv/virtualSequencer`
+  (error: `moore.concat_ref` not lowered before MooreToCore; log:
+  `/tmp/spi_avip_full_ignore_timing_dynamic2.log`).
+- Made `moore-lower-concatref` run at `mlir::ModuleOp` scope so concat refs in
+  class methods are lowered; added a `func.func` case to
+  `test/Dialect/Moore/lower-concatref.mlir`.
+- Re-ran SPI AVIP with virtual sequencer include path after concat-ref fix
+  (success; log: `/tmp/spi_avip_full_ignore_timing_dynamic3.log`).
+- Ran circt-verilog on verilator-verification
+  `tests/randomize-constraints/constraint_dist.sv` with
+  `--ignore-timing-controls --allow-nonprocedural-dynamic` (success; log:
+  `/tmp/verilator_verification_constraint_dist_ignore_timing8.log`).
+- Ran sv-tests `chapter-11/11.10.1--string_concat.sv` with
+  `--ignore-timing-controls` (log:
+  `/tmp/svtests_string_concat_ignore_timing7.log`).
 - Ran circt-verilog on AXI4Lite master write test package with BFMs and
   dependencies using `--ignore-timing-controls` (log:
   `/tmp/axi4lite_master_write_test_pkg_ignore_timing2.log`).

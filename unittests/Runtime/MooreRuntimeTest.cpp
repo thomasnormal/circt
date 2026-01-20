@@ -3771,6 +3771,152 @@ TEST(MooreRuntimeCoverageTest, HtmlReportNullFilename) {
   EXPECT_NE(result, 0);
 }
 
+TEST(MooreRuntimeCoverageTest, HtmlReportContainsCoverageData) {
+  // Create a covergroup with bins and sample values
+  void *cg = __moore_covergroup_create("html_data_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  // Initialize coverpoints with explicit bins
+  MooreCoverageBin bins1[] = {
+      {"low_bin", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 10, 0},
+      {"high_bin", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 11, 20, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "signal_x", bins1, 2);
+  __moore_coverpoint_init(cg, 1, "signal_y");
+
+  // Sample values
+  __moore_coverpoint_sample(cg, 0, 5);   // Hits low_bin
+  __moore_coverpoint_sample(cg, 0, 15);  // Hits high_bin
+  __moore_coverpoint_sample(cg, 1, 100);
+
+  // Generate HTML report
+  const char *filename = "/tmp/coverage_data_test.html";
+  int32_t result = __moore_coverage_report_html(filename);
+  EXPECT_EQ(result, 0);
+
+  // Read and verify HTML content
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string htmlContent(fileSize, '\0');
+  std::fread(&htmlContent[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Verify key HTML elements are present
+  EXPECT_NE(htmlContent.find("html_data_cg"), std::string::npos);
+  EXPECT_NE(htmlContent.find("signal_x"), std::string::npos);
+  EXPECT_NE(htmlContent.find("signal_y"), std::string::npos);
+  EXPECT_NE(htmlContent.find("Coverpoints"), std::string::npos);
+  EXPECT_NE(htmlContent.find("Coverage Report"), std::string::npos);
+
+  // Verify bin details are present
+  EXPECT_NE(htmlContent.find("low_bin"), std::string::npos);
+  EXPECT_NE(htmlContent.find("high_bin"), std::string::npos);
+  EXPECT_NE(htmlContent.find("range"), std::string::npos);
+
+  // Verify CSS color coding is present
+  EXPECT_NE(htmlContent.find("--success"), std::string::npos);
+  EXPECT_NE(htmlContent.find("--warning"), std::string::npos);
+  EXPECT_NE(htmlContent.find("--danger"), std::string::npos);
+
+  // Clean up
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, HtmlReportWithCrossCoverage) {
+  // Create a covergroup with cross coverage
+  void *cg = __moore_covergroup_create("html_cross_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "addr");
+  __moore_coverpoint_init(cg, 1, "data");
+
+  // Create a cross coverage item
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "addr_data_cross", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Sample values to trigger cross coverage
+  __moore_coverpoint_sample(cg, 0, 10);
+  __moore_coverpoint_sample(cg, 1, 20);
+  int64_t cpValues[] = {10, 20};
+  __moore_cross_sample(cg, cpValues, 2);
+
+  // Generate HTML report
+  const char *filename = "/tmp/coverage_cross_test.html";
+  int32_t result = __moore_coverage_report_html(filename);
+  EXPECT_EQ(result, 0);
+
+  // Read and verify HTML content
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string htmlContent(fileSize, '\0');
+  std::fread(&htmlContent[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Verify cross coverage section is present
+  EXPECT_NE(htmlContent.find("Cross Coverage"), std::string::npos);
+  EXPECT_NE(htmlContent.find("addr_data_cross"), std::string::npos);
+  EXPECT_NE(htmlContent.find("addr"), std::string::npos);
+  EXPECT_NE(htmlContent.find("data"), std::string::npos);
+  EXPECT_NE(htmlContent.find("Bins Hit"), std::string::npos);
+
+  // Clean up
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, HtmlReportColorCodingThresholds) {
+  // Test that color coding is applied correctly based on coverage thresholds
+  // Green (100%), Yellow (50-99%), Red (<50%)
+
+  void *cg = __moore_covergroup_create("html_color_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Create a coverpoint with bins to test color coding
+  MooreCoverageBin bins[] = {
+      {"bin1", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 1, 1, 0},
+      {"bin2", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 2, 2, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "test_cp", bins, 2);
+
+  // Sample only one bin to get 50% coverage
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  const char *filename = "/tmp/coverage_color_test.html";
+  int32_t result = __moore_coverage_report_html(filename);
+  EXPECT_EQ(result, 0);
+
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string htmlContent(fileSize, '\0');
+  std::fread(&htmlContent[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Verify that coverage percentage is shown with appropriate color
+  // With 1 out of 2 bins hit, we should have 50% coverage (warning color)
+  EXPECT_NE(htmlContent.find("50.0%"), std::string::npos);
+
+  // Clean up
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
 //===----------------------------------------------------------------------===//
 // Coverage Database Save/Load/Merge Tests
 //===----------------------------------------------------------------------===//
