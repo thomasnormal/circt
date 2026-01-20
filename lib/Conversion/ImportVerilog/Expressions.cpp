@@ -137,14 +137,15 @@ static Value visitClassProperty(Context &context,
   // reject non-static property access without a receiver object.
   bool isStatic = expr.lifetime == slang::ast::VariableLifetime::Static;
 
-  // Get the scope's implicit this variable
+  // Get the scope's implicit this variable and any inline constraint override.
   mlir::Value instRef = context.getImplicitThisRef();
+  mlir::Value constraintThisRef = context.getInlineConstraintThisRef();
 
   // If there's no implicit 'this' and we're accessing a class property,
   // it must be a static property (slang validates this at parse time).
   // This handles cases where expr.lifetime may not reflect the static
   // storage class correctly (e.g., in some parameterized class contexts).
-  if (!instRef) {
+  if (!instRef && !constraintThisRef) {
     isStatic = true;
   }
 
@@ -187,15 +188,6 @@ static Value visitClassProperty(Context &context,
     return varOp;
   }
 
-  // At this point we have an implicit 'this' reference, so this is
-  // an instance property access.
-  if (!instRef) {
-    // This should never happen based on the logic above, but keep as a safety check
-    mlir::emitError(loc) << "class property '" << expr.name
-                         << "' referenced without an implicit 'this'";
-    return {};
-  }
-
   auto fieldSym = mlir::FlatSymbolRefAttr::get(builder.getContext(), expr.name);
   auto fieldTy = cast<moore::UnpackedType>(type);
   auto fieldRefTy = moore::RefType::get(fieldTy);
@@ -231,13 +223,30 @@ static Value visitClassProperty(Context &context,
   auto targetClassHandle = moore::ClassHandleType::get(
       context.getContext(), mlir::FlatSymbolRefAttr::get(declaringClassSym));
 
+  Value thisRef = instRef;
+  if (constraintThisRef) {
+    auto constraintTy =
+        dyn_cast<moore::ClassHandleType>(constraintThisRef.getType());
+    if (constraintTy &&
+        context.isClassDerivedFrom(constraintTy, targetClassHandle)) {
+      thisRef = constraintThisRef;
+    }
+  }
+
+  if (!thisRef) {
+    // This should never happen based on the logic above, but keep as a safety check
+    mlir::emitError(loc) << "class property '" << expr.name
+                         << "' referenced without an implicit 'this'";
+    return {};
+  }
+
   moore::ClassHandleType classTy =
-      cast<moore::ClassHandleType>(instRef.getType());
+      cast<moore::ClassHandleType>(thisRef.getType());
 
   // If target class is same as current class, no conversion needed
   Value upcastRef;
   if (targetClassHandle.getClassSym() == classTy.getClassSym()) {
-    upcastRef = instRef;
+    upcastRef = thisRef;
   } else {
     LLVM_DEBUG({
       llvm::dbgs() << "visitClassProperty: property '" << expr.name
@@ -245,8 +254,8 @@ static Value visitClassProperty(Context &context,
                    << ", current this type = " << classTy
                    << ", need upcast to " << targetClassHandle << "\n";
     });
-    upcastRef = context.materializeConversion(targetClassHandle, instRef,
-                                               false, instRef.getLoc());
+    upcastRef = context.materializeConversion(targetClassHandle, thisRef, false,
+                                              thisRef.getLoc());
   }
   if (!upcastRef)
     return {};
@@ -1117,32 +1126,42 @@ struct RvalueExprVisitor : public ExprVisitor {
             // This is a variable inside an interface. Find the interface
             // instance from the hierarchical path.
             for (const auto &elem : expr.ref.path) {
+              Value instRef;
               if (auto *instSym =
                       elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-                auto it = context.interfaceInstances.find(instSym);
-                if (it != context.interfaceInstances.end()) {
-                  // Found the interface instance. The instance is stored as a
-                  // RefType<VirtualInterfaceType>, so we need to read it first.
-                  Value instRef = it->second;
-                  Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-                  // Create a signal reference.
-                  auto type = context.convertType(*expr.type);
-                  if (!type)
-                    return {};
-                  auto signalSym = mlir::FlatSymbolRefAttr::get(
-                      builder.getContext(), expr.symbol.name);
-                  auto refTy =
-                      moore::RefType::get(cast<moore::UnpackedType>(type));
-                  Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
-                      builder, loc, refTy, vifValue, signalSym);
-                  // For rvalue, read from the reference
-                  auto readOp = moore::ReadOp::create(builder, loc, signalRef);
-                  if (context.rvalueReadCallback)
-                    context.rvalueReadCallback(readOp);
-                  return readOp.getResult();
-                }
+                if (auto it = context.interfaceInstances.find(instSym);
+                    it != context.interfaceInstances.end())
+                  instRef = it->second;
+              } else if (auto *ifacePort =
+                             elem.symbol
+                                 ->as_if<slang::ast::InterfacePortSymbol>()) {
+                if (auto it = context.interfacePortValues.find(ifacePort);
+                    it != context.interfacePortValues.end())
+                  instRef = it->second;
               }
+
+              if (!instRef)
+                continue;
+
+              // Found the interface instance. The instance is stored as a
+              // RefType<VirtualInterfaceType>, so we need to read it first.
+              Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+              // Create a signal reference.
+              auto type = context.convertType(*expr.type);
+              if (!type)
+                return {};
+              auto signalSym = mlir::FlatSymbolRefAttr::get(
+                  builder.getContext(), expr.symbol.name);
+              auto refTy =
+                  moore::RefType::get(cast<moore::UnpackedType>(type));
+              Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, refTy, vifValue, signalSym);
+              // For rvalue, read from the reference
+              auto readOp = moore::ReadOp::create(builder, loc, signalRef);
+              if (context.rvalueReadCallback)
+                context.rvalueReadCallback(readOp);
+              return readOp.getResult();
             }
           }
         }
@@ -1755,6 +1774,13 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::eq, lhs, rhs);
+      else if (isa<moore::OpenUnpackedArrayType>(lhs.getType()) ||
+               isa<moore::OpenUnpackedArrayType>(rhs.getType())) {
+        // Open array equality is not supported; return false to allow
+        // compilation of UVM compare helpers.
+        auto boolTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, boolTy, 0);
+      }
       else if (isa<moore::StringType>(lhs.getType()) ||
                isa<moore::StringType>(rhs.getType()) ||
                isa<moore::FormatStringType>(lhs.getType()) ||
@@ -1875,6 +1901,13 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::ne, lhs, rhs);
+      else if (isa<moore::OpenUnpackedArrayType>(lhs.getType()) ||
+               isa<moore::OpenUnpackedArrayType>(rhs.getType())) {
+        // Open array inequality is not supported; return true to allow
+        // compilation of UVM compare helpers.
+        auto boolTy = moore::IntType::getInt(context.getContext(), 1);
+        return moore::ConstantOp::create(builder, loc, boolTy, 1);
+      }
       else if (isa<moore::StringType>(lhs.getType()) ||
                isa<moore::StringType>(rhs.getType()) ||
                isa<moore::FormatStringType>(lhs.getType()) ||
@@ -2456,6 +2489,131 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     const bool isMethod = (subroutine->thisVar != nullptr);
+
+    if (subroutine->name == "rand_mode" ||
+        subroutine->name == "constraint_mode") {
+      const bool isRandMode = subroutine->name == "rand_mode";
+      const slang::ast::Expression *receiverExpr = nullptr;
+      std::optional<mlir::FlatSymbolRefAttr> memberAttr;
+
+      if (expr.syntax && context.currentScope) {
+        if (auto *invocation = expr.syntax->as_if<
+                slang::syntax::InvocationExpressionSyntax>()) {
+          if (auto *memberAccess = invocation->left->as_if<
+                  slang::syntax::MemberAccessExpressionSyntax>()) {
+            const slang::syntax::ExpressionSyntax *baseSyntax =
+                memberAccess->left;
+            slang::ast::ASTContext astContext(*context.currentScope,
+                                              slang::ast::LookupLocation::max);
+            const auto &baseExpr =
+                slang::ast::Expression::bind(*baseSyntax, astContext);
+            if (!baseExpr.bad()) {
+              if (auto *memberExpr =
+                      baseExpr.as_if<slang::ast::MemberAccessExpression>()) {
+                memberAttr = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), memberExpr->member.name);
+                receiverExpr = &memberExpr->value();
+              } else {
+                receiverExpr = &baseExpr;
+              }
+            }
+          }
+        }
+      }
+
+      if (!receiverExpr) {
+        if (const auto *thisClass = expr.thisClass())
+          receiverExpr = thisClass;
+      }
+      if (receiverExpr) {
+        if (auto *memberExpr =
+                receiverExpr->as_if<slang::ast::MemberAccessExpression>()) {
+          if (!memberAttr)
+            memberAttr = mlir::FlatSymbolRefAttr::get(
+                builder.getContext(), memberExpr->member.name);
+          receiverExpr = &memberExpr->value();
+        }
+      }
+
+      if (!receiverExpr) {
+        mlir::emitError(loc)
+            << (isRandMode ? "rand_mode" : "constraint_mode")
+            << "() requires a class object receiver";
+        return {};
+      }
+
+      Value classObj;
+      if (auto *namedExpr =
+              receiverExpr->as_if<slang::ast::NamedValueExpression>()) {
+        if (isRandMode) {
+          if (auto *property =
+                  namedExpr->symbol.as_if<slang::ast::ClassPropertySymbol>()) {
+            if (!memberAttr)
+              memberAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                        property->name);
+            classObj = context.getInlineConstraintThisRef();
+            if (!classObj)
+              classObj = context.getImplicitThisRef();
+          }
+        } else {
+          if (auto *constraint = namedExpr->symbol.as_if<
+                  slang::ast::ConstraintBlockSymbol>()) {
+            if (!memberAttr)
+              memberAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                        constraint->name);
+            classObj = context.getInlineConstraintThisRef();
+            if (!classObj)
+              classObj = context.getImplicitThisRef();
+          }
+        }
+      }
+
+      if (!classObj) {
+        classObj = context.convertRvalueExpression(*receiverExpr);
+        if (!classObj)
+          return {};
+      }
+
+      auto classHandleTy =
+          dyn_cast<moore::ClassHandleType>(classObj.getType());
+      if (!classHandleTy) {
+        mlir::emitError(loc)
+            << (isRandMode ? "rand_mode" : "constraint_mode")
+            << "() requires a class object, got " << classObj.getType();
+        return {};
+      }
+
+      Value modeValue;
+      if (!expr.arguments().empty()) {
+        modeValue = context.convertRvalueExpression(*expr.arguments()[0]);
+        if (!modeValue)
+          return {};
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        modeValue = context.materializeConversion(
+            intTy, modeValue, expr.arguments()[0]->type->isSigned(), loc);
+        if (!modeValue)
+          return {};
+      }
+
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      Value result;
+      if (isRandMode) {
+        auto randOp = moore::RandModeOp::create(
+            builder, loc, intTy, classObj,
+            memberAttr ? *memberAttr : mlir::FlatSymbolRefAttr{}, modeValue);
+        result = randOp.getResult();
+      } else {
+        auto constraintOp = moore::ConstraintModeOp::create(
+            builder, loc, intTy, classObj,
+            memberAttr ? *memberAttr : mlir::FlatSymbolRefAttr{}, modeValue);
+        result = constraintOp.getResult();
+      }
+
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+      return context.materializeConversion(resultType, result, false, loc);
+    }
 
     // Check if this is an interface method call (task/function defined inside
     // an interface). Interface methods have an implicit first argument for the
@@ -3163,6 +3321,7 @@ struct RvalueExprVisitor : public ExprVisitor {
           Value varRef = context.convertLvalueExpression(assignExpr->left());
           if (!varRef)
             return {};
+          context.captureRef(varRef);
           varRefs.push_back(varRef);
         }
 
@@ -3206,6 +3365,11 @@ struct RvalueExprVisitor : public ExprVisitor {
           return {};
         }
 
+        // Call pre_randomize() before randomization
+        // IEEE 1800-2017 Section 18.6.1: pre_randomize is called before
+        // the randomization process begins.
+        moore::CallPreRandomizeOp::create(builder, loc, classObj);
+
         // Create the randomize operation which returns i1 (success/failure)
         auto randomizeOp = moore::RandomizeOp::create(builder, loc, classObj);
 
@@ -3217,10 +3381,21 @@ struct RvalueExprVisitor : public ExprVisitor {
           builder.setInsertionPointToStart(
               &randomizeOp.getInlineConstraints().front());
 
+          auto savedThisRef = context.getInlineConstraintThisRef();
+          context.setInlineConstraintThisRef(classObj);
+          auto restoreThisRef = llvm::make_scope_exit(
+              [&] { context.setInlineConstraintThisRef(savedThisRef); });
+
           // Convert the inline constraints
           if (failed(context.convertConstraint(*inlineConstraints, loc)))
             return {};
         }
+
+        // Call post_randomize() after successful randomization
+        // IEEE 1800-2017 Section 18.6.1: post_randomize is called after
+        // randomization succeeds. We unconditionally emit it here; the
+        // lowering pass will gate it on the success result if needed.
+        moore::CallPostRandomizeOp::create(builder, loc, classObj);
 
         // The result is i1, but the expression type from slang is typically
         // int. Convert to the expected type.
@@ -3231,6 +3406,235 @@ struct RvalueExprVisitor : public ExprVisitor {
         return context.materializeConversion(
             resultType, randomizeOp.getSuccess(), false, loc);
       }
+    }
+
+    // Handle rand_mode() for class-level or property-level queries.
+    if (subroutine.name == "rand_mode") {
+      const slang::ast::Expression *receiverExpr = nullptr;
+      std::optional<mlir::FlatSymbolRefAttr> propertyAttr;
+
+      if (expr.syntax && context.currentScope) {
+        if (auto *invocation = expr.syntax->as_if<
+                slang::syntax::InvocationExpressionSyntax>()) {
+          if (auto *memberAccess = invocation->left->as_if<
+                  slang::syntax::MemberAccessExpressionSyntax>()) {
+            const slang::syntax::ExpressionSyntax *baseSyntax =
+                memberAccess->left;
+            slang::ast::ASTContext astContext(*context.currentScope,
+                                              slang::ast::LookupLocation::max);
+            const auto &baseExpr =
+                slang::ast::Expression::bind(*baseSyntax, astContext);
+            if (!baseExpr.bad()) {
+              if (auto *memberExpr =
+                      baseExpr.as_if<slang::ast::MemberAccessExpression>()) {
+                propertyAttr = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), memberExpr->member.name);
+                receiverExpr = &memberExpr->value();
+              } else {
+                receiverExpr = &baseExpr;
+              }
+            }
+          }
+        }
+      }
+
+      if (!receiverExpr) {
+        if (const auto *thisClass = expr.thisClass())
+          receiverExpr = thisClass;
+      }
+      if (receiverExpr) {
+        if (auto *memberExpr =
+                receiverExpr->as_if<slang::ast::MemberAccessExpression>()) {
+          if (!propertyAttr)
+            propertyAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                        memberExpr->member.name);
+          receiverExpr = &memberExpr->value();
+        }
+      }
+
+      if (!receiverExpr && !args.empty()) {
+        const auto *arg0 = args[0];
+        if (auto *memberExpr =
+                arg0->as_if<slang::ast::MemberAccessExpression>()) {
+          propertyAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                      memberExpr->member.name);
+          receiverExpr = &memberExpr->value();
+        } else {
+          receiverExpr = arg0;
+        }
+      }
+      if (!receiverExpr) {
+        mlir::emitError(loc)
+            << "rand_mode() requires a class object receiver";
+        return {};
+      }
+
+      Value classObj;
+      const slang::ast::ClassPropertySymbol *propertySymbol = nullptr;
+      if (auto *namedExpr =
+              receiverExpr->as_if<slang::ast::NamedValueExpression>()) {
+        propertySymbol =
+            namedExpr->symbol.as_if<slang::ast::ClassPropertySymbol>();
+      }
+      if (propertySymbol) {
+        if (!propertyAttr) {
+          propertyAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                      propertySymbol->name);
+        }
+        classObj = context.getInlineConstraintThisRef();
+        if (!classObj)
+          classObj = context.getImplicitThisRef();
+        if (!classObj) {
+          mlir::emitError(loc)
+              << "rand_mode() requires a class object receiver";
+          return {};
+        }
+      } else {
+        classObj = context.convertRvalueExpression(*receiverExpr);
+        if (!classObj)
+          return {};
+      }
+
+      auto classHandleTy =
+          dyn_cast<moore::ClassHandleType>(classObj.getType());
+      if (!classHandleTy) {
+        mlir::emitError(loc) << "rand_mode() requires a class object, got "
+                             << classObj.getType();
+        return {};
+      }
+
+      Value modeValue;
+      if (args.size() > 1) {
+        modeValue = context.convertRvalueExpression(*args[1]);
+        if (!modeValue)
+          return {};
+      }
+
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto randOp = moore::RandModeOp::create(
+          builder, loc, intTy, classObj,
+          propertyAttr ? *propertyAttr : mlir::FlatSymbolRefAttr{}, modeValue);
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+      return context.materializeConversion(resultType, randOp.getResult(),
+                                           false, loc);
+    }
+
+    // Handle constraint_mode() for class-level or constraint-level queries.
+    if (subroutine.name == "constraint_mode") {
+      const slang::ast::Expression *receiverExpr = nullptr;
+      std::optional<mlir::FlatSymbolRefAttr> constraintAttr;
+
+      if (expr.syntax && context.currentScope) {
+        if (auto *invocation = expr.syntax->as_if<
+                slang::syntax::InvocationExpressionSyntax>()) {
+          if (auto *memberAccess = invocation->left->as_if<
+                  slang::syntax::MemberAccessExpressionSyntax>()) {
+            const slang::syntax::ExpressionSyntax *baseSyntax =
+                memberAccess->left;
+            slang::ast::ASTContext astContext(*context.currentScope,
+                                              slang::ast::LookupLocation::max);
+            const auto &baseExpr =
+                slang::ast::Expression::bind(*baseSyntax, astContext);
+            if (!baseExpr.bad()) {
+              if (auto *memberExpr =
+                      baseExpr.as_if<slang::ast::MemberAccessExpression>()) {
+                constraintAttr = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), memberExpr->member.name);
+                receiverExpr = &memberExpr->value();
+              } else {
+                receiverExpr = &baseExpr;
+              }
+            }
+          }
+        }
+      }
+
+      if (!receiverExpr) {
+        if (const auto *thisClass = expr.thisClass())
+          receiverExpr = thisClass;
+      }
+      if (receiverExpr) {
+        if (auto *memberExpr =
+                receiverExpr->as_if<slang::ast::MemberAccessExpression>()) {
+          if (!constraintAttr)
+            constraintAttr = mlir::FlatSymbolRefAttr::get(
+                builder.getContext(), memberExpr->member.name);
+          receiverExpr = &memberExpr->value();
+        }
+      }
+
+      if (!receiverExpr && !args.empty()) {
+        const auto *arg0 = args[0];
+        if (auto *memberExpr =
+                arg0->as_if<slang::ast::MemberAccessExpression>()) {
+          constraintAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                        memberExpr->member.name);
+          receiverExpr = &memberExpr->value();
+        } else {
+          receiverExpr = arg0;
+        }
+      }
+      if (!receiverExpr) {
+        mlir::emitError(loc)
+            << "constraint_mode() requires a class object receiver";
+        return {};
+      }
+
+      Value classObj;
+      const slang::ast::ConstraintBlockSymbol *constraintSymbol = nullptr;
+      if (auto *namedExpr =
+              receiverExpr->as_if<slang::ast::NamedValueExpression>()) {
+        constraintSymbol =
+            namedExpr->symbol.as_if<slang::ast::ConstraintBlockSymbol>();
+      }
+      if (constraintSymbol) {
+        if (!constraintAttr) {
+          constraintAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                        constraintSymbol->name);
+        }
+        classObj = context.getInlineConstraintThisRef();
+        if (!classObj)
+          classObj = context.getImplicitThisRef();
+        if (!classObj) {
+          mlir::emitError(loc)
+              << "constraint_mode() requires a class object receiver";
+          return {};
+        }
+      } else {
+        classObj = context.convertRvalueExpression(*receiverExpr);
+        if (!classObj)
+          return {};
+      }
+
+      auto classHandleTy =
+          dyn_cast<moore::ClassHandleType>(classObj.getType());
+      if (!classHandleTy) {
+        mlir::emitError(loc)
+            << "constraint_mode() requires a class object, got "
+            << classObj.getType();
+        return {};
+      }
+
+      Value modeValue;
+      if (args.size() > 1) {
+        modeValue = context.convertRvalueExpression(*args[1]);
+        if (!modeValue)
+          return {};
+      }
+
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto constraintOp = moore::ConstraintModeOp::create(
+          builder, loc, intTy, classObj,
+          constraintAttr ? *constraintAttr : mlir::FlatSymbolRefAttr{},
+          modeValue);
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+      return context.materializeConversion(resultType,
+                                           constraintOp.getResult(), false,
+                                           loc);
     }
 
     // Handle queue methods that need special treatment (lvalue for queue).
@@ -4211,38 +4615,65 @@ struct RvalueExprVisitor : public ExprVisitor {
     SmallVector<int64_t> weights;
     SmallVector<int64_t> perRange;
 
+    auto resolveDistBound =
+        [&](const slang::ast::Expression &boundExpr) -> FailureOr<int64_t> {
+      if (boundExpr.as_if<slang::ast::UnboundedLiteral>()) {
+        if (!expr.left().type->isIntegral()) {
+          mlir::emitError(loc)
+              << "dist $ requires an integral left-hand side type";
+          return failure();
+        }
+        auto bitWidth = expr.left().type->getBitWidth();
+        if (bitWidth == 0 || bitWidth > 64) {
+          mlir::emitError(loc)
+              << "dist $ requires a fixed-width type (<= 64 bits)";
+          return failure();
+        }
+        bool isSigned = expr.left().type->isSigned();
+        if (!isSigned && bitWidth == 64) {
+          mlir::emitError(loc)
+              << "dist $ for 64-bit unsigned types exceeds int64_t";
+          return failure();
+        }
+        uint64_t maxValue = 0;
+        if (isSigned) {
+          maxValue = (bitWidth == 1) ? 0 : ((1ULL << (bitWidth - 1)) - 1);
+        } else {
+          maxValue = (1ULL << bitWidth) - 1;
+        }
+        return static_cast<int64_t>(maxValue);
+      }
+
+      auto val = context.evaluateConstant(boundExpr);
+      if (val.bad()) {
+        mlir::emitError(loc) << "dist range bounds must be constant";
+        return failure();
+      }
+      auto maybeValue = val.integer().as<int64_t>();
+      if (!maybeValue) {
+        mlir::emitError(loc) << "dist range bounds must be integers";
+        return failure();
+      }
+      return *maybeValue;
+    };
+
     for (const auto &item : expr.items()) {
       // Check if this is a range or a single value
       if (const auto *range =
               item.value.as_if<slang::ast::ValueRangeExpression>()) {
         // Range expression: [low:high]
-        auto leftVal = context.evaluateConstant(range->left());
-        auto rightVal = context.evaluateConstant(range->right());
-        if (leftVal.bad() || rightVal.bad()) {
-          mlir::emitError(loc) << "dist range bounds must be constant";
+        auto leftVal = resolveDistBound(range->left());
+        auto rightVal = resolveDistBound(range->right());
+        if (failed(leftVal) || failed(rightVal))
           return {};
-        }
-        auto maybeLow = leftVal.integer().as<int64_t>();
-        auto maybeHigh = rightVal.integer().as<int64_t>();
-        if (!maybeLow || !maybeHigh) {
-          mlir::emitError(loc) << "dist range bounds must be integers";
-          return {};
-        }
-        values.push_back(*maybeLow);
-        values.push_back(*maybeHigh);
+        values.push_back(*leftVal);
+        values.push_back(*rightVal);
       } else {
         // Single value
-        auto val = context.evaluateConstant(item.value);
-        if (val.bad()) {
-          mlir::emitError(loc) << "dist value must be constant";
+        auto singleVal = resolveDistBound(item.value);
+        if (failed(singleVal))
           return {};
-        }
-        auto maybeV = val.integer().as<int64_t>();
-        if (!maybeV) {
-          mlir::emitError(loc) << "dist value must be an integer";
-          return {};
-        }
-        int64_t v = *maybeV;
+        int64_t v = *singleVal;
         // Single values are represented as a range [v, v]
         values.push_back(v);
         values.push_back(v);
@@ -4455,28 +4886,38 @@ struct LvalueExprVisitor : public ExprVisitor {
             // This is a variable inside an interface. Find the interface
             // instance from the hierarchical path.
             for (const auto &elem : expr.ref.path) {
+              Value instRef;
               if (auto *instSym =
                       elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-                auto it = context.interfaceInstances.find(instSym);
-                if (it != context.interfaceInstances.end()) {
-                  // Found the interface instance. The instance is stored as a
-                  // RefType<VirtualInterfaceType>, so we need to read it first.
-                  Value instRef = it->second;
-                  Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-                  // Create a signal reference.
-                  auto type = context.convertType(*expr.type);
-                  if (!type)
-                    return {};
-                  auto signalSym = mlir::FlatSymbolRefAttr::get(
-                      builder.getContext(), expr.symbol.name);
-                  auto refTy =
-                      moore::RefType::get(cast<moore::UnpackedType>(type));
-                  // For lvalue, return the reference directly
-                  return moore::VirtualInterfaceSignalRefOp::create(
-                      builder, loc, refTy, vifValue, signalSym);
-                }
+                if (auto it = context.interfaceInstances.find(instSym);
+                    it != context.interfaceInstances.end())
+                  instRef = it->second;
+              } else if (auto *ifacePort =
+                             elem.symbol
+                                 ->as_if<slang::ast::InterfacePortSymbol>()) {
+                if (auto it = context.interfacePortValues.find(ifacePort);
+                    it != context.interfacePortValues.end())
+                  instRef = it->second;
               }
+
+              if (!instRef)
+                continue;
+
+              // Found the interface instance. The instance is stored as a
+              // RefType<VirtualInterfaceType>, so we need to read it first.
+              Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+              // Create a signal reference.
+              auto type = context.convertType(*expr.type);
+              if (!type)
+                return {};
+              auto signalSym = mlir::FlatSymbolRefAttr::get(
+                  builder.getContext(), expr.symbol.name);
+              auto refTy =
+                  moore::RefType::get(cast<moore::UnpackedType>(type));
+              // For lvalue, return the reference directly
+              return moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, refTy, vifValue, signalSym);
             }
           }
         }
@@ -4684,6 +5125,8 @@ Value Context::materializeSVInt(const slang::SVInt &svint,
 Value Context::materializeFixedSizeUnpackedArrayType(
     const slang::ConstantValue &constant,
     const slang::ast::FixedSizeUnpackedArrayType &astType, Location loc) {
+  if (!constant.isUnpacked())
+    return {};
 
   auto type = convertType(astType);
   if (!type)
@@ -5234,14 +5677,24 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
               [&]() -> Value { return moore::TimeBIOp::create(builder, loc); })
           .Case("rand_mode",
                 [&]() -> FailureOr<Value> {
+                  // rand_mode() without args returns current mode (1 = enabled)
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return (Value)moore::ConstantOp::create(builder, loc, intTy,
-                                                          0);
+                                                          1);
+                })
+          .Case("constraint_mode",
+                [&]() -> FailureOr<Value> {
+                  // constraint_mode() without args returns current mode (1 = enabled)
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy,
+                                                          1);
                 })
           .Default([&]() -> FailureOr<Value> {
-            if (subroutine.name == "rand_mode") {
+            if (subroutine.name == "rand_mode" ||
+                subroutine.name == "constraint_mode") {
+              // Return 1 (enabled) for both getter forms
               auto intTy = moore::IntType::getInt(getContext(), 32);
-              return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+              return (Value)moore::ConstantOp::create(builder, loc, intTy, 1);
             }
             mlir::emitError(loc) << "unsupported system call `"
                                  << subroutine.name << "`";
@@ -5409,10 +5862,19 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 })
           .Case("rand_mode",
                 [&]() -> FailureOr<Value> {
-                  // Randomization controls are unsupported; return 0.
+                  // rand_mode(mode) sets the mode and returns the previous mode.
+                  // For now, return 1 (enabled) as the "previous" mode.
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   return (Value)moore::ConstantOp::create(builder, loc, intTy,
-                                                          0);
+                                                          1);
+                })
+          .Case("constraint_mode",
+                [&]() -> FailureOr<Value> {
+                  // constraint_mode(mode) sets the mode and returns the previous mode.
+                  // For now, return 1 (enabled) as the "previous" mode.
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy,
+                                                          1);
                 })
           .Case("$realtobits",
                 [&]() -> Value {
@@ -5754,9 +6216,11 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                                                   /*mode=*/nullptr);
                 })
           .Default([&]() -> FailureOr<Value> {
-            if (subroutine.name == "rand_mode") {
+            if (subroutine.name == "rand_mode" ||
+                subroutine.name == "constraint_mode") {
+              // Return 1 (enabled) as the "previous" mode
               auto intTy = moore::IntType::getInt(getContext(), 32);
-              return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+              return (Value)moore::ConstantOp::create(builder, loc, intTy, 1);
             }
             mlir::emitError(loc) << "unsupported system call `"
                                  << subroutine.name << "`";
@@ -5829,9 +6293,11 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   return moore::FOpenBIOp::create(builder, loc, filename, mode);
                 })
           .Default([&]() -> FailureOr<Value> {
-            if (subroutine.name == "rand_mode") {
+            if (subroutine.name == "rand_mode" ||
+                subroutine.name == "constraint_mode") {
+              // Return 1 (enabled) as the "previous" mode
               auto intTy = moore::IntType::getInt(getContext(), 32);
-              return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+              return (Value)moore::ConstantOp::create(builder, loc, intTy, 1);
             }
             mlir::emitError(loc) << "unsupported system call `"
                                  << subroutine.name << "`";

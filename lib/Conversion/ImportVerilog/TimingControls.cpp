@@ -183,6 +183,11 @@ static LogicalResult handleRoot(Context &context,
                                 moore::WaitEventOp *implicitWaitOp) {
   auto &builder = context.builder;
   auto loc = context.convertLocation(ctrl.sourceRange);
+  if (context.options.ignoreTimingControls.value_or(false)) {
+    mlir::emitWarning(loc) << "ignoring timing control due to "
+                              "--ignore-timing-controls";
+    return success();
+  }
 
   using slang::ast::TimingControlKind;
   switch (ctrl.kind) {

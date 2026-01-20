@@ -9818,7 +9818,7 @@ struct RandModeOpConversion : public OpConversionPattern<RandModeOp> {
   }
 };
 
-/// Conversion for moore.call_pre_randomize -> runtime function call.
+/// Conversion for moore.call_pre_randomize -> direct function call.
 /// Invokes the pre_randomize() method before randomization begins.
 /// IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
 struct CallPreRandomizeOpConversion
@@ -9831,36 +9831,50 @@ struct CallPreRandomizeOpConversion
   matchAndRewrite(CallPreRandomizeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
     // Get the class handle type and resolve class info
     auto handleTy = cast<ClassHandleType>(op.getObject().getType());
     auto classSym = handleTy.getClassSym();
+    StringRef className = classSym.getRootReference();
 
     // Check if the class has a user-defined pre_randomize method
     auto *classDeclSym = mod.lookupSymbol(classSym);
     auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
 
+    bool foundMethod = false;
     if (classDecl) {
-      // Look for a pre_randomize method declaration
+      // First, look for a pre_randomize method declaration (for virtual case)
       for (auto methodDecl :
            classDecl.getBody().getOps<ClassMethodDeclOp>()) {
         if (methodDecl.getSymName() == "pre_randomize") {
-          // Found a pre_randomize method - call it via the runtime
-          auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-          auto voidTy = LLVM::LLVMVoidType::get(ctx);
+          // Found a pre_randomize method - call it directly if it has an impl
+          if (methodDecl.getImpl().has_value()) {
+            auto implSymRef = methodDecl.getImpl().value();
 
-          // Runtime function: void __moore_call_pre_randomize(void* obj)
-          auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
-          auto fn = getOrCreateRuntimeFunc(mod, rewriter,
-                                           "__moore_call_pre_randomize", fnTy);
-
-          Value classPtr = adaptor.getObject();
-          LLVM::CallOp::create(rewriter, loc, TypeRange{},
-                               SymbolRefAttr::get(fn), ValueRange{classPtr});
+            // The pre_randomize method takes 'this' as argument and returns
+            // void. Call the implementation function directly.
+            Value classPtr = adaptor.getObject();
+            func::CallOp::create(rewriter, loc, implSymRef, TypeRange{},
+                                 ValueRange{classPtr});
+            foundMethod = true;
+          }
           break;
         }
+      }
+    }
+
+    // If not found via ClassMethodDeclOp, look for a func.func with the
+    // conventional name "ClassName::pre_randomize". This handles non-virtual
+    // pre_randomize methods which don't get ClassMethodDeclOp entries.
+    if (!foundMethod) {
+      std::string funcName = (className + "::pre_randomize").str();
+      auto funcOp = mod.lookupSymbol<func::FuncOp>(funcName);
+      if (funcOp) {
+        Value classPtr = adaptor.getObject();
+        func::CallOp::create(rewriter, loc,
+                             SymbolRefAttr::get(rewriter.getContext(), funcName),
+                             TypeRange{}, ValueRange{classPtr});
       }
     }
 
@@ -9873,7 +9887,7 @@ private:
   ClassTypeCache &cache;
 };
 
-/// Conversion for moore.call_post_randomize -> runtime function call.
+/// Conversion for moore.call_post_randomize -> direct function call.
 /// Invokes the post_randomize() method after successful randomization.
 /// IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
 struct CallPostRandomizeOpConversion
@@ -9886,36 +9900,50 @@ struct CallPostRandomizeOpConversion
   matchAndRewrite(CallPostRandomizeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
     // Get the class handle type and resolve class info
     auto handleTy = cast<ClassHandleType>(op.getObject().getType());
     auto classSym = handleTy.getClassSym();
+    StringRef className = classSym.getRootReference();
 
     // Check if the class has a user-defined post_randomize method
     auto *classDeclSym = mod.lookupSymbol(classSym);
     auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
 
+    bool foundMethod = false;
     if (classDecl) {
-      // Look for a post_randomize method declaration
+      // First, look for a post_randomize method declaration (for virtual case)
       for (auto methodDecl :
            classDecl.getBody().getOps<ClassMethodDeclOp>()) {
         if (methodDecl.getSymName() == "post_randomize") {
-          // Found a post_randomize method - call it via the runtime
-          auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-          auto voidTy = LLVM::LLVMVoidType::get(ctx);
+          // Found a post_randomize method - call it directly if it has an impl
+          if (methodDecl.getImpl().has_value()) {
+            auto implSymRef = methodDecl.getImpl().value();
 
-          // Runtime function: void __moore_call_post_randomize(void* obj)
-          auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
-          auto fn = getOrCreateRuntimeFunc(mod, rewriter,
-                                           "__moore_call_post_randomize", fnTy);
-
-          Value classPtr = adaptor.getObject();
-          LLVM::CallOp::create(rewriter, loc, TypeRange{},
-                               SymbolRefAttr::get(fn), ValueRange{classPtr});
+            // The post_randomize method takes 'this' as argument and returns
+            // void. Call the implementation function directly.
+            Value classPtr = adaptor.getObject();
+            func::CallOp::create(rewriter, loc, implSymRef, TypeRange{},
+                                 ValueRange{classPtr});
+            foundMethod = true;
+          }
           break;
         }
+      }
+    }
+
+    // If not found via ClassMethodDeclOp, look for a func.func with the
+    // conventional name "ClassName::post_randomize". This handles non-virtual
+    // post_randomize methods which don't get ClassMethodDeclOp entries.
+    if (!foundMethod) {
+      std::string funcName = (className + "::post_randomize").str();
+      auto funcOp = mod.lookupSymbol<func::FuncOp>(funcName);
+      if (funcOp) {
+        Value classPtr = adaptor.getObject();
+        func::CallOp::create(rewriter, loc,
+                             SymbolRefAttr::get(rewriter.getContext(), funcName),
+                             TypeRange{}, ValueRange{classPtr});
       }
     }
 

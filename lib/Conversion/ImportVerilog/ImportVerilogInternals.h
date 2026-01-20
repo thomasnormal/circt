@@ -33,7 +33,7 @@ using moore::Domain;
 
 /// Port lowering information.
 struct PortLowering {
-  const slang::ast::PortSymbol &ast;
+  const slang::ast::Symbol *symbol;
   Location loc;
   BlockArgument arg;
 };
@@ -42,7 +42,7 @@ struct PortLowering {
 struct ModuleLowering {
   moore::SVModuleOp op;
   SmallVector<PortLowering> ports;
-  DenseMap<const slang::syntax::SyntaxNode *, const slang::ast::PortSymbol *>
+  DenseMap<const slang::syntax::SyntaxNode *, const slang::ast::Symbol *>
       portsBySyntaxNode;
 };
 
@@ -136,6 +136,7 @@ struct Context {
   LogicalResult convertGlobalVariable(const slang::ast::VariableSymbol &var);
   LogicalResult
   convertStaticClassProperty(const slang::ast::ClassPropertySymbol &prop);
+  void captureRef(Value ref);
 
   /// Convert interface declarations
   InterfaceLowering *
@@ -158,6 +159,11 @@ struct Context {
 
   Value getImplicitThisRef() const {
     return currentThisRef; // block arg added in declareFunction
+  }
+  void setImplicitThisRef(Value value) { currentThisRef = value; }
+  Value getInlineConstraintThisRef() const { return inlineConstraintThisRef; }
+  void setInlineConstraintThisRef(Value value) {
+    inlineConstraintThisRef = value;
   }
   // Convert a statement AST node to MLIR ops.
   LogicalResult convertStatement(const slang::ast::Statement &stmt);
@@ -393,6 +399,7 @@ struct Context {
   /// stores the MLIR Value (ref to virtual interface) for each interface
   /// instance symbol.
   DenseMap<const slang::ast::InstanceSymbol *, Value> interfaceInstances;
+  DenseMap<const slang::ast::InterfacePortSymbol *, Value> interfacePortValues;
 
   /// A stack of assignment left-hand side values. Each assignment will push its
   /// lowered left-hand side onto this stack before lowering its right-hand
@@ -442,6 +449,10 @@ struct Context {
   /// constructor calls so that argument evaluation continues to use the
   /// caller's `this`, while the callee still receives the correct new object.
   Value methodReceiverOverride = {};
+
+  /// Temporary override for inline randomize constraints so unqualified
+  /// properties resolve against the randomized object.
+  Value inlineConstraintThisRef = {};
 
   /// The function currently being converted (if any). Used to propagate
   /// captures from callee functions to the caller when the caller is also

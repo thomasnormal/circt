@@ -1531,9 +1531,13 @@ LogicalResult ClassNewOp::verify() {
   if (!classSym)
     return emitOpError("result type is missing a class symbol");
 
-  // Resolve the referenced symbol starting from the nearest symbol table.
+  // Resolve the referenced symbol from the module symbol table. Class handles
+  // can appear inside other class bodies, which are also symbol tables.
+  auto module = getOperation()->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return emitOpError("must be contained in a module to resolve class symbol");
   mlir::Operation *sym =
-      mlir::SymbolTable::lookupNearestSymbolFrom(getOperation(), classSym);
+      mlir::SymbolTable::lookupSymbolIn(module, classSym);
   if (!sym)
     return emitOpError("referenced class symbol `")
            << classSym << "` was not found";
@@ -1591,10 +1595,13 @@ ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 
   auto *op = getOperation();
 
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return emitOpError() << "must be contained in a module to resolve classes";
   auto *srcDeclOp =
-      symbolTable.lookupNearestSymbolFrom(op, srcTy.getClassSym());
+      symbolTable.lookupSymbolIn(module, srcTy.getClassSym());
   auto *dstDeclOp =
-      symbolTable.lookupNearestSymbolFrom(op, dstTy.getClassSym());
+      symbolTable.lookupSymbolIn(module, dstTy.getClassSym());
   if (!srcDeclOp || !dstDeclOp)
     return emitOpError() << "failed to resolve class symbol(s): src="
                          << srcTy.getClassSym()
@@ -1616,7 +1623,7 @@ ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     if (!baseSym)
       break;
 
-    auto *baseOp = symbolTable.lookupNearestSymbolFrom(op, baseSym);
+    auto *baseOp = symbolTable.lookupSymbolIn(module, baseSym);
     cur = llvm::dyn_cast_or_null<ClassDeclOp>(baseOp);
   }
 
@@ -1642,10 +1649,13 @@ ClassDynCastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // Verify that the class symbols can be resolved.
   auto *op = getOperation();
 
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return emitOpError() << "must be contained in a module to resolve classes";
   auto *srcDeclOp =
-      symbolTable.lookupNearestSymbolFrom(op, srcTy.getClassSym());
+      symbolTable.lookupSymbolIn(module, srcTy.getClassSym());
   auto *dstDeclOp =
-      symbolTable.lookupNearestSymbolFrom(op, dstTy.getClassSym());
+      symbolTable.lookupSymbolIn(module, dstTy.getClassSym());
   if (!srcDeclOp || !dstDeclOp)
     return emitOpError() << "failed to resolve class symbol(s): src="
                          << srcTy.getClassSym()
@@ -1679,9 +1689,13 @@ ClassPropertyRefOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   if (!classSym)
     return emitOpError("instance type is missing a class symbol");
 
-  // Resolve the class symbol starting from the nearest symbol table.
+  // Resolve the class symbol from the module symbol table. Property refs can
+  // appear inside other class bodies, which are also symbol tables.
+  auto module = getOperation()->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return emitOpError("must be contained in a module to resolve class symbol");
   Operation *clsSym =
-      symbolTable.lookupNearestSymbolFrom(getOperation(), classSym);
+      symbolTable.lookupSymbolIn(module, classSym);
   if (!clsSym)
     return emitOpError("referenced class symbol `")
            << classSym << "` was not found";

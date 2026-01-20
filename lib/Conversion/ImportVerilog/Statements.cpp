@@ -1340,6 +1340,13 @@ struct StmtVisitor {
 
     // Simulation Control Tasks
 
+    if (subroutine.name == "$dumpfile" || subroutine.name == "$dumpvars") {
+      // These tasks are simulator-specific; ignore for now.
+      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
+                            << "`";
+      return true;
+    }
+
     if (subroutine.name == "$stop") {
       createFinishMessage(args.size() >= 1 ? args[0] : nullptr);
       moore::StopBIOp::create(builder, loc);

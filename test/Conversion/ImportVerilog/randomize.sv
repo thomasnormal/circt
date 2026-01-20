@@ -323,3 +323,47 @@ module testStdRandomizeWithConstraint;
         success = std::randomize(x, y) with { x < y; };
     end
 endmodule
+
+//===----------------------------------------------------------------------===//
+// Inline Constraint in External Method Definitions
+//===----------------------------------------------------------------------===//
+
+/// Ensure inline constraints inside out-of-line class methods bind to the
+/// randomized object, not the enclosing class.
+
+// CHECK-LABEL: moore.class.classdecl @InlineConstraintTarget2 {
+// CHECK:   moore.class.propertydecl @x : !moore.i32 rand_mode rand
+// CHECK: }
+
+class InlineConstraintTarget2;
+    rand int x;
+endclass
+
+// CHECK-LABEL: func.func private @"InlineConstraintSeq::doRandomize"
+// CHECK: %[[RAND:.+]] = moore.randomize %{{.+}} : <@InlineConstraintTarget2> {
+// CHECK:   %{{.+}} = moore.eq
+// CHECK:   moore.constraint.expr %{{.+}} : i1
+// CHECK: }
+
+class InlineConstraintSeq;
+    InlineConstraintTarget2 req;
+    extern function new();
+    extern task doRandomize();
+endclass
+
+function InlineConstraintSeq::new();
+    req = new;
+endfunction
+
+task InlineConstraintSeq::doRandomize();
+    if (!req.randomize() with { x == 1; }) begin
+    end
+endtask
+
+module testInlineConstraintExternalMethod;
+    InlineConstraintSeq s;
+    initial begin
+        s = new;
+        s.doRandomize();
+    end
+endmodule

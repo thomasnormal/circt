@@ -83,3 +83,17 @@ hw.module @Init() {
 func.func private @dummy(%arg0: i32) {
   return
 }
+
+// CHECK-LABEL: @TopLevelCall
+hw.module @TopLevelCall(out out0 : i1) {
+  %false = hw.constant false
+  %sig = llhd.sig %false : i1
+  // CHECK-NOT: call @readSig
+  %val = func.call @readSig(%sig) : (!llhd.ref<i1>) -> i1
+  hw.output %val : i1
+}
+
+func.func private @readSig(%arg0: !llhd.ref<i1>) -> i1 {
+  %0 = llhd.prb %arg0 : i1
+  return %0 : i1
+}

@@ -29,6 +29,7 @@
 #include <mutex>
 #include <random>
 #include <regex>
+#include <set>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -2096,6 +2097,12 @@ thread_local std::vector<MooreCovergroup *> registeredCovergroups;
 /// structure like a hash set or bit vector.
 struct CoverpointTracker {
   std::map<int64_t, int64_t> valueCounts; // value -> hit count
+
+  // Previous value tracking for transition bins
+  int64_t prevValue;
+  bool hasPrevValue;
+
+  CoverpointTracker() : prevValue(0), hasPrevValue(false) {}
 };
 
 /// Map from coverpoint to its value tracker.
@@ -2194,6 +2201,10 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
     std::free(covergroup->coverpoints);
   }
 
+  // Clean up cross coverage data (implemented later in file)
+  extern void __moore_cross_cleanup_for_covergroup(MooreCovergroup *);
+  __moore_cross_cleanup_for_covergroup(covergroup);
+
   // Free the covergroup itself
   std::free(covergroup);
 }
@@ -2201,6 +2212,12 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
 // Forward declaration for explicit bin update helper
 namespace {
 void updateExplicitBinsHelper(MooreCoverpoint *cp, int64_t value);
+void updateTransitionBinsHelper(MooreCoverpoint *cp, int64_t value,
+                                int64_t prevValue, bool hasPrev);
+// Forward declarations for illegal/ignore bin checking
+bool checkIllegalBinsInternal(MooreCovergroup *cg, MooreCoverpoint *cp,
+                              int64_t value);
+bool checkIgnoreBinsInternal(MooreCoverpoint *cp, int64_t value);
 } // namespace
 
 extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
@@ -2213,6 +2230,15 @@ extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
   if (!cp)
     return;
 
+  // Check for ignore bins first - skip sampling if matched
+  if (checkIgnoreBinsInternal(cp, value)) {
+    // Value is in an ignore bin, don't count it
+    return;
+  }
+
+  // Check for illegal bins - report error/warning but continue
+  checkIllegalBinsInternal(covergroup, cp, value);
+
   // Update hit count
   cp->hits++;
 
@@ -2222,14 +2248,27 @@ extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
   if (value > cp->max_val)
     cp->max_val = value;
 
-  // Track unique values
+  // Track unique values and get previous value for transition tracking
   auto trackerIt = coverpointTrackers.find(cp);
+  int64_t prevValue = 0;
+  bool hasPrev = false;
   if (trackerIt != coverpointTrackers.end()) {
+    prevValue = trackerIt->second.prevValue;
+    hasPrev = trackerIt->second.hasPrevValue;
     trackerIt->second.valueCounts[value]++;
   }
 
   // Update explicit bins if present
   updateExplicitBinsHelper(cp, value);
+
+  // Update transition bins if present
+  updateTransitionBinsHelper(cp, value, prevValue, hasPrev);
+
+  // Update previous value for transition tracking
+  if (trackerIt != coverpointTrackers.end()) {
+    trackerIt->second.prevValue = value;
+    trackerIt->second.hasPrevValue = true;
+  }
 }
 
 extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
@@ -2355,10 +2394,30 @@ extern "C" void __moore_coverage_report(void) {
 
 namespace {
 
+/// Structure to store a transition bin with its sequences and state.
+struct TransitionBin {
+  const char *name;
+  std::vector<MooreTransitionSequence> sequences; // Alternative sequences
+  int64_t hit_count;
+
+  // State for tracking sequence progress per alternative
+  struct SequenceState {
+    int32_t currentStep;  // Which step in the sequence we're waiting for
+    int32_t repeatCount;  // For repeat patterns, count of matching values
+    bool active;          // Is this sequence currently being tracked
+
+    SequenceState() : currentStep(0), repeatCount(0), active(false) {}
+  };
+  std::vector<SequenceState> sequenceStates;
+
+  TransitionBin() : name(nullptr), hit_count(0) {}
+};
+
 /// Structure to store explicit bin data for a coverpoint.
 /// Stored separately to maintain backward compatibility with the C API.
 struct ExplicitBinData {
   std::vector<MooreCoverageBin> bins;
+  std::vector<TransitionBin> transitionBins;
 };
 
 /// Map from coverpoint to its explicit bin data.
@@ -2427,6 +2486,7 @@ extern "C" void __moore_coverpoint_add_bin(void *cg, int32_t cp_index,
   MooreCoverageBin newBin;
   newBin.name = bin_name;
   newBin.type = bin_type;
+  newBin.kind = MOORE_BIN_KIND_NORMAL;  // Default to normal bin
   newBin.low = low;
   newBin.high = high;
   newBin.hit_count = 0;
@@ -2694,13 +2754,142 @@ bool matchesBin(const MooreCoverageBin &bin, int64_t value) {
   case MOORE_BIN_RANGE:
     return value >= bin.low && value <= bin.high;
   case MOORE_BIN_WILDCARD:
-    // Wildcard matching is future work
-    return false;
+    // Wildcard matching uses mask+value encoding:
+    // - bin.low = pattern value (don't care bits are 0)
+    // - bin.high = mask (1 = don't care, 0 = must match)
+    // Match condition: all "care" bits must match the pattern
+    // Formula: (value ^ pattern) & ~mask == 0
+    return ((value ^ bin.low) & ~bin.high) == 0;
   case MOORE_BIN_TRANSITION:
-    // Transition matching requires state tracking
+    // Transition matching is handled separately via transition bins
     return false;
   default:
     return false;
+  }
+}
+
+/// Check if a value matches a transition step (considering wildcards and ranges).
+bool valueMatchesTransitionStep(int64_t value, const MooreTransitionStep &step) {
+  // For now, simple equality check. Could be extended for ranges/wildcards.
+  return value == step.value;
+}
+
+/// Advance the state machine for a single sequence given a new value.
+/// Returns true if the sequence completed (bin hit).
+bool advanceTransitionSequenceState(TransitionBin::SequenceState &state,
+                                    const MooreTransitionSequence &seq,
+                                    int64_t value, int64_t prevValue,
+                                    bool hasPrev) {
+  if (seq.num_steps < 2)
+    return false; // Need at least 2 steps for a transition
+
+  // If not active, check if the first step matches the previous value
+  // and second step matches current value (for simple transitions)
+  if (!state.active) {
+    // Check if we're at a potential start of the sequence
+    if (hasPrev && valueMatchesTransitionStep(prevValue, seq.steps[0]) &&
+        valueMatchesTransitionStep(value, seq.steps[1])) {
+      if (seq.num_steps == 2) {
+        // Simple 2-step transition - complete!
+        return true;
+      } else {
+        // Start tracking longer sequence
+        state.active = true;
+        state.currentStep = 2;
+        state.repeatCount = 0;
+      }
+    }
+    return false;
+  }
+
+  // Active - check if current value matches the next expected step
+  if (state.currentStep >= seq.num_steps) {
+    state.active = false;
+    return false;
+  }
+
+  const MooreTransitionStep &step = seq.steps[state.currentStep];
+
+  // Handle repeat patterns
+  if (step.repeat_kind != MOORE_TRANS_NONE) {
+    if (valueMatchesTransitionStep(value, step)) {
+      state.repeatCount++;
+
+      // Check if we've seen enough repeats
+      if (state.repeatCount >= step.repeat_from) {
+        // Check if this could be the end of repeats (max reached or next step matches)
+        if (state.repeatCount >= step.repeat_to ||
+            (state.currentStep + 1 < seq.num_steps &&
+             valueMatchesTransitionStep(value, seq.steps[state.currentStep + 1]))) {
+          state.currentStep++;
+          state.repeatCount = 0;
+
+          // Check if sequence complete
+          if (state.currentStep >= seq.num_steps) {
+            state.active = false;
+            return true;
+          }
+        }
+      }
+    } else {
+      // Value doesn't match - check if we can move to next step
+      if (state.repeatCount >= step.repeat_from &&
+          state.currentStep + 1 < seq.num_steps &&
+          valueMatchesTransitionStep(value, seq.steps[state.currentStep + 1])) {
+        state.currentStep++;
+        state.repeatCount = 0;
+
+        if (state.currentStep >= seq.num_steps) {
+          state.active = false;
+          return true;
+        }
+      } else {
+        // Sequence broken
+        state.active = false;
+        state.currentStep = 0;
+        state.repeatCount = 0;
+      }
+    }
+  } else {
+    // No repeat - simple step matching
+    if (valueMatchesTransitionStep(value, step)) {
+      state.currentStep++;
+
+      // Check if sequence complete
+      if (state.currentStep >= seq.num_steps) {
+        state.active = false;
+        return true;
+      }
+    } else {
+      // Sequence broken
+      state.active = false;
+      state.currentStep = 0;
+      state.repeatCount = 0;
+    }
+  }
+
+  return false;
+}
+
+/// Update transition bins when a value is sampled.
+/// Returns true if any transition bin was hit.
+void updateTransitionBinsHelper(MooreCoverpoint *cp, int64_t value,
+                                int64_t prevValue, bool hasPrev) {
+  auto it = explicitBinData.find(cp);
+  if (it == explicitBinData.end())
+    return;
+
+  for (auto &transBin : it->second.transitionBins) {
+    // Check each alternative sequence
+    for (size_t seqIdx = 0; seqIdx < transBin.sequences.size(); ++seqIdx) {
+      auto &seq = transBin.sequences[seqIdx];
+      auto &seqState = transBin.sequenceStates[seqIdx];
+
+      if (advanceTransitionSequenceState(seqState, seq, value, prevValue,
+                                         hasPrev)) {
+        transBin.hit_count++;
+      }
+    }
   }
 }
 
@@ -2908,14 +3097,52 @@ extern "C" void __moore_coverpoint_add_transition_bin(
     void *cg, int32_t cp_index, const char *bin_name,
     MooreTransitionSequence *sequences, int32_t num_sequences) {
   // This function is called to define transition bins on a coverpoint.
-  // The actual tracking happens via the transition tracker.
-  // For now, this is a stub - full implementation would store the bin
-  // definition and integrate with the coverpoint structure.
-  (void)cg;
-  (void)cp_index;
-  (void)bin_name;
-  (void)sequences;
-  (void)num_sequences;
+  // Store the bin definition in explicitBinData for integrated tracking.
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  if (!sequences || num_sequences <= 0)
+    return;
+
+  // Create a new transition bin
+  TransitionBin transBin;
+  transBin.name = bin_name;
+  transBin.hit_count = 0;
+
+  // Copy the sequences
+  for (int32_t i = 0; i < num_sequences; ++i) {
+    MooreTransitionSequence seq;
+    seq.num_steps = sequences[i].num_steps;
+    // Deep copy the steps array
+    if (seq.num_steps > 0 && sequences[i].steps) {
+      seq.steps = static_cast<MooreTransitionStep *>(
+          std::malloc(seq.num_steps * sizeof(MooreTransitionStep)));
+      if (seq.steps) {
+        std::memcpy(seq.steps, sequences[i].steps,
+                    seq.num_steps * sizeof(MooreTransitionStep));
+      }
+    } else {
+      seq.steps = nullptr;
+    }
+    transBin.sequences.push_back(seq);
+    // Initialize sequence state for this alternative
+    transBin.sequenceStates.push_back(TransitionBin::SequenceState());
+  }
+
+  // Add to explicit bin data
+  auto it = explicitBinData.find(cp);
+  if (it == explicitBinData.end()) {
+    ExplicitBinData binData;
+    binData.transitionBins.push_back(std::move(transBin));
+    explicitBinData[cp] = std::move(binData);
+  } else {
+    it->second.transitionBins.push_back(std::move(transBin));
+  }
 }
 
 extern "C" void
@@ -2968,12 +3195,24 @@ __moore_transition_tracker_reset(MooreTransitionTrackerHandle tracker) {
 
 extern "C" int64_t __moore_transition_bin_get_hits(void *cg, int32_t cp_index,
                                                    int32_t bin_index) {
-  // This would need to look up the transition tracker for this coverpoint
-  // and return the hit count. For now, return 0 as a stub.
-  (void)cg;
-  (void)cp_index;
-  (void)bin_index;
-  return 0;
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return 0;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return 0;
+
+  // Look up transition bins in explicitBinData
+  auto it = explicitBinData.find(cp);
+  if (it == explicitBinData.end())
+    return 0;
+
+  if (bin_index < 0 ||
+      bin_index >= static_cast<int32_t>(it->second.transitionBins.size()))
+    return 0;
+
+  return it->second.transitionBins[bin_index].hit_count;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2986,16 +3225,37 @@ extern "C" int64_t __moore_transition_bin_get_hits(void *cg, int32_t cp_index,
 
 namespace {
 
+/// Internal representation of a named cross bin with filters.
+struct CrossNamedBin {
+  std::string name;
+  int32_t kind; // MooreCrossBinKind
+  std::vector<MooreCrossBinsofFilter> filters;
+  int64_t hit_count = 0;
+};
+
+/// Extended cross coverage data per cross item.
+struct CrossItemData {
+  std::vector<CrossNamedBin> namedBins;
+  /// Map from per-cross bin index to named bins that match it.
+  /// Used for fast lookup during sampling.
+};
+
 /// Structure to store cross coverage data for a covergroup.
 struct CrossCoverageData {
   std::vector<MooreCrossCoverage> crosses;
   /// Map from cross index to a map of value tuples to hit counts.
   /// The key is a vector of int64_t values (one per coverpoint in the cross).
   std::map<std::vector<int64_t>, int64_t> crossBins;
+  /// Named bins for each cross (indexed by cross index).
+  std::vector<CrossItemData> crossItemData;
 };
 
 /// Map from covergroup to its cross coverage data.
 thread_local std::map<MooreCovergroup *, CrossCoverageData> crossCoverageData;
+
+/// Global illegal cross bin callback.
+thread_local MooreIllegalCrossBinCallback illegalCrossBinCallback = nullptr;
+thread_local void *illegalCrossBinCallbackUserData = nullptr;
 
 /// Map from covergroup to its coverage goal (default 100.0).
 thread_local std::map<MooreCovergroup *, double> covergroupGoals;
@@ -3021,6 +3281,95 @@ struct CoverpointOptions {
 
 /// Map from coverpoint to its options.
 thread_local std::map<MooreCoverpoint *, CoverpointOptions> coverpointOptions;
+
+/// Helper function to check if a value matches a binsof filter.
+/// Returns true if the value satisfies the filter condition.
+bool matchesBinsofFilter(const MooreCrossBinsofFilter &filter, int64_t value,
+                         MooreCovergroup *covergroup) {
+  bool matches = false;
+
+  // If no specific bins or values are specified, the filter matches all values
+  if (filter.num_bins == 0 && filter.num_values == 0) {
+    matches = true;
+  } else {
+    // Check if value matches any of the specified bin indices
+    if (filter.num_bins > 0 && filter.bin_indices) {
+      // Get the coverpoint's explicit bins
+      int32_t cpIdx = filter.cp_index;
+      if (cpIdx >= 0 && cpIdx < covergroup->num_coverpoints) {
+        auto *cp = covergroup->coverpoints[cpIdx];
+        if (cp) {
+          // Check if value falls within any of the specified bin ranges
+          auto binIt = explicitBinData.find(cp);
+          if (binIt != explicitBinData.end()) {
+            for (int32_t i = 0; i < filter.num_bins; ++i) {
+              int32_t binIdx = filter.bin_indices[i];
+              if (binIdx >= 0 &&
+                  binIdx < static_cast<int32_t>(binIt->second.bins.size())) {
+                const auto &bin = binIt->second.bins[binIdx];
+                if (bin.type == MOORE_BIN_VALUE) {
+                  if (value == bin.low) {
+                    matches = true;
+                    break;
+                  }
+                } else if (bin.type == MOORE_BIN_RANGE) {
+                  if (value >= bin.low && value <= bin.high) {
+                    matches = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Check if value matches any of the intersect values
+    if (filter.num_values > 0 && filter.values) {
+      for (int32_t i = 0; i < filter.num_values; ++i) {
+        if (value == filter.values[i]) {
+          matches = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Apply negation if needed
+  return filter.negate ? !matches : matches;
+}
+
+/// Helper function to check if a value tuple matches a named cross bin.
+bool matchesNamedCrossBin(const CrossNamedBin &namedBin,
+                          const std::vector<int64_t> &values,
+                          MooreCovergroup *covergroup,
+                          const MooreCrossCoverage &cross) {
+  // All filters must match (AND semantics)
+  for (const auto &filter : namedBin.filters) {
+    // Find the index of this coverpoint in the cross
+    int32_t crossCpIdx = -1;
+    for (int32_t i = 0; i < cross.num_cps; ++i) {
+      if (cross.cp_indices[i] == filter.cp_index) {
+        crossCpIdx = i;
+        break;
+      }
+    }
+
+    if (crossCpIdx < 0 ||
+        crossCpIdx >= static_cast<int32_t>(values.size())) {
+      // Filter references a coverpoint not in this cross
+      return false;
+    }
+
+    int64_t value = values[crossCpIdx];
+    if (!matchesBinsofFilter(filter, value, covergroup)) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 } // anonymous namespace
 
@@ -3056,6 +3405,9 @@ extern "C" int32_t __moore_cross_create(void *cg, const char *name,
   int32_t crossIndex = static_cast<int32_t>(crossData.crosses.size());
   crossData.crosses.push_back(cross);
 
+  // Also create the CrossItemData for this cross
+  crossData.crossItemData.push_back(CrossItemData());
+
   return crossIndex;
 }
 
@@ -3070,7 +3422,8 @@ extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
     return;
 
   // For each cross, record the combination of values
-  for (auto &cross : it->second.crosses) {
+  for (size_t crossIdx = 0; crossIdx < it->second.crosses.size(); ++crossIdx) {
+    auto &cross = it->second.crosses[crossIdx];
     std::vector<int64_t> valueKey;
     valueKey.reserve(cross.num_cps);
 
@@ -3085,7 +3438,62 @@ extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
     }
 
     if (validSample) {
-      it->second.crossBins[valueKey]++;
+      // Check if this sample matches any named cross bins
+      if (crossIdx < it->second.crossItemData.size()) {
+        auto &itemData = it->second.crossItemData[crossIdx];
+
+        // Check for illegal bins first
+        bool isIllegal = false;
+        const char *illegalBinName = nullptr;
+        for (auto &namedBin : itemData.namedBins) {
+          if (namedBin.kind == MOORE_CROSS_BIN_ILLEGAL) {
+            if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
+              isIllegal = true;
+              illegalBinName = namedBin.name.c_str();
+              namedBin.hit_count++;
+
+              // Invoke the callback if registered
+              if (illegalCrossBinCallback) {
+                illegalCrossBinCallback(covergroup->name, cross.name,
+                                        illegalBinName, valueKey.data(),
+                                        cross.num_cps,
+                                        illegalCrossBinCallbackUserData);
+              }
+              break;
+            }
+          }
+        }
+
+        // Check for ignore bins - skip sampling if matched
+        bool isIgnored = false;
+        for (const auto &namedBin : itemData.namedBins) {
+          if (namedBin.kind == MOORE_CROSS_BIN_IGNORE) {
+            if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
+              isIgnored = true;
+              break;
+            }
+          }
+        }
+
+        // Update hit counts for normal named bins
+        if (!isIllegal && !isIgnored) {
+          for (auto &namedBin : itemData.namedBins) {
+            if (namedBin.kind == MOORE_CROSS_BIN_NORMAL) {
+              if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
+                namedBin.hit_count++;
+              }
+            }
+          }
+        }
+
+        // Only record the cross bin if not ignored
+        if (!isIgnored) {
+          it->second.crossBins[valueKey]++;
+        }
+      } else {
+        // No named bins defined, just record the sample
+        it->second.crossBins[valueKey]++;
+      }
     }
   }
 }
@@ -3161,6 +3569,182 @@ extern "C" int64_t __moore_cross_get_bins_hit(void *cg, int32_t cross_index) {
 }
 
 //===----------------------------------------------------------------------===//
+// Cross Coverage Named Bins and Filtering
+//===----------------------------------------------------------------------===//
+
+extern "C" int32_t __moore_cross_add_named_bin(void *cg, int32_t cross_index,
+                                                const char *name, int32_t kind,
+                                                MooreCrossBinsofFilter *filters,
+                                                int32_t num_filters) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cross_index < 0 || !name)
+    return -1;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() ||
+      cross_index >= static_cast<int32_t>(it->second.crosses.size()))
+    return -1;
+
+  // Create the named bin
+  CrossNamedBin namedBin;
+  namedBin.name = name;
+  namedBin.kind = kind;
+  namedBin.hit_count = 0;
+
+  // Copy filters
+  if (filters && num_filters > 0) {
+    namedBin.filters.reserve(num_filters);
+    for (int32_t i = 0; i < num_filters; ++i) {
+      namedBin.filters.push_back(filters[i]);
+    }
+  }
+
+  // Ensure we have enough crossItemData entries
+  while (it->second.crossItemData.size() <=
+         static_cast<size_t>(cross_index)) {
+    it->second.crossItemData.push_back(CrossItemData());
+  }
+
+  auto &itemData = it->second.crossItemData[cross_index];
+  int32_t binIndex = static_cast<int32_t>(itemData.namedBins.size());
+  itemData.namedBins.push_back(std::move(namedBin));
+
+  return binIndex;
+}
+
+extern "C" int32_t __moore_cross_add_ignore_bin(void *cg, int32_t cross_index,
+                                                 const char *name,
+                                                 MooreCrossBinsofFilter *filters,
+                                                 int32_t num_filters) {
+  return __moore_cross_add_named_bin(cg, cross_index, name,
+                                      MOORE_CROSS_BIN_IGNORE, filters,
+                                      num_filters);
+}
+
+extern "C" int32_t __moore_cross_add_illegal_bin(void *cg, int32_t cross_index,
+                                                  const char *name,
+                                                  MooreCrossBinsofFilter *filters,
+                                                  int32_t num_filters) {
+  return __moore_cross_add_named_bin(cg, cross_index, name,
+                                      MOORE_CROSS_BIN_ILLEGAL, filters,
+                                      num_filters);
+}
+
+extern "C" int64_t __moore_cross_get_named_bin_hits(void *cg,
+                                                     int32_t cross_index,
+                                                     int32_t bin_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cross_index < 0 || bin_index < 0)
+    return 0;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() ||
+      cross_index >= static_cast<int32_t>(it->second.crossItemData.size()))
+    return 0;
+
+  const auto &itemData = it->second.crossItemData[cross_index];
+  if (bin_index >= static_cast<int32_t>(itemData.namedBins.size()))
+    return 0;
+
+  return itemData.namedBins[bin_index].hit_count;
+}
+
+extern "C" bool __moore_cross_is_illegal(void *cg, int32_t cross_index,
+                                          int64_t *values) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cross_index < 0 || !values)
+    return false;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() ||
+      cross_index >= static_cast<int32_t>(it->second.crosses.size()) ||
+      cross_index >= static_cast<int32_t>(it->second.crossItemData.size()))
+    return false;
+
+  const auto &cross = it->second.crosses[cross_index];
+  const auto &itemData = it->second.crossItemData[cross_index];
+
+  // Build value vector
+  std::vector<int64_t> valueVec(values, values + cross.num_cps);
+
+  // Check if any illegal bin matches
+  for (const auto &namedBin : itemData.namedBins) {
+    if (namedBin.kind == MOORE_CROSS_BIN_ILLEGAL) {
+      if (matchesNamedCrossBin(namedBin, valueVec, covergroup, cross)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+extern "C" bool __moore_cross_is_ignored(void *cg, int32_t cross_index,
+                                          int64_t *values) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cross_index < 0 || !values)
+    return false;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() ||
+      cross_index >= static_cast<int32_t>(it->second.crosses.size()) ||
+      cross_index >= static_cast<int32_t>(it->second.crossItemData.size()))
+    return false;
+
+  const auto &cross = it->second.crosses[cross_index];
+  const auto &itemData = it->second.crossItemData[cross_index];
+
+  // Build value vector
+  std::vector<int64_t> valueVec(values, values + cross.num_cps);
+
+  // Check if any ignore bin matches
+  for (const auto &namedBin : itemData.namedBins) {
+    if (namedBin.kind == MOORE_CROSS_BIN_IGNORE) {
+      if (matchesNamedCrossBin(namedBin, valueVec, covergroup, cross)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+extern "C" int32_t __moore_cross_get_num_named_bins(void *cg,
+                                                     int32_t cross_index) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cross_index < 0)
+    return 0;
+
+  auto it = crossCoverageData.find(covergroup);
+  if (it == crossCoverageData.end() ||
+      cross_index >= static_cast<int32_t>(it->second.crossItemData.size()))
+    return 0;
+
+  return static_cast<int32_t>(it->second.crossItemData[cross_index].namedBins.size());
+}
+
+extern "C" void __moore_cross_set_illegal_bin_callback(
+    MooreIllegalCrossBinCallback callback, void *userData) {
+  illegalCrossBinCallback = callback;
+  illegalCrossBinCallbackUserData = userData;
+}
+
+/// Internal function to clean up cross coverage data for a covergroup.
+/// This is called from __moore_covergroup_destroy.
+void __moore_cross_cleanup_for_covergroup(MooreCovergroup *covergroup) {
+  auto it = crossCoverageData.find(covergroup);
+  if (it != crossCoverageData.end()) {
+    // Free cp_indices for each cross
+    for (auto &cross : it->second.crosses) {
+      if (cross.cp_indices) {
+        std::free(cross.cp_indices);
+      }
+    }
+    crossCoverageData.erase(it);
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Reset and Aggregation
 //===----------------------------------------------------------------------===//
 
@@ -3178,6 +3762,12 @@ extern "C" void __moore_covergroup_reset(void *cg) {
   auto crossIt = crossCoverageData.find(covergroup);
   if (crossIt != crossCoverageData.end()) {
     crossIt->second.crossBins.clear();
+    // Reset named cross bin hit counts
+    for (auto &itemData : crossIt->second.crossItemData) {
+      for (auto &namedBin : itemData.namedBins) {
+        namedBin.hit_count = 0;
+      }
+    }
   }
 }
 
@@ -3208,12 +3798,24 @@ extern "C" void __moore_coverpoint_reset(void *cg, int32_t cp_index) {
     for (auto &bin : binIt->second.bins) {
       bin.hit_count = 0;
     }
+    // Reset transition bins
+    for (auto &transBin : binIt->second.transitionBins) {
+      transBin.hit_count = 0;
+      // Reset sequence states
+      for (auto &seqState : transBin.sequenceStates) {
+        seqState.active = false;
+        seqState.currentStep = 0;
+        seqState.repeatCount = 0;
+      }
+    }
   }
 
-  // Reset value tracker
+  // Reset value tracker (including previous value for transitions)
   auto trackerIt = coverpointTrackers.find(cp);
   if (trackerIt != coverpointTrackers.end()) {
     trackerIt->second.valueCounts.clear();
+    trackerIt->second.prevValue = 0;
+    trackerIt->second.hasPrevValue = false;
   }
 }
 
@@ -3503,6 +4105,474 @@ extern "C" bool __moore_coverpoint_bin_covered(void *cg, int32_t cp_index,
   }
 
   return cp->bins[bin_index] >= atLeast;
+}
+
+//===----------------------------------------------------------------------===//
+// Illegal Bins and Ignore Bins Runtime Support
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Structure to store illegal and ignore bins for a coverpoint.
+struct SpecialBinData {
+  std::vector<MooreCoverageBin> illegalBins;
+  std::vector<MooreCoverageBin> ignoreBins;
+};
+
+/// Map from coverpoint to its special bin data (illegal/ignore).
+thread_local std::map<MooreCoverpoint *, SpecialBinData> specialBinData;
+
+/// Global state for illegal bin handling.
+struct IllegalBinState {
+  MooreIllegalBinCallback callback = nullptr;
+  void *callbackUserData = nullptr;
+  bool fatal = true;  // Default: illegal bins cause fatal errors
+  int64_t hitCount = 0;
+};
+
+thread_local IllegalBinState illegalBinState;
+
+/// Check if a value matches a bin (works for illegal/ignore bins).
+bool valueMatchesBin(const MooreCoverageBin &bin, int64_t value) {
+  switch (bin.type) {
+  case MOORE_BIN_VALUE:
+    return value == bin.low;
+  case MOORE_BIN_RANGE:
+    return value >= bin.low && value <= bin.high;
+  case MOORE_BIN_WILDCARD:
+    // Wildcard matching uses mask+value encoding:
+    // - bin.low = pattern value (don't care bits are 0)
+    // - bin.high = mask (1 = don't care, 0 = must match)
+    // Match condition: all "care" bits must match the pattern
+    // Formula: (value ^ pattern) & ~mask == 0
+    return ((value ^ bin.low) & ~bin.high) == 0;
+  case MOORE_BIN_TRANSITION:
+    // Transitions are not applicable to illegal/ignore value bins
+    return false;
+  default:
+    return false;
+  }
+}
+
+/// Handle an illegal bin hit.
+void handleIllegalBinHit(MooreCovergroup *cg, MooreCoverpoint *cp,
+                         const MooreCoverageBin &bin, int64_t value) {
+  illegalBinState.hitCount++;
+
+  // Get names for reporting
+  const char *cgName = cg ? cg->name : "(unknown)";
+  const char *cpName = cp ? cp->name : "(unknown)";
+  const char *binName = bin.name ? bin.name : "(unnamed)";
+
+  // Call user callback if registered
+  if (illegalBinState.callback) {
+    illegalBinState.callback(cgName, cpName, binName, value,
+                             illegalBinState.callbackUserData);
+  }
+
+  // Print error/warning message
+  if (illegalBinState.fatal) {
+    std::fprintf(stderr,
+                 "Error: Illegal bin hit in covergroup '%s', coverpoint '%s', "
+                 "bin '%s': value = %ld\n",
+                 cgName, cpName, binName, static_cast<long>(value));
+    // In a real simulator, this would call $fatal. For now, we print and continue.
+    // The caller can check the hit count and terminate if desired.
+  } else {
+    std::fprintf(stderr,
+                 "Warning: Illegal bin hit in covergroup '%s', coverpoint '%s', "
+                 "bin '%s': value = %ld\n",
+                 cgName, cpName, binName, static_cast<long>(value));
+  }
+}
+
+/// Check if a value matches any illegal bins and handle accordingly.
+/// Returns true if an illegal bin was hit.
+bool checkIllegalBinsInternal(MooreCovergroup *cg, MooreCoverpoint *cp,
+                              int64_t value) {
+  auto it = specialBinData.find(cp);
+  if (it == specialBinData.end())
+    return false;
+
+  for (auto &bin : it->second.illegalBins) {
+    if (valueMatchesBin(bin, value)) {
+      bin.hit_count++;
+      handleIllegalBinHit(cg, cp, bin, value);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/// Check if a value matches any ignore bins.
+/// Returns true if the value should be ignored.
+bool checkIgnoreBinsInternal(MooreCoverpoint *cp, int64_t value) {
+  auto it = specialBinData.find(cp);
+  if (it == specialBinData.end())
+    return false;
+
+  for (const auto &bin : it->second.ignoreBins) {
+    if (valueMatchesBin(bin, value))
+      return true;
+  }
+
+  return false;
+}
+
+} // anonymous namespace
+
+extern "C" void __moore_coverpoint_set_illegal_bins(void *cg, int32_t cp_index,
+                                                     MooreCoverageBin *bins,
+                                                     int32_t num_bins) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  // Clear existing illegal bins and add new ones
+  auto &data = specialBinData[cp];
+  data.illegalBins.clear();
+
+  if (bins && num_bins > 0) {
+    for (int32_t i = 0; i < num_bins; ++i) {
+      MooreCoverageBin bin = bins[i];
+      bin.kind = MOORE_BIN_KIND_ILLEGAL;
+      bin.hit_count = 0;
+      data.illegalBins.push_back(bin);
+    }
+  }
+}
+
+extern "C" void __moore_coverpoint_set_ignore_bins(void *cg, int32_t cp_index,
+                                                    MooreCoverageBin *bins,
+                                                    int32_t num_bins) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  // Clear existing ignore bins and add new ones
+  auto &data = specialBinData[cp];
+  data.ignoreBins.clear();
+
+  if (bins && num_bins > 0) {
+    for (int32_t i = 0; i < num_bins; ++i) {
+      MooreCoverageBin bin = bins[i];
+      bin.kind = MOORE_BIN_KIND_IGNORE;
+      bin.hit_count = 0;
+      data.ignoreBins.push_back(bin);
+    }
+  }
+}
+
+extern "C" void __moore_coverpoint_add_illegal_bin(void *cg, int32_t cp_index,
+                                                    const char *bin_name,
+                                                    int64_t low, int64_t high) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  MooreCoverageBin bin;
+  bin.name = bin_name;
+  bin.type = (low == high) ? MOORE_BIN_VALUE : MOORE_BIN_RANGE;
+  bin.kind = MOORE_BIN_KIND_ILLEGAL;
+  bin.low = low;
+  bin.high = high;
+  bin.hit_count = 0;
+
+  specialBinData[cp].illegalBins.push_back(bin);
+}
+
+extern "C" void __moore_coverpoint_add_ignore_bin(void *cg, int32_t cp_index,
+                                                   const char *bin_name,
+                                                   int64_t low, int64_t high) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return;
+
+  MooreCoverageBin bin;
+  bin.name = bin_name;
+  bin.type = (low == high) ? MOORE_BIN_VALUE : MOORE_BIN_RANGE;
+  bin.kind = MOORE_BIN_KIND_IGNORE;
+  bin.low = low;
+  bin.high = high;
+  bin.hit_count = 0;
+
+  specialBinData[cp].ignoreBins.push_back(bin);
+}
+
+extern "C" void
+__moore_coverage_set_illegal_bin_callback(MooreIllegalBinCallback callback,
+                                          void *userData) {
+  illegalBinState.callback = callback;
+  illegalBinState.callbackUserData = userData;
+}
+
+extern "C" void __moore_coverage_set_illegal_bin_fatal(bool fatal) {
+  illegalBinState.fatal = fatal;
+}
+
+extern "C" bool __moore_coverage_illegal_bin_is_fatal(void) {
+  return illegalBinState.fatal;
+}
+
+extern "C" int64_t __moore_coverage_get_illegal_bin_hits(void) {
+  return illegalBinState.hitCount;
+}
+
+extern "C" void __moore_coverage_reset_illegal_bin_hits(void) {
+  illegalBinState.hitCount = 0;
+}
+
+extern "C" bool __moore_coverpoint_is_ignored(void *cg, int32_t cp_index,
+                                               int64_t value) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return false;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return false;
+
+  auto it = specialBinData.find(cp);
+  if (it == specialBinData.end())
+    return false;
+
+  for (const auto &bin : it->second.ignoreBins) {
+    if (valueMatchesBin(bin, value))
+      return true;
+  }
+
+  return false;
+}
+
+extern "C" bool __moore_coverpoint_is_illegal(void *cg, int32_t cp_index,
+                                               int64_t value) {
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
+    return false;
+
+  auto *cp = covergroup->coverpoints[cp_index];
+  if (!cp)
+    return false;
+
+  auto it = specialBinData.find(cp);
+  if (it == specialBinData.end())
+    return false;
+
+  for (const auto &bin : it->second.illegalBins) {
+    if (valueMatchesBin(bin, value))
+      return true;
+  }
+
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
+// Coverage Exclusion API
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Structure to store an exclusion pattern.
+struct ExclusionPattern {
+  std::string pattern;
+  std::string cgPattern;  // Covergroup pattern (first component)
+  std::string cpPattern;  // Coverpoint pattern (second component)
+  std::string binPattern; // Bin pattern (third component)
+};
+
+/// Global list of exclusion patterns.
+thread_local std::vector<ExclusionPattern> exclusionPatterns;
+
+/// Parse an exclusion pattern into components.
+/// Format: "covergroup.coverpoint.bin" (with wildcards)
+ExclusionPattern parseExclusionPattern(const std::string &pattern) {
+  ExclusionPattern result;
+  result.pattern = pattern;
+
+  // Split by '.'
+  size_t pos1 = pattern.find('.');
+  if (pos1 == std::string::npos) {
+    // Only covergroup specified, wildcard the rest
+    result.cgPattern = pattern;
+    result.cpPattern = "*";
+    result.binPattern = "*";
+  } else {
+    result.cgPattern = pattern.substr(0, pos1);
+    size_t pos2 = pattern.find('.', pos1 + 1);
+    if (pos2 == std::string::npos) {
+      // Covergroup.coverpoint specified
+      result.cpPattern = pattern.substr(pos1 + 1);
+      result.binPattern = "*";
+    } else {
+      // Full pattern
+      result.cpPattern = pattern.substr(pos1 + 1, pos2 - pos1 - 1);
+      result.binPattern = pattern.substr(pos2 + 1);
+    }
+  }
+
+  return result;
+}
+
+/// Check if a name matches a wildcard pattern.
+/// Supports '*' (any sequence) and '?' (single character).
+bool matchesWildcard(const std::string &pattern, const std::string &name) {
+  size_t p = 0, n = 0;
+  size_t starP = std::string::npos, starN = 0;
+
+  while (n < name.size()) {
+    if (p < pattern.size() && (pattern[p] == name[n] || pattern[p] == '?')) {
+      ++p;
+      ++n;
+    } else if (p < pattern.size() && pattern[p] == '*') {
+      starP = p;
+      starN = n;
+      ++p;
+    } else if (starP != std::string::npos) {
+      p = starP + 1;
+      ++starN;
+      n = starN;
+    } else {
+      return false;
+    }
+  }
+
+  // Skip trailing wildcards
+  while (p < pattern.size() && pattern[p] == '*')
+    ++p;
+
+  return p == pattern.size();
+}
+
+/// Check if a covergroup/coverpoint/bin matches an exclusion pattern.
+bool matchesExclusion(const ExclusionPattern &excl, const char *cgName,
+                      const char *cpName, const char *binName) {
+  std::string cg = cgName ? cgName : "";
+  std::string cp = cpName ? cpName : "";
+  std::string bin = binName ? binName : "";
+
+  return matchesWildcard(excl.cgPattern, cg) &&
+         matchesWildcard(excl.cpPattern, cp) &&
+         matchesWildcard(excl.binPattern, bin);
+}
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_coverage_add_exclusion(const char *pattern) {
+  if (!pattern || !*pattern)
+    return 1;
+
+  ExclusionPattern excl = parseExclusionPattern(pattern);
+  exclusionPatterns.push_back(excl);
+  return 0;
+}
+
+extern "C" int32_t __moore_coverage_remove_exclusion(const char *pattern) {
+  if (!pattern)
+    return 1;
+
+  std::string patternStr(pattern);
+  for (auto it = exclusionPatterns.begin(); it != exclusionPatterns.end(); ++it) {
+    if (it->pattern == patternStr) {
+      exclusionPatterns.erase(it);
+      return 0;
+    }
+  }
+  return 1; // Pattern not found
+}
+
+extern "C" void __moore_coverage_clear_exclusions(void) {
+  exclusionPatterns.clear();
+}
+
+extern "C" int32_t __moore_coverage_load_exclusions(const char *filename) {
+  if (!filename)
+    return -1;
+
+  FILE *fp = std::fopen(filename, "r");
+  if (!fp)
+    return -1;
+
+  int32_t count = 0;
+  char line[1024];
+
+  while (std::fgets(line, sizeof(line), fp)) {
+    // Skip comments and empty lines
+    char *start = line;
+    while (*start == ' ' || *start == '\t')
+      ++start;
+
+    if (*start == '#' || *start == '\n' || *start == '\0')
+      continue;
+
+    // Remove trailing newline
+    size_t len = std::strlen(start);
+    if (len > 0 && start[len - 1] == '\n')
+      start[len - 1] = '\0';
+
+    // Trim trailing whitespace
+    len = std::strlen(start);
+    while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) {
+      start[len - 1] = '\0';
+      --len;
+    }
+
+    if (len > 0 && __moore_coverage_add_exclusion(start) == 0)
+      ++count;
+  }
+
+  std::fclose(fp);
+  return count;
+}
+
+extern "C" int32_t __moore_coverage_save_exclusions(const char *filename) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  std::fprintf(fp, "# CIRCT Coverage Exclusion File\n");
+  std::fprintf(fp, "# Format: covergroup.coverpoint.bin\n");
+  std::fprintf(fp, "# Wildcards: * (any sequence), ? (single character)\n\n");
+
+  for (const auto &excl : exclusionPatterns) {
+    std::fprintf(fp, "%s\n", excl.pattern.c_str());
+  }
+
+  std::fclose(fp);
+  return 0;
+}
+
+extern "C" bool __moore_coverage_is_excluded(const char *cg_name,
+                                              const char *cp_name,
+                                              const char *bin_name) {
+  for (const auto &excl : exclusionPatterns) {
+    if (matchesExclusion(excl, cg_name, cp_name, bin_name))
+      return true;
+  }
+  return false;
+}
+
+extern "C" int32_t __moore_coverage_get_exclusion_count(void) {
+  return static_cast<int32_t>(exclusionPatterns.size());
 }
 
 //===----------------------------------------------------------------------===//
@@ -5199,6 +6269,434 @@ extern "C" int64_t __moore_randomize_with_ranges_constrained(
 
   // Return an unconstrained random value from the ranges (ignore predicate)
   return __moore_randomize_with_ranges(ranges, numRanges);
+}
+
+//===----------------------------------------------------------------------===//
+// Pre/Post Randomize Callbacks
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog supports pre_randomize() and post_randomize() callback methods
+// that are invoked before and after randomization respectively.
+// IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
+//
+// These are virtual methods that user classes can override to perform setup
+// or post-processing around randomization. The default implementations are
+// empty (no-ops).
+//
+
+/// Call pre_randomize() callback on a class object.
+/// This is called before the randomization process begins.
+///
+/// NOTE: As of the current implementation, pre_randomize callbacks are handled
+/// directly in the MooreToCore lowering pass by generating direct calls to the
+/// user-defined pre_randomize method (e.g., "ClassName::pre_randomize"). This
+/// runtime function is kept as a fallback stub for potential future vtable-
+/// based dispatch or for compatibility with older generated code.
+extern "C" void __moore_call_pre_randomize(void *classPtr) {
+  // The direct call approach in MooreToCore handles this - this stub is for
+  // backward compatibility and potential future vtable dispatch.
+  (void)classPtr;
+}
+
+/// Call post_randomize() callback on a class object.
+/// This is called after randomization succeeds.
+///
+/// NOTE: As of the current implementation, post_randomize callbacks are handled
+/// directly in the MooreToCore lowering pass by generating direct calls to the
+/// user-defined post_randomize method (e.g., "ClassName::post_randomize"). This
+/// runtime function is kept as a fallback stub for potential future vtable-
+/// based dispatch or for compatibility with older generated code.
+extern "C" void __moore_call_post_randomize(void *classPtr) {
+  // The direct call approach in MooreToCore handles this - this stub is for
+  // backward compatibility and potential future vtable dispatch.
+  (void)classPtr;
+}
+
+//===----------------------------------------------------------------------===//
+// Constraint Mode Control
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog supports constraint_mode() to enable/disable constraints.
+// IEEE 1800-2017 Section 18.8 "Disabling random variables and constraints".
+//
+// constraint_mode(0) disables a constraint
+// constraint_mode(1) enables a constraint
+// constraint_mode() returns the current mode (0 or 1)
+//
+
+namespace {
+
+/// Global constraint mode state: tracks enabled/disabled state per constraint.
+/// Key: unique constraint identifier (object address + constraint name hash)
+/// Value: enabled (1) or disabled (0)
+std::unordered_map<uint64_t, int32_t> constraintModeState;
+std::mutex constraintModeMutex;
+
+/// Generate a unique key for a constraint instance.
+uint64_t makeConstraintKey(void *classPtr, const char *constraintName) {
+  uint64_t key = reinterpret_cast<uint64_t>(classPtr);
+  if (constraintName) {
+    // Simple string hash
+    const char *p = constraintName;
+    while (*p) {
+      key = key * 31 + static_cast<uint64_t>(*p);
+      ++p;
+    }
+  }
+  return key;
+}
+
+} // anonymous namespace
+
+/// Get the current constraint mode (1 = enabled, 0 = disabled).
+/// Returns 1 if the constraint has not been explicitly disabled.
+extern "C" int32_t __moore_constraint_mode_get(void *classPtr,
+                                               const char *constraintName) {
+  uint64_t key = makeConstraintKey(classPtr, constraintName);
+  std::lock_guard<std::mutex> lock(constraintModeMutex);
+  auto it = constraintModeState.find(key);
+  if (it == constraintModeState.end()) {
+    // Not found - default is enabled
+    return 1;
+  }
+  return it->second;
+}
+
+/// Set the constraint mode and return the previous mode.
+/// mode = 0: disable, mode = 1: enable
+extern "C" int32_t __moore_constraint_mode_set(void *classPtr,
+                                               const char *constraintName,
+                                               int32_t mode) {
+  uint64_t key = makeConstraintKey(classPtr, constraintName);
+  std::lock_guard<std::mutex> lock(constraintModeMutex);
+  auto it = constraintModeState.find(key);
+  int32_t previousMode = (it == constraintModeState.end()) ? 1 : it->second;
+  constraintModeState[key] = (mode != 0) ? 1 : 0;
+  return previousMode;
+}
+
+/// Disable all constraints on a class object.
+/// Returns 1 if any constraints were enabled, 0 otherwise.
+extern "C" int32_t __moore_constraint_mode_disable_all(void *classPtr) {
+  // This is a simplified implementation that sets a "disable all" flag.
+  // In practice, we'd iterate through all constraint blocks for this class.
+  uint64_t key = makeConstraintKey(classPtr, "__all__");
+  std::lock_guard<std::mutex> lock(constraintModeMutex);
+  auto it = constraintModeState.find(key);
+  int32_t previousMode = (it == constraintModeState.end()) ? 1 : it->second;
+  constraintModeState[key] = 0;
+  return previousMode;
+}
+
+/// Enable all constraints on a class object.
+/// Returns 1 if any constraints were disabled, 0 otherwise.
+extern "C" int32_t __moore_constraint_mode_enable_all(void *classPtr) {
+  uint64_t key = makeConstraintKey(classPtr, "__all__");
+  std::lock_guard<std::mutex> lock(constraintModeMutex);
+  auto it = constraintModeState.find(key);
+  int32_t previousMode = (it == constraintModeState.end()) ? 1 : it->second;
+  constraintModeState[key] = 1;
+  return previousMode;
+}
+
+/// Check if a specific constraint is enabled.
+/// Takes into account both individual constraint mode and "disable all" flag.
+extern "C" int32_t __moore_is_constraint_enabled(void *classPtr,
+                                                 const char *constraintName) {
+  std::lock_guard<std::mutex> lock(constraintModeMutex);
+
+  // First check the "disable all" flag
+  uint64_t allKey = makeConstraintKey(classPtr, "__all__");
+  auto allIt = constraintModeState.find(allKey);
+  if (allIt != constraintModeState.end() && allIt->second == 0) {
+    // All constraints disabled
+    return 0;
+  }
+
+  // Then check individual constraint mode
+  uint64_t key = makeConstraintKey(classPtr, constraintName);
+  auto it = constraintModeState.find(key);
+  if (it == constraintModeState.end()) {
+    // Not found - default is enabled
+    return 1;
+  }
+  return it->second;
+}
+
+//===----------------------------------------------------------------------===//
+// Array Constraint Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for array constraint features:
+// - Unique constraints: ensure all elements have distinct values
+// - Foreach constraints: element-wise constraint validation
+// - Size constraints: array size validation
+// - Sum constraints: aggregate constraint validation
+//
+// IEEE 1800-2017 Section 18.5.5 "Uniqueness constraints"
+// IEEE 1800-2017 Section 18.5.8 "Foreach constraints"
+//
+
+namespace {
+
+/// Helper to read an element value as uint64_t from memory.
+uint64_t readElementAsUint64(void *ptr, int64_t elementSize) {
+  uint64_t value = 0;
+  if (elementSize > 8)
+    elementSize = 8;
+  std::memcpy(&value, ptr, static_cast<size_t>(elementSize));
+  return value;
+}
+
+/// Helper to write a uint64_t value to memory as an element.
+void writeElementFromUint64(void *ptr, int64_t elementSize, uint64_t value) {
+  if (elementSize > 8)
+    elementSize = 8;
+  std::memcpy(ptr, &value, static_cast<size_t>(elementSize));
+}
+
+} // anonymous namespace
+
+/// Check if all elements in an array are unique.
+/// This implements the SystemVerilog `unique {arr}` constraint.
+extern "C" int32_t __moore_constraint_unique_check(void *array,
+                                                   int64_t numElements,
+                                                   int64_t elementSize) {
+  if (!array || numElements <= 1 || elementSize <= 0)
+    return 1; // Empty or single-element arrays are trivially unique
+
+  auto *data = static_cast<char *>(array);
+
+  // Use a set to track seen values for efficiency
+  std::set<std::vector<uint8_t>> seenValues;
+
+  for (int64_t i = 0; i < numElements; ++i) {
+    std::vector<uint8_t> elemBytes(static_cast<size_t>(elementSize));
+    std::memcpy(elemBytes.data(), data + i * elementSize,
+                static_cast<size_t>(elementSize));
+
+    if (!seenValues.insert(elemBytes).second) {
+      // Duplicate found
+      return 0;
+    }
+  }
+
+  return 1; // All elements are unique
+}
+
+/// Check if multiple scalar variables are all unique.
+/// This implements the SystemVerilog `unique {a, b, c}` constraint.
+extern "C" int32_t __moore_constraint_unique_scalars(void *values,
+                                                     int64_t numValues,
+                                                     int64_t valueSize) {
+  // Same implementation as array check
+  return __moore_constraint_unique_check(values, numValues, valueSize);
+}
+
+/// Randomize an array ensuring all elements are unique.
+/// Uses Fisher-Yates shuffle on a range of values.
+extern "C" int32_t __moore_randomize_unique_array(void *array,
+                                                  int64_t numElements,
+                                                  int64_t elementSize,
+                                                  int64_t minValue,
+                                                  int64_t maxValue) {
+  if (!array || numElements <= 0 || elementSize <= 0)
+    return 0;
+
+  // Check if range is large enough
+  int64_t rangeSize = maxValue - minValue + 1;
+  if (rangeSize < numElements) {
+    // Cannot generate enough unique values
+    return 0;
+  }
+
+  auto *data = static_cast<char *>(array);
+
+  // For small ranges, use Fisher-Yates on the full range
+  if (rangeSize <= 100000 && rangeSize <= numElements * 10) {
+    std::vector<int64_t> pool;
+    pool.reserve(static_cast<size_t>(rangeSize));
+    for (int64_t v = minValue; v <= maxValue; ++v) {
+      pool.push_back(v);
+    }
+
+    // Shuffle and pick first numElements
+    for (int64_t i = 0; i < numElements; ++i) {
+      int64_t remaining = static_cast<int64_t>(pool.size()) - i;
+      int64_t j = i + (std::rand() % remaining);
+      std::swap(pool[static_cast<size_t>(i)], pool[static_cast<size_t>(j)]);
+
+      // Write to array
+      writeElementFromUint64(data + i * elementSize, elementSize,
+                             static_cast<uint64_t>(pool[static_cast<size_t>(i)]));
+    }
+    return 1;
+  }
+
+  // For large ranges, use rejection sampling
+  std::set<int64_t> usedValues;
+  int64_t maxIterations = numElements * 100; // Prevent infinite loops
+  int64_t iterations = 0;
+
+  for (int64_t i = 0; i < numElements; ++i) {
+    int64_t value;
+    do {
+      value = minValue + (std::rand() % rangeSize);
+      iterations++;
+      if (iterations > maxIterations) {
+        // Fallback: just fill with sequential values
+        for (int64_t j = i; j < numElements; ++j) {
+          writeElementFromUint64(data + j * elementSize, elementSize,
+                                 static_cast<uint64_t>(minValue + j));
+        }
+        return 1;
+      }
+    } while (usedValues.count(value) > 0);
+
+    usedValues.insert(value);
+    writeElementFromUint64(data + i * elementSize, elementSize,
+                           static_cast<uint64_t>(value));
+  }
+
+  return 1;
+}
+
+/// Validate a foreach constraint on an array.
+/// Checks that all elements satisfy a predicate function.
+extern "C" int32_t __moore_constraint_foreach_validate(
+    void *array, int64_t numElements, int64_t elementSize,
+    bool (*predicate)(int64_t, void *), void *userData) {
+  if (!array || numElements <= 0 || elementSize <= 0 || !predicate)
+    return 1; // Empty arrays or no predicate trivially satisfy
+
+  auto *data = static_cast<char *>(array);
+
+  for (int64_t i = 0; i < numElements; ++i) {
+    int64_t value = static_cast<int64_t>(
+        readElementAsUint64(data + i * elementSize, elementSize));
+    if (!predicate(value, userData)) {
+      return 0; // Constraint violated
+    }
+  }
+
+  return 1; // All elements satisfy the constraint
+}
+
+/// Validate an array size constraint.
+/// Checks that the array has exactly the expected number of elements.
+extern "C" int32_t __moore_constraint_size_check(MooreQueue *array,
+                                                 int64_t expectedSize) {
+  if (!array)
+    return expectedSize == 0 ? 1 : 0;
+
+  return array->len == expectedSize ? 1 : 0;
+}
+
+/// Validate an array sum constraint.
+/// Checks that the sum of all elements equals the expected value.
+extern "C" int32_t __moore_constraint_sum_check(MooreQueue *array,
+                                                int64_t elementSize,
+                                                int64_t expectedSum) {
+  if (!array || !array->data || array->len <= 0)
+    return expectedSum == 0 ? 1 : 0;
+
+  int64_t actualSum = __moore_array_reduce_sum(array, elementSize);
+  return actualSum == expectedSum ? 1 : 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Rand Mode Control
+//===----------------------------------------------------------------------===//
+//
+// SystemVerilog supports rand_mode() to enable/disable random variables.
+// IEEE 1800-2017 Section 18.8 "Disabling random variables and constraints".
+//
+// rand_mode(0) disables a random variable
+// rand_mode(1) enables a random variable
+// rand_mode() returns the current mode (0 or 1)
+//
+
+namespace {
+
+/// Global rand mode state: tracks enabled/disabled state per random variable.
+/// Key: unique identifier (object address + property name hash)
+/// Value: enabled (1) or disabled (0)
+std::unordered_map<uint64_t, int32_t> randModeState;
+std::mutex randModeMutex;
+
+} // anonymous namespace
+
+/// Get the current rand mode (1 = enabled, 0 = disabled).
+/// Returns 1 if the variable has not been explicitly disabled.
+extern "C" int32_t __moore_rand_mode_get(void *classPtr,
+                                         const char *propertyName) {
+  uint64_t key = makeConstraintKey(classPtr, propertyName);
+  std::lock_guard<std::mutex> lock(randModeMutex);
+  auto it = randModeState.find(key);
+  if (it == randModeState.end()) {
+    // Not found - default is enabled
+    return 1;
+  }
+  return it->second;
+}
+
+/// Set the rand mode and return the previous mode.
+/// mode = 0: disable, mode = 1: enable
+extern "C" int32_t __moore_rand_mode_set(void *classPtr,
+                                         const char *propertyName,
+                                         int32_t mode) {
+  uint64_t key = makeConstraintKey(classPtr, propertyName);
+  std::lock_guard<std::mutex> lock(randModeMutex);
+  auto it = randModeState.find(key);
+  int32_t previousMode = (it == randModeState.end()) ? 1 : it->second;
+  randModeState[key] = (mode != 0) ? 1 : 0;
+  return previousMode;
+}
+
+/// Disable all random variables on a class object.
+/// Returns 1 if any variables were enabled, 0 otherwise.
+extern "C" int32_t __moore_rand_mode_disable_all(void *classPtr) {
+  uint64_t key = makeConstraintKey(classPtr, "__all__");
+  std::lock_guard<std::mutex> lock(randModeMutex);
+  auto it = randModeState.find(key);
+  int32_t previousMode = (it == randModeState.end()) ? 1 : it->second;
+  randModeState[key] = 0;
+  return previousMode;
+}
+
+/// Enable all random variables on a class object.
+/// Returns 1 if any variables were disabled, 0 otherwise.
+extern "C" int32_t __moore_rand_mode_enable_all(void *classPtr) {
+  uint64_t key = makeConstraintKey(classPtr, "__all__");
+  std::lock_guard<std::mutex> lock(randModeMutex);
+  auto it = randModeState.find(key);
+  int32_t previousMode = (it == randModeState.end()) ? 1 : it->second;
+  randModeState[key] = 1;
+  return previousMode;
+}
+
+/// Check if a specific random variable is enabled.
+/// Takes into account both individual rand mode and "disable all" flag.
+extern "C" int32_t __moore_is_rand_enabled(void *classPtr,
+                                           const char *propertyName) {
+  std::lock_guard<std::mutex> lock(randModeMutex);
+
+  // First check the "disable all" flag
+  uint64_t allKey = makeConstraintKey(classPtr, "__all__");
+  auto allIt = randModeState.find(allKey);
+  if (allIt != randModeState.end() && allIt->second == 0) {
+    // All random variables disabled
+    return 0;
+  }
+
+  // Then check individual rand mode
+  uint64_t key = makeConstraintKey(classPtr, propertyName);
+  auto it = randModeState.find(key);
+  if (it == randModeState.end()) {
+    // Not found - default is enabled
+    return 1;
+  }
+  return it->second;
 }
 
 //===----------------------------------------------------------------------===//

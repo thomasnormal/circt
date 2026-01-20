@@ -1,0 +1,14 @@
+// RUN: circt-verilog %s
+// REQUIRES: slang
+
+module top;
+  import uvm_pkg::*;
+
+  class my_item extends uvm_sequence_item;
+    `uvm_object_utils(my_item)
+
+    function new(string name = "my_item");
+      super.new(name);
+    endfunction
+  endclass
+endmodule

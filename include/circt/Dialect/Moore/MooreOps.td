@@ -4137,6 +4137,144 @@ def StdRandomizeOp
 
 }
 
+def ConstraintModeOp
+    : MooreOp<"constraint_mode", []> {
+  let summary = "Get or set constraint mode";
+  let description = [{
+    Controls whether a constraint is enabled or disabled during randomization.
+    SystemVerilog supports two forms:
+
+    1. Class-level: `obj.constraint_mode(0)` - Disable all constraints in the object
+    2. Constraint-level: `obj.c_name.constraint_mode(0)` - Disable specific constraint
+
+    When called with an argument (mode), sets the constraint mode:
+    - 0: Disabled (constraint is ignored during randomization)
+    - 1: Enabled (constraint is active during randomization)
+
+    When called without an argument, returns the current constraint mode.
+
+    The result is an integer:
+    - When setting: Returns the previous mode (0 or 1)
+    - When getting: Returns the current mode (0 or 1)
+
+    Example:
+    ```mlir
+    // Disable all constraints on an object
+    %prev = moore.constraint_mode set(%obj) mode(0) : !moore.class<@MyClass>
+
+    // Disable a specific constraint
+    %prev = moore.constraint_mode set(%obj, @c_valid) mode(0) : !moore.class<@MyClass>
+
+    // Get the current mode of a specific constraint
+    %mode = moore.constraint_mode get(%obj, @c_valid) : !moore.class<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 18.8 "Disabling random variables and constraints".
+  }];
+
+  let arguments = (ins ClassHandleType:$object,
+                       OptionalAttr<FlatSymbolRefAttr>:$constraint,
+                       Optional<IntType>:$mode);
+  let results = (outs IntType:$result);
+  // Use generic assembly format to avoid optional group restrictions.
+}
+
+def RandModeOp
+    : MooreOp<"rand_mode", []> {
+  let summary = "Get or set rand mode";
+  let description = [{
+    Controls whether random variables are enabled or disabled during
+    randomization. SystemVerilog supports two forms:
+
+    1. Class-level: `obj.rand_mode(0)` - Disable all random variables in the object
+    2. Property-level: `obj.var.rand_mode(0)` - Disable a specific random variable
+
+    When called with an argument (mode), sets the rand mode:
+    - 0: Disabled (variable is not randomized)
+    - 1: Enabled (variable is randomized)
+
+    When called without an argument, returns the current rand mode.
+
+    The result is an integer:
+    - When setting: Returns the previous mode (0 or 1)
+    - When getting: Returns the current mode (0 or 1)
+
+    Example:
+    ```mlir
+    // Disable all random variables on an object
+    %prev = moore.rand_mode set(%obj) mode(0) : !moore.class<@MyClass>
+
+    // Disable a specific random variable
+    %prev = moore.rand_mode set(%obj, @addr) mode(0) : !moore.class<@MyClass>
+
+    // Get the current mode of a specific variable
+    %mode = moore.rand_mode get(%obj, @addr) : !moore.class<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 18.8 "Disabling random variables and constraints".
+  }];
+
+  let arguments = (ins ClassHandleType:$object,
+                       OptionalAttr<FlatSymbolRefAttr>:$property,
+                       Optional<IntType>:$mode);
+  let results = (outs IntType:$result);
+  // Use generic assembly format to avoid optional group restrictions.
+}
+
+def CallPreRandomizeOp
+    : MooreOp<"call_pre_randomize", []> {
+  let summary = "Call pre_randomize callback on a class object";
+  let description = [{
+    Invokes the pre_randomize() method on a class object. This method is
+    automatically called before randomization begins. User classes can
+    override this method to perform setup before randomization.
+
+    The pre_randomize() method is a virtual function that returns void
+    by default. If a class overrides it with a different signature,
+    slang will report an error.
+
+    Example:
+    ```mlir
+    moore.call_pre_randomize %obj : !moore.class<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
+  }];
+
+  let arguments = (ins ClassHandleType:$object);
+  let results = (outs);
+  let assemblyFormat = [{
+    $object `:` type($object) attr-dict
+  }];
+}
+
+def CallPostRandomizeOp
+    : MooreOp<"call_post_randomize", []> {
+  let summary = "Call post_randomize callback on a class object";
+  let description = [{
+    Invokes the post_randomize() method on a class object. This method is
+    automatically called after randomization succeeds. User classes can
+    override this method to perform post-processing after randomization.
+
+    The post_randomize() method is a virtual function that returns void
+    by default. If a class overrides it with a different signature,
+    slang will report an error.
+
+    Example:
+    ```mlir
+    moore.call_post_randomize %obj : !moore.class<@MyClass>
+    ```
+
+    See IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
+  }];
+
+  let arguments = (ins ClassHandleType:$object);
+  let results = (outs);
+  let assemblyFormat = [{
+    $object `:` type($object) attr-dict
+  }];
+}
+
 def ClassNewOp
     : MooreOp<
           "class.new", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {

@@ -1,0 +1,7 @@
+project:
+  name: "workspace-symbol-project"
+  top: "alpha"
+
+sources:
+  files:
+    - "src/**/*.sv"

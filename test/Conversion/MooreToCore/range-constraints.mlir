@@ -3,6 +3,7 @@
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
+// CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Range Constraint Support Tests
@@ -25,6 +26,8 @@ moore.class.classdecl @RangeConstrainedClass {
 func.func @test_range_constraint(%obj: !moore.class<@RangeConstrainedClass>) -> i1 {
   // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(8 : i64) : i64
   // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
+  // CHECK: llvm.call @__moore_is_rand_enabled
+  // CHECK: llvm.call @__moore_is_constraint_enabled
   // CHECK: %[[MIN:.*]] = llvm.mlir.constant(1 : i64) : i64
   // CHECK: %[[MAX:.*]] = llvm.mlir.constant(99 : i64) : i64
   // CHECK: %[[RANGE_RESULT:.*]] = llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]]) : (i64, i64) -> i64

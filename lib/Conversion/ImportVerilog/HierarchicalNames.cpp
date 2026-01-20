@@ -151,20 +151,31 @@ struct InstBodyVisitor {
 
   // Handle continuous assignments.
   LogicalResult visit(const slang::ast::ContinuousAssignSymbol &assignNode) {
-    const auto &expr =
-        assignNode.getAssignment().as<slang::ast::AssignmentExpression>();
+    const auto *expr =
+        assignNode.getAssignment().as_if<slang::ast::AssignmentExpression>();
+    if (!expr) {
+      if (context.options.allowNonProceduralDynamic.value_or(false)) {
+        mlir::emitWarning(loc)
+            << "skipping continuous assignment without an assignment "
+               "expression after DynamicNotProcedural downgrade";
+        return success();
+      }
+      mlir::emitError(loc)
+          << "expected assignment expression in continuous assignment";
+      return failure();
+    }
 
     // Such as `sub.a`, the `sub` is the outermost module for the hierarchical
     // variable `a`.
     auto &outermostModule = assignNode.getParentScope()->asSymbol();
-    if (expr.left().hasHierarchicalReference())
-      if (failed(
-              context.collectHierarchicalValues(expr.left(), outermostModule)))
+    if (expr->left().hasHierarchicalReference())
+      if (failed(context.collectHierarchicalValues(expr->left(),
+                                                   outermostModule)))
         return failure();
 
-    if (expr.right().hasHierarchicalReference())
-      if (failed(
-              context.collectHierarchicalValues(expr.right(), outermostModule)))
+    if (expr->right().hasHierarchicalReference())
+      if (failed(context.collectHierarchicalValues(expr->right(),
+                                                   outermostModule)))
         return failure();
 
     return success();

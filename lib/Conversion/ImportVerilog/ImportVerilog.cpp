@@ -27,6 +27,7 @@
 #include "llvm/Support/SourceMgr.h"
 
 #include "slang/diagnostics/DiagnosticClient.h"
+#include "slang/diagnostics/ExpressionsDiags.h"
 #include "slang/driver/Driver.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxPrinter.h"
@@ -253,6 +254,10 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.warningOptions = options.warningOptions;
 
   driver.options.singleUnit = options.singleUnit;
+
+  if (options.allowNonProceduralDynamic.value_or(false))
+    driver.diagEngine.setSeverity(slang::diag::DynamicNotProcedural,
+                                  slang::DiagnosticSeverity::Warning);
 
   return success(driver.processOptions());
 }
