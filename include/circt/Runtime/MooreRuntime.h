@@ -1210,6 +1210,88 @@ void __moore_coverpoint_set_comment(void *cg, int32_t cp_index,
 /// @return Comment string, or NULL if not set
 const char *__moore_coverpoint_get_comment(void *cg, int32_t cp_index);
 
+/// Set the auto_bin_max for a covergroup.
+/// IEEE 1800-2017 Section 19.7.1: option.auto_bin_max
+/// Specifies the maximum number of automatically created bins.
+///
+/// @param cg Pointer to the covergroup
+/// @param maxBins Maximum number of auto bins (default: 64)
+void __moore_covergroup_set_auto_bin_max(void *cg, int64_t maxBins);
+
+/// Get the auto_bin_max for a covergroup.
+///
+/// @param cg Pointer to the covergroup
+/// @return Maximum number of auto bins (default: 64)
+int64_t __moore_covergroup_get_auto_bin_max(void *cg);
+
+/// Set the auto_bin_max for a coverpoint.
+/// IEEE 1800-2017 Section 19.7.2: option.auto_bin_max for coverpoints
+/// Specifies the maximum number of automatically created bins.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param maxBins Maximum number of auto bins (default: 64)
+void __moore_coverpoint_set_auto_bin_max(void *cg, int32_t cp_index,
+                                          int64_t maxBins);
+
+/// Get the auto_bin_max for a coverpoint.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @return Maximum number of auto bins (default: 64)
+int64_t __moore_coverpoint_get_auto_bin_max(void *cg, int32_t cp_index);
+
+//===----------------------------------------------------------------------===//
+// Generic Coverage Option API
+//===----------------------------------------------------------------------===//
+//
+// These functions provide a flexible string-based API for setting and getting
+// coverage options. This mirrors the SystemVerilog syntax:
+//   cg.option.goal = 90;
+//   cg.cp.option.at_least = 5;
+//
+
+/// Coverage option identifiers for the generic API.
+enum MooreCoverageOption {
+  MOORE_OPTION_GOAL = 0,        ///< Coverage goal percentage (double)
+  MOORE_OPTION_WEIGHT = 1,      ///< Weight for coverage calculation (int64)
+  MOORE_OPTION_AT_LEAST = 2,    ///< Minimum hit count (int64)
+  MOORE_OPTION_AUTO_BIN_MAX = 3 ///< Maximum auto bins (int64)
+};
+
+/// Set a covergroup option using the generic API.
+/// For integer options (weight, at_least, auto_bin_max), the value is cast.
+/// For double options (goal), the value is used directly.
+///
+/// @param cg Pointer to the covergroup
+/// @param option Option identifier (see MooreCoverageOption)
+/// @param value Option value (interpreted based on option type)
+void __moore_covergroup_set_option(void *cg, int32_t option, double value);
+
+/// Get a covergroup option using the generic API.
+///
+/// @param cg Pointer to the covergroup
+/// @param option Option identifier (see MooreCoverageOption)
+/// @return Option value (as double, cast appropriately for integer options)
+double __moore_covergroup_get_option(void *cg, int32_t option);
+
+/// Set a coverpoint option using the generic API.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param option Option identifier (see MooreCoverageOption)
+/// @param value Option value (interpreted based on option type)
+void __moore_coverpoint_set_option(void *cg, int32_t cp_index, int32_t option,
+                                    double value);
+
+/// Get a coverpoint option using the generic API.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint
+/// @param option Option identifier (see MooreCoverageOption)
+/// @return Option value (as double, cast appropriately for integer options)
+double __moore_coverpoint_get_option(void *cg, int32_t cp_index, int32_t option);
+
 /// Get weighted coverage for a covergroup.
 /// Calculates coverage considering per-coverpoint and per-cross weights.
 /// IEEE 1800-2017 Section 19.8: coverage calculation with weights

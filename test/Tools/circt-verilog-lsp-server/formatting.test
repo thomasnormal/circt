@@ -1,0 +1,64 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test document formatting functionality.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// Test that formatting capability is advertised
+// CHECK: "documentFormattingProvider": true
+// CHECK: "documentRangeFormattingProvider": true
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///formatting.sv","languageId":"verilog","version":1,"text":"module test_mod(\ninput logic clk,\noutput logic [7:0] data_out\n);\nlogic [7:0] counter;\nalways_ff @(posedge clk) begin\ncounter <= counter + 1;\ndata_out <= counter;\nend\nendmodule"}}}
+// -----
+// Request document formatting with 2-space indentation
+{"jsonrpc":"2.0","id":1,"method":"textDocument/formatting","params":{"textDocument":{"uri":"test:///formatting.sv"},"options":{"tabSize":2,"insertSpaces":true}}}
+// CHECK:       "id": 1
+// CHECK:       "result": [
+// CHECK:         "newText"
+// CHECK:         "range"
+// -----
+// Open a new document with bad indentation for testing
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///badindent.sv","languageId":"verilog","version":1,"text":"module bad_indent(\n    input logic clk,\n  output logic data\n);\n      always_ff @(posedge clk) begin\n  data <= 1'b0;\n      end\nendmodule"}}}
+// -----
+// Request formatting for the badly indented file
+{"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":{"textDocument":{"uri":"test:///badindent.sv"},"options":{"tabSize":2,"insertSpaces":true}}}
+// CHECK:       "id": 2
+// CHECK:       "result": [
+// The formatter should fix the indentation
+// CHECK:         "newText"
+// -----
+// Test range formatting
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///rangeformat.sv","languageId":"verilog","version":1,"text":"module range_test(\ninput logic clk\n);\nalways_ff @(posedge clk) begin\n  data <= 1;\nend\nalways_comb begin\ndata=a+b;\nend\nendmodule"}}}
+// -----
+// Request range formatting for just the always_comb block
+{"jsonrpc":"2.0","id":3,"method":"textDocument/rangeFormatting","params":{"textDocument":{"uri":"test:///rangeformat.sv"},"range":{"start":{"line":6,"character":0},"end":{"line":8,"character":3}},"options":{"tabSize":2,"insertSpaces":true}}}
+// CHECK:       "id": 3
+// CHECK:       "result": [
+// -----
+// Test formatting with tabs instead of spaces
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///tabs.sv","languageId":"verilog","version":1,"text":"module tabs_test(\ninput logic clk\n);\nalways_ff @(posedge clk) begin\ndata <= 1'b0;\nend\nendmodule"}}}
+// -----
+{"jsonrpc":"2.0","id":4,"method":"textDocument/formatting","params":{"textDocument":{"uri":"test:///tabs.sv"},"options":{"tabSize":4,"insertSpaces":false}}}
+// CHECK:       "id": 4
+// CHECK:       "result": [
+// -----
+// Test formatting preserves preprocessor directives
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///preproc.sv","languageId":"verilog","version":1,"text":"`define WIDTH 8\nmodule featured();\nlogic data;\nendmodule"}}}
+// -----
+{"jsonrpc":"2.0","id":5,"method":"textDocument/formatting","params":{"textDocument":{"uri":"test:///preproc.sv"},"options":{"tabSize":2,"insertSpaces":true}}}
+// CHECK:       "id": 5
+// CHECK:       "result": [
+// CHECK:         "`define WIDTH 8
+// -----
+// Test formatting with nested blocks
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///nested.sv","languageId":"verilog","version":1,"text":"module nested();\nlogic cond;\nlogic data;\nalways_comb begin\nif (cond) begin\ndata = 1;\nend else begin\ndata = 0;\nend\nend\nendmodule"}}}
+// -----
+{"jsonrpc":"2.0","id":6,"method":"textDocument/formatting","params":{"textDocument":{"uri":"test:///nested.sv"},"options":{"tabSize":2,"insertSpaces":true}}}
+// CHECK:       "id": 6
+// CHECK:       "result": [
+// Nested blocks should have proper indentation levels
+// CHECK:         "newText"
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

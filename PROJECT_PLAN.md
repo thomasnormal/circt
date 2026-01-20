@@ -9,9 +9,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 ## Remaining Limitations & Next Steps
 
 ### CRITICAL: Simulation Blockers
-1. **UVM Library Not Supported**: `uvm_pkg` imports fail - need UVM stubs or full UVM compilation
-2. **circt-sim Procedural Execution**: Limited loop/conditional/function call support in interpreter
+1. ~~**UVM Library Not Supported**~~: ✅ UVM stubs now auto-included, 12 test files compile
+2. ~~**circt-sim Procedural Execution**~~: ✅ SCF ops, func.call, hw.array now supported
 3. **Virtual Interface Tasks**: Tasks with timing on module ports need work
+4. **Constraint Lowering Completion**: Some constraint patterns need MooreToCore lowering
 
 ### Track Status & Next Tasks
 
