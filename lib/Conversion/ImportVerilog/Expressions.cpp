@@ -2238,6 +2238,40 @@ struct RvalueExprVisitor : public ExprVisitor {
         cond = moore::AndOp::create(builder, loc, leftValue, rightValue);
       } else {
         // Handle expressions.
+        if (listExpr->kind == slang::ast::ExpressionKind::DataType) {
+          const auto &canonicalType = listExpr->type->getCanonicalType();
+          if (canonicalType.kind == slang::ast::SymbolKind::EnumType) {
+            const auto &enumType =
+                static_cast<const slang::ast::EnumType &>(canonicalType);
+            auto lhsType = cast<moore::IntType>(lhs.getType());
+            SmallVector<Value> enumConds;
+            for (const auto &member : enumType.values()) {
+              auto cv = member.getValue();
+              if (cv.bad() || !cv.isInteger())
+                continue;
+              auto fv = convertSVIntToFVInt(cv.integer());
+              if (fv.getBitWidth() != lhsType.getWidth())
+                fv = fv.zext(lhsType.getWidth());
+              auto enumConst =
+                  moore::ConstantOp::create(builder, loc, lhsType, fv);
+              enumConds.push_back(
+                  moore::WildcardEqOp::create(builder, loc, lhs, enumConst));
+            }
+            if (enumConds.empty()) {
+              mlir::emitError(loc) << "enum type has no values";
+              return {};
+            }
+            Value enumResult = enumConds.back();
+            enumConds.pop_back();
+            while (!enumConds.empty()) {
+              enumResult = moore::OrOp::create(builder, loc,
+                                               enumConds.back(), enumResult);
+              enumConds.pop_back();
+            }
+            conditions.push_back(enumResult);
+            continue;
+          }
+        }
         if (!listExpr->type->isIntegral()) {
           if (listExpr->type->isUnpackedArray()) {
             mlir::emitError(

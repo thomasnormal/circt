@@ -204,6 +204,61 @@ inline json::Value toJSON(const CallHierarchyOutgoingCall &call) {
   };
 }
 
+//===----------------------------------------------------------------------===//
+// Code Lens Types
+//===----------------------------------------------------------------------===//
+
+/// Parameters for textDocument/codeLens request.
+struct CodeLensParams {
+  TextDocumentIdentifier textDocument;
+};
+
+inline bool fromJSON(const json::Value &value, CodeLensParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("textDocument", result.textDocument);
+}
+
+/// A code lens represents a command that should be shown inline with source code,
+/// like the number of references.
+struct CodeLens {
+  /// The range in which this code lens is valid.
+  Range range;
+  /// The command this code lens represents.
+  std::optional<std::string> command;
+  /// The command title (text shown to user).
+  std::optional<std::string> title;
+  /// Optional arguments for the command.
+  std::optional<json::Value> arguments;
+  /// Data that is preserved when resolving a code lens (as string).
+  std::string data;
+};
+
+inline json::Value toJSON(const CodeLens &lens) {
+  json::Object obj;
+  obj["range"] = toJSON(lens.range);
+  if (lens.command && lens.title) {
+    json::Object cmd;
+    cmd["title"] = *lens.title;
+    cmd["command"] = *lens.command;
+    if (lens.arguments)
+      cmd["arguments"] = *lens.arguments;
+    obj["command"] = std::move(cmd);
+  }
+  if (!lens.data.empty())
+    obj["data"] = lens.data;
+  return obj;
+}
+
+inline bool fromJSON(const json::Value &value, CodeLens &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  if (!o || !o.map("range", result.range))
+    return false;
+  o.map("data", result.data);
+  return true;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -347,6 +402,16 @@ struct LSPServer {
                                      Callback<json::Value> reply);
 
   //===--------------------------------------------------------------------===//
+  // Code Lens
+  //===--------------------------------------------------------------------===//
+
+  void onCodeLens(const CodeLensParams &params,
+                  Callback<json::Value> reply);
+
+  void onCodeLensResolve(const CodeLens &params,
+                         Callback<json::Value> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -434,6 +499,10 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"documentFormattingProvider", true},
       {"documentRangeFormattingProvider", true},
       {"callHierarchyProvider", true},
+      {"codeLensProvider",
+       llvm::json::Object{
+           {"resolveProvider", true},
+       }},
       // Workspace capabilities
       {"workspace",
        llvm::json::Object{
@@ -795,6 +864,57 @@ void LSPServer::onCallHierarchyOutgoingCalls(
 }
 
 //===----------------------------------------------------------------------===//
+// Code Lens
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onCodeLens(const CodeLensParams &params,
+                           Callback<json::Value> reply) {
+  std::vector<circt::lsp::VerilogServer::CodeLensInfo> lenses;
+  server.getCodeLenses(params.textDocument.uri, lenses);
+
+  json::Array result;
+  for (const auto &lens : lenses) {
+    CodeLens codeLens;
+    codeLens.range = lens.range;
+    codeLens.title = lens.title;
+    codeLens.command = lens.command;
+    codeLens.data = lens.data;
+    if (!lens.commandArguments.empty()) {
+      json::Array args;
+      for (const auto &arg : lens.commandArguments)
+        args.push_back(arg);
+      codeLens.arguments = std::move(args);
+    }
+    result.push_back(toJSON(codeLens));
+  }
+  reply(std::move(result));
+}
+
+void LSPServer::onCodeLensResolve(const CodeLens &params,
+                                   Callback<json::Value> reply) {
+  // Resolve the code lens
+  circt::lsp::VerilogServer::CodeLensInfo resolved;
+  resolved.range = params.range;
+  if (server.resolveCodeLens(params.data, resolved)) {
+    CodeLens codeLens;
+    codeLens.range = resolved.range;
+    codeLens.title = resolved.title;
+    codeLens.command = resolved.command;
+    codeLens.data = params.data;
+    if (!resolved.commandArguments.empty()) {
+      json::Array args;
+      for (const auto &arg : resolved.commandArguments)
+        args.push_back(arg);
+      codeLens.arguments = std::move(args);
+    }
+    reply(toJSON(codeLens));
+  } else {
+    // Return original if resolution fails
+    reply(toJSON(params));
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -889,6 +1009,12 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
                         &LSPServer::onCallHierarchyIncomingCalls);
   messageHandler.method("callHierarchy/outgoingCalls", &lspServer,
                         &LSPServer::onCallHierarchyOutgoingCalls);
+
+  // Code Lens
+  messageHandler.method("textDocument/codeLens", &lspServer,
+                        &LSPServer::onCodeLens);
+  messageHandler.method("codeLens/resolve", &lspServer,
+                        &LSPServer::onCodeLensResolve);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

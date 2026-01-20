@@ -502,6 +502,66 @@ void circt::lsp::VerilogServer::getOutgoingCalls(
 }
 
 //===----------------------------------------------------------------------===//
+// Code Lens
+//===----------------------------------------------------------------------===//
+
+void circt::lsp::VerilogServer::getCodeLenses(
+    const URIForFile &uri, std::vector<CodeLensInfo> &lenses) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt == impl->files.end())
+    return;
+
+  // Get code lenses from VerilogDocument
+  std::vector<VerilogDocument::CodeLensInfo> docLenses;
+  fileIt->second->getCodeLenses(uri, docLenses);
+
+  // Convert from VerilogDocument type to VerilogServer type
+  for (const auto &docLens : docLenses) {
+    CodeLensInfo lens;
+    lens.range = docLens.range;
+    lens.title = docLens.title;
+    lens.command = docLens.command;
+    lens.commandArguments = docLens.commandArguments;
+    lens.data = docLens.data;
+    lenses.push_back(std::move(lens));
+  }
+}
+
+bool circt::lsp::VerilogServer::resolveCodeLens(llvm::StringRef data,
+                                                 CodeLensInfo &lens) {
+  // The data format is "uri:line:col:type"
+  // For now, we resolve by re-computing reference counts
+  auto parts = data.split(':');
+  if (parts.first.empty())
+    return false;
+
+  auto uriStr = parts.first;
+  parts = parts.second.split(':');
+  int line;
+  if (parts.first.getAsInteger(10, line))
+    return false;
+  parts = parts.second.split(':');
+  int col;
+  if (parts.first.getAsInteger(10, col))
+    return false;
+
+  auto fileIt = impl->files.find(uriStr);
+  if (fileIt == impl->files.end())
+    return false;
+
+  // Resolve the code lens using the document
+  VerilogDocument::CodeLensInfo docLens;
+  docLens.range = lens.range;
+  if (fileIt->second->resolveCodeLens(data, docLens)) {
+    lens.title = docLens.title;
+    lens.command = docLens.command;
+    lens.commandArguments = docLens.commandArguments;
+    return true;
+  }
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
 // Workspace Management
 //===----------------------------------------------------------------------===//
 

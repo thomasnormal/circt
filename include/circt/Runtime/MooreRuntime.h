@@ -1126,6 +1126,107 @@ double __moore_covergroup_get_goal(void *cg);
 /// @return true if coverage >= goal, false otherwise
 bool __moore_covergroup_goal_met(void *cg);
 
+//===----------------------------------------------------------------------===//
+// Coverage Assertion APIs
+//===----------------------------------------------------------------------===//
+//
+// These functions provide assertion-style coverage checking that can be used
+// to enforce coverage goals during simulation. When assertions fail, they
+// can invoke a callback or print error messages.
+//
+// Use cases:
+// - End-of-simulation coverage checks
+// - Continuous coverage monitoring during simulation
+// - Integration with UVM scoreboard reporting
+// - CI/CD coverage gate enforcement
+//
+
+/// Callback function type for coverage assertion failures.
+/// Called when a coverage assertion fails (coverage is below the required goal).
+///
+/// @param cg_name Name of the covergroup that failed (or NULL for global)
+/// @param cp_name Name of the coverpoint that failed (or NULL for covergroup-level)
+/// @param actual_coverage The actual coverage percentage achieved
+/// @param required_goal The required coverage goal percentage
+/// @param userData User-provided context data
+typedef void (*MooreCoverageAssertCallback)(const char *cg_name,
+                                            const char *cp_name,
+                                            double actual_coverage,
+                                            double required_goal,
+                                            void *userData);
+
+/// Set the callback function for coverage assertion failures.
+/// When a coverage assertion fails, this callback will be invoked before
+/// returning the failure result.
+///
+/// @param callback Function to call on assertion failure (NULL to disable)
+/// @param userData User data passed to the callback
+void __moore_coverage_set_failure_callback(MooreCoverageAssertCallback callback,
+                                           void *userData);
+
+/// Assert that overall coverage meets a minimum goal percentage.
+/// Checks total coverage across all registered covergroups against the goal.
+/// If coverage is below the goal, invokes the failure callback (if set).
+///
+/// @param min_percentage Minimum required coverage percentage (0.0 to 100.0)
+/// @return true if coverage >= min_percentage, false otherwise
+bool __moore_coverage_assert_goal(double min_percentage);
+
+/// Assert that a covergroup meets a minimum coverage goal.
+/// Uses either the specified min_percentage or the covergroup's configured goal,
+/// whichever is higher. Invokes failure callback on assertion failure.
+///
+/// @param cg Pointer to the covergroup
+/// @param min_percentage Minimum required coverage percentage (0.0 to 100.0)
+/// @return true if covergroup coverage >= goal, false otherwise
+bool __moore_covergroup_assert_goal(void *cg, double min_percentage);
+
+/// Assert that a coverpoint meets a minimum coverage goal.
+/// Uses either the specified min_percentage or the coverpoint's configured goal,
+/// whichever is higher. Invokes failure callback on assertion failure.
+///
+/// @param cg Pointer to the covergroup containing the coverpoint
+/// @param cp_index Index of the coverpoint within the covergroup
+/// @param min_percentage Minimum required coverage percentage (0.0 to 100.0)
+/// @return true if coverpoint coverage >= goal, false otherwise
+bool __moore_coverpoint_assert_goal(void *cg, int32_t cp_index,
+                                    double min_percentage);
+
+/// Check if all defined coverage goals are met.
+/// Iterates through all registered covergroups and their coverpoints,
+/// checking each against its configured goal. Invokes the failure callback
+/// for each goal that is not met.
+///
+/// @return true if all goals are met, false if any goal is not met
+bool __moore_coverage_check_all_goals(void);
+
+/// Get the number of coverage goals that are not met.
+/// Useful for summary reporting at end of simulation.
+///
+/// @return Count of covergroups and coverpoints that have not met their goals
+int32_t __moore_coverage_get_unmet_goal_count(void);
+
+/// Register a coverage assertion to be checked at simulation end.
+/// Multiple assertions can be registered and will all be checked when
+/// __moore_coverage_check_registered_assertions() is called.
+///
+/// @param cg Pointer to covergroup (NULL for global coverage check)
+/// @param cp_index Index of coverpoint (-1 for covergroup-level check)
+/// @param min_percentage Minimum required coverage percentage
+/// @return Assertion ID (>= 0) on success, -1 on failure
+int32_t __moore_coverage_register_assertion(void *cg, int32_t cp_index,
+                                            double min_percentage);
+
+/// Check all registered coverage assertions.
+/// Typically called at end of simulation. Returns true only if all
+/// registered assertions pass. Invokes failure callback for each failure.
+///
+/// @return true if all assertions pass, false if any assertion fails
+bool __moore_coverage_check_registered_assertions(void);
+
+/// Clear all registered coverage assertions.
+void __moore_coverage_clear_registered_assertions(void);
+
 /// Set the weight for a covergroup (relative importance in coverage calculation).
 /// IEEE 1800-2017 Section 19.7.1: option.weight
 ///

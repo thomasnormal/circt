@@ -246,6 +246,33 @@ public:
   std::optional<uint32_t> lspPositionToOffset(const llvm::lsp::Position &pos);
   const char *getPointerFor(const llvm::lsp::Position &pos);
 
+  //===--------------------------------------------------------------------===//
+  // Code Lens
+  //===--------------------------------------------------------------------===//
+
+  /// Code lens information for LSP.
+  struct CodeLensInfo {
+    /// The range in which this code lens is valid.
+    llvm::lsp::Range range;
+    /// The command title (text shown to user).
+    std::string title;
+    /// The command identifier.
+    std::string command;
+    /// Arguments for the command.
+    std::vector<std::string> commandArguments;
+    /// Data for lazy resolution.
+    std::string data;
+  };
+
+  /// Return code lenses for this document.
+  /// Provides reference counts for modules, classes, interfaces, functions, tasks.
+  /// Also provides "Go to implementation" for virtual methods.
+  void getCodeLenses(const llvm::lsp::URIForFile &uri,
+                     std::vector<CodeLensInfo> &lenses);
+
+  /// Resolve a code lens with the given data.
+  bool resolveCodeLens(llvm::StringRef data, CodeLensInfo &lens);
+
 private:
   std::optional<std::pair<slang::BufferID, llvm::SmallString<128>>>
   getOrOpenFile(llvm::StringRef filePath);

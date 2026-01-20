@@ -2477,16 +2477,225 @@ struct ConstraintDisableOpConversion
 
 /// Lowering for ConstraintUniqueOp.
 /// Uniqueness constraints require all elements to have distinct values.
-/// Currently erased; full support requires post-randomization validation.
+/// Generates runtime calls to validate uniqueness:
+/// - For arrays: calls __moore_constraint_unique_check
+/// - For scalar variables: calls __moore_constraint_unique_scalars
 struct ConstraintUniqueOpConversion
     : public OpConversionPattern<ConstraintUniqueOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(ConstraintUniqueOp op, OpAdaptor,
+  matchAndRewrite(ConstraintUniqueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Unique constraints require post-randomization validation.
-    // TODO: Generate uniqueness check runtime call.
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    // If this unique constraint is inside a constraint block, just erase it.
+    // Constraint blocks are declarations that are processed during RandomizeOp
+    // lowering. The unique constraint info is extracted there.
+    if (op->getParentOfType<ConstraintBlockOp>()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto variables = op.getVariables();
+    if (variables.empty()) {
+      // No variables to check - just erase
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Check if we have a single array variable or multiple scalar variables
+    if (variables.size() == 1) {
+      Value var = adaptor.getVariables()[0];
+      Type mooreType = op.getVariables()[0].getType();
+
+      // Check if it's an array type
+      if (auto arrayType = dyn_cast<UnpackedArrayType>(mooreType)) {
+        // Single array - check all elements are unique
+        // Get array size and element size
+        int64_t numElements = arrayType.getSize();
+        Type elementType = arrayType.getElementType();
+        Type convertedElemType = typeConverter->convertType(elementType);
+
+        // Calculate element size in bytes
+        int64_t elementSize = 1;
+        if (auto intTy = dyn_cast<IntegerType>(convertedElemType))
+          elementSize = (intTy.getWidth() + 7) / 8;
+        else
+          elementSize = getTypeSizeSafe(convertedElemType, mod);
+
+        // Get pointer to the array data
+        // The converted value should be an LLVM array or pointer to it
+        Value arrayPtr = var;
+
+        // If the value is an array (not a pointer), we need to store it
+        // to get a pointer
+        Type convertedType = var.getType();
+        if (auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(convertedType)) {
+          // LLVM array type - can store directly
+          auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                              rewriter.getI64IntegerAttr(1));
+          auto alloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayTy, one);
+          LLVM::StoreOp::create(rewriter, loc, var, alloca);
+          arrayPtr = alloca;
+        } else if (auto hwArrayTy = dyn_cast<hw::ArrayType>(convertedType)) {
+          // hw::ArrayType - convert to LLVM array type first
+          Type elemTy = hwArrayTy.getElementType();
+          auto llvmArrayType =
+              LLVM::LLVMArrayType::get(elemTy, hwArrayTy.getNumElements());
+          auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                              rewriter.getI64IntegerAttr(1));
+          auto alloca =
+              LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+          // Cast hw.array to LLVM array for storage
+          auto casted = UnrealizedConversionCastOp::create(
+                            rewriter, loc, llvmArrayType, var)
+                            .getResult(0);
+          LLVM::StoreOp::create(rewriter, loc, casted, alloca);
+          arrayPtr = alloca;
+        }
+
+        // Create constants for runtime call
+        auto numElemsConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(numElements));
+        auto elemSizeConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elementSize));
+
+        // Call __moore_constraint_unique_check(array, numElements, elementSize)
+        auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty, i64Ty});
+        auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                         "__moore_constraint_unique_check",
+                                         fnTy);
+        LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                             SymbolRefAttr::get(fn),
+                             ValueRange{arrayPtr, numElemsConst, elemSizeConst});
+
+        rewriter.eraseOp(op);
+        return success();
+      }
+
+      // Check for queue type
+      if (auto queueType = dyn_cast<QueueType>(mooreType)) {
+        // Queue is stored as {ptr, length} struct
+        // Extract the data pointer and length
+        Type elementType = queueType.getElementType();
+        Type convertedElemType = typeConverter->convertType(elementType);
+
+        int64_t elementSize = 1;
+        if (auto intTy = dyn_cast<IntegerType>(convertedElemType))
+          elementSize = (intTy.getWidth() + 7) / 8;
+        else
+          elementSize = getTypeSizeSafe(convertedElemType, mod);
+
+        // Extract data pointer (field 0) and length (field 1)
+        Value dataPtr =
+            LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, var, ArrayRef<int64_t>{0});
+        Value length =
+            LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, var, ArrayRef<int64_t>{1});
+
+        auto elemSizeConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elementSize));
+
+        auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty, i64Ty});
+        auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                         "__moore_constraint_unique_check",
+                                         fnTy);
+        LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                             SymbolRefAttr::get(fn),
+                             ValueRange{dataPtr, length, elemSizeConst});
+
+        rewriter.eraseOp(op);
+        return success();
+      }
+
+      // Check for dynamic array type
+      if (auto dynArrayType = dyn_cast<OpenUnpackedArrayType>(mooreType)) {
+        // Dynamic array is stored as {ptr, length} struct
+        Type elementType = dynArrayType.getElementType();
+        Type convertedElemType = typeConverter->convertType(elementType);
+
+        int64_t elementSize = 1;
+        if (auto intTy = dyn_cast<IntegerType>(convertedElemType))
+          elementSize = (intTy.getWidth() + 7) / 8;
+        else
+          elementSize = getTypeSizeSafe(convertedElemType, mod);
+
+        Value dataPtr =
+            LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, var, ArrayRef<int64_t>{0});
+        Value length =
+            LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, var, ArrayRef<int64_t>{1});
+
+        auto elemSizeConst = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elementSize));
+
+        auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty, i64Ty});
+        auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                         "__moore_constraint_unique_check",
+                                         fnTy);
+        LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                             SymbolRefAttr::get(fn),
+                             ValueRange{dataPtr, length, elemSizeConst});
+
+        rewriter.eraseOp(op);
+        return success();
+      }
+
+      // Single scalar - always unique, just erase
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Multiple scalar variables - collect them into an array and check
+    // All variables should have the same type for uniqueness constraint
+    Type firstMooreType = op.getVariables()[0].getType();
+    Type convertedType = typeConverter->convertType(firstMooreType);
+
+    int64_t valueSize = 1;
+    if (auto intTy = dyn_cast<IntegerType>(convertedType))
+      valueSize = (intTy.getWidth() + 7) / 8;
+    else
+      valueSize = getTypeSizeSafe(convertedType, mod);
+
+    int64_t numValues = variables.size();
+
+    // Allocate stack space for the values array
+    auto arrayTy = LLVM::LLVMArrayType::get(convertedType, numValues);
+    auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                        rewriter.getI64IntegerAttr(1));
+    auto valuesAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, arrayTy, one);
+
+    // Store each value into the array
+    for (int64_t i = 0; i < numValues; ++i) {
+      Value val = adaptor.getVariables()[i];
+      auto idx = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(i));
+      auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, convertedType,
+                                         valuesAlloca, ValueRange{idx});
+      LLVM::StoreOp::create(rewriter, loc, val, elemPtr);
+    }
+
+    // Create constants for runtime call
+    auto numValsConst = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(numValues));
+    auto valSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(valueSize));
+
+    // Call __moore_constraint_unique_scalars(values, numValues, valueSize)
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_constraint_unique_scalars", fnTy);
+    LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                         SymbolRefAttr::get(fn),
+                         ValueRange{valuesAlloca, numValsConst, valSizeConst});
+
     rewriter.eraseOp(op);
     return success();
   }
