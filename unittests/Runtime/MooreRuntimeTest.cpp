@@ -3011,6 +3011,289 @@ TEST(MooreRuntimeCrossCoverageTest, CrossResetNamedBins) {
 }
 
 //===----------------------------------------------------------------------===//
+// get_coverage() and get_inst_coverage() API Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, CovergroupGetInstCoverage) {
+  // Test basic instance coverage for a single covergroup
+  void *cg = __moore_covergroup_create("test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Initially, coverage should be 0
+  double instCov = __moore_covergroup_get_inst_coverage(cg);
+  EXPECT_DOUBLE_EQ(instCov, 0.0);
+
+  // Sample a single value
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Instance coverage should be 100% (single value = full coverage)
+  instCov = __moore_covergroup_get_inst_coverage(cg);
+  EXPECT_DOUBLE_EQ(instCov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverpointGetInstCoverage) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Sample different values
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 1, 10);
+  __moore_coverpoint_sample(cg, 1, 20);
+
+  // Get instance coverage for each coverpoint
+  double cp0InstCov = __moore_coverpoint_get_inst_coverage(cg, 0);
+  double cp1InstCov = __moore_coverpoint_get_inst_coverage(cg, 1);
+
+  // cp0 has single value - 100% coverage
+  EXPECT_DOUBLE_EQ(cp0InstCov, 100.0);
+  // cp1 has range 10-20 (11 values), 2 unique values
+  EXPECT_GT(cp1InstCov, 0.0);
+  EXPECT_LT(cp1InstCov, 100.0);
+
+  // Instance coverage should equal regular coverage for coverpoints
+  EXPECT_DOUBLE_EQ(cp0InstCov, __moore_coverpoint_get_coverage(cg, 0));
+  EXPECT_DOUBLE_EQ(cp1InstCov, __moore_coverpoint_get_coverage(cg, 1));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, MultiInstanceTypeCoverage) {
+  // Test that get_coverage aggregates across instances with same name
+  // when per_instance is false (default)
+  void *cg1 = __moore_covergroup_create("same_type_cg", 1);
+  void *cg2 = __moore_covergroup_create("same_type_cg", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  __moore_coverpoint_init(cg1, 0, "cp");
+  __moore_coverpoint_init(cg2, 0, "cp");
+
+  // Sample different values in each instance
+  __moore_coverpoint_sample(cg1, 0, 10);
+  __moore_coverpoint_sample(cg2, 0, 20);
+
+  // Instance coverage should be 100% for each (single value)
+  double inst1 = __moore_covergroup_get_inst_coverage(cg1);
+  double inst2 = __moore_covergroup_get_inst_coverage(cg2);
+  EXPECT_DOUBLE_EQ(inst1, 100.0);
+  EXPECT_DOUBLE_EQ(inst2, 100.0);
+
+  // Type coverage should be average of instances = 100%
+  double typeCov1 = __moore_covergroup_get_coverage(cg1);
+  double typeCov2 = __moore_covergroup_get_coverage(cg2);
+  EXPECT_DOUBLE_EQ(typeCov1, 100.0);
+  EXPECT_DOUBLE_EQ(typeCov2, 100.0);
+
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageTest, PerInstanceModeCoverage) {
+  // Test that per_instance mode returns instance-specific coverage
+  void *cg1 = __moore_covergroup_create("per_inst_cg", 1);
+  void *cg2 = __moore_covergroup_create("per_inst_cg", 1);
+  ASSERT_NE(cg1, nullptr);
+  ASSERT_NE(cg2, nullptr);
+
+  // Enable per_instance mode
+  __moore_covergroup_set_per_instance(cg1, true);
+  __moore_covergroup_set_per_instance(cg2, true);
+
+  __moore_coverpoint_init(cg1, 0, "cp");
+  __moore_coverpoint_init(cg2, 0, "cp");
+
+  // Sample different amounts
+  __moore_coverpoint_sample(cg1, 0, 1);
+  __moore_coverpoint_sample(cg2, 0, 10);
+  __moore_coverpoint_sample(cg2, 0, 20);
+
+  // In per_instance mode, get_coverage should equal get_inst_coverage
+  double cov1 = __moore_covergroup_get_coverage(cg1);
+  double cov2 = __moore_covergroup_get_coverage(cg2);
+  double inst1 = __moore_covergroup_get_inst_coverage(cg1);
+  double inst2 = __moore_covergroup_get_inst_coverage(cg2);
+
+  EXPECT_DOUBLE_EQ(cov1, inst1);
+  EXPECT_DOUBLE_EQ(cov2, inst2);
+
+  __moore_covergroup_destroy(cg1);
+  __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverageWithAtLeastThreshold) {
+  // Test that coverage respects at_least threshold
+  void *cg = __moore_covergroup_create("at_least_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp");
+
+  // Set at_least to 3
+  __moore_covergroup_set_at_least(cg, 3);
+
+  // Set up explicit bins for precise testing
+  MooreCoverageBin bins[3];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+
+  // Destroy old coverpoint and create with bins
+  __moore_covergroup_destroy(cg);
+  cg = __moore_covergroup_create("at_least_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+  __moore_covergroup_set_at_least(cg, 3);
+
+  // Sample bin0 once, bin1 twice, bin2 three times
+  __moore_coverpoint_sample(cg, 0, 5);     // bin0: 1 hit
+  __moore_coverpoint_sample(cg, 0, 15);    // bin1: 1 hit
+  __moore_coverpoint_sample(cg, 0, 15);    // bin1: 2 hits
+  __moore_coverpoint_sample(cg, 0, 25);    // bin2: 1 hit
+  __moore_coverpoint_sample(cg, 0, 25);    // bin2: 2 hits
+  __moore_coverpoint_sample(cg, 0, 25);    // bin2: 3 hits
+
+  // Only bin2 has >= 3 hits, so coverage should be 1/3 = 33.33%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_NEAR(cov, 33.33, 0.5);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoverageWithIgnoreBins) {
+  // Test that ignore bins are excluded from coverage calculation
+  void *cg = __moore_covergroup_create("ignore_bins_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Set up explicit bins including an ignore bin
+  MooreCoverageBin bins[3];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_IGNORE,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 3);
+
+  // Sample bin0 and bin2
+  __moore_coverpoint_sample(cg, 0, 5);     // bin0: 1 hit
+  __moore_coverpoint_sample(cg, 0, 25);    // bin2: 1 hit
+
+  // Only 2 normal bins (bin0, bin2), both hit, so coverage = 100%
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 100.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, CoveragePartialBins) {
+  // Test partial coverage with explicit bins
+  void *cg = __moore_covergroup_create("partial_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  // Set up 4 explicit bins
+  MooreCoverageBin bins[4];
+  bins[0] = {.name = "bin0", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 0, .high = 9, .hit_count = 0};
+  bins[1] = {.name = "bin1", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 10, .high = 19, .hit_count = 0};
+  bins[2] = {.name = "bin2", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 20, .high = 29, .hit_count = 0};
+  bins[3] = {.name = "bin3", .type = MOORE_BIN_RANGE, .kind = MOORE_BIN_KIND_NORMAL,
+             .low = 30, .high = 39, .hit_count = 0};
+
+  __moore_coverpoint_init_with_bins(cg, 0, "cp", bins, 4);
+
+  // Sample only bin0 and bin2 (50% coverage)
+  __moore_coverpoint_sample(cg, 0, 5);     // bin0: hit
+  __moore_coverpoint_sample(cg, 0, 25);    // bin2: hit
+
+  double cov = __moore_coverpoint_get_coverage(cg, 0);
+  EXPECT_DOUBLE_EQ(cov, 50.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossGetInstCoverage) {
+  // Test cross instance coverage
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Sample values
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 1, 10);
+  __moore_coverpoint_sample(cg, 1, 20);
+
+  // Sample cross bins
+  int64_t vals1[] = {1, 10};
+  int64_t vals2[] = {2, 20};
+  __moore_cross_sample(cg, vals1, 2);
+  __moore_cross_sample(cg, vals2, 2);
+
+  // Get coverage - should be same as inst_coverage for crosses
+  double cov = __moore_cross_get_coverage(cg, crossIdx);
+  double instCov = __moore_cross_get_inst_coverage(cg, crossIdx);
+  EXPECT_DOUBLE_EQ(cov, instCov);
+
+  // 2 bins hit out of 4 possible (2x2), so 50%
+  EXPECT_DOUBLE_EQ(cov, 50.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossCoverageWithAtLeast) {
+  // Test that cross coverage respects at_least threshold
+  void *cg = __moore_covergroup_create("cross_at_least_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  // Set at_least to 2
+  __moore_covergroup_set_at_least(cg, 2);
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Sample values to create cross products
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 1, 10);
+  __moore_coverpoint_sample(cg, 1, 20);
+
+  // Sample cross bins: (1,10) twice, (2,20) once
+  int64_t vals1[] = {1, 10};
+  int64_t vals2[] = {2, 20};
+  __moore_cross_sample(cg, vals1, 2);
+  __moore_cross_sample(cg, vals1, 2);  // (1,10) hit twice
+  __moore_cross_sample(cg, vals2, 2);  // (2,20) hit once
+
+  // Only (1,10) has >= 2 hits, so coverage = 1/4 = 25%
+  double cov = __moore_cross_get_coverage(cg, crossIdx);
+  EXPECT_DOUBLE_EQ(cov, 25.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Reset Tests
 //===----------------------------------------------------------------------===//
 

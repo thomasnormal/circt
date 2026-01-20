@@ -13,6 +13,7 @@
 #include "circt/Support/UnusedOpPruner.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dominance.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericIteratedDominanceFrontier.h"
@@ -1739,12 +1740,25 @@ bool Promoter::insertBlockArgs(BlockEntry *node) {
           args.push_back(def->getValueOrPlaceholder());
         } else {
           auto type = getStoredType(slot);
-          auto flatType = builder.getIntegerType(hw::getBitWidth(type));
-          Value value =
-              hw::ConstantOp::create(builder, getLoc(slot), flatType, 0);
-          if (type != flatType)
-            value = hw::BitcastOp::create(builder, getLoc(slot), type, value);
-          args.push_back(value);
+          auto bitWidth = hw::getBitWidth(type);
+          if (bitWidth >= 0) {
+            auto flatType = builder.getIntegerType(bitWidth);
+            Value value =
+                hw::ConstantOp::create(builder, getLoc(slot), flatType, 0);
+            if (type != flatType)
+              value = hw::BitcastOp::create(builder, getLoc(slot), type, value);
+            args.push_back(value);
+          } else if (LLVM::isCompatibleType(type)) {
+            args.push_back(
+                LLVM::ZeroOp::create(builder, getLoc(slot), type));
+          } else {
+            emitError(getLoc(slot))
+                << "llhd-mem2reg unable to create default value for type "
+                << type;
+            args.push_back(UnrealizedConversionCastOp::create(
+                               builder, getLoc(slot), type, ValueRange{})
+                               .getResult(0));
+          }
         }
         break;
       case Which::Condition:
