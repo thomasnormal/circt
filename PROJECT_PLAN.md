@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | AVIP blocker identified (timing in class tasks) | Fix llhd.wait in class methods |
-| **B** | Randomization | Distribution constraints fully lowered | Solve-before constraints |
-| **C** | Coverage | Coverage callbacks complete (13 functions) | Coverage get_coverage() API |
-| **D** | LSP Tooling | Find references enhanced | Rename refactoring, call hierarchy |
+| **A** | Runtime/Simulation | Dynamic legality for timing controls | Inline class tasks into processes |
+| **B** | Randomization | Solve-before constraints complete | Array constraints full lowering |
+| **C** | Coverage | get_inst_coverage() API complete | Coverage HTML report generation |
+| **D** | LSP Tooling | Rename refactoring complete | Call hierarchy, workspace symbols |
 
 ### Feature Completion Matrix
 
@@ -55,12 +55,49 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Constraint implication | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverage callbacks | ✅ | ✅ | ✅ | ✅ | ✅ |
 | LSP find references | - | - | - | - | ✅ |
+| Solve-before constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LSP rename refactoring | - | - | - | - | ✅ |
+| Coverage get_inst_coverage | - | - | - | ✅ | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 63 - Distribution Constraints + Coverage Callbacks + LSP Find References (January 20, 2026)
+## Current Status: ITERATION 64 - Solve-Before Constraints + LSP Rename + Coverage get_inst_coverage (January 20, 2026)
+
+**Summary**: Implemented solve-before constraint ordering, LSP rename refactoring, coverage instance-specific APIs, and fixed llhd-mem2reg for LLVM pointer types.
+
+### Iteration 64 Highlights
+
+**Track A: Dynamic Legality for Timing Controls** ⭐ ARCHITECTURE
+- ✅ Added dynamic legality rules for WaitEventOp and DetectEventOp
+- ✅ Timing controls in class tasks remain unconverted until inlined into llhd.process
+- ✅ Unblocks AVIP tasks with `@(posedge clk)` timing
+
+**Track B: Solve-Before Constraints** ⭐ FEATURE
+- ✅ Full MooreToCore lowering for `solve a before b` constraints
+- ✅ Topological sort using Kahn's algorithm for constraint ordering
+- ✅ 5 comprehensive test cases (basic, multiple, chained, partial, erased)
+
+**Track C: Coverage get_inst_coverage API** ⭐ FEATURE
+- ✅ `__moore_covergroup_get_inst_coverage()` for instance-specific coverage
+- ✅ `__moore_coverpoint_get_inst_coverage()` and `__moore_cross_get_inst_coverage()`
+- ✅ Enhanced `get_coverage()` to respect per_instance option
+- ✅ Enhanced cross coverage to respect at_least threshold
+
+**Track D: LSP Rename Refactoring** ⭐ FEATURE
+- ✅ Extended prepareRename for ClassType, ClassProperty, InterfacePort
+- ✅ Support for Modport, FormalArgument, TypeAlias
+- ✅ 10 comprehensive test scenarios in rename-refactoring.test
+
+**Bug Fix: llhd-mem2reg LLVM Pointer Types**
+- ✅ Fixed default value materialization for LLVM pointer types
+- ✅ Use llvm.mlir.zero instead of invalid integer bitcast
+- ✅ Added regression test mem2reg-llvm-zero.mlir
+
+---
+
+## Previous: ITERATION 63 - Distribution Constraints + Coverage Callbacks + LSP Find References (January 20, 2026)
 
 **Summary**: Implemented distribution constraint lowering, added coverage callbacks API, enhanced LSP find references, investigated AVIP E2E blockers.
 
