@@ -18,9 +18,9 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
 | **A** | Runtime/Simulation | circt-sim works for basic RTL | UVM base class stubs, task timing |
-| **B** | Randomization | Full constraint support | Constraint mode on/off, pre/post_randomize |
-| **C** | Coverage | Merge, options, transition bins | Exclusions, illegal bins runtime |
-| **D** | LSP Tooling | Full navigation suite | Completion, semantic tokens |
+| **B** | Randomization | Full constraint support | pre/post_randomize callbacks |
+| **C** | Coverage | Illegal/ignore bins lowering complete | Wildcard bins, exclusion API |
+| **D** | LSP Tooling | Chained member access complete | Semantic tokens, inheritance completion |
 
 ### Feature Completion Matrix
 
@@ -31,20 +31,50 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Soft constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Distribution constraints | ✅ | ✅ | ⚠️ | ✅ | ✅ |
 | Inline constraints | ✅ | ✅ | ⚠️ | - | ✅ |
+| constraint_mode() | ✅ | ✅ | ✅ | ✅ | ✅ |
+| rand_mode() | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Covergroups | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverpoints | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cross coverage | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Transition bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Illegal/ignore bins | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverage merge | - | - | - | ✅ | ✅ |
 | Virtual interfaces | ✅ | ✅ | ⚠️ | ❌ | ⚠️ |
 | Classes | ✅ | ✅ | ✅ | ⚠️ | ✅ |
 | UVM base classes | ❌ | ❌ | ❌ | ❌ | ❌ |
+| LSP chained completion | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 58 - Inline Constraints + Coverage Merge + AVIP Demo (January 17, 2026)
+## Current Status: ITERATION 59 - Coverage Illegal/Ignore Bins + LSP Chained Access (January 20, 2026)
+
+**Summary**: Implemented illegal/ignore bins MooreToCore lowering and chained member access for LSP completion.
+
+### Iteration 59 Highlights
+
+**Track C: Coverage Illegal/Ignore Bins Lowering** ⭐ FEATURE
+- ✅ Extended CovergroupDeclOpConversion to process CoverageBinDeclOp
+- ✅ Generates runtime calls for `__moore_coverpoint_add_illegal_bin` and `__moore_coverpoint_add_ignore_bin`
+- ✅ Supports single values and ranges in bin definitions
+- ✅ Added CoverageBinDeclOpConversion pattern to erase bins after processing
+- Test: `coverage-illegal-bins.mlir` (new)
+
+**Track D: LSP Chained Member Access** ⭐ FEATURE
+- ✅ Extended completion context analysis to parse full identifier chains (e.g., `obj.field1.field2`)
+- ✅ Added `resolveIdentifierChain()` to walk through member access chains
+- ✅ Supports class types, instance types, and interface types in chains
+- ✅ Returns completions for the final type in the chain
+
+**Files Modified**:
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` - illegal/ignore bins lowering
+- `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogDocument.cpp` - chained access
+- `test/Conversion/MooreToCore/coverage-illegal-bins.mlir` - new test
+
+---
+
+## Previous: ITERATION 58 - Inline Constraints + Coverage Merge + AVIP Demo (January 17, 2026)
 
 **Summary**: Implemented inline constraints (with clause), coverage database merge, comprehensive AVIP testbench demo, and LSP fuzzy workspace search. LARGEST ITERATION: 2,535 insertions.
 

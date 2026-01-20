@@ -1907,6 +1907,20 @@ struct CovergroupDeclOpConversion
         auto initCpFn = getOrCreateRuntimeFunc(
             mod, rewriter, "__moore_coverpoint_init", initCpFnTy);
 
+        // Get or create illegal/ignore bin functions
+        // __moore_coverpoint_add_illegal_bin(cg, cp_index, name, low, high)
+        auto i64Ty = IntegerType::get(ctx, 64);
+        auto addIllegalBinFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i64Ty, i64Ty});
+        auto addIllegalBinFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_add_illegal_bin", addIllegalBinFnTy);
+
+        // __moore_coverpoint_add_ignore_bin(cg, cp_index, name, low, high)
+        auto addIgnoreBinFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i64Ty, i64Ty});
+        auto addIgnoreBinFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_add_ignore_bin", addIgnoreBinFnTy);
+
         // Create string constant for covergroup name
         std::string cgNameGlobal = ("__cg_name_" + cgName).str();
         Value cgNamePtr = createGlobalStringConstant(loc, mod, rewriter, cgName,
@@ -1920,7 +1934,7 @@ struct CovergroupDeclOpConversion
             ValueRange{cgNamePtr, numCpConst});
         Value cgHandle = createCall.getResult();
 
-        // Initialize each coverpoint
+        // Initialize each coverpoint and its illegal/ignore bins
         int32_t cpIndex = 0;
         for (auto cp : coverpoints) {
           StringRef cpName = cp.getSymName();
@@ -1935,6 +1949,65 @@ struct CovergroupDeclOpConversion
           LLVM::CallOp::create(rewriter, loc, TypeRange{},
                                SymbolRefAttr::get(initCpFn),
                                ValueRange{cgHandle, idxConst, cpNamePtr});
+
+          // Process illegal_bins and ignore_bins for this coverpoint
+          for (auto &binOp : cp.getBody().front()) {
+            auto bin = dyn_cast<CoverageBinDeclOp>(&binOp);
+            if (!bin)
+              continue;
+
+            auto kind = bin.getKind();
+            if (kind != CoverageBinKind::IllegalBins &&
+                kind != CoverageBinKind::IgnoreBins)
+              continue;
+
+            // Get the bin name
+            StringRef binName = bin.getSymName();
+            std::string binNameGlobal =
+                ("__bin_name_" + cgName + "_" + cpName + "_" + binName).str();
+            Value binNamePtr = createGlobalStringConstant(loc, mod, rewriter,
+                                                          binName, binNameGlobal);
+
+            // Get the values array
+            auto valuesAttr = bin.getValues();
+            if (!valuesAttr)
+              continue;
+
+            // Process each value/range in the bin
+            for (auto valAttr : *valuesAttr) {
+              int64_t low = 0, high = 0;
+              if (auto intAttr = dyn_cast<IntegerAttr>(valAttr)) {
+                // Single value: low = high = value
+                low = high = intAttr.getInt();
+              } else if (auto arrAttr = dyn_cast<ArrayAttr>(valAttr)) {
+                // Range: [low, high]
+                if (arrAttr.size() >= 2) {
+                  if (auto lowAttr = dyn_cast<IntegerAttr>(arrAttr[0]))
+                    low = lowAttr.getInt();
+                  if (auto highAttr = dyn_cast<IntegerAttr>(arrAttr[1]))
+                    high = highAttr.getInt();
+                }
+              }
+
+              auto lowConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(low));
+              auto highConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(high));
+
+              if (kind == CoverageBinKind::IllegalBins) {
+                LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                     SymbolRefAttr::get(addIllegalBinFn),
+                                     ValueRange{cgHandle, idxConst, binNamePtr,
+                                                lowConst, highConst});
+              } else {
+                LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                     SymbolRefAttr::get(addIgnoreBinFn),
+                                     ValueRange{cgHandle, idxConst, binNamePtr,
+                                                lowConst, highConst});
+              }
+            }
+          }
+
           ++cpIndex;
         }
 
@@ -1967,6 +2040,24 @@ struct CoverpointDeclOpConversion
   matchAndRewrite(CoverpointDeclOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Coverpoints are handled by the parent CovergroupDeclOp conversion.
+    // Just erase this op.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lowering for CoverageBinDeclOp.
+/// Bins are processed by the parent CovergroupDeclOp during its conversion.
+/// Illegal and ignore bins are registered with the runtime. Normal bins
+/// are used for coverage calculation. This pattern just erases the declaration.
+struct CoverageBinDeclOpConversion
+    : public OpConversionPattern<CoverageBinDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CoverageBinDeclOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Bins are handled by the parent CovergroupDeclOp conversion.
     // Just erase this op.
     rewriter.eraseOp(op);
     return success();
@@ -4118,6 +4209,54 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
         // Create a new signal with the converted value
         auto signal =
             llhd::SignalOp::create(rewriter, loc, resultRefType, StringAttr{}, resultValue);
+        rewriter.replaceOp(op, signal.getResult());
+        return success();
+      }
+    }
+
+    // Handle value-to-ref conversions by creating a new signal with the input
+    // value as the initializer.
+    if (auto resultRefType = dyn_cast<llhd::RefType>(resultType)) {
+      if (!isa<llhd::RefType>(adaptor.getInput().getType())) {
+        Value initValue = adaptor.getInput();
+        Type nestedType = resultRefType.getNestedType();
+        if (initValue.getType() != nestedType) {
+          auto getBitWidthForType = [](Type type) -> int64_t {
+            int64_t bw = hw::getBitWidth(type);
+            if (bw != -1)
+              return bw;
+            if (auto floatTy = dyn_cast<FloatType>(type))
+              return floatTy.getWidth();
+            return -1;
+          };
+
+          int64_t inputBw = getBitWidthForType(initValue.getType());
+          int64_t resultBw = getBitWidthForType(nestedType);
+          if (inputBw == -1 || resultBw == -1)
+            return failure();
+
+          if (isa<FloatType>(initValue.getType())) {
+            initValue = rewriter.createOrFold<LLVM::BitcastOp>(
+                loc, rewriter.getIntegerType(inputBw), initValue);
+          } else {
+            initValue = rewriter.createOrFold<hw::BitcastOp>(
+                loc, rewriter.getIntegerType(inputBw), initValue);
+          }
+
+          Value adjusted =
+              adjustIntegerWidth(rewriter, initValue, resultBw, loc);
+
+          if (isa<FloatType>(nestedType)) {
+            initValue = rewriter.createOrFold<LLVM::BitcastOp>(
+                loc, nestedType, adjusted);
+          } else {
+            initValue = rewriter.createOrFold<hw::BitcastOp>(
+                loc, nestedType, adjusted);
+          }
+        }
+
+        auto signal = llhd::SignalOp::create(rewriter, loc, resultRefType,
+                                             StringAttr{}, initValue);
         rewriter.replaceOp(op, signal.getResult());
         return success();
       }
@@ -8618,6 +8757,7 @@ struct RandomBIOpConversion : public OpConversionPattern<RandomBIOp> {
 /// Supports both single-range and multi-range constraints.
 struct RangeConstraintInfo {
   StringRef propertyName; // Name of the constrained property
+  StringRef constraintName; // Name of the constraint block
   int64_t minValue;       // Minimum value (inclusive) - for single range
   int64_t maxValue;       // Maximum value (inclusive) - for single range
   SmallVector<std::pair<int64_t, int64_t>> ranges; // All ranges for multi-range
@@ -8632,6 +8772,7 @@ struct RangeConstraintInfo {
 /// constraints. Pattern: `constraint soft_c { soft value == 42; }`
 struct SoftConstraintInfo {
   StringRef propertyName; // Name of the constrained property
+  StringRef constraintName; // Name of the constraint block
   int64_t defaultValue;   // Default value when no hard constraint applies
   unsigned fieldIndex;    // Index of the field in the struct
   unsigned bitWidth;      // Bit width of the property
@@ -8669,6 +8810,8 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
     auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
     if (!constraintBlock)
       continue;
+
+    StringRef constraintName = constraintBlock.getSymName();
 
     // Walk the constraint block body
     for (auto &constraintOp : constraintBlock.getBody().getOps()) {
@@ -8728,6 +8871,7 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 
         RangeConstraintInfo info;
         info.propertyName = propName;
+        info.constraintName = constraintName;
         info.fieldIndex = fieldIdx;
         info.bitWidth = bitWidth;
         info.isSoft = insideOp.getIsSoft();
@@ -8790,6 +8934,8 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
     auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
     if (!constraintBlock)
       continue;
+
+    StringRef constraintName = constraintBlock.getSymName();
 
     // Walk the constraint block body looking for soft ConstraintInsideOp
     // with single-value ranges (representing equality constraints)
@@ -8860,6 +9006,7 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 
         SoftConstraintInfo info;
         info.propertyName = propName;
+        info.constraintName = constraintName;
         info.defaultValue = defaultValue;
         info.fieldIndex = fieldIdx;
         info.bitWidth = bitWidth;
@@ -8930,10 +9077,29 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
 
     SmallVector<std::pair<Value, Value>> preservedFields;
+    SmallVector<std::tuple<Value, Value, Value>> conditionalRestores;
+    auto createRandEnabledCheck = [&](StringRef propertyName) -> Value {
+      std::string globalName =
+          ("__rand_name_" + classSym.getRootReference().str() + "_" +
+           propertyName)
+              .str();
+      Value namePtr = createGlobalStringConstant(loc, mod, rewriter,
+                                                 propertyName, globalName);
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_is_rand_enabled",
+                                       fnTy);
+      auto enabledVal = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+          ValueRange{classPtr, namePtr});
+      auto zero =
+          LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                   rewriter.getI32IntegerAttr(0));
+      return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                   enabledVal.getResult(), zero);
+    };
+
     if (classDecl) {
       for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
-        if (propDecl.isRandomizable())
-          continue;
         auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
         if (!pathOpt)
           continue;
@@ -8950,17 +9116,57 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                             classPtr, gepIndices);
         auto fieldVal =
             LLVM::LoadOp::create(rewriter, loc, fieldTy, fieldPtr);
-        preservedFields.push_back({fieldPtr, fieldVal});
+        if (propDecl.isRandomizable()) {
+          Value enabled = createRandEnabledCheck(propDecl.getSymName());
+          auto zero = arith::ConstantOp::create(
+              rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+          Value shouldRestore = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::eq, enabled, zero);
+          conditionalRestores.emplace_back(fieldPtr, fieldVal, shouldRestore);
+        } else {
+          preservedFields.push_back({fieldPtr, fieldVal});
+        }
       }
     }
 
     auto restorePreservedFields = [&]() {
       for (auto &entry : preservedFields)
         LLVM::StoreOp::create(rewriter, loc, entry.second, entry.first);
+      for (auto &entry : conditionalRestores) {
+        Value fieldPtr = std::get<0>(entry);
+        Value fieldVal = std::get<1>(entry);
+        Value shouldRestore = std::get<2>(entry);
+        auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, shouldRestore,
+                                      /*withElseRegion=*/false);
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+        LLVM::StoreOp::create(rewriter, loc, fieldVal, fieldPtr);
+      }
     };
 
-    auto applyRandcFields = [&](const llvm::DenseSet<StringRef> *hardConstrained,
-                                const llvm::DenseSet<StringRef> *softConstrained) {
+    auto createConstraintEnabledCheck = [&](StringRef constraintName) -> Value {
+      std::string globalName =
+          ("__constraint_name_" + classSym.getRootReference().str() + "_" +
+           constraintName)
+              .str();
+      Value namePtr = createGlobalStringConstant(loc, mod, rewriter,
+                                                 constraintName, globalName);
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_is_constraint_enabled", fnTy);
+      auto enabledVal = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+          ValueRange{classPtr, namePtr});
+      auto zero =
+          LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                   rewriter.getI32IntegerAttr(0));
+      return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                   enabledVal.getResult(), zero);
+    };
+
+    auto applyRandcFields =
+        [&](const llvm::DenseMap<StringRef, SmallVector<StringRef>>
+                &constraintsByProperty) {
       if (!classDecl)
         return;
 
@@ -8971,11 +9177,34 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
         if (propDecl.getRandMode() != RandMode::RandC)
           continue;
-        if ((hardConstrained &&
-             hardConstrained->contains(propDecl.getSymName())) ||
-            (softConstrained &&
-             softConstrained->contains(propDecl.getSymName())))
-          continue;
+        OpBuilder::InsertionGuard guard(rewriter);
+        Value randEnabled = createRandEnabledCheck(propDecl.getSymName());
+        auto constraintIt = constraintsByProperty.find(propDecl.getSymName());
+        if (constraintIt != constraintsByProperty.end() &&
+            !constraintIt->second.empty()) {
+          Value anyEnabled = arith::ConstantOp::create(
+              rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+          for (auto constraintName : constraintIt->second) {
+            if (constraintName.empty())
+              continue;
+            Value enabled = createConstraintEnabledCheck(constraintName);
+            anyEnabled =
+                arith::OrIOp::create(rewriter, loc, anyEnabled, enabled);
+          }
+          Value shouldApply = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::eq, anyEnabled,
+              arith::ConstantOp::create(rewriter, loc, i1Ty,
+                                        rewriter.getBoolAttr(false)));
+          Value applyCond =
+              arith::AndIOp::create(rewriter, loc, randEnabled, shouldApply);
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+        } else {
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabled,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+        }
 
         auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
         if (!pathOpt)
@@ -9040,12 +9269,21 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
     }
 
+    // Build a map of properties to constraint names for randc gating.
+    llvm::DenseMap<StringRef, SmallVector<StringRef>> constraintsByProperty;
+    for (const auto &constraint : hardConstraints) {
+      if (!constraint.constraintName.empty())
+        constraintsByProperty[constraint.propertyName].push_back(
+            constraint.constraintName);
+    }
+    for (const auto &soft : effectiveSoftConstraints) {
+      if (!soft.constraintName.empty())
+        constraintsByProperty[soft.propertyName].push_back(
+            soft.constraintName);
+    }
+
     // If we have any constraints, use constraint-aware randomization
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty()) {
-      llvm::DenseSet<StringRef> softConstrainedProps;
-      for (const auto &soft : effectiveSoftConstraints)
-        softConstrainedProps.insert(soft.propertyName);
-
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -9071,6 +9309,19 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                                rangesFnTy);
 
         for (const auto &constraint : hardConstraints) {
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(constraint.propertyName);
+          Value applyCond = randEnabled;
+          if (!constraint.constraintName.empty()) {
+            Value enabled = createConstraintEnabledCheck(
+                constraint.constraintName);
+            applyCond = arith::AndIOp::create(rewriter, loc, randEnabled,
+                                              enabled);
+          }
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
           Value rangeResultVal;
 
           if (constraint.isMultiRange) {
@@ -9170,6 +9421,18 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       // constraints. Soft constraints provide fallback values that can be
       // overridden.
       for (const auto &soft : effectiveSoftConstraints) {
+        OpBuilder::InsertionGuard guard(rewriter);
+        Value randEnabled = createRandEnabledCheck(soft.propertyName);
+        Value applyCond = randEnabled;
+        if (!soft.constraintName.empty()) {
+          Value enabled = createConstraintEnabledCheck(soft.constraintName);
+          applyCond =
+              arith::AndIOp::create(rewriter, loc, randEnabled, enabled);
+        }
+        auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                      /*withElseRegion=*/false);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
         // Create the default value constant
         Type fieldIntTy = IntegerType::get(ctx, soft.bitWidth);
         Value defaultVal;
@@ -9211,7 +9474,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         }
       }
 
-      applyRandcFields(&hardConstrainedProps, &softConstrainedProps);
+      applyRandcFields(constraintsByProperty);
       // Return success
       restorePreservedFields();
       auto successVal = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
@@ -9237,7 +9500,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     auto truncResult =
         arith::TruncIOp::create(rewriter, loc, i1Ty, result.getResult());
 
-    applyRandcFields(nullptr, nullptr);
+    applyRandcFields(constraintsByProperty);
     restorePreservedFields();
     rewriter.replaceOp(op, truncResult);
     return success();
@@ -9333,6 +9596,336 @@ struct StdRandomizeOpConversion : public OpConversionPattern<StdRandomizeOp> {
     rewriter.replaceOp(op, successVal);
     return success();
   }
+};
+
+/// Conversion for moore.constraint_mode -> runtime function call.
+/// Implements the SystemVerilog constraint_mode() method for enabling/disabling
+/// constraints during randomization (IEEE 1800-2017 Section 18.8).
+struct ConstraintModeOpConversion
+    : public OpConversionPattern<ConstraintModeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ConstraintModeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    Value classPtr = adaptor.getObject();
+    auto handleTy = cast<ClassHandleType>(op.getObject().getType());
+    StringRef className = handleTy.getClassSym().getRootReference();
+    Value namePtr =
+        LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+
+    if (op.getConstraint().has_value()) {
+      StringRef constraintName = op.getConstraint().value();
+      std::string globalName =
+          ("__constraint_name_" + className + "_" + constraintName).str();
+      namePtr = createGlobalStringConstant(loc, mod, rewriter, constraintName,
+                                           globalName);
+    }
+
+    auto convertMode = [&](Value modeVal) -> Value {
+      if (!modeVal)
+        return {};
+      if (modeVal.getType() == i32Ty)
+        return modeVal;
+      auto modeIntTy = dyn_cast<IntegerType>(modeVal.getType());
+      if (!modeIntTy)
+        return modeVal;
+      if (modeIntTy.getWidth() < 32)
+        return arith::ExtUIOp::create(rewriter, loc, i32Ty, modeVal);
+      if (modeIntTy.getWidth() > 32)
+        return arith::TruncIOp::create(rewriter, loc, i32Ty, modeVal);
+      return modeVal;
+    };
+
+    if (adaptor.getMode()) {
+      Value modeI32 = convertMode(adaptor.getMode());
+      if (!modeI32)
+        return op.emitError() << "constraint_mode expects integer mode";
+
+      if (op.getConstraint().has_value()) {
+        auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy, i32Ty});
+        auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                         "__moore_constraint_mode_set", fnTy);
+        auto resultVal = LLVM::CallOp::create(
+            rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+            ValueRange{classPtr, namePtr, modeI32});
+        rewriter.replaceOp(op, resultVal.getResult());
+        return success();
+      }
+
+      auto zero =
+          LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                   rewriter.getI32IntegerAttr(0));
+      Value isEnable = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::ne, modeI32, zero);
+      auto ifOp =
+          scf::IfOp::create(rewriter, loc, TypeRange{i32Ty}, isEnable,
+                            /*withElseRegion=*/true);
+
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      auto enableFnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+      auto enableFn = getOrCreateRuntimeFunc(
+          mod, rewriter, "__moore_constraint_mode_enable_all", enableFnTy);
+      auto enableCall = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(enableFn),
+          ValueRange{classPtr});
+      scf::YieldOp::create(rewriter, loc, enableCall.getResult());
+
+      rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+      auto disableFnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+      auto disableFn = getOrCreateRuntimeFunc(
+          mod, rewriter, "__moore_constraint_mode_disable_all", disableFnTy);
+      auto disableCall = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(disableFn),
+          ValueRange{classPtr});
+      scf::YieldOp::create(rewriter, loc, disableCall.getResult());
+
+      rewriter.replaceOp(op, ifOp.getResult(0));
+      return success();
+    }
+
+    // Getter: constraint-specific or class-level.
+    if (!op.getConstraint().has_value()) {
+      std::string globalName =
+          ("__constraint_name_" + className + "__all__").str();
+      namePtr = createGlobalStringConstant(loc, mod, rewriter, "__all__",
+                                           globalName);
+    }
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_constraint_mode_get", fnTy);
+    auto resultVal = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                          SymbolRefAttr::get(fn),
+                                          ValueRange{classPtr, namePtr});
+    rewriter.replaceOp(op, resultVal.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.rand_mode -> runtime function call.
+/// Implements the SystemVerilog rand_mode() method for enabling/disabling
+/// random variables during randomization (IEEE 1800-2017 Section 18.8).
+struct RandModeOpConversion : public OpConversionPattern<RandModeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(RandModeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    Value classPtr = adaptor.getObject();
+    auto handleTy = cast<ClassHandleType>(op.getObject().getType());
+    StringRef className = handleTy.getClassSym().getRootReference();
+    Value namePtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+
+    if (op.getProperty().has_value()) {
+      StringRef propertyName = op.getProperty().value();
+      std::string globalName =
+          ("__rand_name_" + className + "_" + propertyName).str();
+      namePtr = createGlobalStringConstant(loc, mod, rewriter, propertyName,
+                                           globalName);
+    }
+
+    auto convertMode = [&](Value modeVal) -> Value {
+      if (!modeVal)
+        return {};
+      if (modeVal.getType() == i32Ty)
+        return modeVal;
+      auto modeIntTy = dyn_cast<IntegerType>(modeVal.getType());
+      if (!modeIntTy)
+        return modeVal;
+      if (modeIntTy.getWidth() < 32)
+        return arith::ExtUIOp::create(rewriter, loc, i32Ty, modeVal);
+      if (modeIntTy.getWidth() > 32)
+        return arith::TruncIOp::create(rewriter, loc, i32Ty, modeVal);
+      return modeVal;
+    };
+
+    if (adaptor.getMode()) {
+      Value modeI32 = convertMode(adaptor.getMode());
+      if (!modeI32)
+        return op.emitError() << "rand_mode expects integer mode";
+
+      if (op.getProperty().has_value()) {
+        auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy, i32Ty});
+        auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                         "__moore_rand_mode_set", fnTy);
+        auto resultVal = LLVM::CallOp::create(
+            rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+            ValueRange{classPtr, namePtr, modeI32});
+        rewriter.replaceOp(op, resultVal.getResult());
+        return success();
+      }
+
+      auto zero =
+          LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                   rewriter.getI32IntegerAttr(0));
+      Value isEnable = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::ne, modeI32, zero);
+      auto ifOp =
+          scf::IfOp::create(rewriter, loc, TypeRange{i32Ty}, isEnable,
+                            /*withElseRegion=*/true);
+
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      auto enableFnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+      auto enableFn = getOrCreateRuntimeFunc(
+          mod, rewriter, "__moore_rand_mode_enable_all", enableFnTy);
+      auto enableCall = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(enableFn),
+          ValueRange{classPtr});
+      scf::YieldOp::create(rewriter, loc, enableCall.getResult());
+
+      rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+      auto disableFnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy});
+      auto disableFn = getOrCreateRuntimeFunc(
+          mod, rewriter, "__moore_rand_mode_disable_all", disableFnTy);
+      auto disableCall = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(disableFn),
+          ValueRange{classPtr});
+      scf::YieldOp::create(rewriter, loc, disableCall.getResult());
+
+      rewriter.replaceOp(op, ifOp.getResult(0));
+      return success();
+    }
+
+    if (!op.getProperty().has_value()) {
+      std::string globalName = ("__rand_name_" + className + "__all__").str();
+      namePtr = createGlobalStringConstant(loc, mod, rewriter, "__all__",
+                                           globalName);
+    }
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_rand_mode_get", fnTy);
+    auto resultVal = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                          SymbolRefAttr::get(fn),
+                                          ValueRange{classPtr, namePtr});
+    rewriter.replaceOp(op, resultVal.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.call_pre_randomize -> runtime function call.
+/// Invokes the pre_randomize() method before randomization begins.
+/// IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
+struct CallPreRandomizeOpConversion
+    : public OpConversionPattern<CallPreRandomizeOp> {
+  CallPreRandomizeOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                               ClassTypeCache &cache)
+      : OpConversionPattern<CallPreRandomizeOp>(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(CallPreRandomizeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    // Get the class handle type and resolve class info
+    auto handleTy = cast<ClassHandleType>(op.getObject().getType());
+    auto classSym = handleTy.getClassSym();
+
+    // Check if the class has a user-defined pre_randomize method
+    auto *classDeclSym = mod.lookupSymbol(classSym);
+    auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
+
+    if (classDecl) {
+      // Look for a pre_randomize method declaration
+      for (auto methodDecl :
+           classDecl.getBody().getOps<ClassMethodDeclOp>()) {
+        if (methodDecl.getSymName() == "pre_randomize") {
+          // Found a pre_randomize method - call it via the runtime
+          auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+          auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+          // Runtime function: void __moore_call_pre_randomize(void* obj)
+          auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+          auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                           "__moore_call_pre_randomize", fnTy);
+
+          Value classPtr = adaptor.getObject();
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(fn), ValueRange{classPtr});
+          break;
+        }
+      }
+    }
+
+    // pre_randomize returns void, so just erase the operation
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  ClassTypeCache &cache;
+};
+
+/// Conversion for moore.call_post_randomize -> runtime function call.
+/// Invokes the post_randomize() method after successful randomization.
+/// IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
+struct CallPostRandomizeOpConversion
+    : public OpConversionPattern<CallPostRandomizeOp> {
+  CallPostRandomizeOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                                ClassTypeCache &cache)
+      : OpConversionPattern<CallPostRandomizeOp>(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(CallPostRandomizeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    // Get the class handle type and resolve class info
+    auto handleTy = cast<ClassHandleType>(op.getObject().getType());
+    auto classSym = handleTy.getClassSym();
+
+    // Check if the class has a user-defined post_randomize method
+    auto *classDeclSym = mod.lookupSymbol(classSym);
+    auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
+
+    if (classDecl) {
+      // Look for a post_randomize method declaration
+      for (auto methodDecl :
+           classDecl.getBody().getOps<ClassMethodDeclOp>()) {
+        if (methodDecl.getSymName() == "post_randomize") {
+          // Found a post_randomize method - call it via the runtime
+          auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+          auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+          // Runtime function: void __moore_call_post_randomize(void* obj)
+          auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+          auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                           "__moore_call_post_randomize", fnTy);
+
+          Value classPtr = adaptor.getObject();
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(fn), ValueRange{classPtr});
+          break;
+        }
+      }
+    }
+
+    // post_randomize returns void, so just erase the operation
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  ClassTypeCache &cache;
 };
 
 } // namespace
@@ -9730,6 +10323,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // Coverage patterns (erased during lowering).
   patterns.add<CovergroupDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CoverpointDeclOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CoverageBinDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CoverCrossDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<CrossBinDeclOpConversion>(typeConverter, patterns.getContext());
   patterns.add<BinsOfOpConversion>(typeConverter, patterns.getContext());
@@ -10052,6 +10646,14 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<RandomizeOpConversion>(typeConverter, patterns.getContext(),
                                       classCache);
   patterns.add<StdRandomizeOpConversion>(typeConverter, patterns.getContext());
+
+  // Constraint mode and randomize callbacks
+  patterns.add<ConstraintModeOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<RandModeOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CallPreRandomizeOpConversion>(typeConverter, patterns.getContext(),
+                                             classCache);
+  patterns.add<CallPostRandomizeOpConversion>(typeConverter,
+                                              patterns.getContext(), classCache);
 
   mlir::populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                             typeConverter);
