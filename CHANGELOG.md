@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 62 - January 20, 2026
+
+### Virtual Interface Fix + Coverage Options + LSP Formatting
+
+**Track A: Virtual Interface Timing Fix** ⭐ BUG FIX
+- Fixed modport-qualified virtual interface type conversion bug
+- Tasks called through `virtual interface.modport vif` now work correctly
+- Added `moore.conversion` to convert modport type to base interface type
+- Created 3 new tests demonstrating real AVIP BFM patterns
+
+**Track B: Constraint Implication Verification** ⭐ VERIFICATION
+- Verified `->` implication operator fully implemented
+- Verified `if-else` conditional constraints fully implemented
+- Created comprehensive test with 13 scenarios (constraint-implication.sv)
+- Created MooreToCore test with 12 scenarios
+
+**Track C: Coverage Options** ⭐ FEATURE
+- Added `option.goal` - Target coverage percentage
+- Added `option.at_least` - Minimum bin hit count
+- Added `option.weight` - Coverage weight for calculations
+- Added `option.auto_bin_max` - Maximum auto-generated bins
+- Added `MooreCoverageOption` enum for generic API
+- Coverage calculations now respect at_least and auto_bin_max
+- Added 14 new unit tests
+
+**Track D: LSP Document Formatting** ⭐ FEATURE
+- Implemented `textDocument/formatting` for full document
+- Implemented `textDocument/rangeFormatting` for selected ranges
+- Configurable tab size and spaces/tabs preference
+- Proper indentation for module/begin/end/function/task blocks
+- Preserves preprocessor directives
+- Created comprehensive formatting.test
+
+### Files Modified
+- `lib/Conversion/ImportVerilog/Expressions.cpp` (+10 lines for type conversion)
+- `lib/Runtime/MooreRuntime.cpp` (+300 lines for coverage options)
+- `include/circt/Runtime/MooreRuntime.h` (+40 lines for API)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+250 lines for tests)
+- `lib/Tools/circt-verilog-lsp-server/` (+500 lines for formatting)
+- New tests: 4 ImportVerilog, 1 MooreToCore, 1 LSP
+
+---
+
 ## Iteration 61 - January 20, 2026
 
 ### UVM Stubs + Array Constraints + Cross Coverage + LSP Inheritance

@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | UVM stubs extended, circt-sim enhanced | Virtual interface tasks, timing |
-| **B** | Randomization | Array constraints (unique, foreach, size, sum) | Constraint distribution, implication |
-| **C** | Coverage | Cross coverage with named bins, binsof | Coverage options (goal, at_least) |
-| **D** | LSP Tooling | Inheritance completion, code actions | Refactoring, document formatting |
+| **A** | Runtime/Simulation | Virtual interface timing fixed | End-to-end AVIP simulation |
+| **B** | Randomization | Constraint implication verified | Distribution weights lowering |
+| **C** | Coverage | Coverage options complete | Coverage callbacks, sample_event |
+| **D** | LSP Tooling | Document formatting complete | Go-to-implementation, find references |
 
 ### Feature Completion Matrix
 
@@ -50,12 +50,39 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Cross named bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
 | LSP inheritance completion | - | - | - | - | ✅ |
 | LSP chained completion | - | - | - | - | ✅ |
+| LSP document formatting | - | - | - | - | ✅ |
+| Coverage options | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Constraint implication | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 61 - UVM Stubs + Array Constraints + Cross Coverage (January 20, 2026)
+## Current Status: ITERATION 62 - Virtual Interface Fix + Coverage Options + LSP Formatting (January 20, 2026)
+
+**Summary**: Fixed virtual interface timing bug, added coverage options, implemented LSP document formatting.
+
+### Iteration 62 Highlights
+
+**Track A: Virtual Interface Timing** ⭐ BUG FIX
+- ✅ Fixed modport-qualified virtual interface type conversion
+- ✅ All 6 virtual interface tests passing
+
+**Track B: Constraint Implication** ⭐ VERIFICATION
+- ✅ Verified `->` and `if-else` fully implemented
+- ✅ Created 25 comprehensive test scenarios
+
+**Track C: Coverage Options** ⭐ FEATURE
+- ✅ goal, at_least, weight, auto_bin_max support
+- ✅ 14 new unit tests
+
+**Track D: LSP Formatting** ⭐ FEATURE
+- ✅ Full document and range formatting
+- ✅ Configurable indentation
+
+---
+
+## Previous: ITERATION 61 - UVM Stubs + Array Constraints + Cross Coverage (January 20, 2026)
 
 **Summary**: Extended UVM stubs, added array constraint support, enhanced cross coverage with named bins, LSP inheritance completion.
 
