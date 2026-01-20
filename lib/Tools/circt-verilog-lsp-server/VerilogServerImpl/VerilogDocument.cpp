@@ -4183,7 +4183,176 @@ public:
       hints.push_back(std::move(hint));
     }
 
+    // Add port name hints for positional port connections
+    // In Verilog, an instantiation uses either ALL ordered or ALL named connections
+    // We determine the style by checking the first connection that has valid syntax
+    auto connections = inst.getPortConnections();
+
+    // First, determine if this instantiation uses ordered connections
+    bool usesOrderedConnections = false;
+    for (const auto *conn : connections) {
+      if (!conn)
+        continue;
+      const auto *expr = conn->getExpression();
+      if (!expr || !expr->syntax)
+        continue;
+
+      // Walk up to find what kind of port connection this is
+      const slang::syntax::SyntaxNode *syntaxNode = expr->syntax;
+      int depth = 0;
+      while (syntaxNode && depth < 20) {
+        if (syntaxNode->kind == slang::syntax::SyntaxKind::OrderedPortConnection) {
+          usesOrderedConnections = true;
+          break;
+        }
+        if (syntaxNode->kind == slang::syntax::SyntaxKind::NamedPortConnection) {
+          // Named connection found, not ordered
+          break;
+        }
+        if (syntaxNode->kind == slang::syntax::SyntaxKind::HierarchyInstantiation) {
+          break;
+        }
+        syntaxNode = syntaxNode->parent;
+        ++depth;
+      }
+      // Once we've determined the style from the first valid connection, we're done
+      break;
+    }
+
+    // Only add hints if the instantiation uses ordered connections
+    if (usesOrderedConnections) {
+      for (const auto *conn : connections) {
+        if (!conn)
+          continue;
+
+        const auto *expr = conn->getExpression();
+        if (!expr)
+          continue;
+
+        // Check if the expression location is in range
+        auto exprLoc = expr->sourceRange.start();
+        if (!isInRange(exprLoc))
+          continue;
+
+        // Get port name from the connection
+        std::string_view portName = conn->port.name;
+        if (portName.empty())
+          continue;
+
+        auto pos = getPosition(exprLoc);
+        llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Parameter, pos);
+        hint.label = std::string(portName) + ":";
+        hint.paddingRight = true;
+        hints.push_back(std::move(hint));
+      }
+    }
+
     visitDefault(inst);
+  }
+
+  void handle(const slang::ast::CallExpression &call) {
+    // Add parameter name hints for function/task calls
+    if (call.isSystemCall()) {
+      visitDefault(call);
+      return;
+    }
+
+    const auto *sub =
+        std::get_if<const slang::ast::SubroutineSymbol *>(&call.subroutine);
+    if (!sub || !*sub) {
+      visitDefault(call);
+      return;
+    }
+
+    const auto &subroutine = **sub;
+    auto formalArgs = subroutine.getArguments();
+    auto actualArgs = call.arguments();
+
+    // Match actual arguments to formal parameters
+    size_t argIndex = 0;
+    for (const auto *argExpr : actualArgs) {
+      if (!argExpr || argIndex >= formalArgs.size())
+        break;
+
+      auto exprLoc = argExpr->sourceRange.start();
+      if (!isInRange(exprLoc)) {
+        ++argIndex;
+        continue;
+      }
+
+      const auto *formalArg = formalArgs[argIndex];
+      if (!formalArg || formalArg->name.empty()) {
+        ++argIndex;
+        continue;
+      }
+
+      // Check if this is a named argument by looking at the syntax
+      bool isNamedArg = false;
+      if (call.syntax) {
+        // Check if this call has InvocationExpressionSyntax
+        if (auto *invocation =
+                call.syntax->as_if<slang::syntax::InvocationExpressionSyntax>()) {
+          if (invocation->arguments) {
+            // Check if the argument at this index is named
+            size_t syntaxIdx = 0;
+            for (auto *argSyntax : invocation->arguments->parameters) {
+              if (syntaxIdx == argIndex) {
+                if (argSyntax->kind == slang::syntax::SyntaxKind::NamedArgument) {
+                  isNamedArg = true;
+                }
+                break;
+              }
+              ++syntaxIdx;
+            }
+          }
+        }
+      }
+
+      // Only add hint for positional arguments
+      if (!isNamedArg) {
+        auto pos = getPosition(exprLoc);
+        llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Parameter, pos);
+        hint.label = std::string(formalArg->name) + ":";
+        hint.paddingRight = true;
+        hints.push_back(std::move(hint));
+      }
+
+      ++argIndex;
+    }
+
+    visitDefault(call);
+  }
+
+  void handle(const slang::ast::SubroutineSymbol &sub) {
+    // Add return type hints for functions without explicit return type annotation
+    if (!isInRange(sub.location)) {
+      visitDefault(sub);
+      return;
+    }
+
+    // Only add hint for functions (not tasks)
+    if (sub.subroutineKind != slang::ast::SubroutineKind::Function) {
+      visitDefault(sub);
+      return;
+    }
+
+    // Check if the function has a non-void return type
+    const auto &returnType = sub.getReturnType();
+    if (returnType.isVoid()) {
+      visitDefault(sub);
+      return;
+    }
+
+    // Get the position after the function name (before parameters)
+    auto pos = getPosition(sub.location);
+    pos.character += sub.name.size();
+
+    llvm::lsp::InlayHint hint(llvm::lsp::InlayHintKind::Type, pos);
+    hint.label = " -> " + formatTypeDescription(returnType);
+    hint.paddingLeft = true;
+    hints.push_back(std::move(hint));
+
+    visitDefault(sub);
   }
 
   template <typename T>
@@ -5665,4 +5834,301 @@ bool VerilogDocument::resolveCodeLens(llvm::StringRef data, CodeLensInfo &lens) 
   // For now, just return true if we can parse the data
   // The lens was already fully resolved in getCodeLenses
   return !typeStr.empty();
+}
+
+//===----------------------------------------------------------------------===//
+// Type Hierarchy
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Encode class location data for type hierarchy items.
+static std::string encodeClassData(const llvm::lsp::URIForFile &uri,
+                                   int line, int col) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  os << uri.file() << ":" << line << ":" << col;
+  return result;
+}
+
+/// Decode class location data from type hierarchy items.
+static bool decodeClassData(llvm::StringRef data, std::string &file,
+                            int &line, int &col) {
+  auto lastColon = data.rfind(':');
+  if (lastColon == llvm::StringRef::npos)
+    return false;
+
+  auto colStr = data.substr(lastColon + 1);
+  if (colStr.getAsInteger(10, col))
+    return false;
+
+  auto secondLastColon = data.rfind(':', lastColon - 1);
+  if (secondLastColon == llvm::StringRef::npos)
+    return false;
+
+  auto lineStr = data.substr(secondLastColon + 1, lastColon - secondLastColon - 1);
+  if (lineStr.getAsInteger(10, line))
+    return false;
+
+  file = data.substr(0, secondLastColon).str();
+  return true;
+}
+
+/// Build a TypeHierarchyItem from a ClassType symbol.
+static VerilogDocument::TypeHierarchyItem
+buildTypeHierarchyItem(const slang::ast::ClassType &classType,
+                       const slang::SourceManager &sm,
+                       const llvm::lsp::URIForFile &uri) {
+  VerilogDocument::TypeHierarchyItem item;
+  item.name = classType.name;
+  item.kind = llvm::lsp::SymbolKind::Class;
+
+  // Build detail string
+  std::string detail;
+  llvm::raw_string_ostream detailOs(detail);
+  detailOs << "class " << classType.name;
+  if (classType.getBaseClass()) {
+    detailOs << " extends " << classType.getBaseClass()->name;
+  }
+  item.detail = detail;
+
+  item.uri = uri;
+
+  // Get the range of the entire class
+  if (auto *syntax = classType.getSyntax()) {
+    auto syntaxRange = syntax->sourceRange();
+    int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
+    int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
+    int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
+    int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+    item.range =
+        llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
+                         llvm::lsp::Position(endLine, endCol));
+  } else {
+    // Fallback to just the name location
+    int line = sm.getLineNumber(classType.location) - 1;
+    int col = sm.getColumnNumber(classType.location) - 1;
+    item.range = llvm::lsp::Range(
+        llvm::lsp::Position(line, col),
+        llvm::lsp::Position(line, col + static_cast<int>(classType.name.size())));
+  }
+
+  // Selection range is just the name
+  int nameLine = sm.getLineNumber(classType.location) - 1;
+  int nameCol = sm.getColumnNumber(classType.location) - 1;
+  item.selectionRange = llvm::lsp::Range(
+      llvm::lsp::Position(nameLine, nameCol),
+      llvm::lsp::Position(nameLine, nameCol + static_cast<int>(classType.name.size())));
+
+  // Encode location for later lookup
+  item.data = encodeClassData(uri, nameLine, nameCol);
+
+  return item;
+}
+
+/// Visitor to collect all classes and build inheritance graph.
+class ClassInheritanceCollector
+    : public slang::ast::ASTVisitor<ClassInheritanceCollector, true, true> {
+public:
+  /// Map from class symbol to its children (classes that extend it).
+  llvm::DenseMap<const slang::ast::ClassType *,
+                 std::vector<const slang::ast::ClassType *>> childrenMap;
+  /// All classes found.
+  std::vector<const slang::ast::ClassType *> allClasses;
+
+  void visit(const slang::ast::ClassType &classType) {
+    allClasses.push_back(&classType);
+
+    // Record parent-child relationship
+    if (const auto *baseClass = classType.getBaseClass()) {
+      if (baseClass->isClass()) {
+        const auto *baseClassType = &baseClass->getCanonicalType().as<slang::ast::ClassType>();
+        childrenMap[baseClassType].push_back(&classType);
+      }
+    }
+
+    // Continue visiting nested classes
+    visitDefault(classType);
+  }
+
+  template <typename T>
+  void visit(const T &node) {
+    visitDefault(node);
+  }
+};
+
+} // namespace
+
+std::optional<VerilogDocument::TypeHierarchyItem>
+VerilogDocument::prepareTypeHierarchy(const llvm::lsp::URIForFile &uri,
+                                      const llvm::lsp::Position &pos) {
+  if (!index || failed(compilation))
+    return std::nullopt;
+
+  const auto *slangBufferPointer = getPointerFor(pos);
+  if (!slangBufferPointer)
+    return std::nullopt;
+
+  const auto &intervalMap = index->getIntervalMap();
+  auto it = intervalMap.find(slangBufferPointer);
+
+  if (!it.valid() || slangBufferPointer < it.start())
+    return std::nullopt;
+
+  auto element = it.value();
+
+  // Check if it's a symbol
+  const auto *symbol = dyn_cast<const slang::ast::Symbol *>(element);
+  if (!symbol)
+    return std::nullopt;
+
+  // Handle ClassType symbols directly
+  if (symbol->kind == slang::ast::SymbolKind::ClassType) {
+    const auto &classType = symbol->as<slang::ast::ClassType>();
+    const auto &sm = getSlangSourceManager();
+    return buildTypeHierarchyItem(classType, sm, uri);
+  }
+
+  // Also handle references to classes (e.g., in extends clause or variable type)
+  // Check if this is a type that refers to a class
+  if (symbol->kind == slang::ast::SymbolKind::Variable ||
+      symbol->kind == slang::ast::SymbolKind::ClassProperty) {
+    const auto &type = symbol->kind == slang::ast::SymbolKind::Variable
+                           ? symbol->as<slang::ast::VariableSymbol>().getType()
+                           : symbol->as<slang::ast::ClassPropertySymbol>().getType();
+    if (type.isClass()) {
+      const auto &classType = type.getCanonicalType().as<slang::ast::ClassType>();
+      const auto &sm = getSlangSourceManager();
+      return buildTypeHierarchyItem(classType, sm, uri);
+    }
+  }
+
+  return std::nullopt;
+}
+
+void VerilogDocument::getSupertypes(
+    const TypeHierarchyItem &item,
+    std::vector<TypeHierarchyItem> &supertypes) {
+  if (failed(compilation))
+    return;
+
+  // Decode the target class location from item.data
+  std::string file;
+  int targetLine, targetCol;
+  if (!decodeClassData(item.data, file, targetLine, targetCol))
+    return;
+
+  const auto &sm = getSlangSourceManager();
+
+  // Find the target class by matching name and checking if it matches
+  // the expected location
+  const slang::ast::ClassType *targetClass = nullptr;
+
+  auto findClass = [&](const slang::ast::Scope &scope) {
+    for (const auto &member : scope.members()) {
+      if (member.kind == slang::ast::SymbolKind::ClassType &&
+          member.name == item.name) {
+        const auto &classType = member.as<slang::ast::ClassType>();
+        int line = sm.getLineNumber(classType.location) - 1;
+        int col = sm.getColumnNumber(classType.location) - 1;
+        if (line == targetLine && col == targetCol) {
+          targetClass = &classType;
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Search in packages
+  for (auto *package : (*compilation)->getPackages()) {
+    if (findClass(*package))
+      break;
+  }
+
+  // Search in top instances
+  if (!targetClass) {
+    for (auto *inst : (*compilation)->getRoot().topInstances) {
+      if (findClass(inst->body))
+        break;
+    }
+  }
+
+  // Search in compilation units
+  if (!targetClass) {
+    for (const auto *unit : (*compilation)->getCompilationUnits()) {
+      if (findClass(*unit))
+        break;
+    }
+  }
+
+  if (!targetClass)
+    return;
+
+  // Get the base class if it exists
+  if (const auto *baseClass = targetClass->getBaseClass()) {
+    if (baseClass->isClass()) {
+      const auto &baseClassType = baseClass->getCanonicalType().as<slang::ast::ClassType>();
+      supertypes.push_back(buildTypeHierarchyItem(baseClassType, sm, uri));
+    }
+  }
+}
+
+void VerilogDocument::getSubtypes(
+    const TypeHierarchyItem &item,
+    std::vector<TypeHierarchyItem> &subtypes) {
+  if (failed(compilation))
+    return;
+
+  // Decode the target class location from item.data
+  std::string file;
+  int targetLine, targetCol;
+  if (!decodeClassData(item.data, file, targetLine, targetCol))
+    return;
+
+  const auto &sm = getSlangSourceManager();
+
+  // First, collect all classes and build inheritance graph
+  ClassInheritanceCollector collector;
+
+  // Visit all packages
+  for (auto *package : (*compilation)->getPackages()) {
+    package->visit(collector);
+  }
+
+  // Visit all top instances
+  for (auto *inst : (*compilation)->getRoot().topInstances) {
+    inst->body.visit(collector);
+  }
+
+  // Visit all compilation units
+  for (const auto *unit : (*compilation)->getCompilationUnits()) {
+    for (const auto &member : unit->members()) {
+      member.visit(collector);
+    }
+  }
+
+  // Find the target class by matching name and location
+  const slang::ast::ClassType *targetClass = nullptr;
+  for (const auto *classType : collector.allClasses) {
+    if (classType->name == item.name) {
+      int line = sm.getLineNumber(classType->location) - 1;
+      int col = sm.getColumnNumber(classType->location) - 1;
+      if (line == targetLine && col == targetCol) {
+        targetClass = classType;
+        break;
+      }
+    }
+  }
+
+  if (!targetClass)
+    return;
+
+  // Get all classes that directly extend the target class
+  auto it = collector.childrenMap.find(targetClass);
+  if (it != collector.childrenMap.end()) {
+    for (const auto *childClass : it->second) {
+      subtypes.push_back(buildTypeHierarchyItem(*childClass, sm, uri));
+    }
+  }
 }

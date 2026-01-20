@@ -912,6 +912,30 @@ private:
           args.push_back(genOp.getValue());
           return success();
         })
+        .Case<sim::FormatDynStringOp>([&](auto dynStrOp) {
+          // Dynamic strings are represented as LLVM struct {ptr, i64}
+          // (MooreString). Use %.*s format specifier to print with explicit
+          // length, avoiding the need for null-terminated strings.
+          formatStr.append("%.*s");
+          Value strStruct = dynStrOp.getValue();
+
+          // Extract length (field 1) - needs to be i32 for printf %.*s
+          auto i32Type = IntegerType::get(getContext(), 32);
+          auto i64Type = IntegerType::get(getContext(), 64);
+          Value len64 =
+              LLVM::ExtractValueOp::create(rewriter, loc, i64Type, strStruct,
+                                           ArrayRef<int64_t>{1});
+          Value len32 = LLVM::TruncOp::create(rewriter, loc, i32Type, len64);
+          args.push_back(len32);
+
+          // Extract pointer (field 0)
+          auto ptrType = LLVM::LLVMPointerType::get(getContext());
+          Value ptr =
+              LLVM::ExtractValueOp::create(rewriter, loc, ptrType, strStruct,
+                                           ArrayRef<int64_t>{0});
+          args.push_back(ptr);
+          return success();
+        })
         .Default([&](Operation *) {
           // For unsupported format operations, emit a placeholder.
           formatStr.append("<unsupported>");

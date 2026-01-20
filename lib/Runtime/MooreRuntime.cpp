@@ -35,6 +35,13 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
+
 //===----------------------------------------------------------------------===//
 // Internal Helpers
 //===----------------------------------------------------------------------===//
@@ -7414,6 +7421,880 @@ extern "C" const char *__moore_coverage_get_test_name(void) {
 }
 
 //===----------------------------------------------------------------------===//
+// UCDB-Compatible Coverage File Format
+//===----------------------------------------------------------------------===//
+//
+// These functions implement UCDB (Unified Coverage Database) compatible file
+// format support. The format uses JSON for human readability and portability,
+// with a schema designed to map to UCDB semantics.
+//
+
+namespace {
+
+/// Global user attributes for coverage sessions.
+std::map<std::string, std::string> globalUserAttrs;
+
+/// Thread-local storage for version string return value.
+thread_local std::string cachedVersionString;
+
+/// Get hostname for metadata.
+std::string getHostnameStr() {
+#ifdef _WIN32
+  char hostname[256];
+  DWORD size = sizeof(hostname);
+  if (GetComputerNameA(hostname, &size))
+    return hostname;
+  return "unknown";
+#else
+  char hostname[256];
+  if (gethostname(hostname, sizeof(hostname)) == 0)
+    return hostname;
+  return "unknown";
+#endif
+}
+
+/// Get username for metadata.
+std::string getUsernameStr() {
+#ifdef _WIN32
+  char username[256];
+  DWORD size = sizeof(username);
+  if (GetUserNameA(username, &size))
+    return username;
+  return "unknown";
+#else
+  const char *user = getenv("USER");
+  if (user)
+    return user;
+  user = getenv("LOGNAME");
+  if (user)
+    return user;
+  return "unknown";
+#endif
+}
+
+/// Get current working directory for metadata.
+std::string getCurrentWorkdirStr() {
+  char cwd[4096];
+#ifdef _WIN32
+  if (_getcwd(cwd, sizeof(cwd)))
+    return cwd;
+#else
+  if (getcwd(cwd, sizeof(cwd)))
+    return cwd;
+#endif
+  return "";
+}
+
+/// Generate UCDB-compatible JSON output.
+std::string generateUCDBJson(const MooreUCDBMetadata *metadata) {
+  std::string json = "{\n";
+
+  // Schema identification
+  json += "  \"$schema\": \"circt-ucdb-2.0\",\n";
+  json += "  \"format\": {\n";
+  json += "    \"name\": \"" MOORE_UCDB_FORMAT_MAGIC "\",\n";
+  json += "    \"version\": \"" MOORE_UCDB_FORMAT_VERSION "\",\n";
+  json += "    \"generator\": \"circt-moore-runtime\",\n";
+  json += "    \"generator_version\": \"1.0.0\"\n";
+  json += "  },\n";
+
+  // Metadata section
+  json += "  \"metadata\": {\n";
+
+  // Test info
+  if (metadata && metadata->test_name) {
+    json +=
+        "    \"test_name\": " + jsonEscapeString(metadata->test_name) + ",\n";
+  } else if (!globalTestName.empty()) {
+    json += "    \"test_name\": " +
+            jsonEscapeString(globalTestName.c_str()) + ",\n";
+  } else {
+    json += "    \"test_name\": null,\n";
+  }
+
+  if (metadata && metadata->test_seed) {
+    json +=
+        "    \"test_seed\": " + jsonEscapeString(metadata->test_seed) + ",\n";
+  } else {
+    json += "    \"test_seed\": null,\n";
+  }
+
+  // Timestamps
+  int64_t currentTime = static_cast<int64_t>(std::time(nullptr));
+  if (metadata && metadata->start_time > 0) {
+    json +=
+        "    \"start_time\": " + std::to_string(metadata->start_time) + ",\n";
+  } else {
+    json += "    \"start_time\": " + std::to_string(currentTime) + ",\n";
+  }
+
+  if (metadata && metadata->end_time > 0) {
+    json += "    \"end_time\": " + std::to_string(metadata->end_time) + ",\n";
+  } else {
+    json += "    \"end_time\": " + std::to_string(currentTime) + ",\n";
+  }
+
+  if (metadata && metadata->sim_time > 0) {
+    json += "    \"sim_time\": " + std::to_string(metadata->sim_time) + ",\n";
+  } else {
+    json += "    \"sim_time\": 0,\n";
+  }
+
+  if (metadata && metadata->time_unit) {
+    json +=
+        "    \"time_unit\": " + jsonEscapeString(metadata->time_unit) + ",\n";
+  } else {
+    json += "    \"time_unit\": \"ns\",\n";
+  }
+
+  // Tool info
+  if (metadata && metadata->tool_name) {
+    json +=
+        "    \"tool_name\": " + jsonEscapeString(metadata->tool_name) + ",\n";
+  } else {
+    json += "    \"tool_name\": \"circt-moore\",\n";
+  }
+
+  if (metadata && metadata->tool_version) {
+    json += "    \"tool_version\": " +
+            jsonEscapeString(metadata->tool_version) + ",\n";
+  } else {
+    json += "    \"tool_version\": \"1.0.0\",\n";
+  }
+
+  // Environment info
+  json += "    \"hostname\": " +
+          jsonEscapeString(getHostnameStr().c_str()) + ",\n";
+  json += "    \"username\": " +
+          jsonEscapeString(getUsernameStr().c_str()) + ",\n";
+
+  std::string workdir = getCurrentWorkdirStr();
+  if (metadata && metadata->workdir) {
+    json += "    \"workdir\": " + jsonEscapeString(metadata->workdir) + ",\n";
+  } else if (!workdir.empty()) {
+    json += "    \"workdir\": " + jsonEscapeString(workdir.c_str()) + ",\n";
+  } else {
+    json += "    \"workdir\": null,\n";
+  }
+
+  if (metadata && metadata->command_line) {
+    json += "    \"command_line\": " +
+            jsonEscapeString(metadata->command_line) + ",\n";
+  } else {
+    json += "    \"command_line\": null,\n";
+  }
+
+  if (metadata && metadata->comment) {
+    json += "    \"comment\": " + jsonEscapeString(metadata->comment) + ",\n";
+  } else {
+    json += "    \"comment\": null,\n";
+  }
+
+  // Merge history
+  json += "    \"merge_history\": [\n";
+  if (metadata && metadata->num_merged_runs > 0 &&
+      metadata->merged_test_names) {
+    for (int32_t i = 0; i < metadata->num_merged_runs; ++i) {
+      if (i > 0)
+        json += ",\n";
+      json += "      " + jsonEscapeString(metadata->merged_test_names[i]);
+    }
+    if (metadata->num_merged_runs > 0)
+      json += "\n";
+  }
+  json += "    ],\n";
+
+  // User attributes
+  json += "    \"user_attributes\": {\n";
+  bool firstAttr = true;
+
+  // Add global user attributes
+  for (const auto &attr : globalUserAttrs) {
+    if (!firstAttr)
+      json += ",\n";
+    firstAttr = false;
+    json += "      " + jsonEscapeString(attr.first.c_str()) + ": " +
+            jsonEscapeString(attr.second.c_str());
+  }
+
+  // Add metadata user attributes (if any)
+  if (metadata && metadata->num_user_attrs > 0 && metadata->user_attr_names &&
+      metadata->user_attr_values) {
+    for (int32_t i = 0; i < metadata->num_user_attrs; ++i) {
+      if (!firstAttr)
+        json += ",\n";
+      firstAttr = false;
+      json += "      " + jsonEscapeString(metadata->user_attr_names[i]) + ": " +
+              jsonEscapeString(metadata->user_attr_values[i]);
+    }
+  }
+
+  if (!firstAttr)
+    json += "\n";
+  json += "    }\n";
+  json += "  },\n";
+
+  // Coverage data section
+  json += "  \"coverage_data\": {\n";
+
+  // Summary
+  double totalCoverage = 0.0;
+  int32_t totalCovergroups = 0;
+  int32_t totalCoverpoints = 0;
+  int64_t totalBins = 0;
+  int64_t coveredBins = 0;
+
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+    ++totalCovergroups;
+    totalCoverpoints += cg->num_coverpoints;
+    totalCoverage += __moore_covergroup_get_coverage(cg);
+
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+      auto binIt = explicitBinData.find(cp);
+      if (binIt != explicitBinData.end()) {
+        totalBins += binIt->second.bins.size();
+        for (const auto &bin : binIt->second.bins) {
+          if (bin.hit_count > 0)
+            ++coveredBins;
+        }
+      }
+    }
+  }
+
+  if (totalCovergroups > 0)
+    totalCoverage /= totalCovergroups;
+
+  json += "    \"summary\": {\n";
+  json += "      \"total_coverage_percent\": " + std::to_string(totalCoverage) +
+          ",\n";
+  json += "      \"total_covergroups\": " + std::to_string(totalCovergroups) +
+          ",\n";
+  json += "      \"total_coverpoints\": " + std::to_string(totalCoverpoints) +
+          ",\n";
+  json += "      \"total_bins\": " + std::to_string(totalBins) + ",\n";
+  json += "      \"covered_bins\": " + std::to_string(coveredBins) + "\n";
+  json += "    },\n";
+
+  // Covergroups
+  json += "    \"covergroups\": [\n";
+
+  bool firstCg = true;
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    if (!firstCg)
+      json += ",\n";
+    firstCg = false;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+
+    json += "      {\n";
+    json += "        \"name\": " + jsonEscapeString(cg->name) + ",\n";
+    json +=
+        "        \"coverage_percent\": " + std::to_string(cgCoverage) + ",\n";
+    json += "        \"type\": \"covergroup\",\n";
+    json += "        \"options\": {\n";
+    json += "          \"weight\": 1,\n";
+    json += "          \"goal\": 100,\n";
+    json += "          \"comment\": null\n";
+    json += "        },\n";
+    json += "        \"coverpoints\": [\n";
+
+    bool firstCp = true;
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      if (!firstCp)
+        json += ",\n";
+      firstCp = false;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      auto trackerIt = coverpointTrackers.find(cp);
+
+      json += "          {\n";
+      json += "            \"name\": " + jsonEscapeString(cp->name) + ",\n";
+      json += "            \"coverage_percent\": " +
+              std::to_string(cpCoverage) + ",\n";
+      json += "            \"total_hits\": " + std::to_string(cp->hits) + ",\n";
+      json +=
+          "            \"min_value\": " + std::to_string(cp->min_val) + ",\n";
+      json +=
+          "            \"max_value\": " + std::to_string(cp->max_val) + ",\n";
+      json += "            \"options\": {\n";
+      json += "              \"weight\": 1,\n";
+      json += "              \"goal\": 100,\n";
+      json += "              \"at_least\": 1,\n";
+      json += "              \"auto_bin_max\": 64,\n";
+      json += "              \"comment\": null\n";
+      json += "            },\n";
+
+      // Bins
+      json += "            \"bins\": [\n";
+      auto binIt = explicitBinData.find(cp);
+      if (binIt != explicitBinData.end()) {
+        bool firstBin = true;
+        for (const auto &bin : binIt->second.bins) {
+          if (!firstBin)
+            json += ",\n";
+          firstBin = false;
+
+          const char *binTypeName = "unknown";
+          switch (bin.type) {
+          case MOORE_BIN_VALUE:
+            binTypeName = "value";
+            break;
+          case MOORE_BIN_RANGE:
+            binTypeName = "range";
+            break;
+          case MOORE_BIN_WILDCARD:
+            binTypeName = "wildcard";
+            break;
+          case MOORE_BIN_TRANSITION:
+            binTypeName = "transition";
+            break;
+          }
+
+          const char *binKindName = "normal";
+          switch (bin.kind) {
+          case MOORE_BIN_KIND_NORMAL:
+            binKindName = "normal";
+            break;
+          case MOORE_BIN_KIND_ILLEGAL:
+            binKindName = "illegal";
+            break;
+          case MOORE_BIN_KIND_IGNORE:
+            binKindName = "ignore";
+            break;
+          }
+
+          json += "              {\n";
+          json +=
+              "                \"name\": " + jsonEscapeString(bin.name) + ",\n";
+          json += "                \"type\": \"" + std::string(binTypeName) +
+                  "\",\n";
+          json += "                \"kind\": \"" + std::string(binKindName) +
+                  "\",\n";
+          json += "                \"low\": " + std::to_string(bin.low) + ",\n";
+          json +=
+              "                \"high\": " + std::to_string(bin.high) + ",\n";
+          json += "                \"hit_count\": " +
+                  std::to_string(bin.hit_count) + ",\n";
+          json += "                \"at_least\": 1\n";
+          json += "              }";
+        }
+      }
+      json += "\n            ],\n";
+
+      // Value distribution (for analysis)
+      json += "            \"value_distribution\": [\n";
+      if (trackerIt != coverpointTrackers.end()) {
+        bool firstVal = true;
+        for (const auto &kv : trackerIt->second.valueCounts) {
+          if (!firstVal)
+            json += ",\n";
+          firstVal = false;
+          json += "              {\"value\": " + std::to_string(kv.first) +
+                  ", \"count\": " + std::to_string(kv.second) + "}";
+        }
+      }
+      json += "\n            ]\n";
+      json += "          }";
+    }
+
+    json += "\n        ],\n";
+
+    // Crosses placeholder (for future)
+    json += "        \"crosses\": []\n";
+    json += "      }";
+  }
+
+  json += "\n    ]\n";
+  json += "  }\n";
+  json += "}\n";
+
+  return json;
+}
+
+} // anonymous namespace
+
+extern "C" int32_t
+__moore_coverage_write_ucdb(const char *filename,
+                            const MooreUCDBMetadata *metadata) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  std::string json = generateUCDBJson(metadata);
+  size_t written = std::fwrite(json.c_str(), 1, json.size(), fp);
+  std::fclose(fp);
+
+  return (written == json.size()) ? 0 : 1;
+}
+
+extern "C" MooreCoverageDBHandle
+__moore_coverage_read_ucdb(const char *filename) {
+  if (!filename)
+    return nullptr;
+
+  FILE *fp = std::fopen(filename, "r");
+  if (!fp)
+    return nullptr;
+
+  // Read the entire file
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  if (fileSize <= 0) {
+    std::fclose(fp);
+    return nullptr;
+  }
+
+  std::string json(fileSize, '\0');
+  size_t bytesRead = std::fread(&json[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  if (bytesRead != static_cast<size_t>(fileSize))
+    return nullptr;
+
+  // Allocate database
+  auto *db = new MooreCoverageDB();
+
+  // Use the existing JSON parser
+  SimpleJsonParser parser(json);
+  if (!parser.parse(*db)) {
+    delete db;
+    return nullptr;
+  }
+
+  // Parse metadata if present
+  size_t metadataPos = json.find("\"metadata\"");
+  if (metadataPos != std::string::npos) {
+    db->hasMetadata = true;
+
+    // Parse test_name
+    size_t testNamePos = json.find("\"test_name\"", metadataPos);
+    if (testNamePos != std::string::npos) {
+      size_t colonPos = json.find(':', testNamePos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && json[valueStart] == '"') {
+          size_t valueEnd = json.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            db->metadataStorage.testName =
+                json.substr(valueStart + 1, valueEnd - valueStart - 1);
+          }
+        }
+      }
+    }
+
+    // Parse tool_name as simulator
+    size_t toolNamePos = json.find("\"tool_name\"", metadataPos);
+    if (toolNamePos != std::string::npos) {
+      size_t colonPos = json.find(':', toolNamePos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && json[valueStart] == '"') {
+          size_t valueEnd = json.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            db->metadataStorage.simulator =
+                json.substr(valueStart + 1, valueEnd - valueStart - 1);
+          }
+        }
+      }
+    }
+
+    // Parse end_time as timestamp
+    size_t endTimePos = json.find("\"end_time\"", metadataPos);
+    if (endTimePos != std::string::npos) {
+      size_t colonPos = json.find(':', endTimePos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos) {
+          // Parse integer without exceptions
+          const char *numStart = json.c_str() + valueStart;
+          char *numEnd = nullptr;
+          long long value = std::strtoll(numStart, &numEnd, 10);
+          db->metadataStorage.timestamp =
+              (numEnd != numStart) ? static_cast<int64_t>(value) : 0;
+        }
+      }
+    }
+
+    // Parse comment
+    size_t commentPos = json.find("\"comment\"", metadataPos);
+    if (commentPos != std::string::npos) {
+      size_t colonPos = json.find(':', commentPos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && json[valueStart] == '"') {
+          size_t valueEnd = json.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            db->metadataStorage.comment =
+                json.substr(valueStart + 1, valueEnd - valueStart - 1);
+          }
+        }
+      }
+    }
+
+    // Check for UCDB format version
+    size_t formatPos = json.find("\"format\"");
+    if (formatPos != std::string::npos) {
+      size_t versionPos = json.find("\"version\"", formatPos);
+      if (versionPos != std::string::npos && versionPos < formatPos + 200) {
+        size_t colonPos = json.find(':', versionPos);
+        if (colonPos != std::string::npos) {
+          size_t valueStart = json.find_first_not_of(" \t\n\r", colonPos + 1);
+          if (valueStart != std::string::npos && json[valueStart] == '"') {
+            size_t valueEnd = json.find('"', valueStart + 1);
+            if (valueEnd != std::string::npos) {
+              db->metadataStorage.version =
+                  json.substr(valueStart + 1, valueEnd - valueStart - 1);
+            }
+          }
+        }
+      }
+    }
+
+    db->updateMetadataPointers();
+  }
+
+  return db;
+}
+
+extern "C" const MooreUCDBMetadata *
+__moore_coverage_db_get_ucdb_metadata(MooreCoverageDBHandle db) {
+  // Extended UCDB metadata is not currently stored in the handle
+  // Return nullptr - full implementation would need extended type
+  if (!db)
+    return nullptr;
+  return nullptr;
+}
+
+extern "C" int32_t __moore_coverage_merge_ucdb_files(const char **input_files,
+                                                      int32_t num_files,
+                                                      const char *output_file,
+                                                      const char *comment) {
+  if (!input_files || num_files <= 0 || !output_file)
+    return 1;
+
+  // Load all input databases
+  std::vector<MooreCoverageDBHandle> databases;
+  std::vector<std::string> mergedTestNames;
+
+  for (int32_t i = 0; i < num_files; ++i) {
+    if (!input_files[i])
+      continue;
+
+    MooreCoverageDBHandle db = __moore_coverage_read_ucdb(input_files[i]);
+    if (!db) {
+      // Clean up already loaded databases
+      for (auto *d : databases)
+        __moore_coverage_db_free(d);
+      return 1;
+    }
+
+    databases.push_back(db);
+
+    // Collect test names for merge history
+    const MooreCoverageMetadata *meta = __moore_coverage_db_get_metadata(db);
+    if (meta && meta->test_name) {
+      mergedTestNames.push_back(meta->test_name);
+    } else {
+      mergedTestNames.push_back(input_files[i]);
+    }
+  }
+
+  if (databases.empty())
+    return 1;
+
+  // Create merged database starting with first file's data
+  MooreCoverageDB mergedDb;
+  for (const auto &cg : databases[0]->covergroups) {
+    mergedDb.covergroups.push_back(cg);
+  }
+
+  // Merge remaining databases
+  for (size_t i = 1; i < databases.size(); ++i) {
+    for (const auto &cg : databases[i]->covergroups) {
+      bool found = false;
+      for (auto &mergedCg : mergedDb.covergroups) {
+        if (mergedCg.name == cg.name) {
+          // Merge coverpoints
+          for (const auto &cp : cg.coverpoints) {
+            bool cpFound = false;
+            for (auto &mergedCp : mergedCg.coverpoints) {
+              if (mergedCp.name == cp.name) {
+                mergedCp.hits += cp.hits;
+                mergedCp.minVal = std::min(mergedCp.minVal, cp.minVal);
+                mergedCp.maxVal = std::max(mergedCp.maxVal, cp.maxVal);
+                for (const auto &vc : cp.valueCounts) {
+                  mergedCp.valueCounts[vc.first] += vc.second;
+                }
+                for (size_t binIdx = 0;
+                     binIdx < cp.bins.size() && binIdx < mergedCp.bins.size();
+                     ++binIdx) {
+                  mergedCp.bins[binIdx].hit_count += cp.bins[binIdx].hit_count;
+                }
+                cpFound = true;
+                break;
+              }
+            }
+            if (!cpFound) {
+              mergedCg.coverpoints.push_back(cp);
+            }
+          }
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        mergedDb.covergroups.push_back(cg);
+      }
+    }
+  }
+
+  // Clean up input databases
+  for (auto *db : databases)
+    __moore_coverage_db_free(db);
+
+  // Write merged output
+  FILE *fp = std::fopen(output_file, "w");
+  if (!fp)
+    return 1;
+
+  // Generate UCDB-format JSON for merged data
+  std::string json = "{\n";
+  json += "  \"$schema\": \"circt-ucdb-2.0\",\n";
+  json += "  \"format\": {\n";
+  json += "    \"name\": \"" MOORE_UCDB_FORMAT_MAGIC "\",\n";
+  json += "    \"version\": \"" MOORE_UCDB_FORMAT_VERSION "\",\n";
+  json += "    \"generator\": \"circt-moore-runtime\"\n";
+  json += "  },\n";
+
+  json += "  \"metadata\": {\n";
+  json += "    \"test_name\": \"merged_coverage\",\n";
+  json += "    \"end_time\": " +
+          std::to_string(static_cast<int64_t>(std::time(nullptr))) + ",\n";
+  json += "    \"tool_name\": \"circt-moore\",\n";
+  if (comment) {
+    json += "    \"comment\": " + jsonEscapeString(comment) + ",\n";
+  } else {
+    json += "    \"comment\": null,\n";
+  }
+  json += "    \"merge_history\": [\n";
+  for (size_t i = 0; i < mergedTestNames.size(); ++i) {
+    if (i > 0)
+      json += ",\n";
+    json += "      " + jsonEscapeString(mergedTestNames[i].c_str());
+  }
+  json += "\n    ]\n";
+  json += "  },\n";
+
+  // Coverage data
+  json += "  \"coverage_data\": {\n";
+  json += "    \"covergroups\": [\n";
+  bool firstCg = true;
+  for (const auto &cg : mergedDb.covergroups) {
+    if (!firstCg)
+      json += ",\n";
+    firstCg = false;
+
+    json += "      {\n";
+    json += "        \"name\": " + jsonEscapeString(cg.name.c_str()) + ",\n";
+    json +=
+        "        \"coverage_percent\": " + std::to_string(cg.coverage) + ",\n";
+    json += "        \"coverpoints\": [\n";
+
+    bool firstCp = true;
+    for (const auto &cp : cg.coverpoints) {
+      if (!firstCp)
+        json += ",\n";
+      firstCp = false;
+
+      json += "          {\n";
+      json +=
+          "            \"name\": " + jsonEscapeString(cp.name.c_str()) + ",\n";
+      json += "            \"total_hits\": " + std::to_string(cp.hits) + ",\n";
+      json +=
+          "            \"min_value\": " + std::to_string(cp.minVal) + ",\n";
+      json +=
+          "            \"max_value\": " + std::to_string(cp.maxVal) + ",\n";
+      json += "            \"bins\": [\n";
+
+      bool firstBin = true;
+      for (const auto &bin : cp.bins) {
+        if (!firstBin)
+          json += ",\n";
+        firstBin = false;
+        json += "              {\"name\": " + jsonEscapeString(bin.name) +
+                ", \"hit_count\": " + std::to_string(bin.hit_count) + "}";
+      }
+      json += "\n            ],\n";
+
+      json += "            \"top_values\": [\n";
+      bool firstVal = true;
+      for (const auto &kv : cp.valueCounts) {
+        if (!firstVal)
+          json += ",\n";
+        firstVal = false;
+        json += "              {\"value\": " + std::to_string(kv.first) +
+                ", \"count\": " + std::to_string(kv.second) + "}";
+      }
+      json += "\n            ]\n";
+      json += "          }";
+    }
+
+    json += "\n        ]\n";
+    json += "      }";
+  }
+
+  json += "\n    ]\n";
+  json += "  }\n";
+  json += "}\n";
+
+  size_t written = std::fwrite(json.c_str(), 1, json.size(), fp);
+  std::fclose(fp);
+
+  return (written == json.size()) ? 0 : 1;
+}
+
+extern "C" int32_t __moore_coverage_is_ucdb_format(const char *filename) {
+  if (!filename)
+    return -1;
+
+  FILE *fp = std::fopen(filename, "r");
+  if (!fp)
+    return -1;
+
+  char buffer[1024];
+  size_t bytesRead = std::fread(buffer, 1, sizeof(buffer) - 1, fp);
+  std::fclose(fp);
+
+  if (bytesRead == 0)
+    return -1;
+
+  buffer[bytesRead] = '\0';
+  std::string header(buffer);
+
+  // Check for UCDB-specific markers (more specific than generic "format")
+  // - "$schema" is a JSON schema indicator unique to UCDB 2.0
+  // - "circt-ucdb" is our format identifier magic string
+  // - "format": { indicates a format object (UCDB) vs "format": "string" (legacy)
+  if (header.find("\"$schema\"") != std::string::npos ||
+      header.find("circt-ucdb") != std::string::npos) {
+    return 1;
+  }
+
+  // Check for UCDB format object structure (has "format": { with "name" inside)
+  size_t formatPos = header.find("\"format\"");
+  if (formatPos != std::string::npos) {
+    size_t colonPos = header.find(':', formatPos);
+    if (colonPos != std::string::npos) {
+      size_t valueStart = header.find_first_not_of(" \t\n\r", colonPos + 1);
+      // If format value starts with '{', it's UCDB format
+      if (valueStart != std::string::npos && header[valueStart] == '{') {
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
+extern "C" const char *__moore_coverage_get_file_version(const char *filename) {
+  if (!filename)
+    return nullptr;
+
+  FILE *fp = std::fopen(filename, "r");
+  if (!fp)
+    return nullptr;
+
+  char buffer[2048];
+  size_t bytesRead = std::fread(buffer, 1, sizeof(buffer) - 1, fp);
+  std::fclose(fp);
+
+  if (bytesRead == 0)
+    return nullptr;
+
+  buffer[bytesRead] = '\0';
+  std::string content(buffer);
+
+  // Look for version in format section (UCDB 2.0+)
+  size_t formatPos = content.find("\"format\"");
+  if (formatPos != std::string::npos) {
+    size_t versionPos = content.find("\"version\"", formatPos);
+    if (versionPos != std::string::npos && versionPos < formatPos + 200) {
+      size_t colonPos = content.find(':', versionPos);
+      if (colonPos != std::string::npos) {
+        size_t valueStart = content.find_first_not_of(" \t\n\r", colonPos + 1);
+        if (valueStart != std::string::npos && content[valueStart] == '"') {
+          size_t valueEnd = content.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            cachedVersionString =
+                content.substr(valueStart + 1, valueEnd - valueStart - 1);
+            return cachedVersionString.c_str();
+          }
+        }
+      }
+    }
+  }
+
+  // Try legacy version field
+  size_t versionPos = content.find("\"version\"");
+  if (versionPos != std::string::npos) {
+    size_t colonPos = content.find(':', versionPos);
+    if (colonPos != std::string::npos) {
+      size_t valueStart = content.find_first_not_of(" \t\n\r", colonPos + 1);
+      if (valueStart != std::string::npos) {
+        if (content[valueStart] == '"') {
+          size_t valueEnd = content.find('"', valueStart + 1);
+          if (valueEnd != std::string::npos) {
+            cachedVersionString =
+                content.substr(valueStart + 1, valueEnd - valueStart - 1);
+            return cachedVersionString.c_str();
+          }
+        }
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+extern "C" void __moore_coverage_set_user_attr(const char *name,
+                                                const char *value) {
+  if (!name)
+    return;
+  if (value) {
+    globalUserAttrs[name] = value;
+  } else {
+    globalUserAttrs.erase(name);
+  }
+}
+
+extern "C" const char *__moore_coverage_get_user_attr(const char *name) {
+  if (!name)
+    return nullptr;
+  auto it = globalUserAttrs.find(name);
+  if (it != globalUserAttrs.end()) {
+    return it->second.c_str();
+  }
+  return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //
@@ -7946,7 +8827,138 @@ void writeElementFromUint64(void *ptr, int64_t elementSize, uint64_t value) {
   std::memcpy(ptr, &value, static_cast<size_t>(elementSize));
 }
 
+//===----------------------------------------------------------------------===//
+// Implication Constraint Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for implication constraints:
+// - Basic implication: antecedent -> consequent
+// - Nested implication checking
+// - Implication with soft/hard constraint handling
+//
+// IEEE 1800-2017 Section 18.5.6 "Implication constraints"
+// IEEE 1800-2017 Section 18.5.7 "if-else constraints"
+//
+
+/// Global statistics for implication constraint evaluation.
+MooreImplicationStats gImplicationStats = {0, 0, 0, 0};
+
 } // anonymous namespace
+
+/// Check if an implication constraint is satisfied.
+/// Implements the SystemVerilog implication operator: antecedent -> consequent
+/// If antecedent is false (0), the implication is trivially true.
+/// If antecedent is true (non-zero), the consequent must be true (non-zero).
+extern "C" int32_t __moore_constraint_check_implication(int32_t antecedent,
+                                                         int32_t consequent) {
+  // Update statistics
+  gImplicationStats.totalImplications++;
+
+  // Implication truth table:
+  // antecedent | consequent | result
+  //     0      |     0      |   1 (vacuously true)
+  //     0      |     1      |   1 (vacuously true)
+  //     1      |     0      |   0 (constraint violated)
+  //     1      |     1      |   1 (constraint satisfied)
+
+  if (antecedent != 0) {
+    gImplicationStats.triggeredImplications++;
+    if (consequent != 0) {
+      gImplicationStats.satisfiedImplications++;
+      return 1;
+    }
+    return 0; // Constraint violated: antecedent true but consequent false
+  }
+
+  // Antecedent is false, implication is vacuously true
+  gImplicationStats.satisfiedImplications++;
+  return 1;
+}
+
+/// Check a nested implication constraint (a -> (b -> c)).
+/// Evaluates as: !a || (!b || c) which is equivalent to: !a || !b || c
+extern "C" int32_t __moore_constraint_check_nested_implication(int32_t outer,
+                                                                int32_t inner,
+                                                                int32_t consequent) {
+  // Nested implication: outer -> (inner -> consequent)
+  // Equivalent to: !outer || !inner || consequent
+  // Or as implications: if outer is true, check inner -> consequent
+
+  gImplicationStats.totalImplications++;
+
+  if (outer == 0) {
+    // Outer antecedent is false, entire implication is vacuously true
+    gImplicationStats.satisfiedImplications++;
+    return 1;
+  }
+
+  gImplicationStats.triggeredImplications++;
+
+  if (inner == 0) {
+    // Inner antecedent is false, inner implication is true, so whole is true
+    gImplicationStats.satisfiedImplications++;
+    return 1;
+  }
+
+  // Both antecedents are true, consequent must be true
+  if (consequent != 0) {
+    gImplicationStats.satisfiedImplications++;
+    return 1;
+  }
+
+  return 0; // Constraint violated
+}
+
+/// Evaluate an implication constraint and apply soft/hard semantics.
+/// Soft implications provide a preference but don't cause constraint failure.
+/// Hard implications are enforced strictly and cause failure if violated.
+extern "C" int32_t __moore_constraint_check_implication_soft(int32_t antecedent,
+                                                              int32_t consequentSatisfied,
+                                                              int32_t isSoft) {
+  gImplicationStats.totalImplications++;
+
+  if (antecedent == 0) {
+    // Antecedent is false, implication is vacuously satisfied
+    gImplicationStats.satisfiedImplications++;
+    return 1;
+  }
+
+  gImplicationStats.triggeredImplications++;
+
+  if (consequentSatisfied != 0) {
+    // Consequent is satisfied
+    gImplicationStats.satisfiedImplications++;
+    return 1;
+  }
+
+  // Consequent not satisfied
+  if (isSoft != 0) {
+    // Soft constraint - use fallback behavior, don't fail
+    gImplicationStats.softFallbacks++;
+    gImplicationStats.satisfiedImplications++;
+    return 1;
+  }
+
+  // Hard constraint violated
+  return 0;
+}
+
+/// Get global implication constraint statistics.
+extern "C" MooreImplicationStats *__moore_implication_get_stats(void) {
+  return &gImplicationStats;
+}
+
+/// Reset global implication statistics to zero.
+extern "C" void __moore_implication_reset_stats(void) {
+  gImplicationStats.totalImplications = 0;
+  gImplicationStats.triggeredImplications = 0;
+  gImplicationStats.satisfiedImplications = 0;
+  gImplicationStats.softFallbacks = 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Array Constraint Operations
+//===----------------------------------------------------------------------===//
 
 /// Check if all elements in an array are unique.
 /// This implements the SystemVerilog `unique {arr}` constraint.
@@ -8386,6 +9398,204 @@ extern "C" int32_t __moore_ftell(int32_t fd) {
     }
   }
   return -1; // Error
+}
+
+//===----------------------------------------------------------------------===//
+// Display System Tasks
+//===----------------------------------------------------------------------===//
+//
+// Implementation of SystemVerilog display system tasks: $display, $write,
+// $strobe, and $monitor. These functions output pre-formatted messages
+// that have been processed by the Moore dialect's format string operations.
+//
+
+namespace {
+// Simulation time tracking for $time system function
+static int64_t currentSimulationTime = 0;
+static std::mutex simTimeMutex;
+
+// Strobe queue for end-of-timestep output
+struct StrobeEntry {
+  std::string message;
+};
+static std::vector<StrobeEntry> strobeQueue;
+static std::mutex strobeMutex;
+
+// Monitor state for $monitor system task
+struct MonitorState {
+  std::string messageTemplate;
+  std::vector<void *> valuePointers;
+  std::vector<int32_t> valueSizes;
+  std::vector<std::vector<uint8_t>> lastValues;
+  bool enabled = true;
+  bool active = false;
+};
+static MonitorState monitorState;
+static std::mutex monitorMutex;
+
+// Helper to copy a monitored value for comparison
+static std::vector<uint8_t> copyValue(void *ptr, int32_t size) {
+  std::vector<uint8_t> result(static_cast<size_t>(size));
+  if (ptr && size > 0) {
+    std::memcpy(result.data(), ptr, static_cast<size_t>(size));
+  }
+  return result;
+}
+
+// Helper to check if a value has changed
+static bool valueChanged(void *ptr, int32_t size,
+                         const std::vector<uint8_t> &lastValue) {
+  if (!ptr || size <= 0 || static_cast<size_t>(size) != lastValue.size())
+    return true;
+  return std::memcmp(ptr, lastValue.data(), static_cast<size_t>(size)) != 0;
+}
+} // namespace
+
+extern "C" void __moore_display(MooreString *message) {
+  // Validate message
+  if (!message)
+    return;
+
+  // Print the message content
+  if (message->data && message->len > 0) {
+    std::fwrite(message->data, 1, static_cast<size_t>(message->len), stdout);
+  }
+
+  // $display always appends a newline
+  std::fputc('\n', stdout);
+  std::fflush(stdout);
+}
+
+extern "C" void __moore_write(MooreString *message) {
+  // Validate message
+  if (!message)
+    return;
+
+  // Print the message content without newline
+  if (message->data && message->len > 0) {
+    std::fwrite(message->data, 1, static_cast<size_t>(message->len), stdout);
+    std::fflush(stdout);
+  }
+}
+
+extern "C" void __moore_strobe(MooreString *message) {
+  // Validate message
+  if (!message || !message->data || message->len <= 0)
+    return;
+
+  // Queue the message for end-of-timestep output
+  std::lock_guard<std::mutex> lock(strobeMutex);
+  StrobeEntry entry;
+  entry.message.assign(message->data, static_cast<size_t>(message->len));
+  strobeQueue.push_back(std::move(entry));
+}
+
+extern "C" void __moore_monitor(MooreString *message, void **values,
+                                int32_t numValues, int32_t *valueSizes) {
+  std::lock_guard<std::mutex> lock(monitorMutex);
+
+  // Clear any previous monitor state
+  monitorState.valuePointers.clear();
+  monitorState.valueSizes.clear();
+  monitorState.lastValues.clear();
+  monitorState.active = false;
+
+  // Validate inputs
+  if (!message || !message->data || message->len <= 0) {
+    return;
+  }
+
+  // Store the message template
+  monitorState.messageTemplate.assign(message->data,
+                                      static_cast<size_t>(message->len));
+
+  // Store value pointers and sizes
+  if (values && valueSizes && numValues > 0) {
+    for (int32_t i = 0; i < numValues; ++i) {
+      monitorState.valuePointers.push_back(values[i]);
+      monitorState.valueSizes.push_back(valueSizes[i]);
+      // Initialize last values for change detection
+      monitorState.lastValues.push_back(copyValue(values[i], valueSizes[i]));
+    }
+  }
+
+  monitorState.active = true;
+
+  // Display initial values (monitor triggers immediately on setup)
+  if (monitorState.enabled) {
+    std::fputs(monitorState.messageTemplate.c_str(), stdout);
+    std::fputc('\n', stdout);
+    std::fflush(stdout);
+  }
+}
+
+extern "C" void __moore_monitoroff(void) {
+  std::lock_guard<std::mutex> lock(monitorMutex);
+  monitorState.enabled = false;
+}
+
+extern "C" void __moore_monitoron(void) {
+  std::lock_guard<std::mutex> lock(monitorMutex);
+  monitorState.enabled = true;
+}
+
+extern "C" void __moore_print_dyn_string(MooreString *str) {
+  // Simply print the dynamic string content without newline
+  if (str && str->data && str->len > 0) {
+    std::fwrite(str->data, 1, static_cast<size_t>(str->len), stdout);
+  }
+}
+
+extern "C" int64_t __moore_get_time(void) {
+  std::lock_guard<std::mutex> lock(simTimeMutex);
+  return currentSimulationTime;
+}
+
+extern "C" void __moore_set_time(int64_t time) {
+  std::lock_guard<std::mutex> lock(simTimeMutex);
+  currentSimulationTime = time;
+}
+
+extern "C" void __moore_strobe_flush(void) {
+  std::lock_guard<std::mutex> lock(strobeMutex);
+
+  // Output all queued strobe messages
+  for (const auto &entry : strobeQueue) {
+    std::fputs(entry.message.c_str(), stdout);
+    std::fputc('\n', stdout);
+  }
+
+  // Clear the queue
+  strobeQueue.clear();
+
+  std::fflush(stdout);
+}
+
+extern "C" void __moore_monitor_check(void) {
+  std::lock_guard<std::mutex> lock(monitorMutex);
+
+  // Skip if monitor is not active or disabled
+  if (!monitorState.active || !monitorState.enabled)
+    return;
+
+  // Check if any monitored value has changed
+  bool anyChanged = false;
+  for (size_t i = 0; i < monitorState.valuePointers.size(); ++i) {
+    void *ptr = monitorState.valuePointers[i];
+    int32_t size = monitorState.valueSizes[i];
+    if (valueChanged(ptr, size, monitorState.lastValues[i])) {
+      anyChanged = true;
+      // Update the last value
+      monitorState.lastValues[i] = copyValue(ptr, size);
+    }
+  }
+
+  // If any value changed, display the monitor message
+  if (anyChanged) {
+    std::fputs(monitorState.messageTemplate.c_str(), stdout);
+    std::fputc('\n', stdout);
+    std::fflush(stdout);
+  }
 }
 
 //===----------------------------------------------------------------------===//

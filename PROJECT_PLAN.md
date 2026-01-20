@@ -18,10 +18,10 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | MOS primitives verified, AVIP E2E tested | Timing delays, $display runtime |
-| **B** | Randomization | Cross named bins negate fixed | Implication constraints completion |
-| **C** | Coverage | UVM coverage integration complete | Coverage merge file format |
-| **D** | LSP Tooling | Type hierarchy verified | Inlay hints, more refactoring |
+| **A** | Runtime/Simulation | $display runtime complete | $finish/$fatal, timing delays |
+| **B** | Randomization | Constraint implication complete | RandSequence production breaks |
+| **C** | Coverage | UCDB file format complete | Coverage GUI/reports |
+| **D** | LSP Tooling | Inlay hints complete | Semantic highlighting |
 
 ### Feature Completion Matrix
 
@@ -47,7 +47,7 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | Classes | ✅ | ✅ | ✅ | ⚠️ | ✅ |
 | UVM base classes | ✅ | ⚠️ | ⚠️ | ✅ | ✅ |
 | Array unique constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cross named bins | ✅ | ✅ | ⚠️ | ✅ | ✅ |
+| Cross named bins | ✅ | ✅ | ✅ | ✅ | ✅ |
 | LSP inheritance completion | - | - | - | - | ✅ |
 | LSP chained completion | - | - | - | - | ✅ |
 | LSP document formatting | - | - | - | - | ✅ |
@@ -72,33 +72,40 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 | MOS primitives (12 types) | ✅ | ✅ | ✅ | - | ✅ |
 | UVM coverage model | - | - | - | ✅ | ✅ |
 | LSP type hierarchy | - | - | - | - | ✅ |
+| $display/$write runtime | - | - | - | ✅ | ✅ |
+| Constraint implication | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Coverage UCDB format | - | - | - | ✅ | ✅ |
+| LSP inlay hints | - | - | - | - | ✅ |
 
 Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 69 - MOS Primitives + UVM Coverage Integration + LSP Type Hierarchy (January 20, 2026)
+## Current Status: ITERATION 70 - $display Runtime + Constraint Implication + UCDB Format + LSP Inlay Hints (January 20, 2026)
 
-**Summary**: Verified MOS primitives, completed UVM coverage model integration, confirmed LSP type hierarchy, and performed AVIP E2E testing.
+**Summary**: Implemented $display system tasks, completed constraint implication lowering, added UCDB coverage file format, and added LSP inlay hints.
 
-### Iteration 69 Highlights
+### Iteration 70 Highlights
 
-**Track A: MOS Transistor Primitives** ⭐ FEATURE
-- ✅ Verified 12 MOS primitives: nmos, pmos, cmos, tran, tranif0/1, etc.
-- ✅ APB AVIP E2E testing to simulation (time 0 fs limitation noted)
+**Track A: $display Runtime Support** ⭐ FEATURE
+- ✅ Implemented $display, $write, $strobe, $monitor runtime functions
+- ✅ Added FormatDynStringOp support in LowerArcToLLVM
+- ✅ 12 unit tests for display system tasks
 
-**Track B: Cross Named Bins** ⭐ BUGFIX
-- ✅ Fixed BinsOfOp negate attribute (was hardcoded to false)
-- ✅ Test file validates mixed negated/non-negated filters
+**Track B: Constraint Implication Lowering** ⭐ FEATURE
+- ✅ Extended test coverage with 7 new tests (nested, soft, distribution)
+- ✅ Added runtime functions for implication checking
+- ✅ 8 unit tests for implication constraints
 
-**Track C: UVM Coverage Integration** ⭐ FEATURE
-- ✅ MooreUvmCoverageModel enum (UVM_CVR_REG_BITS, etc.)
-- ✅ 10 new UVM-style coverage API functions
-- ✅ 18 unit tests for complete verification
+**Track C: Coverage UCDB File Format** ⭐ FEATURE
+- ✅ UCDB-compatible JSON format for coverage persistence
+- ✅ File merge support for regression runs
+- ✅ 12 unit tests for UCDB functionality
 
-**Track D: LSP Type Hierarchy** ⭐ VERIFICATION
-- ✅ Confirmed prepareTypeHierarchy, supertypes, subtypes all working
-- ✅ UVM-style class hierarchy test file created
+**Track D: LSP Inlay Hints** ⭐ FEATURE
+- ✅ Parameter name hints for function/task calls
+- ✅ Port connection hints for module instantiations
+- ✅ Return type hints for functions
 
 ---
 

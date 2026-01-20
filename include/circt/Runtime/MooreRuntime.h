@@ -1999,6 +1999,137 @@ void __moore_coverage_set_test_name(const char *test_name);
 const char *__moore_coverage_get_test_name(void);
 
 //===----------------------------------------------------------------------===//
+// UCDB-Compatible Coverage File Format
+//===----------------------------------------------------------------------===//
+//
+// These functions provide UCDB (Unified Coverage Database) compatible file
+// format support for coverage data persistence. While not a true UCDB binary
+// format, the JSON schema is designed to be compatible with UCDB semantics
+// and can be easily converted to/from UCDB format.
+//
+// The UCDB-like JSON format includes:
+// - Schema version for forward/backward compatibility
+// - Rich metadata (tool info, timestamps, test names, user attributes)
+// - Hierarchical covergroup/coverpoint/bin structure
+// - Support for all bin types (value, range, wildcard, transition)
+// - Merge history tracking for multi-run coverage accumulation
+// - Cross coverage data (future)
+//
+// Format Version History:
+//   2.0 - UCDB-compatible JSON format with enhanced metadata
+//   1.1 - Added metadata section (test_name, timestamp, comment)
+//   1.0 - Basic coverage report format
+//
+
+/// Current UCDB-compatible format version.
+#define MOORE_UCDB_FORMAT_VERSION "2.0"
+
+/// UCDB format identifier magic string.
+#define MOORE_UCDB_FORMAT_MAGIC "circt-ucdb"
+
+/// Extended metadata structure for UCDB-compatible databases.
+/// Contains comprehensive information about the coverage collection session.
+typedef struct {
+  const char *format_version;    ///< UCDB format version (e.g., "2.0")
+  const char *schema_id;         ///< Schema identifier (MOORE_UCDB_FORMAT_MAGIC)
+  const char *test_name;         ///< Name of the test/testbench
+  const char *test_seed;         ///< Random seed used (if applicable)
+  int64_t start_time;            ///< Simulation start timestamp (Unix epoch)
+  int64_t end_time;              ///< Simulation end timestamp (Unix epoch)
+  int64_t sim_time;              ///< Simulation time (in time units)
+  const char *time_unit;         ///< Time unit (ns, ps, etc.)
+  const char *tool_name;         ///< Tool/simulator name
+  const char *tool_version;      ///< Tool/simulator version
+  const char *hostname;          ///< Machine hostname
+  const char *username;          ///< User who ran the simulation
+  const char *workdir;           ///< Working directory
+  const char *command_line;      ///< Command line used
+  const char *comment;           ///< User-provided comment
+  int32_t num_merged_runs;       ///< Number of merged coverage runs
+  const char **merged_test_names; ///< Names of merged tests (array)
+  int32_t num_user_attrs;        ///< Number of user attributes
+  const char **user_attr_names;  ///< User attribute names (array)
+  const char **user_attr_values; ///< User attribute values (array)
+} MooreUCDBMetadata;
+
+/// Write coverage data in UCDB-compatible JSON format.
+/// Creates a comprehensive coverage database file with full metadata,
+/// hierarchical structure, and all bin details.
+///
+/// The output format follows UCDB semantics:
+/// - covergroups contain coverpoints and crosses
+/// - coverpoints contain bins with type, kind, and hit counts
+/// - All metadata is preserved for merge and analysis
+///
+/// @param filename Path to the output file (null-terminated string)
+/// @param metadata Extended metadata for the database (can be NULL for defaults)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_write_ucdb(const char *filename,
+                                     const MooreUCDBMetadata *metadata);
+
+/// Read coverage data from UCDB-compatible JSON format.
+/// Loads a coverage database with full metadata preservation.
+/// The returned handle must be freed with __moore_coverage_db_free.
+///
+/// This function can read:
+/// - UCDB-compatible JSON files (version 2.0+)
+/// - Legacy coverage database files (version 1.x)
+///
+/// @param filename Path to the input file (null-terminated string)
+/// @return Handle to the loaded database, or NULL on failure
+MooreCoverageDBHandle __moore_coverage_read_ucdb(const char *filename);
+
+/// Get extended UCDB metadata from a loaded database.
+/// Returns a pointer to the extended metadata structure.
+/// The pointer is valid until the database handle is freed.
+///
+/// @param db Handle to the loaded database
+/// @return Pointer to extended metadata, or NULL if not available/not UCDB format
+const MooreUCDBMetadata *__moore_coverage_db_get_ucdb_metadata(
+    MooreCoverageDBHandle db);
+
+/// Merge multiple UCDB-compatible coverage files.
+/// Creates a new database containing combined coverage from all input files.
+/// Tracks merge history in the output metadata.
+///
+/// @param input_files Array of input file paths
+/// @param num_files Number of input files
+/// @param output_file Path to the output merged database
+/// @param comment Optional comment for the merge operation (can be NULL)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_merge_ucdb_files(const char **input_files,
+                                           int32_t num_files,
+                                           const char *output_file,
+                                           const char *comment);
+
+/// Check if a file is in UCDB-compatible format.
+/// Reads the file header to determine if it's a valid UCDB-like file.
+///
+/// @param filename Path to the file to check
+/// @return 1 if UCDB-compatible format, 0 if not, -1 on error
+int32_t __moore_coverage_is_ucdb_format(const char *filename);
+
+/// Get the format version of a coverage database file.
+/// Returns the version string from the file without fully loading it.
+///
+/// @param filename Path to the file to check
+/// @return Version string (caller must NOT free), or NULL on error
+const char *__moore_coverage_get_file_version(const char *filename);
+
+/// Set a user attribute on the current coverage session.
+/// User attributes are included in UCDB output and preserved across merges.
+///
+/// @param name Attribute name (will be copied)
+/// @param value Attribute value (will be copied)
+void __moore_coverage_set_user_attr(const char *name, const char *value);
+
+/// Get a user attribute from the current coverage session.
+///
+/// @param name Attribute name to look up
+/// @return Attribute value, or NULL if not found
+const char *__moore_coverage_get_user_attr(const char *name);
+
+//===----------------------------------------------------------------------===//
 // Constraint Solving Operations
 //===----------------------------------------------------------------------===//
 //
@@ -2209,6 +2340,70 @@ int32_t __moore_is_constraint_enabled(void *classPtr,
                                       const char *constraintName);
 
 //===----------------------------------------------------------------------===//
+// Implication Constraint Operations
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for implication constraints:
+// - Basic implication: antecedent -> consequent
+// - Nested implication checking
+// - Implication with soft/hard constraint handling
+//
+// IEEE 1800-2017 Section 18.5.6 "Implication constraints"
+// IEEE 1800-2017 Section 18.5.7 "if-else constraints"
+//
+
+/// Check if an implication constraint is satisfied.
+/// Implements the SystemVerilog implication operator: antecedent -> consequent
+/// If antecedent is false, the implication is trivially true.
+/// If antecedent is true, the consequent must be true.
+///
+/// @param antecedent The condition that triggers the implication (0 or 1)
+/// @param consequent The constraint that must hold when antecedent is true (0 or 1)
+/// @return 1 if implication is satisfied, 0 otherwise
+int32_t __moore_constraint_check_implication(int32_t antecedent,
+                                              int32_t consequent);
+
+/// Check a nested implication constraint (a -> (b -> c)).
+/// Evaluates nested implications from left to right.
+/// Returns 1 if the entire nested implication chain is satisfied.
+///
+/// @param outer The outer antecedent
+/// @param inner The inner antecedent (consequent of outer)
+/// @param consequent The final consequent
+/// @return 1 if nested implication is satisfied, 0 otherwise
+int32_t __moore_constraint_check_nested_implication(int32_t outer,
+                                                     int32_t inner,
+                                                     int32_t consequent);
+
+/// Evaluate an implication constraint and apply soft/hard semantics.
+/// Soft implications provide default behavior when the antecedent is true.
+/// Hard implications are enforced strictly.
+///
+/// @param antecedent The condition that triggers the implication
+/// @param consequentSatisfied Whether the consequent constraint is satisfied
+/// @param isSoft 1 if this is a soft implication, 0 for hard
+/// @return 1 if constraint passes (or soft fallback applies), 0 otherwise
+int32_t __moore_constraint_check_implication_soft(int32_t antecedent,
+                                                   int32_t consequentSatisfied,
+                                                   int32_t isSoft);
+
+/// Statistics tracking for implication constraint evaluation.
+/// Incremented when implication constraints are checked at runtime.
+typedef struct {
+  int64_t totalImplications;     ///< Total implication checks performed
+  int64_t triggeredImplications; ///< Implications where antecedent was true
+  int64_t satisfiedImplications; ///< Implications that were satisfied
+  int64_t softFallbacks;         ///< Soft implications using fallback
+} MooreImplicationStats;
+
+/// Get global implication constraint statistics.
+/// @return Pointer to the global implication statistics
+MooreImplicationStats *__moore_implication_get_stats(void);
+
+/// Reset global implication statistics to zero.
+void __moore_implication_reset_stats(void);
+
+//===----------------------------------------------------------------------===//
 // Array Constraint Operations
 //===----------------------------------------------------------------------===//
 //
@@ -2384,6 +2579,90 @@ void __moore_fflush(int32_t fd);
 /// @param fd File descriptor
 /// @return Current file position, or -1 on error
 int32_t __moore_ftell(int32_t fd);
+
+//===----------------------------------------------------------------------===//
+// Display System Tasks
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for SystemVerilog display system
+// tasks: $display, $write, $strobe, $monitor. They implement the display
+// functionality as specified in IEEE 1800-2017 Section 21.2.
+//
+// The format string has already been evaluated by the Moore dialect's
+// format string operations; these functions output the pre-formatted result.
+//
+// Format specifiers supported in pre-processing:
+// - %d, %0d, %8d - decimal integer (with optional width)
+// - %h, %x, %0h - hexadecimal (lower/upper case)
+// - %b, %0b - binary
+// - %o - octal
+// - %s - string
+// - %t - time value
+// - %m - hierarchical module path
+// - %c - single character
+// - %e, %f, %g - floating point formats
+//
+
+/// Display a formatted message to stdout with a trailing newline.
+/// Implements the SystemVerilog $display system task.
+/// The message is a pre-formatted string from format string evaluation.
+/// @param message Pointer to the message string structure
+void __moore_display(MooreString *message);
+
+/// Display a formatted message to stdout without a trailing newline.
+/// Implements the SystemVerilog $write system task.
+/// @param message Pointer to the message string structure
+void __moore_write(MooreString *message);
+
+/// Schedule a message to be displayed at the end of the current timestep.
+/// Implements the SystemVerilog $strobe system task.
+/// Strobe output is postponed to the end of the current simulation time step,
+/// after all processes have executed for that time step.
+/// @param message Pointer to the message string structure
+void __moore_strobe(MooreString *message);
+
+/// Register a message to be displayed when monitored values change.
+/// Implements the SystemVerilog $monitor system task.
+/// Monitor continuously displays its arguments whenever any of the listed
+/// arguments change value (except $time, $stime, $realtime).
+/// Only one $monitor can be active at a time.
+/// @param message Pointer to the message string structure
+/// @param values Array of pointers to monitored values (for change detection)
+/// @param numValues Number of values being monitored
+/// @param valueSizes Array of sizes (in bytes) for each monitored value
+void __moore_monitor(MooreString *message, void **values, int32_t numValues,
+                     int32_t *valueSizes);
+
+/// Disable $monitor output.
+/// Implements the SystemVerilog $monitoroff system task.
+void __moore_monitoroff(void);
+
+/// Enable $monitor output (default state).
+/// Implements the SystemVerilog $monitoron system task.
+void __moore_monitoron(void);
+
+/// Print a dynamic MooreString directly to stdout (for sim::FormatDynStringOp).
+/// This is called when the LLVM lowering encounters a dynamic string value
+/// that needs to be printed as part of a display task.
+/// @param str Pointer to the dynamic string structure
+void __moore_print_dyn_string(MooreString *str);
+
+/// Get the current simulation time.
+/// Implements the SystemVerilog $time system function.
+/// @return The current simulation time as a 64-bit value
+int64_t __moore_get_time(void);
+
+/// Set the current simulation time (called by the simulation scheduler).
+/// @param time The new simulation time
+void __moore_set_time(int64_t time);
+
+/// Execute pending strobe callbacks at end of timestep.
+/// Called by the simulation scheduler at the end of each timestep.
+void __moore_strobe_flush(void);
+
+/// Check and execute monitor callback if values changed.
+/// Called by the simulation scheduler after each delta cycle.
+void __moore_monitor_check(void);
 
 //===----------------------------------------------------------------------===//
 // Memory Management
