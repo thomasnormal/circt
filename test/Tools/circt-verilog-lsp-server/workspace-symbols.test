@@ -1,0 +1,113 @@
+// RUN: circt-verilog-lsp-server -lit-test < %s | FileCheck %s
+// REQUIRES: slang
+// UNSUPPORTED: valgrind
+// Test workspace/symbol across multiple open documents with various symbol types.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"verilog","capabilities":{},"trace":"off"}}
+// -----
+// Open first document with module and interface
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///design.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"module design_top(\n  input clk,\n  input rst_n\n);\n  logic data_valid;\n  function void process_data();\n  endfunction\n  task automatic send_packet();\n  endtask\nendmodule\n\ninterface axi_if;\n  logic valid;\n  logic ready;\n  modport master(output valid, input ready);\n  modport slave(input valid, output ready);\nendinterface\n"
+}}}
+// -----
+// Open second document with class and package
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"test:///testbench.sv",
+  "languageId":"verilog",
+  "version":1,
+  "text":"package test_pkg;\n  class driver_base;\n    virtual function void drive();\n    endfunction\n  endclass\n  class monitor_class extends driver_base;\n    int transaction_count;\n    function void collect();\n    endfunction\n  endclass\nendpackage\n\nmodule tb_top;\n  initial begin\n    $display(\"Test\");\n  end\nendmodule\n"
+}}}
+// -----
+// Test 1: Query for modules - should find design_top and tb_top
+{"jsonrpc":"2.0","id":1,"method":"workspace/symbol","params":{"query":"top"}}
+// CHECK:       "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-DAG:         "name": "design_top"
+// CHECK-DAG:         "name": "tb_top"
+// CHECK:       ]
+// -----
+// Test 2: Query for interfaces
+{"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"axi"}}
+// CHECK:       "id": 2,
+// CHECK:       "result": [
+// CHECK:         "kind": 11
+// CHECK:         "name": "axi_if"
+// CHECK:       ]
+// -----
+// Test 3: Query for classes (only monitor_class contains "class" in name)
+{"jsonrpc":"2.0","id":3,"method":"workspace/symbol","params":{"query":"class"}}
+// CHECK:       "id": 3,
+// CHECK:       "result": [
+// CHECK:         "name": "monitor_class"
+// CHECK:       ]
+// -----
+// Test 4: Query for packages
+{"jsonrpc":"2.0","id":4,"method":"workspace/symbol","params":{"query":"pkg"}}
+// CHECK:       "id": 4,
+// CHECK:       "result": [
+// CHECK:         "kind": 4
+// CHECK:         "name": "test_pkg"
+// CHECK:       ]
+// -----
+// Test 5: Query for functions
+{"jsonrpc":"2.0","id":5,"method":"workspace/symbol","params":{"query":"process"}}
+// CHECK:       "id": 5,
+// CHECK:       "result": [
+// CHECK:         "name": "process_data"
+// CHECK:       ]
+// -----
+// Test 6: Query for tasks
+{"jsonrpc":"2.0","id":6,"method":"workspace/symbol","params":{"query":"send"}}
+// CHECK:       "id": 6,
+// CHECK:       "result": [
+// CHECK:         "name": "send_packet"
+// CHECK:       ]
+// -----
+// Test 7: Fuzzy match - CamelCase abbreviation (dc -> driver_class or design_... or ...)
+{"jsonrpc":"2.0","id":7,"method":"workspace/symbol","params":{"query":"db"}}
+// CHECK:       "id": 7,
+// CHECK:       "result": [
+// CHECK:         "name": "driver_base"
+// CHECK:       ]
+// -----
+// Test 8: Case-insensitive match
+{"jsonrpc":"2.0","id":8,"method":"workspace/symbol","params":{"query":"MONITOR"}}
+// CHECK:       "id": 8,
+// CHECK:       "result": [
+// CHECK:         "name": "monitor_class"
+// CHECK:       ]
+// -----
+// Test 9: Empty query returns all symbols
+{"jsonrpc":"2.0","id":9,"method":"workspace/symbol","params":{"query":""}}
+// CHECK:       "id": 9,
+// CHECK:       "result": [
+// CHECK:         "name":
+// CHECK:       ]
+// -----
+// Test 10: Non-matching query returns empty result
+{"jsonrpc":"2.0","id":10,"method":"workspace/symbol","params":{"query":"nonexistent_xyz_123"}}
+// CHECK:       "id": 10,
+// CHECK:       "result": []
+// -----
+// Test 11: Query for nested symbols (functions inside classes)
+{"jsonrpc":"2.0","id":11,"method":"workspace/symbol","params":{"query":"drive"}}
+// CHECK:       "id": 11,
+// CHECK:       "result": [
+// CHECK-DAG:         "name": "driver_base"
+// CHECK-DAG:         "name": "drive"
+// CHECK:       ]
+// -----
+// Test 12: Container name is included for nested symbols
+{"jsonrpc":"2.0","id":12,"method":"workspace/symbol","params":{"query":"collect"}}
+// CHECK:       "id": 12,
+// CHECK:       "result": [
+// CHECK:         "containerName": "monitor_class"
+// CHECK:         "name": "collect"
+// CHECK:       ]
+// -----
+{"jsonrpc":"2.0","id":99,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}
