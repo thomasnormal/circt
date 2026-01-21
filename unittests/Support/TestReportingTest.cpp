@@ -9,6 +9,7 @@
 #include "circt/Support/TestReporting.h"
 #include "gtest/gtest.h"
 #include "llvm/Support/raw_ostream.h"
+#include <thread>
 
 using namespace circt;
 
@@ -105,8 +106,10 @@ TEST(TestReportTest, MultiSuiteReport) {
 
   auto &suite1 = report.addSuite("suite1");
   suite1.addTestCase("test1").timeSeconds = 0.1;
-  suite1.addTestCase("test2").fail("failure");
-  suite1.getTestCases().back().timeSeconds = 0.2;
+  // Note: fail() and error() return the TestCase reference for chaining
+  auto &tc2 = suite1.addTestCase("test2");
+  tc2.fail("failure");
+  tc2.timeSeconds = 0.2;
 
   auto &suite2 = report.addSuite("suite2");
   suite2.addTestCase("test3").timeSeconds = 0.15;

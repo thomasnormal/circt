@@ -24,7 +24,9 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
+#include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -222,6 +224,12 @@ public:
 
   /// Flush any buffered output.
   virtual void flush() = 0;
+
+  /// Check if this is VCD format (for format-specific operations without RTTI).
+  virtual bool isVCD() const { return false; }
+
+  /// Get as VCD format (returns nullptr if not VCD).
+  virtual class VCDFormat *asVCD() { return nullptr; }
 };
 
 //===----------------------------------------------------------------------===//
@@ -324,6 +332,12 @@ public:
   }
 
   void flush() override { file.flush(); }
+
+  /// Override for RTTI-free type identification.
+  bool isVCD() const override { return true; }
+
+  /// Override to return this as VCD format.
+  VCDFormat *asVCD() override { return this; }
 
 private:
   std::ofstream file;
@@ -863,7 +877,7 @@ inline void WaveformDumper::writeInitialValues() {
   }
 
   // End $dumpvars section for VCD
-  if (auto *vcd = dynamic_cast<VCDFormat *>(format.get())) {
+  if (auto *vcd = format->asVCD()) {
     vcd->endDumpVars();
   }
 }

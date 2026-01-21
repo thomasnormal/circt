@@ -890,6 +890,26 @@ struct VerifBoundedModelCheckingOpConversion
     // implication so the BMC delay buffers can track the antecedent history.
     rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
 
+    // Combine multiple non-final asserts into a single assert so BMC checks
+    // can detect any violating property.
+    SmallVector<verif::AssertOp> nonFinalAsserts;
+    SmallVector<Value> assertProps;
+    circuitBlock.walk([&](verif::AssertOp assertOp) {
+      if (assertOp->hasAttr("bmc.final"))
+        return;
+      nonFinalAsserts.push_back(assertOp);
+      assertProps.push_back(assertOp.getProperty());
+    });
+    if (nonFinalAsserts.size() > 1) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(nonFinalAsserts.front());
+      Value combined =
+          ltl::AndOp::create(rewriter, loc, assertProps).getResult();
+      verif::AssertOp::create(rewriter, loc, combined, Value(), StringAttr());
+      for (auto assertOp : nonFinalAsserts)
+        rewriter.eraseOp(assertOp);
+    }
+
     // Hoist any final-only asserts into circuit outputs so we can check them
     // only at the final step.
     SmallVector<Value> finalCheckValues;
@@ -1613,8 +1633,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
                             "trivially find no violations.");
             propertylessBMCOps.push_back(bmcOp);
           }
-          if (numAssertions > 1 || numCovers > 1 ||
-              (numAssertions > 0 && numCovers > 0)) {
+          if (numCovers > 1 || (numAssertions > 0 && numCovers > 0)) {
             op->emitError(
                 "bounded model checking problems with multiple properties are "
                 "not yet correctly handled - instead, check one property at a "
