@@ -274,6 +274,12 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
 
   proc->setWaitingFor(waitList);
 
+  // Also update the main sensitivity list so it persists across wake/sleep cycles.
+  // This is critical for LLHD processes that use llhd.wait - if a process wakes
+  // but doesn't re-execute to its next wait (due to control flow or errors),
+  // it would otherwise become orphaned in Suspended state with no sensitivity.
+  proc->getSensitivityList() = waitList;
+
   // Ensure the signals in the wait list are mapped to this process
   for (const auto &entry : waitList.getEntries()) {
     auto &procList = signalToProcesses[entry.signalId];
