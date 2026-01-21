@@ -751,6 +751,36 @@ struct DelayInfo {
   size_t bufferStartIndex;   // Index into the delay buffer iter_args
 };
 
+/// Rewrite ltl.implication with an exact delayed consequent into a past-form
+/// implication for BMC. This allows the BMC loop to use past buffers instead
+/// of looking ahead into future time steps.
+static void rewriteImplicationDelaysForBMC(Block &circuitBlock,
+                                           RewriterBase &rewriter) {
+  SmallVector<ltl::ImplicationOp> implicationOps;
+  circuitBlock.walk(
+      [&](ltl::ImplicationOp op) { implicationOps.push_back(op); });
+
+  for (auto implOp : implicationOps) {
+    auto delayOp = implOp.getConsequent().getDefiningOp<ltl::DelayOp>();
+    if (!delayOp)
+      continue;
+    uint64_t delay = delayOp.getDelay();
+    if (delay == 0)
+      continue;
+    auto lengthAttr = delayOp.getLengthAttr();
+    if (!lengthAttr || lengthAttr.getValue().getZExtValue() != 0)
+      continue;
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(implOp);
+    auto shiftedAntecedent = ltl::DelayOp::create(
+        rewriter, implOp.getLoc(), implOp.getAntecedent(), delay,
+        rewriter.getI64IntegerAttr(0));
+    implOp.setOperand(0, shiftedAntecedent.getResult());
+    implOp.setOperand(1, delayOp.getInput());
+  }
+}
+
 /// Expand ltl.repeat into explicit delay/and/or sequences inside a BMC circuit.
 static void expandRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
                                  RewriterBase &rewriter) {
@@ -852,15 +882,18 @@ struct VerifBoundedModelCheckingOpConversion
       return success();
     }
 
+    auto &circuitBlock = op.getCircuit().front();
     // Expand repeat ops inside the BMC circuit before delay scanning so
     // delay buffers can be allocated for the resulting ltl.delay ops.
     expandRepeatOpsInBMC(op, rewriter);
+    // Rewrite implication with exact delayed consequent to a past-form
+    // implication so the BMC delay buffers can track the antecedent history.
+    rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
 
     // Hoist any final-only asserts into circuit outputs so we can check them
     // only at the final step.
     SmallVector<Value> finalCheckValues;
     SmallVector<Operation *> opsToErase;
-    auto &circuitBlock = op.getCircuit().front();
     circuitBlock.walk([&](Operation *curOp) {
       if (!curOp->hasAttr("bmc.final"))
         return;
@@ -944,6 +977,8 @@ struct VerifBoundedModelCheckingOpConversion
     // First pass: collect all delay ops with delay > 0
     uint64_t boundValue = op.getBound();
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
+      if (delayOp.use_empty())
+        return;
       uint64_t delay = delayOp.getDelay();
       if (delay == 0)
         return;

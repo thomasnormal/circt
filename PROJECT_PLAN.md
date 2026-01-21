@@ -8,39 +8,43 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Remaining Limitations & Next Steps
 
-### CRITICAL: Simulation Runtime Blockers (Updated Iteration 72)
+### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
 
 > **See `.claude/plans/ticklish-sleeping-pie.md` for detailed implementation plan.**
 
-**RESOLVED in Iteration 71-72:**
+**RESOLVED in Iteration 71-74:**
 1. ~~**Simulation Time Advancement**~~: ✅ FIXED - ProcessScheduler↔EventScheduler works correctly
 2. ~~**DPI/VPI Real Hierarchy**~~: ✅ FIXED - Signal registry bridge implemented with callbacks
 3. ~~**Virtual Interface Binding**~~: ✅ FIXED - InterfaceInstanceOp now returns llhd.sig properly
 4. ~~**4-State X/Z Propagation**~~: ✅ INFRASTRUCTURE - X/Z preserved in IR, lowering maps to 0
+5. ~~**Queue Sort With Method Calls**~~: ✅ FIXED (Iter 73) - QueueSortWithOpConversion implemented
+6. ~~**LLHD Process Pattern Mismatch**~~: ✅ VERIFIED (Iter 73) - cf.br pattern is correctly handled
+7. ~~**Signal-Sensitive Waits**~~: ✅ VERIFIED (Iter 73) - @(posedge/negedge) working
+8. ~~**sim.proc.print Output**~~: ✅ FIXED (Iter 73) - $display now prints to console
+9. ~~**ProcessOp Canonicalization**~~: ✅ FIXED (Iter 74) - Processes with $display/$finish no longer removed
 
-**NEW BLOCKERS (from AVIP testing):**
-1. **Queue Sort With Method Calls** ❌ CRITICAL: `q.sort with (item.get_full_name())` fails legalization. Blocks UVM core compilation.
+**REMAINING BLOCKERS:**
+1. **Concurrent Process Scheduling** ⚠️ HIGH: When initial block runs with always blocks, only the initial block executes; clock generation doesn't trigger. Needs LLHDProcessInterpreter investigation.
 
-2. **LLHD Process Pattern Mismatch** ❌ CRITICAL: circt-verilog generates `cf.br ^bb1; ^bb1: llhd.wait` but circt-sim expects `llhd.wait` as first op. Causes simulation to hang.
+2. **UVM Macro Completeness** ⚠️ MEDIUM: Many UVM macros still need stubs (uvm_copier_get_function, etc.). Blocks full UVM core compilation.
 
-3. **Signal-Sensitive Waits** ⚠️ HIGH: `@(posedge clk)` pattern (`llhd.wait (%signal), ^bb`) not fully supported in circt-sim.
+3. **Class Method Inlining** ⚠️ MEDIUM: Virtual method dispatch and class hierarchy not fully simulated.
 
-4. **sim.proc.print Output** ⚠️ MEDIUM: Console output from $display not visible during simulation.
-
-### Track Status & Next Tasks (Iteration 73+)
+### Track Status & Next Tasks (Iteration 75+)
 
 **Simulation Runtime (Critical Path)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Process Patterns | circt-verilog/circt-sim mismatch | Fix process generation or simulator to handle cf.br pattern |
-| **B** | Queue Sort With | Method calls not legalized | Implement QueueSortWithOp legalization |
+| **A** | Concurrent Scheduling | Initial+Always broken | Debug LLHDProcessInterpreter event queue |
+| **B** | UVM Macro Stubs | Partial coverage | Add remaining UVM macros (copier, comparer, etc.) |
 
 **Feature Development (Parallel)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **C** | Coverage | Interactive HTML reports complete | Real-world AVIP testing |
-| **D** | LSP Tooling | All 49 tests pass (100%) | Other tooling work |
-| **E** | Signal-Sensitive Waits | Partial support | Full @(posedge/negedge) support |
+| **C** | Real-World Testing | AVIP testing started | Run full APB/SPI testbenches |
+| **D** | BMC/Formal | Non-overlapped implication done | More SVA property support |
+| **E** | Coverage Runtime | HTML reports complete | UCDB merge improvements |
+| **F** | LSP Tooling | All 49 tests pass (100%) | Diagnostics improvements |
 
 ### Feature Completion Matrix
 
@@ -100,22 +104,50 @@ Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 71 - RandSequence Fractional N Support (January 21, 2026)
+## Current Status: ITERATION 74 - ProcessOp Canonicalization Fix (January 21, 2026)
 
-**Summary**: Fixed `rand join (N)` to support fractional N values per IEEE 1800-2017 Section 18.17.5.
+**Summary**: Fixed critical bug where processes with $display/$finish were being removed by the optimizer.
 
-### Iteration 71 Highlights
+### Iteration 74 Highlights
 
-**Track E: RandSequence Improvements**
-- Fixed `rand join (N)` where N is a real number (e.g., 0.5)
-- Per IEEE 1800-2017, fractional N (0 <= N <= 1) means execute `round(N * numProds)` productions
-- Previously crashed on fractional N; now properly handles both integer and real values
-- All 12 non-negative sv-tests for section 18.17 now pass (up from 11)
-- Added test case for `rand join (0.5)` in randsequence.sv
+**ProcessOp Canonicalization Fix** ⭐ CRITICAL
+- Fixed ProcessOp::canonicalize() to preserve processes with side effects
+- Previously only checked for DriveOp, missing sim.proc.print and sim.terminate
+- Now checks for all side-effect operations including memory writes
+- Initial blocks with $display/$finish now work correctly
+- Test: `simple_initial_test.sv` prints "Hello from initial block!" and terminates at correct time
+
+**UVM Macro Enhancements**
+- Added UVM_STRING_QUEUE_STREAMING_PACK, uvm_typename, uvm_type_name_decl
+- Added uvm_object_abstract_utils, uvm_component_abstract_utils
+- Fixed uvm_object_utils conflict with uvm_type_name_decl
+
+**Known Issue Discovered**
+- Concurrent process scheduling broken: initial+always blocks don't work together
+- Needs investigation in LLHDProcessInterpreter
 
 **Files Modified**:
-- `lib/Conversion/ImportVerilog/Statements.cpp` - Handle real values in randJoinExpr
-- `test/Conversion/ImportVerilog/randsequence.sv` - Added fractional ratio test
+- `lib/Dialect/LLHD/IR/LLHDOps.cpp` - ProcessOp canonicalization fix
+- `lib/Runtime/uvm/uvm_macros.svh` - Additional UVM macro stubs
+- New test: `canonicalize-process-with-side-effects.mlir`
+
+---
+
+## Previous: ITERATION 73 - Major Simulation Fixes (January 21, 2026)
+
+**Summary**: Fixed $display output, $finish termination, queue sort with expressions.
+
+### Iteration 73 Highlights
+- **Queue Sort With**: QueueSortWithOpConversion for `q.sort with (expr)` pattern
+- **$display Output**: sim.proc.print now prints to console
+- **$finish Support**: sim.terminate properly terminates simulation
+- **seq.initial Support**: Added support for sequential initial blocks
+
+---
+
+## Previous: ITERATION 71 - RandSequence Fractional N Support (January 21, 2026)
+
+**Summary**: Fixed `rand join (N)` to support fractional N values per IEEE 1800-2017 Section 18.17.5.
 
 ---
 
@@ -791,6 +823,9 @@ ninja -C build check-circt-unit
 - ✅ Verified `|->` and `|=>` implemented in VerifToSMT
 - ✅ Added 117 lines of comprehensive implication tests
 - Tests: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
+- ✅ LTLToCore shifts exact delayed consequents to past-form implications for BMC
+- ✅ Disable-iff now shifts past reset alongside delayed implications (yosys basic00 pass)
+- Tests: `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`, `integration_test/circt-bmc/sva-e2e.sv`
 
 **Track D: LSP Workspace Symbols**
 - ✅ `workspace/symbol` support added for open docs and workspace files
