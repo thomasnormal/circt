@@ -5,6 +5,9 @@ hw.module @SimpleProbesInProcessOp() {
   %c0_i42 = hw.constant 0 : i42
   %a = llhd.sig %c0_i42 : i42
   // CHECK: llhd.sig
+  // Entry block probes CAN be hoisted (no wait predecessors).
+  // Probes in blocks after waits are NOT hoisted to preserve correct
+  // simulation semantics - they must re-read the signal value after each wait.
   // CHECK-NEXT: [[A:%.+]] = llhd.prb %a
   // CHECK-NEXT: llhd.process
   llhd.process {
@@ -15,9 +18,11 @@ hw.module @SimpleProbesInProcessOp() {
     llhd.wait ^bb1
   ^bb1:
     // CHECK: ^bb1:
-    // CHECK-NOT: llhd.prb
+    // Probe after wait must NOT be hoisted - it reads current signal value
+    // which may change between process iterations.
+    // CHECK-NEXT: [[B:%.+]] = llhd.prb %a
     %1 = llhd.prb %a : i42
-    // CHECK-NEXT: call @use_i42([[A]])
+    // CHECK-NEXT: call @use_i42([[B]])
     func.call @use_i42(%1) : (i42) -> ()
     llhd.halt
   }

@@ -247,8 +247,20 @@ struct AssertionExprVisitor {
     case BinaryAssertionOperator::NonOverlappedImplication: {
       if (isa<ltl::PropertyType>(rhs.getType())) {
         // Use past-shifted antecedent to avoid concat+delay true in BMC.
-        auto pastAntecedent =
-            ltl::PastOp::create(builder, loc, lhs, 1).getResult();
+        // ltl.past only accepts i1, so use delay+concat for sequences.
+        Value pastAntecedent;
+        if (lhs.getType().isInteger(1)) {
+          pastAntecedent = ltl::PastOp::create(builder, loc, lhs, 1).getResult();
+        } else {
+          // For sequences, use delay to shift the antecedent back.
+          auto constOne =
+              hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+          auto lhsDelay = ltl::DelayOp::create(
+              builder, loc, lhs, builder.getI64IntegerAttr(1),
+              builder.getI64IntegerAttr(0));
+          pastAntecedent = ltl::ConcatOp::create(
+              builder, loc, SmallVector<Value, 2>{lhsDelay, constOne});
+        }
         return ltl::ImplicationOp::create(
             builder, loc, SmallVector<Value, 2>{pastAntecedent, rhs});
       }
