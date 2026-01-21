@@ -4065,6 +4065,92 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
       return success();
     }
 
+    // Handle 4-state struct types ({value, unknown} structs)
+    if (isFourStateStructType(inputType)) {
+      auto loc = op.getLoc();
+      auto structType = cast<hw::StructType>(inputType);
+      auto valueType = structType.getElements()[0].type;
+      auto intType = cast<IntegerType>(valueType);
+      int32_t inputWidth = intType.getWidth();
+
+      // Extract the value and unknown components
+      Value inputValue = extractFourStateValue(rewriter, loc, adaptor.getInput());
+      Value inputUnknown = extractFourStateUnknown(rewriter, loc, adaptor.getInput());
+
+      // Check if result is also 4-state
+      if (isFourStateStructType(resultType)) {
+        auto resultStructType = cast<hw::StructType>(resultType);
+        auto resultValueType = resultStructType.getElements()[0].type;
+        int32_t resultWidth = cast<IntegerType>(resultValueType).getWidth();
+        int32_t high = low + resultWidth;
+
+        // Helper to extract bits from a component with proper bounds handling
+        auto extractBits = [&](Value component) -> Value {
+          SmallVector<Value> toConcat;
+
+          // Handle negative low index - prepend zeros
+          if (low < 0)
+            toConcat.push_back(hw::ConstantOp::create(
+                rewriter, loc, APInt(std::min(-low, resultWidth), 0)));
+
+          // Extract the middle portion that's within bounds
+          if (low < inputWidth && high > 0) {
+            int32_t lowIdx = std::max(low, 0);
+            Value middle = rewriter.createOrFold<comb::ExtractOp>(
+                loc,
+                rewriter.getIntegerType(
+                    std::min(resultWidth, std::min(high, inputWidth) - lowIdx)),
+                component, lowIdx);
+            toConcat.push_back(middle);
+          }
+
+          // Handle out-of-bounds high - append zeros
+          int32_t diff = high - inputWidth;
+          if (diff > 0)
+            toConcat.push_back(
+                hw::ConstantOp::create(rewriter, loc, APInt(diff, 0)));
+
+          return rewriter.createOrFold<comb::ConcatOp>(loc, toConcat);
+        };
+
+        Value extractedValue = extractBits(inputValue);
+        Value extractedUnknown = extractBits(inputUnknown);
+
+        // Create the result 4-state struct
+        auto result = createFourStateStruct(rewriter, loc, extractedValue,
+                                            extractedUnknown);
+        rewriter.replaceOp(op, result);
+      } else {
+        // Result is 2-state - just extract the value bits
+        int32_t resultWidth = hw::getBitWidth(resultType);
+        int32_t high = low + resultWidth;
+
+        SmallVector<Value> toConcat;
+        if (low < 0)
+          toConcat.push_back(hw::ConstantOp::create(
+              rewriter, loc, APInt(std::min(-low, resultWidth), 0)));
+
+        if (low < inputWidth && high > 0) {
+          int32_t lowIdx = std::max(low, 0);
+          Value middle = rewriter.createOrFold<comb::ExtractOp>(
+              loc,
+              rewriter.getIntegerType(
+                  std::min(resultWidth, std::min(high, inputWidth) - lowIdx)),
+              inputValue, lowIdx);
+          toConcat.push_back(middle);
+        }
+
+        int32_t diff = high - inputWidth;
+        if (diff > 0)
+          toConcat.push_back(
+              hw::ConstantOp::create(rewriter, loc, APInt(diff, 0)));
+
+        Value concat = rewriter.createOrFold<comb::ConcatOp>(loc, toConcat);
+        rewriter.replaceOp(op, concat);
+      }
+      return success();
+    }
+
     return failure();
   }
 };
@@ -4698,11 +4784,43 @@ struct ReduceAndOpConversion : public OpConversionPattern<ReduceAndOp> {
   LogicalResult
   matchAndRewrite(ReduceAndOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type resultType = typeConverter->convertType(op.getInput().getType());
-    Value max = hw::ConstantOp::create(rewriter, op->getLoc(), resultType, -1);
+    auto loc = op.getLoc();
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value input = adaptor.getInput();
 
-    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, comb::ICmpPredicate::eq,
-                                              adaptor.getInput(), max);
+    if (isFourStateStructType(input.getType())) {
+      Value value = extractFourStateValue(rewriter, loc, input);
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+
+      Value allOnes = hw::ConstantOp::create(rewriter, loc, value.getType(), -1);
+      Value zero = hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
+
+      Value valueOrUnknown =
+          comb::OrOp::create(rewriter, loc, value, unknown, false);
+      Value anyZero = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, valueOrUnknown, allOnes);
+      Value anyUnknown = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, unknown, zero);
+
+      Value one = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      Value noZero = comb::XorOp::create(rewriter, loc, anyZero, one, false);
+      Value noUnknown =
+          comb::XorOp::create(rewriter, loc, anyUnknown, one, false);
+      Value resultVal =
+          comb::AndOp::create(rewriter, loc, noZero, noUnknown, false);
+      Value resultUnknown =
+          comb::AndOp::create(rewriter, loc, noZero, anyUnknown, false);
+
+      rewriter.replaceOp(
+          op, createFourStateStruct(rewriter, loc, resultVal, resultUnknown));
+      return success();
+    }
+
+    Value max =
+        hw::ConstantOp::create(rewriter, loc, input.getType(), -1);
+    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, resultType,
+                                              comb::ICmpPredicate::eq, input,
+                                              max);
     return success();
   }
 };
@@ -4712,11 +4830,35 @@ struct ReduceOrOpConversion : public OpConversionPattern<ReduceOrOp> {
   LogicalResult
   matchAndRewrite(ReduceOrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type resultType = typeConverter->convertType(op.getInput().getType());
-    Value zero = hw::ConstantOp::create(rewriter, op->getLoc(), resultType, 0);
+    auto loc = op.getLoc();
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value input = adaptor.getInput();
 
-    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, comb::ICmpPredicate::ne,
-                                              adaptor.getInput(), zero);
+    if (isFourStateStructType(input.getType())) {
+      Value value = extractFourStateValue(rewriter, loc, input);
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+
+      Value zeroVal = hw::ConstantOp::create(rewriter, loc, value.getType(), 0);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
+      Value anyOne = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, value, zeroVal);
+      Value anyUnknown = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, unknown, zeroUnk);
+      Value one = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      Value notAnyOne = comb::XorOp::create(rewriter, loc, anyOne, one, false);
+      Value resultUnknown =
+          comb::AndOp::create(rewriter, loc, notAnyOne, anyUnknown, false);
+      rewriter.replaceOp(
+          op, createFourStateStruct(rewriter, loc, anyOne, resultUnknown));
+      return success();
+    }
+
+    Value zero =
+        hw::ConstantOp::create(rewriter, loc, input.getType(), 0);
+    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, resultType,
+                                              comb::ICmpPredicate::ne, input,
+                                              zero);
     return success();
   }
 };
@@ -4726,8 +4868,22 @@ struct ReduceXorOpConversion : public OpConversionPattern<ReduceXorOp> {
   LogicalResult
   matchAndRewrite(ReduceXorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value input = adaptor.getInput();
 
-    rewriter.replaceOpWithNewOp<comb::ParityOp>(op, adaptor.getInput());
+    if (isFourStateStructType(input.getType())) {
+      Value value = extractFourStateValue(rewriter, loc, input);
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+      Value parity = comb::ParityOp::create(rewriter, loc, value);
+      Value zero = hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
+      Value anyUnknown = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, unknown, zero);
+      rewriter.replaceOp(
+          op, createFourStateStruct(rewriter, loc, parity, anyUnknown));
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<comb::ParityOp>(op, input);
     return success();
   }
 };
@@ -4737,21 +4893,54 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
   LogicalResult
   matchAndRewrite(BoolCastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type resultType = typeConverter->convertType(op.getInput().getType());
+    auto loc = op.getLoc();
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value input = adaptor.getInput();
+
+    if (isFourStateStructType(input.getType())) {
+      Value value = extractFourStateValue(rewriter, loc, input);
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+      Value zeroVal = hw::ConstantOp::create(rewriter, loc, value.getType(), 0);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
+      Value anyOne = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, value, zeroVal);
+      Value anyUnknown = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, unknown, zeroUnk);
+      Value one = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      Value noUnknown =
+          comb::XorOp::create(rewriter, loc, anyUnknown, one, false);
+      Value resultVal =
+          comb::AndOp::create(rewriter, loc, anyOne, noUnknown, false);
+      rewriter.replaceOp(
+          op, createFourStateStruct(rewriter, loc, resultVal, anyUnknown));
+      return success();
+    }
     if (isa_and_nonnull<IntegerType>(resultType)) {
+      // Compare input to zero of the input's type, not result type
       Value zero =
-          hw::ConstantOp::create(rewriter, op->getLoc(), resultType, 0);
+          hw::ConstantOp::create(rewriter, loc, input.getType(), 0);
       rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, comb::ICmpPredicate::ne,
-                                                adaptor.getInput(), zero);
+                                                input, zero);
       return success();
     }
     // Handle pointer types (virtual interfaces, class handles) - compare to null.
     if (isa_and_nonnull<LLVM::LLVMPointerType>(resultType)) {
       auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
-      auto nullPtr = LLVM::ZeroOp::create(rewriter, op->getLoc(), ptrTy);
+      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
       auto i1Ty = rewriter.getI1Type();
       rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
-          op, i1Ty, LLVM::ICmpPredicate::ne, adaptor.getInput(), nullPtr);
+          op, i1Ty, LLVM::ICmpPredicate::ne, input, nullPtr);
+      return success();
+    }
+    if (isFourStateStructType(resultType) && isa<IntegerType>(input.getType())) {
+      Value zero = hw::ConstantOp::create(rewriter, loc, input.getType(), 0);
+      Value anyOne = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, input, zero);
+      Value unknown =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      rewriter.replaceOp(
+          op, createFourStateStruct(rewriter, loc, anyOne, unknown));
       return success();
     }
     return failure();
@@ -6617,58 +6806,39 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
     Value input = adaptor.getInput();
     int64_t delay = op.getDelay();
 
-    // If the input is i1 (boolean), prefer an explicit register chain using a
-    // clock from a surrounding clocked assertion. This keeps the result as i1
-    // for comparisons.
+    if (delay == 0) {
+      rewriter.replaceOp(op, input);
+      return success();
+    }
+    if (auto clockInfo = findClockFromUsers(op.getResult())) {
+      Value clockSignal = clockInfo->first;
+      auto edge = clockInfo->second;
+      if (edge == verif::ClockEdge::Neg) {
+        auto one = hw::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI1Type(), 1);
+        clockSignal = comb::XorOp::create(rewriter, loc, clockSignal, one);
+      } else if (edge == verif::ClockEdge::Both) {
+        op.emitError("both-edge clocks are not supported for moore.past");
+        return failure();
+      }
+      if (!isa<seq::ClockType>(clockSignal.getType()))
+        clockSignal = seq::ToClockOp::create(rewriter, loc, clockSignal);
+
+      Value current = input;
+      for (int64_t i = 0; i < delay; ++i)
+        current = seq::CompRegOp::create(rewriter, loc, current, clockSignal);
+      rewriter.replaceOp(op, current);
+      return success();
+    }
+
     if (input.getType().isInteger(1)) {
-      if (delay == 0) {
-        rewriter.replaceOp(op, input);
-        return success();
-      }
-      if (auto clockInfo = findClockFromUsers(op.getResult())) {
-        Value clockSignal = clockInfo->first;
-        auto edge = clockInfo->second;
-        if (edge == verif::ClockEdge::Neg) {
-          auto one = hw::ConstantOp::create(rewriter, loc,
-                                            rewriter.getI1Type(), 1);
-          clockSignal =
-              comb::XorOp::create(rewriter, loc, clockSignal, one);
-        } else if (edge == verif::ClockEdge::Both) {
-          op.emitError("both-edge clocks are not supported for moore.past");
-          return failure();
-        }
-        if (!isa<seq::ClockType>(clockSignal.getType()))
-          clockSignal = seq::ToClockOp::create(rewriter, loc, clockSignal);
-
-        Value current = input;
-        for (int64_t i = 0; i < delay; ++i) {
-          auto initVal = hw::ConstantOp::create(
-              rewriter, loc, rewriter.getI1Type(), 0);
-          auto powerOn =
-              seq::createConstantInitialValue(rewriter, initVal.getOperation());
-          current = seq::CompRegOp::create(
-              rewriter, loc, current, clockSignal, Value(), Value(),
-              rewriter.getStringAttr("moore_past"), powerOn);
-        }
-        rewriter.replaceOp(op, current);
-        return success();
-      }
-
       // Fallback: use ltl.past when no clock is found.
       rewriter.replaceOpWithNewOp<ltl::PastOp>(op, input, delay);
       return success();
     }
 
-    // For non-boolean types (used in comparisons like `$past(val) == 0`),
-    // we need to create a register chain to capture past values.
-    // However, this requires a clock signal which isn't available in this
-    // context. For now, we pass through the input value and rely on the
-    // verification infrastructure to handle the past semantics correctly.
-    //
-    // TODO: Once clock information is propagated through assertions, implement
-    // proper register-based delay using seq::CompRegOp.
-    rewriter.replaceOp(op, input);
-    return success();
+    op.emitError("non-boolean moore.past requires a clocked assertion");
+    return failure();
   }
 };
 
@@ -9895,7 +10065,14 @@ struct AssocArrayExistsOpConversion
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                                      SymbolRefAttr::get(fn),
                                      ValueRange{adaptor.getArray(), keyAlloca});
-    rewriter.replaceOp(op, call.getResult());
+    // The runtime returns i32, but .exists() should return i1 (bool)
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto zero = LLVM::ConstantOp::create(rewriter, loc,
+                                         rewriter.getI32IntegerAttr(0));
+    auto result = LLVM::ICmpOp::create(rewriter, loc, i1Ty,
+                                       LLVM::ICmpPredicate::ne,
+                                       call.getResult(), zero);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };

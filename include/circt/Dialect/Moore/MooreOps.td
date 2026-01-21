@@ -6169,7 +6169,7 @@ def AssocArrayExistsOp : AssocArrayBuiltin<"exists"> {
     ```
   }];
   let arguments = (ins AssocArrayType:$array, UnpackedType:$key);
-  let results = (outs TwoValuedI32:$result);
+  let results = (outs TwoValuedI1:$result);
   let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }
 
