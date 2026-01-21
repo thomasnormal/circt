@@ -123,6 +123,8 @@ circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
   clock (LowerToBMC) to fix sampled-clock misalignment; re-run `basic03`.
 - In progress: gate BMC checks to posedge iterations when not in
   `rising-clocks-only` mode to prevent falling-edge false violations.
+- In progress: gate BMC delay/past buffer updates on posedge so history
+  advances once per cycle in non-rising mode.
 
 **SVA Support Plan (End-to-End)**:
 1. **Pipeline robustness**: keep SV→Moore→HW→BMC→SMT legal (no illegal ops).

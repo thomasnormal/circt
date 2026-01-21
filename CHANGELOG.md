@@ -105,6 +105,12 @@
 - Updated regression expectations: `test/Conversion/VerifToSMT/verif-to-smt.mlir`
 - File: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
+**Track G: BMC Delay/Past Buffer Posedge Gating** ⭐ BUG FIX
+- Update delay/past buffers only on posedge when `rising-clocks-only=false`
+- Prevents half-cycle history skew for `ltl.past`/`ltl.delay` in multi-step BMC
+- New regression: `test/Conversion/VerifToSMT/bmc-delay-posedge.mlir`
+- File: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Critical Next Step
 Fix 4-state type conversion in MooreToCore:
 - Extract `value` field from 4-state structs before passing to integer-expecting ops
