@@ -2602,10 +2602,8 @@ module ConcurrentAssert(input clk);
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
   // CHECK: [[READ_B:%.+]] = moore.read [[B]] : <l1>
   // CHECK: [[CONV_B:%.+]] = moore.to_builtin_bool [[READ_B]] : l1
-  // CHECK: [[CONST_T:%.+]] = hw.constant true
-  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 1, 0 : i1
-  // CHECK: [[CONCAT_OP:%.+]] = ltl.concat [[DELAY_OP]], [[CONST_T]] : !ltl.sequence, i1
-  // CHECK: [[IMPLICATION_OP:%.+]] = ltl.implication [[CONCAT_OP]], [[CONV_B]] : !ltl.sequence, i1
+  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_B]], 1, 0 : l1
+  // CHECK: [[IMPLICATION_OP:%.+]] = ltl.implication [[CONV_A]], [[DELAY_OP]] : i1, !ltl.sequence
   // CHECK: verif.assert [[IMPLICATION_OP]] : !ltl.property
   assert property (a |=> b);
   // CHECK-NOT: moore.procedure always
@@ -2623,11 +2621,9 @@ module ConcurrentAssert(input clk);
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
   // CHECK: [[READ_B:%.+]] = moore.read [[B]] : <l1>
   // CHECK: [[CONV_B:%.+]] = moore.to_builtin_bool [[READ_B]] : l1
-  // CHECK: [[CONST_T:%.+]] = hw.constant true
   // CHECK: [[NOT_OP:%.+]] = ltl.not [[CONV_B]] : i1
-  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 1, 0 : i1
-  // CHECK: [[CONCAT_OP:%.+]] = ltl.concat [[DELAY_OP]], [[CONST_T]] : !ltl.sequence, i1
-  // CHECK: [[IMPLICATION_OP:%.+]] = ltl.implication [[CONCAT_OP]], [[NOT_OP]] : !ltl.sequence, !ltl.property
+  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[NOT_OP]], 1, 0 : i1
+  // CHECK: [[IMPLICATION_OP:%.+]] = ltl.implication [[CONV_A]], [[DELAY_OP]] : i1, !ltl.sequence
   // CHECK: [[NOT_IMPLI_OP:%.+]] = ltl.not [[IMPLICATION_OP]] : !ltl.property
   // CHECK: verif.assert [[NOT_IMPLI_OP]] : !ltl.property
   assert property (a #=# b);

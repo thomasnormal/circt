@@ -100,6 +100,9 @@
 - Repeat now allocates multi-step delay buffers, enabling consecutive repeat checks
 - Added repeat range regression tests in VerifToSMT conversion
 - Added end-to-end BMC tests for `b[*N]` and `b[*m:n]` fail cases; pass cases pending LTLToCore implication fix
+- Added a local yosys SVA test harness script for circt-bmc runs
+- Fixed import of concurrent assertions with action blocks (no longer dropped)
+- Fixed non-overlapped implication lowering to delay consequents (restores |=> semantics)
 
 ### Files Modified
 - `include/circt/Dialect/Sim/ProcessScheduler.h` (improved documentation)
@@ -110,6 +113,9 @@
 - `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (repeat expansion in BMC)
 - `test/Conversion/VerifToSMT/bmc-multistep-repeat.mlir` (new repeat tests)
 - `integration_test/circt-bmc/sva-e2e.sv` (repeat e2e cases)
+- `utils/run_yosys_sva_circt_bmc.sh` (yosys SVA harness)
+- `lib/Conversion/ImportVerilog/Structure.cpp` (assertion block import)
+- `test/Conversion/ImportVerilog/sva-action-block.sv` (new regression)
 - `unittests/Dialect/Sim/ProcessSchedulerTest.cpp` (+4 new tests)
 - `unittests/Runtime/MooreRuntimeTest.cpp` (+8 new tests)
 

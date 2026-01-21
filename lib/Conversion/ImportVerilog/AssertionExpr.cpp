@@ -245,15 +245,23 @@ struct AssertionExprVisitor {
     case BinaryAssertionOperator::OverlappedImplication:
       return ltl::ImplicationOp::create(builder, loc, operands);
     case BinaryAssertionOperator::NonOverlappedImplication: {
-      auto constOne =
-          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-      auto lhsDelay =
-          ltl::DelayOp::create(builder, loc, lhs, builder.getI64IntegerAttr(1),
-                               builder.getI64IntegerAttr(0));
-      auto antecedent = ltl::ConcatOp::create(
-          builder, loc, SmallVector<Value, 2>{lhsDelay, constOne});
+      if (isa<ltl::PropertyType>(rhs.getType())) {
+        auto constOne =
+            hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+        auto lhsDelay = ltl::DelayOp::create(
+            builder, loc, lhs, builder.getI64IntegerAttr(1),
+            builder.getI64IntegerAttr(0));
+        auto antecedent = ltl::ConcatOp::create(
+            builder, loc, SmallVector<Value, 2>{lhsDelay, constOne});
+        return ltl::ImplicationOp::create(
+            builder, loc, SmallVector<Value, 2>{antecedent, rhs});
+      }
+      auto ltlSeqType = ltl::SequenceType::get(builder.getContext());
+      auto delayedRhs = ltl::DelayOp::create(
+          builder, loc, ltlSeqType, rhs, builder.getI64IntegerAttr(1),
+          builder.getI64IntegerAttr(0));
       return ltl::ImplicationOp::create(builder, loc,
-                                        SmallVector<Value, 2>{antecedent, rhs});
+                                        SmallVector<Value, 2>{lhs, delayedRhs});
     }
     case BinaryAssertionOperator::OverlappedFollowedBy: {
       auto notRhs = ltl::NotOp::create(builder, loc, rhs);
@@ -262,16 +270,25 @@ struct AssertionExprVisitor {
       return ltl::NotOp::create(builder, loc, implication);
     }
     case BinaryAssertionOperator::NonOverlappedFollowedBy: {
-      auto constOne =
-          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
       auto notRhs = ltl::NotOp::create(builder, loc, rhs);
-      auto lhsDelay =
-          ltl::DelayOp::create(builder, loc, lhs, builder.getI64IntegerAttr(1),
-                               builder.getI64IntegerAttr(0));
-      auto antecedent = ltl::ConcatOp::create(
-          builder, loc, SmallVector<Value, 2>{lhsDelay, constOne});
+      if (isa<ltl::PropertyType>(notRhs.getType())) {
+        auto constOne =
+            hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+        auto lhsDelay = ltl::DelayOp::create(
+            builder, loc, lhs, builder.getI64IntegerAttr(1),
+            builder.getI64IntegerAttr(0));
+        auto antecedent = ltl::ConcatOp::create(
+            builder, loc, SmallVector<Value, 2>{lhsDelay, constOne});
+        auto implication = ltl::ImplicationOp::create(
+            builder, loc, SmallVector<Value, 2>{antecedent, notRhs});
+        return ltl::NotOp::create(builder, loc, implication);
+      }
+      auto ltlSeqType = ltl::SequenceType::get(builder.getContext());
+      auto delayedRhs = ltl::DelayOp::create(
+          builder, loc, ltlSeqType, notRhs, builder.getI64IntegerAttr(1),
+          builder.getI64IntegerAttr(0));
       auto implication = ltl::ImplicationOp::create(
-          builder, loc, SmallVector<Value, 2>{antecedent, notRhs});
+          builder, loc, SmallVector<Value, 2>{lhs, delayedRhs});
       return ltl::NotOp::create(builder, loc, implication);
     }
     case BinaryAssertionOperator::SUntil: {

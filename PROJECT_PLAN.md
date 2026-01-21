@@ -8,32 +8,39 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Remaining Limitations & Next Steps
 
-### CRITICAL: Simulation Runtime Blockers
+### CRITICAL: Simulation Runtime Blockers (Updated Iteration 72)
 
 > **See `.claude/plans/ticklish-sleeping-pie.md` for detailed implementation plan.**
 
-1. **Simulation Time Advancement** ❌ CRITICAL: `circt-sim` ends at 0fs because `ProcessScheduler::advanceTime()` doesn't check `EventScheduler` for queued events. The LLHD interpreter exists (1700+ lines) but process resumption after delays never triggers.
+**RESOLVED in Iteration 71-72:**
+1. ~~**Simulation Time Advancement**~~: ✅ FIXED - ProcessScheduler↔EventScheduler works correctly
+2. ~~**DPI/VPI Real Hierarchy**~~: ✅ FIXED - Signal registry bridge implemented with callbacks
+3. ~~**Virtual Interface Binding**~~: ✅ FIXED - InterfaceInstanceOp now returns llhd.sig properly
+4. ~~**4-State X/Z Propagation**~~: ✅ INFRASTRUCTURE - X/Z preserved in IR, lowering maps to 0
 
-2. **DPI/VPI Real Hierarchy** ⚠️ HIGH: DPI stubs use disconnected in-memory map. `uvm_hdl_read("path")` returns 0, not actual signal value. Need to bridge signal registry from `LLHDProcessInterpreter` to `MooreRuntime`.
+**NEW BLOCKERS (from AVIP testing):**
+1. **Queue Sort With Method Calls** ❌ CRITICAL: `q.sort with (item.get_full_name())` fails legalization. Blocks UVM core compilation.
 
-3. **Virtual Interface Binding** ⚠️ HIGH: Signal access works, but runtime binding (`driver.vif = apb_if`) doesn't propagate. Need `moore.virtual_interface.bind` operation.
+2. **LLHD Process Pattern Mismatch** ❌ CRITICAL: circt-verilog generates `cf.br ^bb1; ^bb1: llhd.wait` but circt-sim expects `llhd.wait` as first op. Causes simulation to hang.
 
-4. **4-State X/Z Propagation** ⚠️ MEDIUM: Type system supports it (`Domain::FourValued`, `FVInt`), but lowering loses X/Z info. Constants parsed but not preserved in IR.
+3. **Signal-Sensitive Waits** ⚠️ HIGH: `@(posedge clk)` pattern (`llhd.wait (%signal), ^bb`) not fully supported in circt-sim.
 
-### Track Status & Next Tasks (Iteration 71+)
+4. **sim.proc.print Output** ⚠️ MEDIUM: Console output from $display not visible during simulation.
+
+### Track Status & Next Tasks (Iteration 73+)
 
 **Simulation Runtime (Critical Path)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Simulation Runtime | Time advancement broken (ends at 0fs) | Fix ProcessScheduler↔EventScheduler integration |
-| **B** | DPI/VPI Hierarchy | Stubs with in-memory map only | Build signal registry bridge to real signals |
+| **A** | Process Patterns | circt-verilog/circt-sim mismatch | Fix process generation or simulator to handle cf.br pattern |
+| **B** | Queue Sort With | Method calls not legalized | Implement QueueSortWithOp legalization |
 
 **Feature Development (Parallel)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **C** | Coverage | UCDB file format complete | Coverage GUI/reports, virtual interface binding |
-| **D** | LSP Tooling | Inlay hints complete | Semantic highlighting |
-| **E** | Randomization/UVM | RandSequence fractional N complete | 4-state X/Z |
+| **C** | Coverage | Interactive HTML reports complete | Real-world AVIP testing |
+| **D** | LSP Tooling | All 49 tests pass (100%) | Other tooling work |
+| **E** | Signal-Sensitive Waits | Partial support | Full @(posedge/negedge) support |
 
 ### Feature Completion Matrix
 
@@ -1026,6 +1033,10 @@ ninja -C build check-circt-unit
 - ✅ Added end-to-end BMC tests for repeat fail cases
 - ⚠️ Repeat pass cases still fail due to LTLToCore implication semantics (needs fix)
 - ⛔ Goto/non-consecutive repeat still single-step in BMC
+- ✅ Added local yosys SVA harness script for circt-bmc runs
+- ✅ Import now preserves concurrent assertions with action blocks (`else $error`)
+- ⚠️ yosys `basic00.sv` pass still fails (implication/disable semantics need alignment)
+- ✅ Updated non-overlapped implication lowering to delay consequents (|=> alignment)
 - ✅ Handle unbounded delay ranges (`##[m:$]`) in BMC within bound (bounded approximation)
 - ✅ Added end-to-end SVA BMC integration tests (SV → `circt-bmc`) for delay and range delay (pass + fail cases; pass uses `--ignore-asserts-until=1`)
 - Add more end-to-end BMC tests with Z3 (`circt-bmc`) for temporal properties
