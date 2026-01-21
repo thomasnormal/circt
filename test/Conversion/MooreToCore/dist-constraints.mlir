@@ -3,6 +3,7 @@
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
 // CHECK-DAG: llvm.func @__moore_randomize_with_dist(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
+// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Distribution Constraint Support Tests
@@ -29,24 +30,16 @@ func.func @test_simple_dist(%obj: !moore.class<@SimpleDistClass>) -> i1 {
   // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
   // CHECK: llvm.call @__moore_is_rand_enabled
   // CHECK: llvm.call @__moore_is_constraint_enabled
-  // Store ranges: [0,0], [1,1], [2,2]
-  // CHECK: llvm.mlir.constant(0 : i64) : i64
-  // CHECK: llvm.store {{.*}} : i64, !llvm.ptr
-  // CHECK: llvm.mlir.constant(0 : i64) : i64
-  // CHECK: llvm.store {{.*}} : i64, !llvm.ptr
-  // Store weights: [10, 20, 30]
-  // CHECK: llvm.mlir.constant(10 : i64) : i64
-  // CHECK: llvm.store {{.*}} : i64, !llvm.ptr
-  // Store perRange: [0, 0, 0]
-  // CHECK: llvm.mlir.constant(0 : i64) : i64
-  // CHECK: llvm.store {{.*}} : i64, !llvm.ptr
-  // CHECK: %[[NUM_RANGES:.*]] = llvm.mlir.constant(3 : i64) : i64
-  // CHECK: %[[DIST_RESULT:.*]] = llvm.call @__moore_randomize_with_dist({{.*}}, {{.*}}, {{.*}}, %[[NUM_RANGES]]) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64) -> i64
-  // CHECK: arith.trunci %[[DIST_RESULT]] : i64 to i8
-  // CHECK: llvm.getelementptr %[[OBJ]][0, 1]
+  // CHECK: scf.if
+  // Allocate arrays for ranges, weights, and perRange flags
+  // CHECK: llvm.alloca {{.*}} x !llvm.array<6 x i64>
+  // CHECK: llvm.alloca {{.*}} x !llvm.array<3 x i64>
+  // CHECK: llvm.alloca {{.*}} x !llvm.array<3 x i64>
+  // Store ranges and call dist function
+  // CHECK: llvm.call @__moore_randomize_with_dist({{.*}}, {{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64) -> i64
+  // CHECK: arith.trunci {{.*}} : i64 to i8
   // CHECK: llvm.store {{.*}} : i8, !llvm.ptr
-  // CHECK: %[[SUCCESS:.*]] = hw.constant true
-  // CHECK: return %[[SUCCESS]] : i1
+  // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@SimpleDistClass>
   return %success : i1
 }

@@ -3,6 +3,9 @@
 // IEEE 1800-2017 Section 18.6.1, 18.8
 
 // CHECK-LABEL: moore.class.classdecl @Transaction
+// CHECK:   moore.class.propertydecl @addr : !moore.i8 rand_mode rand
+// CHECK:   moore.class.propertydecl @data : !moore.i32 rand_mode rand
+// CHECK:   moore.constraint.block @c_addr
 class Transaction;
   rand bit [7:0] addr;
   rand bit [31:0] data;
@@ -11,18 +14,17 @@ class Transaction;
   constraint c_addr { addr > 8'h10; }
 
   // pre_randomize callback - called before randomization
-  // CHECK: moore.class.methoddecl @pre_randomize
   function void pre_randomize();
     $display("pre_randomize called");
   endfunction
 
   // post_randomize callback - called after successful randomization
-  // CHECK: moore.class.methoddecl @post_randomize
   function void post_randomize();
     $display("post_randomize: addr=%h, data=%h", addr, data);
   endfunction
 endclass
 
+// CHECK-LABEL: moore.module @test
 module test;
   Transaction tx;
 
@@ -30,11 +32,11 @@ module test;
     tx = new();
 
     // Test constraint_mode getter - returns current mode (1 = enabled)
-    // CHECK: moore.constraint_mode
+    // CHECK: "moore.constraint_mode"
     $display("c_addr mode = %d", tx.c_addr.constraint_mode());
 
     // Test constraint_mode setter - disable constraint
-    // CHECK: moore.constraint_mode
+    // CHECK: "moore.constraint_mode"
     tx.c_addr.constraint_mode(0);
 
     // Test randomize - should call pre_randomize and post_randomize
@@ -46,11 +48,11 @@ module test;
     end
 
     // Re-enable constraint
-    // CHECK: moore.constraint_mode
+    // CHECK: "moore.constraint_mode"
     tx.c_addr.constraint_mode(1);
 
     // Disable all constraints on object
-    // CHECK: moore.constraint_mode
+    // CHECK: "moore.constraint_mode"
     tx.constraint_mode(0);
 
     // Randomize again

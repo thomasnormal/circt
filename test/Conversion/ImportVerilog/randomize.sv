@@ -219,13 +219,15 @@ endclass
 // CHECK:     %[[NEW:.+]] = moore.class.new : <@InlineConstraintTx>
 // CHECK:     moore.blocking_assign %t, %[[NEW]] : class<@InlineConstraintTx>
 // CHECK:     %[[OBJ:.+]] = moore.read %t : <class<@InlineConstraintTx>>
+// CHECK:     moore.call_pre_randomize %[[OBJ]] : <@InlineConstraintTx>
 // CHECK:     %[[RAND_RESULT:.+]] = moore.randomize %[[OBJ]] : <@InlineConstraintTx> {
-// CHECK:       %{{.+}} = moore.variable
-// CHECK:       %[[XVAL:.+]] = moore.read %{{.+}}
+// CHECK:       %[[XREF:.+]] = moore.class.property_ref %[[OBJ]][@x] : <@InlineConstraintTx> -> <i32>
+// CHECK:       %[[XVAL:.+]] = moore.read %[[XREF]]
 // CHECK:       %[[CONST0:.+]] = moore.constant 0 : i32
 // CHECK:       %[[GT:.+]] = moore.sgt %[[XVAL]], %[[CONST0]] : i32 -> i1
 // CHECK:       moore.constraint.expr %[[GT]] : i1
 // CHECK:     }
+// CHECK:     moore.call_post_randomize %[[OBJ]] : <@InlineConstraintTx>
 // CHECK:     %[[CONV:.+]] = moore.conversion %[[RAND_RESULT]] : i1 -> !moore.i32
 // CHECK:     moore.blocking_assign %success, %[[CONV]] : i32
 // CHECK:     moore.return

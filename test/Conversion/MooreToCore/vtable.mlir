@@ -37,13 +37,13 @@ func.func private @"testClass::testSubroutine"(%arg0: !moore.class<@testClass>) 
 // Test vtable.load_method lowering to func.constant
 
 // CHECK-LABEL: func.func @test_vtable_load_method
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr) -> ((!llvm.ptr) -> ())
 // CHECK:         %[[FPTR:.*]] = constant @"testClass::subroutine" : (!llvm.ptr) -> ()
-// CHECK:         return
+// CHECK:         return %[[FPTR]]
 
-func.func @test_vtable_load_method(%obj: !moore.class<@testClass>) {
+func.func @test_vtable_load_method(%obj: !moore.class<@testClass>) -> ((!moore.class<@testClass>) -> ()) {
   %fptr = moore.vtable.load_method %obj : @subroutine of <@testClass> -> (!moore.class<@testClass>) -> ()
-  return
+  return %fptr : (!moore.class<@testClass>) -> ()
 }
 
 // Test vtable.load_method with nested vtable lookup (abstract base class case).
@@ -51,13 +51,13 @@ func.func @test_vtable_load_method(%obj: !moore.class<@testClass>) {
 // we should find the vtable entry in the nested vtable inside a derived class vtable.
 
 // CHECK-LABEL: func.func @test_vtable_load_method_nested
-// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
+// CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr) -> ((!llvm.ptr) -> ())
 // CHECK:         %[[FPTR:.*]] = constant @"testClass::subroutine" : (!llvm.ptr) -> ()
-// CHECK:         return
+// CHECK:         return %[[FPTR]]
 
-func.func @test_vtable_load_method_nested(%obj: !moore.class<@virtualFunctionClass>) {
+func.func @test_vtable_load_method_nested(%obj: !moore.class<@virtualFunctionClass>) -> ((!moore.class<@virtualFunctionClass>) -> ()) {
   // virtualFunctionClass has no top-level vtable, but testClass::@vtable contains
   // a nested @virtualFunctionClass::@vtable with the method entry.
   %fptr = moore.vtable.load_method %obj : @subroutine of <@virtualFunctionClass> -> (!moore.class<@virtualFunctionClass>) -> ()
-  return
+  return %fptr : (!moore.class<@virtualFunctionClass>) -> ()
 }

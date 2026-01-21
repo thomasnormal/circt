@@ -990,6 +990,41 @@ struct LowerLTLToCorePass
 
 // Simply applies the conversion patterns defined above
 void LowerLTLToCorePass::runOnOperation() {
+  auto hwModule = getOperation();
+  Value defaultClock;
+  auto getDefaultClock = [&]() -> Value {
+    if (defaultClock || !hwModule)
+      return defaultClock;
+
+    hwModule.walk([&](seq::ToClockOp op) {
+      if (!defaultClock)
+        defaultClock = op.getResult();
+    });
+    if (defaultClock)
+      return defaultClock;
+
+    auto &entryBlock = hwModule.getBody().front();
+    auto inputTypes = hwModule.getInputTypes();
+    for (auto it : llvm::enumerate(inputTypes)) {
+      if (isa<seq::ClockType>(it.value())) {
+        defaultClock = entryBlock.getArgument(it.index());
+        return defaultClock;
+      }
+      if (auto hwStruct = dyn_cast<hw::StructType>(it.value())) {
+        for (auto field : hwStruct.getElements()) {
+          if (isa<seq::ClockType>(field.type)) {
+            OpBuilder builder(&entryBlock, entryBlock.begin());
+            auto extract = hw::StructExtractOp::create(
+                builder, hwModule.getLoc(), entryBlock.getArgument(it.index()),
+                field.name);
+            defaultClock = extract;
+            return defaultClock;
+          }
+        }
+      }
+    }
+    return defaultClock;
+  };
 
   // Set target dialects: We don't want to see any ltl or verif that might
   // come from an AssertProperty left in the result
@@ -1057,7 +1092,7 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
-    auto result = lowerer.lowerProperty(op.getProperty(), Value(),
+    auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
@@ -1072,7 +1107,7 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
-    auto result = lowerer.lowerProperty(op.getProperty(), Value(),
+    auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
@@ -1087,7 +1122,7 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
-    auto result = lowerer.lowerProperty(op.getProperty(), Value(),
+    auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();

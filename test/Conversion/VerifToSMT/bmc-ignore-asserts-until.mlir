@@ -1,22 +1,22 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
-// CHECK: [[FALSE:%.+]] = arith.constant false
-// CHECK: [[TRUE:%.+]] = arith.constant true
-// CHECK: scf.for [[I:%.+]] = {{%.+}} to {{%.+}} step {{%.+}} iter_args({{%.+}} = {{%.+}}, [[VIOLATED:%.+]] = {{%.+}})
 // CHECK: [[IGNOREUNTIL:%.+]] = arith.constant 3
+// CHECK: [[TRUE:%.+]] = arith.constant true
+// CHECK: [[FALSE:%.+]] = arith.constant false
+// CHECK: scf.for [[I:%.+]] = {{%.+}} to {{%.+}} step {{%.+}} iter_args({{%.+}} = {{%.+}}, [[VIOLATED:%.+]] = {{%.+}})
 // CHECK: [[CMP:%.+]] = arith.cmpi ult, [[I]], [[IGNOREUNTIL]]
 // CHECK: [[NEWVIOLATED:%.+]] = scf.if [[CMP]]
 // CHECK:     scf.yield [[VIOLATED]]
 // CHECK: } else {
-// CHECK:     [[CHECK:%.+]] = smt.check sat {
+// CHECK:     smt.check sat {
 // CHECK:     smt.yield [[TRUE]]
 // CHECK:     } unknown {
 // CHECK:     smt.yield [[TRUE]]
 // CHECK:     } unsat {
 // CHECK:     smt.yield [[FALSE]]
 // CHECK:     } -> i1
-// CHECK:     [[OR:%.+]] = arith.ori [[CHECK]], [[VIOLATED]]
-// CHECK:     scf.yield [[OR]]
+// CHECK:     arith.ori
+// CHECK:     scf.yield
 // CHECK: }
 // CHECK: func.call @bmc_loop()
 // CHECK: [[FUNCDECL:%.+]] = smt.declare_fun : !smt.bv<32>

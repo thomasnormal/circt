@@ -117,9 +117,9 @@ func.func private @"GoldenRetriever::getAge"(%this: !moore.class<@GoldenRetrieve
 // Test 2: Basic VTableLoadMethodOp - void method
 //===----------------------------------------------------------------------===//
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_load_void_method
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_load_void_method(%obj: !moore.class<@Dog>) {
@@ -131,9 +131,9 @@ func.func @test_load_void_method(%obj: !moore.class<@Dog>) {
 // Test 3: VTableLoadMethodOp - method with return value
 //===----------------------------------------------------------------------===//
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_load_method_with_return
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
 // CHECK:         return
 
 func.func @test_load_method_with_return(%obj: !moore.class<@Dog>) {
@@ -145,10 +145,9 @@ func.func @test_load_method_with_return(%obj: !moore.class<@Dog>) {
 // Test 4: Loading different methods from same object
 //===----------------------------------------------------------------------===//
 
+// When the results are not used, the constants get dead-code-eliminated.
 // CHECK-LABEL: func.func @test_load_multiple_methods
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK-DAG:     %[[FPTR1:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK-DAG:     %[[FPTR2:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
 // CHECK:         return
 
 func.func @test_load_multiple_methods(%obj: !moore.class<@Dog>) {
@@ -161,10 +160,9 @@ func.func @test_load_multiple_methods(%obj: !moore.class<@Dog>) {
 // Test 5: Loading same method from different classes (polymorphism)
 //===----------------------------------------------------------------------===//
 
+// When the results are not used, the constants get dead-code-eliminated.
 // CHECK-LABEL: func.func @test_polymorphic_method_load
 // CHECK-SAME:    (%[[DOG:.*]]: !llvm.ptr, %[[CAT:.*]]: !llvm.ptr)
-// CHECK-DAG:     %[[FPTR1:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK-DAG:     %[[FPTR2:.*]] = constant @"Cat::speak" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_polymorphic_method_load(%dog: !moore.class<@Dog>, %cat: !moore.class<@Cat>) {
@@ -177,10 +175,9 @@ func.func @test_polymorphic_method_load(%dog: !moore.class<@Dog>, %cat: !moore.c
 // Test 6: Multi-level inheritance (3 levels deep)
 //===----------------------------------------------------------------------===//
 
+// When the results are not used, the constants get dead-code-eliminated.
 // CHECK-LABEL: func.func @test_multilevel_inheritance
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK-DAG:     %[[FPTR1:.*]] = constant @"GoldenRetriever::speak" : (!llvm.ptr) -> ()
-// CHECK-DAG:     %[[FPTR2:.*]] = constant @"GoldenRetriever::getAge" : (!llvm.ptr) -> i32
 // CHECK:         return
 
 func.func @test_multilevel_inheritance(%obj: !moore.class<@GoldenRetriever>) {
@@ -227,16 +224,17 @@ func.func @test_load_call_use_result(%obj: !moore.class<@Dog>) -> !moore.i32 {
 // Test 9: Method dispatch in control flow
 //===----------------------------------------------------------------------===//
 
+// The constants get hoisted to the entry block by the conversion.
 // CHECK-LABEL: func.func @test_method_in_control_flow
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[COND:.*]]: i1)
+// CHECK-DAG:     %[[FPTR_AGE:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
+// CHECK-DAG:     %[[FPTR_SPEAK:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
 // CHECK:         cf.cond_br %[[COND]], ^[[BB1:.*]], ^[[BB2:.*]]
 // CHECK:       ^[[BB1]]:
-// CHECK:         %[[FPTR1:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK:         call_indirect %[[FPTR1]](%[[OBJ]]) : (!llvm.ptr) -> ()
+// CHECK:         call_indirect %[[FPTR_SPEAK]](%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         cf.br ^[[BB3:.*]]
 // CHECK:       ^[[BB2]]:
-// CHECK:         %[[FPTR2:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
-// CHECK:         %[[AGE:.*]] = call_indirect %[[FPTR2]](%[[OBJ]]) : (!llvm.ptr) -> i32
+// CHECK:         %[[AGE:.*]] = call_indirect %[[FPTR_AGE]](%[[OBJ]]) : (!llvm.ptr) -> i32
 // CHECK:         cf.br ^[[BB3]]
 // CHECK:       ^[[BB3]]:
 // CHECK:         return
@@ -305,14 +303,13 @@ func.func @test_polymorphic_calls(%dog: !moore.class<@Dog>, %cat: !moore.class<@
 // Test 12: Compare loaded function pointers (same method from same class)
 //===----------------------------------------------------------------------===//
 
+// When the results are not used, the constants get dead-code-eliminated.
 // CHECK-LABEL: func.func @test_same_method_twice
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR1:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK:         %[[FPTR2:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_same_method_twice(%obj: !moore.class<@Dog>) {
-  // Load the same method twice - should result in two identical func.constant ops
+  // Load the same method twice - results unused so get eliminated
   %fptr1 = moore.vtable.load_method %obj : @speak of <@Dog> -> (!moore.class<@Dog>) -> ()
   %fptr2 = moore.vtable.load_method %obj : @speak of <@Dog> -> (!moore.class<@Dog>) -> ()
   return

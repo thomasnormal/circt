@@ -22,16 +22,21 @@ moore.global_variable @assocArrayGlobal : !moore.assoc_array<!moore.i32, !moore.
 
 // Test get_global_variable for queue type
 // CHECK-LABEL: func @testGetGlobalQueue
-func.func @testGetGlobalQueue() {
-  // CHECK: llvm.mlir.addressof @queueGlobal : !llvm.ptr
+// CHECK-SAME: () -> !llvm.ptr
+func.func @testGetGlobalQueue() -> !moore.ref<queue<!moore.i8, 0>> {
+  // CHECK: %[[ADDR:.*]] = llvm.mlir.addressof @queueGlobal : !llvm.ptr
   %0 = moore.get_global_variable @queueGlobal : !moore.ref<queue<!moore.i8, 0>>
-  return
+  // CHECK: return %[[ADDR]] : !llvm.ptr
+  return %0 : !moore.ref<queue<!moore.i8, 0>>
 }
 
 // Test get_global_variable for integer type
+// Integer ref types convert to !llhd.ref<iN> via type conversion
 // CHECK-LABEL: func @testGetGlobalInt
-func.func @testGetGlobalInt() {
-  // CHECK: llvm.mlir.addressof @intGlobal : !llvm.ptr
+// CHECK-SAME: () -> !llhd.ref<i32>
+func.func @testGetGlobalInt() -> !moore.ref<i32> {
+  // CHECK: %[[ADDR:.*]] = llvm.mlir.addressof @intGlobal : !llvm.ptr
   %0 = moore.get_global_variable @intGlobal : !moore.ref<i32>
-  return
+  // CHECK: return
+  return %0 : !moore.ref<i32>
 }

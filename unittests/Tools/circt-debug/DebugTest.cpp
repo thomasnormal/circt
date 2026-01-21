@@ -384,17 +384,17 @@ TEST(ExpressionEvaluatorTest, SimpleValues) {
 
   // Signal lookup
   auto result = eval.evaluate("test.data");
-  EXPECT_TRUE(result.success);
+  EXPECT_TRUE(result.succeeded);
   EXPECT_EQ(result.value->toAPInt().getZExtValue(), 0xABu);
 
   // Constant
   auto constResult = eval.evaluate("0xFF");
-  EXPECT_TRUE(constResult.success);
+  EXPECT_TRUE(constResult.succeeded);
   EXPECT_EQ(constResult.value->toAPInt().getZExtValue(), 0xFFu);
 
   // Unknown signal
   auto unknownResult = eval.evaluate("nonexistent");
-  EXPECT_FALSE(unknownResult.success);
+  EXPECT_FALSE(unknownResult.succeeded);
 }
 
 TEST(ExpressionEvaluatorTest, Comparisons) {

@@ -11,6 +11,6 @@ module PastCompare(input logic clk, a, b);
   // CHECK-LABEL: hw.module @PastCompare
   // CHECK: ltl.past
   // CHECK: ltl.or
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   // CHECK-NOT: unrealized_conversion_cast
 endmodule

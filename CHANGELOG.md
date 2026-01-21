@@ -21,6 +21,13 @@
 - Compiles further through LLHD lowering
 - Remaining blocker: `$sscanf` with 4-state output ref
 
+**Track D: BMC/SVA Correctness (Yosys basic03)** ⭐ BUG FIX
+- Reordered BMC circuit outputs to keep delay/past buffers ahead of non-final
+  checks, avoiding type skew in buffer updates
+- Added post-conversion rewrite for `smt.bool`↔`bv1` casts (via `smt.ite`/`smt.eq`)
+  to eliminate Z3 sort errors from LTL-to-core lowering
+- End-to-end yosys `basic03.sv` now passes (pass/fail cases clean)
+
 **Test Results**:
 - MooreRuntime tests: **435/435 PASS**
 - Unit tests: 1132/1140 pass (8 pre-existing failures)

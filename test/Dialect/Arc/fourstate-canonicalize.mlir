@@ -23,7 +23,7 @@ func.func @fold_from_to_fourstate(%arg0: i8) -> i8 {
 func.func @fold_is_x_constant() -> i1 {
   %c42 = arc.fourstate.constant 42 : !arc.logic<8>
   // Constants have no X/Z, so is_x should fold to false
-  // CHECK: %[[FALSE:.*]] = arith.constant false
+  // CHECK: %[[FALSE:.*]] = hw.constant false
   // CHECK: return %[[FALSE]]
   %result = arc.is_x %c42 : !arc.logic<8>
   return %result : i1
@@ -33,7 +33,7 @@ func.func @fold_is_x_constant() -> i1 {
 func.func @fold_is_x_from_to(%arg0: i8) -> i1 {
   %logic = arc.to_fourstate %arg0 : (i8) -> !arc.logic<8>
   // Values from to_fourstate have no X/Z
-  // CHECK: %[[FALSE:.*]] = arith.constant false
+  // CHECK: %[[FALSE:.*]] = hw.constant false
   // CHECK: return %[[FALSE]]
   %result = arc.is_x %logic : !arc.logic<8>
   return %result : i1
@@ -43,7 +43,7 @@ func.func @fold_is_x_from_to(%arg0: i8) -> i1 {
 func.func @fold_is_x_x_value() -> i1 {
   %x = arc.fourstate.x : !arc.logic<8>
   // X values always have X
-  // CHECK: %[[TRUE:.*]] = arith.constant true
+  // CHECK: %[[TRUE:.*]] = hw.constant true
   // CHECK: return %[[TRUE]]
   %result = arc.is_x %x : !arc.logic<8>
   return %result : i1
@@ -53,7 +53,7 @@ func.func @fold_is_x_x_value() -> i1 {
 func.func @fold_is_x_z_value() -> i1 {
   %z = arc.fourstate.z : !arc.logic<8>
   // Z values have X/Z bits
-  // CHECK: %[[TRUE:.*]] = arith.constant true
+  // CHECK: %[[TRUE:.*]] = hw.constant true
   // CHECK: return %[[TRUE]]
   %result = arc.is_x %z : !arc.logic<8>
   return %result : i1
@@ -172,7 +172,7 @@ func.func @fold_mul_one(%arg0: !arc.logic<8>) -> !arc.logic<8> {
 // CHECK-LABEL: func.func @fold_case_eq_same
 func.func @fold_case_eq_same(%arg0: !arc.logic<8>) -> i1 {
   // a === a is always true (even for X/Z)
-  // CHECK: %[[TRUE:.*]] = arith.constant true
+  // CHECK: %[[TRUE:.*]] = hw.constant true
   // CHECK: return %[[TRUE]]
   %result = arc.fourstate.case_eq %arg0, %arg0 : !arc.logic<8>
   return %result : i1
@@ -181,7 +181,7 @@ func.func @fold_case_eq_same(%arg0: !arc.logic<8>) -> i1 {
 // CHECK-LABEL: func.func @fold_case_ne_same
 func.func @fold_case_ne_same(%arg0: !arc.logic<8>) -> i1 {
   // a !== a is always false (even for X/Z)
-  // CHECK: %[[FALSE:.*]] = arith.constant false
+  // CHECK: %[[FALSE:.*]] = hw.constant false
   // CHECK: return %[[FALSE]]
   %result = arc.fourstate.case_ne %arg0, %arg0 : !arc.logic<8>
   return %result : i1
@@ -226,7 +226,7 @@ func.func @fold_replicate_same_width(%arg0: !arc.logic<8>) -> !arc.logic<8> {
 func.func @fold_mux_same_values(%cond: !arc.logic<1>, %arg0: !arc.logic<8>) -> !arc.logic<8> {
   // mux(cond, a, a) = a
   // CHECK-NOT: arc.fourstate.mux
-  // CHECK: return %arg0
+  // CHECK: return %arg1
   %result = arc.fourstate.mux %cond, %arg0, %arg0 : !arc.logic<1>, !arc.logic<8>
   return %result : !arc.logic<8>
 }

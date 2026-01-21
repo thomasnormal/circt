@@ -1,28 +1,4 @@
-// RUN: split-file %s %t
-// RUN: circt-lec %t/a.mlir %t/b.mlir --c1 top_a --c2 top_b --emit-mlir | FileCheck %s
-
-//--- a.mlir
-hw.module @foo(in %a : i8, out b : i8) {
-  %c1_i8 = hw.constant 1 : i8
-  %add = comb.add %a, %c1_i8: i8
-  hw.output %add : i8
-}
-hw.module @top_a(in %a : i8, out b : i8) {
-  %foo.b = hw.instance "foo" @foo(a: %a: i8) -> (b: i8)
-  hw.output %foo.b : i8
-}
-
-//--- b.mlir
-hw.module @foo(in %a : i8, out b : i8) {
-  %c2_i8 = hw.constant 2 : i8
-  %add = comb.add %a, %c2_i8: i8
-  hw.output %add : i8
-}
-
-hw.module @top_b(in %a : i8, out b : i8) {
-  %foo.b = hw.instance "foo" @foo(a: %a: i8) -> (b: i8)
-  hw.output %foo.b : i8
-}
+// RUN: circt-lec %S/Inputs/merge-inputs-a.mlir %S/Inputs/merge-inputs-b.mlir --c1 top_a --c2 top_b --emit-mlir | FileCheck %s
 
 // Check constants to make sure a.mlir and b.mlir are properly merged.
 // CHECK-LABEL: func.func @foo_0(%arg0: !smt.bv<8>) -> !smt.bv<8>

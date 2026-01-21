@@ -1,4 +1,4 @@
-// RUN: circt-verilog --parse-only %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
 
 // Test UVM utility classes: cmdline_processor, report_server, report_catcher
 

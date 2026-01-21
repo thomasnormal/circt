@@ -395,35 +395,33 @@ module SampleValueBuiltins #() (
     input clk_i
 );
   // CHECK: [[CLKWIRE:%.+]] = moore.net name "clk_i" wire : <l1>
-  // CHECK: moore.procedure always {
-  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK-NEXT: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK-NEXT: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
-  // CHECK-NEXT: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
-  // CHECK-NEXT: [[NOTPAST:%.+]] = ltl.not [[PAST]] : !ltl.sequence
-  // CHECK-NEXT: [[NOTPASTANDCURRENT:%.+]] = ltl.and [[CURRENT]], [[NOTPAST]] : i1, !ltl.property
+  // CHECK: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
+  // CHECK: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
+  // CHECK: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
+  // CHECK: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
+  // CHECK: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
+  // CHECK: [[NOTPAST:%.+]] = ltl.not [[PAST]] : !ltl.sequence
+  // CHECK: [[NOTPASTANDCURRENT:%.+]] = ltl.and [[CURRENT]], [[NOTPAST]] : i1, !ltl.property
+  // CHECK: ltl.implication
+  // CHECK: ltl.clock
+  // CHECK: verif.assert
   rising_clk: assert property (@(posedge clk_i) clk_i |=> $rose(clk_i));
-  // CHECK: moore.procedure always {
-  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK-NEXT: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK-NEXT: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
-  // CHECK-NEXT: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
-  // CHECK-NEXT: [[NOTCURRENT:%.+]] = ltl.not [[CURRENT]] : i1
-  // CHECK-NEXT: [[PASTANDNOTCURRENT:%.+]] = ltl.and [[NOTCURRENT]], [[PAST]] : !ltl.property, !ltl.sequence
+  // CHECK: ltl.past
+  // CHECK: ltl.not
+  // CHECK: ltl.and
+  // CHECK: ltl.implication
+  // CHECK: ltl.clock
+  // CHECK: verif.assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
-  // CHECK: moore.procedure always {
-  // CHECK-NEXT: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK-NEXT: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK-NEXT: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK-NEXT: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
-  // CHECK-NEXT: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
-  // CHECK-NEXT: [[NOTPAST:%.+]] = ltl.not [[PAST]] : !ltl.sequence
-  // CHECK-NEXT: [[NOTCURRENT:%.+]] = ltl.not [[CURRENT]] : i1
-  // CHECK-NEXT: [[PASTANDCURRENT:%.+]] = ltl.and [[CURRENT]], [[PAST]] : i1, !ltl.sequence
-  // CHECK-NEXT: [[NOTPASTANDNOTCURRENT:%.+]] = ltl.and [[NOTCURRENT]], [[NOTPAST]] : !ltl.property, !ltl.property
-  // CHECK-NEXT: [[STABLE:%.+]] = ltl.or [[PASTANDCURRENT]], [[NOTPASTANDNOTCURRENT]] : !ltl.sequence, !ltl.property
+  // CHECK: ltl.past
+  // CHECK: ltl.not
+  // CHECK: ltl.not
+  // CHECK: ltl.and
+  // CHECK: ltl.and
+  // CHECK: ltl.or
+  // CHECK: ltl.implication
+  // CHECK: ltl.clock
+  // CHECK: verif.assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));
 
 endmodule

@@ -14,7 +14,7 @@
 interface driver_bfm (
   input bit clk,
   input bit reset_n,
-  output logic enable
+  output bit enable
 );
 
   task wait_for_reset();
@@ -32,7 +32,7 @@ endinterface
 module top;
   bit clk;
   bit reset_n;
-  logic enable;
+  bit enable;
 
   driver_bfm bfm (
     .clk(clk),

@@ -5,9 +5,10 @@ interface bus_if(input logic clk);
 endinterface
 
 module consumer(bus_if bus);
-  // CHECK-LABEL: moore.module @consumer
-  // CHECK-SAME: (%[[BUS:.*]]: !moore.ref<virtual_interface<@bus_if>>)
+  // CHECK-LABEL: moore.module private @consumer
+  // CHECK-SAME: (in %[[BUS:.*]] : !moore.ref<virtual_interface<@bus_if>>)
   initial begin
+    // CHECK: moore.procedure initial
     // CHECK: %[[BUS_DATA:.*]] = moore.read %[[BUS]] : <virtual_interface<@bus_if>>
     // CHECK: %[[DATA_REF:.*]] = moore.virtual_interface.signal_ref %[[BUS_DATA]][@data] : <@bus_if> -> <l1>
     // CHECK: %[[BUS_CLK:.*]] = moore.read %[[BUS]] : <virtual_interface<@bus_if>>

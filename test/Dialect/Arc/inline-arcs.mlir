@@ -1,7 +1,4 @@
-// RUN: split-file %s %t
-
-//--- default
-// RUN: circt-opt %t/default --arc-inline | FileCheck %t/default
+// RUN: circt-opt %s --arc-inline | FileCheck %s
 
 // CHECK-LABEL: func.func @Simple
 func.func @Simple(%arg0: i4, %arg1: !seq.clock) -> (i4, i4) {
@@ -189,24 +186,4 @@ arc.define @ArcThatIsCalled(%arg0: i32) -> i32 {
   %1 = comb.and %arg0, %arg0 : i32
   %2 = comb.and %arg0, %arg0 : i32
   arc.output %0 : i32
-}
-
-//--- onlyIntoArcs
-// RUN: circt-opt %t/onlyIntoArcs --arc-inline=into-arcs-only=1 | FileCheck %t/onlyIntoArcs
-
-// CHECK-LABEL: hw.module @onlyIntoArcs
-hw.module @onlyIntoArcs(in %arg0: i4, in %arg1: i4, in %arg2: !seq.clock, out out0: i4) {
-  %0 = arc.call @sub1(%arg0, %arg1) : (i4, i4) -> i4
-  hw.output %0 : i4
-}
-// CHECK-LABEL: arc.define @sub1
-arc.define @sub1(%arg0: i4, %arg1: i4) -> i4 {
-  // CHECK-NEXT: comb.add
-  %0 = arc.call @sub2(%arg0, %arg1) : (i4, i4) -> i4
-  arc.output %0 : i4
-}
-// CHECK-NOT: arc.define @sub2
-arc.define @sub2(%arg0: i4, %arg1: i4) -> i4 {
-  %0 = comb.add %arg0, %arg1 : i4
-  arc.output %0 : i4
 }

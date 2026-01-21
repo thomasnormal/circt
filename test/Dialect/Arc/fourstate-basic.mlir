@@ -240,9 +240,11 @@ func.func @fourstate_full_adder(%a: !arc.logic<1>, %b: !arc.logic<1>, %cin: !arc
   return %sum, %cout : !arc.logic<1>, !arc.logic<1>
 }
 
-// CHECK-LABEL: func.func @fourstate_with_arc_define
+// CHECK-LABEL: arc.define @logic_and_arc
 arc.define @logic_and_arc(%a: !arc.logic<8>, %b: !arc.logic<8>) -> !arc.logic<8> {
+  // CHECK: arc.fourstate.and
   %result = arc.fourstate.and %a, %b : !arc.logic<8>
+  // CHECK: arc.output
   arc.output %result : !arc.logic<8>
 }
 

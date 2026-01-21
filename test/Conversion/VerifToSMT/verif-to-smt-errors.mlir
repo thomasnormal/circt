@@ -1,25 +1,25 @@
 // RUN: circt-opt %s --convert-verif-to-smt --split-input-file --verify-diagnostics
 
-func.func @assert_with_unsupported_property_type(%arg0: !smt.bv<1>) {
+// LTL sequence types are now supported - no error expected
+func.func @assert_with_sequence_type(%arg0: !smt.bv<1>) {
   %0 = builtin.unrealized_conversion_cast %arg0 : !smt.bv<1> to !ltl.sequence
-  // expected-error @below {{failed to legalize operation 'verif.assert' that was explicitly marked illegal}}
   verif.assert %0 : !ltl.sequence
   return
 }
 
 // -----
 
-func.func @assert_with_unsupported_property_type(%arg0: !smt.bv<1>) {
+// LTL property types are now supported - no error expected
+func.func @assert_with_property_type(%arg0: !smt.bv<1>) {
   %0 = builtin.unrealized_conversion_cast %arg0 : !smt.bv<1> to !ltl.property
-  // expected-error @below {{failed to legalize operation 'verif.assert' that was explicitly marked illegal}}
   verif.assert %0 : !ltl.property
   return
 }
 
 // -----
 
+// Multiple assertions are now supported - no error expected
 func.func @multiple_assertions_bmc() -> (i1) {
-  // expected-error @below {{bounded model checking problems with multiple assertions are not yet correctly handled - instead, you can assert the conjunction of your assertions}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
@@ -38,8 +38,8 @@ func.func @multiple_assertions_bmc() -> (i1) {
 
 // -----
 
+// Multiple asserting modules are now supported - no error expected
 func.func @multiple_asserting_modules_bmc() -> (i1) {
-  // expected-error @below {{bounded model checking problems with multiple assertions are not yet correctly handled - instead, you can assert the conjunction of your assertions}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
@@ -100,8 +100,8 @@ hw.module @OneAssertion(in %x: i1) {
 
 // -----
 
+// Two separated assertions are now supported - no error expected
 func.func @two_separated_assertions() -> (i1) {
-  // expected-error @below {{bounded model checking problems with multiple assertions are not yet correctly handled - instead, you can assert the conjunction of your assertions}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
@@ -121,8 +121,8 @@ hw.module @OneAssertion(in %x: i1) {
 
 // -----
 
+// Multiple nested assertions are now supported - no error expected
 func.func @multiple_nested_assertions() -> (i1) {
-  // expected-error @below {{bounded model checking problems with multiple assertions are not yet correctly handled - instead, you can assert the conjunction of your assertions}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}

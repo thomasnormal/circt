@@ -21,8 +21,10 @@ func.func @ClassType(%arg0: !moore.class<@PropertyCombo>) {
 /// Check that new lowers to malloc
 
 // malloc should be declared in the LLVM dialect.
+// Class C struct is: (type_id(i32), a(i32), b(struct<i32,i32>), c(struct<i32,i32>))
+// Size: 4 + 4 + 8 + 8 = 24 bytes
 // CHECK-LABEL: func.func private @test_new2
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(16 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -35,6 +37,7 @@ func.func private @test_new2() {
   return
 }
 // Minimal class so the identified struct has a concrete body.
+// l32 is 4-value logic which is lowered to struct<(i32, i32)>
 moore.class.classdecl @C {
   moore.class.propertydecl @a : !moore.i32
   moore.class.propertydecl @b : !moore.l32
@@ -42,11 +45,11 @@ moore.class.classdecl @C {
 }
 
 /// Check that new lowers to malloc with inheritance without shadowing
-/// D struct is: (struct<"C", (i32, i32, i32, i32)>, i32, i64, i16)
-/// Size: C(16) + i32(4) + i64(8) + i16(2) = 30 bytes (packed size)
+/// D struct is: (C(24), d(struct<i32,i32>), e(struct<i64,i64>), f(i16))
+/// Size: 24 + 8 + 16 + 2 = 50 bytes
 
 // CHECK-LABEL: func.func private @test_new3
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(30 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(50 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -64,9 +67,11 @@ moore.class.classdecl @D extends @C {
 }
 
 /// Check that new lowers to malloc with inheritance & shadowing
+/// E struct is: (C(24), a(i32), b(struct<i32,i32>), c(struct<i32,i32>))
+/// Size: 24 + 4 + 8 + 8 = 44 bytes
 
 // CHECK-LABEL: func.func private @test_new4
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(28 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(44 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -107,8 +112,7 @@ moore.class.classdecl @F extends @C {
 
 // CHECK-LABEL: func.func private @test_new6
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"G", (struct<"C", (i32, i32, i32, i32)>, i32, i32, i32)>
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"G"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 
@@ -129,9 +133,8 @@ moore.class.classdecl @G extends @C {
 
 // CHECK-LABEL: func.func private @test_dyn_cast
 // CHECK-SAME: (%arg0: !llvm.ptr) -> (!llvm.ptr, i1) {
-// CHECK:   [[ZERO:%.+]] = llvm.mlir.zero : !llvm.ptr
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[{{.*}}] : (!llvm.ptr, i32) -> !llvm.ptr
-// CHECK:   [[RTTI:%.+]] = llvm.load [[GEP]] : !llvm.ptr -> i32
+// CHECK-DAG:   [[ZERO:%.+]] = llvm.mlir.zero : !llvm.ptr
+// CHECK:   [[RTTI:%.+]] = llvm.load %arg0 : !llvm.ptr -> i32
 // CHECK:   [[CALL:%.+]] = llvm.call @__moore_dyn_cast_check({{.*}}) : (i32, i32, i32) -> i1
 // CHECK:   [[NOTNULL:%.+]] = llvm.icmp "ne" %arg0, [[ZERO]] : !llvm.ptr
 // CHECK:   [[SUCCESS:%.+]] = llvm.and [[NOTNULL]], [[CALL]] : i1

@@ -11,19 +11,19 @@ moore.class.classdecl @RandModeClass {
 
 // CHECK-LABEL: func.func @test_rand_mode
 func.func @test_rand_mode(%obj: !moore.class<@RandModeClass>,
-                          %mode: i32) -> i32 {
+                          %mode: !moore.i32) -> !moore.i32 {
   // Property-level get.
   // CHECK: llvm.call @__moore_rand_mode_get
-  %prev0 = moore.rand_mode %obj {property = @addr}
-      : !moore.class<@RandModeClass> -> i32
+  %prev0 = "moore.rand_mode"(%obj) <{property = @addr}>
+      : (!moore.class<@RandModeClass>) -> !moore.i32
   // Property-level set.
   // CHECK: llvm.call @__moore_rand_mode_set
-  %prev1 = moore.rand_mode %obj, %mode {property = @addr}
-      : !moore.class<@RandModeClass>, i32 -> i32
+  %prev1 = "moore.rand_mode"(%obj, %mode) <{property = @addr}>
+      : (!moore.class<@RandModeClass>, !moore.i32) -> !moore.i32
   // Class-level set (enable/disable all).
   // CHECK: llvm.call @__moore_rand_mode_enable_all
   // CHECK: llvm.call @__moore_rand_mode_disable_all
-  %prev2 = moore.rand_mode %obj, %mode
-      : !moore.class<@RandModeClass>, i32 -> i32
-  return %prev1 : i32
+  %prev2 = "moore.rand_mode"(%obj, %mode)
+      : (!moore.class<@RandModeClass>, !moore.i32) -> !moore.i32
+  return %prev1 : !moore.i32
 }

@@ -13,11 +13,15 @@ hw.module @Basic(in %a: i42, in %b: i42, out u: i42, out v: i42) {
     // CHECK-NOT:    call @bar
     // CHECK-NEXT:   [[TMP2:%.+]] = hw.constant 42 :
     // CHECK-NEXT:   [[TMP3:%.+]] = comb.xor %a, [[TMP2]] :
-    // CHECK-NEXT:   [[TMP4:%.+]] = comb.mul [[TMP3]], %b :
-    // CHECK-NEXT:   cf.br [[BB2:\^.+]]
-    // CHECK-NEXT: [[BB2]]:
-    // CHECK-NEXT:   cf.br [[BB3:\^.+]]([[TMP1]], [[TMP4]] : i42, i42)
-    // CHECK-NEXT: [[BB3]]([[CALLRES0:%.+]]: i42, [[CALLRES1:%.+]]: i42):
+    // CHECK-NEXT:   cf.br [[BB2:\^.+]]([[TMP3]] : i42)
+    // CHECK-NEXT: [[BB2]]([[TMP3B:%.+]]: i42):
+    // CHECK-NEXT:   cf.br [[BB3:\^.+]]([[TMP3B]] : i42)
+    // CHECK-NEXT: [[BB3]]([[TMP3C:%.+]]: i42):
+    // CHECK-NEXT:   [[TMP4:%.+]] = comb.mul [[TMP3C]], %b :
+    // CHECK-NEXT:   cf.br [[BB4:\^.+]]
+    // CHECK-NEXT: [[BB4]]:
+    // CHECK-NEXT:   cf.br [[BB5:\^.+]]([[TMP1]], [[TMP4]] : i42, i42)
+    // CHECK-NEXT: [[BB5]]([[CALLRES0:%.+]]: i42, [[CALLRES1:%.+]]: i42):
 
     // CHECK-NEXT: scf.execute_region
     %2:2 = scf.execute_region -> (i42, i42) {
@@ -29,13 +33,17 @@ hw.module @Basic(in %a: i42, in %b: i42, out u: i42, out v: i42) {
       // CHECK-NOT:    call @bar
       // CHECK-NEXT:   [[TMP2:%.+]] = hw.constant 42 :
       // CHECK-NEXT:   [[TMP3:%.+]] = comb.xor [[CALLRES0]], [[TMP2]] :
-      // CHECK-NEXT:   [[TMP4:%.+]] = comb.mul [[TMP3]], [[CALLRES1]] :
-      // CHECK-NEXT:   cf.br [[BB2:\^.+]]
-      // CHECK-NEXT: [[BB2]]:
-      // CHECK-NEXT:   cf.br [[BB3:\^.+]]([[TMP1]], [[TMP4]] : i42, i42)
-      // CHECK-NEXT: [[BB3]]([[CALLRES0:%.+]]: i42, [[CALLRES1:%.+]]: i42):
+      // CHECK-NEXT:   cf.br [[BB2:\^.+]]([[TMP3]] : i42)
+      // CHECK-NEXT: [[BB2]]([[TMP3B:%.+]]: i42):
+      // CHECK-NEXT:   cf.br [[BB3:\^.+]]([[TMP3B]] : i42)
+      // CHECK-NEXT: [[BB3]]([[TMP3C:%.+]]: i42):
+      // CHECK-NEXT:   [[TMP4:%.+]] = comb.mul [[TMP3C]], [[CALLRES1]] :
+      // CHECK-NEXT:   cf.br [[BB4:\^.+]]
+      // CHECK-NEXT: [[BB4]]:
+      // CHECK-NEXT:   cf.br [[BB5:\^.+]]([[TMP1]], [[TMP4]] : i42, i42)
+      // CHECK-NEXT: [[BB5]]([[CALLRES2:%.+]]: i42, [[CALLRES3:%.+]]: i42):
 
-      // CHECK-NEXT: scf.yield [[CALLRES0]], [[CALLRES1]]
+      // CHECK-NEXT: scf.yield [[CALLRES2]], [[CALLRES3]]
       scf.yield %3#0, %3#1 : i42, i42
     }
 

@@ -11,6 +11,7 @@ TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
+SKIP_VHDL="${SKIP_VHDL:-1}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2
@@ -25,6 +26,7 @@ trap cleanup EXIT
 
 failures=0
 total=0
+skipped=0
 
 run_case() {
   local sv="$1"
@@ -77,10 +79,16 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
       continue
     fi
   fi
+  base="$(basename "$sv" .sv)"
+  if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
+    echo "SKIP(vhdl): $base"
+    skipped=$((skipped + 1))
+    continue
+  fi
   total=$((total + 1))
   run_case "$sv" pass
   run_case "$sv" fail
 done
 
-echo "yosys SVA summary: $total tests, failures=$failures"
+echo "yosys SVA summary: $total tests, failures=$failures, skipped=$skipped"
 exit "$failures"

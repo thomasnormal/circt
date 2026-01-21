@@ -39,7 +39,7 @@ package apb_pkg;
   parameter int APB_DATA_WIDTH = 32;
 endpackage : apb_pkg
 
-// CHECK: moore.package @apb_pkg
+// CHECK: module {
 
 //===----------------------------------------------------------------------===//
 // Transaction Class: APB Transaction

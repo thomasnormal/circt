@@ -117,8 +117,10 @@ circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
 - ✅ Progress: HWToSMT now lowers `hw.struct_create/extract/explode` to SMT
   bitvector concat/extract, unblocking BMC when LowerToBMC emits 4-state
   structs.
-- Remaining: verify end-to-end BMC pipeline with yosys `basic03.sv`; pass-case
-  still reports violations (sampled/clock alignment or BMC semantics issue).
+- ✅ FIXED: VerifToSMT now rewrites `smt.bool`↔`bv1` unrealized casts into
+  explicit SMT ops, eliminating Z3 sort errors in yosys `basic03.sv`.
+- ✅ Verified end-to-end BMC pipeline with yosys `basic03.sv`
+  (pass/fail cases both clean).
 - In progress: constrain derived `seq.to_clock` inputs to the generated BMC
   clock (LowerToBMC) to fix sampled-clock misalignment; re-run `basic03`.
 - In progress: gate BMC checks to posedge iterations when not in

@@ -162,36 +162,36 @@ moore.class.classdecl @ConstraintExpressions {
 
 // Test constraint expression with basic expression
 // CHECK-LABEL:   func.func @test_constraint_expr
-func.func @test_constraint_expr(%cond: i1) {
-  // CHECK:       moore.constraint.expr %{{.*}}
-  moore.constraint.expr %cond
+func.func @test_constraint_expr(%cond: !moore.i1) {
+  // CHECK:       moore.constraint.expr %{{.*}} : i1
+  moore.constraint.expr %cond : !moore.i1
   return
 }
 
 // Test constraint implication
 // CHECK-LABEL:   func.func @test_constraint_implication
-func.func @test_constraint_implication(%antecedent: i1, %cond: i1) {
-  // CHECK:       moore.constraint.implication %{{.*}} {
-  // CHECK-NEXT:    moore.constraint.expr %{{.*}}
+func.func @test_constraint_implication(%antecedent: !moore.i1, %cond: !moore.i1) {
+  // CHECK:       moore.constraint.implication %{{.*}} : i1 {
+  // CHECK-NEXT:    moore.constraint.expr %{{.*}} : i1
   // CHECK-NEXT:  }
-  moore.constraint.implication %antecedent {
-    moore.constraint.expr %cond
+  moore.constraint.implication %antecedent : !moore.i1 {
+    moore.constraint.expr %cond : !moore.i1
   }
   return
 }
 
 // Test constraint if-else
 // CHECK-LABEL:   func.func @test_constraint_if_else
-func.func @test_constraint_if_else(%cond: i1, %then_cond: i1, %else_cond: i1) {
-  // CHECK:       moore.constraint.if_else %{{.*}} {
-  // CHECK-NEXT:    moore.constraint.expr %{{.*}}
+func.func @test_constraint_if_else(%cond: !moore.i1, %then_cond: !moore.i1, %else_cond: !moore.i1) {
+  // CHECK:       moore.constraint.if_else %{{.*}} : i1 {
+  // CHECK-NEXT:    moore.constraint.expr %{{.*}} : i1
   // CHECK-NEXT:  } else {
-  // CHECK-NEXT:    moore.constraint.expr %{{.*}}
+  // CHECK-NEXT:    moore.constraint.expr %{{.*}} : i1
   // CHECK-NEXT:  }
-  moore.constraint.if_else %cond {
-    moore.constraint.expr %then_cond
+  moore.constraint.if_else %cond : !moore.i1 {
+    moore.constraint.expr %then_cond : !moore.i1
   } else {
-    moore.constraint.expr %else_cond
+    moore.constraint.expr %else_cond : !moore.i1
   }
   return
 }

@@ -16,8 +16,9 @@
 // The for loop has the delay buffer as an iter_arg
 // CHECK:         scf.for
 // Circuit is called with 3 args (req, ack, delay_buffer)
+// Returns: orig outputs + delay buffer + non-final check (!smt.bool for LTL property)
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_delay_1() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -42,13 +43,13 @@ func.func @test_delay_1() -> i1 {
 // =============================================================================
 
 // CHECK-LABEL: func.func @test_delay_2
-// Two delay buffer slots initialized to 0
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// Single delay buffer constant initialized to 0 (used multiple times)
 // CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK:         scf.for
 // Circuit takes 4 args (start, done, buf0, buf1)
+// Returns: orig outputs + delay buffers + non-final check
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_delay_2() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -71,14 +72,13 @@ func.func @test_delay_2() -> i1 {
 // =============================================================================
 
 // CHECK-LABEL: func.func @test_delay_range
-// Three delay buffer slots initialized to 0
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// Single delay buffer constant initialized to 0 (used multiple times)
 // CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK:         scf.for
 // Circuit takes 5 args (start, done, buf0, buf1, buf2)
+// Returns: orig outputs + delay buffers + non-final check
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_delay_range() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -101,15 +101,13 @@ func.func @test_delay_range() -> i1 {
 // =============================================================================
 
 // CHECK-LABEL: func.func @test_delay_unbounded
-// Four delay buffer slots initialized to 0
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// Single delay buffer constant initialized to 0 (used multiple times)
 // CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK:         scf.for
 // Circuit takes 6 args (start, done, buf0, buf1, buf2, buf3)
+// Returns: orig outputs + delay buffers + non-final check
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_delay_unbounded() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -133,8 +131,9 @@ func.func @test_delay_unbounded() -> i1 {
 // CHECK-LABEL: func.func @test_no_delay
 // Should work without delay buffers - just 2 symbolic inputs + wasViolated
 // CHECK:         scf.for
+// Returns: orig outputs + non-final check (i1 property -> !smt.bv<1>)
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
 func.func @test_no_delay() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -157,8 +156,9 @@ func.func @test_no_delay() -> i1 {
 // CHECK-LABEL: func.func @test_delay_0
 // CHECK:         scf.for
 // Zero delay doesn't add buffer slots - circuit has only 2 args
+// Returns: orig outputs + non-final check (!ltl.sequence -> !smt.bool)
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_delay_0() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {

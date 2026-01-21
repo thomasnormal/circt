@@ -17,11 +17,11 @@ class constrained_rand;
   endfunction
 endclass
 
-// CHECK-LABEL: moore.class @constrained_rand
-// CHECK: moore.class.property @value : !moore.packed<range<i8>>
-// CHECK-SAME: rand_mode = rand
-// CHECK: moore.class.property @count : !moore.int
-// CHECK-SAME: rand_mode = rand
+// CHECK-LABEL: moore.class.classdecl @constrained_rand
+// CHECK: moore.class.propertydecl @value : !moore.i8 rand_mode rand
+// CHECK: moore.class.propertydecl @count : !moore.i32 rand_mode rand
+// CHECK: moore.constraint.block @c_value
+// CHECK: moore.constraint.block @c_count
 
 module test;
   initial begin
@@ -42,7 +42,7 @@ module test;
   end
 endmodule
 
-// CHECK-LABEL: moore.procedure always
-// CHECK: %[[OBJ:.+]] = moore.class.new @constrained_rand
-// CHECK: %[[SUCCESS1:.+]] = moore.randomize %[[OBJ]]
-// CHECK: %[[SUCCESS2:.+]] = moore.randomize %[[OBJ]]
+// CHECK-LABEL: moore.module @test
+// CHECK: moore.procedure initial
+// CHECK: moore.class.new : <@constrained_rand>
+// CHECK: moore.randomize {{%.+}} : <@constrained_rand>

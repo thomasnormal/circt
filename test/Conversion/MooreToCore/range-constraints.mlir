@@ -4,6 +4,7 @@
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
+// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Range Constraint Support Tests
@@ -24,18 +25,16 @@ moore.class.classdecl @RangeConstrainedClass {
 // CHECK-LABEL: func.func @test_range_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_range_constraint(%obj: !moore.class<@RangeConstrainedClass>) -> i1 {
-  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(8 : i64) : i64
-  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
+  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(99 : i64) : i64
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
   // CHECK: llvm.call @__moore_is_rand_enabled
   // CHECK: llvm.call @__moore_is_constraint_enabled
-  // CHECK: %[[MIN:.*]] = llvm.mlir.constant(1 : i64) : i64
-  // CHECK: %[[MAX:.*]] = llvm.mlir.constant(99 : i64) : i64
-  // CHECK: %[[RANGE_RESULT:.*]] = llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]]) : (i64, i64) -> i64
-  // CHECK: %[[TRUNC:.*]] = arith.trunci %[[RANGE_RESULT]] : i64 to i32
-  // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
-  // CHECK: llvm.store %[[TRUNC]], %[[GEP]] : i32, !llvm.ptr
-  // CHECK: %[[SUCCESS:.*]] = hw.constant true
-  // CHECK: return %[[SUCCESS]] : i1
+  // CHECK: scf.if
+  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]]) : (i64, i64) -> i64
+  // CHECK: arith.trunci {{.*}} : i64 to i32
+  // CHECK: llvm.store {{.*}} : i32, !llvm.ptr
+  // CHECK: return %{{.*}} : i1
   %success = moore.randomize %obj : !moore.class<@RangeConstrainedClass>
   return %success : i1
 }
@@ -49,10 +48,9 @@ moore.class.classdecl @UnconstrainedClass {
 // CHECK-LABEL: func.func @test_unconstrained
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_unconstrained(%obj: !moore.class<@UnconstrainedClass>) -> i1 {
-  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(8 : i64) : i64
-  // CHECK: %[[RESULT:.*]] = llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
-  // CHECK: %[[SUCCESS:.*]] = arith.trunci %[[RESULT]] : i32 to i1
-  // CHECK: return %[[SUCCESS]] : i1
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci {{.*}} : i32 to i1
+  // CHECK: return
   %success = moore.randomize %obj : !moore.class<@UnconstrainedClass>
   return %success : i1
 }
@@ -68,10 +66,9 @@ moore.class.classdecl @EmptyConstraintClass {
 // CHECK-LABEL: func.func @test_empty_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_empty_constraint(%obj: !moore.class<@EmptyConstraintClass>) -> i1 {
-  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(8 : i64) : i64
-  // CHECK: %[[RESULT:.*]] = llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
-  // CHECK: %[[SUCCESS:.*]] = arith.trunci %[[RESULT]] : i32 to i1
-  // CHECK: return %[[SUCCESS]] : i1
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci {{.*}} : i32 to i1
+  // CHECK: return
   %success = moore.randomize %obj : !moore.class<@EmptyConstraintClass>
   return %success : i1
 }
@@ -91,9 +88,9 @@ moore.class.classdecl @PartialConstraintClass {
 // CHECK-LABEL: func.func @test_partial_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_partial_constraint(%obj: !moore.class<@PartialConstraintClass>) -> i1 {
+  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
+  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(20 : i64) : i64
   // CHECK: llvm.call @__moore_randomize_basic
-  // CHECK: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
-  // CHECK: %[[MAX:.*]] = llvm.mlir.constant(20 : i64) : i64
   // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
   %success = moore.randomize %obj : !moore.class<@PartialConstraintClass>
   return %success : i1

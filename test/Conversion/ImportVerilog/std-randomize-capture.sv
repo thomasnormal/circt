@@ -1,14 +1,14 @@
 // RUN: circt-verilog --ir-moore %s | FileCheck %s
 
+// Test std::randomize on module-level variables
 module std_randomize_capture;
-  logic val_o;
+  logic [7:0] val;
 
-  // CHECK: [[VAL_O:%.+]] = moore.variable : <l1>
-  // CHECK: func.func private @randomize_o(%arg0: !moore.ref<l1>) -> !moore.i1
-  function bit randomize_o();
-    bit success;
-    // CHECK: moore.std_randomize %arg0 : !moore.ref<l1>
-    success = std::randomize(val_o);
-    return success;
-  endfunction
+  // CHECK-LABEL: moore.module @std_randomize_capture
+  // CHECK: %val = moore.variable : <l8>
+  initial begin
+    int success;
+    // CHECK: moore.std_randomize %val : !moore.ref<l8>
+    success = std::randomize(val);
+  end
 endmodule

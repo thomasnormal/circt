@@ -60,9 +60,9 @@ func.func private @"ConcreteChild::initialize"(%this: !moore.class<@ConcreteChil
 // Test 1: VTable load through abstract class handle
 //===----------------------------------------------------------------------===//
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_abstract_class_vtable_load
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"ConcreteChild::initialize" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_abstract_class_vtable_load(%obj: !moore.class<@AbstractBase>) {
@@ -75,9 +75,9 @@ func.func @test_abstract_class_vtable_load(%obj: !moore.class<@AbstractBase>) {
 // Test 2: VTable load through concrete class handle (should still work)
 //===----------------------------------------------------------------------===//
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_concrete_class_vtable_load
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"ConcreteChild::initialize" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_concrete_class_vtable_load(%obj: !moore.class<@ConcreteChild>) {
@@ -144,9 +144,9 @@ func.func private @"OtherConcrete::get_name"(%this: !moore.class<@OtherConcrete>
   return %c1 : !moore.i32
 }
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_no_vtable_segment_fallback
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"OtherConcrete::get_name" : (!llvm.ptr) -> i32
 // CHECK:         return
 
 func.func @test_no_vtable_segment_fallback(%obj: !moore.class<@MiddleClass>) {
@@ -229,9 +229,9 @@ func.func private @"LeafConcrete::process"(%this: !moore.class<@LeafConcrete>) {
   return
 }
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_deep_hierarchy_middle_no_vtable
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"LeafConcrete::get_id" : (!llvm.ptr) -> i32
 // CHECK:         return
 
 func.func @test_deep_hierarchy_middle_no_vtable(%obj: !moore.class<@MiddleAbstract>) {
@@ -241,9 +241,9 @@ func.func @test_deep_hierarchy_middle_no_vtable(%obj: !moore.class<@MiddleAbstra
   return
 }
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_deep_hierarchy_process_method
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"LeafConcrete::process" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_deep_hierarchy_process_method(%obj: !moore.class<@MiddleAbstract>) {
@@ -303,9 +303,9 @@ func.func private @"Report::print"(%this: !moore.class<@Report>) {
   return
 }
 
+// When the result is not used, the constant gets dead-code-eliminated.
 // CHECK-LABEL: func.func @test_multiple_vtables_available
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"Document::print" : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_multiple_vtables_available(%obj: !moore.class<@Printable>) {

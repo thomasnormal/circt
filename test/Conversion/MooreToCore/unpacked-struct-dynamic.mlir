@@ -5,8 +5,8 @@
 
 // CHECK-LABEL: func.func @UnpackedStructWithString
 func.func @UnpackedStructWithString() {
-  // CHECK: llvm.alloca {{.*}} x !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
   // CHECK: llvm.mlir.zero : !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
+  // CHECK: llvm.alloca {{.*}} x !llvm.struct<(struct<(ptr, i64)>, struct<(ptr, i64)>)>
   // CHECK: llvm.store
   %var = moore.variable : <ustruct<{a: string, b: string}>>
   return
@@ -15,8 +15,8 @@ func.func @UnpackedStructWithString() {
 // CHECK-LABEL: func.func @UnpackedStructWithMixedTypes
 func.func @UnpackedStructWithMixedTypes() {
   // Unpacked struct with both string and integer fields
-  // CHECK: llvm.alloca {{.*}} x !llvm.struct<(i32, struct<(ptr, i64)>)>
   // CHECK: llvm.mlir.zero : !llvm.struct<(i32, struct<(ptr, i64)>)>
+  // CHECK: llvm.alloca {{.*}} x !llvm.struct<(i32, struct<(ptr, i64)>)>
   // CHECK: llvm.store
   %var = moore.variable : <ustruct<{num: i32, name: string}>>
   return
@@ -26,17 +26,18 @@ func.func @UnpackedStructWithMixedTypes() {
 func.func @NestedUnpackedStructWithString() {
   // Nested unpacked struct containing strings
   // The nested struct with string becomes LLVM struct, so the outer struct also becomes LLVM struct
-  // CHECK: llvm.alloca {{.*}} x !llvm.struct<(struct<(i32, struct<(ptr, i64)>)>, i32)>
   // CHECK: llvm.mlir.zero : !llvm.struct<(struct<(i32, struct<(ptr, i64)>)>, i32)>
+  // CHECK: llvm.alloca {{.*}} x !llvm.struct<(struct<(i32, struct<(ptr, i64)>)>, i32)>
   // CHECK: llvm.store
   %var = moore.variable : <ustruct<{inner: ustruct<{num: i32, name: string}>, count: i32}>>
   return
 }
 
-// Test that unpacked structs without dynamic types still use hw::StructType
+// Test that unpacked structs without dynamic types get eliminated when unused
+// (DCE removes the unreferenced variable)
 // CHECK-LABEL: func.func @UnpackedStructWithoutDynamic
+// CHECK-NEXT: return
 func.func @UnpackedStructWithoutDynamic() {
-  // CHECK: %var = llhd.sig %{{.*}} : !hw.struct<a: i32, b: i32>
   %var = moore.variable name "var" : <ustruct<{a: i32, b: i32}>>
   return
 }
