@@ -655,17 +655,48 @@ DriveOp::ensureOnlySafeAccesses(const MemorySlot &slot,
 //===----------------------------------------------------------------------===//
 
 LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
-  // Remove processes that have no results and no DriveOp operations. Such
+  // Remove processes that have no results and no visible side effects. Such
   // processes are dead code (e.g., empty wait loops) and can be safely removed.
   // This is necessary for arcilator simulation support since llhd.process ops
   // cannot be directly lowered to Arc.
+  //
+  // Side effects we preserve:
+  // - DriveOp: signal assignments
+  // - sim.proc.print: $display output
+  // - sim.terminate: $finish simulation control
+  // - Any operation with memory write effects
   if (op.getNumResults() == 0) {
-    bool hasDrive = false;
-    op.walk([&](DriveOp) {
-      hasDrive = true;
-      return WalkResult::interrupt();
+    bool hasSideEffect = false;
+    op.walk([&](Operation *innerOp) {
+      // Check for DriveOp (signal assignment)
+      if (isa<DriveOp>(innerOp)) {
+        hasSideEffect = true;
+        return WalkResult::interrupt();
+      }
+      // Check for sim.proc.print ($display)
+      if (innerOp->getName().getStringRef() == "sim.proc.print") {
+        hasSideEffect = true;
+        return WalkResult::interrupt();
+      }
+      // Check for sim.terminate ($finish/$fatal)
+      if (innerOp->getName().getStringRef() == "sim.terminate") {
+        hasSideEffect = true;
+        return WalkResult::interrupt();
+      }
+      // Check for any memory write effects
+      if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(innerOp)) {
+        SmallVector<MemoryEffects::EffectInstance> effects;
+        memInterface.getEffects(effects);
+        for (auto &effect : effects) {
+          if (isa<MemoryEffects::Write>(effect.getEffect())) {
+            hasSideEffect = true;
+            return WalkResult::interrupt();
+          }
+        }
+      }
+      return WalkResult::advance();
     });
-    if (!hasDrive) {
+    if (!hasSideEffect) {
       rewriter.eraseOp(op);
       return success();
     }

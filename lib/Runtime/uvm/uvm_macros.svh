@@ -81,13 +81,11 @@ typedef enum {
 //===----------------------------------------------------------------------===//
 
 // UVM_COMPONENT_UTILS - Register a component with the factory
+// Note: Does NOT define get_type_name - use uvm_type_name_decl for that
 `define uvm_component_utils(T) \
   typedef uvm_component_registry #(T, `"T`") type_id; \
   static function type_id get_type(); \
     return type_id::get(); \
-  endfunction \
-  virtual function string get_type_name(); \
-    return `"T`"; \
   endfunction
 
 // UVM_COMPONENT_UTILS_BEGIN/END - For field automation
@@ -97,13 +95,11 @@ typedef enum {
 `define uvm_component_utils_end
 
 // UVM_OBJECT_UTILS - Register an object with the factory
+// Note: Does NOT define get_type_name - use uvm_type_name_decl for that
 `define uvm_object_utils(T) \
   typedef uvm_object_registry #(T, `"T`") type_id; \
   static function type_id get_type(); \
     return type_id::get(); \
-  endfunction \
-  virtual function string get_type_name(); \
-    return `"T`"; \
   endfunction \
   virtual function uvm_object create(string name = ""); \
     T tmp = new(name); \
@@ -335,5 +331,73 @@ typedef enum {
 `define uvm_add_to_seq_lib(SEQ_TYPE, LIB_TYPE)
 
 `define uvm_set_super_type(TYPE, PARENT)
+
+//===----------------------------------------------------------------------===//
+// Type Name and String Macros
+//===----------------------------------------------------------------------===//
+
+// UVM_STRING_QUEUE_STREAMING_PACK - Join string queue elements
+`ifndef UVM_STRING_QUEUE_STREAMING_PACK
+  `define UVM_STRING_QUEUE_STREAMING_PACK(q) m_uvm_string_queue_join(q)
+`endif
+
+// uvm_typename - Get type name as string
+`define uvm_typename(T) `"T`"
+
+// uvm_type_name_decl - Declare get_type_name() method
+`define uvm_type_name_decl(TNAME_STRING) \
+  virtual function string get_type_name(); \
+    return TNAME_STRING; \
+  endfunction
+
+//===----------------------------------------------------------------------===//
+// Abstract Object Utilities
+//===----------------------------------------------------------------------===//
+
+`define uvm_object_abstract_utils(T) \
+  static function string type_name(); \
+    return `"T`"; \
+  endfunction
+
+`define uvm_object_abstract_param_utils(T) \
+  `uvm_object_abstract_utils(T)
+
+`define uvm_object_abstract_utils_begin(T) \
+  `uvm_object_abstract_utils(T)
+
+`define uvm_object_abstract_utils_end
+
+//===----------------------------------------------------------------------===//
+// Component Abstract Utilities
+//===----------------------------------------------------------------------===//
+
+`define uvm_component_abstract_utils(T) \
+  static function string type_name(); \
+    return `"T`"; \
+  endfunction
+
+//===----------------------------------------------------------------------===//
+// Additional Global Defines
+//===----------------------------------------------------------------------===//
+
+`ifndef UVM_MAX_STREAMBITS
+  `define UVM_MAX_STREAMBITS 4096
+`endif
+
+`ifndef UVM_FIELD_FLAG_SIZE
+  `define UVM_FIELD_FLAG_SIZE 64
+`endif
+
+`ifndef UVM_LINE_WIDTH
+  `define UVM_LINE_WIDTH 120
+`endif
+
+`ifndef UVM_NUM_LINES
+  `define UVM_NUM_LINES 100
+`endif
+
+`ifndef UVM_FIELD_FLAG_RESERVED_BITS
+  `define UVM_FIELD_FLAG_RESERVED_BITS 28
+`endif
 
 `endif // UVM_MACROS_SVH
