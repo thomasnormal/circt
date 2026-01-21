@@ -838,4 +838,133 @@ TEST(ProcessSchedulerIntegration, EventSchedulerIntegrationCheck) {
   EXPECT_EQ(scheduler.getCurrentTime().realTime, 5000u);
 }
 
+//===----------------------------------------------------------------------===//
+// ProcessScheduler Tests - Concurrent Initial and Always Blocks
+//===----------------------------------------------------------------------===//
+
+TEST(ProcessSchedulerIntegration, ConcurrentInitialAndAlwaysBlocks) {
+  // This test simulates the scenario with:
+  // - initial block (runs once, terminates)
+  // - always #5 clk = ~clk (clock generator)
+  // - always @(posedge clk) counter++ (counter)
+  //
+  // The test verifies that:
+  // 1. All three processes execute initially
+  // 2. The clock process continues to run via delay-based wake
+  // 3. The counter process continues to be triggered by clock edges
+  // 4. The signal-to-process mapping persists across wake/sleep cycles
+
+  ProcessScheduler scheduler;
+  SignalId clk = scheduler.registerSignal("clk", 1);
+
+  int initialRan = 0;
+  int clockExecutions = 0;
+  int counterExecutions = 0;
+  bool clkValue = false;
+
+  // Initial block - runs once and terminates
+  ProcessId initialProc = scheduler.registerProcess("initial", [&]() {
+    initialRan++;
+    scheduler.terminateProcess(initialProc);
+  });
+
+  // Clock generator - drives clk and schedules own resume
+  ProcessId clockProc;
+  clockProc = scheduler.registerProcess("clock", [&]() {
+    clockExecutions++;
+    clkValue = !clkValue;
+
+    // Schedule signal update (simulating llhd.drv with epsilon delay)
+    // Use NBA region as LLHD drives do
+    SignalValue newClkVal(clkValue ? 1 : 0, 1);
+    scheduler.getEventScheduler().schedule(
+        scheduler.getCurrentTime(), SchedulingRegion::NBA,
+        Event([&scheduler, clk, newClkVal]() {
+          scheduler.updateSignal(clk, newClkVal);
+        }));
+
+    // Schedule own resume after 5ns (simulating llhd.wait with delay)
+    scheduler.getEventScheduler().schedule(
+        SimTime(scheduler.getCurrentTime().realTime + 5000000, 0, 0),
+        SchedulingRegion::Active,
+        Event([&scheduler, clockProc]() {
+          scheduler.scheduleProcess(clockProc, SchedulingRegion::Active);
+        }));
+  });
+
+  // Counter - triggers on clock edge
+  ProcessId counterProc = scheduler.registerProcess("counter", [&]() {
+    counterExecutions++;
+    // Re-register sensitivity (simulating suspendProcessForEvents)
+    SensitivityList waitList;
+    waitList.addLevel(clk);
+    scheduler.suspendProcessForEvents(counterProc, waitList);
+  });
+
+  // Initialize - all processes should be scheduled
+  scheduler.initialize();
+  EXPECT_EQ(scheduler.getStatistics().processesRegistered, 3u);
+
+  // Run simulation for 50ns (should be ~10 clock cycles)
+  SimTime endTime = scheduler.runUntil(50000000);
+
+  // Verify results
+  EXPECT_EQ(initialRan, 1) << "Initial block should run exactly once";
+  EXPECT_GE(clockExecutions, 10)
+      << "Clock should execute at least 10 times (50ns / 5ns per cycle)";
+  EXPECT_GE(counterExecutions, 10)
+      << "Counter should execute at least as many times as clock (triggered by edges)";
+
+  // The simulation should have advanced time
+  EXPECT_GE(endTime.realTime, 45000000u);
+
+  auto stats = scheduler.getStatistics();
+  EXPECT_GE(stats.processesExecuted, 20u)
+      << "Should have many process executions";
+  EXPECT_GE(stats.signalUpdates, 10u) << "Should have many signal updates";
+  EXPECT_GE(stats.edgesDetected, 5u) << "Should detect clock edges";
+}
+
+TEST(ProcessSchedulerIntegration, SuspendProcessForEventsPeristsMapping) {
+  // This test specifically verifies that the signalToProcesses mapping
+  // persists across multiple wake/sleep cycles using suspendProcessForEvents
+
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  int triggerCount = 0;
+  ProcessId proc;
+  proc = scheduler.registerProcess("waker", [&]() {
+    triggerCount++;
+    // Re-register for the next event
+    SensitivityList waitList;
+    waitList.addLevel(sig);
+    scheduler.suspendProcessForEvents(proc, waitList);
+  });
+
+  scheduler.initialize();
+  scheduler.executeDeltaCycle();
+
+  EXPECT_EQ(triggerCount, 1) << "Process should execute once during init";
+
+  // Process should now be in Waiting state
+  Process *p = scheduler.getProcess(proc);
+  EXPECT_EQ(p->getState(), ProcessState::Waiting);
+
+  // Trigger the process multiple times with signal changes
+  for (int i = 0; i < 10; ++i) {
+    SignalValue oldVal = scheduler.getSignalValue(sig);
+    SignalValue newVal((i % 2) ? 0 : 1, 1);
+    scheduler.updateSignal(sig, newVal);
+    scheduler.executeDeltaCycle();
+  }
+
+  // Process should have been triggered 10 more times
+  EXPECT_EQ(triggerCount, 11)
+      << "Process should be triggered for each signal change";
+
+  // Process should still be in Waiting state (re-registered each time)
+  EXPECT_EQ(p->getState(), ProcessState::Waiting);
+}
+
 } // namespace

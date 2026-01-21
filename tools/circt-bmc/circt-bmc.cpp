@@ -22,6 +22,7 @@
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
 #include "circt/Dialect/LTL/LTLDialect.h"
@@ -214,6 +215,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
+  pm.addPass(hw::createFlattenModules());
   pm.addPass(createExternalizeRegisters());
   LowerToBMCOptions lowerToBMCOptions;
   lowerToBMCOptions.bound = clockBound;
