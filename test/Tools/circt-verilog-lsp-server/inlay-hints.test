@@ -83,8 +83,8 @@
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result":
 // Module type hints
-// CHECK:         "/* adder */"
-// CHECK:         "/* adder */"
+// CHECK:         "label": " /* adder */"
+// CHECK:         "label": " /* adder */"
 // Port hints only for positional connections
 // CHECK:         "a:"
 // CHECK:         "b:"
@@ -110,9 +110,9 @@
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
 // CHECK:         "kind": 1
-// CHECK:         "8-bit"
-// CHECK:         "16-bit"
-// CHECK:         "32-bit"
+// CHECK:         ": 8-bit"
+// CHECK:         ": 16-bit"
+// CHECK:         ": 32-bit"
 // -----
 
 // Test 5: Empty range should return empty results

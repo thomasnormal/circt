@@ -72,11 +72,11 @@
 // CHECK-NEXT:  "result": {
 // CHECK:         "isIncomplete": false,
 // CHECK:         "items": [
-// Should include members starting with "dat"
-// CHECK:           "label": "data_count"
-// CHECK:           "label": "data_name"
-// CHECK:           "label": "data_reset"
-// CHECK:           "label": "data_size"
+// Should include members starting with "dat" - order depends on implementation
+// CHECK-DAG:     "label": "data_count"
+// CHECK-DAG:     "label": "data_name"
+// CHECK-DAG:     "label": "data_reset"
+// CHECK-DAG:     "label": "data_size"
 // Should NOT include other_field since it doesn't match prefix
 // -----
 {"jsonrpc":"2.0","id":99,"method":"shutdown"}

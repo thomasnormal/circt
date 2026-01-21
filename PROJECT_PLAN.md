@@ -1022,7 +1022,10 @@ ninja -C build check-circt-unit
 ### Track C: SVA + Z3 Track
 **Status**: ⚠️ PARTIAL (multi-step delay buffering for `##N`/bounded `##[m:n]` on i1) | **Priority**: HIGH
 **Next Task**: Extend temporal unrolling beyond delay
-- Add repeat (`[*N]`) and goto/non-consecutive repeat support
+- ✅ Repeat (`[*N]`) expansion in BMC (bounded by BMC depth; uses delay buffers)
+- ✅ Added end-to-end BMC tests for repeat fail cases
+- ⚠️ Repeat pass cases still fail due to LTLToCore implication semantics (needs fix)
+- ⛔ Goto/non-consecutive repeat still single-step in BMC
 - ✅ Handle unbounded delay ranges (`##[m:$]`) in BMC within bound (bounded approximation)
 - ✅ Added end-to-end SVA BMC integration tests (SV → `circt-bmc`) for delay and range delay (pass + fail cases; pass uses `--ignore-asserts-until=1`)
 - Add more end-to-end BMC tests with Z3 (`circt-bmc`) for temporal properties

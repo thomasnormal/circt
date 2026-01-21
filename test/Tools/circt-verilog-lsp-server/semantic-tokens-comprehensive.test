@@ -133,7 +133,7 @@
   "uri":"test:///always.sv",
   "languageId":"verilog",
   "version":1,
-  "text":"module fsm (\n  input  logic clk, rst_n,\n  input  logic start,\n  output logic done\n);\n  // State enumeration\n  typedef enum logic [1:0] {\n    IDLE, RUN, DONE\n  } state_t;\n  \n  state_t state, next_state;\n  \n  /* Sequential logic */\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n)\n      state <= IDLE;\n    else\n      state <= next_state;\n  end\n  \n  // Combinational logic\n  always_comb begin\n    next_state = state;\n    done = 1'b0;\n    case (state)\n      IDLE: if (start) next_state = RUN;\n      RUN:  next_state = DONE;\n      DONE: begin\n        done = 1'b1;\n        next_state = IDLE;\n      end\n    endcase\n  end\nendmodule"
+  "text":"module fsm (\n  input  logic clk, rst_n,\n  input  logic start,\n  output logic done\n);\n  // State enumeration\n  typedef enum logic [1:0] {\n    IDLE, ACTIVE, FINISH\n  } state_t;\n  \n  state_t state, next_state;\n  \n  /* Sequential logic */\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n)\n      state <= IDLE;\n    else\n      state <= next_state;\n  end\n  \n  // Combinational logic\n  always_comb begin\n    next_state = state;\n    done = 1'b0;\n    case (state)\n      IDLE: if (start) next_state = ACTIVE;\n      ACTIVE: next_state = FINISH;\n      FINISH: begin\n        done = 1'b1;\n        next_state = IDLE;\n      end\n    endcase\n  end\nendmodule"
 }}}
 // -----
 {"jsonrpc":"2.0","id":5,"method":"textDocument/semanticTokens/full","params":{

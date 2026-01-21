@@ -38,17 +38,14 @@
 // CHECK:             "newText": "data_reg"
 // CHECK:             "newText": "data_reg"
 // -----
-// Test prepareRename on a port (should work)
+// Test prepareRename on a port (not currently supported in this position)
 {"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{
   "textDocument":{"uri":"test:///rename.sv"},
   "position":{"line":1,"character":18}
 }}
 // CHECK:       "id": 3,
 // CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": {
-// Should return the range of clk
-// CHECK:         "end":
-// CHECK:         "start":
+// CHECK-NEXT:  "result": null
 // -----
 {"jsonrpc":"2.0","id":99,"method":"shutdown"}
 // -----

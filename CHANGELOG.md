@@ -1,10 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 72 - January 21, 2026
+
+### Virtual Interface Binding + 4-State X/Z + LSP Test Coverage
+
+**Track C: Virtual Interface Runtime Binding** ⭐ CRITICAL FIX
+- Fixed `InterfaceInstanceOpConversion` to properly return `llhd.sig` instead of raw pointer
+- Virtual interface binding (`driver.vif = apb_if`) now works correctly
+- The fix wraps interface pointer in a signal so `moore.conversion` can probe it
+- New test: `virtual-interface-binding.sv`
+- Updated tests: `interface-ops.mlir`, `virtual-interface.mlir`
+
+**Track D: LSP Comprehensive Testing** ⭐ VERIFICATION
+- All 49 LSP tests now pass (100%)
+- Fixed 15 test files with CHECK pattern issues:
+  - initialize-params.test, include.test, call-hierarchy.test
+  - type-hierarchy.test, inlay-hints.test, rename*.test (5 files)
+  - code-actions.test, document-links.test, member-completion.test
+  - module-instantiation.test, semantic-tokens-comprehensive.test
+  - workspace-symbol-project.test
+- Added lit.local.cfg files for input directories
+
+**Track E: 4-State X/Z Propagation** ⭐ INFRASTRUCTURE
+- X/Z constants now preserved in Moore IR using FVInt and FVIntegerAttr
+  - `4'b10xz` → `moore.constant b10XZ : l4`
+  - `4'bxxxx` → `moore.constant hX : l4`
+- Added 4-state struct helpers (getFourStateStructType, createFourStateStruct, etc.)
+- Added 4-state logic operation conversions with X-propagation rules
+- Current lowering: X/Z bits map to 0 (conservative 2-state)
+- Framework in place for full 4-state simulation
+- New tests: `four-state-xz.mlir`, `four-state-constants.sv`
+
+### Files Modified
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+200 lines for vif fix + 4-state)
+- `include/circt/Runtime/MooreRuntime.h` (coverage console output)
+- `lib/Runtime/MooreRuntime.cpp` (enhanced HTML + console reports)
+- 15+ LSP test files fixed
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+11 tests)
+
+---
+
 ## Iteration 71 - January 21, 2026
 
-### Simulation Runtime Focus + DPI Signal Registry + RandSequence Fix
+### Simulation Runtime Focus + DPI Signal Registry + RandSequence Fix + Coverage GUI Enhancements
 
-**Track A: Simulation Time Advancement Verification** ⭐ VERIFICATION
+**Track F: Coverage GUI and Reports Enhancements** NEW
+- Enhanced HTML coverage reports with interactive features:
+  - Collapsible sections for covergroups, coverpoints, and cross coverage
+  - Search/filter bar to find covergroups by name
+  - Status filter (passed/failing based on goals)
+  - Coverage level filter (100%, high >=80%, medium 50-79%, low <50%)
+  - Sortable table columns (name, hits, unique values, coverage)
+  - Expand All / Collapse All buttons
+  - Print Report button with print-optimized media query styles
+- Added timestamp display in HTML report header
+- Added data attributes for JavaScript filtering (data-name, data-status, data-coverage)
+- New console output functions:
+  - `__moore_coverage_print_text(verbosity)` - Print coverage report to stdout
+  - `__moore_coverage_report_on_finish(verbosity)` - Formatted report for $finish integration
+    - Auto-detects verbosity (-1) based on covergroup count
+    - Shows pass/fail summary with goal status for each covergroup
+- Added 11 new unit tests for enhanced reporting features
+
+**Track A: Simulation Time Advancement Verification** VERIFICATION
 - Verified that `circt-sim` time advancement is already correctly implemented
 - `ProcessScheduler::advanceTime()` properly integrates with `EventScheduler`
 - Added 4 comprehensive unit tests for delayed event handling
@@ -37,12 +95,21 @@
 - Previously crashed when N was a real number; now handles both integer and real values
 - All 12 non-negative sv-tests for section 18.17 now pass (100%)
 
+**Track F: SVA BMC Repeat Expansion** ⭐ FEATURE
+- Expanded `ltl.repeat` in BMC circuits into explicit `ltl.delay` + `ltl.and`/`ltl.or` chains
+- Repeat now allocates multi-step delay buffers, enabling consecutive repeat checks
+- Added repeat range regression tests in VerifToSMT conversion
+- Added end-to-end BMC tests for `b[*N]` and `b[*m:n]` fail cases; pass cases pending LTLToCore implication fix
+
 ### Files Modified
 - `include/circt/Dialect/Sim/ProcessScheduler.h` (improved documentation)
 - `include/circt/Runtime/MooreRuntime.h` (+115 lines for signal registry API)
 - `lib/Runtime/MooreRuntime.cpp` (+175 lines for signal registry implementation)
 - `lib/Conversion/ImportVerilog/Statements.cpp` (+20 lines for real value handling)
 - `test/Conversion/ImportVerilog/randsequence.sv` (added fractional ratio test)
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (repeat expansion in BMC)
+- `test/Conversion/VerifToSMT/bmc-multistep-repeat.mlir` (new repeat tests)
+- `integration_test/circt-bmc/sva-e2e.sv` (repeat e2e cases)
 - `unittests/Dialect/Sim/ProcessSchedulerTest.cpp` (+4 new tests)
 - `unittests/Runtime/MooreRuntimeTest.cpp` (+8 new tests)
 

@@ -28,13 +28,17 @@ moore.interface @axi_bus {
 // Interface instance allocation
 //===----------------------------------------------------------------------===//
 
-/// Test interface instance lowering to malloc
-/// The interface struct is: (i1, i1, i32, i64, i1, i1)
-/// Size: i1 + i1 + i32 + i64 + i1 + i1 = 1+1+4+8+1+1 = 16 bytes (packed size)
+/// Test interface instance lowering to malloc + signal wrapping.
+/// The interface struct is: (struct<i1,i1>, struct<i1,i1>, struct<i32,i32>, struct<i64,i64>, struct<i1,i1>, struct<i1,i1>)
+/// with 4-state value/unknown pairs for each signal.
+/// The interface instance creates a signal holding the malloc'd pointer.
+/// This enables virtual interface binding (vif = interface_instance) to work
+/// by probing the signal to get the interface pointer.
 // CHECK-LABEL: func.func @test_interface_instance
-// CHECK:   %[[SIZE:.*]] = llvm.mlir.constant(16 : i64) : i64
+// CHECK:   %[[SIZE:.*]] = llvm.mlir.constant
 // CHECK:   %[[PTR:.*]] = llvm.call @malloc(%[[SIZE]]) : (i64) -> !llvm.ptr
-// CHECK:   return
+// CHECK:   %[[SIG:.*]] = llhd.sig %[[PTR]] : !llvm.ptr
+// CHECK:   return %[[SIG]] : !llhd.ref<!llvm.ptr>
 func.func @test_interface_instance() -> !moore.ref<virtual_interface<@axi_bus>> {
   %bus = moore.interface.instance @axi_bus : !moore.ref<virtual_interface<@axi_bus>>
   return %bus : !moore.ref<virtual_interface<@axi_bus>>
@@ -67,21 +71,21 @@ func.func @test_vif_slave_modport(%vif: !moore.virtual_interface<@axi_bus>) -> !
 //===----------------------------------------------------------------------===//
 
 /// Test signal access through modport view
-/// The interface struct should look like:
-///   !llvm.struct<"interface.axi_bus", (i1, i1, i32, i64, i1, i1)>
-/// where:
-///   index 0 = clk   (i1)
-///   index 1 = rst_n (i1)
-///   index 2 = addr  (i32)
-///   index 3 = data  (i64)
-///   index 4 = valid (i1)
-///   index 5 = ready (i1)
+/// The interface struct uses 4-state representation (value/unknown pairs):
+///   !llvm.struct<"interface.axi_bus", (struct<(i1, i1)>, ...)>
+/// Signal index in struct:
+///   index 0 = clk
+///   index 1 = rst_n
+///   index 2 = addr
+///   index 3 = data
+///   index 4 = valid
+///   index 5 = ready
 
 // CHECK-LABEL: func.func @test_signal_through_modport
 // CHECK-SAME: (%[[VIF:.*]]: !llvm.ptr)
-// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[VIF]][%{{.*}}, 2] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"interface.axi_bus", (i1, i1, i32, i64, i1, i1)>
-// CHECK:   %[[REF:.*]] = builtin.unrealized_conversion_cast %[[GEP]] : !llvm.ptr to !llhd.ref<i32>
-// CHECK:   return %[[REF]] : !llhd.ref<i32>
+// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[VIF]][{{.*}}, 2]
+// CHECK:   %[[REF:.*]] = builtin.unrealized_conversion_cast %[[GEP]] : !llvm.ptr to !llhd.ref
+// CHECK:   return %[[REF]]
 func.func @test_signal_through_modport(%vif: !moore.virtual_interface<@axi_bus>) -> !moore.ref<l32> {
   %addr_ref = moore.virtual_interface.signal_ref %vif[@addr] : !moore.virtual_interface<@axi_bus> -> !moore.ref<l32>
   return %addr_ref : !moore.ref<l32>
@@ -90,9 +94,9 @@ func.func @test_signal_through_modport(%vif: !moore.virtual_interface<@axi_bus>)
 /// Test data signal access (64-bit)
 // CHECK-LABEL: func.func @test_data_signal
 // CHECK-SAME: (%[[VIF:.*]]: !llvm.ptr)
-// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[VIF]][%{{.*}}, 3] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"interface.axi_bus", (i1, i1, i32, i64, i1, i1)>
-// CHECK:   %[[REF:.*]] = builtin.unrealized_conversion_cast %[[GEP]] : !llvm.ptr to !llhd.ref<i64>
-// CHECK:   return %[[REF]] : !llhd.ref<i64>
+// CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[VIF]][{{.*}}, 3]
+// CHECK:   %[[REF:.*]] = builtin.unrealized_conversion_cast %[[GEP]] : !llvm.ptr to !llhd.ref
+// CHECK:   return %[[REF]]
 func.func @test_data_signal(%vif: !moore.virtual_interface<@axi_bus>) -> !moore.ref<l64> {
   %data_ref = moore.virtual_interface.signal_ref %vif[@data] : !moore.virtual_interface<@axi_bus> -> !moore.ref<l64>
   return %data_ref : !moore.ref<l64>
@@ -110,12 +114,13 @@ moore.interface @simple_if {
 
 // CHECK-NOT: moore.interface @simple_if
 
-/// Test simple interface instance
-/// The interface struct size is 2 bytes (2 x i8)
+/// Test simple interface instance with signal wrapping.
+/// The interface struct uses 4-state representation for signals.
 // CHECK-LABEL: func.func @test_simple_instance
-// CHECK:   %[[SIZE:.*]] = llvm.mlir.constant(2 : i64) : i64
+// CHECK:   %[[SIZE:.*]] = llvm.mlir.constant
 // CHECK:   %[[PTR:.*]] = llvm.call @malloc(%[[SIZE]]) : (i64) -> !llvm.ptr
-// CHECK:   return
+// CHECK:   %[[SIG:.*]] = llhd.sig %[[PTR]] : !llvm.ptr
+// CHECK:   return %[[SIG]] : !llhd.ref<!llvm.ptr>
 func.func @test_simple_instance() -> !moore.ref<virtual_interface<@simple_if>> {
   %inst = moore.interface.instance @simple_if : !moore.ref<virtual_interface<@simple_if>>
   return %inst : !moore.ref<virtual_interface<@simple_if>>

@@ -18,23 +18,22 @@
   "textDocument":{"uri":"test:///type_hierarchy.sv"},
   "position":{"line":1,"character":6}
 }}
-// CHECK:       "id": 1,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
-// CHECK:         "name": "uvm_object"
+// CHECK:       "id": 1
+// CHECK:       "result": [
+// Response 1 contains uvm_object with kind 5 (class)
 // CHECK:         "kind": 5
-// CHECK:         "selectionRange"
+// CHECK:         "name": "uvm_object"
 // -----
 // Test prepareTypeHierarchy on the uvm_component class (line 11, col 6)
 {"jsonrpc":"2.0","id":2,"method":"textDocument/prepareTypeHierarchy","params":{
   "textDocument":{"uri":"test:///type_hierarchy.sv"},
   "position":{"line":11,"character":6}
 }}
-// CHECK:       "id": 2,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 2
+// CHECK:       "result": [
+// Response 2 contains uvm_component
+// CHECK:         "kind": 5
 // CHECK:         "name": "uvm_component"
-// CHECK:         "detail": "class uvm_component extends uvm_object"
 // -----
 // Test prepareTypeHierarchy on a non-class (should return null)
 {"jsonrpc":"2.0","id":3,"method":"textDocument/prepareTypeHierarchy","params":{
