@@ -36,6 +36,12 @@
 - BMC core is working correctly
 - Frontend issues remain for $rose/$fell type mismatch
 
+**Track E: BMC Derived Clock Constraints** ⭐ BUG FIX
+- Constrain derived `seq.to_clock` inputs to the generated BMC clock via `verif.assume`
+- Prevents false violations when SVA clocks are derived from input wires/struct fields
+- New regression: `test/Tools/circt-bmc/lower-to-bmc-derived-clock.mlir`
+- File: `lib/Tools/circt-bmc/LowerToBMC.cpp`
+
 ### Critical Next Step
 Fix 4-state type conversion in MooreToCore:
 - Extract `value` field from 4-state structs before passing to integer-expecting ops

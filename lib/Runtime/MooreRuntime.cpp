@@ -10415,13 +10415,17 @@ std::string parseArrayIndices(const std::string &component,
       break;
     }
     std::string indexStr = component.substr(pos + 1, endBracket - pos - 1);
-    try {
-      indices.push_back(std::stoll(indexStr));
-    } catch (...) {
-      // Invalid index, return empty
+    // Check if indexStr is a valid integer without using exceptions
+    bool valid = !indexStr.empty();
+    for (size_t i = 0; i < indexStr.size() && valid; ++i) {
+      if (i == 0 && indexStr[i] == '-') continue;
+      if (!std::isdigit(static_cast<unsigned char>(indexStr[i]))) valid = false;
+    }
+    if (!valid) {
       indices.clear();
       return baseName;
     }
+    indices.push_back(std::stoll(indexStr));
     pos = endBracket + 1;
   }
 

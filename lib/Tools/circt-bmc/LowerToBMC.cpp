@@ -170,6 +170,19 @@ void LowerToBMCPass::runOnOperation() {
       }
       auto clockTy = seq::ClockType::get(ctx);
       auto newClock = hwModule.prependInput("bmc_clock", clockTy).second;
+      {
+        // Constrain the derived clock input to match the generated BMC clock.
+        OpBuilder::InsertionGuard guard(builder);
+        if (auto *def = clockInput.getDefiningOp()) {
+          builder.setInsertionPointAfter(def);
+        } else {
+          builder.setInsertionPointToStart(clockInput.getParentBlock());
+        }
+        auto fromClk = seq::FromClockOp::create(builder, loc, newClock);
+        auto eq = comb::ICmpOp::create(builder, loc, comb::ICmpPredicate::eq,
+                                       fromClk, clockInput);
+        verif::AssumeOp::create(builder, loc, eq, Value(), StringAttr());
+      }
       for (auto toClockOp : toClockOps) {
         toClockOp.replaceAllUsesWith(newClock);
         toClockOp.erase();
