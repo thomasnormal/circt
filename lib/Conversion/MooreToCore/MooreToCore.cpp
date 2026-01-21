@@ -14342,6 +14342,13 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return IntegerType::get(type.getContext(), 1);
   });
 
+  // VoidType -> i0 (zero-width integer).
+  // This is used in tagged unions where some members have no data (void).
+  // The zero-width type allows the union structure to be preserved.
+  typeConverter.addConversion([&](VoidType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 0);
+  });
+
   typeConverter.addConversion([&](FormatStringType type) {
     return sim::FormatStringType::get(type.getContext());
   });

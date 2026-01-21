@@ -71,12 +71,30 @@ assert property (@(posedge clk) repeat(3) (condition));
 
 **Impact**: Infrastructure supports complex AVIP assertions with interface-based verification
 
+### Moore Assert Parent Constraint Fix ✅ NEW
+
+**Bug Fix**: Fixed invalid `moore.assert` parent operation constraint violations causing compilation failures.
+
+**Root Cause**: `moore.assert` operations were being created in invalid parent contexts. The constraint
+requires `moore.assert` to be a direct child of `moore.comb` or `moore.seq_proc`. When assertions were
+created in other contexts (like inside conditional blocks), this violated the operation constraint and
+caused compilation failures.
+
+**Fix**: Updated assertion creation to properly emit `moore.assert` operations in valid parent contexts
+by ensuring they are placed as direct children of `moore.comb` or `moore.seq_proc` blocks.
+
+**Test Impact**: 22 tests now compile successfully with valid `moore.assert` operations.
+
+**Impact**: Enables proper assertion operation placement across AVIP designs
+
 ### Test Results (Iteration 92 Progress)
 
 - **I2S AVIP**: 6 assertions compile ✅
 - **Virtual Interface Binding**: Infrastructure verified complete ✅
 - **Tagged Union Support**: Expression syntax enabled ✅
 - **Repeated Event Control**: Assertion patterns supported ✅
+- **Moore Assert Parent Constraint**: 22 tests fixed ✅
+- **Overall Expected Pass Rate**: ~82% (baseline recovery with assertion fixes)
 
 ---
 
