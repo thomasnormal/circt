@@ -66,7 +66,9 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 82+)
+### Track Status & Next Tasks (Iteration 88)
+
+**Test Results (Iteration 87)**: 2377/2380 PASS (99.87%)
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -79,19 +81,34 @@ circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
   ~/uvm-core/src/uvm_pkg.sv <testbench files> | circt-sim
 ```
 
-**Simulation Runtime (Critical Path)**:
-| Track | Focus Area | Current Status | Next Priority |
-|-------|-----------|----------------|---------------|
-| **A** | Concurrent Scheduling | ✅ FIXED (Iter 81) | End-to-end circt-sim testing |
-| **B** | UVM Library | ✅ Use ~/uvm-core directly | No stubs needed! |
+**Track A: End-to-End Simulation Testing**
+| Status | Next Priority |
+|--------|---------------|
+| ✅ 4-state works | Test APB/SPI AVIPs through full simulation |
+| ✅ @posedge fixed | Validate concurrent process execution |
+| ⚠️ AVIP blockers | Fix bind directive, virtual interface binding |
 
-**Feature Development (Parallel)**:
-| Track | Focus Area | Current Status | Next Priority |
-|-------|-----------|----------------|---------------|
-| **C** | Real-World Testing | ✅ 73% pass rate (Iter 81) | Run all AVIPs with real UVM |
-| **D** | BMC/Formal | ✅ $countones/$rose/$fell (Iter 81) | End-to-end SVA tests |
-| **E** | Coverage Runtime | HTML reports complete | UCDB merge improvements |
-| **F** | LSP Tooling | All 49 tests pass (100%) | Diagnostics improvements |
+**Track B: BMC/Formal Verification**
+| Status | Next Priority |
+|--------|---------------|
+| ✅ basic03 works | Run ~/yosys/tests/sva suite |
+| ✅ $rose/$fell/$past | Test ~/sv-tests SVA patterns |
+| ⚠️ Derived clocks | Fix clock alignment in multi-clock designs |
+
+**Track C: Class/Virtual Interface Completion**
+| Status | Next Priority |
+|--------|---------------|
+| ⚠️ Virtual interfaces | Runtime binding for UVM drivers/monitors |
+| ⚠️ Class hierarchy | Virtual method dispatch in simulation |
+| ⚠️ Bind directives | Parse and lower SystemVerilog bind |
+
+**Track D: Real-World Test Suites**
+| Test Suite | Location | Purpose |
+|------------|----------|---------|
+| AVIP Testbenches | ~/mbit/*avip | UVM verification IPs |
+| sv-tests | ~/sv-tests | SV language compliance |
+| Verilator tests | ~/verilator-verification | Simulation edge cases |
+| Yosys SVA | ~/yosys/tests/sva | Formal verification |
 
 ### Real-World Test Results (Iteration 76)
 
