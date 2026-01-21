@@ -14,5 +14,6 @@ module {
 }
 
 // CHECK: hw.module @test
+// CHECK-DAG: seq.compreg sym @ltl_past
+// CHECK-DAG: seq.compreg sym @ltl_past name "ltl_past"
 // CHECK: ltl_state
-// CHECK-NOT: ltl_past
