@@ -117,6 +117,14 @@ void ProbeHoister::findValuesLiveAcrossWait(Liveness &liveness) {
 /// all predecessors are `llhd.wait` ops, and the entry block. Only waits
 /// without any side-effecting op in between themselves and the beginning of the
 /// block can be hoisted.
+///
+/// IMPORTANT: We do NOT hoist probes from blocks that are resumption targets
+/// of `llhd.wait` operations. Even if the probe's value doesn't appear to leak
+/// across waits, the probe reads the "current" signal value which may change
+/// between process iterations. Hoisting such probes would cause them to read
+/// a stale value computed once at module instantiation, breaking the semantics
+/// of event-driven simulation where `always @(posedge clk)` must detect clock
+/// edges dynamically.
 void ProbeHoister::hoistProbes() {
   auto findExistingProbe = [&](Value signal) {
     for (auto *user : signal.getUsers())
@@ -128,10 +136,21 @@ void ProbeHoister::hoistProbes() {
 
   for (auto &block : region) {
     // We can only hoist probes in blocks where all predecessors have wait
-    // terminators.
-    if (!llvm::all_of(block.getPredecessors(), [](auto *predecessor) {
+    // terminators. But we must NOT hoist probes from these blocks if the
+    // process is intended for simulation, because the probe reads a signal
+    // value that may change between iterations. Such probes must remain
+    // inside the process to be re-executed each time.
+    //
+    // Skip blocks that are resumption targets of waits entirely - probes
+    // there must remain inside the process for correct simulation semantics.
+    if (llvm::any_of(block.getPredecessors(), [](auto *predecessor) {
           return isa<WaitOp>(predecessor->getTerminator());
         }))
+      continue;
+
+    // For entry blocks (no predecessors) or blocks with only non-wait
+    // predecessors, we can potentially hoist probes.
+    if (!block.hasNoPredecessors())
       continue;
 
     for (auto &op : llvm::make_early_inc_range(block)) {

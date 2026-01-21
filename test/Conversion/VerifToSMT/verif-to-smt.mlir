@@ -130,8 +130,8 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK:        smt.push 1
 // CHECK:        [[CIRCUIT:%.+]]:4 = func.call @bmc_circuit([[ARG1]], [[ARG2]], [[ARG3]], [[ARG4]], [[ARG5]])
 // CHECK:        [[LSB:%.+]] = arith.andi [[ARG0]], {{%.+}} : i32
-// CHECK:        [[ISODD:%.+]] = arith.cmpi ne, [[LSB]], {{%.+}} : i32
-// CHECK:        [[IF:%.+]] = scf.if [[ISODD]] -> (i1) {
+// CHECK:        [[ISEVEN:%.+]] = arith.cmpi eq, [[LSB]], {{%.+}} : i32
+// CHECK:        [[IF:%.+]] = scf.if [[ISEVEN]] -> (i1) {
 // CHECK:          scf.yield [[ARG7]] : i1
 // CHECK:        } else {
 // CHECK:          [[SMTCHECK:%.+]] = smt.check sat {

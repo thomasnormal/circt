@@ -784,6 +784,28 @@ struct StmtVisitor {
     if (!lhsSBV || !rhsSBV)
       return failure();
 
+    // Ensure both operands have the same type (SameTypeOperands constraint).
+    // Pattern matching may have mismatched bit widths if slang doesn't insert
+    // implicit conversions (e.g., `if (x matches 42)` where x is 1-bit).
+    auto lhsTy = cast<moore::IntType>(lhsSBV.getType());
+    auto rhsTy = cast<moore::IntType>(rhsSBV.getType());
+    if (lhsTy != rhsTy) {
+      // Use the larger width and four-valued if either is four-valued.
+      unsigned commonWidth = std::max(lhsTy.getWidth(), rhsTy.getWidth());
+      auto commonDomain = (lhsTy.getDomain() == moore::Domain::FourValued ||
+                           rhsTy.getDomain() == moore::Domain::FourValued)
+                              ? moore::Domain::FourValued
+                              : moore::Domain::TwoValued;
+      auto commonTy =
+          moore::IntType::get(context.getContext(), commonWidth, commonDomain);
+      if (lhsTy != commonTy)
+        lhsSBV = context.materializeConversion(commonTy, lhsSBV, false, loc);
+      if (rhsTy != commonTy)
+        rhsSBV = context.materializeConversion(commonTy, rhsSBV, false, loc);
+      if (!lhsSBV || !rhsSBV)
+        return failure();
+    }
+
     Value cond;
     switch (condKind) {
     case slang::ast::CaseStatementCondition::Normal:

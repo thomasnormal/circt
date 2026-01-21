@@ -2014,45 +2014,81 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
   // defining probe operation.
   if (!waitOp.getObserved().empty()) {
     SensitivityList waitList;
-    for (Value observed : waitOp.getObserved()) {
-      // Try to trace back to the signal through llhd.prb
-      SignalId sigId = 0;
-      if (auto probeOp = observed.getDefiningOp<llhd::ProbeOp>()) {
-        sigId = getSignalId(probeOp.getSignal());
-        LLVM_DEBUG(llvm::dbgs() << "  Observed value from probe of signal "
-                                << sigId << "\n");
-      } else {
-        // Maybe it's directly a signal reference (shouldn't happen per spec,
-        // but handle it gracefully)
-        sigId = getSignalId(observed);
-        if (sigId == 0) {
-          // Try to trace through other operations that might produce the value
-          // This handles cases where the value passed through casts or other ops
-          if (Operation *defOp = observed.getDefiningOp()) {
-            // Check if any operand is a signal we know about
-            for (Value operand : defOp->getOperands()) {
-              sigId = getSignalId(operand);
-              if (sigId != 0) {
-                LLVM_DEBUG(llvm::dbgs()
-                           << "  Found signal " << sigId
-                           << " through operand of " << defOp->getName() << "\n");
-                break;
-              }
-              // Also check if operand comes from a probe
-              if (auto innerProbe = operand.getDefiningOp<llhd::ProbeOp>()) {
-                sigId = getSignalId(innerProbe.getSignal());
-                if (sigId != 0) {
-                  LLVM_DEBUG(llvm::dbgs()
-                             << "  Found signal " << sigId
-                             << " through nested probe in "
-                             << defOp->getName() << "\n");
-                  break;
-                }
-              }
+
+    // Helper function to recursively trace back through operations to find
+    // the signal being observed. This handles chains like:
+    //   %clk_bool = comb.and %value, %not_unknown
+    //   %value = hw.struct_extract %probed["value"]
+    //   %probed = llhd.prb %signal
+    // We need to trace back through this chain to find %signal.
+    std::function<SignalId(Value, int)> traceToSignal;
+    traceToSignal = [&](Value value, int depth) -> SignalId {
+      // Limit recursion depth to prevent infinite loops
+      if (depth > 10)
+        return 0;
+
+      // Direct probe case
+      if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
+        SignalId sigId = getSignalId(probeOp.getSignal());
+        if (sigId != 0) {
+          LLVM_DEBUG(llvm::dbgs() << "  Found signal " << sigId
+                                  << " from probe at depth " << depth << "\n");
+          return sigId;
+        }
+      }
+
+      // Check if it's a signal reference directly
+      SignalId sigId = getSignalId(value);
+      if (sigId != 0)
+        return sigId;
+
+      // Block argument - trace through predecessors
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        Block *block = blockArg.getOwner();
+        unsigned argIdx = blockArg.getArgNumber();
+
+        // Look at all predecessors
+        for (Block *pred : block->getPredecessors()) {
+          Operation *terminator = pred->getTerminator();
+          if (auto branchOp = dyn_cast<mlir::cf::BranchOp>(terminator)) {
+            if (branchOp.getDest() == block && argIdx < branchOp.getNumOperands()) {
+              Value incoming = branchOp.getDestOperands()[argIdx];
+              sigId = traceToSignal(incoming, depth + 1);
+              if (sigId != 0)
+                return sigId;
+            }
+          } else if (auto condBrOp = dyn_cast<mlir::cf::CondBranchOp>(terminator)) {
+            if (condBrOp.getTrueDest() == block && argIdx < condBrOp.getNumTrueOperands()) {
+              Value incoming = condBrOp.getTrueDestOperands()[argIdx];
+              sigId = traceToSignal(incoming, depth + 1);
+              if (sigId != 0)
+                return sigId;
+            }
+            if (condBrOp.getFalseDest() == block && argIdx < condBrOp.getNumFalseOperands()) {
+              Value incoming = condBrOp.getFalseDestOperands()[argIdx];
+              sigId = traceToSignal(incoming, depth + 1);
+              if (sigId != 0)
+                return sigId;
             }
           }
         }
+        return 0;
       }
+
+      // Trace through defining operation's operands
+      if (Operation *defOp = value.getDefiningOp()) {
+        for (Value operand : defOp->getOperands()) {
+          sigId = traceToSignal(operand, depth + 1);
+          if (sigId != 0)
+            return sigId;
+        }
+      }
+
+      return 0;
+    };
+
+    for (Value observed : waitOp.getObserved()) {
+      SignalId sigId = traceToSignal(observed, 0);
 
       if (sigId != 0) {
         waitList.addLevel(sigId);

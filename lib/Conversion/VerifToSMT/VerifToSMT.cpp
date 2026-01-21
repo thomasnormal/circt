@@ -1573,13 +1573,15 @@ struct VerifBoundedModelCheckingOpConversion
               auto zero = arith::ConstantOp::create(
                   builder, loc, rewriter.getI32IntegerAttr(0));
               auto lsb = arith::AndIOp::create(builder, loc, i, one);
-              auto isOdd = arith::CmpIOp::create(
-                  builder, loc, arith::CmpIPredicate::ne, lsb, zero);
+              // Skip even iterations; with initial clock = 0, posedges occur on
+              // odd loop iterations after toggling.
+              auto isEven = arith::CmpIOp::create(
+                  builder, loc, arith::CmpIPredicate::eq, lsb, zero);
               if (shouldSkip)
                 shouldSkip = arith::OrIOp::create(builder, loc, shouldSkip,
-                                                  isOdd);
+                                                  isEven);
               else
-                shouldSkip = isOdd;
+                shouldSkip = isEven;
             }
             auto ifShouldSkip = scf::IfOp::create(
                 builder, loc, builder.getI1Type(), shouldSkip, true);
