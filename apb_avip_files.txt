@@ -1,6 +1,9 @@
 # APB AVIP file list for CIRCT compilation
 # Order: Dependencies first, then dependent files
 
+# Include path for virtual sequencer includes in env packages.
+-I /home/thomas-ahle/mbit/apb_avip/src/hvl_top/env/virtual_sequencer
+
 # 1. Globals Package
 /home/thomas-ahle/mbit/apb_avip/src/globals/apb_global_pkg.sv
 

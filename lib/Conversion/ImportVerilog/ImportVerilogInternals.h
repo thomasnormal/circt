@@ -419,10 +419,12 @@ struct Context {
   /// production branches to this block to exit the entire randsequence.
   SmallVector<Block *> randSequenceReturnStack;
 
-  /// A stack of loop depths for randsequence break handling. This is used to
-  /// distinguish between a break that exits a loop within a production versus
-  /// a break that exits the production itself.
-  SmallVector<unsigned> randSequenceBreakDepthStack;
+  /// A stack of break target blocks for randsequence productions. A 'break'
+  /// statement within a randsequence production code block branches to this
+  /// block to exit the current production. Unlike loop break which continues
+  /// after the loop, randsequence break exits the current production but
+  /// continues with subsequent productions in the rule.
+  SmallVector<Block *> randSequenceBreakStack;
 
   /// A listener called for every variable or net being read. This can be used
   /// to collect all variables read as part of an expression or statement, for

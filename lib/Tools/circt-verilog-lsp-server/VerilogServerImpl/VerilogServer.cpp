@@ -562,6 +562,101 @@ bool circt::lsp::VerilogServer::resolveCodeLens(llvm::StringRef data,
 }
 
 //===----------------------------------------------------------------------===//
+// Type Hierarchy
+//===----------------------------------------------------------------------===//
+
+std::optional<circt::lsp::VerilogServer::TypeHierarchyItem>
+circt::lsp::VerilogServer::prepareTypeHierarchy(const URIForFile &uri,
+                                                const llvm::lsp::Position &pos) {
+  auto fileIt = impl->files.find(uri.file());
+  if (fileIt == impl->files.end())
+    return std::nullopt;
+
+  auto docItem = fileIt->second->prepareTypeHierarchy(uri, pos);
+  if (!docItem)
+    return std::nullopt;
+
+  // Convert from VerilogDocument type to VerilogServer type
+  TypeHierarchyItem item;
+  item.name = docItem->name;
+  item.kind = docItem->kind;
+  item.detail = docItem->detail;
+  item.uri = docItem->uri;
+  item.range = docItem->range;
+  item.selectionRange = docItem->selectionRange;
+  item.data = docItem->data;
+  return item;
+}
+
+void circt::lsp::VerilogServer::getSupertypes(
+    const TypeHierarchyItem &item,
+    std::vector<TypeHierarchyItem> &supertypes) {
+  auto fileIt = impl->files.find(item.uri.file());
+  if (fileIt == impl->files.end())
+    return;
+
+  // Convert to VerilogDocument type
+  VerilogDocument::TypeHierarchyItem docItem;
+  docItem.name = item.name;
+  docItem.kind = item.kind;
+  docItem.detail = item.detail;
+  docItem.uri = item.uri;
+  docItem.range = item.range;
+  docItem.selectionRange = item.selectionRange;
+  docItem.data = item.data;
+
+  std::vector<VerilogDocument::TypeHierarchyItem> docSupertypes;
+  fileIt->second->getSupertypes(docItem, docSupertypes);
+
+  // Convert back to VerilogServer types
+  for (const auto &docSupertype : docSupertypes) {
+    TypeHierarchyItem supertype;
+    supertype.name = docSupertype.name;
+    supertype.kind = docSupertype.kind;
+    supertype.detail = docSupertype.detail;
+    supertype.uri = docSupertype.uri;
+    supertype.range = docSupertype.range;
+    supertype.selectionRange = docSupertype.selectionRange;
+    supertype.data = docSupertype.data;
+    supertypes.push_back(std::move(supertype));
+  }
+}
+
+void circt::lsp::VerilogServer::getSubtypes(
+    const TypeHierarchyItem &item,
+    std::vector<TypeHierarchyItem> &subtypes) {
+  auto fileIt = impl->files.find(item.uri.file());
+  if (fileIt == impl->files.end())
+    return;
+
+  // Convert to VerilogDocument type
+  VerilogDocument::TypeHierarchyItem docItem;
+  docItem.name = item.name;
+  docItem.kind = item.kind;
+  docItem.detail = item.detail;
+  docItem.uri = item.uri;
+  docItem.range = item.range;
+  docItem.selectionRange = item.selectionRange;
+  docItem.data = item.data;
+
+  std::vector<VerilogDocument::TypeHierarchyItem> docSubtypes;
+  fileIt->second->getSubtypes(docItem, docSubtypes);
+
+  // Convert back to VerilogServer types
+  for (const auto &docSubtype : docSubtypes) {
+    TypeHierarchyItem subtype;
+    subtype.name = docSubtype.name;
+    subtype.kind = docSubtype.kind;
+    subtype.detail = docSubtype.detail;
+    subtype.uri = docSubtype.uri;
+    subtype.range = docSubtype.range;
+    subtype.selectionRange = docSubtype.selectionRange;
+    subtype.data = docSubtype.data;
+    subtypes.push_back(std::move(subtype));
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Workspace Management
 //===----------------------------------------------------------------------===//
 

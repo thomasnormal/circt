@@ -8,6 +8,7 @@
 
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
+#include <cmath>
 #include "slang/ast/Statement.h"
 #include "slang/ast/SystemSubroutine.h"
 #include "slang/ast/expressions/MiscExpressions.h"
@@ -1145,6 +1146,22 @@ struct StmtVisitor {
 
   // Handle return statements.
   LogicalResult visit(const slang::ast::ReturnStatement &stmt) {
+    // Check if we're inside a randsequence production - if so, return exits
+    // the entire randsequence per IEEE 1800-2017 Section 18.17
+    if (!context.randSequenceReturnStack.empty()) {
+      // A return inside a randsequence production should not have a value
+      // (it just exits the randsequence, not the function)
+      if (stmt.expr) {
+        // If there's an expression, it's being used to return from the function
+        // containing the randsequence, so fall through to normal return handling
+      } else {
+        cf::BranchOp::create(builder, loc,
+                             context.randSequenceReturnStack.back());
+        setTerminated();
+        return success();
+      }
+    }
+
     if (stmt.expr) {
       auto expr = context.convertRvalueExpression(*stmt.expr);
       if (!expr)
@@ -1185,14 +1202,24 @@ struct StmtVisitor {
 
   // Handle break statements.
   LogicalResult visit(const slang::ast::BreakStatement &stmt) {
-    if (context.loopStack.empty())
-      return mlir::emitError(loc, "cannot `break` without a surrounding loop");
+    // Check if we're inside a loop - if so, break exits the loop
+    if (!context.loopStack.empty()) {
+      cf::BranchOp::create(builder, loc, context.loopStack.back().breakBlock);
+      setTerminated();
+      return success();
+    }
 
-    // In randsequence productions, a break exits the current production's code
-    // block. The executeRule function sets up a break block for this purpose.
-    cf::BranchOp::create(builder, loc, context.loopStack.back().breakBlock);
-    setTerminated();
-    return success();
+    // Check if we're inside a randsequence production - if so, break exits
+    // the current production code block per IEEE 1800-2017 Section 18.17
+    if (!context.randSequenceBreakStack.empty()) {
+      cf::BranchOp::create(builder, loc,
+                           context.randSequenceBreakStack.back());
+      setTerminated();
+      return success();
+    }
+
+    return mlir::emitError(loc, "cannot `break` without a surrounding loop "
+                                "or randsequence production");
   }
 
   // Handle immediate assertion statements.
@@ -1567,7 +1594,29 @@ struct StmtVisitor {
   LogicalResult visit(const slang::ast::RandSequenceStatement &stmt) {
     if (!stmt.firstProduction)
       return success();
-    return executeProduction(*stmt.firstProduction);
+
+    // Create an exit block for the entire randsequence. A 'return' statement
+    // within any production will branch to this block.
+    Block &exitBlock = createBlock();
+    context.randSequenceReturnStack.push_back(&exitBlock);
+    auto returnGuard = llvm::make_scope_exit(
+        [&] { context.randSequenceReturnStack.pop_back(); });
+
+    if (failed(executeProduction(*stmt.firstProduction)))
+      return failure();
+
+    // If not terminated, branch to exit block
+    if (!isTerminated())
+      cf::BranchOp::create(builder, loc, &exitBlock);
+
+    // Set up the exit block as the continuation point after randsequence
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      // Already terminated, nothing to do
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
   }
 
   // Handle randcase statements.
@@ -1767,9 +1816,31 @@ struct StmtVisitor {
     context.currentScope = rule.ruleBlock;
     auto scopeGuard =
         llvm::make_scope_exit([&] { context.currentScope = savedScope; });
-    if (rule.codeBlock)
+
+    // Handle the initial code block before production items
+    if (rule.codeBlock) {
+      // Set up a break target for the code block
+      Block &breakBlock = createBlock();
+      context.randSequenceBreakStack.push_back(&breakBlock);
+      auto breakGuard = llvm::make_scope_exit(
+          [&] { context.randSequenceBreakStack.pop_back(); });
+
       if (failed(convertStatementBlock(*rule.codeBlock->block)))
         return failure();
+
+      // If not terminated, branch to break block
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &breakBlock);
+
+      // Set up the break block as the continuation point
+      if (breakBlock.hasNoPredecessors()) {
+        breakBlock.erase();
+        // Already terminated, return early
+        return success();
+      } else {
+        builder.setInsertionPointToEnd(&breakBlock);
+      }
+    }
     if (isTerminated())
       return success();
 
@@ -1778,9 +1849,24 @@ struct StmtVisitor {
       if (rule.randJoinExpr) {
         auto cv = context.evaluateConstant(*rule.randJoinExpr);
         if (!cv.bad()) {
-          auto maybeCount = cv.integer().as<int64_t>();
-          if (maybeCount)
-            joinCount = *maybeCount;
+          // Per IEEE 1800-2017 Section 18.17.5:
+          // - Integer N: execute exactly N productions
+          // - Real N (0 <= N <= 1): execute round(N * numProds) productions
+          if (cv.isReal()) {
+            double realVal = cv.real();
+            if (realVal >= 0.0 && realVal <= 1.0) {
+              // Treat as ratio of productions to execute
+              joinCount = static_cast<int64_t>(
+                  std::round(realVal * static_cast<double>(rule.prods.size())));
+            } else {
+              // Real > 1 treated as integer count
+              joinCount = static_cast<int64_t>(std::round(realVal));
+            }
+          } else if (cv.isInteger()) {
+            auto maybeCount = cv.integer().as<int64_t>();
+            if (maybeCount)
+              joinCount = *maybeCount;
+          }
         }
       }
       // Handle edge cases per IEEE 1800-2017 Section 18.17
@@ -1961,10 +2047,33 @@ struct StmtVisitor {
     case ProdKind::Item:
       return executeProdItem(
           prodBase.as<slang::ast::RandSeqProductionSymbol::ProdItem>());
-    case ProdKind::CodeBlock:
-      return convertStatementBlock(
+    case ProdKind::CodeBlock: {
+      // For code blocks in randsequence, we need to set up a break target
+      // so that 'break' exits the code block per IEEE 1800-2017 Section 18.17
+      Block &breakBlock = createBlock();
+      context.randSequenceBreakStack.push_back(&breakBlock);
+      auto breakGuard = llvm::make_scope_exit(
+          [&] { context.randSequenceBreakStack.pop_back(); });
+
+      auto result = convertStatementBlock(
           *prodBase.as<slang::ast::RandSeqProductionSymbol::CodeBlockProd>()
                .block);
+      if (failed(result))
+        return failure();
+
+      // If not terminated, branch to break block to continue
+      if (!isTerminated())
+        cf::BranchOp::create(builder, loc, &breakBlock);
+
+      // Set up the break block as the continuation point
+      if (breakBlock.hasNoPredecessors()) {
+        breakBlock.erase();
+        // Already terminated, nothing to do
+      } else {
+        builder.setInsertionPointToEnd(&breakBlock);
+      }
+      return success();
+    }
     case ProdKind::IfElse:
       return executeIfElseProd(
           prodBase.as<slang::ast::RandSeqProductionSymbol::IfElseProd>());

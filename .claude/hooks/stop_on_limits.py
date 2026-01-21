@@ -15,9 +15,9 @@ Advice:
 - What limitations do we still have? What features should we build?
 - Check the status of each Track/Workstream. What task should they each do next?
 - We should have four agents running at any one time.
-- Keep testing on ~/mbit/* for real world freed back.
-- Remember to make unit tests as you go along and implement more features, and commit regularly.
-- The work trees should regularly by merged into main, so the workers stay in sync.
+- Keep testing on ~/mbit/*avip* and ~/sv-tests/ and ~/verilator-verification/ and ~/yosys/tests/ for real world feedback.
+- Make unit tests for every bug you fix or new feature you implement
+- Commit regularly and merge with upstream main, so the workers stay in sync.
 Continue!
 """.strip()
 
@@ -38,7 +38,7 @@ def main() -> int:
             if last_msg.get("type") == "assistant":
                 break
         else:
-            raise ("Unable to find last assistant message. Stop" + "\n".join(lines[-10::-1]))
+            raise Exception("Unable to find last assistant message. Stop" + "\n".join(lines[-10::-1]))
             return 0
         print(f"last msg: {last_msg}", file=debug_file)
 

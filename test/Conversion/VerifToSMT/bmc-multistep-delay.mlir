@@ -66,6 +66,67 @@ func.func @test_delay_2() -> i1 {
 }
 
 // =============================================================================
+// Test case 2b: ##[1:3] delay range (1 to 3 cycles)
+// For delay=1 length=2, we need 3 buffer slots
+// =============================================================================
+
+// CHECK-LABEL: func.func @test_delay_range
+// Three delay buffer slots initialized to 0
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         scf.for
+// Circuit takes 5 args (start, done, buf0, buf1, buf2)
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+func.func @test_delay_range() -> i1 {
+  %bmc = verif.bmc bound 5 num_regs 0 initial_values []
+  init {
+  }
+  loop {
+  }
+  circuit {
+  ^bb0(%start: i1, %done: i1):
+    %delayed_done = ltl.delay %done, 1, 2 : i1
+    %prop = ltl.implication %start, %delayed_done : i1, !ltl.sequence
+    verif.assert %prop : !ltl.property
+    verif.yield %start, %done : i1, i1
+  }
+  func.return %bmc : i1
+}
+
+// =============================================================================
+// Test case 2c: ##[1:$] unbounded delay (truncated by BMC bound)
+// For bound=5, delay=1 length=3, we need 4 buffer slots
+// =============================================================================
+
+// CHECK-LABEL: func.func @test_delay_unbounded
+// Four delay buffer slots initialized to 0
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         scf.for
+// Circuit takes 6 args (start, done, buf0, buf1, buf2, buf3)
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+func.func @test_delay_unbounded() -> i1 {
+  %bmc = verif.bmc bound 5 num_regs 0 initial_values []
+  init {
+  }
+  loop {
+  }
+  circuit {
+  ^bb0(%start: i1, %done: i1):
+    %delayed_done = ltl.delay %done, 1 : i1
+    %prop = ltl.implication %start, %delayed_done : i1, !ltl.sequence
+    verif.assert %prop : !ltl.property
+    verif.yield %start, %done : i1, i1
+  }
+  func.return %bmc : i1
+}
+
+// =============================================================================
 // Test case 3: No delay ops - with assert (verifies non-delay paths work)
 // =============================================================================
 

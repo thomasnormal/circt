@@ -8,20 +8,32 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 
 ## Remaining Limitations & Next Steps
 
-### CRITICAL: Simulation Blockers
-1. ~~**UVM Library Not Supported**~~: ✅ UVM stubs now auto-included, 12 test files compile
-2. ~~**circt-sim Procedural Execution**~~: ✅ SCF ops, func.call, hw.array now supported
-3. **Virtual Interface Tasks**: Tasks with timing on module ports need work
-4. **Constraint Lowering Completion**: Some constraint patterns need MooreToCore lowering
+### CRITICAL: Simulation Runtime Blockers
 
-### Track Status & Next Tasks
+> **See `.claude/plans/ticklish-sleeping-pie.md` for detailed implementation plan.**
 
+1. **Simulation Time Advancement** ❌ CRITICAL: `circt-sim` ends at 0fs because `ProcessScheduler::advanceTime()` doesn't check `EventScheduler` for queued events. The LLHD interpreter exists (1700+ lines) but process resumption after delays never triggers.
+
+2. **DPI/VPI Real Hierarchy** ⚠️ HIGH: DPI stubs use disconnected in-memory map. `uvm_hdl_read("path")` returns 0, not actual signal value. Need to bridge signal registry from `LLHDProcessInterpreter` to `MooreRuntime`.
+
+3. **Virtual Interface Binding** ⚠️ HIGH: Signal access works, but runtime binding (`driver.vif = apb_if`) doesn't propagate. Need `moore.virtual_interface.bind` operation.
+
+4. **4-State X/Z Propagation** ⚠️ MEDIUM: Type system supports it (`Domain::FourValued`, `FVInt`), but lowering loses X/Z info. Constants parsed but not preserved in IR.
+
+### Track Status & Next Tasks (Iteration 71+)
+
+**Simulation Runtime (Critical Path)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Runtime/Simulation | $display runtime complete | $finish/$fatal, timing delays |
-| **B** | Randomization | Constraint implication complete | RandSequence production breaks |
-| **C** | Coverage | UCDB file format complete | Coverage GUI/reports |
+| **A** | Simulation Runtime | Time advancement broken (ends at 0fs) | Fix ProcessScheduler↔EventScheduler integration |
+| **B** | DPI/VPI Hierarchy | Stubs with in-memory map only | Build signal registry bridge to real signals |
+
+**Feature Development (Parallel)**:
+| Track | Focus Area | Current Status | Next Priority |
+|-------|-----------|----------------|---------------|
+| **C** | Coverage | UCDB file format complete | Coverage GUI/reports, virtual interface binding |
 | **D** | LSP Tooling | Inlay hints complete | Semantic highlighting |
+| **E** | Randomization/UVM | RandSequence fractional N complete | 4-state X/Z |
 
 ### Feature Completion Matrix
 
@@ -81,7 +93,26 @@ Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ---
 
-## Current Status: ITERATION 70 - $display Runtime + Constraint Implication + UCDB Format + LSP Inlay Hints (January 20, 2026)
+## Current Status: ITERATION 71 - RandSequence Fractional N Support (January 21, 2026)
+
+**Summary**: Fixed `rand join (N)` to support fractional N values per IEEE 1800-2017 Section 18.17.5.
+
+### Iteration 71 Highlights
+
+**Track E: RandSequence Improvements**
+- Fixed `rand join (N)` where N is a real number (e.g., 0.5)
+- Per IEEE 1800-2017, fractional N (0 <= N <= 1) means execute `round(N * numProds)` productions
+- Previously crashed on fractional N; now properly handles both integer and real values
+- All 12 non-negative sv-tests for section 18.17 now pass (up from 11)
+- Added test case for `rand join (0.5)` in randsequence.sv
+
+**Files Modified**:
+- `lib/Conversion/ImportVerilog/Statements.cpp` - Handle real values in randJoinExpr
+- `test/Conversion/ImportVerilog/randsequence.sv` - Added fractional ratio test
+
+---
+
+## Previous: ITERATION 70 - $display Runtime + Constraint Implication + UCDB Format + LSP Inlay Hints (January 20, 2026)
 
 **Summary**: Implemented $display system tasks, completed constraint implication lowering, added UCDB coverage file format, and added LSP inlay hints.
 
@@ -992,8 +1023,9 @@ ninja -C build check-circt-unit
 **Status**: ⚠️ PARTIAL (multi-step delay buffering for `##N`/bounded `##[m:n]` on i1) | **Priority**: HIGH
 **Next Task**: Extend temporal unrolling beyond delay
 - Add repeat (`[*N]`) and goto/non-consecutive repeat support
-- Handle unbounded delay ranges (`##[m:$]`) in BMC within bound
-- Add end-to-end BMC tests with Z3 (`circt-bmc`) for temporal properties
+- ✅ Handle unbounded delay ranges (`##[m:$]`) in BMC within bound (bounded approximation)
+- ✅ Added end-to-end SVA BMC integration tests (SV → `circt-bmc`) for delay and range delay (pass + fail cases; pass uses `--ignore-asserts-until=1`)
+- Add more end-to-end BMC tests with Z3 (`circt-bmc`) for temporal properties
 - Files: `lib/Tools/circt-bmc/`, `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Track D: Tooling & Debug (LSP)
@@ -1036,12 +1068,13 @@ ninja -C build check-circt-unit
 4. Temporal BMC unrolling: repeat (`[*N]`) + unbounded `##[m:$]` (bounded delays now buffered)
 5. Constraint expressions for randomization
 6. Cross coverage and sampling expressions
+7. BMC: LLHD time ops from `initial` blocks still fail legalization (avoid for now)
 
 **MEDIUM**:
-7. Regex-based workspace symbol scanning (no full parse/index)
-8. 4-state X/Z propagation
-9. VPI handle support
-10. Multi-core Arcilator
+8. Regex-based workspace symbol scanning (no full parse/index)
+9. 4-state X/Z propagation
+10. VPI handle support
+11. Multi-core Arcilator
 
 ## Next Feature Targets (Top Impact for UVM)
 1. **DPI-C runtime stubs** - Implement `uvm_hdl_deposit`, `uvm_hdl_force`, `uvm_re_*`

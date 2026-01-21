@@ -1,1 +1,2 @@
-notify = ["python3", "/home/thomas-ahle/circt/.codex/auto_continue.py"]
+# .codex/config.toml (repo-local)
+notify = ["python3", ".codex/auto_continue.py"]

@@ -259,6 +259,69 @@ inline bool fromJSON(const json::Value &value, CodeLens &result,
   return true;
 }
 
+//===----------------------------------------------------------------------===//
+// Type Hierarchy Types
+//===----------------------------------------------------------------------===//
+
+/// Type hierarchy item for LSP communication.
+struct TypeHierarchyItem {
+  std::string name;
+  SymbolKind kind;
+  std::string detail;
+  URIForFile uri;
+  Range range;
+  Range selectionRange;
+  std::string data;
+};
+
+inline json::Value toJSON(const TypeHierarchyItem &item) {
+  return json::Object{
+      {"name", item.name},
+      {"kind", static_cast<int>(item.kind)},
+      {"detail", item.detail},
+      {"uri", item.uri},
+      {"range", item.range},
+      {"selectionRange", item.selectionRange},
+      {"data", item.data},
+  };
+}
+
+inline bool fromJSON(const json::Value &value, TypeHierarchyItem &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  int kindInt;
+  if (!o || !o.map("name", result.name) || !o.map("kind", kindInt) ||
+      !o.map("uri", result.uri) || !o.map("range", result.range) ||
+      !o.map("selectionRange", result.selectionRange))
+    return false;
+  result.kind = static_cast<SymbolKind>(kindInt);
+  o.map("detail", result.detail);
+  o.map("data", result.data);
+  return true;
+}
+
+/// Parameters for typeHierarchy/supertypes request.
+struct TypeHierarchySupertypesParams {
+  TypeHierarchyItem item;
+};
+
+inline bool fromJSON(const json::Value &value, TypeHierarchySupertypesParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("item", result.item);
+}
+
+/// Parameters for typeHierarchy/subtypes request.
+struct TypeHierarchySubtypesParams {
+  TypeHierarchyItem item;
+};
+
+inline bool fromJSON(const json::Value &value, TypeHierarchySubtypesParams &result,
+                     json::Path path) {
+  json::ObjectMapper o(value, path);
+  return o && o.map("item", result.item);
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -412,6 +475,19 @@ struct LSPServer {
                          Callback<json::Value> reply);
 
   //===--------------------------------------------------------------------===//
+  // Type Hierarchy
+  //===--------------------------------------------------------------------===//
+
+  void onPrepareTypeHierarchy(const TextDocumentPositionParams &params,
+                              Callback<json::Value> reply);
+
+  void onTypeHierarchySupertypes(const TypeHierarchySupertypesParams &params,
+                                  Callback<json::Value> reply);
+
+  void onTypeHierarchySubtypes(const TypeHierarchySubtypesParams &params,
+                                Callback<json::Value> reply);
+
+  //===--------------------------------------------------------------------===//
   // Fields
   //===--------------------------------------------------------------------===//
 
@@ -499,6 +575,7 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"documentFormattingProvider", true},
       {"documentRangeFormattingProvider", true},
       {"callHierarchyProvider", true},
+      {"typeHierarchyProvider", true},
       {"codeLensProvider",
        llvm::json::Object{
            {"resolveProvider", true},
@@ -915,6 +992,96 @@ void LSPServer::onCodeLensResolve(const CodeLens &params,
 }
 
 //===----------------------------------------------------------------------===//
+// Type Hierarchy
+//===----------------------------------------------------------------------===//
+
+void LSPServer::onPrepareTypeHierarchy(const TextDocumentPositionParams &params,
+                                       Callback<json::Value> reply) {
+  auto result = server.prepareTypeHierarchy(params.textDocument.uri,
+                                            params.position);
+  if (!result) {
+    reply(json::Value(nullptr));
+    return;
+  }
+
+  // Convert to local TypeHierarchyItem and then to JSON
+  TypeHierarchyItem item;
+  item.name = result->name;
+  item.kind = result->kind;
+  item.detail = result->detail;
+  item.uri = result->uri;
+  item.range = result->range;
+  item.selectionRange = result->selectionRange;
+  item.data = result->data;
+
+  json::Array items;
+  items.push_back(toJSON(item));
+  reply(std::move(items));
+}
+
+void LSPServer::onTypeHierarchySupertypes(
+    const TypeHierarchySupertypesParams &params,
+    Callback<json::Value> reply) {
+  // Convert local type to server type
+  circt::lsp::VerilogServer::TypeHierarchyItem serverItem;
+  serverItem.name = params.item.name;
+  serverItem.kind = params.item.kind;
+  serverItem.detail = params.item.detail;
+  serverItem.uri = params.item.uri;
+  serverItem.range = params.item.range;
+  serverItem.selectionRange = params.item.selectionRange;
+  serverItem.data = params.item.data;
+
+  std::vector<circt::lsp::VerilogServer::TypeHierarchyItem> supertypes;
+  server.getSupertypes(serverItem, supertypes);
+
+  json::Array result;
+  for (const auto &supertype : supertypes) {
+    TypeHierarchyItem lspItem;
+    lspItem.name = supertype.name;
+    lspItem.kind = supertype.kind;
+    lspItem.detail = supertype.detail;
+    lspItem.uri = supertype.uri;
+    lspItem.range = supertype.range;
+    lspItem.selectionRange = supertype.selectionRange;
+    lspItem.data = supertype.data;
+    result.push_back(toJSON(lspItem));
+  }
+  reply(std::move(result));
+}
+
+void LSPServer::onTypeHierarchySubtypes(
+    const TypeHierarchySubtypesParams &params,
+    Callback<json::Value> reply) {
+  // Convert local type to server type
+  circt::lsp::VerilogServer::TypeHierarchyItem serverItem;
+  serverItem.name = params.item.name;
+  serverItem.kind = params.item.kind;
+  serverItem.detail = params.item.detail;
+  serverItem.uri = params.item.uri;
+  serverItem.range = params.item.range;
+  serverItem.selectionRange = params.item.selectionRange;
+  serverItem.data = params.item.data;
+
+  std::vector<circt::lsp::VerilogServer::TypeHierarchyItem> subtypes;
+  server.getSubtypes(serverItem, subtypes);
+
+  json::Array result;
+  for (const auto &subtype : subtypes) {
+    TypeHierarchyItem lspItem;
+    lspItem.name = subtype.name;
+    lspItem.kind = subtype.kind;
+    lspItem.detail = subtype.detail;
+    lspItem.uri = subtype.uri;
+    lspItem.range = subtype.range;
+    lspItem.selectionRange = subtype.selectionRange;
+    lspItem.data = subtype.data;
+    result.push_back(toJSON(lspItem));
+  }
+  reply(std::move(result));
+}
+
+//===----------------------------------------------------------------------===//
 // Entry Point
 //===----------------------------------------------------------------------===//
 
@@ -1015,6 +1182,14 @@ circt::lsp::runVerilogLSPServer(const circt::lsp::LSPServerOptions &options,
                         &LSPServer::onCodeLens);
   messageHandler.method("codeLens/resolve", &lspServer,
                         &LSPServer::onCodeLensResolve);
+
+  // Type Hierarchy
+  messageHandler.method("textDocument/prepareTypeHierarchy", &lspServer,
+                        &LSPServer::onPrepareTypeHierarchy);
+  messageHandler.method("typeHierarchy/supertypes", &lspServer,
+                        &LSPServer::onTypeHierarchySupertypes);
+  messageHandler.method("typeHierarchy/subtypes", &lspServer,
+                        &LSPServer::onTypeHierarchySubtypes);
 
   // Run the main loop of the transport.
   if (Error error = transport.run(messageHandler)) {

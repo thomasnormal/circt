@@ -278,6 +278,27 @@ void VerilogTextFile::getOutgoingCalls(
   doc->getOutgoingCalls(item, calls);
 }
 
+std::optional<VerilogDocument::TypeHierarchyItem>
+VerilogTextFile::prepareTypeHierarchy(const llvm::lsp::URIForFile &uri,
+                                      llvm::lsp::Position pos) {
+  auto doc = getDocument();
+  return doc->prepareTypeHierarchy(uri, pos);
+}
+
+void VerilogTextFile::getSupertypes(
+    const VerilogDocument::TypeHierarchyItem &item,
+    std::vector<VerilogDocument::TypeHierarchyItem> &supertypes) {
+  auto doc = getDocument();
+  doc->getSupertypes(item, supertypes);
+}
+
+void VerilogTextFile::getSubtypes(
+    const VerilogDocument::TypeHierarchyItem &item,
+    std::vector<VerilogDocument::TypeHierarchyItem> &subtypes) {
+  auto doc = getDocument();
+  doc->getSubtypes(item, subtypes);
+}
+
 void VerilogTextFile::getCodeLenses(
     const llvm::lsp::URIForFile &uri,
     std::vector<VerilogDocument::CodeLensInfo> &lenses) {

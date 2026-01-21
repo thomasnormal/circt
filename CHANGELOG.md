@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 71 - January 21, 2026
+
+### Simulation Runtime Focus + DPI Signal Registry + RandSequence Fix
+
+**Track A: Simulation Time Advancement Verification** ⭐ VERIFICATION
+- Verified that `circt-sim` time advancement is already correctly implemented
+- `ProcessScheduler::advanceTime()` properly integrates with `EventScheduler`
+- Added 4 comprehensive unit tests for delayed event handling
+- Improved documentation in `ProcessScheduler.h`
+- Test `llhd-process-todo.mlir` correctly runs to 10,000,000 fs
+
+**Track B: DPI Signal Registry Bridge** ⭐ MAJOR FEATURE
+- Implemented signal registry to bridge DPI/VPI stubs with real simulation signals
+- New API functions:
+  - `__moore_signal_registry_register()` - Register signals with hierarchical paths
+  - `__moore_signal_registry_set_accessor()` - Set callbacks for signal access
+  - `__moore_signal_registry_lookup()` - Look up signal by path
+  - `__moore_signal_registry_exists()` - Check if path exists
+  - `__moore_signal_registry_get_width()` - Get signal bit width
+- Modified DPI functions (`uvm_hdl_read`, `uvm_hdl_deposit`, `uvm_hdl_force`) to use registry
+- Modified VPI functions (`vpi_get_value`, `vpi_put_value`) to use registry
+- Callback-based architecture for simulation integration
+- 8 new unit tests for signal registry
+
+**Track D: LSP Semantic Tokens Verification** ⭐ VERIFICATION
+- Verified semantic tokens already fully implemented (23 token types, 9 modifiers)
+- Supports: keywords, modules, classes, interfaces, parameters, variables, operators, etc.
+- Full `textDocument/semanticTokens/full` handler in place
+
+**Track E: RandSequence Improvements** ⭐ BUGFIX
+- Fixed `rand join (N)` to support fractional N values per IEEE 1800-2017 Section 18.17.5
+- When N is a real number between 0 and 1, it represents a ratio:
+  - `rand join (0.5)` with 4 productions executes `round(0.5 * 4) = 2` productions
+  - Real N > 1 is truncated to integer count
+- Previously crashed when N was a real number; now handles both integer and real values
+- All 12 non-negative sv-tests for section 18.17 now pass (100%)
+
+### Files Modified
+- `include/circt/Dialect/Sim/ProcessScheduler.h` (improved documentation)
+- `include/circt/Runtime/MooreRuntime.h` (+115 lines for signal registry API)
+- `lib/Runtime/MooreRuntime.cpp` (+175 lines for signal registry implementation)
+- `lib/Conversion/ImportVerilog/Statements.cpp` (+20 lines for real value handling)
+- `test/Conversion/ImportVerilog/randsequence.sv` (added fractional ratio test)
+- `unittests/Dialect/Sim/ProcessSchedulerTest.cpp` (+4 new tests)
+- `unittests/Runtime/MooreRuntimeTest.cpp` (+8 new tests)
+
+---
+
 ## Iteration 70 - January 20, 2026
 
 ### $display Runtime + Constraint Implication + UCDB Format + LSP Inlay Hints
@@ -92,6 +140,24 @@
 - Created `type-hierarchy.test` with UVM-style class hierarchy tests
 - Tests uvm_object → uvm_component → uvm_driver/uvm_monitor → my_driver
 
+**Track E: SVA BMC End-to-End Integration** ⭐ FEATURE
+- `circt-bmc` now accepts LLHD-lowered input from `circt-verilog --ir-hw`
+  by running the LLHD-to-Core pipeline when LLHD ops are present
+- Registered LLVM inliner interface to avoid crashes during LLHD inlining
+- Added SV → `circt-bmc` integration tests for:
+  - Exact delay (`##1`) failure detection
+  - Exact delay pass with clocked assumptions (uses `--ignore-asserts-until=1`)
+  - Range delay (`##[1:2]`) failure detection
+  - Range delay pass with clocked assumptions (uses `--ignore-asserts-until=1`)
+  - Unbounded delay (`##[1:$]`) fail/pass cases (pass uses `--ignore-asserts-until=1`)
+  - Cover property pass-through (no violations)
+- Added lightweight UVM stubs for SVA integration tests
+
+**Track F: BMC Unbounded Delay (Bounded Approximation)** ⭐ FEATURE
+- `ltl.delay` with missing length (`##[m:$]`) now expands to a bounded window
+  based on the BMC bound: `[m : bound-1]`
+- Added BMC regression coverage for unbounded delay buffering
+
 ### Files Modified
 - `include/circt/Runtime/MooreRuntime.h` (+49 lines for UVM coverage API)
 - `lib/Runtime/MooreRuntime.cpp` (+91 lines for UVM coverage implementation)
@@ -159,11 +225,16 @@
 - `lib/Tools/circt-verilog-lsp-server/LSPServer.cpp` (+150 lines for code lens)
 - `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/*.cpp/h` (+300 lines)
 - `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+120 lines for BMC delay buffering)
+- `tools/circt-bmc/circt-bmc.cpp` (LLHD-to-Core pipeline + LLVM inliner interface)
+- `tools/circt-bmc/CMakeLists.txt` (link CIRCTImportVerilog)
 - `unittests/Runtime/MooreRuntimeTest.cpp` (+450 lines for tests)
 - `test/Conversion/ImportVerilog/gate-primitives.sv` (new, 153 lines)
 - `test/Conversion/MooreToCore/unique-constraints.mlir` (new)
 - `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir` (extended)
 - `test/Tools/circt-verilog-lsp-server/code-lens.test` (new)
+- `integration_test/circt-bmc/sva-e2e.sv` (new)
+- `integration_test/circt-bmc/Inputs/uvm_stub/uvm_pkg.sv` (new)
+- `integration_test/circt-bmc/Inputs/uvm_stub/uvm_macros.svh` (new)
 
 ---
 
