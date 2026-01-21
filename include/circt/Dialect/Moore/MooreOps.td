@@ -2126,8 +2126,11 @@ def DeferAssertAttr : I32EnumAttr<
   let cppNamespace = "circt::moore";
 }
 
-class ImmediateAssertOp<string mnemonic, list<Trait> traits = []> : 
-    MooreOp<mnemonic, traits # [HasParent<"ProcedureOp">]>{
+// Immediate assertions can appear in procedures (always, initial, etc.) or
+// in class methods (which lower to func::FuncOp). We don't restrict the parent
+// since the lowering to verif ops works regardless of the enclosing region.
+class ImmediateAssertOp<string mnemonic, list<Trait> traits = []> :
+    MooreOp<mnemonic, traits>{
   let arguments = (ins
     DeferAssertAttr:$defer,
     AnySingleBitType:$cond,
