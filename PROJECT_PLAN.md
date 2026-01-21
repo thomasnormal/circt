@@ -63,19 +63,19 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 77+)
+### Track Status & Next Tasks (Iteration 78+)
 
 **Simulation Runtime (Critical Path)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Concurrent Scheduling | ✅ Event-wait fix committed | Fix sensitivity persistence in ProcessScheduler |
-| **B** | UVM Macro Stubs | ✅ 2000+ lines (Iter 77) | Add remaining macros for full UVM compilation |
+| **A** | Concurrent Scheduling | 🔄 Deep analysis ongoing | Root cause: EventScheduler time advancement |
+| **B** | UVM Macro Stubs | ✅ 3650+ lines (Iter 78) | Core services complete, add reg layer stubs |
 
 **Feature Development (Parallel)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **C** | Real-World Testing | Investigating slang AST | Address dynamic type access issues |
-| **D** | BMC/Formal | ✅ $rose/$fell fixed (Iter 77) | $countones/$onehot BMC symbol resolution |
+| **C** | Real-World Testing | ✅ Dynamic type fix (Iter 78) | Test more AVIP patterns |
+| **D** | BMC/Formal | ✅ $countones/$onehot (Iter 78) | BMC constraint support |
 | **E** | Coverage Runtime | HTML reports complete | UCDB merge improvements |
 | **F** | LSP Tooling | All 49 tests pass (100%) | Diagnostics improvements |
 
