@@ -716,6 +716,8 @@ struct ModuleVisitor : public BaseVisitor {
   }
 
   LogicalResult visit(const slang::ast::ProceduralBlockSymbol &procNode) {
+    if (procNode.isFromAssertion)
+      return context.convertStatement(procNode.getBody());
     // Detect `always @(*) <stmt>` and convert to `always_comb <stmt>` if
     // requested by the user.
     if (context.options.lowerAlwaysAtStarAsComb) {
