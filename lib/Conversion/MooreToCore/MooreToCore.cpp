@@ -9818,6 +9818,48 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
             .getResult(0);
     mapper.map(blockArg, currentElemMoore);
 
+    // Map external values (values defined outside the predicate block) to
+    // their converted versions. This is necessary because the cloned Moore
+    // operations will reference these external values, but they need to be
+    // properly converted to LLVM types.
+    for (Operation &innerOp : body.without_terminator()) {
+      for (Value operand : innerOp.getOperands()) {
+        // Skip if already mapped (block argument or result of previous op)
+        if (mapper.contains(operand))
+          continue;
+
+        // Skip if defined inside the block
+        if (operand.getParentBlock() == &body)
+          continue;
+
+        // This is an external value - try to get its converted version
+        Value remapped = rewriter.getRemappedValue(operand);
+        if (remapped) {
+          // Cast back to Moore type so cloned Moore ops can use it
+          Value mooreCast =
+              UnrealizedConversionCastOp::create(rewriter, loc,
+                                                 operand.getType(), remapped)
+                  .getResult(0);
+          mapper.map(operand, mooreCast);
+        } else {
+          // Value hasn't been converted yet - try to materialize a conversion
+          Type targetType = typeConverter->convertType(operand.getType());
+          if (targetType) {
+            Value converted = typeConverter->materializeTargetConversion(
+                rewriter, loc, targetType, operand);
+            if (converted) {
+              // Cast back to Moore type for the cloned Moore ops
+              Value mooreCast =
+                  UnrealizedConversionCastOp::create(rewriter, loc,
+                                                     operand.getType(), converted)
+                      .getResult(0);
+              mapper.map(operand, mooreCast);
+            }
+          }
+        }
+      }
+    }
+
     for (Operation &innerOp : body.without_terminator()) {
       Operation *clonedOp = rewriter.clone(innerOp, mapper);
       for (auto [oldResult, newResult] :
@@ -10188,10 +10230,10 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
           op, "comparison must compare block argument with a value");
 
     // The constant value must be defined by a moore.constant op
+    // If not a constant, fall back to inline loop approach for variable comparisons
     auto constOp = constValue.getDefiningOp<ConstantOp>();
     if (!constOp)
-      return rewriter.notifyMatchFailure(
-          op, "comparison value must be a constant");
+      return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
 
     // Get element type and size
     Type elementType;
