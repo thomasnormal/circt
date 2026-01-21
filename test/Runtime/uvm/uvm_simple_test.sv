@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 // Simple UVM Testbench to verify CIRCT UVM stubs
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only -I %S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
 
 `timescale 1ns/1ps
 

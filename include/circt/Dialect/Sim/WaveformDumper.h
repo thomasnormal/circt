@@ -790,12 +790,25 @@ inline bool WaveformDumper::shouldTrace(llvm::StringRef path) const {
     if (pattern == "*")
       return true;
 
-    if (pattern.back() == '*') {
+    bool startsWithWild = !pattern.empty() && pattern.front() == '*';
+    bool endsWithWild = !pattern.empty() && pattern.back() == '*';
+
+    if (startsWithWild && endsWithWild) {
+      // Contains match: *substring* means path must contain "substring"
+      if (pattern.size() > 2) {
+        llvm::StringRef middle(pattern.data() + 1, pattern.size() - 2);
+        if (path.contains(middle))
+          return true;
+      } else {
+        // Pattern is just "**" or "*", match everything
+        return true;
+      }
+    } else if (endsWithWild) {
       // Prefix match
       llvm::StringRef prefix(pattern.data(), pattern.size() - 1);
       if (path.starts_with(prefix))
         return true;
-    } else if (pattern.front() == '*') {
+    } else if (startsWithWild) {
       // Suffix match
       llvm::StringRef suffix(pattern.data() + 1, pattern.size() - 1);
       if (path.ends_with(suffix))

@@ -16,8 +16,9 @@
 // The for loop has the past buffer as an iter_arg
 // CHECK:         scf.for
 // Circuit is called with past buffer argument (2 total args: sig, past_buffer)
+// Returns: orig outputs + past buffer + non-final check (!smt.bool)
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_past_simple() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -66,13 +67,12 @@ func.func @test_rose_pattern() -> i1 {
 // =============================================================================
 
 // CHECK-LABEL: func.func @test_multiple_past
-// Three buffer slots: 1 for past(sig,1) + 2 for past(sig,2) = 3 total
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
-// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// Single buffer constant (used multiple times for past(sig,1) + past(sig,2))
 // CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK:         scf.for
+// Returns: orig outputs + past buffers + non-final check
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_multiple_past() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -101,9 +101,10 @@ func.func @test_multiple_past() -> i1 {
 // CHECK-LABEL: func.func @test_past_with_delay
 // Both delay and past buffers are allocated
 // CHECK:         scf.for
-// CHECK:           func.call @bmc_circuit
 // Circuit has 4 args: req, ack, delay_buffer, past_buffer
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// Returns: orig outputs + buffers + non-final check
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
 func.func @test_past_with_delay() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {

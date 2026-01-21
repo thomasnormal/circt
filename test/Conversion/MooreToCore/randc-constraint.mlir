@@ -2,7 +2,7 @@
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
-// CHECK-NOT: llvm.func @__moore_randc_next
+// CHECK-DAG: llvm.func @__moore_randc_next(!llvm.ptr, i64) -> i64
 
 moore.class.classdecl @RandCConstrainedClass {
   moore.class.propertydecl @id : !moore.i8 rand_mode randc
@@ -15,9 +15,11 @@ moore.class.classdecl @RandCConstrainedClass {
 // CHECK-LABEL: func.func @test_randc_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_randc_constraint(%obj: !moore.class<@RandCConstrainedClass>) -> i1 {
+  // When constraint is enabled, use randomize_with_range
   // CHECK: llvm.call @__moore_randomize_basic
   // CHECK: llvm.call @__moore_randomize_with_range
-  // CHECK-NOT: llvm.call @__moore_randc_next
+  // When constraint is not enabled, fall back to randc_next
+  // CHECK: llvm.call @__moore_randc_next
   %success = moore.randomize %obj : !moore.class<@RandCConstrainedClass>
   return %success : i1
 }

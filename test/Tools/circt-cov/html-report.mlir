@@ -10,7 +10,6 @@
 // Check basic HTML structure
 // HTML: <!DOCTYPE html>
 // HTML: CIRCT Coverage Report
-// HTML: </html>
 
 // Check summary section
 // HTML: Overall Coverage
@@ -31,14 +30,17 @@
 // HTML: Source File Coverage
 // HTML: module.v
 
-// Check uncovered items section
-// HTML: Uncovered Items
-
 // Check coverage trends section (we have trend data)
 // HTML: Coverage Trends
 
+// Check uncovered items section
+// HTML: Uncovered Items
+
 // Check exclusions section
 // HTML: Exclusions
+
+// Check closing HTML tag
+// HTML: </html>
 
 // Test HTML report with custom title
 // RUN: circt-cov --report %t/test.json --format=html --title="My Custom Report" -o %t/custom.html

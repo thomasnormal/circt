@@ -15,19 +15,19 @@ moore.class.classdecl @ConstraintModeClass {
 
 // CHECK-LABEL: func.func @test_constraint_mode
 func.func @test_constraint_mode(%obj: !moore.class<@ConstraintModeClass>,
-                                %mode: i32) -> i32 {
+                                %mode: !moore.i32) -> !moore.i32 {
   // Constraint-level get.
   // CHECK: llvm.call @__moore_constraint_mode_get
-  %prev0 = moore.constraint_mode %obj {constraint = @c_range}
-      : !moore.class<@ConstraintModeClass> -> i32
+  %prev0 = "moore.constraint_mode"(%obj) {constraint = @c_range}
+      : (!moore.class<@ConstraintModeClass>) -> !moore.i32
   // Constraint-level set.
   // CHECK: llvm.call @__moore_constraint_mode_set
-  %prev1 = moore.constraint_mode %obj, %mode {constraint = @c_range}
-      : !moore.class<@ConstraintModeClass>, i32 -> i32
+  %prev1 = "moore.constraint_mode"(%obj, %mode) {constraint = @c_range}
+      : (!moore.class<@ConstraintModeClass>, !moore.i32) -> !moore.i32
   // Class-level set (enable/disable all).
   // CHECK: llvm.call @__moore_constraint_mode_enable_all
   // CHECK: llvm.call @__moore_constraint_mode_disable_all
-  %prev2 = moore.constraint_mode %obj, %mode
-      : !moore.class<@ConstraintModeClass>, i32 -> i32
-  return %prev1 : i32
+  %prev2 = "moore.constraint_mode"(%obj, %mode)
+      : (!moore.class<@ConstraintModeClass>, !moore.i32) -> !moore.i32
+  return %prev1 : !moore.i32
 }

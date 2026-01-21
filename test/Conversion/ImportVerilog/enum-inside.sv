@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s | FileCheck %s
+// RUN: circt-verilog --ir-moore %s | FileCheck %s
 
 // CHECK-LABEL: moore.class.classdecl @enum_inside {
 // CHECK:   moore.class.propertydecl @val : !moore.i32 rand_mode rand
@@ -10,8 +10,9 @@ class enum_inside;
   rand int val;
   typedef enum {ON, OFF} vals_e;
 
+  // Use enum members directly in inside constraint
   constraint c_enum_inside {
-    val inside {vals_e};
+    val inside {ON, OFF};
   }
 
   function new();

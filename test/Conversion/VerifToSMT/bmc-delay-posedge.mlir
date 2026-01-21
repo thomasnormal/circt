@@ -1,11 +1,11 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
 // CHECK-LABEL: func.func @delay_posedge
+// CHECK:       [[BVTRUE:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
 // CHECK:       scf.for
 // CHECK:         [[LOOP:%.+]] = func.call @bmc_loop
 // CHECK:         [[OLDCLOCKLOW:%.+]] = smt.bv.not
 // CHECK:         [[BVPOSEDGE:%.+]] = smt.bv.and [[OLDCLOCKLOW]], [[LOOP]]
-// CHECK:         [[BVTRUE:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
 // CHECK:         [[ISPOSEDGE:%.+]] = smt.eq [[BVPOSEDGE]], [[BVTRUE]]
 // CHECK:         [[BUFNEXT:%.+]] = smt.ite [[ISPOSEDGE]]
 

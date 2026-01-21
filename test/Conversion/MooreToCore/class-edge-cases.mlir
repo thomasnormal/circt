@@ -70,12 +70,14 @@ moore.class.classdecl @ClassB {
 }
 
 /// Test creating multiple class instances of different types
+/// ClassA: type_id(4) + valA(4) = 8 bytes
+/// ClassB: type_id(4) + valB(8) = 12 bytes
 
 // CHECK-LABEL: func.func private @test_multiple_new
-// CHECK:   [[SIZE_A:%.*]] = llvm.mlir.constant(8 : i64) : i64
-// CHECK:   [[PTR_A:%.*]] = llvm.call @malloc([[SIZE_A]]) : (i64) -> !llvm.ptr
-// CHECK:   [[SIZE_B:%.*]] = llvm.mlir.constant(12 : i64) : i64
-// CHECK:   [[PTR_B:%.*]] = llvm.call @malloc([[SIZE_B]]) : (i64) -> !llvm.ptr
+// CHECK-DAG:   [[SIZE_A:%.*]] = llvm.mlir.constant(8 : i64) : i64
+// CHECK-DAG:   [[SIZE_B:%.*]] = llvm.mlir.constant(12 : i64) : i64
+// CHECK:   llvm.call @malloc
+// CHECK:   llvm.call @malloc
 // CHECK:   return
 // CHECK-NOT: moore.class.new
 
@@ -93,8 +95,7 @@ func.func private @test_multiple_new() {
 
 // CHECK-LABEL: func.func private @test_own_property_level1
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i64> {
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level1"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level1"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i64>
 // CHECK:   return [[CONV]] : !llhd.ref<i64>
 // CHECK-NOT: moore.class.property_ref
@@ -106,8 +107,7 @@ func.func private @test_own_property_level1(%obj: !moore.class<@Level1>) -> !moo
 
 // CHECK-LABEL: func.func private @test_own_property_level2
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i16> {
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i16>
 // CHECK:   return [[CONV]] : !llhd.ref<i16>
 // CHECK-NOT: moore.class.property_ref
@@ -119,8 +119,7 @@ func.func private @test_own_property_level2(%obj: !moore.class<@Level2>) -> !moo
 
 // CHECK-LABEL: func.func private @test_own_property_level3
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i8> {
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Level3"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level3"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i8>
 // CHECK:   return [[CONV]] : !llhd.ref<i8>
 // CHECK-NOT: moore.class.property_ref
@@ -134,8 +133,7 @@ func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moo
 
 // CHECK-LABEL: func.func private @test_upcast_then_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[[[CONSTIDX]]] : (!llvm.ptr, i32) -> !llvm.ptr, !llvm.struct<"Base", (i32, i32)>
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Base", (i32, i32)>
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 // CHECK-NOT: moore.class.property_ref
@@ -170,9 +168,9 @@ func.func private @test_cmp_after_upcast(%derived: !moore.class<@Level2>, %base:
 /// Test comparing handle with null after new
 
 // CHECK-LABEL: func.func private @test_new_not_null
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant
+// CHECK-DAG:   [[NULL:%.*]] = llvm.mlir.zero : !llvm.ptr
+// CHECK-DAG:   [[SIZE:%.*]] = llvm.mlir.constant{{.*}}i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc
-// CHECK:   [[NULL:%.*]] = llvm.mlir.zero : !llvm.ptr
 // CHECK:   [[CMP:%.*]] = llvm.icmp "ne" [[PTR]], [[NULL]] : !llvm.ptr
 // CHECK:   return [[CMP]] : i1
 // CHECK-NOT: moore.class.new
@@ -187,12 +185,11 @@ func.func private @test_new_not_null() -> !moore.i1 {
 }
 
 /// Test null equality (null == null should be true)
+/// The constant folding optimization simplifies this to just return true.
 
 // CHECK-LABEL: func.func private @test_null_equals_null
-// CHECK:   [[NULL1:%.*]] = llvm.mlir.zero : !llvm.ptr
-// CHECK:   [[NULL2:%.*]] = llvm.mlir.zero : !llvm.ptr
-// CHECK:   [[CMP:%.*]] = llvm.icmp "eq" [[NULL1]], [[NULL2]] : !llvm.ptr
-// CHECK:   return [[CMP]] : i1
+// CHECK:   [[TRUE:%.*]] = llvm.mlir.constant(true) : i1
+// CHECK:   return [[TRUE]] : i1
 // CHECK-NOT: moore.class.null
 // CHECK-NOT: moore.class_handle_cmp
 
@@ -210,11 +207,10 @@ func.func private @test_null_equals_null() -> !moore.i1 {
 /// Test full workflow: new -> property access -> upcast -> compare
 
 // CHECK-LABEL: func.func private @test_full_workflow
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant
+// CHECK-DAG:   [[NULL:%.*]] = llvm.mlir.zero : !llvm.ptr
+// CHECK-DAG:   [[SIZE:%.*]] = llvm.mlir.constant{{.*}}i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc
-// CHECK:   [[CONSTIDX:%.+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK:   llvm.getelementptr [[PTR]][[[CONSTIDX]]]
-// CHECK:   [[NULL:%.*]] = llvm.mlir.zero : !llvm.ptr
+// CHECK:   llvm.getelementptr [[PTR]]
 // CHECK:   [[CMP:%.*]] = llvm.icmp "ne" [[PTR]], [[NULL]] : !llvm.ptr
 // CHECK:   return [[CMP]] : i1
 

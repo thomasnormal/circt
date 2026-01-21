@@ -13,13 +13,10 @@ class simple_rand;
   endfunction
 endclass
 
-// CHECK-LABEL: moore.class @simple_rand
-// CHECK: moore.class.property @data : !moore.packed<range<i8>>
-// CHECK-SAME: rand_mode = rand
-// CHECK: moore.class.property @count : !moore.int
-// CHECK-SAME: rand_mode = rand
-// CHECK: moore.class.property @addr : !moore.packed<range<i4>>
-// CHECK-SAME: rand_mode = randc
+// CHECK-LABEL: moore.class.classdecl @simple_rand
+// CHECK: moore.class.propertydecl @data : !moore.i8 rand_mode rand
+// CHECK: moore.class.propertydecl @count : !moore.i32 rand_mode rand
+// CHECK: moore.class.propertydecl @addr : !moore.i4 rand_mode randc
 
 module test;
   initial begin
@@ -30,7 +27,7 @@ module test;
   end
 endmodule
 
-// CHECK-LABEL: moore.procedure always
-// CHECK: %[[OBJ:.+]] = moore.class.new @simple_rand
-// CHECK: %[[SUCCESS:.+]] = moore.randomize %[[OBJ]]
-// CHECK: moore.call @display
+// CHECK-LABEL: moore.module @test
+// CHECK: moore.procedure initial
+// CHECK: moore.class.new : <@simple_rand>
+// CHECK: moore.randomize {{%.+}} : <@simple_rand>

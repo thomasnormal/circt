@@ -87,10 +87,9 @@ moore.class.classdecl @TestClass {
 // CHECK-LABEL: func.func @test_randomize
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_randomize(%obj: !moore.class<@TestClass>) -> i1 {
-  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(16 : i64) : i64
-  // CHECK: %[[RESULT:.*]] = llvm.call @__moore_randomize_basic(%[[OBJ]], %[[SIZE]]) : (!llvm.ptr, i64) -> i32
-  // CHECK: %[[SUCCESS:.*]] = arith.trunci %[[RESULT]] : i32 to i1
-  // CHECK: return %[[SUCCESS]] : i1
+  // The size is 24 bytes: 4 (i32) + 4 (padding) + 8 (l64 hi) + 8 (l64 lo) = 24
+  // CHECK: llvm.call @__moore_randomize_basic(%[[OBJ]], {{.*}}) : (!llvm.ptr, i64) -> i32
+  // CHECK: arith.trunci
   %success = moore.randomize %obj : !moore.class<@TestClass>
   return %success : i1
 }

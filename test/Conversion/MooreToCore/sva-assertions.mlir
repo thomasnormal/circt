@@ -5,15 +5,19 @@
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hw.module @ImmediateAssertions
+// CHECK-SAME: (in %cond : !hw.struct<value: i1, unknown: i1>
 moore.module @ImmediateAssertions(in %cond : !moore.l1, in %cond2 : !moore.l1) {
   moore.procedure always {
-    // CHECK: verif.assert %cond label "assert_cond" : i1
+    // CHECK: %[[VAL1:.*]] = hw.struct_extract %cond["value"]
+    // CHECK: verif.assert %[[VAL1]] label "assert_cond" : i1
     moore.assert immediate %cond label "assert_cond" : l1
 
-    // CHECK: verif.assume %cond label "" : i1
+    // CHECK: %[[VAL2:.*]] = hw.struct_extract %cond["value"]
+    // CHECK: verif.assume %[[VAL2]] label "" : i1
     moore.assume immediate %cond : l1
 
-    // CHECK: verif.cover %cond label "" : i1
+    // CHECK: %[[VAL3:.*]] = hw.struct_extract %cond["value"]
+    // CHECK: verif.cover %[[VAL3]] label "" : i1
     moore.cover immediate %cond : l1
 
     moore.return
@@ -21,14 +25,17 @@ moore.module @ImmediateAssertions(in %cond : !moore.l1, in %cond2 : !moore.l1) {
 }
 
 // CHECK-LABEL: hw.module @DeferredAssertions
+// CHECK-SAME: (in %cond : !hw.struct<value: i1, unknown: i1>)
 moore.module @DeferredAssertions(in %cond : !moore.l1) {
   moore.procedure always {
     // Observed deferred assertion (assert #0)
-    // CHECK: verif.assert %cond label "" : i1
+    // CHECK: %[[VAL1:.*]] = hw.struct_extract %cond["value"]
+    // CHECK: verif.assert %[[VAL1]] label "" : i1
     moore.assert observed %cond : l1
 
     // Final deferred assertion (assert final)
-    // CHECK: verif.assert %cond label "" : i1
+    // CHECK: %[[VAL2:.*]] = hw.struct_extract %cond["value"]
+    // CHECK: verif.assert %[[VAL2]] label "" : i1
     moore.assert final %cond : l1
 
     moore.return

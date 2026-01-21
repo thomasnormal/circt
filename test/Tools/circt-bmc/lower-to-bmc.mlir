@@ -2,7 +2,7 @@
 
 // CHECK:  llvm.func @printf(!llvm.ptr, ...)
 // CHECK:  func.func @comb() {
-// CHECK:    [[BMC:%.+]] = verif.bmc bound 20 num_regs 0 initial_values [] init {
+// CHECK:    [[BMC:%.+]] = verif.bmc bound 20 num_regs 0 initial_values []{{.*}} init {
 // CHECK:    } loop {
 // CHECK:    } circuit {
 // CHECK:    ^bb0([[ARG0:%.+]]: i32, [[ARG1:%.+]]: i32):
@@ -21,7 +21,7 @@
 // CHECK:  llvm.mlir.global private constant [[FSTR]]("Assertion can be violated!\0A\00") {addr_space = 0 : i32}
 
 // RUN: circt-opt --lower-to-bmc="top-module=comb bound=10 ignore-asserts-until=3" %s | FileCheck %s --check-prefix=CHECKIGNOREUNTIL
-// CHECKIGNOREUNTIL:    {{%.+}} = verif.bmc bound 20 num_regs 0 initial_values [] attributes {ignore_asserts_until = 6 : i32} init {
+// CHECKIGNOREUNTIL:    {{%.+}} = verif.bmc bound 20 num_regs 0 initial_values [] attributes {{{.*}}ignore_asserts_until = 6 : i32{{.*}}} init {
 
 hw.module @comb(in %in0: i32, in %in1: i32, out out: i32) attributes {num_regs = 0 : i32, initial_values = []} {
   %0 = comb.add %in0, %in1 : i32
@@ -34,7 +34,7 @@ hw.module @comb(in %in0: i32, in %in1: i32, out out: i32) attributes {num_regs =
 
 // CHECK1:  llvm.func @printf(!llvm.ptr, ...)
 // CHECK1:  func.func @seq() {
-// CHECK1:    [[BMC:%.+]] = verif.bmc bound 20 num_regs 1 initial_values [unit] init {
+// CHECK1:    [[BMC:%.+]] = verif.bmc bound 20 num_regs 1 initial_values [unit]{{.*}} init {
 // CHECK1:      [[FALSE:%.+]] = hw.constant false
 // CHECK1:      [[INIT_CLK:%.+]] = seq.to_clock [[FALSE]]
 // CHECK1:      verif.yield [[INIT_CLK]]
@@ -62,7 +62,7 @@ hw.module @comb(in %in0: i32, in %in1: i32, out out: i32) attributes {num_regs =
 // CHECK1:  llvm.mlir.global private constant [[FSTR]]("Assertion can be violated!\0A\00") {addr_space = 0 : i32}
 
 // RUN: circt-opt --lower-to-bmc="top-module=seq bound=10 rising-clocks-only=true" %s | FileCheck %s --check-prefix=CHECKRISING
-// CHECKRISING:    [[BMC:%.+]] = verif.bmc bound 10 num_regs 1 initial_values [unit] init {
+// CHECKRISING:    [[BMC:%.+]] = verif.bmc bound 10 num_regs 1 initial_values [unit]{{.*}} init {
 // CHECKRISING-NEXT:      [[FALSE:%.+]] = hw.constant true
 // CHECKRISING-NEXT:      [[INIT_CLK:%.+]] = seq.to_clock [[FALSE]]
 // CHECKRISING-NEXT:      verif.yield [[INIT_CLK]]
@@ -81,7 +81,7 @@ hw.module @seq(in %clk : !seq.clock, in %in0 : i32, in %in1 : i32, in %reg_state
 
 // CHECK2:  llvm.func @printf(!llvm.ptr, ...)
 // CHECK2:  func.func @nondominance() {
-// CHECK2:    [[BMC:%.+]] = verif.bmc bound 20 num_regs 1 initial_values [unit] init {
+// CHECK2:    [[BMC:%.+]] = verif.bmc bound 20 num_regs 1 initial_values [unit]{{.*}} init {
 // CHECK2:      [[FALSE:%.+]] = hw.constant false
 // CHECK2:      [[INIT_CLK:%.+]] = seq.to_clock [[FALSE]]
 // CHECK2:      verif.yield [[INIT_CLK]]

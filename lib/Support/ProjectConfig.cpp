@@ -245,6 +245,10 @@ llvm::Expected<std::unique_ptr<ProjectConfig>>
 ProjectConfig::loadFromYAML(llvm::StringRef yamlContent) {
   auto config = std::make_unique<ProjectConfig>();
 
+  // Handle empty content as valid empty config
+  if (yamlContent.empty() || yamlContent.trim().empty())
+    return std::move(config);
+
   llvm::SourceMgr srcMgr;
   llvm::yaml::Stream stream(yamlContent, srcMgr);
 

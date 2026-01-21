@@ -1,4 +1,4 @@
-// RUN: circt-verilog --parse-only %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
 
 // Test that UVM stub classes compile correctly and can be used
 // in typical UVM testbench patterns

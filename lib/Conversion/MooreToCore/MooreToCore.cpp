@@ -3866,7 +3866,49 @@ struct ConcatOpConversion : public OpConversionPattern<ConcatOp> {
   LogicalResult
   matchAndRewrite(ConcatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<comb::ConcatOp>(op, adaptor.getValues());
+    Location loc = op.getLoc();
+    auto values = adaptor.getValues();
+
+    // Check if any of the input types are 4-state struct types
+    bool hasFourState = false;
+    for (auto value : values) {
+      if (isFourStateStructType(value.getType())) {
+        hasFourState = true;
+        break;
+      }
+    }
+
+    if (!hasFourState) {
+      // All inputs are 2-state integers - use simple concat
+      rewriter.replaceOpWithNewOp<comb::ConcatOp>(op, values);
+      return success();
+    }
+
+    // Handle 4-state types: concatenate value and unknown components separately
+    SmallVector<Value> valueComponents;
+    SmallVector<Value> unknownComponents;
+
+    for (auto value : values) {
+      if (isFourStateStructType(value.getType())) {
+        valueComponents.push_back(
+            extractFourStateValue(rewriter, loc, value));
+        unknownComponents.push_back(
+            extractFourStateUnknown(rewriter, loc, value));
+      } else {
+        // 2-state value - unknown bits are all 0
+        valueComponents.push_back(value);
+        auto intType = cast<IntegerType>(value.getType());
+        auto zero = hw::ConstantOp::create(rewriter, loc, intType, 0);
+        unknownComponents.push_back(zero);
+      }
+    }
+
+    Value concatValue = comb::ConcatOp::create(rewriter, loc, valueComponents);
+    Value concatUnknown =
+        comb::ConcatOp::create(rewriter, loc, unknownComponents);
+    Value result =
+        createFourStateStruct(rewriter, loc, concatValue, concatUnknown);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -3876,10 +3918,30 @@ struct ReplicateOpConversion : public OpConversionPattern<ReplicateOp> {
   LogicalResult
   matchAndRewrite(ReplicateOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value input = adaptor.getValue();
 
-    rewriter.replaceOpWithNewOp<comb::ReplicateOp>(op, resultType,
-                                                   adaptor.getValue());
+    // Check if the input is a 4-state struct type
+    if (isFourStateStructType(input.getType())) {
+      // Handle 4-state types: replicate value and unknown components separately
+      Value valueComp = extractFourStateValue(rewriter, loc, input);
+      Value unknownComp = extractFourStateUnknown(rewriter, loc, input);
+
+      auto structType = cast<hw::StructType>(resultType);
+      auto valueType = structType.getElements()[0].type;
+
+      Value replicatedValue =
+          comb::ReplicateOp::create(rewriter, loc, valueType, valueComp);
+      Value replicatedUnknown =
+          comb::ReplicateOp::create(rewriter, loc, valueType, unknownComp);
+      Value result =
+          createFourStateStruct(rewriter, loc, replicatedValue, replicatedUnknown);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<comb::ReplicateOp>(op, resultType, input);
     return success();
   }
 };
@@ -4151,8 +4213,11 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
     }
 
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
-      Value amount = adjustIntegerWidth(rewriter, adaptor.getLowBit(),
-                                        intType.getWidth(), loc);
+      // Handle 4-state index - extract just the value part
+      Value amount = adaptor.getLowBit();
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+      amount = adjustIntegerWidth(rewriter, amount, intType.getWidth(), loc);
       Value value = comb::ShrUOp::create(rewriter, loc,
                                          adaptor.getInput(), amount);
 
@@ -4162,8 +4227,11 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
 
     if (auto arrType = dyn_cast<hw::ArrayType>(inputType)) {
       unsigned idxWidth = llvm::Log2_64_Ceil(arrType.getNumElements());
-      Value idx = adjustIntegerWidth(rewriter, adaptor.getLowBit(), idxWidth,
-                                     loc);
+      // Handle 4-state index - extract just the value part
+      Value idx = adaptor.getLowBit();
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+      idx = adjustIntegerWidth(rewriter, idx, idxWidth, loc);
 
       bool isSingleElementExtract = arrType.getElementType() == resultType;
 
@@ -4340,18 +4408,25 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       if (width == -1)
         return failure();
 
-      Value amount =
-          adjustIntegerWidth(rewriter, adaptor.getLowBit(),
-                             llvm::Log2_64_Ceil(width), loc);
+      // Handle 4-state index - extract just the value part
+      Value amount = adaptor.getLowBit();
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+      amount = adjustIntegerWidth(rewriter, amount,
+                                  llvm::Log2_64_Ceil(width), loc);
       rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(
           op, resultType, adaptor.getInput(), amount);
       return success();
     }
 
     if (auto arrType = dyn_cast<hw::ArrayType>(inputType)) {
-      Value idx = adjustIntegerWidth(
-          rewriter, adaptor.getLowBit(),
-          llvm::Log2_64_Ceil(arrType.getNumElements()), loc);
+      // Handle 4-state index - extract just the value part
+      Value idx = adaptor.getLowBit();
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+      idx = adjustIntegerWidth(rewriter, idx,
+                               llvm::Log2_64_Ceil(arrType.getNumElements()),
+                               loc);
 
       auto resultRefType = dyn_cast<llhd::RefType>(resultType);
       if (!resultRefType)
@@ -5156,6 +5231,146 @@ struct ICmpOpConversion : public OpConversionPattern<SourceOp> {
   }
 };
 
+template <typename SourceOp, ICmpPredicate pred>
+struct LogicalICmpOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type resultType =
+        ConversionPattern::typeConverter->convertType(op.getResult().getType());
+
+    Value lhs = adaptor.getLhs();
+    Value rhs = adaptor.getRhs();
+
+    if (isFourStateStructType(lhs.getType())) {
+      Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+      Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+      Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+      Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+
+      Value cmpVal =
+          comb::ICmpOp::create(rewriter, loc, pred, lhsVal, rhsVal);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+      Value lhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, lhsUnk, zeroUnk);
+      Value rhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, rhsUnk, zeroUnk);
+      Value hasUnk =
+          comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+      Value zero = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
+                                          0);
+      Value resultVal = comb::MuxOp::create(rewriter, loc, hasUnk, zero, cmpVal);
+      Value result =
+          createFourStateStruct(rewriter, loc, resultVal, hasUnk);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, resultType, pred, lhs, rhs);
+    return success();
+  }
+};
+
+template <typename SourceOp, ICmpPredicate pred>
+struct CaseEqOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type resultType =
+        ConversionPattern::typeConverter->convertType(op.getResult().getType());
+    Value lhs = adaptor.getLhs();
+    Value rhs = adaptor.getRhs();
+
+    if (isFourStateStructType(lhs.getType())) {
+      Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+      Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+      Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+      Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+
+      Value valEq =
+          comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq, lhsVal,
+                               rhsVal);
+      Value unkEq =
+          comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq, lhsUnk,
+                               rhsUnk);
+      Value eqAll =
+          comb::AndOp::create(rewriter, loc, valEq, unkEq, false);
+      if (pred == ICmpPredicate::cne) {
+        Value one = hw::ConstantOp::create(rewriter, loc,
+                                           rewriter.getI1Type(), 1);
+        eqAll = comb::XorOp::create(rewriter, loc, eqAll, one, false);
+      }
+      rewriter.replaceOp(op, eqAll);
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, resultType, pred, lhs, rhs);
+    return success();
+  }
+};
+
+template <typename SourceOp, ICmpPredicate pred>
+struct WildcardEqOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type resultType =
+        ConversionPattern::typeConverter->convertType(op.getResult().getType());
+    Value lhs = adaptor.getLhs();
+    Value rhs = adaptor.getRhs();
+
+    if (isFourStateStructType(lhs.getType())) {
+      Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+      Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+      Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+      Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+
+      Value allOnes = hw::ConstantOp::create(
+          rewriter, loc, rhsUnk.getType(), -1);
+      Value rhsMask =
+          comb::XorOp::create(rewriter, loc, rhsUnk, allOnes, false);
+      Value maskedLhs =
+          comb::AndOp::create(rewriter, loc, lhsVal, rhsMask, false);
+      Value maskedRhs =
+          comb::AndOp::create(rewriter, loc, rhsVal, rhsMask, false);
+
+      auto cmpPred =
+          pred == ICmpPredicate::wne ? ICmpPredicate::ne : ICmpPredicate::eq;
+      Value cmpVal =
+          comb::ICmpOp::create(rewriter, loc, cmpPred, maskedLhs, maskedRhs);
+
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+      Value lhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, lhsUnk, zeroUnk);
+      Value zero = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
+                                          0);
+      Value resultVal =
+          comb::MuxOp::create(rewriter, loc, lhsHasUnk, zero, cmpVal);
+      Value result =
+          createFourStateStruct(rewriter, loc, resultVal, lhsHasUnk);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, resultType, pred, lhs, rhs);
+    return success();
+  }
+};
+
 template <typename SourceOp, arith::CmpFPredicate pred>
 struct FCmpOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -5201,15 +5416,24 @@ struct CaseXZEqOpConversion : public OpConversionPattern<SourceOp> {
     detectIgnoredBits(op.getLhs());
     detectIgnoredBits(op.getRhs());
 
-    // If we have detected any bits to be ignored, mask them in the operands for
-    // the comparison.
+    // Get the adapted operands - may be 4-state structs
+    Location loc = op.getLoc();
     Value lhs = adaptor.getLhs();
     Value rhs = adaptor.getRhs();
+
+    // Handle 4-state struct types by extracting the value component
+    if (isFourStateStructType(lhs.getType()))
+      lhs = extractFourStateValue(rewriter, loc, lhs);
+    if (isFourStateStructType(rhs.getType()))
+      rhs = extractFourStateValue(rewriter, loc, rhs);
+
+    // If we have detected any bits to be ignored, mask them in the operands for
+    // the comparison.
     if (!ignoredBits.isZero()) {
       ignoredBits.flipAllBits();
-      auto maskOp = hw::ConstantOp::create(rewriter, op.getLoc(), ignoredBits);
-      lhs = rewriter.createOrFold<comb::AndOp>(op.getLoc(), lhs, maskOp);
-      rhs = rewriter.createOrFold<comb::AndOp>(op.getLoc(), rhs, maskOp);
+      auto maskOp = hw::ConstantOp::create(rewriter, loc, ignoredBits);
+      lhs = rewriter.createOrFold<comb::AndOp>(loc, lhs, maskOp);
+      rhs = rewriter.createOrFold<comb::AndOp>(loc, rhs, maskOp);
     }
 
     rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, ICmpPredicate::ceq, lhs, rhs);
@@ -5581,8 +5805,37 @@ struct TruncOpConversion : public OpConversionPattern<TruncOp> {
   LogicalResult
   matchAndRewrite(TruncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<comb::ExtractOp>(op, adaptor.getInput(), 0,
-                                                 op.getType().getWidth());
+    auto loc = op.getLoc();
+    auto type = typeConverter->convertType(op.getType());
+    Value input = adaptor.getInput();
+
+    if (isFourStateStructType(input.getType())) {
+      Value inputValue = extractFourStateValue(rewriter, loc, input);
+      Value inputUnknown = extractFourStateUnknown(rewriter, loc, input);
+
+      if (isFourStateStructType(type)) {
+        auto resultStructType = cast<hw::StructType>(type);
+        auto resultValueType = resultStructType.getElements()[0].type;
+        auto resultWidth = cast<IntegerType>(resultValueType).getWidth();
+
+        Value truncValue = comb::ExtractOp::create(rewriter, loc, inputValue, 0,
+                                                   resultWidth);
+        Value truncUnknown = comb::ExtractOp::create(
+            rewriter, loc, inputUnknown, 0, resultWidth);
+        auto result =
+            createFourStateStruct(rewriter, loc, truncValue, truncUnknown);
+        rewriter.replaceOp(op, result);
+      } else {
+        auto resultWidth = cast<IntegerType>(type).getWidth();
+        Value truncValue = comb::ExtractOp::create(rewriter, loc, inputValue, 0,
+                                                   resultWidth);
+        rewriter.replaceOp(op, truncValue);
+      }
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<comb::ExtractOp>(
+        op, input, 0, cast<IntegerType>(type).getWidth());
     return success();
   }
 };
@@ -5593,15 +5846,38 @@ struct ZExtOpConversion : public OpConversionPattern<ZExtOp> {
   LogicalResult
   matchAndRewrite(ZExtOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto targetWidth = op.getType().getWidth();
-    auto inputWidth = op.getInput().getType().getWidth();
+    auto loc = op.getLoc();
+    auto type = typeConverter->convertType(op.getType());
+    Value input = adaptor.getInput();
 
-    auto zeroExt = hw::ConstantOp::create(
-        rewriter, op.getLoc(),
-        rewriter.getIntegerType(targetWidth - inputWidth), 0);
+    if (isFourStateStructType(input.getType())) {
+      Value inputValue = extractFourStateValue(rewriter, loc, input);
+      Value inputUnknown = extractFourStateUnknown(rewriter, loc, input);
 
-    rewriter.replaceOpWithNewOp<comb::ConcatOp>(
-        op, ValueRange{zeroExt, adaptor.getInput()});
+      if (isFourStateStructType(type)) {
+        auto resultStructType = cast<hw::StructType>(type);
+        auto resultValueType = resultStructType.getElements()[0].type;
+        auto resultWidth = cast<IntegerType>(resultValueType).getWidth();
+
+        Value extValue = comb::createZExt(rewriter, loc, inputValue,
+                                          resultWidth);
+        Value extUnknown = comb::createZExt(rewriter, loc, inputUnknown,
+                                            resultWidth);
+        auto result =
+            createFourStateStruct(rewriter, loc, extValue, extUnknown);
+        rewriter.replaceOp(op, result);
+      } else {
+        auto resultWidth = cast<IntegerType>(type).getWidth();
+        Value extValue =
+            comb::createZExt(rewriter, loc, inputValue, resultWidth);
+        rewriter.replaceOp(op, extValue);
+      }
+      return success();
+    }
+
+    auto resultWidth = cast<IntegerType>(type).getWidth();
+    Value extValue = comb::createZExt(rewriter, loc, input, resultWidth);
+    rewriter.replaceOp(op, extValue);
     return success();
   }
 };
@@ -6290,8 +6566,11 @@ struct AssertLikeOpConversion : public OpConversionPattern<MooreOpTy> {
         op.getLabel().has_value()
             ? StringAttr::get(op->getContext(), op.getLabel().value())
             : StringAttr::get(op->getContext());
-    rewriter.replaceOpWithNewOp<VerifOpTy>(op, adaptor.getCond(), mlir::Value(),
-                                           label);
+    Value cond = adaptor.getCond();
+    // If the condition is a 4-state struct (from l1 type), extract the value.
+    if (isFourStateStructType(cond.getType()))
+      cond = extractFourStateValue(rewriter, op.getLoc(), cond);
+    rewriter.replaceOpWithNewOp<VerifOpTy>(op, cond, mlir::Value(), label);
     return success();
   }
 };
@@ -10731,7 +11010,12 @@ static LogicalResult convert(TimeBIOp op, TimeBIOp::Adaptor adaptor,
 // moore.logic_to_time
 static LogicalResult convert(LogicToTimeOp op, LogicToTimeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<llhd::IntToTimeOp>(op, adaptor.getInput());
+  Location loc = op.getLoc();
+  Value input = adaptor.getInput();
+  // Handle 4-state struct types by extracting the value component
+  if (isFourStateStructType(input.getType()))
+    input = extractFourStateValue(rewriter, loc, input);
+  rewriter.replaceOpWithNewOp<llhd::IntToTimeOp>(op, input);
   return success();
 }
 
@@ -13442,20 +13726,20 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     PowUOpConversion, PowSOpConversion,
 
     // Patterns of relational operations.
-    ICmpOpConversion<UltOp, ICmpPredicate::ult>,
-    ICmpOpConversion<SltOp, ICmpPredicate::slt>,
-    ICmpOpConversion<UleOp, ICmpPredicate::ule>,
-    ICmpOpConversion<SleOp, ICmpPredicate::sle>,
-    ICmpOpConversion<UgtOp, ICmpPredicate::ugt>,
-    ICmpOpConversion<SgtOp, ICmpPredicate::sgt>,
-    ICmpOpConversion<UgeOp, ICmpPredicate::uge>,
-    ICmpOpConversion<SgeOp, ICmpPredicate::sge>,
-    ICmpOpConversion<EqOp, ICmpPredicate::eq>,
-    ICmpOpConversion<NeOp, ICmpPredicate::ne>,
-    ICmpOpConversion<CaseEqOp, ICmpPredicate::ceq>,
-    ICmpOpConversion<CaseNeOp, ICmpPredicate::cne>,
-    ICmpOpConversion<WildcardEqOp, ICmpPredicate::weq>,
-    ICmpOpConversion<WildcardNeOp, ICmpPredicate::wne>,
+    LogicalICmpOpConversion<UltOp, ICmpPredicate::ult>,
+    LogicalICmpOpConversion<SltOp, ICmpPredicate::slt>,
+    LogicalICmpOpConversion<UleOp, ICmpPredicate::ule>,
+    LogicalICmpOpConversion<SleOp, ICmpPredicate::sle>,
+    LogicalICmpOpConversion<UgtOp, ICmpPredicate::ugt>,
+    LogicalICmpOpConversion<SgtOp, ICmpPredicate::sgt>,
+    LogicalICmpOpConversion<UgeOp, ICmpPredicate::uge>,
+    LogicalICmpOpConversion<SgeOp, ICmpPredicate::sge>,
+    LogicalICmpOpConversion<EqOp, ICmpPredicate::eq>,
+    LogicalICmpOpConversion<NeOp, ICmpPredicate::ne>,
+    CaseEqOpConversion<CaseEqOp, ICmpPredicate::ceq>,
+    CaseEqOpConversion<CaseNeOp, ICmpPredicate::cne>,
+    WildcardEqOpConversion<WildcardEqOp, ICmpPredicate::weq>,
+    WildcardEqOpConversion<WildcardNeOp, ICmpPredicate::wne>,
     FCmpOpConversion<NeRealOp, arith::CmpFPredicate::ONE>,
     FCmpOpConversion<FltOp, arith::CmpFPredicate::OLT>,
     FCmpOpConversion<FleOp, arith::CmpFPredicate::OLE>,

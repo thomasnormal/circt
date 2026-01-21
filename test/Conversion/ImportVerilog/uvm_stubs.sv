@@ -4,6 +4,7 @@
 // This test verifies that the UVM stub package can be successfully imported
 // and that basic UVM patterns compile correctly.
 
+`timescale 1ns/1ps
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 
@@ -11,7 +12,7 @@ import uvm_pkg::*;
 // Basic UVM object and component test
 //===----------------------------------------------------------------------===//
 
-// CHECK: moore.class.classdecl @my_transaction
+// CHECK: moore.class.classdecl @my_transaction extends @"uvm_pkg::uvm_sequence_item"
 class my_transaction extends uvm_sequence_item;
   `uvm_object_utils(my_transaction)
 
@@ -27,7 +28,7 @@ class my_transaction extends uvm_sequence_item;
   endfunction
 endclass
 
-// CHECK: moore.class.classdecl @my_driver
+// CHECK: moore.class.classdecl @my_driver extends @"uvm_pkg::uvm_driver"
 class my_driver extends uvm_driver #(my_transaction);
   `uvm_component_utils(my_driver)
 
@@ -46,7 +47,7 @@ class my_driver extends uvm_driver #(my_transaction);
   endtask
 endclass
 
-// CHECK: moore.class.classdecl @my_monitor
+// CHECK: moore.class.classdecl @my_monitor extends @"uvm_pkg::uvm_monitor"
 class my_monitor extends uvm_monitor;
   `uvm_component_utils(my_monitor)
 
@@ -67,7 +68,7 @@ class my_monitor extends uvm_monitor;
   endtask
 endclass
 
-// CHECK: moore.class.classdecl @my_agent
+// CHECK: moore.class.classdecl @my_agent extends @"uvm_pkg::uvm_agent"
 class my_agent extends uvm_agent;
   `uvm_component_utils(my_agent)
 
@@ -96,7 +97,7 @@ class my_agent extends uvm_agent;
   endfunction
 endclass
 
-// CHECK: moore.class.classdecl @my_scoreboard
+// CHECK: moore.class.classdecl @my_scoreboard extends @"uvm_pkg::uvm_scoreboard"
 class my_scoreboard extends uvm_scoreboard;
   `uvm_component_utils(my_scoreboard)
 
@@ -112,7 +113,7 @@ class my_scoreboard extends uvm_scoreboard;
   endfunction
 endclass
 
-// CHECK: moore.class.classdecl @my_env
+// CHECK: moore.class.classdecl @my_env extends @"uvm_pkg::uvm_env"
 class my_env extends uvm_env;
   `uvm_component_utils(my_env)
 
@@ -135,7 +136,7 @@ class my_env extends uvm_env;
   endfunction
 endclass
 
-// CHECK: moore.class.classdecl @my_test
+// CHECK: moore.class.classdecl @my_test extends @"uvm_pkg::uvm_test"
 class my_test extends uvm_test;
   `uvm_component_utils(my_test)
 
@@ -163,7 +164,7 @@ endclass
 // Test sequence
 //===----------------------------------------------------------------------===//
 
-// CHECK: moore.class.classdecl @my_sequence
+// CHECK: moore.class.classdecl @my_sequence extends @"uvm_pkg::uvm_sequence_64"
 class my_sequence extends uvm_sequence #(my_transaction);
   `uvm_object_utils(my_sequence)
 
@@ -185,7 +186,7 @@ endclass
 // Test config_db
 //===----------------------------------------------------------------------===//
 
-// CHECK: moore.class.classdecl @my_config
+// CHECK: moore.class.classdecl @my_config extends @"uvm_pkg::uvm_object"
 class my_config extends uvm_object;
   `uvm_object_utils(my_config)
 

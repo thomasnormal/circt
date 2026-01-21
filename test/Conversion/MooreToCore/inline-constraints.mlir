@@ -26,11 +26,12 @@ moore.class.classdecl @InlineTestClass {
 // CHECK-LABEL: func.func @test_inline_single_range
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_inline_single_range(%obj: !moore.class<@InlineTestClass>) -> i1 {
+  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
+  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(50 : i64) : i64
   // CHECK: llvm.call @__moore_randomize_basic
   // CHECK: llvm.call @__moore_is_rand_enabled
   // Should apply the inline constraint range [10, 50]
-  // CHECK: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
-  // CHECK: %[[MAX:.*]] = llvm.mlir.constant(50 : i64) : i64
+  // CHECK: scf.if
   // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
   %success = moore.randomize %obj : !moore.class<@InlineTestClass> {
     %0 = moore.class.property_ref %obj[@x] : !moore.class<@InlineTestClass> -> !moore.ref<i32>

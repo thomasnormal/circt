@@ -22,6 +22,7 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 
@@ -497,6 +498,58 @@ struct VerifCoverOpConversion : OpConversionPattern<verif::CoverOp> {
   }
 };
 
+/// Lower unrealized casts between smt.bool and smt.bv<1> into explicit SMT ops.
+struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern<UnrealizedConversionCastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return failure();
+
+    Value input = op.getInputs()[0];
+    Type srcTy = input.getType();
+    Type dstTy = op.getOutputs()[0].getType();
+    Location loc = op.getLoc();
+
+    auto dstBvTy = dyn_cast<smt::BitVectorType>(dstTy);
+    if (dstBvTy && dstBvTy.getWidth() == 1) {
+      Value boolVal;
+      if (isa<smt::BoolType>(srcTy)) {
+        boolVal = input;
+      } else if (auto intTy = dyn_cast<IntegerType>(srcTy);
+                 intTy && intTy.getWidth() == 1) {
+        if (auto innerCast =
+                op.getInputs()[0]
+                    .getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (innerCast.getInputs().size() == 1 &&
+              isa<smt::BoolType>(innerCast.getInputs()[0].getType()))
+            boolVal = innerCast.getInputs()[0];
+        }
+      }
+      if (boolVal) {
+        auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+        auto zero = smt::BVConstantOp::create(rewriter, loc, 0, 1);
+        auto ite = smt::IteOp::create(rewriter, loc, boolVal, one, zero);
+        rewriter.replaceOp(op, ite);
+        return success();
+      }
+    }
+
+    if (isa<smt::BoolType>(dstTy)) {
+      if (auto bvTy = dyn_cast<smt::BitVectorType>(srcTy);
+          bvTy && bvTy.getWidth() == 1) {
+        auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+        auto eq = smt::EqOp::create(rewriter, loc, input, one);
+        rewriter.replaceOp(op, eq);
+        return success();
+      }
+    }
+
+    return failure();
+  }
+};
+
 template <typename OpTy>
 struct CircuitRelationCheckOpConversion : public OpConversionPattern<OpTy> {
   using OpConversionPattern<OpTy>::OpConversionPattern;
@@ -938,24 +991,39 @@ struct VerifBoundedModelCheckingOpConversion
     // implication so the BMC delay buffers can track the antecedent history.
     rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
 
-    // Combine multiple non-final asserts into a single assert so BMC checks
+    // Combine multiple non-final properties into a single check value so BMC
     // can detect any violating property.
-    SmallVector<verif::AssertOp> nonFinalAsserts;
-    SmallVector<Value> assertProps;
-    circuitBlock.walk([&](verif::AssertOp assertOp) {
-      if (assertOp->hasAttr("bmc.final"))
-        return;
-      nonFinalAsserts.push_back(assertOp);
-      assertProps.push_back(assertOp.getProperty());
-    });
-    if (nonFinalAsserts.size() > 1) {
+    SmallVector<Operation *> nonFinalOps;
+    SmallVector<Value> checkProps;
+    if (isCoverCheck) {
+      circuitBlock.walk([&](verif::CoverOp coverOp) {
+        if (coverOp->hasAttr("bmc.final"))
+          return;
+        nonFinalOps.push_back(coverOp);
+        checkProps.push_back(coverOp.getProperty());
+      });
+    } else {
+      circuitBlock.walk([&](verif::AssertOp assertOp) {
+        if (assertOp->hasAttr("bmc.final"))
+          return;
+        nonFinalOps.push_back(assertOp);
+        checkProps.push_back(assertOp.getProperty());
+      });
+    }
+    SmallVector<Value> nonFinalCheckValues;
+    if (!nonFinalOps.empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(circuitBlock.getTerminator());
-      Value combined =
-          ltl::AndOp::create(rewriter, loc, assertProps).getResult();
-      verif::AssertOp::create(rewriter, loc, combined, Value(), StringAttr());
-      for (auto assertOp : nonFinalAsserts)
-        rewriter.eraseOp(assertOp);
+      Value combined = checkProps.front();
+      if (checkProps.size() > 1) {
+        combined = isCoverCheck
+                       ? ltl::OrOp::create(rewriter, loc, checkProps).getResult()
+                       : ltl::AndOp::create(rewriter, loc, checkProps)
+                             .getResult();
+      }
+      nonFinalCheckValues.push_back(combined);
+      for (auto *opToErase : nonFinalOps)
+        rewriter.eraseOp(opToErase);
     }
 
     // Hoist any final-only asserts into circuit outputs so we can check them
@@ -981,18 +1049,11 @@ struct VerifBoundedModelCheckingOpConversion
         return;
       }
     });
-    // Modify the yield first (while values are still valid)
-    if (!finalCheckValues.empty()) {
-      auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
-      SmallVector<Value> newYieldOperands(yieldOp.getOperands());
-      newYieldOperands.append(finalCheckValues.begin(),
-                              finalCheckValues.end());
-      yieldOp->setOperands(newYieldOperands);
-    }
     // Erase the bmc.final ops using the rewriter to properly notify the
     // conversion framework
     for (auto *opToErase : opsToErase)
       rewriter.eraseOp(opToErase);
+    size_t numNonFinalChecks = nonFinalCheckValues.size();
     size_t numFinalAsserts = finalCheckValues.size();
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
@@ -1158,21 +1219,17 @@ struct VerifBoundedModelCheckingOpConversion
     // We need to do this BEFORE region type conversion.
     //
     // Output order after modification:
-    // [original outputs (registers)] [delay buffer outputs] [final check outputs]
-    //
-    // We need to insert delay buffer outputs BEFORE final check outputs.
+    // [original outputs (registers)] [delay buffer outputs]
     SmallVector<ltl::DelayOp> delayOpsToErase;
     if (!delayInfos.empty()) {
       // For each delay op, add buffer arguments and modify the yield
       auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
 
-      // Get current operands and split off the final check values
+      // Get current operands (no check outputs appended yet)
       SmallVector<Value> origOperands(yieldOp.getOperands().begin(),
                                       yieldOp.getOperands().end());
-      // Final check values were appended last, so they're at the end
-      size_t numOrigOutputs = origOperands.size() - numFinalAsserts;
       SmallVector<Value> newYieldOperands(origOperands.begin(),
-                                          origOperands.begin() + numOrigOutputs);
+                                          origOperands.end());
       SmallVector<Value> delayBufferOutputs;
 
       for (auto &info : delayInfos) {
@@ -1214,10 +1271,8 @@ struct VerifBoundedModelCheckingOpConversion
         delayBufferOutputs.push_back(inputSig);
       }
 
-      // Construct final yield: [orig outputs] [delay buffers] [final checks]
+      // Construct final yield: [orig outputs] [delay buffers]
       newYieldOperands.append(delayBufferOutputs);
-      newYieldOperands.append(origOperands.begin() + numOrigOutputs,
-                              origOperands.end());  // final check values
 
       // Update the yield with new operands
       yieldOp->setOperands(newYieldOperands);
@@ -1245,12 +1300,11 @@ struct VerifBoundedModelCheckingOpConversion
     if (!pastInfos.empty()) {
       auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
 
-      // Get current operands and split off the final check values
+      // Get current operands (no check outputs appended yet)
       SmallVector<Value> origOperands(yieldOp.getOperands().begin(),
                                       yieldOp.getOperands().end());
-      size_t numOrigOutputs = origOperands.size() - numFinalAsserts;
       SmallVector<Value> newYieldOperands(origOperands.begin(),
-                                          origOperands.begin() + numOrigOutputs);
+                                          origOperands.end());
       SmallVector<Value> pastBufferOutputs;
 
       for (auto &info : pastInfos) {
@@ -1278,10 +1332,8 @@ struct VerifBoundedModelCheckingOpConversion
         pastBufferOutputs.push_back(info.inputSignal);
       }
 
-      // Construct final yield: [orig outputs] [past buffers] [final checks]
+      // Construct final yield: [orig outputs] [past buffers]
       newYieldOperands.append(pastBufferOutputs);
-      newYieldOperands.append(origOperands.begin() + numOrigOutputs,
-                              origOperands.end());
 
       yieldOp->setOperands(newYieldOperands);
 
@@ -1296,6 +1348,19 @@ struct VerifBoundedModelCheckingOpConversion
 
       // Update totalDelaySlots to include past slots for buffer initialization
       totalDelaySlots += totalPastSlots;
+    }
+
+    // Append non-final and final check outputs after delay/past buffers so
+    // circuit outputs are ordered as:
+    // [original outputs] [delay/past buffers] [non-final checks] [final checks]
+    if (!nonFinalCheckValues.empty() || !finalCheckValues.empty()) {
+      auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
+      SmallVector<Value> newYieldOperands(yieldOp.getOperands());
+      newYieldOperands.append(nonFinalCheckValues.begin(),
+                              nonFinalCheckValues.end());
+      newYieldOperands.append(finalCheckValues.begin(),
+                              finalCheckValues.end());
+      yieldOp->setOperands(newYieldOperands);
     }
 
     // Extend name list with delay/past buffer slots appended to the circuit
@@ -1381,9 +1446,6 @@ struct VerifBoundedModelCheckingOpConversion
     // Call init func to get initial clock values
     ValueRange initVals =
         func::CallOp::create(rewriter, loc, initFuncOp)->getResults();
-
-    // Initial push
-    smt::PushOp::create(rewriter, loc, 1);
 
     // InputDecls order should be <circuit arguments> <state arguments>
     // <finalChecks> <wasViolated>
@@ -1497,11 +1559,16 @@ struct VerifBoundedModelCheckingOpConversion
         arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(false));
     Value constTrue =
         arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
-    // Initialize final check iter_args with SMT bv<1> zero (these will be
-    // updated with circuit outputs)
-    auto smtBVFalse = smt::BVConstantOp::create(rewriter, loc, 0, 1);
-    for (size_t i = 0; i < numFinalAsserts; ++i)
-      inputDecls.push_back(smtBVFalse);
+    // Initialize final check iter_args with false values matching their types
+    // (these will be updated with circuit outputs). Types may be !smt.bv<1>
+    // for i1 properties or !smt.bool for LTL properties.
+    for (size_t i = 0; i < numFinalAsserts; ++i) {
+      Type checkTy = circuitOutputTy[circuitOutputTy.size() - numFinalAsserts + i];
+      if (isa<smt::BoolType>(checkTy))
+        inputDecls.push_back(smt::BoolConstantOp::create(rewriter, loc, false));
+      else
+        inputDecls.push_back(smt::BVConstantOp::create(rewriter, loc, 0, 1));
+    }
     inputDecls.push_back(constFalse); // wasViolated?
 
     // TODO: swapping to a whileOp here would allow early exit once the property
@@ -1510,12 +1577,7 @@ struct VerifBoundedModelCheckingOpConversion
     auto forOp = scf::ForOp::create(
         rewriter, loc, lowerBound, upperBound, step, inputDecls,
         [&](OpBuilder &builder, Location loc, Value i, ValueRange iterArgs) {
-          // Drop existing assertions
-          smt::PopOp::create(builder, loc, 1);
-          smt::PushOp::create(builder, loc, 1);
-
-          // Re-assert 2-state constraints on the current iteration inputs,
-          // since the previous push frame was popped.
+          // Assert 2-state constraints on the current iteration inputs.
           size_t numCircuitArgs = circuitFuncOp.getNumArguments();
           for (auto [oldTy, arg] :
                llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
@@ -1531,94 +1593,125 @@ struct VerifBoundedModelCheckingOpConversion
                   ->getResults();
 
           // Circuit outputs are ordered as:
-          // [original outputs (registers)] [delay buffer outputs] [final checks]
+          // [original outputs (registers)] [delay buffer outputs]
+          // [non-final checks] [final checks]
           //
           // Note: totalDelaySlots is captured from the outer scope
           ValueRange finalCheckOutputs =
               numFinalAsserts == 0 ? ValueRange{}
                                    : circuitCallOuts.take_back(numFinalAsserts);
-          ValueRange nonFinalOutputs =
+          ValueRange beforeFinal =
               numFinalAsserts == 0 ? circuitCallOuts
                                    : circuitCallOuts.drop_back(numFinalAsserts);
+          ValueRange nonFinalCheckOutputs =
+              numNonFinalChecks == 0
+                  ? ValueRange{}
+                  : beforeFinal.take_back(numNonFinalChecks);
+          ValueRange nonFinalOutputs =
+              numNonFinalChecks == 0
+                  ? beforeFinal
+                  : beforeFinal.drop_back(numNonFinalChecks);
           // Split non-final outputs into register outputs and delay buffer outputs
           ValueRange delayBufferOutputs = nonFinalOutputs.take_back(totalDelaySlots);
           ValueRange circuitOutputs = nonFinalOutputs.drop_back(totalDelaySlots);
 
-          // If we have a cycle up to which we ignore assertions, we need an
-          // IfOp to track this
-          // First, save the insertion point so we can safely enter the IfOp
-
-          auto insideForPoint = builder.saveInsertionPoint();
-          // We need to still have the yielded result of the op in scope after
-          // we've built the check
-          Value yieldedValue;
-          bool gateOnPosedge = !risingClocksOnly && clockIndexes.size() == 1;
-          auto ignoreAssertionsUntil =
-              op->getAttrOfType<IntegerAttr>("ignore_asserts_until");
-          if (ignoreAssertionsUntil || gateOnPosedge) {
-            Value shouldSkip;
-            if (ignoreAssertionsUntil) {
-              auto ignoreUntilConstant = arith::ConstantOp::create(
-                  builder, loc,
-                  rewriter.getI32IntegerAttr(
-                      ignoreAssertionsUntil.getValue().getZExtValue()));
-              auto shouldIgnore = arith::CmpIOp::create(
-                  builder, loc, arith::CmpIPredicate::ult, i,
-                  ignoreUntilConstant);
-              shouldSkip = shouldIgnore;
+          Value violated = iterArgs.back();
+          if (numNonFinalChecks > 0) {
+            // If we have a cycle up to which we ignore assertions, we need an
+            // IfOp to track this.
+            auto insideForPoint = builder.saveInsertionPoint();
+            // We need to still have the yielded result of the op in scope after
+            // we've built the check.
+            Value yieldedValue;
+            bool gateOnPosedge = !risingClocksOnly && clockIndexes.size() == 1;
+            auto ignoreAssertionsUntil =
+                op->getAttrOfType<IntegerAttr>("ignore_asserts_until");
+            if (ignoreAssertionsUntil || gateOnPosedge) {
+              Value shouldSkip;
+              if (ignoreAssertionsUntil) {
+                auto ignoreUntilConstant = arith::ConstantOp::create(
+                    builder, loc,
+                    rewriter.getI32IntegerAttr(
+                        ignoreAssertionsUntil.getValue().getZExtValue()));
+                auto shouldIgnore = arith::CmpIOp::create(
+                    builder, loc, arith::CmpIPredicate::ult, i,
+                    ignoreUntilConstant);
+                shouldSkip = shouldIgnore;
+              }
+              if (gateOnPosedge) {
+                auto one = arith::ConstantOp::create(
+                    builder, loc, rewriter.getI32IntegerAttr(1));
+                auto zero = arith::ConstantOp::create(
+                    builder, loc, rewriter.getI32IntegerAttr(0));
+                auto lsb = arith::AndIOp::create(builder, loc, i, one);
+                // Skip even iterations; with initial clock = 0, posedges occur
+                // on odd loop iterations after toggling.
+                auto isEven = arith::CmpIOp::create(
+                    builder, loc, arith::CmpIPredicate::eq, lsb, zero);
+                if (shouldSkip)
+                  shouldSkip = arith::OrIOp::create(builder, loc, shouldSkip,
+                                                    isEven);
+                else
+                  shouldSkip = isEven;
+              }
+              auto ifShouldSkip = scf::IfOp::create(
+                  builder, loc, builder.getI1Type(), shouldSkip, true);
+              // If we should skip, yield the existing value.
+              builder.setInsertionPointToEnd(
+                  &ifShouldSkip.getThenRegion().front());
+              scf::YieldOp::create(builder, loc, ValueRange(iterArgs.back()));
+              builder.setInsertionPointToEnd(
+                  &ifShouldSkip.getElseRegion().front());
+              yieldedValue = ifShouldSkip.getResult(0);
             }
-            if (gateOnPosedge) {
-              auto one = arith::ConstantOp::create(
-                  builder, loc, rewriter.getI32IntegerAttr(1));
-              auto zero = arith::ConstantOp::create(
-                  builder, loc, rewriter.getI32IntegerAttr(0));
-              auto lsb = arith::AndIOp::create(builder, loc, i, one);
-              // Skip even iterations; with initial clock = 0, posedges occur on
-              // odd loop iterations after toggling.
-              auto isEven = arith::CmpIOp::create(
-                  builder, loc, arith::CmpIPredicate::eq, lsb, zero);
-              if (shouldSkip)
-                shouldSkip = arith::OrIOp::create(builder, loc, shouldSkip,
-                                                  isEven);
-              else
-                shouldSkip = isEven;
+
+            // Check the non-final property for this iteration.
+            Value checkVal = nonFinalCheckOutputs.front();
+            Value isTrue;
+            if (isa<smt::BoolType>(checkVal.getType())) {
+              // LTL properties are converted to !smt.bool, use directly
+              isTrue = checkVal;
+            } else {
+              // i1 properties are converted to !smt.bv<1>, compare with 1
+              auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
+              isTrue = smt::EqOp::create(builder, loc, checkVal, trueBV);
             }
-            auto ifShouldSkip = scf::IfOp::create(
-                builder, loc, builder.getI1Type(), shouldSkip, true);
-            // If we should skip, yield the existing value
-            builder.setInsertionPointToEnd(
-                &ifShouldSkip.getThenRegion().front());
-            scf::YieldOp::create(builder, loc, ValueRange(iterArgs.back()));
-            builder.setInsertionPointToEnd(
-                &ifShouldSkip.getElseRegion().front());
-            yieldedValue = ifShouldSkip.getResult(0);
+            Value checkCond = isCoverCheck
+                                   ? isTrue
+                                   : smt::NotOp::create(builder, loc, isTrue);
+
+            smt::PushOp::create(builder, loc, 1);
+            smt::AssertOp::create(builder, loc, checkCond);
+            auto checkOp =
+                smt::CheckOp::create(rewriter, loc, builder.getI1Type());
+            {
+              OpBuilder::InsertionGuard guard(builder);
+              builder.createBlock(&checkOp.getSatRegion());
+              smt::YieldOp::create(builder, loc, constTrue);
+              builder.createBlock(&checkOp.getUnknownRegion());
+              smt::YieldOp::create(builder, loc, constTrue);
+              builder.createBlock(&checkOp.getUnsatRegion());
+              smt::YieldOp::create(builder, loc, constFalse);
+            }
+            smt::PopOp::create(builder, loc, 1);
+
+            Value newViolated = arith::OrIOp::create(
+                builder, loc, checkOp.getResult(0), iterArgs.back());
+
+            // If we've packaged everything in an IfOp, we need to yield the
+            // new violated value.
+            if (ignoreAssertionsUntil || gateOnPosedge) {
+              scf::YieldOp::create(builder, loc, newViolated);
+              // Replace the variable with the yielded value.
+              violated = yieldedValue;
+            } else {
+              violated = newViolated;
+            }
+
+            // If we created an IfOp, make sure we start inserting after it
+            // again.
+            builder.restoreInsertionPoint(insideForPoint);
           }
-
-          auto checkOp =
-              smt::CheckOp::create(rewriter, loc, builder.getI1Type());
-          {
-            OpBuilder::InsertionGuard guard(builder);
-            builder.createBlock(&checkOp.getSatRegion());
-            smt::YieldOp::create(builder, loc, constTrue);
-            builder.createBlock(&checkOp.getUnknownRegion());
-            smt::YieldOp::create(builder, loc, constTrue);
-            builder.createBlock(&checkOp.getUnsatRegion());
-            smt::YieldOp::create(builder, loc, constFalse);
-          }
-
-          Value violated = arith::OrIOp::create(
-              builder, loc, checkOp.getResult(0), iterArgs.back());
-
-          // If we've packaged everything in an IfOp, we need to yield the
-          // new violated value
-          if (ignoreAssertionsUntil || gateOnPosedge) {
-            scf::YieldOp::create(builder, loc, violated);
-            // Replace the variable with the yielded value
-            violated = yieldedValue;
-          }
-
-          // If we created an IfOp, make sure we start inserting after it again
-          builder.restoreInsertionPoint(insideForPoint);
 
           // Call loop func to update clock & state arg values
           SmallVector<Value> loopCallInputs;
@@ -1750,11 +1843,18 @@ struct VerifBoundedModelCheckingOpConversion
       // violations). If SAT, the check can be violated.
       auto results = forOp->getResults();
       size_t finalStart = results.size() - 1 - numFinalAsserts;
-      auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
       for (size_t i = 0; i < numFinalAsserts; ++i) {
-        // Results are !smt.bv<1>, check if they can be false
+        // Results may be !smt.bv<1> or !smt.bool depending on source type
         Value finalVal = results[finalStart + i];
-        Value isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+        Value isTrue;
+        if (isa<smt::BoolType>(finalVal.getType())) {
+          // LTL properties are converted to !smt.bool, use directly
+          isTrue = finalVal;
+        } else {
+          // i1 properties are converted to !smt.bv<1>, compare with 1
+          auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+          isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+        }
         // Assert the negation: we're looking for cases where the check FAILS
         Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
         smt::AssertOp::create(rewriter, loc, isFalse);
@@ -1968,5 +2068,10 @@ void ConvertVerifToSMTPass::runOnOperation() {
 
   if (failed(mlir::applyPartialConversion(getOperation(), target,
                                           std::move(patterns))))
+    return signalPassFailure();
+
+  RewritePatternSet postPatterns(&getContext());
+  postPatterns.add<BoolBVCastOpRewrite>(&getContext());
+  if (failed(applyPatternsGreedily(getOperation(), std::move(postPatterns))))
     return signalPassFailure();
 }

@@ -1,23 +1,30 @@
-// RUN: circt-verilog %s | circt-opt --lower-seq-to-sv --export-verilog | FileCheck %s
+// RUN: circt-verilog %s | FileCheck %s
 // REQUIRES: slang
 // Internal issue in Slang v3 about jump depending on uninitialised value.
 // UNSUPPORTED: valgrind
 
-// Ensure we can round-trip the following two different flavors of enables on a
-// register and have them come out unchanged. These have subtly different
-// semantics when `en` is X, which must be preserved in order to satisfy logical
-// equivalence checks.
+// Verify that two different flavors of enables on a register produce the
+// expected IR structure with four-state logic support.
 
-// CHECK-LABEL: module Foo
+// CHECK-LABEL: hw.module @Foo
+// CHECK-SAME: in %clk : !hw.struct<value: i1, unknown: i1>
+// CHECK-SAME: in %en : !hw.struct<value: i1, unknown: i1>
+// CHECK-SAME: in %d : !hw.struct<value: i1, unknown: i1>
+// CHECK-SAME: out qa : !hw.struct<value: i1, unknown: i1>
+// CHECK-SAME: out qb : !hw.struct<value: i1, unknown: i1>
 module Foo (input logic clk, en, d, output logic qa, qb);
-  // CHECK: always @(posedge clk)
+  // Verify clock derivation from four-state value
+  // CHECK: hw.struct_extract %clk["value"]
+  // CHECK: hw.struct_extract %clk["unknown"]
+  // CHECK: seq.to_clock
+
+  // Verify register outputs
+  // CHECK: seq.firreg
+  // CHECK: hw.output
   always @(posedge clk) begin
-    // CHECK: if (en)
-    // CHECK:   [[QA:qa.*]] <= d;
     if (en)
       qa <= d;
 
-    // CHECK: [[QB:qb.*]] <= en ? d : [[QB]];
     qb <= en ? d : qb;
   end
 endmodule

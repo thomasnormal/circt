@@ -6,8 +6,8 @@
 
 // CHECK-LABEL: func.func @test_assert
 // CHECK-SAME:  ([[ARG0:%.+]]: i1)
-// CHECK:         [[CAST:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : i1 to !smt.bv<1>
-// CHECK:         [[TRUE_BV:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK-DAG:     [[TRUE_BV:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK-DAG:     [[CAST:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : i1 to !smt.bv<1>
 // CHECK:         [[EQ:%.+]] = smt.eq [[CAST]], [[TRUE_BV]]
 // CHECK:         [[NEG:%.+]] = smt.not [[EQ]]
 // CHECK:         smt.assert [[NEG]]
@@ -21,8 +21,8 @@ func.func @test_assert(%cond: i1) {
 
 // CHECK-LABEL: func.func @test_assume
 // CHECK-SAME:  ([[ARG0:%.+]]: i1)
-// CHECK:         [[CAST:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : i1 to !smt.bv<1>
-// CHECK:         [[TRUE_BV:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK-DAG:     [[TRUE_BV:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK-DAG:     [[CAST:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : i1 to !smt.bv<1>
 // CHECK:         [[EQ:%.+]] = smt.eq [[CAST]], [[TRUE_BV]]
 // CHECK:         smt.assert [[EQ]]
 // CHECK:         return
@@ -38,8 +38,8 @@ func.func @test_assume(%cond: i1) {
 
 // CHECK-LABEL: func.func @test_cover
 // CHECK-SAME:  ([[ARG0:%.+]]: i1)
-// CHECK:         [[CAST:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : i1 to !smt.bv<1>
-// CHECK:         [[TRUE_BV:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK-DAG:     [[TRUE_BV:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK-DAG:     [[CAST:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : i1 to !smt.bv<1>
 // CHECK:         [[EQ:%.+]] = smt.eq [[CAST]], [[TRUE_BV]]
 // CHECK:         smt.assert [[EQ]]
 // CHECK:         return

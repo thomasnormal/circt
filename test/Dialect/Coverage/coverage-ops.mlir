@@ -39,7 +39,7 @@ hw.module @TestModule(in %clk: !seq.clock, in %x: i4, in %y: i4, in %cond: i1, i
 
   // Test FSM transition coverage
   // CHECK: coverage.fsm.transition %state, %state name "fsm_trans" num_states 8
-  coverage.fsm.transition %state, %state name "fsm_trans" num_states 8 : i3
+  coverage.fsm.transition %state, %state name "fsm_trans" num_states 8 : i3, i3
 
   // Test expression coverage
   // CHECK: coverage.expression %cond, %cond name "expr_and"

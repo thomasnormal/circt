@@ -272,7 +272,18 @@ bool TimeWheel::advanceToNextEvent() {
 size_t TimeWheel::processCurrentRegion() {
   size_t slotIdx = getSlotIndex(currentTime.realTime, 0);
   auto &slot = levels[0].slots[slotIdx];
-  auto region = static_cast<SchedulingRegion>(currentTime.region);
+
+  // Find the next non-empty region starting from current region
+  auto region = slot.deltaQueue.getNextNonEmptyRegion(
+      static_cast<SchedulingRegion>(currentTime.region));
+  if (region == SchedulingRegion::NumRegions) {
+    // No events to process in current or later regions
+    slot.hasEvents = false;
+    return 0;
+  }
+
+  // Update current region to match
+  currentTime.region = static_cast<uint8_t>(region);
 
   auto events = slot.deltaQueue.popRegionEvents(region);
   size_t count = events.size();

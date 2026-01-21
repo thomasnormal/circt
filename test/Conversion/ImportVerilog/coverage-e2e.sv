@@ -129,9 +129,9 @@ module single_value_bins;
   covergroup state_cg @(posedge clk);
     state_cp: coverpoint state {
       bins idle = {0};
-      bins start = {1};
+      bins start_state = {1};
       bins run = {2};
-      bins stop = {3};
+      bins stop_state = {3};
       bins error = {7};
     }
   endgroup
@@ -147,9 +147,9 @@ endmodule
 // CHECK: moore.covergroup.decl @state_cg
 // CHECK:   moore.coverpoint.decl @state_cp
 // CHECK:     moore.coverbin.decl @idle
-// CHECK:     moore.coverbin.decl @start
+// CHECK:     moore.coverbin.decl @start_state
 // CHECK:     moore.coverbin.decl @run
-// CHECK:     moore.coverbin.decl @stop
+// CHECK:     moore.coverbin.decl @stop_state
 // CHECK:     moore.coverbin.decl @error
 
 //===----------------------------------------------------------------------===//

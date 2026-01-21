@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s
+// RUN: circt-verilog --uvm-path=%S/../../lib/Runtime/uvm %s
 // REQUIRES: slang
 
 module top;

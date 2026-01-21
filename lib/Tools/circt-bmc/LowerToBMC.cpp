@@ -161,17 +161,19 @@ void LowerToBMCPass::runOnOperation() {
       toClockOps.push_back(toClockOp);
     });
     if (!toClockOps.empty()) {
-      Value clockInput = toClockOps.front().getInput();
-      for (auto toClockOp : llvm::drop_begin(toClockOps)) {
-        if (toClockOp.getInput() != clockInput) {
-          hwModule.emitError("designs with multiple derived clocks not yet supported");
-          return signalPassFailure();
-        }
-      }
+      SmallVector<Value> clockInputs;
+      clockInputs.reserve(toClockOps.size());
+      for (auto toClockOp : toClockOps)
+        clockInputs.push_back(toClockOp.getInput());
+
       auto clockTy = seq::ClockType::get(ctx);
       auto newClock = hwModule.prependInput("bmc_clock", clockTy).second;
-      {
-        // Constrain the derived clock input to match the generated BMC clock.
+
+      // Constrain each derived clock input to match the generated BMC clock.
+      llvm::SmallPtrSet<Value, 4> seen;
+      for (auto clockInput : clockInputs) {
+        if (!seen.insert(clockInput).second)
+          continue;
         OpBuilder::InsertionGuard guard(builder);
         if (auto *def = clockInput.getDefiningOp()) {
           builder.setInsertionPointAfter(def);
@@ -183,6 +185,7 @@ void LowerToBMCPass::runOnOperation() {
                                        fromClk, clockInput);
         verif::AssumeOp::create(builder, loc, eq, Value(), StringAttr());
       }
+
       for (auto toClockOp : toClockOps) {
         toClockOp.replaceAllUsesWith(newClock);
         toClockOp.erase();

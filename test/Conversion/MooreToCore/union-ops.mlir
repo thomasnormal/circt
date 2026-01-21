@@ -3,7 +3,7 @@
 // Test union creation and extraction operations
 
 // CHECK-LABEL: hw.module @UnionOps
-moore.module @UnionOps(in %a : !moore.i32, in %b : !moore.i16, in %unionVal : !moore.union<{x: i32, y: i16}>, out out1 : !moore.union<{x: i32, y: i16}>, out out2 : !moore.i32, out out3 : !moore.i16) {
+moore.module @UnionOps(in %a : !moore.i32, in %b : !moore.i16, in %unionVal : !moore.union<{x: i32, y: i16}>, out out1 : !moore.union<{x: i32, y: i16}>, out out2 : !moore.union<{x: i32, y: i16}>, out out3 : !moore.i32, out out4 : !moore.i16) {
   // CHECK: hw.union_create "x", %a : !hw.union<x: i32, y: i16>
   %0 = moore.union_create %a {fieldName = "x"} : !moore.i32 -> !moore.union<{x: i32, y: i16}>
 
@@ -16,7 +16,7 @@ moore.module @UnionOps(in %a : !moore.i32, in %b : !moore.i16, in %unionVal : !m
   // CHECK: hw.union_extract %unionVal["y"] : !hw.union<x: i32, y: i16>
   %3 = moore.union_extract %unionVal, "y" : !moore.union<{x: i32, y: i16}> -> i16
 
-  moore.output %0, %2, %3 : !moore.union<{x: i32, y: i16}>, !moore.i32, !moore.i16
+  moore.output %0, %1, %2, %3 : !moore.union<{x: i32, y: i16}>, !moore.union<{x: i32, y: i16}>, !moore.i32, !moore.i16
 }
 
 // CHECK-LABEL: hw.module @UnpackedUnionOps

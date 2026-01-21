@@ -24,8 +24,8 @@ func.func @test_toggle_coverage(%signal: i8, %clock: i1) {
 func.func @test_branch_coverage(%cond: i1) {
   // CHECK: coverage.branch %arg0 name "fsm_cond" true_id 0 false_id 1 : i1
   coverage.branch %cond name "fsm_cond" true_id 0 false_id 1 : i1
-  // CHECK: coverage.branch %arg0 name "if_stmt" true_id 2 false_id 3 at "test.sv":25 : i1
-  coverage.branch %cond name "if_stmt" true_id 2 false_id 3 at "test.sv":25 : i1
+  // CHECK: coverage.branch %arg0 name "if_stmt" true_id 2 false_id 3 at "test.sv" : 25 : i1
+  coverage.branch %cond name "if_stmt" true_id 2 false_id 3 at "test.sv" : 25 : i1
   return
 }
 

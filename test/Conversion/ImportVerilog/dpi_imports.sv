@@ -58,10 +58,12 @@ module dpi_test;
   // CHECK-DAG: func.func private @uvm_re_free(!moore.chandle)
   // CHECK-DAG: func.func private @uvm_dpi_get_tool_name_c() -> !moore.string
 
-  // Check that remarks are emitted for DPI imports
-  // REMARK: remark: DPI-C import 'dpi_int_func' will use runtime stub (link with MooreRuntime)
-  // REMARK: remark: DPI-C import 'dpi_string_func' will use runtime stub (link with MooreRuntime)
-  // REMARK: remark: DPI-C import 'uvm_hdl_deposit' will use runtime stub (link with MooreRuntime)
-  // REMARK: remark: DPI-C import 'uvm_re_comp' will use runtime stub (link with MooreRuntime)
-  // REMARK: remark: DPI-C import 'uvm_dpi_get_tool_name_c' will use runtime stub (link with MooreRuntime)
+  // Check that remarks are emitted for DPI imports (only for functions that are called)
+  // REMARK-DAG: remark: DPI-C import 'dpi_int_func' will use runtime stub (link with MooreRuntime)
+  // REMARK-DAG: remark: DPI-C import 'dpi_void_func' will use runtime stub (link with MooreRuntime)
+  // REMARK-DAG: remark: DPI-C import 'uvm_hdl_deposit' will use runtime stub (link with MooreRuntime)
+  // REMARK-DAG: remark: DPI-C import 'uvm_re_comp' will use runtime stub (link with MooreRuntime)
+  // REMARK-DAG: remark: DPI-C import 'uvm_re_exec' will use runtime stub (link with MooreRuntime)
+  // REMARK-DAG: remark: DPI-C import 'uvm_re_free' will use runtime stub (link with MooreRuntime)
+  // REMARK-DAG: remark: DPI-C import 'uvm_dpi_get_tool_name_c' will use runtime stub (link with MooreRuntime)
 endmodule

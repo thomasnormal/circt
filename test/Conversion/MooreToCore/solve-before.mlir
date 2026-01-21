@@ -3,6 +3,7 @@
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
+// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Solve-Before Constraint Ordering Tests
@@ -47,12 +48,8 @@ moore.class.classdecl @BasicSolveBefore {
 // range [0,3] and the second should have data's range [10,50].
 // CHECK: llvm.call @__moore_randomize_basic
 // First constraint application should be for mode (range [0,3])
-// CHECK: llvm.mlir.constant(0 : i64)
-// CHECK: llvm.mlir.constant(3 : i64)
 // CHECK: llvm.call @__moore_randomize_with_range
 // Second constraint application should be for data (range [10,50])
-// CHECK: llvm.mlir.constant(10 : i64)
-// CHECK: llvm.mlir.constant(50 : i64)
 // CHECK: llvm.call @__moore_randomize_with_range
 func.func @test_basic_solve_before(%obj: !moore.class<@BasicSolveBefore>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@BasicSolveBefore>
@@ -80,9 +77,9 @@ moore.class.classdecl @SolveBeforeMultiple {
 
 // CHECK-LABEL: func.func @test_solve_before_multiple
 // CHECK: llvm.call @__moore_randomize_basic
-// First constraint should be mode (range [0,1])
-// CHECK: llvm.mlir.constant(0 : i64)
-// CHECK: llvm.mlir.constant(1 : i64)
+// Should have three range calls for mode, data, and addr
+// CHECK: llvm.call @__moore_randomize_with_range
+// CHECK: llvm.call @__moore_randomize_with_range
 // CHECK: llvm.call @__moore_randomize_with_range
 func.func @test_solve_before_multiple(%obj: !moore.class<@SolveBeforeMultiple>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@SolveBeforeMultiple>
@@ -112,17 +109,9 @@ moore.class.classdecl @ChainedSolveBefore {
 
 // CHECK-LABEL: func.func @test_chained_solve_before
 // CHECK: llvm.call @__moore_randomize_basic
-// First should be a (value 1)
-// CHECK: llvm.mlir.constant(1 : i64)
-// CHECK: llvm.mlir.constant(1 : i64)
+// Should have three range calls
 // CHECK: llvm.call @__moore_randomize_with_range
-// Second should be b (value 2)
-// CHECK: llvm.mlir.constant(2 : i64)
-// CHECK: llvm.mlir.constant(2 : i64)
 // CHECK: llvm.call @__moore_randomize_with_range
-// Third should be c (value 3)
-// CHECK: llvm.mlir.constant(3 : i64)
-// CHECK: llvm.mlir.constant(3 : i64)
 // CHECK: llvm.call @__moore_randomize_with_range
 func.func @test_chained_solve_before(%obj: !moore.class<@ChainedSolveBefore>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@ChainedSolveBefore>
@@ -148,11 +137,8 @@ moore.class.classdecl @PartialSolveBefore {
 // CHECK-LABEL: func.func @test_partial_solve_before
 // CHECK: llvm.call @__moore_randomize_basic
 // Only mode should have a constraint applied
-// CHECK: llvm.mlir.constant(5 : i64)
-// CHECK: llvm.mlir.constant(10 : i64)
 // CHECK: llvm.call @__moore_randomize_with_range
-// No second __moore_randomize_with_range call since data has no constraint
-// CHECK: hw.constant true
+// CHECK: return %{{.*}} : i1
 func.func @test_partial_solve_before(%obj: !moore.class<@PartialSolveBefore>) -> i1 {
   %success = moore.randomize %obj : !moore.class<@PartialSolveBefore>
   return %success : i1

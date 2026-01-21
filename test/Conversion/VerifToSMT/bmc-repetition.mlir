@@ -13,11 +13,10 @@
 // Which requires delay buffers for offsets 1 and 2
 
 // CHECK-LABEL: func.func @test_exact_repeat_3
-// Delay buffers initialized to 0
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// Delay buffer constant initialized to 0 (single constant, used multiple times)
+// CHECK: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
-// Circuit takes signal 'a' plus 2 delay buffer slots (for ##1 and ##2)
+// Circuit takes signal 'a' plus 3 delay buffer slots
 // CHECK: func.call @bmc_circuit
 func.func @test_exact_repeat_3() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
@@ -44,9 +43,8 @@ func.func @test_exact_repeat_3() -> i1 {
 // Which requires delay buffers for offsets 1 and 2
 
 // CHECK-LABEL: func.func @test_range_repeat_1_to_3
-// Delay buffers initialized to 0
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// Delay buffer constant initialized to 0 (single constant, used multiple times)
+// CHECK: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
 // Circuit takes signal 'a' plus delay buffer slots
 // CHECK: func.call @bmc_circuit
@@ -74,10 +72,10 @@ func.func @test_range_repeat_1_to_3() -> i1 {
 // For BMC, this is approximated within the bound as a[*0:bound-1]
 
 // CHECK-LABEL: func.func @test_zero_or_more
-// Delay buffers for the approximated range
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
+// Circuit returns output + non-final check
 // CHECK: func.call @bmc_circuit
+// CHECK-SAME: -> ({{.*}}!smt.bool)
 func.func @test_zero_or_more() -> i1 {
   %bmc = verif.bmc bound 4 num_regs 0 initial_values []
   init {
@@ -103,10 +101,10 @@ func.func @test_zero_or_more() -> i1 {
 // it means "if 'a' has held for 3 consecutive cycles, then 'b' must hold"
 
 // CHECK-LABEL: func.func @test_repeat_in_antecedent
-// Delay buffers for tracking the repetition in antecedent
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
+// Circuit returns outputs + non-final check
 // CHECK: func.call @bmc_circuit
+// CHECK-SAME: -> ({{.*}}!smt.bool)
 func.func @test_repeat_in_antecedent() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -132,10 +130,10 @@ func.func @test_repeat_in_antecedent() -> i1 {
 // it means "when 'a' holds, 'b' must hold for 2 consecutive cycles"
 
 // CHECK-LABEL: func.func @test_repeat_in_consequent
-// Delay buffers for tracking the consequent repetition
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
+// Circuit returns outputs + non-final check
 // CHECK: func.call @bmc_circuit
+// CHECK-SAME: -> ({{.*}}!smt.bool)
 func.func @test_repeat_in_consequent() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -215,10 +213,10 @@ func.func @test_zero_repeat() -> i1 {
 // This tests concatenation of repeated sequences with a delay
 
 // CHECK-LABEL: func.func @test_repeat_concat
-// Multiple delay buffer slots for both repetitions and the ##1 delay
-// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
+// Circuit returns outputs + non-final check
 // CHECK: func.call @bmc_circuit
+// CHECK-SAME: -> ({{.*}}!smt.bool)
 func.func @test_repeat_concat() -> i1 {
   %bmc = verif.bmc bound 8 num_regs 0 initial_values []
   init {

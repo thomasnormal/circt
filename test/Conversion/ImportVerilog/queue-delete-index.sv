@@ -23,18 +23,18 @@ module QueueDeleteIndexTest;
 
         // Delete element at index 1 (value 20)
         // CHECK: [[IDX1:%.+]] = moore.constant 1 : i32
-        // CHECK: moore.queue.delete %q{{\[}}[[IDX1]]{{\]}} : <queue<i32, 0>>, i32
+        // CHECK: moore.queue.delete %q{{\[}}[[IDX1]]{{\]}} : <queue<i32, 0>>, !moore.i32
         q.delete(1);
 
         // Delete element at index 0 (first element)
         // CHECK: [[IDX0:%.+]] = moore.constant 0 : i32
-        // CHECK: moore.queue.delete %q{{\[}}[[IDX0]]{{\]}} : <queue<i32, 0>>, i32
+        // CHECK: moore.queue.delete %q{{\[}}[[IDX0]]{{\]}} : <queue<i32, 0>>, !moore.i32
         q.delete(0);
 
         // Delete using variable index
         idx = 1;
         // CHECK: [[IDXVAR:%.+]] = moore.read %idx : <i32>
-        // CHECK: moore.queue.delete %q{{\[}}[[IDXVAR]]{{\]}} : <queue<i32, 0>>, i32
+        // CHECK: moore.queue.delete %q{{\[}}[[IDXVAR]]{{\]}} : <queue<i32, 0>>, !moore.i32
         q.delete(idx);
     end
 endmodule
@@ -51,7 +51,7 @@ module QueueDeleteBothFormsTest;
 
         // Delete specific index
         // CHECK: [[IDX:%.+]] = moore.constant 0 : i32
-        // CHECK: moore.queue.delete %q{{\[}}[[IDX]]{{\]}} : <queue<i32, 0>>, i32
+        // CHECK: moore.queue.delete %q{{\[}}[[IDX]]{{\]}} : <queue<i32, 0>>, !moore.i32
         q.delete(0);
 
         // Delete all elements (no index)
@@ -70,17 +70,17 @@ module QueueDeleteIndexTypesTest;
     initial begin
         byte_q.push_back(8'hAA);
         byte_q.push_back(8'hBB);
-        // CHECK: moore.queue.delete %byte_q{{\[}}{{%.+}}{{\]}} : <queue<i8, 0>>, i32
+        // CHECK: moore.queue.delete %byte_q{{\[}}{{%.+}}{{\]}} : <queue<i8, 0>>, !moore.i32
         byte_q.delete(0);
 
         long_q.push_back(64'd100);
         long_q.push_back(64'd200);
-        // CHECK: moore.queue.delete %long_q{{\[}}{{%.+}}{{\]}} : <queue<i64, 0>>, i32
+        // CHECK: moore.queue.delete %long_q{{\[}}{{%.+}}{{\]}} : <queue<i64, 0>>, !moore.i32
         long_q.delete(1);
 
         logic_q.push_back(32'hDEAD);
         logic_q.push_back(32'hBEEF);
-        // CHECK: moore.queue.delete %logic_q{{\[}}{{%.+}}{{\]}} : <queue<l32, 0>>, i32
+        // CHECK: moore.queue.delete %logic_q{{\[}}{{%.+}}{{\]}} : <queue<l32, 0>>, !moore.i32
         logic_q.delete(0);
     end
 endmodule

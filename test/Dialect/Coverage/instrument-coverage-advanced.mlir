@@ -1,4 +1,4 @@
-// RUN: circt-opt %s --coverage-instrument=fsm=true,expression=true,assertion=true | FileCheck %s
+// RUN: circt-opt %s '--coverage-instrument=fsm=true expression=true assertion=true' | FileCheck %s
 
 // Test FSM state coverage instrumentation
 
@@ -7,7 +7,7 @@ hw.module @FSMModule(in %clk: !seq.clock, in %rst: i1, in %next_state: i3, out s
   // A register with "state" in the name should get FSM coverage when fsm=true
   %state_reg = seq.compreg %next_state, %clk {name = "state_reg"} : i3
 
-  // CHECK: coverage.fsm.state %state_reg name "state_reg"
+  // CHECK: coverage.fsm.state %state_reg name "state_reg" num_states 8 hierarchy "FSMModule"
   // CHECK: hw.output %state_reg
 
   hw.output %state_reg : i3
@@ -18,11 +18,11 @@ hw.module @FSMModule(in %clk: !seq.clock, in %rst: i1, in %next_state: i3, out s
 // CHECK-LABEL: hw.module @ExpressionModule
 hw.module @ExpressionModule(in %a: i1, in %b: i1, in %c: i1, out result: i1) {
   // Boolean AND of multiple 1-bit values should get expression coverage
-  // CHECK: coverage.expression %a, %b name "and_expr_
+  // CHECK: coverage.expression %a, %b name "and_expr_{{.*}}" hierarchy "ExpressionModule"
   %0 = comb.and %a, %b : i1
 
   // Boolean OR of multiple 1-bit values should get expression coverage
-  // CHECK: coverage.expression %0, %c name "or_expr_
+  // CHECK: coverage.expression %{{.*}}, %c name "or_expr_{{.*}}" hierarchy "ExpressionModule"
   %1 = comb.or %0, %c : i1
 
   hw.output %1 : i1
@@ -31,21 +31,21 @@ hw.module @ExpressionModule(in %a: i1, in %b: i1, in %c: i1, out result: i1) {
 // Test assertion coverage instrumentation
 
 // CHECK-LABEL: hw.module @AssertionModule
-hw.module @AssertionModule(in %clk: !seq.clock, in %valid: i1, in %data: i8) {
+hw.module @AssertionModule(in %clk: i1, in %valid: i1, in %data: i8) {
   sv.always posedge %clk {
     // Assertion should get coverage
-    // CHECK: coverage.assertion %valid name
+    // CHECK: coverage.assertion %valid name "data_valid_assertion" hierarchy "AssertionModule"
     sv.assert %valid, immediate label "data_valid_assertion"
   }
 }
 
 // Test with all coverage types disabled except branch
 
-// RUN: circt-opt %s --coverage-instrument=line=false,toggle=false,branch=true | FileCheck %s --check-prefix=BRANCH-ONLY
+// RUN: circt-opt %s '--coverage-instrument=line=false toggle=false branch=true' | FileCheck %s --check-prefix=BRANCH-ONLY
 
 // BRANCH-ONLY-LABEL: hw.module @MuxModule
 hw.module @MuxModule(in %sel: i1, in %a: i8, in %b: i8, out result: i8) {
-  // BRANCH-ONLY: coverage.branch %sel
+  // BRANCH-ONLY: coverage.branch %sel name "branch_{{.*}}"
   %0 = comb.mux %sel, %a, %b : i8
   // BRANCH-ONLY-NOT: coverage.line
   // BRANCH-ONLY-NOT: coverage.toggle

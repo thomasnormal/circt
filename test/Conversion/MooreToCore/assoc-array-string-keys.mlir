@@ -64,9 +64,8 @@ hw.module @test_string_assoc_access() {
 
 // CHECK-LABEL: hw.module @test_int_assoc
 hw.module @test_int_assoc() {
-  // CHECK: [[KEY_SIZE:%.+]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK: [[VAL_SIZE:%.+]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK: llvm.call @__moore_assoc_create([[KEY_SIZE]], [[VAL_SIZE]]) : (i32, i32) -> !llvm.ptr
+  // CHECK: [[SIZE:%.+]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: llvm.call @__moore_assoc_create([[SIZE]], [[SIZE]]) : (i32, i32) -> !llvm.ptr
   %values = moore.variable : <assoc_array<i32, i32>>
 
   moore.procedure initial {

@@ -21,6 +21,9 @@
 `ifndef UVM_PKG_SV
 `define UVM_PKG_SV
 
+// Include UVM macros before the package so they're available
+`include "uvm_macros.svh"
+
 package uvm_pkg;
 
   //=========================================================================

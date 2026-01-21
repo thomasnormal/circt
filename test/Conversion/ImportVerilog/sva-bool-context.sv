@@ -46,7 +46,6 @@ endmodule
 // CHECK-LABEL: moore.module @test_impl
 module test_impl(input logic clk);
     logic a, b;
-    // CHECK: ltl.or
-    // CHECK: ltl.not
+    // CHECK: ltl.implication
     assert property(@(posedge clk) a |-> $changed(b));
 endmodule

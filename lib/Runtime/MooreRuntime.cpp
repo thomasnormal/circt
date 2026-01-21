@@ -2338,14 +2338,11 @@ extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
     cp->max_val = value;
 
   // Track unique values and get previous value for transition tracking
-  auto trackerIt = coverpointTrackers.find(cp);
-  int64_t prevValue = 0;
-  bool hasPrev = false;
-  if (trackerIt != coverpointTrackers.end()) {
-    prevValue = trackerIt->second.prevValue;
-    hasPrev = trackerIt->second.hasPrevValue;
-    trackerIt->second.valueCounts[value]++;
-  }
+  // Create tracker if it doesn't exist (defensive - should already exist from init)
+  auto &tracker = coverpointTrackers[cp];
+  int64_t prevValue = tracker.prevValue;
+  bool hasPrev = tracker.hasPrevValue;
+  tracker.valueCounts[value]++;
 
   // Update explicit bins if present
   updateExplicitBinsHelper(cp, value);
@@ -2354,10 +2351,8 @@ extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
   updateTransitionBinsHelper(cp, value, prevValue, hasPrev);
 
   // Update previous value for transition tracking
-  if (trackerIt != coverpointTrackers.end()) {
-    trackerIt->second.prevValue = value;
-    trackerIt->second.hasPrevValue = true;
-  }
+  tracker.prevValue = value;
+  tracker.hasPrevValue = true;
 }
 
 extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {

@@ -256,12 +256,14 @@ module QueueConcatElementTest;
 
     initial begin
         // CHECK: [[Q:%.+]] = moore.read %q : <queue<i32, 0>>
+        // CHECK: moore.queue.concat
         // CHECK: moore.queue.push_back
         // CHECK: moore.queue.concat
         result = { q, 5 };
 
-        // CHECK: [[Q2:%.+]] = moore.read %q : <queue<i32, 0>>
+        // CHECK: moore.queue.concat
         // CHECK: moore.queue.push_back
+        // CHECK: [[Q2:%.+]] = moore.read %q : <queue<i32, 0>>
         // CHECK: moore.queue.concat
         result = { 6, q };
     end
