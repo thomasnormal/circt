@@ -38,6 +38,15 @@ struct HierPathValueExprVisitor {
     if (currentInstBody == outermostInstBody)
       return success();
 
+    // Skip interface port member accesses. When accessing a member of an
+    // interface port (e.g., `iface.data` where `iface` is an interface port),
+    // slang marks this as a hierarchical reference. However, these should be
+    // handled as regular interface port member accesses via
+    // VirtualInterfaceSignalRefOp, not as hierarchical ports that need to be
+    // threaded through the module hierarchy.
+    if (expr.ref.isViaIfacePort())
+      return success();
+
     auto hierName = builder.getStringAttr(expr.symbol.name);
     const slang::ast::InstanceBodySymbol *parentInstBody = nullptr;
 

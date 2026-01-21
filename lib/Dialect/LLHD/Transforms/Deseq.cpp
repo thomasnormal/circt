@@ -19,6 +19,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericIteratedDominanceFrontier.h"
@@ -43,6 +44,61 @@ using namespace deseq;
 using llvm::SmallSetVector;
 
 namespace {
+static LogicalResult peelAggregateAttr(Attribute attr, APInt &intVal) {
+  SmallVector<Attribute> worklist;
+  worklist.push_back(attr);
+  unsigned nextInsertion = intVal.getBitWidth();
+
+  while (!worklist.empty()) {
+    auto current = worklist.pop_back_val();
+    if (auto innerArray = dyn_cast<ArrayAttr>(current)) {
+      for (auto elem : llvm::reverse(innerArray))
+        worklist.push_back(elem);
+      continue;
+    }
+
+    if (auto intAttr = dyn_cast<IntegerAttr>(current)) {
+      auto chunk = intAttr.getValue();
+      nextInsertion -= chunk.getBitWidth();
+      intVal.insertBits(chunk, nextInsertion);
+      continue;
+    }
+
+    return failure();
+  }
+
+  return success();
+}
+
+static std::optional<IntegerAttr> getPresetAttr(Value init) {
+  if (!init)
+    return std::nullopt;
+
+  if (auto bitcast = init.getDefiningOp<hw::BitcastOp>())
+    return getPresetAttr(bitcast.getInput());
+
+  if (auto constant = init.getDefiningOp<hw::ConstantOp>())
+    return constant.getValueAttr();
+
+  if (auto constant = init.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constant.getValue()))
+      return intAttr;
+  }
+
+  if (auto aggregate = init.getDefiningOp<hw::AggregateConstantOp>()) {
+    auto bitWidth = hw::getBitWidth(aggregate.getType());
+    if (bitWidth <= 0)
+      return std::nullopt;
+    APInt intVal(bitWidth, 0);
+    if (failed(peelAggregateAttr(aggregate.getFieldsAttr(), intVal)))
+      return std::nullopt;
+    auto intTy = IntegerType::get(init.getContext(), bitWidth);
+    return IntegerAttr::get(intTy, intVal);
+  }
+
+  return std::nullopt;
+}
+
 /// The work horse promoting processes into concrete registers.
 struct Deseq {
   Deseq(ProcessOp process) : process(process) {}
@@ -1270,15 +1326,19 @@ void Deseq::implementRegister(DriveInfo &drive) {
 
   // Try to guess a name for the register.
   StringAttr name;
+  IntegerAttr presetAttr;
   if (auto sigOp = drive.op.getSignal().getDefiningOp<llhd::SignalOp>())
     name = sigOp.getNameAttr();
+  if (auto sigOp = drive.op.getSignal().getDefiningOp<llhd::SignalOp>())
+    if (auto preset = getPresetAttr(sigOp.getInit()))
+      presetAttr = *preset;
   if (!name)
     name = builder.getStringAttr("");
 
   // Create the register op.
   auto reg = seq::FirRegOp::create(builder, loc, value, clock, name,
                                    hw::InnerSymAttr{},
-                                   /*preset=*/IntegerAttr{}, reset, resetValue,
+                                   /*preset=*/presetAttr, reset, resetValue,
                                    /*isAsync=*/reset != Value{});
 
   // If the register has an enable, insert a self-mux in front of the register.
