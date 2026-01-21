@@ -6198,6 +6198,13 @@ struct ConditionalOpConversion : public OpConversionPattern<ConditionalOp> {
     // evaluated and merged with the appropriate lookup table. See documentation
     // for `ConditionalOp`.
     auto type = typeConverter->convertType(op.getType());
+    auto loc = op.getLoc();
+
+    // Extract the boolean condition from a 4-state struct if needed.
+    // For 4-state values, we use the "value" field and treat X/Z as false.
+    Value condition = adaptor.getCondition();
+    if (isFourStateStructType(condition.getType()))
+      condition = extractFourStateValue(rewriter, loc, condition);
 
     auto hasNoWriteEffect = [](Region &region) {
       auto result = region.walk([](Operation *operation) {
@@ -6223,20 +6230,20 @@ struct ConditionalOpConversion : public OpConversionPattern<ConditionalOp> {
       rewriter.inlineBlockBefore(&op.getFalseRegion().front(), op);
 
       Value convTrueVal = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), type, trueTerm->getOperand(0));
+          rewriter, loc, type, trueTerm->getOperand(0));
       Value convFalseVal = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), type, falseTerm->getOperand(0));
+          rewriter, loc, type, falseTerm->getOperand(0));
 
       rewriter.eraseOp(trueTerm);
       rewriter.eraseOp(falseTerm);
 
-      rewriter.replaceOpWithNewOp<comb::MuxOp>(op, adaptor.getCondition(),
+      rewriter.replaceOpWithNewOp<comb::MuxOp>(op, condition,
                                                convTrueVal, convFalseVal);
       return success();
     }
 
     auto ifOp =
-        scf::IfOp::create(rewriter, op.getLoc(), type, adaptor.getCondition());
+        scf::IfOp::create(rewriter, loc, type, condition);
     rewriter.inlineRegionBefore(op.getTrueRegion(), ifOp.getThenRegion(),
                                 ifOp.getThenRegion().end());
     rewriter.inlineRegionBefore(op.getFalseRegion(), ifOp.getElseRegion(),
@@ -10366,6 +10373,40 @@ struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
           (void)valueI64;
           (void)zeroI32;
           llhd::DriveOp::create(rewriter, loc, destRef, timeVal, timeVal,
+                                Value{});
+        } else if (isFourStateStructType(targetTy)) {
+          // 4-state type: wrap the integer result in a 4-state struct
+          auto structType = cast<hw::StructType>(targetTy);
+          auto valueType = structType.getElements()[0].type;
+          unsigned targetWidth = valueType.getIntOrFloatBitWidth();
+
+          // Extend or truncate to match the target value type
+          Value valueToStore;
+          if (targetWidth < 32) {
+            valueToStore =
+                arith::TruncIOp::create(rewriter, loc, valueType, parsedValue);
+          } else if (targetWidth > 32) {
+            // Sign extend for larger types
+            valueToStore =
+                arith::ExtSIOp::create(rewriter, loc, valueType, parsedValue);
+          } else {
+            valueToStore = parsedValue;
+            // Need to ensure type matches
+            if (valueToStore.getType() != valueType)
+              valueToStore = arith::ExtSIOp::create(rewriter, loc, valueType,
+                                                    parsedValue);
+          }
+
+          // Create 4-state struct with unknown=0 (parsed values are known)
+          Value zero = hw::ConstantOp::create(rewriter, loc, valueType, 0);
+          Value fourStateValue =
+              createFourStateStruct(rewriter, loc, valueToStore, zero);
+
+          // Create llhd.drive to store the value
+          auto timeAttr =
+              llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
+          auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+          llhd::DriveOp::create(rewriter, loc, destRef, fourStateValue, time,
                                 Value{});
         } else if (targetTy.isIntOrFloat()) {
           unsigned targetWidth = targetTy.getIntOrFloatBitWidth();
