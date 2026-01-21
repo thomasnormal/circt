@@ -798,6 +798,50 @@ struct ExprVisitor {
       if (!value)
         return {};
 
+      // For tagged unions, we need to extract through the struct wrapper.
+      // Tagged unions are lowered as struct<{tag: iN, data: union<...>}>
+      // First extract the data field, then extract the member from the union.
+      if (valueType->isTaggedUnion()) {
+        Type valueConvertedType = value.getType();
+        // Handle RefType wrapper for lvalues
+        if (auto refType = dyn_cast<moore::RefType>(valueConvertedType))
+          valueConvertedType = refType.getNestedType();
+
+        // Get union type from the struct wrapper's data field
+        Type unionType;
+        if (auto packedStruct = dyn_cast<moore::StructType>(valueConvertedType)) {
+          if (packedStruct.getMembers().size() == 2)
+            unionType = packedStruct.getMembers()[1].type;
+        } else if (auto unpackedStruct =
+                       dyn_cast<moore::UnpackedStructType>(valueConvertedType)) {
+          if (unpackedStruct.getMembers().size() == 2)
+            unionType = unpackedStruct.getMembers()[1].type;
+        }
+
+        if (!unionType) {
+          mlir::emitError(loc)
+              << "tagged union must have struct wrapper with data field";
+          return {};
+        }
+
+        if (isLvalue) {
+          // Extract reference to data field, then reference to union member
+          auto dataRefType = moore::RefType::get(
+              cast<moore::UnpackedType>(unionType));
+          auto dataRef = moore::StructExtractRefOp::create(
+              builder, loc, dataRefType,
+              builder.getStringAttr("data"), value);
+          return moore::UnionExtractRefOp::create(builder, loc, resultType,
+                                                  memberName, dataRef);
+        }
+        // Extract data field, then extract union member
+        auto dataValue = moore::StructExtractOp::create(
+            builder, loc, unionType,
+            builder.getStringAttr("data"), value);
+        return moore::UnionExtractOp::create(builder, loc, type, memberName,
+                                             dataValue);
+      }
+
       if (isLvalue)
         return moore::UnionExtractRefOp::create(builder, loc, resultType,
                                                 memberName, value);
@@ -4940,6 +4984,142 @@ struct RvalueExprVisitor : public ExprVisitor {
     // indicates the constraint is satisfied.
     auto boolType = moore::IntType::getInt(context.getContext(), 1);
     return moore::ConstantOp::create(builder, loc, boolType, 1);
+  }
+
+  /// Handle tagged union expressions like `tagged Valid(42)`.
+  /// These create a tagged union value by setting the tag and the value
+  /// for a specific member.
+  Value visit(const slang::ast::TaggedUnionExpression &expr) {
+    // Convert the result type (should be struct<{tag, data}> or ustruct<{tag, data}>)
+    auto resultType = context.convertType(*expr.type);
+    if (!resultType)
+      return {};
+
+    // The result type should be a struct with {tag, data} fields
+    // Can be either packed (StructType) or unpacked (UnpackedStructType)
+    ArrayRef<moore::StructLikeMember> structMembers;
+    bool isPacked = false;
+    if (auto packedStruct = dyn_cast<moore::StructType>(resultType)) {
+      structMembers = packedStruct.getMembers();
+      isPacked = true;
+    } else if (auto unpackedStruct =
+                   dyn_cast<moore::UnpackedStructType>(resultType)) {
+      structMembers = unpackedStruct.getMembers();
+      isPacked = false;
+    } else {
+      mlir::emitError(loc)
+          << "tagged union type must be struct or ustruct<{tag, data}>";
+      return {};
+    }
+
+    if (structMembers.size() != 2) {
+      mlir::emitError(loc) << "tagged union wrapper must have 2 fields";
+      return {};
+    }
+
+    auto tagMember = structMembers[0];
+    auto dataMember = structMembers[1];
+
+    // Get the underlying union type from the data member
+    Type unionType = dataMember.type;
+    SmallVector<moore::StructLikeMember> unionMembers;
+    if (auto packedUnion = dyn_cast<moore::UnionType>(unionType)) {
+      unionMembers.append(packedUnion.getMembers().begin(),
+                          packedUnion.getMembers().end());
+    } else if (auto unpackedUnion =
+                   dyn_cast<moore::UnpackedUnionType>(unionType)) {
+      unionMembers.append(unpackedUnion.getMembers().begin(),
+                          unpackedUnion.getMembers().end());
+    } else {
+      mlir::emitError(loc) << "tagged union data field must be a union type";
+      return {};
+    }
+
+    // Find the tag index for the member being set
+    StringRef memberName(expr.member.name);
+    unsigned tagIndex = 0;
+    bool found = false;
+    for (size_t i = 0; i < unionMembers.size(); ++i) {
+      if (unionMembers[i].name.getValue() == memberName) {
+        tagIndex = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      mlir::emitError(loc) << "tagged union member '" << memberName
+                           << "' not found";
+      return {};
+    }
+
+    // Create the tag constant
+    auto tagIntType = dyn_cast<moore::IntType>(tagMember.type);
+    if (!tagIntType) {
+      mlir::emitError(loc) << "tagged union tag must be an integer type";
+      return {};
+    }
+    auto tagValue = moore::ConstantOp::create(builder, loc, tagIntType,
+                                              static_cast<int64_t>(tagIndex));
+
+    // Create the union value
+    Value unionValue;
+    if (expr.valueExpr) {
+      // Convert the value expression
+      auto value = context.convertRvalueExpression(*expr.valueExpr);
+      if (!value)
+        return {};
+      // Create the union with the converted value
+      unionValue = moore::UnionCreateOp::create(
+          builder, loc, unionType, value,
+          builder.getStringAttr(memberName));
+    } else {
+      // Void member - create a union with a dummy value.
+      // For void members, we need to create a union value even though
+      // the member itself has void type. We find the first non-void member
+      // and create a zero-initialized value for it, since all union members
+      // share the same storage.
+      moore::StructLikeMember *firstNonVoidMember = nullptr;
+      for (auto &member : unionMembers) {
+        if (!isa<moore::VoidType>(member.type)) {
+          firstNonVoidMember = &member;
+          break;
+        }
+      }
+
+      if (!firstNonVoidMember) {
+        // All members are void - create a 1-bit placeholder union
+        auto dummyType = moore::IntType::getInt(context.getContext(), 1);
+        auto dummyValue = moore::ConstantOp::create(builder, loc, dummyType, 0);
+        // Use the void member name but with an i1 placeholder value
+        unionValue = moore::UnionCreateOp::create(
+            builder, loc, unionType, dummyValue,
+            builder.getStringAttr(memberName));
+      } else {
+        // Create a zero value for the first non-void member
+        Value zeroValue;
+        if (auto intType = dyn_cast<moore::IntType>(firstNonVoidMember->type)) {
+          zeroValue = moore::ConstantOp::create(builder, loc, intType, 0);
+        } else {
+          // For other types, try to create a default initialization
+          mlir::emitError(loc) << "cannot create default value for tagged "
+                               << "union with void member and non-integer "
+                               << "first member";
+          return {};
+        }
+        unionValue = moore::UnionCreateOp::create(
+            builder, loc, unionType, zeroValue,
+            builder.getStringAttr(firstNonVoidMember->name.getValue()));
+      }
+    }
+
+    // Create the wrapper struct with {tag, data}
+    SmallVector<Value> structFields = {tagValue, unionValue};
+    if (isPacked) {
+      return moore::StructCreateOp::create(
+          builder, loc, cast<moore::StructType>(resultType), structFields);
+    }
+    return moore::StructCreateOp::create(
+        builder, loc, cast<moore::UnpackedStructType>(resultType), structFields);
   }
 
   /// Handle empty argument expressions.
