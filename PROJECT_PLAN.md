@@ -66,11 +66,11 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 92 - FINAL)
+### Track Status & Next Tasks (Iteration 93 - Starting)
 
-**ITERATION 92 COMPLETE - Major Milestone Achieved!**
+**Iteration 92 Complete!** Now starting Iteration 93.
 
-**Test Results (Iteration 92 - FINAL)**:
+**Test Results (Iteration 92 Final)**:
 - sv-tests: **81.8% pass rate** (840/1027 tests) - **+22.9% improvement from Iteration 87!**
 - verilator-verification: 62% parse-only, 95% MooreToCore (2% improvement)
 - Yosys SVA BMC: **82%** (up from 75% in Iteration 91)
@@ -155,6 +155,12 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ Virtual interfaces | Full infrastructure complete |
 | ⚠️ **Virtual method dispatch** | **NEXT**: Base/derived class method resolution |
 | ⚠️ Method overloading | Edge cases in class hierarchy |
+
+**Iteration 93 Priorities**:
+1. **Virtual method dispatch** - Enable UVM polymorphism (factory, callbacks)
+2. **sv-tests moore.conversion** - Fix 19 tests with type conversion legalization
+3. **Hierarchical interface task calls** - Unblock AHB AVIP
+4. **System call stubs** - $strobe, $fmonitor, $fflush, etc. (9+ tests)
 
 **Track B: BMC/Formal (Codex Agent Handling) - Iteration 92 Progress**
 | Status | Progress |
