@@ -254,6 +254,41 @@ struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
   }
 };
 
+/// Convert ltl.past to SMT boolean.
+/// past(signal, N) returns the value of signal from N cycles ago.
+/// For BMC, this is handled specially in the BMC conversion by creating
+/// past buffers that track signal history. This fallback pattern handles
+/// any remaining past ops that weren't processed by BMC (e.g., past(x, 0)).
+///
+/// NOTE: For past with N > 0 outside of BMC, we return false (conservative
+/// approximation that the past value was unknown/false). The proper handling
+/// is done in the BMC infrastructure.
+struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
+  using OpConversionPattern<ltl::PastOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::PastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    uint64_t delay = op.getDelay();
+
+    if (delay == 0) {
+      // past(x, 0) is just x - pass through the input
+      Value input = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()),
+          adaptor.getInput());
+      if (!input)
+        return failure();
+      rewriter.replaceOp(op, input);
+    } else {
+      // For past with delay > 0 outside of BMC, return false (conservative).
+      // This handles edge cases where ltl.past appears outside BMC context.
+      // The proper handling with buffer tracking is done in VerifBoundedModelCheckingOpConversion.
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, false);
+    }
+    return success();
+  }
+};
+
 /// Convert ltl.concat to SMT boolean.
 /// Concatenation in LTL joins sequences end-to-end. For BMC at a single
 /// time step, concat(a, b) means: a holds at its time range, then b holds
@@ -751,6 +786,17 @@ struct DelayInfo {
   size_t bufferStartIndex;   // Index into the delay buffer iter_args
 };
 
+/// Information about a ltl.past operation that needs multi-step tracking.
+/// For past N, we need N slots in the past buffer to track the signal history.
+/// This is used for $rose/$fell which look at the previous cycle's value.
+struct PastInfo {
+  ltl::PastOp op;            // The original past operation
+  Value inputSignal;         // The signal being observed in the past
+  uint64_t delay;            // How many cycles ago (N)
+  uint64_t bufferSize;       // Buffer slots needed (same as delay)
+  size_t bufferStartIndex;   // Index into the past buffer iter_args
+};
+
 /// Rewrite ltl.implication with an exact delayed consequent into a past-form
 /// implication for BMC. This allows the BMC loop to use past buffers instead
 /// of looking ahead into future time steps.
@@ -902,7 +948,7 @@ struct VerifBoundedModelCheckingOpConversion
     });
     if (nonFinalAsserts.size() > 1) {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPoint(nonFinalAsserts.front());
+      rewriter.setInsertionPoint(circuitBlock.getTerminator());
       Value combined =
           ltl::AndOp::create(rewriter, loc, assertProps).getResult();
       verif::AssertOp::create(rewriter, loc, combined, Value(), StringAttr());
@@ -1031,6 +1077,33 @@ struct VerifBoundedModelCheckingOpConversion
       totalDelaySlots += bufferSize;
     });
 
+    // =========================================================================
+    // Past operation tracking for $rose/$fell:
+    // ltl.past operations look at signal values from previous cycles.
+    // For past(signal, N), we need N buffer slots to track signal history.
+    // The buffer works identically to delay buffers - buffer[0] holds the
+    // oldest value (from N cycles ago).
+    // =========================================================================
+    SmallVector<PastInfo> pastInfos;
+    size_t totalPastSlots = 0;
+
+    circuitBlock.walk([&](ltl::PastOp pastOp) {
+      if (pastOp.use_empty())
+        return;
+      uint64_t delay = pastOp.getDelay();
+      if (delay == 0)
+        return;
+
+      PastInfo info;
+      info.op = pastOp;
+      info.inputSignal = pastOp.getInput();
+      info.delay = delay;
+      info.bufferSize = delay;
+      info.bufferStartIndex = totalPastSlots;
+      pastInfos.push_back(info);
+      totalPastSlots += delay;
+    });
+
     // Second pass: modify the circuit block to add delay buffer infrastructure
     // We need to do this BEFORE region type conversion.
     //
@@ -1110,6 +1183,69 @@ struct VerifBoundedModelCheckingOpConversion
       oldCircuitInputTy.clear();
       oldCircuitInputTy.append(op.getCircuit().getArgumentTypes().begin(),
                                op.getCircuit().getArgumentTypes().end());
+    }
+
+    // =========================================================================
+    // Process ltl.past operations for $rose/$fell support.
+    // Past operations look at signal values from previous cycles.
+    // The buffer mechanism is the same as delay ops: buffer[0] is the oldest
+    // value (from N cycles ago), which is exactly what past(signal, N) needs.
+    // =========================================================================
+    SmallVector<ltl::PastOp> pastOpsToErase;
+    if (!pastInfos.empty()) {
+      auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
+
+      // Get current operands and split off the final check values
+      SmallVector<Value> origOperands(yieldOp.getOperands().begin(),
+                                      yieldOp.getOperands().end());
+      size_t numOrigOutputs = origOperands.size() - numFinalAsserts;
+      SmallVector<Value> newYieldOperands(origOperands.begin(),
+                                          origOperands.begin() + numOrigOutputs);
+      SmallVector<Value> pastBufferOutputs;
+
+      for (auto &info : pastInfos) {
+        // The input signal type - past ops work on i1 signals
+        Type bufferElementType = info.inputSignal.getType();
+
+        // Add buffer arguments for the past buffer (oldest to newest)
+        SmallVector<Value> bufferArgs;
+        for (uint64_t i = 0; i < info.bufferSize; ++i) {
+          auto arg = circuitBlock.addArgument(bufferElementType, loc);
+          bufferArgs.push_back(arg);
+        }
+
+        // Replace all uses of the past op with the past value.
+        // past(signal, N) returns the value from N cycles ago, which is buffer[0]
+        // after N cycles of shifting.
+        Value pastValue = bufferArgs[0];
+        info.op.replaceAllUsesWith(pastValue);
+        pastOpsToErase.push_back(info.op);
+
+        // Add yield operands: shifted buffer (drop oldest, add current)
+        // new_buffer = [buffer[1], buffer[2], ..., buffer[N-1], current_signal]
+        for (uint64_t i = 1; i < info.bufferSize; ++i)
+          pastBufferOutputs.push_back(bufferArgs[i]);
+        pastBufferOutputs.push_back(info.inputSignal);
+      }
+
+      // Construct final yield: [orig outputs] [past buffers] [final checks]
+      newYieldOperands.append(pastBufferOutputs);
+      newYieldOperands.append(origOperands.begin() + numOrigOutputs,
+                              origOperands.end());
+
+      yieldOp->setOperands(newYieldOperands);
+
+      // Erase the past ops
+      for (auto pastOp : pastOpsToErase)
+        rewriter.eraseOp(pastOp);
+
+      // Update the type vectors
+      oldCircuitInputTy.clear();
+      oldCircuitInputTy.append(op.getCircuit().getArgumentTypes().begin(),
+                               op.getCircuit().getArgumentTypes().end());
+
+      // Update totalDelaySlots to include past slots for buffer initialization
+      totalDelaySlots += totalPastSlots;
     }
 
     // Re-compute circuit types after potential modification
@@ -1531,7 +1667,7 @@ void circt::populateVerifToSMTConversionPatterns(
   patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLNotOpConversion,
                LTLImplicationOpConversion, LTLEventuallyOpConversion,
                LTLUntilOpConversion, LTLBooleanConstantOpConversion,
-               LTLDelayOpConversion, LTLConcatOpConversion,
+               LTLDelayOpConversion, LTLPastOpConversion, LTLConcatOpConversion,
                LTLRepeatOpConversion, LTLGoToRepeatOpConversion,
                LTLNonConsecutiveRepeatOpConversion>(converter,
                                                     patterns.getContext());
@@ -1662,10 +1798,13 @@ void ConvertVerifToSMTPass::runOnOperation() {
   });
 
   // Mark LTL operations as illegal so they get converted to SMT
+  // Note: ltl::PastOp is handled directly in the BMC conversion by replacing
+  // it with buffer arguments, so it's erased before pattern matching.
   target.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::NotOp, ltl::ImplicationOp,
                       ltl::EventuallyOp, ltl::UntilOp, ltl::BooleanConstantOp,
                       ltl::DelayOp, ltl::ConcatOp, ltl::RepeatOp,
-                      ltl::GoToRepeatOp, ltl::NonConsecutiveRepeatOp>();
+                      ltl::GoToRepeatOp, ltl::NonConsecutiveRepeatOp,
+                      ltl::PastOp>();
 
   SymbolCache symCache;
   symCache.addDefinitions(getOperation());

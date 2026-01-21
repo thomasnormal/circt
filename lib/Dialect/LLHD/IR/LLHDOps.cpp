@@ -662,6 +662,7 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
   //
   // Side effects we preserve:
   // - DriveOp: signal assignments
+  // - WaitOp with observed operands: event-based waits (sensitivity list)
   // - sim.proc.print: $display output
   // - sim.terminate: $finish simulation control
   // - Any operation with memory write effects
@@ -672,6 +673,17 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
       if (isa<DriveOp>(innerOp)) {
         hasSideEffect = true;
         return WalkResult::interrupt();
+      }
+      // Check for WaitOp with observed operands (event-based wait).
+      // A process with an event-based wait is reactive - it sets up a
+      // sensitivity list and waits for signal changes. Even if it has no
+      // other visible side effects, removing it would change simulation
+      // semantics.
+      if (auto waitOp = dyn_cast<WaitOp>(innerOp)) {
+        if (!waitOp.getObserved().empty()) {
+          hasSideEffect = true;
+          return WalkResult::interrupt();
+        }
       }
       // Check for sim.proc.print ($display)
       if (innerOp->getName().getStringRef() == "sim.proc.print") {
