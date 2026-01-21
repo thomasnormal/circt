@@ -19,8 +19,10 @@
 
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
+#include "circt/Dialect/Sim/SimOps.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
@@ -109,13 +111,13 @@ private:
 // ProcessExecutionState - Per-process execution state
 //===----------------------------------------------------------------------===//
 
-/// Execution state for an LLHD process being interpreted.
+/// Execution state for an LLHD process or seq.initial block being interpreted.
 struct ProcessExecutionState {
-  /// The process operation being executed.
-  llhd::ProcessOp processOp;
+  /// The process operation being executed (either llhd.process or seq.initial).
+  mlir::Operation *processOrInitialOp = nullptr;
 
   /// Current basic block being executed.
-  mlir::Block *currentBlock;
+  mlir::Block *currentBlock = nullptr;
 
   /// Iterator to the current operation within the block.
   mlir::Block::iterator currentOp;
@@ -129,6 +131,9 @@ struct ProcessExecutionState {
   /// Flag indicating whether the process is waiting.
   bool waiting = false;
 
+  /// Flag indicating this is a seq.initial block (runs once at time 0).
+  bool isInitialBlock = false;
+
   /// The next block to branch to after a wait.
   mlir::Block *destBlock = nullptr;
 
@@ -137,7 +142,21 @@ struct ProcessExecutionState {
 
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
-      : processOp(op), currentBlock(nullptr), halted(false), waiting(false) {}
+      : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
+        halted(false), waiting(false), isInitialBlock(false) {}
+  explicit ProcessExecutionState(seq::InitialOp op)
+      : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
+        halted(false), waiting(false), isInitialBlock(true) {}
+
+  /// Helper to get the process op (returns null if this is a seq.initial).
+  llhd::ProcessOp getProcessOp() const {
+    return mlir::dyn_cast_or_null<llhd::ProcessOp>(processOrInitialOp);
+  }
+
+  /// Helper to get the initial op (returns null if this is an llhd.process).
+  seq::InitialOp getInitialOp() const {
+    return mlir::dyn_cast_or_null<seq::InitialOp>(processOrInitialOp);
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -173,6 +192,15 @@ public:
   /// Get the number of registered processes.
   size_t getNumProcesses() const { return processStates.size(); }
 
+  /// Set a callback to be called when sim.terminate is executed.
+  /// The callback receives (success, verbose) parameters.
+  void setTerminateCallback(std::function<void(bool, bool)> callback) {
+    terminateCallback = std::move(callback);
+  }
+
+  /// Check if termination has been requested.
+  bool isTerminationRequested() const { return terminationRequested; }
+
 private:
   //===--------------------------------------------------------------------===//
   // Signal Registration
@@ -193,6 +221,9 @@ private:
 
   /// Register a single process from an llhd.process operation.
   ProcessId registerProcess(llhd::ProcessOp processOp);
+
+  /// Register a single initial block from a seq.initial operation.
+  ProcessId registerInitialBlock(seq::InitialOp initialOp);
 
   //===--------------------------------------------------------------------===//
   // Process Execution
@@ -283,6 +314,28 @@ private:
                     llvm::SmallVectorImpl<InterpretedValue> &results);
 
   //===--------------------------------------------------------------------===//
+  // Sim Dialect Operation Handlers
+  //===--------------------------------------------------------------------===//
+
+  /// Interpret a sim.proc.print operation.
+  mlir::LogicalResult interpretProcPrint(ProcessId procId,
+                                          sim::PrintFormattedProcOp printOp);
+
+  /// Interpret a sim.terminate operation.
+  mlir::LogicalResult interpretTerminate(ProcessId procId,
+                                          sim::TerminateOp terminateOp);
+
+  /// Evaluate a format string operation to produce output string.
+  std::string evaluateFormatString(ProcessId procId, mlir::Value fmtValue);
+
+  //===--------------------------------------------------------------------===//
+  // Seq Dialect Operation Handlers
+  //===--------------------------------------------------------------------===//
+
+  /// Interpret a seq.yield operation (terminator for seq.initial).
+  mlir::LogicalResult interpretSeqYield(ProcessId procId, seq::YieldOp yieldOp);
+
+  //===--------------------------------------------------------------------===//
   // Value Management
   //===--------------------------------------------------------------------===//
 
@@ -313,6 +366,12 @@ private:
 
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
+
+  /// Callback for sim.terminate operation.
+  std::function<void(bool, bool)> terminateCallback;
+
+  /// Flag indicating if termination has been requested.
+  bool terminationRequested = false;
 };
 
 } // namespace sim

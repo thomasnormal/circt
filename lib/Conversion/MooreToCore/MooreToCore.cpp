@@ -7096,6 +7096,499 @@ struct QueueRSortOpConversion : public RuntimeCallConversionBase<QueueRSortOp> {
   }
 };
 
+/// Conversion for moore.queue.sort.with -> inline loop with key extraction.
+/// Sorts the queue in-place using a custom key expression.
+/// The approach is to extract keys for all elements, sort indices by keys,
+/// then reorder the queue elements.
+struct QueueSortWithOpConversion
+    : public OpConversionPattern<QueueSortWithOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  /// Get the LLVM struct type for a queue: {ptr, i64}.
+  static LLVM::LLVMStructType getQueueStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
+
+  /// Get the size in bytes of an LLVM type.
+  static int64_t getTypeSize(Type type) {
+    if (auto intType = dyn_cast<IntegerType>(type))
+      return (intType.getWidth() + 7) / 8;
+    if (isa<LLVM::LLVMPointerType>(type))
+      return 8;
+    if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+      int64_t size = 0;
+      for (Type fieldType : structType.getBody())
+        size += getTypeSize(fieldType);
+      return size;
+    }
+    return 8;
+  }
+
+  LogicalResult
+  matchAndRewrite(QueueSortWithOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto queueTy = getQueueStructType(ctx);
+
+    // Get element type from the queue reference
+    auto refType = cast<moore::RefType>(op.getQueue().getType());
+    auto nestedType = refType.getNestedType();
+    Type mooreElemType;
+    if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
+      mooreElemType = queueType.getElementType();
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+      mooreElemType = dynArrayType.getElementType();
+    else
+      return rewriter.notifyMatchFailure(op, "unsupported queue type");
+
+    Type elemType = typeConverter->convertType(mooreElemType);
+    if (!elemType)
+      return rewriter.notifyMatchFailure(op, "failed to convert element type");
+
+    // Get the key type from the yield operation
+    Block &body = op.getBody().front();
+    auto yieldOp = dyn_cast<QueueSortKeyYieldOp>(body.getTerminator());
+    if (!yieldOp)
+      return rewriter.notifyMatchFailure(op, "expected queue.sort.key.yield");
+
+    Type mooreKeyType = yieldOp.getKey().getType();
+    Type keyType = typeConverter->convertType(mooreKeyType);
+    if (!keyType)
+      return rewriter.notifyMatchFailure(op, "failed to convert key type");
+
+    // Load the queue from the reference
+    Value queue = LLVM::LoadOp::create(rewriter, loc, queueTy, adaptor.getQueue());
+
+    // Extract queue length and data pointer
+    Value queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queue,
+                                                   ArrayRef<int64_t>{1});
+    Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queue,
+                                                  ArrayRef<int64_t>{0});
+
+    // Allocate arrays for keys and indices
+    Value keysAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, queueLen);
+    Value indicesAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i64Ty, queueLen);
+
+    // Initialize indices and extract keys using a loop
+    Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                         rewriter.getI64IntegerAttr(0));
+    Value step = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(1));
+
+    // First loop: extract keys and initialize indices
+    auto extractLoop = scf::ForOp::create(rewriter, loc, lb, queueLen, step);
+    {
+      rewriter.setInsertionPointToStart(extractLoop.getBody());
+      Value iv = extractLoop.getInductionVar();
+
+      // Store index
+      Value idxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                          indicesAlloca, iv);
+      LLVM::StoreOp::create(rewriter, loc, iv, idxPtr);
+
+      // Load current element
+      Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                           dataPtr, iv);
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
+
+      // Cast LLVM element back to Moore type for the cloned body operations
+      Value elemMoore =
+          UnrealizedConversionCastOp::create(rewriter, loc,
+                                             body.getArgument(0).getType(), elem)
+              .getResult(0);
+
+      // Clone the body region to compute the key
+      IRMapping mapping;
+      mapping.map(body.getArgument(0), elemMoore);
+
+      for (Operation &bodyOp : body.without_terminator()) {
+        Operation *cloned = rewriter.clone(bodyOp, mapping);
+        for (auto [oldResult, newResult] :
+             llvm::zip(bodyOp.getResults(), cloned->getResults()))
+          mapping.map(oldResult, newResult);
+      }
+
+      // Get the key value from the yield and convert to LLVM type
+      Value keyValueMoore = mapping.lookupOrDefault(yieldOp.getKey());
+      Value keyValue = typeConverter->materializeTargetConversion(
+          rewriter, loc, keyType, keyValueMoore);
+      if (!keyValue)
+        return rewriter.notifyMatchFailure(op, "failed to convert key type");
+
+      // Store key
+      Value keyPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, keyType,
+                                          keysAlloca, iv);
+      LLVM::StoreOp::create(rewriter, loc, keyValue, keyPtr);
+
+      rewriter.setInsertionPointAfter(extractLoop);
+    }
+
+    // Bubble sort the indices by keys (simple but works for arbitrary key types)
+    // Outer loop: i from 0 to len-1
+    Value lenMinus1 = arith::SubIOp::create(rewriter, loc, queueLen, step);
+    auto outerLoop = scf::ForOp::create(rewriter, loc, lb, lenMinus1, step);
+    {
+      rewriter.setInsertionPointToStart(outerLoop.getBody());
+      Value i = outerLoop.getInductionVar();
+
+      // Inner loop: j from i+1 to len
+      Value iPlusOne = arith::AddIOp::create(rewriter, loc, i, step);
+      auto innerLoop = scf::ForOp::create(rewriter, loc, iPlusOne, queueLen, step);
+      {
+        rewriter.setInsertionPointToStart(innerLoop.getBody());
+        Value j = innerLoop.getInductionVar();
+
+        // Load indices[i] and indices[j]
+        Value idxPtrI = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                             indicesAlloca, i);
+        Value idxPtrJ = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                             indicesAlloca, j);
+        Value idxI = LLVM::LoadOp::create(rewriter, loc, i64Ty, idxPtrI);
+        Value idxJ = LLVM::LoadOp::create(rewriter, loc, i64Ty, idxPtrJ);
+
+        // Load keys[indices[i]] and keys[indices[j]]
+        Value keyPtrI = LLVM::GEPOp::create(rewriter, loc, ptrTy, keyType,
+                                             keysAlloca, idxI);
+        Value keyPtrJ = LLVM::GEPOp::create(rewriter, loc, ptrTy, keyType,
+                                             keysAlloca, idxJ);
+        Value keyI = LLVM::LoadOp::create(rewriter, loc, keyType, keyPtrI);
+        Value keyJ = LLVM::LoadOp::create(rewriter, loc, keyType, keyPtrJ);
+
+        // Compare keys: if keyI > keyJ, swap indices (ascending order)
+        Value shouldSwap;
+        if (keyType.isIntOrFloat()) {
+          shouldSwap = arith::CmpIOp::create(rewriter, loc,
+                                              arith::CmpIPredicate::sgt,
+                                              keyI, keyJ);
+        } else {
+          // For non-integer types, compare as unsigned bytes
+          shouldSwap = arith::CmpIOp::create(rewriter, loc,
+                                              arith::CmpIPredicate::ugt,
+                                              keyI, keyJ);
+        }
+
+        // Conditionally swap
+        auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, shouldSwap,
+                                       /*withElseRegion=*/false);
+        {
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+          LLVM::StoreOp::create(rewriter, loc, idxJ, idxPtrI);
+          LLVM::StoreOp::create(rewriter, loc, idxI, idxPtrJ);
+        }
+
+        rewriter.setInsertionPointAfter(innerLoop);
+      }
+
+      rewriter.setInsertionPointAfter(outerLoop);
+    }
+
+    // Allocate temporary storage for reordering
+    Value tempAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, queueLen);
+
+    // Copy elements in sorted order to temp
+    auto copyLoop = scf::ForOp::create(rewriter, loc, lb, queueLen, step);
+    {
+      rewriter.setInsertionPointToStart(copyLoop.getBody());
+      Value i = copyLoop.getInductionVar();
+
+      // Get sorted index
+      Value idxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                          indicesAlloca, i);
+      Value sortedIdx = LLVM::LoadOp::create(rewriter, loc, i64Ty, idxPtr);
+
+      // Copy element from original position to new position
+      Value srcPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          dataPtr, sortedIdx);
+      Value dstPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          tempAlloca, i);
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, srcPtr);
+      LLVM::StoreOp::create(rewriter, loc, elem, dstPtr);
+
+      rewriter.setInsertionPointAfter(copyLoop);
+    }
+
+    // Copy sorted elements back to original queue
+    auto copyBackLoop = scf::ForOp::create(rewriter, loc, lb, queueLen, step);
+    {
+      rewriter.setInsertionPointToStart(copyBackLoop.getBody());
+      Value i = copyBackLoop.getInductionVar();
+
+      Value srcPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          tempAlloca, i);
+      Value dstPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          dataPtr, i);
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, srcPtr);
+      LLVM::StoreOp::create(rewriter, loc, elem, dstPtr);
+
+      rewriter.setInsertionPointAfter(copyBackLoop);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.rsort.with -> inline loop with key extraction.
+/// Same as QueueSortWithOpConversion but sorts in descending order.
+struct QueueRSortWithOpConversion
+    : public OpConversionPattern<QueueRSortWithOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  /// Get the LLVM struct type for a queue: {ptr, i64}.
+  static LLVM::LLVMStructType getQueueStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
+
+  /// Get the size in bytes of an LLVM type.
+  static int64_t getTypeSize(Type type) {
+    if (auto intType = dyn_cast<IntegerType>(type))
+      return (intType.getWidth() + 7) / 8;
+    if (isa<LLVM::LLVMPointerType>(type))
+      return 8;
+    if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+      int64_t size = 0;
+      for (Type fieldType : structType.getBody())
+        size += getTypeSize(fieldType);
+      return size;
+    }
+    return 8;
+  }
+
+  LogicalResult
+  matchAndRewrite(QueueRSortWithOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto queueTy = getQueueStructType(ctx);
+
+    // Get element type from the queue reference
+    auto refType = cast<moore::RefType>(op.getQueue().getType());
+    auto nestedType = refType.getNestedType();
+    Type mooreElemType;
+    if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
+      mooreElemType = queueType.getElementType();
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+      mooreElemType = dynArrayType.getElementType();
+    else
+      return rewriter.notifyMatchFailure(op, "unsupported queue type");
+
+    Type elemType = typeConverter->convertType(mooreElemType);
+    if (!elemType)
+      return rewriter.notifyMatchFailure(op, "failed to convert element type");
+
+    // Get the key type from the yield operation
+    Block &body = op.getBody().front();
+    auto yieldOp = dyn_cast<QueueSortKeyYieldOp>(body.getTerminator());
+    if (!yieldOp)
+      return rewriter.notifyMatchFailure(op, "expected queue.sort.key.yield");
+
+    Type mooreKeyType = yieldOp.getKey().getType();
+    Type keyType = typeConverter->convertType(mooreKeyType);
+    if (!keyType)
+      return rewriter.notifyMatchFailure(op, "failed to convert key type");
+
+    // Load the queue from the reference
+    Value queue = LLVM::LoadOp::create(rewriter, loc, queueTy, adaptor.getQueue());
+
+    // Extract queue length and data pointer
+    Value queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queue,
+                                                   ArrayRef<int64_t>{1});
+    Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queue,
+                                                  ArrayRef<int64_t>{0});
+
+    // Allocate arrays for keys and indices
+    Value keysAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, queueLen);
+    Value indicesAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i64Ty, queueLen);
+
+    // Initialize indices and extract keys using a loop
+    Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                         rewriter.getI64IntegerAttr(0));
+    Value step = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(1));
+
+    // First loop: extract keys and initialize indices
+    auto extractLoop = scf::ForOp::create(rewriter, loc, lb, queueLen, step);
+    {
+      rewriter.setInsertionPointToStart(extractLoop.getBody());
+      Value iv = extractLoop.getInductionVar();
+
+      // Store index
+      Value idxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                          indicesAlloca, iv);
+      LLVM::StoreOp::create(rewriter, loc, iv, idxPtr);
+
+      // Load current element
+      Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                           dataPtr, iv);
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
+
+      // Cast LLVM element back to Moore type for the cloned body operations
+      Value elemMoore =
+          UnrealizedConversionCastOp::create(rewriter, loc,
+                                             body.getArgument(0).getType(), elem)
+              .getResult(0);
+
+      // Clone the body region to compute the key
+      IRMapping mapping;
+      mapping.map(body.getArgument(0), elemMoore);
+
+      for (Operation &bodyOp : body.without_terminator()) {
+        Operation *cloned = rewriter.clone(bodyOp, mapping);
+        for (auto [oldResult, newResult] :
+             llvm::zip(bodyOp.getResults(), cloned->getResults()))
+          mapping.map(oldResult, newResult);
+      }
+
+      // Get the key value from the yield and convert to LLVM type
+      Value keyValueMoore = mapping.lookupOrDefault(yieldOp.getKey());
+      Value keyValue = typeConverter->materializeTargetConversion(
+          rewriter, loc, keyType, keyValueMoore);
+      if (!keyValue)
+        return rewriter.notifyMatchFailure(op, "failed to convert key type");
+
+      // Store key
+      Value keyPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, keyType,
+                                          keysAlloca, iv);
+      LLVM::StoreOp::create(rewriter, loc, keyValue, keyPtr);
+
+      rewriter.setInsertionPointAfter(extractLoop);
+    }
+
+    // Bubble sort the indices by keys (simple but works for arbitrary key types)
+    // Outer loop: i from 0 to len-1
+    Value lenMinus1 = arith::SubIOp::create(rewriter, loc, queueLen, step);
+    auto outerLoop = scf::ForOp::create(rewriter, loc, lb, lenMinus1, step);
+    {
+      rewriter.setInsertionPointToStart(outerLoop.getBody());
+      Value i = outerLoop.getInductionVar();
+
+      // Inner loop: j from i+1 to len
+      Value iPlusOne = arith::AddIOp::create(rewriter, loc, i, step);
+      auto innerLoop = scf::ForOp::create(rewriter, loc, iPlusOne, queueLen, step);
+      {
+        rewriter.setInsertionPointToStart(innerLoop.getBody());
+        Value j = innerLoop.getInductionVar();
+
+        // Load indices[i] and indices[j]
+        Value idxPtrI = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                             indicesAlloca, i);
+        Value idxPtrJ = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                             indicesAlloca, j);
+        Value idxI = LLVM::LoadOp::create(rewriter, loc, i64Ty, idxPtrI);
+        Value idxJ = LLVM::LoadOp::create(rewriter, loc, i64Ty, idxPtrJ);
+
+        // Load keys[indices[i]] and keys[indices[j]]
+        Value keyPtrI = LLVM::GEPOp::create(rewriter, loc, ptrTy, keyType,
+                                             keysAlloca, idxI);
+        Value keyPtrJ = LLVM::GEPOp::create(rewriter, loc, ptrTy, keyType,
+                                             keysAlloca, idxJ);
+        Value keyI = LLVM::LoadOp::create(rewriter, loc, keyType, keyPtrI);
+        Value keyJ = LLVM::LoadOp::create(rewriter, loc, keyType, keyPtrJ);
+
+        // Compare keys: if keyI < keyJ, swap indices (descending order)
+        Value shouldSwap;
+        if (keyType.isIntOrFloat()) {
+          shouldSwap = arith::CmpIOp::create(rewriter, loc,
+                                              arith::CmpIPredicate::slt,
+                                              keyI, keyJ);
+        } else {
+          // For non-integer types, compare as unsigned bytes
+          shouldSwap = arith::CmpIOp::create(rewriter, loc,
+                                              arith::CmpIPredicate::ult,
+                                              keyI, keyJ);
+        }
+
+        // Conditionally swap
+        auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, shouldSwap,
+                                       /*withElseRegion=*/false);
+        {
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+          LLVM::StoreOp::create(rewriter, loc, idxJ, idxPtrI);
+          LLVM::StoreOp::create(rewriter, loc, idxI, idxPtrJ);
+        }
+
+        rewriter.setInsertionPointAfter(innerLoop);
+      }
+
+      rewriter.setInsertionPointAfter(outerLoop);
+    }
+
+    // Allocate temporary storage for reordering
+    Value tempAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, queueLen);
+
+    // Copy elements in sorted order to temp
+    auto copyLoop = scf::ForOp::create(rewriter, loc, lb, queueLen, step);
+    {
+      rewriter.setInsertionPointToStart(copyLoop.getBody());
+      Value i = copyLoop.getInductionVar();
+
+      // Get sorted index
+      Value idxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                          indicesAlloca, i);
+      Value sortedIdx = LLVM::LoadOp::create(rewriter, loc, i64Ty, idxPtr);
+
+      // Copy element from original position to new position
+      Value srcPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          dataPtr, sortedIdx);
+      Value dstPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          tempAlloca, i);
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, srcPtr);
+      LLVM::StoreOp::create(rewriter, loc, elem, dstPtr);
+
+      rewriter.setInsertionPointAfter(copyLoop);
+    }
+
+    // Copy sorted elements back to original queue
+    auto copyBackLoop = scf::ForOp::create(rewriter, loc, lb, queueLen, step);
+    {
+      rewriter.setInsertionPointToStart(copyBackLoop.getBody());
+      Value i = copyBackLoop.getInductionVar();
+
+      Value srcPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          tempAlloca, i);
+      Value dstPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType,
+                                          dataPtr, i);
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, srcPtr);
+      LLVM::StoreOp::create(rewriter, loc, elem, dstPtr);
+
+      rewriter.setInsertionPointAfter(copyBackLoop);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.sort.key.yield -> no-op (handled by parent).
+/// This operation is just a terminator and is handled by QueueSortWithOpConversion.
+struct QueueSortKeyYieldOpConversion
+    : public OpConversionPattern<QueueSortKeyYieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(QueueSortKeyYieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // This operation is cloned inside the parent's conversion and the key value
+    // is extracted directly. The original operation is erased when the parent
+    // (QueueSortWithOp or QueueRSortWithOp) is converted.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.queue.shuffle -> runtime function call.
 struct QueueShuffleOpConversion
     : public RuntimeCallConversionBase<QueueShuffleOp> {
@@ -12244,6 +12737,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueReduceOpConversion,
     QueueSortOpConversion,
     QueueRSortOpConversion,
+    QueueSortWithOpConversion,
+    QueueRSortWithOpConversion,
+    QueueSortKeyYieldOpConversion,
     QueueShuffleOpConversion,
     QueueConcatOpConversion,
     QueueSliceOpConversion,

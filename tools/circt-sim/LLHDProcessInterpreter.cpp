@@ -14,6 +14,8 @@
 #include "LLHDProcessInterpreter.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
+#include "circt/Dialect/Sim/SimOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -174,6 +176,11 @@ LLHDProcessInterpreter::registerProcesses(hw::HWModuleOp hwModule) {
     LLVM_DEBUG(llvm::dbgs() << "  Found combinational process (TODO)\n");
   });
 
+  // Also handle seq.initial operations for $display/$finish support
+  hwModule.walk([&](seq::InitialOp initialOp) {
+    registerInitialBlock(initialOp);
+  });
+
   return success();
 }
 
@@ -200,6 +207,34 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
                           << procId << "\n");
 
   // Schedule the process to run at time 0 (initialization)
+  scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+
+  return procId;
+}
+
+ProcessId LLHDProcessInterpreter::registerInitialBlock(seq::InitialOp initialOp) {
+  // Generate a process name for the initial block
+  std::string name = "seq_initial_" + std::to_string(processStates.size());
+
+  // Create the execution state for this initial block
+  ProcessExecutionState state(initialOp);
+
+  // Register with the scheduler, providing a callback that executes this block
+  ProcessId procId = scheduler.registerProcess(
+      name, [this, procId = processStates.size() + 1]() {
+        executeProcess(procId);
+      });
+
+  // Store the state - initial blocks have a body with a single block
+  state.currentBlock = initialOp.getBodyBlock();
+  state.currentOp = state.currentBlock->begin();
+  processStates[procId] = std::move(state);
+  opToProcessId[initialOp.getOperation()] = procId;
+
+  LLVM_DEBUG(llvm::dbgs() << "  Registered initial block '" << name
+                          << "' with ID " << procId << "\n");
+
+  // Schedule the initial block to run at time 0 (initialization)
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
 
   return procId;
@@ -367,6 +402,27 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto constTimeOp = dyn_cast<llhd::ConstantTimeOp>(op))
     return interpretConstantTime(procId, constTimeOp);
+
+  // Sim dialect operations - for $display support
+  if (auto printOp = dyn_cast<sim::PrintFormattedProcOp>(op))
+    return interpretProcPrint(procId, printOp);
+
+  // Sim dialect operations - for $finish support
+  if (auto terminateOp = dyn_cast<sim::TerminateOp>(op))
+    return interpretTerminate(procId, terminateOp);
+
+  // Seq dialect operations - seq.yield terminates seq.initial blocks
+  if (auto yieldOp = dyn_cast<seq::YieldOp>(op))
+    return interpretSeqYield(procId, yieldOp);
+
+  // Format string operations are consumed by interpretProcPrint - just return
+  // success as they don't need individual interpretation
+  if (isa<sim::FormatLiteralOp, sim::FormatHexOp, sim::FormatDecOp,
+          sim::FormatBinOp, sim::FormatOctOp, sim::FormatCharOp,
+          sim::FormatStringConcatOp, sim::FormatDynStringOp>(op)) {
+    // These ops are evaluated lazily when their results are used
+    return success();
+  }
 
   // HW constant operations
   if (auto constOp = dyn_cast<hw::ConstantOp>(op)) {
@@ -2048,4 +2104,155 @@ unsigned LLHDProcessInterpreter::getTypeWidth(Type type) {
 
   // Default to 1 bit for unknown types
   return 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Sim Dialect Operation Handlers
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+LLHDProcessInterpreter::interpretProcPrint(ProcessId procId,
+                                            sim::PrintFormattedProcOp printOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.proc.print\n");
+
+  // Evaluate the format string and print it
+  std::string output = evaluateFormatString(procId, printOp.getInput());
+
+  // Print to stdout
+  llvm::outs() << output;
+  llvm::outs().flush();
+
+  return success();
+}
+
+std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
+                                                          Value fmtValue) {
+  Operation *defOp = fmtValue.getDefiningOp();
+  if (!defOp)
+    return "<unknown>";
+
+  // Handle sim.fmt.literal - literal string
+  if (auto litOp = dyn_cast<sim::FormatLiteralOp>(defOp)) {
+    return litOp.getLiteral().str();
+  }
+
+  // Handle sim.fmt.concat - concatenation of format strings
+  if (auto concatOp = dyn_cast<sim::FormatStringConcatOp>(defOp)) {
+    std::string result;
+    for (Value input : concatOp.getInputs()) {
+      result += evaluateFormatString(procId, input);
+    }
+    return result;
+  }
+
+  // Handle sim.fmt.hex - hexadecimal integer format
+  if (auto hexOp = dyn_cast<sim::FormatHexOp>(defOp)) {
+    InterpretedValue val = getValue(procId, hexOp.getValue());
+    if (val.isX())
+      return "x";
+    llvm::SmallString<32> hexStr;
+    val.getAPInt().toStringUnsigned(hexStr, 16);
+    if (hexOp.getIsHexUppercase()) {
+      std::string upperHex = hexStr.str().upper();
+      return upperHex;
+    }
+    return std::string(hexStr.str());
+  }
+
+  // Handle sim.fmt.dec - decimal integer format
+  if (auto decOp = dyn_cast<sim::FormatDecOp>(defOp)) {
+    InterpretedValue val = getValue(procId, decOp.getValue());
+    if (val.isX())
+      return "x";
+    if (decOp.getIsSigned()) {
+      return std::to_string(val.getAPInt().getSExtValue());
+    }
+    return std::to_string(val.getUInt64());
+  }
+
+  // Handle sim.fmt.bin - binary integer format
+  if (auto binOp = dyn_cast<sim::FormatBinOp>(defOp)) {
+    InterpretedValue val = getValue(procId, binOp.getValue());
+    if (val.isX())
+      return "x";
+    llvm::SmallString<64> binStr;
+    val.getAPInt().toStringUnsigned(binStr, 2);
+    return std::string(binStr.str());
+  }
+
+  // Handle sim.fmt.oct - octal integer format
+  if (auto octOp = dyn_cast<sim::FormatOctOp>(defOp)) {
+    InterpretedValue val = getValue(procId, octOp.getValue());
+    if (val.isX())
+      return "x";
+    llvm::SmallString<32> octStr;
+    val.getAPInt().toStringUnsigned(octStr, 8);
+    return std::string(octStr.str());
+  }
+
+  // Handle sim.fmt.char - character format
+  if (auto charOp = dyn_cast<sim::FormatCharOp>(defOp)) {
+    InterpretedValue val = getValue(procId, charOp.getValue());
+    if (val.isX())
+      return "?";
+    char c = static_cast<char>(val.getUInt64() & 0xFF);
+    return std::string(1, c);
+  }
+
+  // Handle sim.fmt.dyn_string - dynamic string
+  if (auto dynStrOp = dyn_cast<sim::FormatDynStringOp>(defOp)) {
+    // The dynamic string value is a struct {ptr, len}
+    // For now, we can't directly interpret LLVM struct values
+    // Just return a placeholder
+    return "<dynamic string>";
+  }
+
+  // Unknown format operation
+  return "<unsupported format>";
+}
+
+LogicalResult LLHDProcessInterpreter::interpretTerminate(
+    ProcessId procId, sim::TerminateOp terminateOp) {
+  bool success = terminateOp.getSuccess();
+  bool verbose = terminateOp.getVerbose();
+
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.terminate ("
+                          << (success ? "success" : "failure") << ", "
+                          << (verbose ? "verbose" : "quiet") << ")\n");
+
+  // Mark termination requested
+  terminationRequested = true;
+
+  // Call the terminate callback if set
+  if (terminateCallback) {
+    terminateCallback(success, verbose);
+  }
+
+  // Mark the process as halted
+  auto &state = processStates[procId];
+  state.halted = true;
+
+  // Terminate the process in the scheduler
+  scheduler.terminateProcess(procId);
+
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// Seq Dialect Operation Handlers
+//===----------------------------------------------------------------------===//
+
+LogicalResult LLHDProcessInterpreter::interpretSeqYield(ProcessId procId,
+                                                         seq::YieldOp yieldOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting seq.yield - terminating initial block\n");
+
+  auto &state = processStates[procId];
+
+  // seq.yield terminates the initial block - mark it as halted
+  state.halted = true;
+
+  // Terminate the process in the scheduler
+  scheduler.terminateProcess(procId);
+
+  return success();
 }
