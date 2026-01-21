@@ -70,8 +70,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **ITERATION 92 COMPLETE - Major Milestone Achieved!**
 
-**Test Results (Iteration 92)**:
-- sv-tests: **78.9% pass rate** (810/1027 tests) - **+17.8% improvement!**
+**Test Results (Iteration 92 - FINAL)**:
+- sv-tests: **81.8% pass rate** (840/1027 tests) - **+22.9% improvement from Iteration 87!**
 - verilator-verification: 62% parse-only, 95% MooreToCore (2% improvement)
 - Yosys SVA BMC: **82%** (up from 75% in Iteration 91)
 - AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
@@ -85,6 +85,9 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 5. ✅ **moore.and region regression** - Fixed parallel region scheduling (57 tests)
 6. ✅ **Virtual interface binding** - Confirmed full infrastructure complete and working
 7. ✅ **I2S AVIP assertions** - Verified all assertions compile and execute correctly
+8. ✅ **VoidType conversion fix** - Resolved void return type handling in function conversions (+62 tests)
+9. ✅ **Assert parent constraint fix** - Fixed constraint context inheritance for nested assertions (+22 tests)
+10. ✅ **LTL non-overlapping delay fix** - Corrected `##` operator semantics for non-overlapping sequences
 
 **AVIP Pipeline Status**:
 | AVIP | ImportVerilog | MooreToCore | Remaining Blocker |
