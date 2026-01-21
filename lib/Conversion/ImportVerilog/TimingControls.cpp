@@ -269,6 +269,14 @@ Context::convertTimingControl(const slang::ast::TimingControl &ctrl,
   {
     auto previousCallback = rvalueReadCallback;
     auto done = llvm::make_scope_exit([&] { rvalueReadCallback = previousCallback; });
+    auto previousAssertionClock = currentAssertionClock;
+    auto clockDone =
+        llvm::make_scope_exit([&] { currentAssertionClock = previousAssertionClock; });
+    currentAssertionClock = nullptr;
+    if (auto *signalCtrl = ctrl.as_if<slang::ast::SignalEventControl>()) {
+      if (!signalCtrl->iffCondition)
+        currentAssertionClock = signalCtrl;
+    }
     if (implicitWaitOp) {
       rvalueReadCallback = [&](moore::ReadOp readOp) {
         readValues.insert(readOp.getInput());

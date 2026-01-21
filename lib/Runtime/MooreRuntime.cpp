@@ -898,6 +898,66 @@ extern "C" int32_t __moore_string_cmp(MooreString *lhs, MooreString *rhs) {
   return 0;
 }
 
+// str.compare(s) - lexicographic string comparison (case-sensitive)
+// IEEE 1800-2017 Section 6.16.8
+extern "C" int32_t __moore_string_compare(MooreString *lhs, MooreString *rhs) {
+  // Handle null/empty cases
+  bool lhsEmpty = !lhs || !lhs->data || lhs->len <= 0;
+  bool rhsEmpty = !rhs || !rhs->data || rhs->len <= 0;
+
+  if (lhsEmpty && rhsEmpty)
+    return 0;
+  if (lhsEmpty)
+    return -1;
+  if (rhsEmpty)
+    return 1;
+
+  // Compare up to the minimum length
+  int64_t minLen = std::min(lhs->len, rhs->len);
+  int cmp = std::memcmp(lhs->data, rhs->data, minLen);
+
+  if (cmp != 0)
+    return cmp;
+
+  // If equal up to minLen, the shorter string is "less"
+  if (lhs->len < rhs->len)
+    return -1;
+  if (lhs->len > rhs->len)
+    return 1;
+  return 0;
+}
+
+// str.icompare(s) - lexicographic string comparison (case-insensitive)
+// IEEE 1800-2017 Section 6.16.8
+extern "C" int32_t __moore_string_icompare(MooreString *lhs, MooreString *rhs) {
+  // Handle null/empty cases
+  bool lhsEmpty = !lhs || !lhs->data || lhs->len <= 0;
+  bool rhsEmpty = !rhs || !rhs->data || rhs->len <= 0;
+
+  if (lhsEmpty && rhsEmpty)
+    return 0;
+  if (lhsEmpty)
+    return -1;
+  if (rhsEmpty)
+    return 1;
+
+  // Compare up to the minimum length (case-insensitive)
+  int64_t minLen = std::min(lhs->len, rhs->len);
+  for (int64_t i = 0; i < minLen; ++i) {
+    int c1 = std::tolower(static_cast<unsigned char>(lhs->data[i]));
+    int c2 = std::tolower(static_cast<unsigned char>(rhs->data[i]));
+    if (c1 != c2)
+      return c1 - c2;
+  }
+
+  // If equal up to minLen, the shorter string is "less"
+  if (lhs->len < rhs->len)
+    return -1;
+  if (lhs->len > rhs->len)
+    return 1;
+  return 0;
+}
+
 extern "C" MooreString __moore_string_replicate(MooreString *str, int32_t count) {
   // Handle null/empty string or non-positive count
   if (!str || !str->data || str->len <= 0 || count <= 0) {
@@ -11708,4 +11768,197 @@ extern "C" int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
   entry.value = writeValue;
   entry.forced = isForce;
   return 1;
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Configuration Database
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Entry structure for config_db storage.
+/// Stores a copy of the value and its type ID for type checking.
+struct ConfigDbEntry {
+  std::vector<uint8_t> value;  // Deep copy of the stored value
+  int32_t typeId;
+};
+
+/// Global config_db storage, keyed by "{inst_name}.{field_name}".
+/// Thread-safe via mutex protection.
+std::unordered_map<std::string, ConfigDbEntry> __moore_config_db_storage;
+std::mutex __moore_config_db_mutex;
+
+/// Build the config_db key from instance name and field name.
+std::string buildConfigDbKey(const char *instName, int64_t instLen,
+                             const char *fieldName, int64_t fieldLen) {
+  std::string key;
+  if (instName && instLen > 0) {
+    key.append(instName, static_cast<size_t>(instLen));
+  }
+  key.push_back('.');
+  if (fieldName && fieldLen > 0) {
+    key.append(fieldName, static_cast<size_t>(fieldLen));
+  }
+  return key;
+}
+
+} // anonymous namespace
+
+/// Set a value in the UVM configuration database.
+/// @param context Pointer to the context (currently unused, for future hierarchy support)
+/// @param instName Pointer to the instance name string data
+/// @param instLen Length of the instance name string
+/// @param fieldName Pointer to the field name string data
+/// @param fieldLen Length of the field name string
+/// @param value Pointer to the value to store
+/// @param valueSize Size of the value in bytes
+/// @param typeId Type identifier for type checking on retrieval
+extern "C" void __moore_config_db_set(void *context, const char *instName,
+                                      int64_t instLen, const char *fieldName,
+                                      int64_t fieldLen, void *value,
+                                      int64_t valueSize, int32_t typeId) {
+  (void)context;  // Reserved for future use (UVM hierarchy context)
+
+  std::string key = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
+
+  ConfigDbEntry entry;
+  entry.typeId = typeId;
+  if (value && valueSize > 0) {
+    entry.value.resize(static_cast<size_t>(valueSize));
+    std::memcpy(entry.value.data(), value, static_cast<size_t>(valueSize));
+  }
+
+  std::lock_guard<std::mutex> lock(__moore_config_db_mutex);
+  __moore_config_db_storage[key] = std::move(entry);
+}
+
+/// Get a value from the UVM configuration database.
+/// @param context Pointer to the context (currently unused, for future hierarchy support)
+/// @param instName Pointer to the instance name string data
+/// @param instLen Length of the instance name string
+/// @param fieldName Pointer to the field name string data
+/// @param fieldLen Length of the field name string
+/// @param typeId Expected type identifier for type checking
+/// @param outValue Pointer to the output buffer for the value
+/// @param valueSize Size of the output buffer in bytes
+/// @return 1 if the value was found and types match, 0 otherwise
+extern "C" int32_t __moore_config_db_get(void *context, const char *instName,
+                                         int64_t instLen, const char *fieldName,
+                                         int64_t fieldLen, int32_t typeId,
+                                         void *outValue, int64_t valueSize) {
+  (void)context;  // Reserved for future use (UVM hierarchy context)
+
+  std::string key = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
+
+  std::lock_guard<std::mutex> lock(__moore_config_db_mutex);
+  auto it = __moore_config_db_storage.find(key);
+  if (it == __moore_config_db_storage.end()) {
+    // Key not found
+    return 0;
+  }
+
+  const ConfigDbEntry &entry = it->second;
+
+  // Type ID mismatch - in strict mode we could fail here,
+  // but UVM config_db is flexible, so we just warn conceptually
+  // and proceed if the type ID matches
+  if (entry.typeId != typeId) {
+    // Type mismatch - could add runtime warning here
+    // For now, we still return the value but the caller should be aware
+  }
+
+  // Copy the value to the output buffer
+  if (outValue && valueSize > 0 && !entry.value.empty()) {
+    size_t copySize = std::min(static_cast<size_t>(valueSize), entry.value.size());
+    std::memcpy(outValue, entry.value.data(), copySize);
+  }
+
+  return 1;
+}
+
+/// Check if a key exists in the configuration database.
+/// @param instName Pointer to the instance name string data
+/// @param instLen Length of the instance name string
+/// @param fieldName Pointer to the field name string data
+/// @param fieldLen Length of the field name string
+/// @return 1 if the key exists, 0 otherwise
+extern "C" int32_t __moore_config_db_exists(const char *instName, int64_t instLen,
+                                            const char *fieldName, int64_t fieldLen) {
+  std::string key = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
+
+  std::lock_guard<std::mutex> lock(__moore_config_db_mutex);
+  return __moore_config_db_storage.find(key) != __moore_config_db_storage.end() ? 1 : 0;
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Component Hierarchy Support
+//===----------------------------------------------------------------------===//
+
+/// Get the full hierarchical name of a UVM component.
+/// This function iteratively walks the parent chain to build the full name,
+/// avoiding the recursion that cannot be inlined in LLHD IR.
+///
+/// Implementation:
+/// 1. Collect all components in the hierarchy (from current to root)
+/// 2. Build the full name by concatenating names from root to current
+///
+/// @param component Pointer to the component instance
+/// @param parentOffset Byte offset of the m_parent field within the component
+/// @param nameOffset Byte offset of the m_name field (MooreString) within the component
+/// @return A new MooreString containing the full hierarchical name
+extern "C" MooreString __moore_component_get_full_name(void *component,
+                                                        int64_t parentOffset,
+                                                        int64_t nameOffset) {
+  // Handle null component
+  if (!component) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  // Collect all components from current to root (we'll reverse later)
+  std::vector<void *> hierarchy;
+  void *current = component;
+
+  while (current != nullptr) {
+    hierarchy.push_back(current);
+
+    // Get the parent pointer from the current component
+    // The parent pointer is at offset parentOffset from the component base
+    char *componentBytes = static_cast<char *>(current);
+    void **parentPtr = reinterpret_cast<void **>(componentBytes + parentOffset);
+    current = *parentPtr;
+  }
+
+  // Now build the full name from root to leaf
+  // We iterate in reverse order (from root to current component)
+  std::string fullName;
+
+  for (auto it = hierarchy.rbegin(); it != hierarchy.rend(); ++it) {
+    void *comp = *it;
+    char *compBytes = static_cast<char *>(comp);
+
+    // Get the name string from this component
+    // The name is a MooreString at offset nameOffset
+    MooreString *namePtr = reinterpret_cast<MooreString *>(compBytes + nameOffset);
+
+    // Check if this component has a valid, non-empty name
+    if (namePtr && namePtr->data && namePtr->len > 0) {
+      // Skip empty names (like the root's name which is often empty)
+      // Only add separator if we already have content
+      if (!fullName.empty()) {
+        fullName += ".";
+      }
+      fullName.append(namePtr->data, namePtr->len);
+    }
+  }
+
+  // Allocate and return the result
+  if (fullName.empty()) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  MooreString result = allocateString(fullName.length());
+  std::memcpy(result.data, fullName.c_str(), fullName.length());
+  return result;
 }

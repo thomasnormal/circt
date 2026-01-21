@@ -454,72 +454,26 @@ FailureOr<Value> Context::convertAssertionSystemCallArity1(
 
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
-          // Translate $fell to ¬x[0] ∧ x[-1]
+          // Note: $rose/$fell/$stable/$changed are handled in
+          // convertAssertionCallExpression to keep them usable in sequences.
           .Case("$fell",
                 [&]() -> Value {
-                  auto current = value;
-                  auto past =
-                      ltl::PastOp::create(builder, loc, value, 1).getResult();
-                  auto notCurrent =
-                      ltl::NotOp::create(builder, loc, current).getResult();
-                  auto pastAndNotCurrent =
-                      ltl::AndOp::create(builder, loc, {notCurrent, past})
-                          .getResult();
-                  return pastAndNotCurrent;
+                  return {};
                 })
           // Translate $rose to x[0] ∧ ¬x[-1]
           .Case("$rose",
                 [&]() -> Value {
-                  auto past =
-                      ltl::PastOp::create(builder, loc, value, 1).getResult();
-                  auto notPast =
-                      ltl::NotOp::create(builder, loc, past).getResult();
-                  auto current = value;
-                  auto notPastAndCurrent =
-                      ltl::AndOp::create(builder, loc, {current, notPast})
-                          .getResult();
-                  return notPastAndCurrent;
+                  return {};
                 })
           // Translate $stable to ( x[0] ∧ x[-1] ) ⋁ ( ¬x[0] ∧ ¬x[-1] )
           .Case("$stable",
                 [&]() -> Value {
-                  auto past =
-                      ltl::PastOp::create(builder, loc, value, 1).getResult();
-                  auto notPast =
-                      ltl::NotOp::create(builder, loc, past).getResult();
-                  auto current = value;
-                  auto notCurrent =
-                      ltl::NotOp::create(builder, loc, value).getResult();
-                  auto pastAndCurrent =
-                      ltl::AndOp::create(builder, loc, {current, past})
-                          .getResult();
-                  auto notPastAndNotCurrent =
-                      ltl::AndOp::create(builder, loc, {notCurrent, notPast})
-                          .getResult();
-                  auto stable =
-                      ltl::OrOp::create(builder, loc,
-                                        {pastAndCurrent, notPastAndNotCurrent})
-                          .getResult();
-                  return stable;
+                  return {};
                 })
           // Translate $changed to ¬$stable(x).
           .Case("$changed",
                 [&]() -> Value {
-                  auto past =
-                      ltl::PastOp::create(builder, loc, value, 1).getResult();
-                  auto notPast =
-                      ltl::NotOp::create(builder, loc, past).getResult();
-                  auto notCurrent =
-                      ltl::NotOp::create(builder, loc, value).getResult();
-                  auto currentAndNotPast =
-                      ltl::AndOp::create(builder, loc, {value, notPast})
-                          .getResult();
-                  auto notCurrentAndPast =
-                      ltl::AndOp::create(builder, loc, {notCurrent, past})
-                          .getResult();
-                  return ltl::OrOp::create(builder, loc,
-                                           {currentAndNotPast, notCurrentAndPast})
-                      .getResult();
+                  return {};
                 })
           // $sampled(x) in assertion context returns the sampled value, which
           // is effectively the current value since assertions use sampled semantics.
@@ -540,6 +494,59 @@ Value Context::convertAssertionCallExpression(
   FailureOr<Value> result;
   Value value;
   Value boolVal;
+
+  if (subroutine.name == "$rose" || subroutine.name == "$fell" ||
+      subroutine.name == "$stable" || subroutine.name == "$changed") {
+    value = this->convertRvalueExpression(*args[0]);
+    if (!value)
+      return {};
+
+    auto valueType = dyn_cast<moore::IntType>(value.getType());
+    if (!valueType) {
+      mlir::emitError(loc) << "unsupported sampled value type for "
+                           << subroutine.name;
+      return {};
+    }
+    bool hasClockingArg =
+        args.size() > 1 &&
+        args[1]->kind == slang::ast::ExpressionKind::ClockingEvent;
+    if (hasClockingArg && !inAssertionExpr) {
+      auto resultType = moore::IntType::get(
+          builder.getContext(), 1, valueType.getDomain());
+      mlir::emitWarning(loc)
+          << subroutine.name
+          << " with explicit clocking is not yet lowered outside assertions; "
+             "returning 0 as a placeholder";
+      return moore::ConstantOp::create(builder, loc, resultType, 0);
+    }
+
+    if (subroutine.name == "$stable" || subroutine.name == "$changed") {
+      auto past =
+          moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
+      auto stable =
+          moore::CaseEqOp::create(builder, loc, value, past).getResult();
+      Value resultVal = stable;
+      if (subroutine.name == "$changed")
+        resultVal = moore::NotOp::create(builder, loc, stable).getResult();
+      return resultVal;
+    }
+
+    Value current = value;
+    if (valueType.getBitSize() != 1)
+      current = moore::ReduceOrOp::create(builder, loc, value).getResult();
+    auto past =
+        moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
+    auto notPast = moore::NotOp::create(builder, loc, past).getResult();
+    auto notCurrent = moore::NotOp::create(builder, loc, current).getResult();
+    Value resultVal;
+    if (subroutine.name == "$rose")
+      resultVal =
+          moore::AndOp::create(builder, loc, current, notPast).getResult();
+    else
+      resultVal =
+          moore::AndOp::create(builder, loc, notCurrent, past).getResult();
+    return resultVal;
+  }
 
   // Handle $past specially - it returns the past value with preserved type
   // so that comparisons like `$past(val) == 0` work correctly.
@@ -609,13 +616,17 @@ Value Context::convertAssertionCallExpression(
 
 Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
                                           Location loc, bool applyDefaults) {
+  bool prevInAssertionExpr = inAssertionExpr;
+  inAssertionExpr = true;
   AssertionExprVisitor visitor{*this, loc};
   auto value = expr.visit(visitor);
+  inAssertionExpr = prevInAssertionExpr;
   if (!value || !applyDefaults)
     return value;
 
   if (currentScope &&
-      isa<ltl::PropertyType, ltl::SequenceType>(value.getType())) {
+      (isa<ltl::PropertyType, ltl::SequenceType>(value.getType()) ||
+       value.getType().isInteger(1))) {
     if (auto *disableExpr = compilation.getDefaultDisable(*currentScope)) {
       auto disableVal = convertRvalueExpression(*disableExpr);
       disableVal = convertToI1(disableVal);

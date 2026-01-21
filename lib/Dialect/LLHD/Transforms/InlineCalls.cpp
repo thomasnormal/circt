@@ -11,6 +11,7 @@
 #include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Threading.h"
@@ -34,6 +35,162 @@ using namespace mlir;
 using namespace circt;
 using namespace llhd;
 using llvm::SmallSetVector;
+
+//===----------------------------------------------------------------------===//
+// UVM get_full_name() Runtime Support
+//===----------------------------------------------------------------------===//
+//
+// UVM's get_full_name() is recursive and cannot be inlined. Instead of
+// failing, we detect calls to get_full_name() on UVM component classes and
+// replace them with calls to a runtime function that iteratively walks the
+// parent chain.
+//
+
+/// Check if a function name matches the pattern for get_full_name on a
+/// UVM-related class. The function name format from ImportVerilog is:
+///   uvm_pkg::ClassName::get_full_name
+static bool isUvmGetFullNameMethod(StringRef funcName) {
+  // Check for common patterns of get_full_name in UVM classes
+  // The function name typically contains the class name followed by
+  // get_full_name
+  if (!funcName.contains("get_full_name"))
+    return false;
+
+  // Check if it's from uvm_pkg (UVM classes)
+  if (funcName.starts_with("uvm_pkg::"))
+    return true;
+
+  // Also check for common UVM component class names in the function name
+  // These are the classes that typically have the recursive get_full_name
+  static const char *uvmClasses[] = {"uvm_component",   "uvm_object",
+                                     "uvm_report_object", "uvm_agent",
+                                     "uvm_driver",      "uvm_monitor",
+                                     "uvm_sequencer",   "uvm_env",
+                                     "uvm_test",        "uvm_sequence",
+                                     "uvm_reg",         "uvm_reg_block",
+                                     "uvm_reg_map",     "uvm_reg_field",
+                                     "uvm_mem"};
+
+  for (const char *className : uvmClasses) {
+    if (funcName.contains(className))
+      return true;
+  }
+
+  return false;
+}
+
+/// Get or create the __moore_component_get_full_name runtime function
+/// declaration in the module.
+static LLVM::LLVMFuncOp
+getOrCreateGetFullNameRuntimeFunc(ModuleOp mod, OpBuilder &builder) {
+  const char *funcName = "__moore_component_get_full_name";
+
+  // Check if the function already exists
+  if (auto existingFn = mod.lookupSymbol<LLVM::LLVMFuncOp>(funcName))
+    return existingFn;
+
+  MLIRContext *ctx = mod.getContext();
+
+  // Function signature:
+  // MooreString __moore_component_get_full_name(void *component,
+  //                                              int64_t parentOffset,
+  //                                              int64_t nameOffset)
+  // MooreString is {ptr, i64}
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  auto fnTy =
+      LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy, i64Ty, i64Ty});
+
+  // Create the function declaration at the start of the module
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(mod.getBody());
+
+  auto fn = LLVM::LLVMFuncOp::create(builder, mod.getLoc(), funcName, fnTy);
+  fn.setLinkage(LLVM::Linkage::External);
+  return fn;
+}
+
+/// Replace a call to get_full_name() with a call to the runtime function.
+/// Returns true if the replacement was successful.
+static bool replaceGetFullNameWithRuntimeCall(func::CallOp callOp,
+                                               func::FuncOp funcOp,
+                                               OpBuilder &builder) {
+  // Get the module containing this call
+  auto mod = callOp->getParentOfType<ModuleOp>();
+  if (!mod)
+    return false;
+
+  // The call should have one operand (self/this pointer) and return a string
+  if (callOp.getNumOperands() != 1 || callOp.getNumResults() != 1)
+    return false;
+
+  MLIRContext *ctx = builder.getContext();
+  Location loc = callOp.getLoc();
+
+  // Get or create the runtime function
+  auto runtimeFn = getOrCreateGetFullNameRuntimeFunc(mod, builder);
+
+  // Get types
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+  // The operand is the 'self' pointer (component instance)
+  Value selfPtr = callOp.getOperand(0);
+
+  // For now, we use hardcoded offsets based on the UVM component layout.
+  // In a more sophisticated implementation, we would look up the class
+  // definition to determine the actual field offsets.
+  //
+  // Typical UVM component layout (after vtable pointer):
+  //   - vtable pointer (8 bytes on 64-bit)
+  //   - m_name field (MooreString = {ptr, i64} = 16 bytes)
+  //   - m_parent field (ptr = 8 bytes)
+  //
+  // However, the actual offsets depend on the specific class hierarchy.
+  // We'll use reasonable defaults:
+  //   - m_parent offset: 24 bytes (after vtable + m_name)
+  //   - m_name offset: 8 bytes (after vtable)
+  //
+  // TODO: Compute actual offsets from class metadata or pass them as
+  // additional call operands from the frontend.
+  int64_t parentOffsetValue = 24; // Offset of m_parent field
+  int64_t nameOffsetValue = 8;    // Offset of m_name field
+
+  // Create constant offset values
+  builder.setInsertionPoint(callOp);
+  Value parentOffset =
+      LLVM::ConstantOp::create(builder, loc, i64Ty, parentOffsetValue);
+  Value nameOffset =
+      LLVM::ConstantOp::create(builder, loc, i64Ty, nameOffsetValue);
+
+  // Create the call to the runtime function
+  auto runtimeCall = LLVM::CallOp::create(
+      builder, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
+      ValueRange{selfPtr, parentOffset, nameOffset});
+
+  // The result type might need conversion if the original call returned
+  // a different string type representation
+  Value result = runtimeCall.getResult();
+
+  // Replace the original call with the runtime call result
+  // Note: We need to handle potential type mismatches between the LLVM struct
+  // and any hw::StructType or other representation the caller expects
+  if (callOp.getResult(0).getType() != stringStructTy) {
+    // Create an unrealized conversion cast if types don't match
+    auto castOp = UnrealizedConversionCastOp::create(
+        builder, loc, callOp.getResult(0).getType(), result);
+    result = castOp.getResult(0);
+  }
+
+  callOp.getResult(0).replaceAllUsesWith(result);
+
+  LLVM_DEBUG(llvm::dbgs() << "Replaced recursive get_full_name() call with "
+                             "runtime function call\n");
+
+  return true;
+}
 
 namespace {
 /// Implementation of the `InlinerInterface` that allows calls in SSACFG regions
@@ -175,6 +332,17 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
       if (!callOp->getParentWithTrait<ProceduralRegion>() &&
           callOp->getParentRegion()->hasOneBlock()) {
         if (!callStack.insert(funcOp)) {
+          // Check if this is a UVM get_full_name() call that we can handle
+          // with the runtime function instead of failing
+          StringRef funcName = funcOp.getSymName();
+          if (isUvmGetFullNameMethod(funcName)) {
+            OpBuilder builder(callOp);
+            if (replaceGetFullNameWithRuntimeCall(callOp, funcOp, builder)) {
+              callsToErase.push_back(callOp);
+              continue;
+            }
+          }
+          // Fall back to error for other recursive functions
           auto diag = callOp.emitError(
               "recursive function call cannot be inlined (unsupported in --ir-hw)");
           diag.attachNote(funcOp.getLoc())
@@ -193,6 +361,17 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
       // Ensure that we are not recursively inlining a function, which would
       // just expand infinitely in the IR.
       if (!callStack.insert(funcOp)) {
+        // Check if this is a UVM get_full_name() call that we can handle
+        // with the runtime function instead of failing
+        StringRef funcName = funcOp.getSymName();
+        if (isUvmGetFullNameMethod(funcName)) {
+          OpBuilder builder(callOp);
+          if (replaceGetFullNameWithRuntimeCall(callOp, funcOp, builder)) {
+            callsToErase.push_back(callOp);
+            continue;
+          }
+        }
+        // Fall back to error for other recursive functions
         auto diag = callOp.emitError(
             "recursive function call cannot be inlined (unsupported in --ir-hw)");
         diag.attachNote(funcOp.getLoc())

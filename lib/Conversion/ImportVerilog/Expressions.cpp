@@ -6338,6 +6338,18 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return moore::FOpenBIOp::create(builder, loc, filename,
                                                   /*mode=*/nullptr);
                 })
+          .Case("$feof",
+                [&]() -> Value {
+                  // $feof(fd) - check if end-of-file has been reached
+                  // IEEE 1800-2017 Section 21.3.3
+                  return moore::FEofBIOp::create(builder, loc, value);
+                })
+          .Case("$fgetc",
+                [&]() -> Value {
+                  // $fgetc(fd) - read a single character from file
+                  // IEEE 1800-2017 Section 21.3.3
+                  return moore::FGetCBIOp::create(builder, loc, value);
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {
@@ -6361,6 +6373,20 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   return moore::StringGetCOp::create(builder, loc, value1,
                                                      value2);
+                })
+          .Case("compare",
+                [&]() -> Value {
+                  // str.compare(s) - lexicographic string comparison
+                  // IEEE 1800-2017 Section 6.16.8
+                  return moore::StringCompareOp::create(builder, loc, value1,
+                                                        value2);
+                })
+          .Case("icompare",
+                [&]() -> Value {
+                  // str.icompare(s) - case-insensitive lexicographic comparison
+                  // IEEE 1800-2017 Section 6.16.8
+                  return moore::StringICompareOp::create(builder, loc, value1,
+                                                         value2);
                 })
           .Case("exists",
                 [&]() -> Value {

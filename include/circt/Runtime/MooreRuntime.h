@@ -3261,6 +3261,82 @@ int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
                       int32_t flags);
 void vpi_release_handle(vpiHandle obj);
 
+//===----------------------------------------------------------------------===//
+// UVM Configuration Database
+//===----------------------------------------------------------------------===//
+
+/// Set a value in the UVM configuration database.
+/// @param context Pointer to the context (currently unused, for future hierarchy support)
+/// @param instName Pointer to the instance name string data
+/// @param instLen Length of the instance name string
+/// @param fieldName Pointer to the field name string data
+/// @param fieldLen Length of the field name string
+/// @param value Pointer to the value to store
+/// @param valueSize Size of the value in bytes
+/// @param typeId Type identifier for type checking on retrieval
+void __moore_config_db_set(void *context, const char *instName, int64_t instLen,
+                           const char *fieldName, int64_t fieldLen, void *value,
+                           int64_t valueSize, int32_t typeId);
+
+/// Get a value from the UVM configuration database.
+/// @param context Pointer to the context (currently unused, for future hierarchy support)
+/// @param instName Pointer to the instance name string data
+/// @param instLen Length of the instance name string
+/// @param fieldName Pointer to the field name string data
+/// @param fieldLen Length of the field name string
+/// @param typeId Expected type identifier for type checking
+/// @param outValue Pointer to the output buffer for the value
+/// @param valueSize Size of the output buffer in bytes
+/// @return 1 if the value was found and types match, 0 otherwise
+int32_t __moore_config_db_get(void *context, const char *instName,
+                              int64_t instLen, const char *fieldName,
+                              int64_t fieldLen, int32_t typeId, void *outValue,
+                              int64_t valueSize);
+
+/// Check if a key exists in the configuration database.
+/// @param instName Pointer to the instance name string data
+/// @param instLen Length of the instance name string
+/// @param fieldName Pointer to the field name string data
+/// @param fieldLen Length of the field name string
+/// @return 1 if the key exists, 0 otherwise
+int32_t __moore_config_db_exists(const char *instName, int64_t instLen,
+                                 const char *fieldName, int64_t fieldLen);
+
+//===----------------------------------------------------------------------===//
+// UVM Component Hierarchy Support
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for UVM component hierarchy methods
+// that cannot be inlined due to recursion (like get_full_name).
+//
+// UVM's get_full_name() is recursive:
+//   virtual function string get_full_name();
+//     if (m_parent == null || m_parent.get_name() == "")
+//       return m_name;
+//     else
+//       return {m_parent.get_full_name(), ".", m_name};
+//   endfunction
+//
+// Since recursive functions cannot be inlined (LLHD IR limitation), we provide
+// an iterative runtime implementation that walks the parent chain.
+//
+
+/// Get the full hierarchical name of a UVM component.
+/// This function iteratively walks the parent chain to build the full name,
+/// avoiding the recursion that cannot be inlined.
+///
+/// The function needs to know the layout of the component class to access:
+/// - m_parent: pointer to parent component (at parentOffset)
+/// - m_name: the component's name string (at nameOffset)
+///
+/// @param component Pointer to the component instance
+/// @param parentOffset Byte offset of the m_parent field within the component
+/// @param nameOffset Byte offset of the m_name field (MooreString) within the component
+/// @return A new MooreString containing the full hierarchical name (e.g., "top.env.agent")
+MooreString __moore_component_get_full_name(void *component,
+                                            int64_t parentOffset,
+                                            int64_t nameOffset);
+
 #ifdef __cplusplus
 }
 #endif

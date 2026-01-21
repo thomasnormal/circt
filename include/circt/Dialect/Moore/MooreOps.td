@@ -6333,6 +6333,36 @@ def StringAtoBinOp : StringBuiltin<"atobin"> {
   let assemblyFormat = "$str attr-dict";
 }
 
+def StringCompareOp : StringBuiltin<"compare", [Pure]> {
+  let summary = "Lexicographically compare two strings";
+  let description = [{
+    Compares two strings lexicographically (case-sensitive).
+    Returns a negative integer if `lhs` < `rhs`,
+    zero if `lhs` == `rhs`,
+    and a positive integer if `lhs` > `rhs`.
+    This corresponds to the SystemVerilog `str.compare(s)` method
+    (IEEE 1800-2017 Section 6.16.8).
+  }];
+  let arguments = (ins StringType:$lhs, StringType:$rhs);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+}
+
+def StringICompareOp : StringBuiltin<"icompare", [Pure]> {
+  let summary = "Lexicographically compare two strings (case-insensitive)";
+  let description = [{
+    Compares two strings lexicographically (case-insensitive).
+    Returns a negative integer if `lhs` < `rhs`,
+    zero if `lhs` == `rhs`,
+    and a positive integer if `lhs` > `rhs`.
+    This corresponds to the SystemVerilog `str.icompare(s)` method
+    (IEEE 1800-2017 Section 6.16.8).
+  }];
+  let arguments = (ins StringType:$lhs, StringType:$rhs);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // Clocking Blocks
 //===----------------------------------------------------------------------===//
