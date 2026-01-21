@@ -29,3 +29,15 @@ moore.module @UnpackedUnionOps(in %a : !moore.i32, in %b : !moore.i16, in %union
 
   moore.output %0, %1 : !moore.uunion<{x: i32, y: i16}>, !moore.i32
 }
+
+// Test tagged union with void members (tagged unions use void for members without data)
+// CHECK-LABEL: hw.module @TaggedUnionWithVoid
+moore.module @TaggedUnionWithVoid(in %intVal : !moore.i32, in %unionVal : !moore.uunion<{Invalid: void, Valid: i32}>, out out1 : !moore.uunion<{Invalid: void, Valid: i32}>, out out2 : !moore.i32) {
+  // CHECK: hw.union_create "Valid", %intVal : !hw.union<Invalid: i0, Valid: i32>
+  %0 = moore.union_create %intVal {fieldName = "Valid"} : !moore.i32 -> !moore.uunion<{Invalid: void, Valid: i32}>
+
+  // CHECK: hw.union_extract %unionVal["Valid"] : !hw.union<Invalid: i0, Valid: i32>
+  %1 = moore.union_extract %unionVal, "Valid" : !moore.uunion<{Invalid: void, Valid: i32}> -> i32
+
+  moore.output %0, %1 : !moore.uunion<{Invalid: void, Valid: i32}>, !moore.i32
+}
