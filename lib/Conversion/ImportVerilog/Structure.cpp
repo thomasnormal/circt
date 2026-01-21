@@ -716,7 +716,23 @@ struct ModuleVisitor : public BaseVisitor {
   }
 
   LogicalResult visit(const slang::ast::ProceduralBlockSymbol &procNode) {
-    if (procNode.isFromAssertion)
+    auto isConcurrentAssertionBlock =
+        [](const slang::ast::Statement &stmt,
+           const auto &self) -> bool {
+      if (stmt.as_if<slang::ast::ConcurrentAssertionStatement>())
+        return true;
+      if (auto *block = stmt.as_if<slang::ast::BlockStatement>())
+        return self(block->body, self);
+      if (auto *list = stmt.as_if<slang::ast::StatementList>()) {
+        if (list->list.size() == 1)
+          return self(*list->list[0], self);
+      }
+      return false;
+    };
+
+    if (procNode.isFromAssertion &&
+        isConcurrentAssertionBlock(procNode.getBody(),
+                                   isConcurrentAssertionBlock))
       return context.convertStatement(procNode.getBody());
     // Detect `always @(*) <stmt>` and convert to `always_comb <stmt>` if
     // requested by the user.

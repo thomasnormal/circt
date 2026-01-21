@@ -37,6 +37,7 @@
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/SV/SVDialect.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Sim/EventQueue.h"
@@ -471,9 +472,11 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     }
   }
 
-  // Check if this module contains LLHD processes
+  // Check if this module contains LLHD processes or seq.initial blocks
   bool hasLLHDProcesses = false;
+  bool hasSeqInitial = false;
   size_t llhdProcessCount = 0;
+  size_t seqInitialCount = 0;
   size_t totalOpsCount = 0;
 
   // Walk all operations in the module body
@@ -483,23 +486,39 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     if (isa<llhd::ProcessOp>(op)) {
       hasLLHDProcesses = true;
       llhdProcessCount++;
+    } else if (isa<seq::InitialOp>(op)) {
+      hasSeqInitial = true;
+      seqInitialCount++;
     }
   });
 
   llvm::outs() << "[circt-sim] Found " << llhdProcessCount << " LLHD processes"
+               << " and " << seqInitialCount << " seq.initial blocks"
                << " (out of " << totalOpsCount << " total ops) in module\n";
 
-  if (hasLLHDProcesses) {
+  if (hasLLHDProcesses || hasSeqInitial) {
     // Use the LLHD process interpreter for modules with LLHD processes
+    // or seq.initial blocks (the interpreter handles both)
     llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
     if (failed(llhdInterpreter->initialize(hwModule))) {
       llvm::errs() << "Error: Failed to initialize LLHD process interpreter\n";
       return failure();
     }
 
+    // Set up terminate callback to signal SimulationControl
+    llhdInterpreter->setTerminateCallback(
+        [this](bool success, bool verbose) {
+          if (verbose) {
+            llvm::outs() << "[circt-sim] Simulation "
+                         << (success ? "finished" : "failed") << " at time "
+                         << scheduler.getCurrentTime().realTime << " fs\n";
+          }
+          control.finish(success ? 0 : 1);
+        });
+
     llvm::outs() << "[circt-sim] Registered " << llhdInterpreter->getNumSignals()
                  << " LLHD signals and " << llhdInterpreter->getNumProcesses()
-                 << " LLHD processes\n";
+                 << " LLHD processes/initial blocks\n";
   } else {
     // For modules without LLHD processes, create a simple placeholder process
     auto topProcessId = scheduler.registerProcess(

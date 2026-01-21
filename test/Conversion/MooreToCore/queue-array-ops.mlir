@@ -67,6 +67,87 @@ func.func @test_queue_sort() {
 }
 
 //===----------------------------------------------------------------------===//
+// Queue Sort With Operations (custom key expression)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @test_queue_sort_with
+// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.extractvalue {{.*}}[1] : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.extractvalue {{.*}}[0] : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.alloca {{.*}} x i32
+// CHECK: llvm.alloca {{.*}} x i64
+// CHECK: scf.for
+// CHECK:   llvm.store {{.*}} : i64, !llvm.ptr
+// CHECK:   llvm.load {{.*}} : !llvm.ptr -> i32
+// CHECK:   arith.remsi
+// CHECK:   llvm.store {{.*}} : i32, !llvm.ptr
+// CHECK: scf.for
+// CHECK:   scf.for
+// CHECK:     arith.cmpi sgt
+// CHECK:     scf.if
+// CHECK: scf.for
+// CHECK: scf.for
+func.func @test_queue_sort_with() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  moore.queue.sort.with %queue_ref : !moore.ref<queue<!moore.i32, 0>> {
+  ^bb0(%item: !moore.i32):
+    %ten = moore.constant 10 : i32
+    %key = moore.mods %item, %ten : i32
+    moore.queue.sort.key.yield %key : i32
+  }
+  return
+}
+
+// CHECK-LABEL: func @test_queue_rsort_with
+// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.extractvalue {{.*}}[1] : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.extractvalue {{.*}}[0] : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.alloca {{.*}} x i32
+// CHECK: llvm.alloca {{.*}} x i64
+// CHECK: scf.for
+// CHECK: scf.for
+// CHECK:   scf.for
+// CHECK:     arith.cmpi slt
+// CHECK:     scf.if
+// CHECK: scf.for
+// CHECK: scf.for
+func.func @test_queue_rsort_with() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  moore.queue.rsort.with %queue_ref : !moore.ref<queue<!moore.i32, 0>> {
+  ^bb0(%item: !moore.i32):
+    %ten = moore.constant 10 : i32
+    %key = moore.mods %item, %ten : i32
+    moore.queue.sort.key.yield %key : i32
+  }
+  return
+}
+
+// Test queue.sort.with with absolute value key (negative to positive sort)
+// CHECK-LABEL: func @test_queue_sort_with_abs
+// CHECK: scf.for
+// CHECK:   arith.cmpi slt
+// CHECK:   arith.subi
+// CHECK:   arith.select
+// CHECK:   llvm.store
+// CHECK: scf.for
+func.func @test_queue_sort_with_abs() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  moore.queue.sort.with %queue_ref : !moore.ref<queue<!moore.i32, 0>> {
+  ^bb0(%item: !moore.i32):
+    %zero = moore.constant 0 : i32
+    %neg = moore.slt %item, %zero : i32 -> i1
+    %negval = moore.neg %item : i32
+    %absval = moore.conditional %neg : i1 -> i32 {
+      moore.yield %negval : i32
+    } {
+      moore.yield %item : i32
+    }
+    moore.queue.sort.key.yield %absval : i32
+  }
+  return
+}
+
+//===----------------------------------------------------------------------===//
 // Dynamic Array New Operation
 //===----------------------------------------------------------------------===//
 

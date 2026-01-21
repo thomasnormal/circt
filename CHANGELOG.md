@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 73 - January 21, 2026
+
+### Major Simulation Fixes: $display, $finish, Queue Sort With
+
+**Track A: LLHD Process Pattern Verification** ⭐ VERIFICATION
+- Verified that cf.br pattern IS correctly handled by circt-sim
+- Added test `llhd-process-cfbr-pattern.mlir` to verify the pattern
+- No code changes needed - the implementation was already correct
+
+**Track B: Queue Sort With Method Calls** ⭐ CRITICAL FIX
+- Implemented `QueueSortWithOpConversion` for `q.sort with (expr)` pattern
+- Implemented `QueueRSortWithOpConversion` for `q.rsort with (expr)` pattern
+- Uses inline loop approach: extract keys, sort indices, reorder elements
+- UVM core `succ_q.sort with (item.get_full_name())` now compiles!
+- New tests: `queue-sort-with.mlir`, extended `queue-array-ops.mlir`
+
+**Track E: sim::TerminateOp Support** ⭐ FIX
+- Added `interpretTerminate()` handler for `$finish` support
+- Connected terminate callback to SimulationControl
+- Signal-sensitive waits were already working correctly
+
+**Track F: $display Output Visibility** ⭐ MAJOR FIX
+- Added support for `seq.initial` blocks (not just `llhd.process`)
+- Implemented `interpretProcPrint()` for `sim.proc.print` operations
+- Added `evaluateFormatString()` for format string evaluation
+- $display("Hello World!") now works and prints to console!
+- $finish properly terminates simulation
+
+### Files Modified
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+450 lines for queue sort with)
+- `tools/circt-sim/LLHDProcessInterpreter.h` (terminate callback + handlers)
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (+200 lines for seq.initial, print, terminate)
+- `tools/circt-sim/circt-sim.cpp` (seq.initial detection, terminate callback setup)
+- New tests: `queue-sort-with.mlir`, `llhd-process-cfbr-pattern.mlir`
+
+---
+
 ## Iteration 72 - January 21, 2026
 
 ### Virtual Interface Binding + 4-State X/Z + LSP Test Coverage
