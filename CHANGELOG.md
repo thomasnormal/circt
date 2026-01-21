@@ -1,5 +1,72 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 91 - January 21, 2026
+
+### Integer to Queue Conversion ✅ NEW
+
+**Bug Fix**: Added `integer -> queue<T>` conversion in MooreToCore for stream unpack operations.
+
+**Root Cause**: When converting an integer to a queue of bits (e.g., `i8 -> queue<i1>`), the
+conversion was not implemented. This pattern is used for bit unpacking in streaming operators.
+
+**Fix**: MooreToCore now:
+1. Creates an empty queue using `__moore_queue_create_empty()`
+2. Extracts each chunk from the integer (using `comb.extract`)
+3. Pushes each element to the queue using `__moore_queue_push_back()`
+
+**Test**: `test/Conversion/MooreToCore/int-to-queue.mlir`
+
+**Impact**: Unblocks I2S, SPI, UART AVIPs (now blocked by `uarray<64 x string>`)
+
+### $past Assertion Fix ✅ NEW
+
+**Bug Fix**: Fixed `$past(val)` to use `moore::PastOp` instead of `ltl::PastOp`.
+
+**Root Cause**: The previous implementation returned `ltl.sequence` for 1-bit values
+when `$past` was used. This broke comparisons like `$past(val) == 1'b1` because
+`!ltl.sequence` cannot be converted to an integer type for comparison.
+
+**Fix**: Always use `moore::PastOp` in `AssertionExpr.cpp` to preserve the value type:
+```cpp
+return moore::PastOp::create(builder, loc, value, delay).getResult();
+```
+
+**Test**: Updated `test/Conversion/ImportVerilog/assertions.sv` and added
+`test/Conversion/ImportVerilog/sva-defaults.sv`
+
+**Impact**: Fixes verilator-verification `assert_past.sv` test
+
+### Interface Port Member Access Fix ✅ NEW
+
+**Bug Fix**: Fixed hierarchical name resolution for interface port member accesses.
+
+**Root Cause**: When accessing a member of an interface port (e.g., `iface.data` where
+`iface` is an interface port), slang marks this as a hierarchical reference. However,
+these should be handled as regular interface port member accesses via
+`VirtualInterfaceSignalRefOp`, not as hierarchical ports.
+
+**Fix**: Added check for `expr.ref.isViaIfacePort()` in `HierarchicalNames.cpp` to skip
+collecting hierarchical paths for interface port member accesses.
+
+**Test**: `test/Conversion/ImportVerilog/interface-port-member-assign.sv`
+
+**Impact**: Helps fix AHB AVIP patterns that use interface port member accesses
+
+### Deseq Aggregate Attribute Handling ✅ NEW
+
+**Improvement**: Added support for peeling nested aggregate attributes in LLHD Deseq pass.
+
+**Details**: The `peelAggregateAttr` function now recursively processes nested ArrayAttr
+and IntegerAttr to extract preset values for registers.
+
+### Test Results
+
+- **sv-tests**: 81.3% adjusted pass rate (improvement from ~70.9%)
+- **verilator-verification**: 62% parse-only, 96% MooreToCore
+- **Yosys SVA**: 71.4% BMC pass rate maintained
+
+---
+
 ## Iteration 90 - January 21, 2026
 
 ### MooreToCore f64 BoolCast Fix ✅ NEW
@@ -95,9 +162,8 @@ apply the surrounding event control as implicit clocking (e.g. `always
 
 **Tests**: Added `test/Conversion/ImportVerilog/sva-procedural-clock.sv`.
 
-**Limitation**: BMC `externalize-registers` still fails when `moore.past`
-inside procedural assertions lowers to `seq.compreg` within LLHD processes;
-requires hoisting those registers or externalizing process-local state.
+**Update**: Procedural assertions are hoisted to module scope with guard and
+clocking, avoiding `seq.compreg` in `llhd.process` and unblocking BMC.
 
 ### Virtual Interface Investigation ✅ COMPLETE
 
@@ -128,18 +194,21 @@ requires hoisting those registers or externalizing process-local state.
   signal event (posedge/negedge).
 - **SVA limitations**: Explicit clocking arguments to $rose/$fell/$stable/
   $changed outside assertions currently warn and return 0 as a placeholder.
-  X/Z edge semantics for $rose/$fell are still incomplete (see yosys
-  `sva_value_change_sim`).
+- **ImportVerilog**: $rose/$fell now use case-equality comparisons to handle
+  X/Z transitions (no unknown-propagation false positives).
+- **BMC**: Preserve initial values for 4-state regs via `seq.firreg` presets,
+  and allow non-integer initial values in VerifToSMT when bit widths match.
 
 **Yosys SVA progress**:
 - `sva_value_change_changed` + `sva_value_change_changed_wide` now pass
   (pass/fail).
 - `sva_value_change_rose` now pass (pass/fail).
-- `sva_value_change_sim` still fails in pass mode (X/Z edge semantics).
+- `sva_value_change_sim` now passes (pass); fail run skipped if no FAIL macro.
 
 **Tests run**:
 - `ninja -C build circt-verilog`
-- `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/assertions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/assertions.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv --parse-only | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-value-change.sv --parse-only | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-value-change.sv`
 - `TEST_FILTER=value_change utils/run_yosys_sva_circt_bmc.sh`
 
 ### APB AVIP Pipeline Success ✅ NEW
