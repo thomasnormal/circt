@@ -3386,7 +3386,12 @@ struct VirtualInterfaceBindOpConversion
     if (!destRefType) {
       // If it's already an LLVM pointer (from class property), use llvm.store
       if (isa<LLVM::LLVMPointerType>(dest.getType())) {
-        LLVM::StoreOp::create(rewriter, loc, source, dest);
+        // If source is a 4-state struct, extract the value component for storage
+        Value storeVal = source;
+        if (isFourStateStructType(source.getType())) {
+          storeVal = extractFourStateValue(rewriter, loc, source);
+        }
+        LLVM::StoreOp::create(rewriter, loc, storeVal, dest);
         rewriter.eraseOp(op);
         return success();
       }
@@ -6622,8 +6627,12 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     }
 
     if (llvmPtrDst) {
-      LLVM::StoreOp::create(rewriter, op.getLoc(), adaptor.getSrc(),
-                            llvmPtrDst);
+      // If source is a 4-state struct, extract the value component for storage
+      Value storeVal = adaptor.getSrc();
+      if (isFourStateStructType(storeVal.getType())) {
+        storeVal = extractFourStateValue(rewriter, op.getLoc(), storeVal);
+      }
+      LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, llvmPtrDst);
       rewriter.eraseOp(op);
       return success();
     }

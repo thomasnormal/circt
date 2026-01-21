@@ -93,7 +93,10 @@ circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
 |--------|---------------|
 | ✅ basic03 works | Run ~/yosys/tests/sva suite |
 | ✅ $rose/$fell/$past | Test ~/sv-tests SVA patterns |
-| ⚠️ Derived clocks | Fix clock alignment in multi-clock designs |
+| ✅ Derived clocks (same-source) | Multiple derived clocks now constrained to a single BMC clock |
+| ⚠️ SVA defaults & sequences | Default clocking/disable iff now reset LTL state; counter-style repeats/implications still failing |
+| ⚠️ Hierarchical extnets | Missing external net support (extnets.sv) |
+| ⚠️ Value-change operators | $changed/$rose/$not patterns still crash or mis-lower |
 
 **Track C: Class/Virtual Interface Completion**
 | Status | Next Priority |

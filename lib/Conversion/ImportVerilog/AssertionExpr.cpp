@@ -23,6 +23,8 @@ using namespace ImportVerilog;
 
 // NOLINTBEGIN(misc-no-recursion)
 namespace {
+constexpr const char kDisableIffAttr[] = "sva.disable_iff";
+
 struct AssertionExprVisitor {
   Context &context;
   Location loc;
@@ -110,17 +112,37 @@ struct AssertionExprVisitor {
 
     SmallVector<Value> sequenceElements;
 
-    for (const auto &concatElement : expr.elements) {
+    for (auto it = expr.elements.begin(); it != expr.elements.end(); ++it) {
+      const auto &concatElement = *it;
       Value sequenceValue =
-          context.convertAssertionExpression(*concatElement.sequence, loc);
+          context.convertAssertionExpression(*concatElement.sequence, loc,
+                                             /*applyDefaults=*/false);
       if (!sequenceValue)
         return {};
 
-      [[maybe_unused]] Type valueType = sequenceValue.getType();
-      assert(valueType.isInteger(1) || mlir::isa<ltl::SequenceType>(valueType));
+      Type valueType = sequenceValue.getType();
+      // Sequence concatenation requires sequence types (i1 or !ltl.sequence).
+      // Property types (from $rose, $fell, $changed, $stable) cannot be used
+      // directly in sequence contexts.
+      if (mlir::isa<ltl::PropertyType>(valueType)) {
+        mlir::emitError(loc, "property type cannot be used in sequence "
+                             "concatenation; consider restructuring the "
+                             "assertion to use the property as a consequent");
+        return {};
+      }
 
-      auto [delayMin, delayRange] =
-          convertRangeToAttrs(concatElement.delay.min, concatElement.delay.max);
+      // Adjust inter-element delays to account for concat's cycle alignment.
+      // For ##N between elements, concat already advances one cycle, so
+      // subtract one when possible to align with SVA timing. The first element
+      // delay is relative to the sequence start and should not be adjusted.
+      uint32_t minDelay = concatElement.delay.min;
+      std::optional<uint32_t> maxDelay = concatElement.delay.max;
+      if (it != expr.elements.begin() && minDelay > 0) {
+        --minDelay;
+        if (maxDelay.has_value() && maxDelay.value() > 0)
+          --maxDelay.value();
+      }
+      auto [delayMin, delayRange] = convertRangeToAttrs(minDelay, maxDelay);
       auto delayedSequence = ltl::DelayOp::create(builder, loc, sequenceValue,
                                                   delayMin, delayRange);
       sequenceElements.push_back(delayedSequence);
@@ -135,14 +157,16 @@ struct AssertionExprVisitor {
       return {};
     }
 
-    auto sequenceValue = context.convertAssertionExpression(expr.seq, loc);
+    auto sequenceValue =
+        context.convertAssertionExpression(expr.seq, loc, /*applyDefaults=*/false);
     if (!sequenceValue)
       return {};
     return ltl::FirstMatchOp::create(builder, loc, sequenceValue);
   }
 
   Value visit(const slang::ast::UnaryAssertionExpr &expr) {
-    auto value = context.convertAssertionExpression(expr.expr, loc);
+    auto value =
+        context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!value)
       return {};
     using slang::ast::UnaryAssertionOperator;
@@ -185,8 +209,10 @@ struct AssertionExprVisitor {
   }
 
   Value visit(const slang::ast::BinaryAssertionExpr &expr) {
-    auto lhs = context.convertAssertionExpression(expr.left, loc);
-    auto rhs = context.convertAssertionExpression(expr.right, loc);
+    auto lhs =
+        context.convertAssertionExpression(expr.left, loc, /*applyDefaults=*/false);
+    auto rhs =
+        context.convertAssertionExpression(expr.right, loc, /*applyDefaults=*/false);
     if (!lhs || !rhs)
       return {};
     SmallVector<Value, 2> operands = {lhs, rhs};
@@ -242,9 +268,27 @@ struct AssertionExprVisitor {
       return ltl::OrOp::create(builder, loc,
                                SmallVector<Value, 2>{notLhs, rhs});
     }
-    case BinaryAssertionOperator::OverlappedImplication:
+    case BinaryAssertionOperator::OverlappedImplication: {
+      // The antecedent of an implication must be a sequence type (i1 or
+      // !ltl.sequence), not a property type. Property types from $rose, $fell,
+      // $changed, $stable cannot be used directly as antecedents.
+      if (isa<ltl::PropertyType>(lhs.getType())) {
+        mlir::emitError(loc, "property type cannot be used as implication "
+                             "antecedent; consider restructuring the assertion "
+                             "to use the property as a consequent");
+        return {};
+      }
       return ltl::ImplicationOp::create(builder, loc, operands);
+    }
     case BinaryAssertionOperator::NonOverlappedImplication: {
+      // The antecedent of an implication must be a sequence type (i1 or
+      // !ltl.sequence), not a property type.
+      if (isa<ltl::PropertyType>(lhs.getType())) {
+        mlir::emitError(loc, "property type cannot be used as implication "
+                             "antecedent; consider restructuring the assertion "
+                             "to use the property as a consequent");
+        return {};
+      }
       if (isa<ltl::PropertyType>(rhs.getType())) {
         // Use past-shifted antecedent to avoid concat+delay true in BMC.
         // ltl.past only accepts i1, so use delay+concat for sequences.
@@ -272,12 +316,24 @@ struct AssertionExprVisitor {
                                         SmallVector<Value, 2>{lhs, delayedRhs});
     }
     case BinaryAssertionOperator::OverlappedFollowedBy: {
+      // The antecedent of an implication must be a sequence type.
+      if (isa<ltl::PropertyType>(lhs.getType())) {
+        mlir::emitError(loc, "property type cannot be used as followed-by "
+                             "antecedent; consider restructuring the assertion");
+        return {};
+      }
       auto notRhs = ltl::NotOp::create(builder, loc, rhs);
       auto implication = ltl::ImplicationOp::create(
           builder, loc, SmallVector<Value, 2>{lhs, notRhs});
       return ltl::NotOp::create(builder, loc, implication);
     }
     case BinaryAssertionOperator::NonOverlappedFollowedBy: {
+      // The antecedent of an implication must be a sequence type.
+      if (isa<ltl::PropertyType>(lhs.getType())) {
+        mlir::emitError(loc, "property type cannot be used as followed-by "
+                             "antecedent; consider restructuring the assertion");
+        return {};
+      }
       auto notRhs = ltl::NotOp::create(builder, loc, rhs);
       if (isa<ltl::PropertyType>(notRhs.getType())) {
         auto constOne =
@@ -322,7 +378,8 @@ struct AssertionExprVisitor {
   }
 
   Value visit(const slang::ast::ClockingAssertionExpr &expr) {
-    auto assertionExpr = context.convertAssertionExpression(expr.expr, loc);
+    auto assertionExpr =
+        context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!assertionExpr)
       return {};
     return context.convertLTLTimingControl(expr.clocking, assertionExpr);
@@ -334,14 +391,16 @@ struct AssertionExprVisitor {
     if (!condition)
       return {};
 
-    auto ifExpr = context.convertAssertionExpression(expr.ifExpr, loc);
+    auto ifExpr =
+        context.convertAssertionExpression(expr.ifExpr, loc, /*applyDefaults=*/false);
     if (!ifExpr)
       return {};
 
     auto notCond = ltl::NotOp::create(builder, loc, condition);
 
     if (expr.elseExpr) {
-      auto elseExpr = context.convertAssertionExpression(*expr.elseExpr, loc);
+      auto elseExpr = context.convertAssertionExpression(*expr.elseExpr, loc,
+                                                         /*applyDefaults=*/false);
       if (!elseExpr)
         return {};
       auto condAndIf =
@@ -362,14 +421,17 @@ struct AssertionExprVisitor {
     if (!disableCond)
       return {};
 
-    auto assertionExpr = context.convertAssertionExpression(expr.expr, loc);
+    auto assertionExpr =
+        context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!assertionExpr)
       return {};
 
     // Approximate disable iff by treating the property as vacuously true when
     // the disable condition holds.
-    return ltl::OrOp::create(builder, loc,
-                             SmallVector<Value, 2>{disableCond, assertionExpr});
+    auto orOp = ltl::OrOp::create(
+        builder, loc, SmallVector<Value, 2>{disableCond, assertionExpr});
+    orOp->setAttr(kDisableIffAttr, builder.getUnitAttr());
+    return orOp.getResult();
   }
 
   /// Emit an error for all other expressions.
@@ -546,9 +608,34 @@ Value Context::convertAssertionCallExpression(
 }
 
 Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
-                                          Location loc) {
+                                          Location loc, bool applyDefaults) {
   AssertionExprVisitor visitor{*this, loc};
-  return expr.visit(visitor);
+  auto value = expr.visit(visitor);
+  if (!value || !applyDefaults)
+    return value;
+
+  if (currentScope &&
+      isa<ltl::PropertyType, ltl::SequenceType>(value.getType())) {
+    if (auto *disableExpr = compilation.getDefaultDisable(*currentScope)) {
+      auto disableVal = convertRvalueExpression(*disableExpr);
+      disableVal = convertToI1(disableVal);
+      if (disableVal) {
+        auto orOp = ltl::OrOp::create(
+            builder, loc, SmallVector<Value, 2>{disableVal, value});
+        orOp->setAttr(kDisableIffAttr, builder.getUnitAttr());
+        value = orOp.getResult();
+      }
+    }
+
+    if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
+      if (auto *clockBlock =
+              clocking->as_if<slang::ast::ClockingBlockSymbol>()) {
+        value = convertLTLTimingControl(clockBlock->getEvent(), value);
+      }
+    }
+  }
+
+  return value;
 }
 // NOLINTEND(misc-no-recursion)
 

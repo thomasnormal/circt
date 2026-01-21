@@ -4539,7 +4539,10 @@ struct RvalueExprVisitor : public ExprVisitor {
   }
 
   Value visit(const slang::ast::AssertionInstanceExpression &expr) {
-    return context.convertAssertionExpression(expr.body, loc);
+    // Defaults apply at the outer assertion; avoid double-applying default
+    // clocking/disable when instantiating a named property.
+    return context.convertAssertionExpression(expr.body, loc,
+                                              /*applyDefaults=*/false);
   }
 
   // Handle dynamic array new[size] expression.

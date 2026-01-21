@@ -1102,3 +1102,50 @@ func.func @ValueToRefConversion(%arg0: !moore.i32) -> !moore.ref<i32> {
   %0 = moore.conversion %arg0 : !moore.i32 -> !moore.ref<i32>
   return %0 : !moore.ref<i32>
 }
+
+// CHECK-LABEL: func.func @Extract4StateToFourState
+// CHECK-SAME: (%[[ARG0:.*]]: !hw.struct<value: i8, unknown: i8>) -> !hw.struct<value: i2, unknown: i2>
+func.func @Extract4StateToFourState(%arg0: !moore.l8) -> !moore.l2 {
+  // CHECK: %[[VALUE:.*]] = hw.struct_extract %[[ARG0]]["value"]
+  // CHECK: %[[UNKNOWN:.*]] = hw.struct_extract %[[ARG0]]["unknown"]
+  // CHECK: %[[VEXT:.*]] = comb.extract %[[VALUE]] from 3
+  // CHECK: %[[UEXT:.*]] = comb.extract %[[UNKNOWN]] from 3
+  // CHECK: %[[RESULT:.*]] = hw.struct_create (%[[VEXT]], %[[UEXT]])
+  // CHECK: return %[[RESULT]]
+  %0 = moore.extract %arg0 from 3 : !moore.l8 -> !moore.l2
+  return %0 : !moore.l2
+}
+
+// CHECK-LABEL: func.func @Extract4StateTo2State
+// CHECK-SAME: (%[[ARG0:.*]]: !hw.struct<value: i8, unknown: i8>) -> i2
+func.func @Extract4StateTo2State(%arg0: !moore.l8) -> !moore.i2 {
+  // CHECK: %[[VALUE:.*]] = hw.struct_extract %[[ARG0]]["value"]
+  // CHECK: %[[VEXT:.*]] = comb.extract %[[VALUE]] from 4
+  // CHECK: return %[[VEXT]]
+  %0 = moore.extract %arg0 from 4 : !moore.l8 -> !moore.i2
+  return %0 : !moore.i2
+}
+
+// CHECK-LABEL: func.func @Extract4StateOutOfBounds
+// CHECK-SAME: (%[[ARG0:.*]]: !hw.struct<value: i4, unknown: i4>) -> !hw.struct<value: i4, unknown: i4>
+func.func @Extract4StateOutOfBounds(%arg0: !moore.l4) -> !moore.l4 {
+  // Test out-of-bounds high (extracting from bit 2 with width 4 from a 4-bit value)
+  // CHECK: hw.struct_extract
+  // CHECK: hw.struct_extract
+  // CHECK: comb.extract
+  // CHECK: comb.concat
+  // CHECK: hw.struct_create
+  %0 = moore.extract %arg0 from 2 : !moore.l4 -> !moore.l4
+  return %0 : !moore.l4
+}
+
+// CHECK-LABEL: func.func @Extract4State1BitFrom1Bit
+// CHECK-SAME: (%[[ARG0:.*]]: !hw.struct<value: i1, unknown: i1>) -> !hw.struct<value: i1, unknown: i1>
+func.func @Extract4State1BitFrom1Bit(%arg0: !moore.l1) -> !moore.l1 {
+  // This is the pattern that was failing in hdl_top.sv
+  // CHECK: %[[VALUE:.*]] = hw.struct_extract %[[ARG0]]["value"]
+  // CHECK: %[[UNKNOWN:.*]] = hw.struct_extract %[[ARG0]]["unknown"]
+  // CHECK: hw.struct_create (%[[VALUE]], %[[UNKNOWN]])
+  %0 = moore.extract %arg0 from 0 : !moore.l1 -> !moore.l1
+  return %0 : !moore.l1
+}
