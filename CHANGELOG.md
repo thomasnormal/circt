@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 83 - January 21, 2026
+
+### Fix 4-State Type Conversion in MooreToCore
+
+**4-state types (logic, reg) now compile and run without crashing!**
+
+**Track A: FormatIntOpConversion**
+- Extract 'value' field from 4-state struct before passing to `sim::FormatDecOp`
+- Handles `$display` with 4-state variables
+
+**Track B: TimeToLogicOpConversion**
+- Wrap `llhd::TimeToIntOp` result in 4-state struct `{value, unknown=0}`
+- Handles `$time` in 4-state context
+
+**Track C: StringItoaOpConversion**
+- Extract value field from 4-state struct before string conversion
+- Handles UVM internal string formatting
+
+**Additional Fixes**:
+- Added `LogicToIntOpConversion` / `IntToLogicOpConversion` for 2-state ↔ 4-state
+- Fixed circt-sim CMakeLists.txt to link MooreRuntime library
+- Fixed MooreRuntime exception handling (no -fexceptions)
+
+**Test Results**:
+- 4-state code compiles and runs without crashing ✅
+- 2-state types work fully end-to-end ✅
+- 4-state values show as 'x' in simulation (separate circt-sim interpretation bug)
+
+---
+
 ## Iteration 82 - January 21, 2026
 
 ### End-to-End Testing with Real UVM Library
