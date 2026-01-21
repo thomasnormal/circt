@@ -12,6 +12,7 @@ TEST_FILTER="${TEST_FILTER:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
+SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2
@@ -31,6 +32,12 @@ skipped=0
 run_case() {
   local sv="$1"
   local mode="$2"
+  if [[ "$mode" == "fail" && "$SKIP_FAIL_WITHOUT_MACRO" == "1" ]]; then
+    if ! rg -q '^[[:space:]]*`(ifn?def|if)[[:space:]]+FAIL\b' "$sv"; then
+      echo "SKIP(fail-no-macro): $(basename "$sv" .sv)"
+      return
+    fi
+  fi
   local extra_def=()
   if [[ "$mode" == "fail" ]]; then
     extra_def=(-DFAIL)

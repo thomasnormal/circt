@@ -1,0 +1,12 @@
+// RUN: circt-verilog %s --parse-only | FileCheck %s
+
+module test_value_change(input logic clk, a);
+  assert property (@(posedge clk) $fell(a));
+  assert property (@(posedge clk) $rose(a));
+endmodule
+
+// CHECK-LABEL: moore.module @test_value_change
+// CHECK: moore.case_eq {{.*}} : l1
+// CHECK: moore.case_eq {{.*}} : l1
+// CHECK: moore.not {{.*}} : i1
+// CHECK: moore.and {{.*}}, {{.*}} : i1

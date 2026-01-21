@@ -546,7 +546,9 @@ void FirRegOp::print(::mlir::OpAsmPrinter &p) {
   }
 
   if (auto preset = getPresetAttr()) {
-    p << " preset " << preset.getValue();
+    SmallString<32> presetStr;
+    preset.getValue().toString(presetStr, 10, /*isSigned=*/false);
+    p << " preset " << presetStr;
   }
 
   if (canElideName(p, *this))
