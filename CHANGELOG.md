@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 74 - January 21, 2026
+
+### ProcessOp Canonicalization Fix + UVM Macro Enhancements
+
+**ProcessOp Canonicalization Fix** ⭐ CRITICAL FIX
+- Fixed ProcessOp::canonicalize() in LLHDOps.cpp to preserve processes with side effects
+- Previously, processes without DriveOp were removed even if they had:
+  - sim.proc.print ($display output)
+  - sim.terminate ($finish simulation control)
+  - Memory write effects (via MemoryEffectOpInterface)
+- This caused initial blocks with $display/$finish to be silently dropped during optimization
+- The fix now checks for all side-effect operations, not just DriveOp
+- New test: `canonicalize-process-with-side-effects.mlir`
+
+**UVM Macro Stubs Enhanced** ⭐ ENHANCEMENT
+- Added `UVM_STRING_QUEUE_STREAMING_PACK` macro stub (for string queue joining)
+- Added `uvm_typename`, `uvm_type_name_decl` macros (for type introspection)
+- Added `uvm_object_abstract_utils`, `uvm_object_abstract_param_utils`
+- Added `uvm_component_abstract_utils` macro
+- Added global defines: `UVM_MAX_STREAMBITS`, `UVM_FIELD_FLAG_SIZE`, `UVM_LINE_WIDTH`, `UVM_NUM_LINES`
+- Fixed `uvm_object_utils` to not define `get_type_name` (was conflicting with `uvm_type_name_decl`)
+
+**Known Issue Discovered**
+- Concurrent process scheduling issue: when initial block runs with always blocks,
+  only initial block executes; always blocks don't trigger properly
+- Needs investigation in LLHDProcessInterpreter event scheduling
+
+### Files Modified
+- `lib/Dialect/LLHD/IR/LLHDOps.cpp` (ProcessOp canonicalization fix)
+- `lib/Runtime/uvm/uvm_macros.svh` (+70 lines for new macro stubs)
+- New test: `test/Dialect/LLHD/Transforms/canonicalize-process-with-side-effects.mlir`
+
+---
+
 ## Iteration 73 - January 21, 2026
 
 ### Major Simulation Fixes: $display, $finish, Queue Sort With
@@ -27,6 +61,11 @@
 - Added `evaluateFormatString()` for format string evaluation
 - $display("Hello World!") now works and prints to console!
 - $finish properly terminates simulation
+
+**Track G: BMC Non-Overlapped Implication** ⭐ FIX
+- Shifted exact delayed consequents in LTLToCore implication lowering to use past-form antecedent matching.
+- BMC now passes `a |=> q` with single-cycle register delay (nonoverlap pass/fail added).
+- New tests: `bmc-nonoverlap-implication.mlir`, extended `integration_test/circt-bmc/sva-e2e.sv`.
 
 ### Files Modified
 - `lib/Conversion/MooreToCore/MooreToCore.cpp` (+450 lines for queue sort with)
