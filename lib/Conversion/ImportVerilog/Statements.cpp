@@ -23,6 +23,21 @@ using namespace ImportVerilog;
 
 // NOLINTBEGIN(misc-no-recursion)
 namespace {
+static verif::ClockEdge
+convertEdgeKindVerif(const slang::ast::EdgeKind edge) {
+  switch (edge) {
+  case slang::ast::EdgeKind::PosEdge:
+    return verif::ClockEdge::Pos;
+  case slang::ast::EdgeKind::NegEdge:
+    return verif::ClockEdge::Neg;
+  case slang::ast::EdgeKind::BothEdges:
+    return verif::ClockEdge::Both;
+  case slang::ast::EdgeKind::None:
+  default:
+    return verif::ClockEdge::Both;
+  }
+}
+
 struct StmtVisitor {
   Context &context;
   Location loc;
@@ -1317,14 +1332,50 @@ struct StmtVisitor {
   // Handle concurrent assertion statements.
   LogicalResult visit(const slang::ast::ConcurrentAssertionStatement &stmt) {
     auto loc = context.convertLocation(stmt.sourceRange);
-    auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
-    if (!property)
-      return failure();
+    auto *insertionBlock = builder.getInsertionBlock();
+    auto enclosingProc = insertionBlock
+                             ? dyn_cast_or_null<moore::ProcedureOp>(
+                                   insertionBlock->getParentOp())
+                             : nullptr;
 
     if (stmt.ifTrue && !stmt.ifTrue->as_if<slang::ast::EmptyStatement>()) {
       mlir::emitWarning(loc)
           << "ignoring concurrent assertion action blocks during import";
     }
+
+    if (context.currentAssertionClock && enclosingProc) {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointAfter(enclosingProc);
+      auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
+      if (!property)
+        return failure();
+      auto clockVal =
+          context.convertRvalueExpression(context.currentAssertionClock->expr);
+      clockVal = context.convertToI1(clockVal);
+      if (!clockVal)
+        return failure();
+      auto edge = convertEdgeKindVerif(context.currentAssertionClock->edge);
+      switch (stmt.assertionKind) {
+      case slang::ast::AssertionKind::Assert:
+        verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
+                                       Value(), StringAttr{});
+        return success();
+      case slang::ast::AssertionKind::Assume:
+        verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
+                                       Value(), StringAttr{});
+        return success();
+      case slang::ast::AssertionKind::CoverProperty:
+        verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
+                                      Value(), StringAttr{});
+        return success();
+      default:
+        break;
+      }
+    }
+
+    auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
+    if (!property)
+      return failure();
 
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:

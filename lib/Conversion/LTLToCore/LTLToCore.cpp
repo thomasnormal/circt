@@ -486,6 +486,12 @@ struct LTLPropertyLowerer {
                                   SmallVector<Value, 2>{lowBits, zeroBit});
   }
 
+  std::pair<Value, Value> getResetPair(Value resetVal) {
+    if (disable)
+      return {disable, resetVal};
+    return {Value(), Value()};
+  }
+
   PropertyResult lowerDisableIff(ltl::OrOp orOp, Value clock,
                                  ltl::ClockEdge edge) {
     if (disable) {
@@ -574,8 +580,7 @@ struct LTLPropertyLowerer {
       nextStates.push_back(next);
       auto powerOn =
           seq::createConstantInitialValue(builder, zeroBits.getOperation());
-      Value reset = disable;
-      Value resetVal = zeroBits;
+      auto [reset, resetVal] = getResetPair(zeroBits);
       auto reg = seq::CompRegOp::create(builder, loc, next, clock, reset,
                                         resetVal,
                                         builder.getStringAttr("ltl_state"),
@@ -893,8 +898,7 @@ struct LTLPropertyLowerer {
                                                               : falseVal;
       auto powerOn = seq::createConstantInitialValue(
           builder, initVal.getDefiningOp());
-      Value reset = disable;
-      Value resetVal = falseVal;
+      auto [reset, resetVal] = getResetPair(falseVal);
       auto reg = seq::CompRegOp::create(builder, loc, next, clock, reset,
                                         resetVal,
                                         builder.getStringAttr("ltl_state"),
@@ -967,8 +971,7 @@ struct LTLPropertyLowerer {
         hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
     auto powerOn = seq::createConstantInitialValue(
         builder, initVal.getOperation());
-    Value reset = disable;
-    Value resetVal = initVal;
+    auto [reset, resetVal] = getResetPair(initVal);
     return seq::CompRegOp::create(builder, loc, next, clock, reset, resetVal,
                                   builder.getStringAttr(name), powerOn);
   }
@@ -980,8 +983,7 @@ struct LTLPropertyLowerer {
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
       auto powerOn = seq::createConstantInitialValue(
           builder, initVal.getOperation());
-      Value reset = disable;
-      Value resetVal = initVal;
+      auto [reset, resetVal] = getResetPair(initVal);
       current = seq::CompRegOp::create(builder, loc, current, clock, reset,
                                        resetVal,
                                        builder.getStringAttr("ltl_past"),

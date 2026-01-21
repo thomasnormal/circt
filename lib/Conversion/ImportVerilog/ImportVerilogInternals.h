@@ -456,6 +456,9 @@ struct Context {
   /// properties resolve against the randomized object.
   Value inlineConstraintThisRef = {};
 
+  /// True while converting an assertion expression.
+  bool inAssertionExpr = false;
+
   /// The function currently being converted (if any). Used to propagate
   /// captures from callee functions to the caller when the caller is also
   /// a function that captures variables.
@@ -464,6 +467,9 @@ struct Context {
   /// The current scope being processed. This is used by the %m format
   /// specifier to determine the hierarchical path.
   const slang::ast::Scope *currentScope = nullptr;
+
+  /// The current clocking event for assertions within a timed statement.
+  const slang::ast::SignalEventControl *currentAssertionClock = nullptr;
 
   /// The current interface body being processed (if any). This is used when
   /// converting tasks/functions defined inside an interface to determine

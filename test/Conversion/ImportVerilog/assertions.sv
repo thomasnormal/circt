@@ -35,12 +35,13 @@ module Assertions(input logic clk, rst, a, b);
 
   //===--------------------------------------------------------------------===//
   // Test $changed - value changed from previous clock cycle
-  // $changed(x) = (x && !past(x)) || (!x && past(x))
+  // $changed(x) uses sampled comparison against the previous value.
   //===--------------------------------------------------------------------===//
   property changed_test;
     @(posedge clk) a |=> $changed(b);
   endproperty
-  // CHECK-DAG: ltl.past {{%[a-z0-9]+}}, 1 : i1
+  // CHECK-DAG: moore.past
+  // CHECK-DAG: moore.case_eq
   // CHECK: verif.assert
   assert property (changed_test);
 
@@ -90,15 +91,13 @@ module Assertions(input logic clk, rst, a, b);
 
   //===--------------------------------------------------------------------===//
   // Test $stable - value unchanged since last clock
-  // $stable(x) = (x && past(x)) || (!x && !past(x))
+  // $stable(x) uses a sampled case-equality check against the past value.
   //===--------------------------------------------------------------------===//
   property stable_test;
     @(posedge clk) a |-> $stable(b);
   endproperty
-  // CHECK-DAG: ltl.past {{%[a-z0-9]+}}, 1 : i1
-  // CHECK-DAG: ltl.not
-  // CHECK-DAG: ltl.and
-  // CHECK-DAG: ltl.or
+  // CHECK-DAG: moore.past
+  // CHECK-DAG: moore.case_eq
   // CHECK: verif.assert
   assert property (stable_test);
 
@@ -111,10 +110,12 @@ module Assertions(input logic clk, rst, a, b);
     @(posedge clk) a |-> $rose(b);
   endproperty
   // $rose produces: current && !past(current)
-  // CHECK: [[ROSE_PAST:%[a-z0-9]+]] = ltl.past {{%[a-z0-9]+}}, 1 : i1
-  // CHECK: [[ROSE_NOT_PAST:%[a-z0-9]+]] = ltl.not [[ROSE_PAST]]
-  // CHECK: [[ROSE_AND:%[a-z0-9]+]] = ltl.and {{%[a-z0-9]+}}, [[ROSE_NOT_PAST]]
-  // CHECK: ltl.implication {{%[a-z0-9]+}}, [[ROSE_AND]]
+  // CHECK: [[ROSE_CURR:%[a-z0-9]+]] = moore.read %b_{{[0-9]+}} : <l1>
+  // CHECK: [[ROSE_PAST:%[a-z0-9]+]] = moore.past [[ROSE_CURR]] delay 1
+  // CHECK: [[ROSE_NOT_PAST:%[a-z0-9]+]] = moore.not [[ROSE_PAST]]
+  // CHECK: [[ROSE_AND:%[a-z0-9]+]] = moore.and [[ROSE_CURR]], [[ROSE_NOT_PAST]]
+  // CHECK: [[ROSE_BOOL:%[a-z0-9]+]] = moore.to_builtin_bool [[ROSE_AND]] : l1
+  // CHECK: ltl.implication {{%[a-z0-9]+}}, [[ROSE_BOOL]]
   // CHECK: verif.assert
   assert property (rose_test);
 
@@ -127,10 +128,12 @@ module Assertions(input logic clk, rst, a, b);
     @(posedge clk) a |-> $fell(b);
   endproperty
   // $fell produces: !current && past(current)
-  // CHECK: [[FELL_PAST:%[a-z0-9]+]] = ltl.past {{%[a-z0-9]+}}, 1 : i1
-  // CHECK: [[FELL_NOT_CURR:%[a-z0-9]+]] = ltl.not {{%[a-z0-9]+}} : i1
-  // CHECK: [[FELL_AND:%[a-z0-9]+]] = ltl.and [[FELL_NOT_CURR]], [[FELL_PAST]]
-  // CHECK: ltl.implication {{%[a-z0-9]+}}, [[FELL_AND]]
+  // CHECK: [[FELL_CURR:%[a-z0-9]+]] = moore.read %b_{{[0-9]+}} : <l1>
+  // CHECK: [[FELL_PAST:%[a-z0-9]+]] = moore.past [[FELL_CURR]] delay 1
+  // CHECK: [[FELL_NOT_CURR:%[a-z0-9]+]] = moore.not [[FELL_CURR]]
+  // CHECK: [[FELL_AND:%[a-z0-9]+]] = moore.and [[FELL_NOT_CURR]], [[FELL_PAST]]
+  // CHECK: [[FELL_BOOL:%[a-z0-9]+]] = moore.to_builtin_bool [[FELL_AND]] : l1
+  // CHECK: ltl.implication {{%[a-z0-9]+}}, [[FELL_BOOL]]
   // CHECK: verif.assert
   assert property (fell_test);
 endmodule

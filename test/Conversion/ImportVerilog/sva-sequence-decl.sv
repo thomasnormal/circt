@@ -57,7 +57,7 @@ module sva_sequence_test(
 
   // Assertions using named properties
   // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 0, 0 : i1
-  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 1, 3 : i1
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 0, 3 : i1
   // CHECK-DAG: ltl.concat
   // CHECK-DAG: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
@@ -67,7 +67,7 @@ module sva_sequence_test(
   // CHECK: verif.{{(clocked_)?}}assert
   assert property(p_req_ack_with_reset);
 
-  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 1, 0 : i1
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 0, 0 : i1
   // CHECK-DAG: ltl.concat
   // CHECK-DAG: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
@@ -111,14 +111,14 @@ module sva_sequence_params_test(
     @(posedge clk) a |-> delay_seq(a, b, 2);
   endproperty
 
-  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 2, 0 : i1
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 1, 0 : i1
   // CHECK-DAG: ltl.concat
   // CHECK-DAG: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   assert property(p_delay);
 
   // Direct use of parameterized sequence
-  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 3, 0 : i1
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 2, 0 : i1
   // CHECK-DAG: ltl.concat
   // CHECK-DAG: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert

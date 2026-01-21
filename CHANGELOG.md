@@ -1,5 +1,96 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 89 - January 21, 2026
+
+### String Methods and File I/O System Calls
+
+**String Comparison Methods** ✅ NEW:
+- Added `moore.string.compare` op for case-sensitive lexicographic comparison
+- Added `moore.string.icompare` op for case-insensitive lexicographic comparison
+- Runtime functions: `__moore_string_compare`, `__moore_string_icompare`
+- Per IEEE 1800-2017 Section 6.16.8
+
+**File I/O System Functions** ✅ NEW:
+- Added `$feof` support in ImportVerilog (maps to `moore.builtin.feof`)
+- Added `$fgetc` support in ImportVerilog (maps to `moore.builtin.fgetc`)
+- Operations already existed in Moore dialect; added frontend parsing
+
+### Investigation Results
+
+**Recursive Function Inlining (APB AVIP HW IR Blocker)**:
+- Issue: UVM's `get_full_name()` is recursive, cannot be inlined
+- Location: `lib/Dialect/LLHD/Transforms/InlineCalls.cpp` lines 177-201
+- Recommendation: **Runtime function approach** - convert `get_full_name()`
+  calls to `__moore_component_get_full_name()` runtime function
+- Required files: MooreRuntime.cpp/h, MooreToCore.cpp, possibly Structure.cpp
+
+**Yosys SVA Test Suite**: 71% Pass Rate (10/14 tested)
+- Fully passing: basic00-03, counter, sva_range, sva_value_change_*
+- Issues with `not` operator and `throughout` operator (BMC semantic issues)
+- Parse failures: extnets.sv (hierarchical refs), sva_value_change_sim.sv
+  (`$fell/$rose/$stable` outside assertion context)
+
+### config_db Runtime Functions ✅ NEW
+
+**UVM Configuration Database Runtime**:
+- Added `__moore_config_db_set()` runtime function for storing values
+- Added `__moore_config_db_get()` runtime function for retrieving values
+- Added `__moore_config_db_exists()` runtime function for key existence check
+- Thread-safe storage using `std::unordered_map` with mutex protection
+- Supports arbitrary value types via type ID + byte array storage
+
+**MooreToCore Lowering**:
+- `UVMConfigDbSetOpConversion`: Converts `moore.uvm.config_db.set` to runtime call
+- `UVMConfigDbGetOpConversion`: Converts `moore.uvm.config_db.get` to runtime call
+- Creates global string constants for inst_name and field_name
+- Handles optional context argument (null for global scope)
+
+### get_full_name() Runtime ✅ NEW (In Progress)
+
+**Runtime Function**:
+- Added `__moore_component_get_full_name(void*, int64_t, int64_t)` to MooreRuntime
+- Iteratively walks parent chain to build hierarchical name
+- Avoids recursive function calls that cannot be inlined in LLHD
+
+**InlineCalls Integration** (In Progress):
+- Added detection for UVM `get_full_name()` method patterns
+- Replaces recursive calls with runtime function call instead of failing
+
+### sv-tests Regression Check ✅ PASS
+
+**Results**: 83.1% adjusted pass rate (no regression from 81.3% baseline)
+
+| Category | Pass/Total | Rate |
+|----------|------------|------|
+| chapter-7 (Arrays) | 94/103 | 91% |
+| chapter-11 (Operators) | 79/88 | 90% |
+| generic | 179/184 | 97% |
+| Overall | 774/1035 | 74.8% |
+
+**Known Blockers** (not regressions):
+- 104 tests require external UVM library (`unknown package 'uvm_pkg'`)
+- 6 tests require Black Parrot includes (`bp_common_defines.svh`)
+
+### APB AVIP Testing
+
+**Status**: ImportVerilog ✅ PASS, MooreToCore ❌ CRASH
+
+**Finding**: Crash during MooreToCore pass with:
+```
+cast<Ty>() argument of incompatible type!
+```
+- Attempting to cast non-IntegerType to IntegerType
+- Related to `f64` types from covergroup `get_coverage()` functions
+- Issue: `unrealized_conversion_cast to !moore.f64` without inputs
+
+### Test Coverage Improvements
+
+- New test: `test/Conversion/ImportVerilog/string-methods.sv`
+- New test: `test/Conversion/ImportVerilog/file-io-functions.sv`
+- New test: `test/Conversion/MooreToCore/config-db.mlir`
+
+---
+
 ## Iteration 88 - January 21, 2026
 
 ### UVM and AVIP Simulation Progress

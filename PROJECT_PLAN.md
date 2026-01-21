@@ -66,15 +66,18 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 88/89)
+### Track Status & Next Tasks (Iteration 89)
 
-**Test Results (Iteration 88)**: 2381/2398 PASS (99.29%)
+**Test Results (Iteration 89)**: sv-tests 83.1% adjusted pass rate (no regression)
 
 **Key Blockers for UVM Testbench Execution**:
 1. ~~**Delays in class tasks**~~ ✅ FIXED - `__moore_delay()` runtime function for class methods
 2. ~~**Constraint context properties**~~ ✅ FIXED - Non-static properties no longer treated as static
-3. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
-4. **Virtual method dispatch** - Class hierarchy not fully simulated
+3. ~~**config_db runtime**~~ ✅ FIXED - `uvm_config_db::set/get/exists` lowered to runtime functions
+4. ~~**get_full_name() recursion**~~ ✅ FIXED - Runtime function replaces recursive inlining
+5. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
+6. **Virtual method dispatch** - Class hierarchy not fully simulated
+7. **MooreToCore covergroup f64** - Cast failure with `get_coverage()` return type
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -95,6 +98,9 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ APB AVIP parses | Compiles through ImportVerilog |
 | ✅ Class task delays | __moore_delay() for class methods |
 | ✅ Constraint properties | Non-static in constraint blocks |
+| ✅ config_db runtime | set/get/exists with thread-safe storage |
+| ✅ get_full_name runtime | Iterative hierarchy walk replaces recursion |
+| ⚠️ MooreToCore covergroup | f64 cast failure with get_coverage() |
 | ⚠️ Virtual interfaces | Runtime binding needed |
 | ⚠️ Virtual method dispatch | Class hierarchy simulation |
 
@@ -119,23 +125,27 @@ circt-verilog --uvm-path ~/uvm-core/src \
 |--------|---------------|
 | ✅ Static class properties | Constraint context fix - no longer treats non-static as static |
 | ✅ Class task delays | __moore_delay() runtime function implemented |
+| ✅ config_db operations | uvm_config_db::set/get/exists runtime functions |
+| ✅ get_full_name() | Runtime function for hierarchical name building |
+| ✅ String methods | compare(), icompare() implemented |
+| ✅ File I/O functions | $feof(), $fgetc() implemented |
 | ⚠️ DPI function stubs | Complete runtime stubs for UVM |
 | ⚠️ Coroutine runtime | Full coroutine support for task suspension |
 
-### Real-World Test Results (Updated Iteration 88)
+### Real-World Test Results (Updated Iteration 89)
 
-**APB AVIP Pipeline Status** (Iteration 88):
+**APB AVIP Pipeline Status** (Iteration 89):
 - **ImportVerilog → Moore IR**: ✅ SUCCESS (33,153 lines)
-- **MooreToCore**: ✅ SUCCESS (25,279 lines)
-- **Full HW IR**: ❌ Blocked by recursive `get_full_name()` function inlining
-- Progress: Class task delays, constraint properties, virtual interfaces all working
+- **MooreToCore**: ❌ CRASH - IntegerType cast failure with f64 (covergroup get_coverage())
+- **Root Cause**: `cast<IntegerType>()` fails on `f64` return from `get_coverage()` methods
+- **Previous Fix**: `get_full_name()` recursion now handled by runtime function
+- Progress: config_db runtime, string methods, file I/O all working
 
 **sv-tests Compliance Suite** (1,028 tests):
-- Overall Pass Rate: **73.6%** (757 passed)
-- Adjusted Pass Rate: **81.3%** (excluding expected failures)
+- Overall Pass Rate: **76.5%** (787 passed)
+- Adjusted Pass Rate: **83.1%** (excluding expected failures) - NO REGRESSION
 - Main failure categories:
   - UVM package not found (51% of failures)
-  - Unsupported system calls: string methods, file I/O
   - TaggedUnion expressions not supported
   - Disable statement not implemented
 

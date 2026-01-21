@@ -1267,6 +1267,251 @@ struct WaitConditionOpConversion : public OpConversionPattern<WaitConditionOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// UVM Configuration Database Conversion
+//===----------------------------------------------------------------------===//
+
+/// Helper to create a MooreString struct from a string attribute.
+/// Creates global string constant and returns struct {ptr, i64}.
+static Value createMooreStringFromAttr(Location loc, ModuleOp mod,
+                                       ConversionPatternRewriter &rewriter,
+                                       StringRef str, StringRef globalPrefix) {
+  auto *ctx = rewriter.getContext();
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+
+  // Create the string struct type: {ptr, i64}
+  auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+  int64_t len = str.size();
+
+  // Create global string constant
+  std::string globalName = (globalPrefix + "_" +
+      std::to_string(std::hash<std::string>{}(str.str()))).str();
+  auto i8Ty = IntegerType::get(ctx, 8);
+  auto arrayTy = LLVM::LLVMArrayType::get(i8Ty, len);
+
+  // Check if global already exists
+  if (!mod.lookupSymbol<LLVM::GlobalOp>(globalName)) {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(mod.getBody());
+    LLVM::GlobalOp::create(rewriter, loc, arrayTy, /*isConstant=*/true,
+                           LLVM::Linkage::Internal, globalName,
+                           rewriter.getStringAttr(str));
+  }
+
+  // Get address of global
+  Value globalAddr =
+      LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalName);
+  Value lenVal = arith::ConstantOp::create(
+      rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(len));
+
+  // Create result struct
+  Value result = LLVM::UndefOp::create(rewriter, loc, stringStructTy);
+  result = LLVM::InsertValueOp::create(rewriter, loc, result, globalAddr,
+                                       ArrayRef<int64_t>{0});
+  result = LLVM::InsertValueOp::create(rewriter, loc, result, lenVal,
+                                       ArrayRef<int64_t>{1});
+  return result;
+}
+
+/// Conversion for moore.uvm.config_db.set -> runtime function call.
+/// Stores a value in the UVM configuration database.
+struct UVMConfigDbSetOpConversion
+    : public OpConversionPattern<UVMConfigDbSetOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UVMConfigDbSetOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // __moore_config_db_set(context, instName, instLen, fieldName, fieldLen,
+    //                       value, valueSize, typeId)
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        voidTy, {ptrTy, ptrTy, i64Ty, ptrTy, i64Ty, ptrTy, i64Ty, i32Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_config_db_set", fnTy);
+
+    // Get the context pointer (null if not provided)
+    Value contextPtr;
+    if (adaptor.getContext()) {
+      contextPtr = adaptor.getContext();
+    } else {
+      contextPtr =
+          LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    }
+
+    // Get inst_name and field_name from attributes
+    StringRef instName = op.getInstName();
+    StringRef fieldName = op.getFieldName();
+
+    // Create global string constants for inst_name and field_name
+    Value instNameStr = createMooreStringFromAttr(loc, mod, rewriter, instName,
+                                                  "__config_db_inst");
+    Value fieldNameStr = createMooreStringFromAttr(loc, mod, rewriter, fieldName,
+                                                   "__config_db_field");
+
+    // Extract pointer and length from string structs
+    Value instNamePtr = LLVM::ExtractValueOp::create(rewriter, loc, instNameStr,
+                                                     ArrayRef<int64_t>{0});
+    Value instNameLen = LLVM::ExtractValueOp::create(rewriter, loc, instNameStr,
+                                                     ArrayRef<int64_t>{1});
+    Value fieldNamePtr = LLVM::ExtractValueOp::create(rewriter, loc, fieldNameStr,
+                                                      ArrayRef<int64_t>{0});
+    Value fieldNameLen = LLVM::ExtractValueOp::create(rewriter, loc, fieldNameStr,
+                                                      ArrayRef<int64_t>{1});
+
+    // Get the value to store - we need to allocate it and pass a pointer
+    Value value = adaptor.getValue();
+    Type valueType = value.getType();
+
+    // Allocate space for the value and store it
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto valueAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, valueType, one);
+    LLVM::StoreOp::create(rewriter, loc, value, valueAlloca);
+
+    // Compute value size using DataLayout
+    // For simplicity, we use a type ID based on a hash of the original Moore type
+    Type origType = op.getValue().getType();
+    int32_t typeId = static_cast<int32_t>(
+        llvm::hash_value(origType.getAsOpaquePointer()));
+
+    // Estimate value size (in bytes) - simplified heuristic
+    int64_t valueSize = 8;  // Default to 8 bytes
+    if (auto intTy = dyn_cast<IntegerType>(valueType)) {
+      valueSize = (intTy.getWidth() + 7) / 8;
+    } else if (isa<LLVM::LLVMPointerType>(valueType)) {
+      valueSize = 8;  // Pointer size
+    } else if (auto structTy = dyn_cast<LLVM::LLVMStructType>(valueType)) {
+      // For structs, estimate based on number of elements
+      valueSize = structTy.getBody().size() * 8;
+    }
+
+    Value valueSizeVal = arith::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(valueSize));
+    Value typeIdVal = arith::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(typeId));
+
+    // Call the runtime function
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{contextPtr, instNamePtr, instNameLen,
+                                    fieldNamePtr, fieldNameLen, valueAlloca,
+                                    valueSizeVal, typeIdVal});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.uvm.config_db.get -> runtime function call.
+/// Retrieves a value from the UVM configuration database.
+struct UVMConfigDbGetOpConversion
+    : public OpConversionPattern<UVMConfigDbGetOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UVMConfigDbGetOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // __moore_config_db_get(context, instName, instLen, fieldName, fieldLen,
+    //                       typeId, outValue, valueSize) -> i32
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        i32Ty, {ptrTy, ptrTy, i64Ty, ptrTy, i64Ty, i32Ty, ptrTy, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_config_db_get", fnTy);
+
+    // Get the context pointer
+    Value contextPtr = adaptor.getContext();
+
+    // Get inst_name and field_name from attributes
+    StringRef instName = op.getInstName();
+    StringRef fieldName = op.getFieldName();
+
+    // Create global string constants for inst_name and field_name
+    Value instNameStr = createMooreStringFromAttr(loc, mod, rewriter, instName,
+                                                  "__config_db_inst");
+    Value fieldNameStr = createMooreStringFromAttr(loc, mod, rewriter, fieldName,
+                                                   "__config_db_field");
+
+    // Extract pointer and length from string structs
+    Value instNamePtr = LLVM::ExtractValueOp::create(rewriter, loc, instNameStr,
+                                                     ArrayRef<int64_t>{0});
+    Value instNameLen = LLVM::ExtractValueOp::create(rewriter, loc, instNameStr,
+                                                     ArrayRef<int64_t>{1});
+    Value fieldNamePtr = LLVM::ExtractValueOp::create(rewriter, loc, fieldNameStr,
+                                                      ArrayRef<int64_t>{0});
+    Value fieldNameLen = LLVM::ExtractValueOp::create(rewriter, loc, fieldNameStr,
+                                                      ArrayRef<int64_t>{1});
+
+    // Determine the result type and allocate space for the output value
+    Type resultType = getTypeConverter()->convertType(op.getValue().getType());
+    if (!resultType)
+      return failure();
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto outValueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultType, one);
+
+    // Compute type ID and value size
+    Type origType = op.getValue().getType();
+    int32_t typeId = static_cast<int32_t>(
+        llvm::hash_value(origType.getAsOpaquePointer()));
+
+    // Estimate value size (in bytes) - simplified heuristic
+    int64_t valueSize = 8;  // Default to 8 bytes
+    if (auto intTy = dyn_cast<IntegerType>(resultType)) {
+      valueSize = (intTy.getWidth() + 7) / 8;
+    } else if (isa<LLVM::LLVMPointerType>(resultType)) {
+      valueSize = 8;  // Pointer size
+    } else if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+      valueSize = structTy.getBody().size() * 8;
+    }
+
+    Value typeIdVal = arith::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(typeId));
+    Value valueSizeVal = arith::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(valueSize));
+
+    // Call the runtime function
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{contextPtr, instNamePtr, instNameLen, fieldNamePtr,
+                   fieldNameLen, typeIdVal, outValueAlloca, valueSizeVal});
+
+    // Convert i32 result to i1 for the 'found' result
+    Value foundI32 = call.getResult();
+    Value zero = arith::ConstantOp::create(rewriter, loc, i32Ty,
+                                           rewriter.getI32IntegerAttr(0));
+    Value found = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                        foundI32, zero);
+
+    // Load the retrieved value from the alloca
+    Value retrievedValue =
+        LLVM::LoadOp::create(rewriter, loc, resultType, outValueAlloca);
+
+    // Replace the op with the found flag and retrieved value
+    rewriter.replaceOp(op, {found, retrievedValue});
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Process Control Conversion (Fork/Join)
 //===----------------------------------------------------------------------===//
 
@@ -10742,6 +10987,81 @@ struct StringCmpOpConversion : public OpConversionPattern<StringCmpOp> {
   }
 };
 
+// moore.string.compare -> call to __moore_string_compare runtime function
+struct StringCompareOpConversion : public OpConversionPattern<StringCompareOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringCompareOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_compare", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto lhsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getLhs(), lhsAlloca);
+
+    auto rhsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getRhs(), rhsAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{lhsAlloca, rhsAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.icompare -> call to __moore_string_icompare runtime function
+struct StringICompareOpConversion
+    : public OpConversionPattern<StringICompareOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringICompareOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_icompare", fnTy);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto lhsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getLhs(), lhsAlloca);
+
+    auto rhsAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getRhs(), rhsAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{lhsAlloca, rhsAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 // moore.int_to_string -> call to __moore_int_to_string runtime function
 struct IntToStringOpConversion : public OpConversionPattern<IntToStringOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -14110,6 +14430,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringConcatOpConversion,
     StringReplicateOpConversion,
     StringCmpOpConversion,
+    StringCompareOpConversion,
+    StringICompareOpConversion,
     UArrayCmpOpConversion,
     IntToStringOpConversion,
     StringToIntOpConversion,
@@ -14138,6 +14460,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<EventTriggeredOpConversion>(typeConverter, patterns.getContext());
   patterns.add<EventTriggerOpConversion>(typeConverter, patterns.getContext());
   patterns.add<WaitConditionOpConversion>(typeConverter, patterns.getContext());
+
+  // UVM Configuration Database
+  patterns.add<UVMConfigDbSetOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<UVMConfigDbGetOpConversion>(typeConverter, patterns.getContext());
 
   // Process control (fork/join)
   patterns.add<ForkOpConversion>(typeConverter, patterns.getContext());
