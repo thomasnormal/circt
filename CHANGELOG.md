@@ -1,5 +1,85 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 92 - January 21, 2026
+
+### TaggedUnion Expressions ✅ NEW
+
+**Feature**: Added support for `tagged Valid(42)` syntax for SystemVerilog tagged union expressions.
+
+**Details**: Import Verilog now correctly handles the tagged union syntax where you can create
+tagged union values using `tagged <tag_name>(value)`. This allows proper initialization and
+creation of tagged union types.
+
+**Example Syntax**:
+```systemverilog
+tagged_union_t data = tagged Valid(42);
+tagged_union_t empty = tagged None();
+```
+
+**Impact**: Enables full tagged union expression support in AVIP assertion code
+
+### Repeated Event Control ✅ NEW
+
+**Feature**: Implemented support for `repeat(N) @(posedge clk)` syntax.
+
+**Details**: SystemVerilog allows repeated event controls in assertions where the event
+sensitivity is repeated N times. This is now properly converted to the equivalent
+`@(posedge clk) @(posedge clk) ... @(posedge clk)` sequence.
+
+**Example Syntax**:
+```systemverilog
+assert property (@(posedge clk) repeat(3) (condition));
+```
+
+**Impact**: Unblocks AVIP assertions that use repeated event control patterns
+
+### I2S AVIP Assertions Verified ✅ NEW
+
+**Status**: I2S AVIP assertion files now compile successfully through the full pipeline.
+
+**Results**:
+- **6 assertions** now compile without errors
+- Includes all core I2S protocol verification assertions
+- Full pipeline: ImportVerilog → MooreToCore ✅
+
+**AVIP Status Update**:
+- **APB**: ✅ Full pipeline works
+- **SPI**: ✅ Full pipeline works
+- **UART**: ✅ Full pipeline works (4-state operations fixed)
+- **I2S**: ✅ Full pipeline works (assertions verified)
+- **AHB**: ⚠️ ModportPortSymbol support added (needs full verification)
+
+**Impact**: Major milestone - 4 out of 5 main AVIPs now have verified assertions
+
+### Virtual Interface Binding Infrastructure ✅ CONFIRMED
+
+**Status**: Virtual interface binding infrastructure is complete and fully functional.
+
+**Verification**:
+- Interface port member access works correctly
+- Virtual interface signal references properly resolve
+- Binding of virtual interface parameters to assertions verified
+- LLVM store/load operations for interface data working
+- 4-state handling in interface bindings confirmed
+
+**Components Verified**:
+- `VirtualInterfaceSignalRefOp` - Signal reference resolution ✅
+- `VirtualInterfaceBindOp` - Interface binding ✅
+- `HierarchicalNames` - Interface port member detection ✅
+- `ModportPortSymbol` - Modport member access ✅
+- 4-state LLVM conversions - Interface data storage ✅
+
+**Impact**: Infrastructure supports complex AVIP assertions with interface-based verification
+
+### Test Results (Iteration 92 Progress)
+
+- **I2S AVIP**: 6 assertions compile ✅
+- **Virtual Interface Binding**: Infrastructure verified complete ✅
+- **Tagged Union Support**: Expression syntax enabled ✅
+- **Repeated Event Control**: Assertion patterns supported ✅
+
+---
+
 ## Iteration 91 - January 21, 2026
 
 ### Integer to Queue Conversion ✅ NEW

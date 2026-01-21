@@ -2720,6 +2720,14 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   currentThisRef = valueSymbols.lookup(subroutine.thisVar);
   auto restoreThis = llvm::make_scope_exit([&] { currentThisRef = savedThis; });
 
+  // Reset assertion guard when entering an isolated function region.
+  // Values from the outer scope cannot be used inside a func::FuncOp due to
+  // IsolatedFromAbove, so we must clear any guard that was set in outer scope.
+  auto savedAssertionGuard = currentAssertionGuard;
+  currentAssertionGuard = {};
+  auto restoreGuard =
+      llvm::make_scope_exit([&] { currentAssertionGuard = savedAssertionGuard; });
+
   // Track current function lowering for downstream helpers (returns, captures).
   auto *savedLowering = currentFunctionLowering;
   currentFunctionLowering = lowering;
