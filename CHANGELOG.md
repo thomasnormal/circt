@@ -72,6 +72,12 @@
 - New regression: `test/Tools/circt-bmc/lower-to-bmc-derived-clock.mlir`
 - File: `lib/Tools/circt-bmc/LowerToBMC.cpp`
 
+**Track F: BMC Posedge-Only Checking (Non-Rising Mode)** ⭐ BUG FIX
+- Gate BMC `smt.check` to posedge iterations when `rising-clocks-only=false`
+- Avoids false violations from sampling clocked assertions on falling edges
+- Updated regression expectations: `test/Conversion/VerifToSMT/verif-to-smt.mlir`
+- File: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Critical Next Step
 Fix 4-state type conversion in MooreToCore:
 - Extract `value` field from 4-state structs before passing to integer-expecting ops

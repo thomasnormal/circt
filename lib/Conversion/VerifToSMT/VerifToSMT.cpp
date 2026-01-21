@@ -1552,25 +1552,44 @@ struct VerifBoundedModelCheckingOpConversion
           // We need to still have the yielded result of the op in scope after
           // we've built the check
           Value yieldedValue;
+          bool gateOnPosedge = !risingClocksOnly && clockIndexes.size() == 1;
           auto ignoreAssertionsUntil =
               op->getAttrOfType<IntegerAttr>("ignore_asserts_until");
-          if (ignoreAssertionsUntil) {
-            auto ignoreUntilConstant = arith::ConstantOp::create(
-                builder, loc,
-                rewriter.getI32IntegerAttr(
-                    ignoreAssertionsUntil.getValue().getZExtValue()));
-            auto shouldIgnore =
-                arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
-                                      i, ignoreUntilConstant);
-            auto ifShouldIgnore = scf::IfOp::create(
-                builder, loc, builder.getI1Type(), shouldIgnore, true);
-            // If we should ignore, yield the existing value
+          if (ignoreAssertionsUntil || gateOnPosedge) {
+            Value shouldSkip;
+            if (ignoreAssertionsUntil) {
+              auto ignoreUntilConstant = arith::ConstantOp::create(
+                  builder, loc,
+                  rewriter.getI32IntegerAttr(
+                      ignoreAssertionsUntil.getValue().getZExtValue()));
+              auto shouldIgnore = arith::CmpIOp::create(
+                  builder, loc, arith::CmpIPredicate::ult, i,
+                  ignoreUntilConstant);
+              shouldSkip = shouldIgnore;
+            }
+            if (gateOnPosedge) {
+              auto one = arith::ConstantOp::create(
+                  builder, loc, rewriter.getI32IntegerAttr(1));
+              auto zero = arith::ConstantOp::create(
+                  builder, loc, rewriter.getI32IntegerAttr(0));
+              auto lsb = arith::AndIOp::create(builder, loc, i, one);
+              auto isOdd = arith::CmpIOp::create(
+                  builder, loc, arith::CmpIPredicate::ne, lsb, zero);
+              if (shouldSkip)
+                shouldSkip = arith::OrIOp::create(builder, loc, shouldSkip,
+                                                  isOdd);
+              else
+                shouldSkip = isOdd;
+            }
+            auto ifShouldSkip = scf::IfOp::create(
+                builder, loc, builder.getI1Type(), shouldSkip, true);
+            // If we should skip, yield the existing value
             builder.setInsertionPointToEnd(
-                &ifShouldIgnore.getThenRegion().front());
+                &ifShouldSkip.getThenRegion().front());
             scf::YieldOp::create(builder, loc, ValueRange(iterArgs.back()));
             builder.setInsertionPointToEnd(
-                &ifShouldIgnore.getElseRegion().front());
-            yieldedValue = ifShouldIgnore.getResult(0);
+                &ifShouldSkip.getElseRegion().front());
+            yieldedValue = ifShouldSkip.getResult(0);
           }
 
           auto checkOp =
@@ -1590,7 +1609,7 @@ struct VerifBoundedModelCheckingOpConversion
 
           // If we've packaged everything in an IfOp, we need to yield the
           // new violated value
-          if (ignoreAssertionsUntil) {
+          if (ignoreAssertionsUntil || gateOnPosedge) {
             scf::YieldOp::create(builder, loc, violated);
             // Replace the variable with the yielded value
             violated = yieldedValue;
@@ -1648,6 +1667,21 @@ struct VerifBoundedModelCheckingOpConversion
           // clocks only mode
           // TODO: this will also need changing with multiple clocks - currently
           // it only accounts for the one clock case.
+          Value isPosedge;
+          bool usePosedge = !risingClocksOnly && clockIndexes.size() == 1;
+          if (usePosedge) {
+            auto clockIndex = clockIndexes[0];
+            auto oldClock = iterArgs[clockIndex];
+            // The clock is necessarily the first value returned by the loop
+            // region
+            auto newClock = loopVals[0];
+            auto oldClockLow = smt::BVNotOp::create(builder, loc, oldClock);
+            auto isPosedgeBV =
+                smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
+            // Convert posedge bv<1> to bool
+            auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
+            isPosedge = smt::EqOp::create(builder, loc, isPosedgeBV, trueBV);
+          }
           if (clockIndexes.size() == 1) {
             SmallVector<Value> regInputs = circuitOutputs.take_back(numRegs);
             if (risingClocksOnly) {
@@ -1655,18 +1689,6 @@ struct VerifBoundedModelCheckingOpConversion
               // there was a posedge
               newDecls.append(regInputs);
             } else {
-              auto clockIndex = clockIndexes[0];
-              auto oldClock = iterArgs[clockIndex];
-              // The clock is necessarily the first value returned by the loop
-              // region
-              auto newClock = loopVals[0];
-              auto oldClockLow = smt::BVNotOp::create(builder, loc, oldClock);
-              auto isPosedgeBV =
-                  smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
-              // Convert posedge bv<1> to bool
-              auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
-              auto isPosedge =
-                  smt::EqOp::create(builder, loc, isPosedgeBV, trueBV);
               auto regStates =
                   iterArgs.take_front(circuitFuncOp.getNumArguments())
                       .take_back(numRegs + totalDelaySlots)
@@ -1686,8 +1708,21 @@ struct VerifBoundedModelCheckingOpConversion
 
           // Add delay buffer outputs for the next iteration
           // These are the shifted buffer values from the circuit
-          for (Value delayVal : delayBufferOutputs)
-            newDecls.push_back(delayVal);
+          if (totalDelaySlots > 0) {
+            if (usePosedge) {
+              auto delayStates =
+                  iterArgs.take_front(circuitFuncOp.getNumArguments())
+                      .take_back(totalDelaySlots);
+              for (auto [delayState, delayVal] :
+                   llvm::zip(delayStates, delayBufferOutputs)) {
+                newDecls.push_back(smt::IteOp::create(builder, loc, isPosedge,
+                                                     delayVal, delayState));
+              }
+            } else {
+              for (Value delayVal : delayBufferOutputs)
+                newDecls.push_back(delayVal);
+            }
+          }
 
           // Add the rest of the loop state args
           for (; loopIndex < loopVals.size(); ++loopIndex)

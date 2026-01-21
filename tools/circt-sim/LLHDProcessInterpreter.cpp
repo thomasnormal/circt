@@ -63,6 +63,66 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 }
 
 //===----------------------------------------------------------------------===//
+// Helper Functions
+//===----------------------------------------------------------------------===//
+
+/// Flatten an aggregate constant (struct or array) into a single APInt.
+/// This is used for initializing signals with aggregate types.
+/// For 4-state logic, structs typically have the form {value, unknown}.
+static APInt flattenAggregateConstant(hw::AggregateConstantOp aggConstOp) {
+  ArrayAttr fields = aggConstOp.getFields();
+  Type resultType = aggConstOp.getResult().getType();
+
+  // Calculate total width
+  unsigned totalWidth = LLHDProcessInterpreter::getTypeWidth(resultType);
+  APInt result(totalWidth, 0);
+
+  // For struct types, concatenate field values from high to low
+  if (auto structType = dyn_cast<hw::StructType>(resultType)) {
+    auto elements = structType.getElements();
+    unsigned bitOffset = totalWidth;
+
+    for (size_t i = 0; i < fields.size() && i < elements.size(); ++i) {
+      Attribute fieldAttr = fields[i];
+      unsigned fieldWidth =
+          LLHDProcessInterpreter::getTypeWidth(elements[i].type);
+      bitOffset -= fieldWidth;
+
+      if (auto intAttr = dyn_cast<IntegerAttr>(fieldAttr)) {
+        APInt fieldValue = intAttr.getValue();
+        if (fieldValue.getBitWidth() < fieldWidth)
+          fieldValue = fieldValue.zext(fieldWidth);
+        else if (fieldValue.getBitWidth() > fieldWidth)
+          fieldValue = fieldValue.trunc(fieldWidth);
+        result.insertBits(fieldValue, bitOffset);
+      }
+      // Nested arrays/structs would need recursive handling - for now, they
+      // remain zero
+    }
+  }
+  // For array types, concatenate elements
+  else if (auto arrayType = dyn_cast<hw::ArrayType>(resultType)) {
+    unsigned elementWidth =
+        LLHDProcessInterpreter::getTypeWidth(arrayType.getElementType());
+    unsigned bitOffset = totalWidth;
+
+    for (Attribute fieldAttr : fields) {
+      bitOffset -= elementWidth;
+      if (auto intAttr = dyn_cast<IntegerAttr>(fieldAttr)) {
+        APInt fieldValue = intAttr.getValue();
+        if (fieldValue.getBitWidth() < elementWidth)
+          fieldValue = fieldValue.zext(elementWidth);
+        else if (fieldValue.getBitWidth() > elementWidth)
+          fieldValue = fieldValue.trunc(elementWidth);
+        result.insertBits(fieldValue, bitOffset);
+      }
+    }
+  }
+
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
 // Signal Registration
 //===----------------------------------------------------------------------===//
 
@@ -144,6 +204,16 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
     SignalValue sv(initValue.getZExtValue(), width);
     scheduler.updateSignal(sigId, sv);
     LLVM_DEBUG(llvm::dbgs() << "  Set initial value to " << initValue << "\n");
+  } else if (auto aggConstOp =
+                 sigOp.getInit().getDefiningOp<hw::AggregateConstantOp>()) {
+    // Handle aggregate constant (struct/array) initialization
+    // For 4-state logic signals, the struct contains {value, unknown} fields
+    // We need to flatten the aggregate into a single APInt value
+    APInt initValue = flattenAggregateConstant(aggConstOp);
+    SignalValue sv(initValue.getZExtValue(), width);
+    scheduler.updateSignal(sigId, sv);
+    LLVM_DEBUG(llvm::dbgs() << "  Set aggregate initial value to " << initValue
+                            << "\n");
   }
 
   LLVM_DEBUG(llvm::dbgs() << "  Registered signal '" << name << "' with ID "
@@ -318,6 +388,16 @@ LLHDProcessInterpreter::registerProcesses(hw::HWModuleOp hwModule) {
     registerInitialBlock(initialOp);
   });
 
+  // Handle module-level llhd.drv operations
+  // These are continuous assignments driven by process results
+  hwModule.getBody().walk([&](llhd::DriveOp driveOp) {
+    // Only handle drives at module level (not inside processes)
+    if (!driveOp->getParentOfType<llhd::ProcessOp>() &&
+        !driveOp->getParentOfType<seq::InitialOp>()) {
+      registerModuleDrive(driveOp);
+    }
+  });
+
   return success();
 }
 
@@ -375,6 +455,91 @@ ProcessId LLHDProcessInterpreter::registerInitialBlock(seq::InitialOp initialOp)
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
 
   return procId;
+}
+
+void LLHDProcessInterpreter::registerModuleDrive(llhd::DriveOp driveOp) {
+  // Module-level drives need special handling:
+  // The drive value comes from process results which are populated when
+  // the process executes llhd.wait yield or llhd.halt with yield operands.
+  //
+  // For each module-level drive, we need to:
+  // 1. Track the drive operation
+  // 2. Identify the source process (if the value comes from a process result)
+  // 3. Schedule the drive when the process yields
+
+  Value driveValue = driveOp.getValue();
+
+  // Check if the drive value comes from a process result
+  if (auto processOp = driveValue.getDefiningOp<llhd::ProcessOp>()) {
+    // Find the process ID for this process
+    auto procIt = opToProcessId.find(processOp.getOperation());
+    if (procIt != opToProcessId.end()) {
+      ProcessId procId = procIt->second;
+
+      // Store this drive for later execution when the process yields
+      moduleDrives.push_back({driveOp, procId});
+
+      LLVM_DEBUG(llvm::dbgs() << "  Registered module-level drive connected to "
+                              << "process " << procId << "\n");
+    }
+  } else {
+    // For non-process-connected drives, schedule them immediately
+    // This handles static/constant drives at module level
+    LLVM_DEBUG(llvm::dbgs() << "  Found module-level drive (static)\n");
+    // These will be handled during initialization
+    staticModuleDrives.push_back(driveOp);
+  }
+}
+
+void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
+  // Execute all module-level drives connected to this process
+  for (auto &[driveOp, driveProcId] : moduleDrives) {
+    if (driveProcId != procId)
+      continue;
+
+    // Get the signal ID
+    SignalId sigId = getSignalId(driveOp.getSignal());
+    if (sigId == 0) {
+      LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in module drive\n");
+      continue;
+    }
+
+    // Check enable condition if present
+    if (driveOp.getEnable()) {
+      InterpretedValue enableVal = getValue(procId, driveOp.getEnable());
+      if (enableVal.isX() || enableVal.getUInt64() == 0) {
+        LLVM_DEBUG(llvm::dbgs() << "  Module drive disabled\n");
+        continue;
+      }
+    }
+
+    // Get the value to drive from the process result
+    InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+    // Get the delay time
+    SimTime delay = convertTimeValue(procId, driveOp.getTime());
+
+    // Calculate the target time
+    SimTime currentTime = scheduler.getCurrentTime();
+    SimTime targetTime = currentTime.advanceTime(delay.realTime);
+    if (delay.deltaStep > 0) {
+      targetTime.deltaStep = delay.deltaStep;
+    }
+
+    LLVM_DEBUG(llvm::dbgs() << "  Module drive: scheduling update to signal "
+                            << sigId << " value="
+                            << (driveVal.isX() ? "X"
+                                                : std::to_string(driveVal.getUInt64()))
+                            << " at time " << targetTime.realTime << " fs\n");
+
+    // Schedule the signal update
+    SignalValue newVal = driveVal.toSignalValue();
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::NBA,
+        Event([this, sigId, newVal]() {
+          scheduler.updateSignal(sigId, newVal);
+        }));
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -1589,6 +1754,90 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   }
 
   //===--------------------------------------------------------------------===//
+  // HW Struct Operations
+  //===--------------------------------------------------------------------===//
+
+  if (auto structExtractOp = dyn_cast<hw::StructExtractOp>(op)) {
+    InterpretedValue structVal = getValue(procId, structExtractOp.getInput());
+    if (structVal.isX()) {
+      setValue(procId, structExtractOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(structExtractOp.getType())));
+      return success();
+    }
+
+    // Get the struct type and field info
+    auto structType = cast<hw::StructType>(structExtractOp.getInput().getType());
+    auto elements = structType.getElements();
+    uint32_t fieldIndex = structExtractOp.getFieldIndex();
+
+    // Calculate the bit offset for the field
+    // Fields are laid out from high bits to low bits in order
+    unsigned fieldOffset = 0;
+    for (size_t i = fieldIndex + 1; i < elements.size(); ++i) {
+      fieldOffset += getTypeWidth(elements[i].type);
+    }
+
+    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+    APInt fieldValue = structVal.getAPInt().extractBits(fieldWidth, fieldOffset);
+    setValue(procId, structExtractOp.getResult(), InterpretedValue(fieldValue));
+    return success();
+  }
+
+  if (auto structCreateOp = dyn_cast<hw::StructCreateOp>(op)) {
+    auto structType = cast<hw::StructType>(structCreateOp.getType());
+    unsigned totalWidth = getTypeWidth(structType);
+
+    APInt result(totalWidth, 0);
+    bool hasX = false;
+    auto elements = structType.getElements();
+    unsigned bitOffset = totalWidth;
+
+    for (size_t i = 0; i < structCreateOp.getInput().size(); ++i) {
+      InterpretedValue val = getValue(procId, structCreateOp.getInput()[i]);
+      if (val.isX()) {
+        hasX = true;
+        break;
+      }
+      unsigned fieldWidth = getTypeWidth(elements[i].type);
+      bitOffset -= fieldWidth;
+      result.insertBits(val.getAPInt(), bitOffset);
+    }
+
+    if (hasX) {
+      setValue(procId, structCreateOp.getResult(),
+               InterpretedValue::makeX(totalWidth));
+    } else {
+      setValue(procId, structCreateOp.getResult(), InterpretedValue(result));
+    }
+    return success();
+  }
+
+  if (auto aggConstOp = dyn_cast<hw::AggregateConstantOp>(op)) {
+    APInt value = flattenAggregateConstant(aggConstOp);
+    setValue(procId, aggConstOp.getResult(), InterpretedValue(value));
+    return success();
+  }
+
+  if (auto bitcastOp = dyn_cast<hw::BitcastOp>(op)) {
+    InterpretedValue inputVal = getValue(procId, bitcastOp.getInput());
+    // Bitcast preserves the raw bits, just reinterprets the type
+    unsigned outputWidth = getTypeWidth(bitcastOp.getType());
+    if (inputVal.isX()) {
+      setValue(procId, bitcastOp.getResult(),
+               InterpretedValue::makeX(outputWidth));
+    } else {
+      // Extend or truncate to match output width if necessary
+      APInt result = inputVal.getAPInt();
+      if (result.getBitWidth() < outputWidth)
+        result = result.zext(outputWidth);
+      else if (result.getBitWidth() > outputWidth)
+        result = result.trunc(outputWidth);
+      setValue(procId, bitcastOp.getResult(), InterpretedValue(result));
+    }
+    return success();
+  }
+
+  //===--------------------------------------------------------------------===//
   // LLHD Time Operations
   //===--------------------------------------------------------------------===//
 
@@ -1708,6 +1957,30 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
                                                      llhd::WaitOp waitOp) {
   auto &state = processStates[procId];
+
+  // Handle yield operands - these become the process result values
+  // The yield values are immediately available to the llhd.drv operations
+  // that reference the process results.
+  auto yieldOperands = waitOp.getYieldOperands();
+  if (!yieldOperands.empty()) {
+    // Get the parent process operation
+    if (auto processOp = state.getProcessOp()) {
+      auto results = processOp.getResults();
+      for (auto [result, yieldOp] : llvm::zip(results, yieldOperands)) {
+        InterpretedValue yieldVal = getValue(procId, yieldOp);
+        // Store the yielded value so it can be accessed when evaluating
+        // the process results outside the process
+        state.valueMap[result] = yieldVal;
+        LLVM_DEBUG(llvm::dbgs() << "  Yield value for process result: "
+                                << (yieldVal.isX() ? "X"
+                                                    : std::to_string(yieldVal.getUInt64()))
+                                << "\n");
+      }
+    }
+
+    // Execute module-level drives that depend on this process's results
+    executeModuleDrives(procId);
+  }
 
   // Get the destination block
   state.destBlock = waitOp.getDest();
@@ -2203,6 +2476,22 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (it == processStates.end())
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
+  // Handle probe operations BEFORE checking the cache.
+  // Probes must always re-read the current signal value because
+  // signals can change between evaluations (e.g., after delays/waits).
+  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
+    SignalId sigId = getSignalId(probeOp.getSignal());
+    if (sigId != 0) {
+      const SignalValue &sv = scheduler.getSignalValue(sigId);
+      InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
+      LLVM_DEBUG(llvm::dbgs() << "  Live probe of signal " << sigId << " = "
+                              << (sv.isUnknown() ? "X"
+                                                  : std::to_string(sv.getValue()))
+                              << "\n");
+      return iv;
+    }
+  }
+
   auto &valueMap = it->second.valueMap;
   auto valIt = valueMap.find(value);
   if (valIt != valueMap.end())
@@ -2216,21 +2505,35 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return iv;
   }
 
-  // Check if this is a probe operation defined outside the process
-  // These need to be evaluated lazily when their values are needed
-  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
-    SignalId sigId = getSignalId(probeOp.getSignal());
-    if (sigId != 0) {
-      const SignalValue &sv = scheduler.getSignalValue(sigId);
-      InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
-      valueMap[value] = iv;
-      LLVM_DEBUG(llvm::dbgs() << "  Lazy probe of signal " << sigId << " = "
-                              << (sv.isUnknown() ? "X"
-                                                  : std::to_string(sv.getValue()))
-                              << "\n");
-      return iv;
-    }
+  // Check if this is an aggregate constant (struct/array)
+  if (auto aggConstOp = value.getDefiningOp<hw::AggregateConstantOp>()) {
+    APInt constVal = flattenAggregateConstant(aggConstOp);
+    InterpretedValue iv(constVal);
+    valueMap[value] = iv;
+    return iv;
   }
+
+  // Check if this is a bitcast operation
+  if (auto bitcastOp = value.getDefiningOp<hw::BitcastOp>()) {
+    InterpretedValue inputVal = getValue(procId, bitcastOp.getInput());
+    unsigned outputWidth = getTypeWidth(bitcastOp.getType());
+    InterpretedValue iv;
+    if (inputVal.isX()) {
+      iv = InterpretedValue::makeX(outputWidth);
+    } else {
+      APInt result = inputVal.getAPInt();
+      if (result.getBitWidth() < outputWidth)
+        result = result.zext(outputWidth);
+      else if (result.getBitWidth() > outputWidth)
+        result = result.trunc(outputWidth);
+      iv = InterpretedValue(result);
+    }
+    valueMap[value] = iv;
+    return iv;
+  }
+
+  // NOTE: Probe operations are handled at the top of this function
+  // to ensure they always re-read the current signal value.
 
   // Check if this is a constant_time operation
   if (auto constTimeOp = value.getDefiningOp<llhd::ConstantTimeOp>()) {
