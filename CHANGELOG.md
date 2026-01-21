@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 77 - January 21, 2026
+
+### Event-Wait Fix, UVM Macros Expansion, SVA Past Patterns
+
+**Track A: Event-Based Wait Canonicalization Fix** ⭐ BUG FIX
+- Fixed ProcessOp canonicalization incorrectly removing event-based waits
+- `llhd.wait` with observed operands (sensitivity list) now preserved
+- Processes that set up reactive monitoring no longer optimized away
+- Added detection in side-effect analysis for WaitOp with non-empty observed list
+- New test files: `llhd-process-event-wait*.mlir`
+
+**Track B: UVM Macros Expansion** ⭐ ENHANCEMENT
+- Added 1588 lines of new UVM macros (total now ~2000 lines)
+- TLM implementation port declaration macros (uvm_analysis_imp_decl, etc.)
+- Printer macros (uvm_printer_row_color, etc.)
+- Message context macros with ID variants
+- Sequence library and callback macros
+- Phase, resource, and field macros
+- Total: 255+ uvm_* macros and 63+ UVM_* macros
+
+**Track D: $rose/$fell Fix for BMC** ⭐ BUG FIX
+- Added `ltl.past` buffer infrastructure to VerifToSMT conversion
+- `$rose(x) = x && !past(x, 1)` now correctly tracks signal history
+- `$fell(x) = !x && past(x, 1)` also works with past buffers
+- Each `past(signal, N)` gets N buffer slots for history tracking
+- Buffers shift each BMC iteration: oldest value used, newest added
+- New test file: `test/Conversion/VerifToSMT/bmc-past-edge.mlir`
+
+**Track C: Dynamic Type Access (In Progress)**
+- Investigating slang AST handling for class member access
+- InvalidExpression unwrapping challenge identified
+- Work continues in next iteration
+
+### Files Modified
+- `lib/Dialect/LLHD/IR/LLHDOps.cpp` (event-wait side-effect detection)
+- `lib/Runtime/uvm/uvm_macros.svh` (+1588 lines of macros)
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (ltl.past buffer infrastructure)
+- `test/Conversion/VerifToSMT/bmc-past-edge.mlir` (new)
+- `test/Dialect/LLHD/Transforms/canonicalize-process-with-side-effects.mlir`
+- `test/circt-sim/llhd-process-event-wait*.mlir` (3 new test files)
+
+---
+
 ## Iteration 76 - January 21, 2026
 
 ### Concurrent Process Scheduling Root Cause Analysis + Build Fixes
