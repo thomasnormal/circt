@@ -66,52 +66,57 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 88)
+### Track Status & Next Tasks (Iteration 89)
 
-**Test Results (Iteration 87)**: 2377/2380 PASS (99.87%)
+**Test Results (Iteration 88)**: 2377/2396 PASS (99.21%)
+
+**Key Blockers for UVM Testbench Execution**:
+1. **Delays in class tasks** - `#delay` in UVM run_phase needs llhd.process wrapper
+2. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
+3. **Static class properties** - Resolution to global variables needed
 
 **Using Real UVM Library** (Recommended):
 ```bash
-# Compile with real UVM from ~/uvm-core
-circt-verilog --uvm-path ~/uvm-core/src -I ~/uvm-core/src <files>
-
-# Example: APB AVIP testbench
-circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
-  -I ~/uvm-core/src -I src/hvl_top/env/virtual_sequencer \
-  ~/uvm-core/src/uvm_pkg.sv <testbench files> | circt-sim
+# Compile APB AVIP with real UVM
+circt-verilog --uvm-path ~/uvm-core/src \
+  -I ~/mbit/apb_avip/src/hvl_top/master \
+  -I ~/mbit/apb_avip/src/hvl_top/env \
+  ~/mbit/apb_avip/src/globals/apb_global_pkg.sv \
+  ~/mbit/apb_avip/src/hdl_top/apb_if/apb_if.sv \
+  ... (see AVIP compile order)
 ```
 
-**Track A: End-to-End Simulation Testing**
+**Track A: AVIP Simulation (Priority: HIGH)**
 | Status | Next Priority |
 |--------|---------------|
-| ✅ 4-state works | Test APB/SPI AVIPs through full simulation |
-| ✅ @posedge fixed | Validate concurrent process execution |
-| ⚠️ AVIP blockers | Fix bind directive, virtual interface binding |
+| ✅ UVM .exists() fixed | Returns i1 boolean correctly |
+| ✅ 4-state struct storage | Extract value before LLVM store |
+| ✅ APB AVIP parses | Compiles through ImportVerilog |
+| ⚠️ Class task delays | Implement #delay in class methods |
+| ⚠️ Virtual interfaces | Runtime binding needed |
 
-**Track B: BMC/Formal Verification**
+**Track B: BMC/Formal (Codex Agent Handling)**
 | Status | Next Priority |
 |--------|---------------|
 | ✅ basic03 works | Run ~/yosys/tests/sva suite |
-| ✅ $rose/$fell/$past | Test ~/sv-tests SVA patterns |
-| ✅ Derived clocks (same-source) | Multiple derived clocks now constrained to a single BMC clock |
-| ⚠️ SVA defaults & sequences | Default clocking/disable iff now reset LTL state; counter-style repeats/implications still failing |
-| ⚠️ Hierarchical extnets | Missing external net support (extnets.sv) |
-| ⚠️ Value-change operators | $changed/$rose/$not patterns still crash or mis-lower |
+| ✅ Derived clocks | Multiple derived clocks constrained to single BMC clock |
+| ⚠️ SVA defaults | Default clocking/disable iff reset LTL state |
+| ⚠️ Sequence patterns | Counter-style repeats/implications still failing |
 
-**Track C: Class/Virtual Interface Completion**
+**Track C: Test Suite Validation**
+| Test Suite | Location | Purpose | Agent |
+|------------|----------|---------|-------|
+| AVIP Testbenches | ~/mbit/*avip | UVM verification IPs | Track A |
+| sv-tests | ~/sv-tests | SV language compliance | Track C |
+| Verilator tests | ~/verilator-verification | Simulation edge cases | Track C |
+| Yosys SVA | ~/yosys/tests/sva | Formal verification | Track B |
+
+**Track D: Runtime & Infrastructure**
 | Status | Next Priority |
 |--------|---------------|
-| ⚠️ Virtual interfaces | Runtime binding for UVM drivers/monitors |
-| ⚠️ Class hierarchy | Virtual method dispatch in simulation |
-| ⚠️ Bind directives | Parse and lower SystemVerilog bind |
-
-**Track D: Real-World Test Suites**
-| Test Suite | Location | Purpose |
-|------------|----------|---------|
-| AVIP Testbenches | ~/mbit/*avip | UVM verification IPs |
-| sv-tests | ~/sv-tests | SV language compliance |
-| Verilator tests | ~/verilator-verification | Simulation edge cases |
-| Yosys SVA | ~/yosys/tests/sva | Formal verification |
+| ⚠️ Static class properties | Resolve to global variables |
+| ⚠️ DPI function stubs | Complete runtime stubs for UVM |
+| ⚠️ Coroutine/task suspension | For delays in class methods |
 
 ### Real-World Test Results (Iteration 76)
 
