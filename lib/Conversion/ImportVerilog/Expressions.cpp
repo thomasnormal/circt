@@ -1266,6 +1266,49 @@ struct RvalueExprVisitor : public ExprVisitor {
 
   // Handle blocking and non-blocking assignments.
   Value visit(const slang::ast::AssignmentExpression &expr) {
+    // Handle streaming concatenation lvalue with dynamic arrays/queues.
+    // These require runtime streaming using StreamUnpackOp since the size
+    // is not known at compile time.
+    if (auto *streamExpr =
+            expr.left().as_if<slang::ast::StreamingConcatenationExpression>()) {
+      // Check if any stream operand is a dynamic array or queue
+      for (auto stream : streamExpr->streams()) {
+        auto operandType = context.convertType(*stream.operand->type);
+        if (operandType && isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                               operandType)) {
+          // Convert the streaming lvalue - this returns the array reference
+          auto lhs = context.convertLvalueExpression(expr.left());
+          if (!lhs)
+            return {};
+
+          // Convert the RHS without type coercion - we want the original type
+          auto rhs = context.convertRvalueExpression(expr.right());
+          if (!rhs)
+            return {};
+
+          // Determine streaming direction from slice size:
+          // getSliceSize() == 0 means right-to-left ({>>{}}), otherwise
+          // left-to-right ({<<{}}).
+          bool isRightToLeft = streamExpr->getSliceSize() != 0;
+
+          // Handle timing control for blocking assignments
+          if (!expr.isNonBlocking()) {
+            if (expr.timingControl)
+              if (failed(context.convertTimingControl(*expr.timingControl)))
+                return {};
+          } else {
+            mlir::emitError(loc)
+                << "non-blocking streaming unpack not yet supported";
+            return {};
+          }
+
+          // Create the stream unpack operation
+          moore::StreamUnpackOp::create(builder, loc, lhs, rhs, isRightToLeft);
+          return rhs;
+        }
+      }
+    }
+
     // Handle string character assignment: str[i] = c
     // String indexing cannot return a reference type, so we handle this
     // specially by generating a StringPutCOp.
@@ -5218,6 +5261,24 @@ struct LvalueExprVisitor : public ExprVisitor {
         value = context.materializeConversion(intType, value, false, loc);
       } else {
         value = context.convertLvalueExpression(*stream.operand);
+        // Convert packed type references (like struct references) to simple bit
+        // vector references. This is the lvalue equivalent of
+        // convertToSimpleBitVector for rvalues.
+        if (value) {
+          if (auto refType = dyn_cast<moore::RefType>(value.getType())) {
+            if (auto packed =
+                    dyn_cast<moore::PackedType>(refType.getNestedType())) {
+              if (!isa<moore::IntType>(packed)) {
+                if (auto bitSize = packed.getBitSize()) {
+                  auto intType = moore::RefType::get(moore::IntType::get(
+                      context.getContext(), *bitSize, packed.getDomain()));
+                  value =
+                      context.materializeConversion(intType, value, false, loc);
+                }
+              }
+            }
+          }
+        }
       }
 
       if (!value)
@@ -5243,6 +5304,17 @@ struct LvalueExprVisitor : public ExprVisitor {
                            << value.getType();
       return {};
     }
+
+    // Handle dynamic arrays and queues. These cannot be sliced at compile time
+    // since their size is runtime-determined. Return the reference directly and
+    // let the assignment handling use StreamUnpackOp for these types.
+    if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+            refType.getNestedType())) {
+      // For dynamic arrays/queues, we return the reference as-is.
+      // The streaming will be handled at runtime by StreamUnpackOp.
+      return value;
+    }
+
     auto type = dyn_cast<moore::IntType>(refType.getNestedType());
     if (!type) {
       mlir::emitError(loc) << "lvalue streaming expected IntType, got "
