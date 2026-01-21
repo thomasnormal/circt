@@ -6080,6 +6080,36 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       return success();
     }
 
+    // Handle class handle (including null) to integer conversions.
+    // This is used when comparing chandle with null (null is class<@__null__>).
+    if (isa<ClassHandleType>(op.getInput().getType()) &&
+        isa<moore::IntType>(op.getResult().getType())) {
+      // Class handles convert to !llvm.ptr.
+      Value ptrValue = adaptor.getInput();
+      if (!isa<LLVM::LLVMPointerType>(ptrValue.getType())) {
+        ptrValue = rewriter.create<UnrealizedConversionCastOp>(
+            loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
+            ptrValue).getResult(0);
+      }
+
+      // Get the integer width from the Moore result type
+      auto mooreResultType = cast<moore::IntType>(op.getResult().getType());
+      int64_t width = mooreResultType.getWidth();
+      Type intType = rewriter.getIntegerType(width);
+
+      // Convert pointer to integer
+      Value intResult = LLVM::PtrToIntOp::create(rewriter, loc, intType, ptrValue);
+
+      // If the result is a 4-state type, wrap it in a struct
+      if (isFourStateStructType(resultType)) {
+        Value zero = hw::ConstantOp::create(rewriter, loc, intType, 0);
+        intResult = createFourStateStruct(rewriter, loc, intResult, zero);
+      }
+
+      rewriter.replaceOp(op, intResult);
+      return success();
+    }
+
     // Handle ref<virtual_interface> to virtual_interface conversions.
     // This is a dereference operation that reads the pointer from the reference.
     // Check the original Moore type rather than the adaptor type, as the adaptor
