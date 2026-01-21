@@ -15,9 +15,24 @@
 - Updated `VirtualInterfaceBindOpConversion` similarly
 - Enables APB AVIP compilation to proceed further
 
+**Class Task Delays** ✅ NEW:
+- Implemented `WaitDelayOpConversion` that detects context:
+  - In `moore.procedure` (module context): Uses `llhd.wait` as before
+  - In `func.func` (class method context): Calls `__moore_delay(i64)` runtime function
+- Converts `llhd.time` constants to i64 femtoseconds for runtime call
+- Unblocks UVM `run_phase` which uses `#10` delays in class tasks
+
+**Constraint Context Property Fix** ✅ NEW:
+- Fixed `visitClassProperty` to not infer static from missing 'this' reference
+- Constraint blocks don't have implicit 'this', but properties aren't static
+- Creates placeholder variables for constraint solver resolution at runtime
+- Eliminates incorrect "static class property" warnings for constraint properties
+
+**Test Results**: 2381/2398 PASS (99.29%)
+
 **AVIP Testing Progress**:
 - APB AVIP now compiles through ImportVerilog with real UVM library
-- Remaining blocker: delays in class tasks require `llhd.process` parent
+- Class task delays now supported via `__moore_delay()` runtime function
 
 ### SVA/BMC Defaults and Robustness
 
@@ -30,6 +45,9 @@
 - **ImportVerilog**: Apply default clocking + default disable iff to concurrent
   assertions; hierarchical external nets now emit a diagnostic instead of
   segfaulting.
+- **ImportVerilog**: Avoid double-applying defaults inside property instances;
+  adjust inter-element `##N` concat delays (subtract one cycle) to align with
+  SVA timing and fix yosys `counter` pass.
 - **LTLToCore**: Use a default clock (from `seq.to_clock` or clock inputs) for
   unclocked LTL properties in the BMC pipeline.
 - **LTLToCore**: Tag `disable iff` properties and lower them with resettable
@@ -44,8 +62,11 @@
 - `build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/eq-fourstate.mlir | llvm/build/bin/FileCheck test/Conversion/MooreToCore/eq-fourstate.mlir`
 - `ninja -C build circt-opt`
 - `build/bin/circt-opt test/Conversion/LTLToCore/disable-iff.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/disable-iff.mlir`
-- `utils/run_yosys_sva_circt_bmc.sh` (basic00-03 pass; counter pass still failing; extnets unsupported)
-- `TEST_FILTER=counter utils/run_yosys_sva_circt_bmc.sh` (counter still failing)
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-defaults-property.sv --parse-only | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults-property.sv`
+- `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-decl.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-decl.sv`
+- `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/basic.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/basic.sv`
+- `utils/run_yosys_sva_circt_bmc.sh` (basic00-03 pass; counter now passes; extnets unsupported)
+- `TEST_FILTER=counter utils/run_yosys_sva_circt_bmc.sh`
 
 ## Iteration 87 - January 21, 2026
 

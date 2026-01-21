@@ -66,14 +66,15 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 89)
+### Track Status & Next Tasks (Iteration 88/89)
 
-**Test Results (Iteration 88)**: 2377/2396 PASS (99.21%)
+**Test Results (Iteration 88)**: 2381/2398 PASS (99.29%)
 
 **Key Blockers for UVM Testbench Execution**:
-1. **Delays in class tasks** - `#delay` in UVM run_phase needs llhd.process wrapper
-2. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
-3. **Static class properties** - Resolution to global variables needed
+1. ~~**Delays in class tasks**~~ ✅ FIXED - `__moore_delay()` runtime function for class methods
+2. ~~**Constraint context properties**~~ ✅ FIXED - Non-static properties no longer treated as static
+3. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
+4. **Virtual method dispatch** - Class hierarchy not fully simulated
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -92,16 +93,18 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ UVM .exists() fixed | Returns i1 boolean correctly |
 | ✅ 4-state struct storage | Extract value before LLVM store |
 | ✅ APB AVIP parses | Compiles through ImportVerilog |
-| ⚠️ Class task delays | Implement #delay in class methods |
+| ✅ Class task delays | __moore_delay() for class methods |
+| ✅ Constraint properties | Non-static in constraint blocks |
 | ⚠️ Virtual interfaces | Runtime binding needed |
+| ⚠️ Virtual method dispatch | Class hierarchy simulation |
 
 **Track B: BMC/Formal (Codex Agent Handling)**
 | Status | Next Priority |
 |--------|---------------|
 | ✅ basic03 works | Run ~/yosys/tests/sva suite |
 | ✅ Derived clocks | Multiple derived clocks constrained to single BMC clock |
-| ⚠️ SVA defaults | Default clocking/disable iff reset LTL state |
-| ⚠️ Sequence patterns | Counter-style repeats/implications still failing |
+| ⚠️ SVA defaults | Default clocking/disable iff reset LTL state; property instances avoid double defaults |
+| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; remaining: value-change ops, extnets |
 
 **Track C: Test Suite Validation**
 | Test Suite | Location | Purpose | Agent |
@@ -114,9 +117,10 @@ circt-verilog --uvm-path ~/uvm-core/src \
 **Track D: Runtime & Infrastructure**
 | Status | Next Priority |
 |--------|---------------|
-| ⚠️ Static class properties | Resolve to global variables |
+| ✅ Static class properties | Constraint context fix - no longer treats non-static as static |
+| ✅ Class task delays | __moore_delay() runtime function implemented |
 | ⚠️ DPI function stubs | Complete runtime stubs for UVM |
-| ⚠️ Coroutine/task suspension | For delays in class methods |
+| ⚠️ Coroutine runtime | Full coroutine support for task suspension |
 
 ### Real-World Test Results (Iteration 76)
 
