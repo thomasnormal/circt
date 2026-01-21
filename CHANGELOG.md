@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 79 - January 21, 2026
+
+### EventScheduler Fix, UVM RAL Stubs, SVA Repetition Tests
+
+**Track A: EventScheduler MultipleDelayedEvents Fix** ⭐ BUG FIX
+- Fixed `findNextEventTime()` to find minimum time across all slots (not first encountered)
+- Added `advanceToNextTime()` method to EventScheduler for single-step time advancement
+- Rewrote `ProcessScheduler::advanceTime()` to process ONE time step at a time
+- Root cause: TimeWheel was returning first slot with events instead of slot with minimum baseTime
+- All 22 ProcessScheduler tests pass
+
+**Track B: UVM Register Abstraction Layer Stubs** ⭐ ENHANCEMENT
+- Added ~1,711 lines of UVM RAL infrastructure to uvm_pkg.sv
+- New classes: `uvm_reg_field`, `uvm_reg`, `uvm_reg_block`, `uvm_reg_map`
+- Adapter classes: `uvm_reg_adapter`, `uvm_reg_predictor`, `uvm_reg_sequence`
+- Frontdoor/backdoor: `uvm_reg_frontdoor`, `uvm_reg_backdoor`
+- Helper types: `uvm_hdl_path_slice`, `uvm_hdl_path_concat`, `uvm_reg_cbs`
+- Fixed forward declaration issues and ref parameter defaults
+
+**Track D: SVA Consecutive Repetition Test Coverage** ⭐ TEST
+- Added `repeat_antecedent_fail` test module for `a[*3] |-> b` pattern
+- Documented multi-cycle sequence limitation in BMC comments (lines 79-88)
+- Created `test/Conversion/VerifToSMT/bmc-repetition.mlir` test file
+- All existing SVA repetition tests pass
+
+**Track C: AVIP Testbench Crash Investigation** (In Progress)
+- Found crash: `Assertion 'isIntOrFloat() && "only integers and floats have a bitwidth"' failed`
+- Root cause: Shift operations (ShlOp, ShrOp, AShrOp) call getIntOrFloatBitWidth() on non-integer types
+- Fix: Adding type guards to shift operation conversions
+
+### Files Modified
+- `lib/Dialect/Sim/EventQueue.cpp` (+48 lines - findNextEventTime fix, advanceToNextTime)
+- `include/circt/Dialect/Sim/EventQueue.h` (+5 lines - advanceToNextTime declaration)
+- `lib/Dialect/Sim/ProcessScheduler.cpp` (+56 lines - advanceTime rewrite)
+- `lib/Runtime/uvm/uvm_pkg.sv` (+1,821 lines - UVM RAL stubs)
+- `integration_test/circt-bmc/sva-e2e.sv` (+17 lines - repeat_antecedent_fail test)
+- `test/Conversion/VerifToSMT/bmc-repetition.mlir` (new)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (type guards for shift ops)
+
+---
+
 ## Iteration 78 - January 21, 2026
 
 ### BMC Popcount Fix, UVM Core Services, Dynamic Type Access
