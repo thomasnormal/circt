@@ -130,24 +130,14 @@ static Value visitClassProperty(Context &context,
   if (!type)
     return {};
 
-  // Check if this is a static property.
-  // We check expr.lifetime first, but also handle the case where there's no
-  // implicit 'this' reference - in that case, we must be in a static context
-  // (e.g., static function) accessing a static property, since slang would
-  // reject non-static property access without a receiver object.
+  // Check if this is a static property based on slang's lifetime attribute.
+  // Do NOT infer static based on missing 'this' reference - that would
+  // incorrectly treat non-static properties in constraint blocks as static.
   bool isStatic = expr.lifetime == slang::ast::VariableLifetime::Static;
 
   // Get the scope's implicit this variable and any inline constraint override.
   mlir::Value instRef = context.getImplicitThisRef();
   mlir::Value constraintThisRef = context.getInlineConstraintThisRef();
-
-  // If there's no implicit 'this' and we're accessing a class property,
-  // it must be a static property (slang validates this at parse time).
-  // This handles cases where expr.lifetime may not reflect the static
-  // storage class correctly (e.g., in some parameterized class contexts).
-  if (!instRef && !constraintThisRef) {
-    isStatic = true;
-  }
 
   if (isStatic) {
     // Static properties are stored as global variables.
@@ -234,10 +224,16 @@ static Value visitClassProperty(Context &context,
   }
 
   if (!thisRef) {
-    // This should never happen based on the logic above, but keep as a safety check
-    mlir::emitError(loc) << "class property '" << expr.name
-                         << "' referenced without an implicit 'this'";
-    return {};
+    // No implicit 'this' reference available. This happens in constraint blocks
+    // during class body conversion where properties are referenced symbolically.
+    // Create a placeholder variable with the property name that will be resolved
+    // by the constraint solver at runtime.
+    auto fieldTy = cast<moore::UnpackedType>(type);
+    auto refTy = moore::RefType::get(fieldTy);
+    auto nameAttr = builder.getStringAttr(expr.name);
+    auto varOp = moore::VariableOp::create(builder, loc, refTy, nameAttr,
+                                           /*initial=*/Value{});
+    return varOp;
   }
 
   moore::ClassHandleType classTy =

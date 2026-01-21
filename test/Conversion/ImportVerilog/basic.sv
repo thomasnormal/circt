@@ -2457,10 +2457,10 @@ module ConcurrentAssert(input clk);
   // CHECK: [[DELAY_A:%.+]] = ltl.delay [[CONV_A]], 0, 0 : i1
   // CHECK: [[READ_B:%.+]] = moore.read [[B]] : <l1>
   // CHECK: [[CONV_B:%.+]] = moore.to_builtin_bool [[READ_B]] : l1
-  // CHECK: [[DELAY_B:%.+]] = ltl.delay [[CONV_B]], 1 : i1
+  // CHECK: [[DELAY_B:%.+]] = ltl.delay [[CONV_B]], 0 : i1
   // CHECK: [[READ_A2:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A2:%.+]] = moore.to_builtin_bool [[READ_A2]] : i1
-  // CHECK: [[DELAY_A2:%.+]] = ltl.delay [[CONV_A2]], 3, 2 : i1
+  // CHECK: [[DELAY_A2:%.+]] = ltl.delay [[CONV_A2]], 2, 2 : i1
   // CHECK: [[CONCAT_OP:%.+]] = ltl.concat [[DELAY_A]], [[DELAY_B]], [[DELAY_A2]] : !ltl.sequence, !ltl.sequence, !ltl.sequence
   // CHECK: verif.assert [[CONCAT_OP]] : !ltl.sequence
   assert property (a ##[+] b ##[3:5] a);
@@ -2647,7 +2647,7 @@ module ConcurrentAssert(input clk);
   // CHECK: [[DA:%.+]] = ltl.delay [[A]], 0, 0 : i1
   // CHECK: [[TMP:%.+]] = moore.read %b : <l1>
   // CHECK: [[B:%.+]] = moore.to_builtin_bool [[TMP]] : l1
-  // CHECK: [[DB:%.+]] = ltl.delay [[B]], 1, 0 : i1
+  // CHECK: [[DB:%.+]] = ltl.delay [[B]], 0, 0 : i1
   // CHECK: [[RES:%.+]] = ltl.concat [[DA]], [[DB]] : !ltl.sequence, !ltl.sequence
   // CHECK: verif.assert [[RES]] : !ltl.sequence
   sequence s1;
@@ -2678,7 +2678,7 @@ module ConcurrentAssert(input clk);
   // CHECK: [[DA:%.+]] = ltl.delay [[A]], 0, 0 : i1
   // CHECK: [[TMP:%.+]] = moore.read %b : <l1>
   // CHECK: [[B:%.+]] = moore.to_builtin_bool [[TMP]] : l1
-  // CHECK: [[DB:%.+]] = ltl.delay [[B]], 1, 0 : i1
+  // CHECK: [[DB:%.+]] = ltl.delay [[B]], 0, 0 : i1
   // CHECK: [[OP1:%.+]] = ltl.concat [[DA]], [[DB]] : !ltl.sequence, !ltl.sequence
   // CHECK: [[TMP:%.+]] = moore.read %b : <l1>
   // CHECK: [[B2:%.+]] = moore.to_builtin_bool [[TMP]] : l1
@@ -2713,7 +2713,7 @@ module ConcurrentAssert(input clk);
   // CHECK: [[DA3:%.+]] = ltl.delay [[A3]], 0, 0 : i1
   // CHECK: [[TMP:%.+]] = moore.read %b : <l1>
   // CHECK: [[B2:%.+]] = moore.to_builtin_bool [[TMP]] : l1
-  // CHECK: [[DB2:%.+]] = ltl.delay [[B2]], 1, 0 : i1
+  // CHECK: [[DB2:%.+]] = ltl.delay [[B2]], 0, 0 : i1
   // CHECK: [[OP11:%.+]] = ltl.concat [[DA3]], [[DB2]] : !ltl.sequence, !ltl.sequence
   // CHECK: [[TMP:%.+]] = moore.read %b : <l1>
   // CHECK: [[B3:%.+]] = moore.to_builtin_bool [[TMP]] : l1

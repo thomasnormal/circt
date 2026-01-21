@@ -1065,18 +1065,96 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
   }
 };
 
-// moore.wait_delay -> llhd.wait
-static LogicalResult convert(WaitDelayOp op, WaitDelayOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  auto *resumeBlock =
-      rewriter.splitBlock(op->getBlock(), ++Block::iterator(op));
-  rewriter.setInsertionPoint(op);
-  rewriter.replaceOpWithNewOp<llhd::WaitOp>(op, ValueRange{},
-                                            adaptor.getDelay(), ValueRange{},
-                                            ValueRange{}, resumeBlock);
-  rewriter.setInsertionPointToStart(resumeBlock);
-  return success();
-}
+/// Conversion for moore.wait_delay -> either llhd.wait (in llhd.process context)
+/// or __moore_delay runtime call (in func.func context for class methods).
+///
+/// In SystemVerilog, delay statements (#delay) can appear in both:
+/// 1. Module procedures (always, initial blocks) - these lower to llhd.process
+/// 2. Class tasks/methods - these lower to func.func
+///
+/// The llhd.wait operation requires an llhd.process parent, so we need a
+/// different lowering strategy for class method contexts. For class methods,
+/// we call a runtime function that suspends the current coroutine/task.
+struct WaitDelayOpConversion : public OpConversionPattern<WaitDelayOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WaitDelayOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Check if we're inside a moore.procedure (which will become llhd.process)
+    // or already inside an llhd.process. In these cases, use llhd.wait.
+    // Note: During conversion, we check for ProcedureOp because the conversion
+    // of ProcedureOp to llhd.process may happen after this conversion.
+    if (op->getParentOfType<ProcedureOp>() ||
+        op->getParentOfType<llhd::ProcessOp>()) {
+      auto *resumeBlock =
+          rewriter.splitBlock(op->getBlock(), ++Block::iterator(op));
+      rewriter.setInsertionPoint(op);
+      rewriter.replaceOpWithNewOp<llhd::WaitOp>(op, ValueRange{},
+                                                adaptor.getDelay(), ValueRange{},
+                                                ValueRange{}, resumeBlock);
+      rewriter.setInsertionPointToStart(resumeBlock);
+      return success();
+    }
+
+    // We're inside a func.func (class method context) - use runtime call.
+    // We pass the real time component (i64) in time units to the runtime.
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    // __moore_delay takes the delay time in time units as i64.
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_delay", fnTy);
+
+    // Get the delay value. The adaptor gives us the converted operand.
+    Value delay = adaptor.getDelay();
+
+    // Extract the real time component based on the type of the delay value.
+    Value delayTime;
+    if (delay.getType().isInteger(64)) {
+      // Already an i64 (unlikely but possible)
+      delayTime = delay;
+    } else if (auto structTy = dyn_cast<LLVM::LLVMStructType>(delay.getType())) {
+      // LLVM struct {i64 realTime, i32 delta, i32 epsilon}
+      delayTime = LLVM::ExtractValueOp::create(rewriter, loc, delay,
+                                               ArrayRef<int64_t>{0});
+    } else if (isa<llhd::TimeType>(delay.getType())) {
+      // llhd::TimeType - need to check if the defining op is llhd.constant_time
+      // and extract the time value directly from the attribute.
+      if (auto constTimeOp = delay.getDefiningOp<llhd::ConstantTimeOp>()) {
+        // Get the time value from the constant
+        auto timeAttr = constTimeOp.getValueAttr();
+        // Extract the real time in femtoseconds
+        uint64_t timeValue = timeAttr.getTime();
+        delayTime = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(timeValue));
+      } else {
+        // For non-constant time values (e.g., function arguments of type time),
+        // we use an unrealized_conversion_cast to indicate this needs further
+        // conversion. The LLHD to LLVM conversion pass will handle the actual
+        // conversion of llhd.time to the LLVM struct type.
+        delayTime = UnrealizedConversionCastOp::create(rewriter, loc, i64Ty,
+                                                       delay)
+                        .getResult(0);
+      }
+    } else {
+      return rewriter.notifyMatchFailure(
+          op, "unsupported delay type for class method context");
+    }
+
+    // Call the runtime function.
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{delayTime});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 
 // moore.unreachable -> llhd.halt
 static LogicalResult convert(UnreachableOp op, UnreachableOp::Adaptor adaptor,
@@ -14055,7 +14133,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<AssocArrayPrevOpConversion>(typeConverter, patterns.getContext());
 
   // Structural operations
-  patterns.add<WaitDelayOp>(convert);
+  patterns.add<WaitDelayOpConversion>(typeConverter, patterns.getContext());
   patterns.add<UnreachableOp>(convert);
   patterns.add<EventTriggeredOpConversion>(typeConverter, patterns.getContext());
   patterns.add<EventTriggerOpConversion>(typeConverter, patterns.getContext());
