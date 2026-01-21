@@ -270,6 +270,22 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     state.waiting = false;
     state.destBlock = nullptr;
     state.destOperands.clear();
+  } else if (state.waiting) {
+    // Handle the case where a process was triggered by an event (via
+    // triggerSensitiveProcesses) rather than by the delay callback
+    // (resumeProcess). In this case, state.waiting may still be true but
+    // destBlock is null because the scheduler directly scheduled the process.
+    // This can happen when a process is triggered by a signal change while
+    // it was waiting for that signal.
+    //
+    // We need to clear the waiting flag so the execution loop will run.
+    // The process will resume at its current position (which should be right
+    // after the llhd.wait that set the waiting flag originally, or at the
+    // wait's destination block if the process was waiting).
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Warning: Process triggered while waiting but destBlock is "
+                  "null. Clearing waiting flag and resuming.\n");
+    state.waiting = false;
   }
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executing process "
@@ -1593,10 +1609,39 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       SignalId sigId = 0;
       if (auto probeOp = observed.getDefiningOp<llhd::ProbeOp>()) {
         sigId = getSignalId(probeOp.getSignal());
+        LLVM_DEBUG(llvm::dbgs() << "  Observed value from probe of signal "
+                                << sigId << "\n");
       } else {
         // Maybe it's directly a signal reference (shouldn't happen per spec,
         // but handle it gracefully)
         sigId = getSignalId(observed);
+        if (sigId == 0) {
+          // Try to trace through other operations that might produce the value
+          // This handles cases where the value passed through casts or other ops
+          if (Operation *defOp = observed.getDefiningOp()) {
+            // Check if any operand is a signal we know about
+            for (Value operand : defOp->getOperands()) {
+              sigId = getSignalId(operand);
+              if (sigId != 0) {
+                LLVM_DEBUG(llvm::dbgs()
+                           << "  Found signal " << sigId
+                           << " through operand of " << defOp->getName() << "\n");
+                break;
+              }
+              // Also check if operand comes from a probe
+              if (auto innerProbe = operand.getDefiningOp<llhd::ProbeOp>()) {
+                sigId = getSignalId(innerProbe.getSignal());
+                if (sigId != 0) {
+                  LLVM_DEBUG(llvm::dbgs()
+                             << "  Found signal " << sigId
+                             << " through nested probe in "
+                             << defOp->getName() << "\n");
+                  break;
+                }
+              }
+            }
+          }
+        }
       }
 
       if (sigId != 0) {
@@ -1604,13 +1649,20 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  Waiting on signal " << sigId << "\n");
       } else {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: Could not find signal for "
-                                    "observed value\n");
+                                    "observed value (type: "
+                                << observed.getType() << ")\n");
       }
     }
 
     // Register the wait sensitivity with the scheduler
     if (!waitList.empty()) {
       scheduler.suspendProcessForEvents(procId, waitList);
+      LLVM_DEBUG(llvm::dbgs() << "  Registered for " << waitList.size()
+                              << " signal events\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Warning: No signals found in observed list, process "
+                    "will not be triggered by events!\n");
     }
   }
 

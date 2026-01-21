@@ -248,11 +248,11 @@ struct AssertionExprVisitor {
       if (isa<ltl::PropertyType>(rhs.getType())) {
         auto constOne =
             hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-        auto lhsDelay = ltl::DelayOp::create(
-            builder, loc, lhs, builder.getI64IntegerAttr(1),
+        auto oneDelay = ltl::DelayOp::create(
+            builder, loc, constOne, builder.getI64IntegerAttr(1),
             builder.getI64IntegerAttr(0));
         auto antecedent = ltl::ConcatOp::create(
-            builder, loc, SmallVector<Value, 2>{lhsDelay, constOne});
+            builder, loc, SmallVector<Value, 2>{lhs, oneDelay});
         return ltl::ImplicationOp::create(
             builder, loc, SmallVector<Value, 2>{antecedent, rhs});
       }
@@ -488,6 +488,19 @@ Value Context::convertAssertionCallExpression(
         auto intVal = cv.integer().as<int64_t>();
         if (intVal)
           delay = *intVal;
+      }
+    }
+
+    // For 1-bit values in assertion context, prefer ltl.past so the result
+    // can participate in LTL expressions without type casts.
+    if (value.getType().isInteger(1))
+      return ltl::PastOp::create(builder, loc, value, delay).getResult();
+    if (auto intTy = dyn_cast<moore::IntType>(value.getType())) {
+      if (intTy.getBitSize() == 1) {
+        auto boolVal = convertToI1(value);
+        if (!boolVal)
+          return {};
+        return ltl::PastOp::create(builder, loc, boolVal, delay).getResult();
       }
     }
 

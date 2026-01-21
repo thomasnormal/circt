@@ -65,6 +65,16 @@
 // RUN:   circt-bmc -b 3 --ignore-asserts-until=1 --module nonoverlap_disable_pass --shared-libs=%libz3 - | \
 // RUN:   FileCheck %s --check-prefix=NONOVERLAP-DISABLE-PASS
 // NONOVERLAP-DISABLE-PASS: Bound reached with no violations!
+//
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 3 --module instance_fail --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=INSTANCE-FAIL
+// INSTANCE-FAIL: Assertion can be violated!
+//
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 3 --ignore-asserts-until=1 --module instance_pass --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=INSTANCE-PASS
+// INSTANCE-PASS: Bound reached with no violations!
 
 // TODO: Enable repeat_pass and repeat_range_pass once LTLToCore implication
 // semantics for multi-cycle sequences are corrected.
@@ -155,4 +165,22 @@ module nonoverlap_disable_pass(input logic clk, input logic reset, input logic a
   always_ff @(posedge clk)
     q <= reset ? 1'b0 : a;
   assert property (@(posedge clk) disable iff (reset) a |=> q);
+endmodule
+
+module instance_prop(input logic clk, input logic a, input logic b);
+  assert property (@(posedge clk) a |=> b);
+endmodule
+
+module instance_fail(input logic clk, input logic a);
+  logic q;
+  always_ff @(posedge clk)
+    q <= 1'b0;
+  instance_prop props(.clk(clk), .a(a), .b(q));
+endmodule
+
+module instance_pass(input logic clk, input logic a);
+  logic q;
+  always_ff @(posedge clk)
+    q <= a;
+  instance_prop props(.clk(clk), .a(a), .b(q));
 endmodule

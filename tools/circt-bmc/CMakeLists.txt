@@ -26,6 +26,7 @@ target_link_libraries(circt-bmc
   CIRCTCombToSMT
   CIRCTEmitTransforms
   CIRCTHW
+  CIRCTHWTransforms
   CIRCTHWToSMT
   CIRCTImportVerilog
   CIRCTLTL
