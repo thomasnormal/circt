@@ -105,14 +105,43 @@ This includes the full UVM library from `~/uvm-core/src`.
 **AVIP Status**:
 - **APB**: ✅ Full pipeline works
 - **SPI**: ✅ Full pipeline works
-- **UART**: ⚠️ Fails on 4-state power operator and bit extraction
+- **UART**: ⚠️ 4-state power operator and bit extraction fixed, blocked by llvm.store/load
 - **I2S**: ⚠️ Missing assertion files
 - **AHB**: ⚠️ Now has ModportPortSymbol support (needs testing)
 
 **Remaining blockers for UART**:
-- `math.ipowi` doesn't handle 4-state types
-- `llhd.sig.extract` doesn't handle 4-state struct types
 - `llvm.store/load` with hw.struct types
+
+### 4-State Power Operator Fix ✅ NEW
+
+**Bug Fix**: `math.ipowi` now handles 4-state types in MooreToCore.
+
+**Root Cause**: The power operator (`**`) was lowering to `math.ipowi` which only supports
+standard integer types. When the operands were 4-state types (e.g., `!moore.l32`), which
+convert to `!hw.struct<value: i32, unknown: i32>`, the operation would fail.
+
+**Fix**: MooreToCore now:
+1. Detects 4-state struct types in power operator conversion
+2. Extracts the value component from the 4-state operands
+3. Performs `math.ipowi` on the value components
+4. Propagates unknown bits appropriately (if any operand has X bits, result may be X)
+
+**Impact**: Unblocks UART AVIP power operator expressions
+
+### 4-State Bit Extraction Fix ✅ NEW
+
+**Bug Fix**: `llhd.sig.extract` now handles 4-state types in MooreToCore.
+
+**Root Cause**: When extracting bits from a 4-state signal, `llhd.sig.extract` was receiving
+struct types (`!hw.struct<value: iN, unknown: iN>`) which it doesn't support directly.
+
+**Fix**: MooreToCore now:
+1. Detects 4-state struct types in bit extraction operations
+2. Extracts both value and unknown components from the signal
+3. Performs bit extraction on each component separately
+4. Reconstructs the 4-state struct result
+
+**Impact**: Unblocks UART AVIP bit extraction operations
 
 ### Test Results
 
