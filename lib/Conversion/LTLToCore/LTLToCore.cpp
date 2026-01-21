@@ -571,6 +571,77 @@ struct LTLPropertyLowerer {
     return std::nullopt;
   }
 
+  std::optional<std::pair<uint64_t, uint64_t>>
+  getSequenceLengthBounds(Value seq) {
+    if (!seq)
+      return std::make_pair<uint64_t, uint64_t>(0, 0);
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return std::make_pair<uint64_t, uint64_t>(1, 1);
+
+    if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>())
+      return getSequenceLengthBounds(clockOp.getInput());
+    if (auto pastOp = seq.getDefiningOp<ltl::PastOp>())
+      return getSequenceLengthBounds(pastOp.getInput());
+    if (auto delayOp = seq.getDefiningOp<ltl::DelayOp>()) {
+      auto inputBounds = getSequenceLengthBounds(delayOp.getInput());
+      if (!inputBounds)
+        return std::nullopt;
+      uint64_t minDelay = delayOp.getDelay();
+      if (auto length = delayOp.getLength()) {
+        uint64_t maxDelay = minDelay + *length;
+        return std::make_pair(inputBounds->first + minDelay,
+                              inputBounds->second + maxDelay);
+      }
+      return std::nullopt;
+    }
+    if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
+      uint64_t minLen = 0;
+      uint64_t maxLen = 0;
+      for (auto input : concatOp.getInputs()) {
+        auto bounds = getSequenceLengthBounds(input);
+        if (!bounds)
+          return std::nullopt;
+        minLen += bounds->first;
+        maxLen += bounds->second;
+      }
+      return std::make_pair(minLen, maxLen);
+    }
+    if (auto repeatOp = seq.getDefiningOp<ltl::RepeatOp>()) {
+      auto more = repeatOp.getMore();
+      if (!more)
+        return std::nullopt;
+      auto bounds = getSequenceLengthBounds(repeatOp.getInput());
+      if (!bounds)
+        return std::nullopt;
+      uint64_t minLen = bounds->first * repeatOp.getBase();
+      uint64_t maxLen = bounds->second * (repeatOp.getBase() + *more);
+      return std::make_pair(minLen, maxLen);
+    }
+    if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
+      std::optional<uint64_t> minLen;
+      std::optional<uint64_t> maxLen;
+      for (auto input : intersectOp.getInputs()) {
+        auto bounds = getSequenceLengthBounds(input);
+        if (!bounds)
+          return std::nullopt;
+        if (!minLen) {
+          minLen = bounds->first;
+          maxLen = bounds->second;
+        } else {
+          minLen = std::max(*minLen, bounds->first);
+          maxLen = std::min(*maxLen, bounds->second);
+        }
+      }
+      if (!minLen || !maxLen || *minLen > *maxLen)
+        return std::nullopt;
+      return std::make_pair(*minLen, *maxLen);
+    }
+    if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>())
+      return getSequenceLengthBounds(firstMatch.getInput());
+
+    return std::nullopt;
+  }
+
   Value shiftAges(Value input, Value zeroBit, unsigned width, Value zeroBits) {
     if (width == 1)
       return zeroBits;
@@ -835,10 +906,18 @@ struct LTLPropertyLowerer {
         if (auto length = delayOp.getLength()) {
           if (*length == 0 && delayOp.getDelay() > 0) {
             auto input = delayOp.getInput();
-            // Only shift for non-sequence consequents; sequence delays must
-            // remain in place to preserve start/end alignment.
+            uint64_t sequenceLen = 1;
+            bool canShift = false;
             if (!isa<ltl::SequenceType>(input.getType())) {
-              shiftDelay = delayOp.getDelay();
+              canShift = true;
+            } else if (auto bounds = getSequenceLengthBounds(input)) {
+              if (bounds->first == bounds->second && bounds->first > 0) {
+                sequenceLen = bounds->first;
+                canShift = true;
+              }
+            }
+            if (canShift) {
+              shiftDelay = delayOp.getDelay() + sequenceLen - 1;
               consequentValue = input;
             }
           }
