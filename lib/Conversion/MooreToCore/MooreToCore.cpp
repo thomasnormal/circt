@@ -4129,6 +4129,11 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       // Convert index to i64 for GEP
       auto i64Ty = IntegerType::get(ctx, 64);
       Value idx = adaptor.getLowBit();
+
+      // Handle 4-state index types which are lowered to {value, unknown} structs
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+
       if (idx.getType() != i64Ty) {
         if (cast<IntegerType>(idx.getType()).getWidth() < 64)
           idx = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
@@ -4169,6 +4174,47 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
         rewriter.replaceOpWithNewOp<hw::ArraySliceOp>(op, resultType,
                                                       adaptor.getInput(), idx);
 
+      return success();
+    }
+
+    // Handle 4-state struct types ({value, unknown} structs)
+    if (isFourStateStructType(inputType)) {
+      auto structType = cast<hw::StructType>(inputType);
+      auto valueType = structType.getElements()[0].type;
+      auto intType = cast<IntegerType>(valueType);
+
+      // Extract the value and unknown components
+      Value inputValue = extractFourStateValue(rewriter, loc, adaptor.getInput());
+      Value inputUnknown = extractFourStateUnknown(rewriter, loc, adaptor.getInput());
+
+      // Handle 4-state index - extract just the value part
+      Value amount = adaptor.getLowBit();
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+      amount = adjustIntegerWidth(rewriter, amount, intType.getWidth(), loc);
+
+      // Shift both value and unknown components by the same amount
+      Value shiftedValue = comb::ShrUOp::create(rewriter, loc, inputValue, amount);
+      Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, inputUnknown, amount);
+
+      // Check if result is also 4-state
+      if (isFourStateStructType(resultType)) {
+        auto resultStructType = cast<hw::StructType>(resultType);
+        auto resultValueType = resultStructType.getElements()[0].type;
+
+        // Extract the low bits from both components
+        Value extractedValue = comb::ExtractOp::create(rewriter, loc, resultValueType,
+                                                        shiftedValue, 0);
+        Value extractedUnknown = comb::ExtractOp::create(rewriter, loc, resultValueType,
+                                                          shiftedUnknown, 0);
+
+        // Create the result 4-state struct
+        auto result = createFourStateStruct(rewriter, loc, extractedValue, extractedUnknown);
+        rewriter.replaceOp(op, result);
+      } else {
+        // Result is 2-state - just extract the value bits
+        rewriter.replaceOpWithNewOp<comb::ExtractOp>(op, resultType, shiftedValue, 0);
+      }
       return success();
     }
 
@@ -4221,6 +4267,11 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
 
         // Convert index to i64 for GEP
         Value idx = adaptor.getLowBit();
+
+        // Handle 4-state index types which are lowered to {value, unknown} structs
+        if (isFourStateStructType(idx.getType()))
+          idx = extractFourStateValue(rewriter, loc, idx);
+
         if (idx.getType() != i64Ty) {
           if (cast<IntegerType>(idx.getType()).getWidth() < 64)
             idx = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
@@ -4317,6 +4368,27 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
         rewriter.replaceOpWithNewOp<llhd::SigArraySliceOp>(
             op, resultType, adaptor.getInput(), idx);
 
+      return success();
+    }
+
+    // Handle 4-state struct types ({value, unknown} structs in llhd.ref)
+    if (isFourStateStructType(inputType)) {
+      auto structType = cast<hw::StructType>(inputType);
+      auto valueType = structType.getElements()[0].type;
+      auto intType = cast<IntegerType>(valueType);
+      int64_t width = intType.getWidth();
+
+      // Get the index, handling 4-state index types
+      Value idx = adaptor.getLowBit();
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+      idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(width), loc);
+
+      // Use llhd.sig_extract to get a reference to the bit(s)
+      // For 4-state ref, we need to extract from both value and unknown fields
+      // Create a ref to the struct and use llhd.sig_struct_extract to get field refs
+      rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(
+          op, resultType, adaptor.getInput(), idx);
       return success();
     }
 
@@ -4992,6 +5064,11 @@ struct Clog2BIOpConversion : public OpConversionPattern<Clog2BIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs
+    if (isFourStateStructType(input.getType()))
+      input = extractFourStateValue(rewriter, loc, input);
+
     auto inputType = cast<IntegerType>(input.getType());
     unsigned bitWidth = inputType.getWidth();
 
@@ -5535,9 +5612,46 @@ struct SExtOpConversion : public OpConversionPattern<SExtOp> {
   LogicalResult
   matchAndRewrite(SExtOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
     auto type = typeConverter->convertType(op.getType());
-    auto value =
-        comb::createOrFoldSExt(op.getLoc(), adaptor.getInput(), type, rewriter);
+    Value input = adaptor.getInput();
+
+    // Handle 4-state struct types ({value, unknown} structs)
+    if (isFourStateStructType(input.getType())) {
+      // Extract value and unknown components
+      Value inputValue = extractFourStateValue(rewriter, loc, input);
+      Value inputUnknown = extractFourStateUnknown(rewriter, loc, input);
+
+      if (isFourStateStructType(type)) {
+        auto resultStructType = cast<hw::StructType>(type);
+        auto resultValueType = resultStructType.getElements()[0].type;
+
+        // Sign extend the value component
+        Value extValue = comb::createOrFoldSExt(loc, inputValue, resultValueType, rewriter);
+
+        // Zero extend the unknown mask (sign extension doesn't propagate unknown bits)
+        Value extUnknown;
+        auto unknownWidth = cast<IntegerType>(inputUnknown.getType()).getWidth();
+        auto resultWidth = cast<IntegerType>(resultValueType).getWidth();
+        if (unknownWidth < resultWidth) {
+          Value zero = hw::ConstantOp::create(rewriter, loc,
+              rewriter.getIntegerType(resultWidth - unknownWidth), 0);
+          extUnknown = comb::ConcatOp::create(rewriter, loc, ValueRange{zero, inputUnknown});
+        } else {
+          extUnknown = inputUnknown;
+        }
+
+        auto result = createFourStateStruct(rewriter, loc, extValue, extUnknown);
+        rewriter.replaceOp(op, result);
+      } else {
+        // Result is 2-state, just sign extend the value
+        auto value = comb::createOrFoldSExt(loc, inputValue, type, rewriter);
+        rewriter.replaceOp(op, value);
+      }
+      return success();
+    }
+
+    auto value = comb::createOrFoldSExt(loc, input, type, rewriter);
     rewriter.replaceOp(op, value);
     return success();
   }
@@ -5805,16 +5919,44 @@ struct ShlOpConversion : public OpConversionPattern<ShlOp> {
   LogicalResult
   matchAndRewrite(ShlOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value inputValue = adaptor.getValue();
+    Value amount = adaptor.getAmount();
+
+    // Handle 4-state struct types ({value, unknown} structs)
+    if (isFourStateStructType(inputValue.getType())) {
+      Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
+      Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
+
+      // Handle 4-state amount - extract just the value
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+
+      auto width = cast<IntegerType>(valueComp.getType()).getWidth();
+      amount = adjustIntegerWidth(rewriter, amount, width, loc);
+
+      // Shift both value and unknown components
+      Value shiftedValue = comb::ShlOp::create(rewriter, loc, valueComp, amount, false);
+      Value shiftedUnknown = comb::ShlOp::create(rewriter, loc, unknownComp, amount, false);
+
+      auto result = createFourStateStruct(rewriter, loc, shiftedValue, shiftedUnknown);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     if (!resultType || !resultType.isIntOrFloat())
       return rewriter.notifyMatchFailure(
           op, "shift operations require integer/float result type");
 
+    // Handle 4-state amount - extract just the value
+    if (isFourStateStructType(amount.getType()))
+      amount = extractFourStateValue(rewriter, loc, amount);
+
     // Comb shift operations require the same bit-width for value and amount
-    Value amount =
-        adjustIntegerWidth(rewriter, adaptor.getAmount(),
-                           resultType.getIntOrFloatBitWidth(), op->getLoc());
-    rewriter.replaceOpWithNewOp<comb::ShlOp>(op, resultType, adaptor.getValue(),
+    amount = adjustIntegerWidth(rewriter, amount,
+                                resultType.getIntOrFloatBitWidth(), loc);
+    rewriter.replaceOpWithNewOp<comb::ShlOp>(op, resultType, inputValue,
                                              amount, false);
     return success();
   }
@@ -5826,17 +5968,45 @@ struct ShrOpConversion : public OpConversionPattern<ShrOp> {
   LogicalResult
   matchAndRewrite(ShrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value inputValue = adaptor.getValue();
+    Value amount = adaptor.getAmount();
+
+    // Handle 4-state struct types ({value, unknown} structs)
+    if (isFourStateStructType(inputValue.getType())) {
+      Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
+      Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
+
+      // Handle 4-state amount - extract just the value
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+
+      auto width = cast<IntegerType>(valueComp.getType()).getWidth();
+      amount = adjustIntegerWidth(rewriter, amount, width, loc);
+
+      // Shift both value and unknown components (zero fill from left)
+      Value shiftedValue = comb::ShrUOp::create(rewriter, loc, valueComp, amount, false);
+      Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, unknownComp, amount, false);
+
+      auto result = createFourStateStruct(rewriter, loc, shiftedValue, shiftedUnknown);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     if (!resultType || !resultType.isIntOrFloat())
       return rewriter.notifyMatchFailure(
           op, "shift operations require integer/float result type");
 
+    // Handle 4-state amount - extract just the value
+    if (isFourStateStructType(amount.getType()))
+      amount = extractFourStateValue(rewriter, loc, amount);
+
     // Comb shift operations require the same bit-width for value and amount
-    Value amount =
-        adjustIntegerWidth(rewriter, adaptor.getAmount(),
-                           resultType.getIntOrFloatBitWidth(), op->getLoc());
+    amount = adjustIntegerWidth(rewriter, amount,
+                                resultType.getIntOrFloatBitWidth(), loc);
     rewriter.replaceOpWithNewOp<comb::ShrUOp>(
-        op, resultType, adaptor.getValue(), amount, false);
+        op, resultType, inputValue, amount, false);
     return success();
   }
 };
@@ -5887,17 +6057,45 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
   LogicalResult
   matchAndRewrite(AShrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value inputValue = adaptor.getValue();
+    Value amount = adaptor.getAmount();
+
+    // Handle 4-state struct types ({value, unknown} structs)
+    if (isFourStateStructType(inputValue.getType())) {
+      Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
+      Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
+
+      // Handle 4-state amount - extract just the value
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+
+      auto width = cast<IntegerType>(valueComp.getType()).getWidth();
+      amount = adjustIntegerWidth(rewriter, amount, width, loc);
+
+      // Arithmetic shift value (sign extension), logical shift unknown (zero fill)
+      Value shiftedValue = comb::ShrSOp::create(rewriter, loc, valueComp, amount, false);
+      Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, unknownComp, amount, false);
+
+      auto result = createFourStateStruct(rewriter, loc, shiftedValue, shiftedUnknown);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     if (!resultType || !resultType.isIntOrFloat())
       return rewriter.notifyMatchFailure(
           op, "shift operations require integer/float result type");
 
+    // Handle 4-state amount - extract just the value
+    if (isFourStateStructType(amount.getType()))
+      amount = extractFourStateValue(rewriter, loc, amount);
+
     // Comb shift operations require the same bit-width for value and amount
-    Value amount =
-        adjustIntegerWidth(rewriter, adaptor.getAmount(),
-                           resultType.getIntOrFloatBitWidth(), op->getLoc());
+    amount = adjustIntegerWidth(rewriter, amount,
+                                resultType.getIntOrFloatBitWidth(), loc);
     rewriter.replaceOpWithNewOp<comb::ShrSOp>(
-        op, resultType, adaptor.getValue(), amount, false);
+        op, resultType, inputValue, amount, false);
     return success();
   }
 };
@@ -10238,6 +10436,11 @@ struct CountOnesBIOpConversion : public OpConversionPattern<CountOnesBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs
+    if (isFourStateStructType(input.getType()))
+      input = extractFourStateValue(rewriter, loc, input);
+
     auto inputType = cast<IntegerType>(input.getType());
 
     // Use LLVM's ctpop (count population) intrinsic to count 1 bits.
@@ -10261,6 +10464,11 @@ struct OneHotBIOpConversion : public OpConversionPattern<OneHotBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs
+    if (isFourStateStructType(input.getType()))
+      input = extractFourStateValue(rewriter, loc, input);
+
     auto inputType = cast<IntegerType>(input.getType());
     unsigned bitWidth = inputType.getWidth();
 
@@ -10291,6 +10499,11 @@ struct OneHot0BIOpConversion : public OpConversionPattern<OneHot0BIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs
+    if (isFourStateStructType(input.getType()))
+      input = extractFourStateValue(rewriter, loc, input);
+
     auto inputType = cast<IntegerType>(input.getType());
     unsigned bitWidth = inputType.getWidth();
 
@@ -10327,6 +10540,11 @@ struct CountBitsBIOpConversion : public OpConversionPattern<CountBitsBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs
+    if (isFourStateStructType(input.getType()))
+      input = extractFourStateValue(rewriter, loc, input);
+
     auto inputType = cast<IntegerType>(input.getType());
     unsigned bitWidth = inputType.getWidth();
 

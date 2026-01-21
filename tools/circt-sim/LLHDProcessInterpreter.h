@@ -201,6 +201,9 @@ public:
   /// Check if termination has been requested.
   bool isTerminationRequested() const { return terminationRequested; }
 
+  /// Get the bit width of a type. Made public for use by helper functions.
+  static unsigned getTypeWidth(mlir::Type type);
+
 private:
   //===--------------------------------------------------------------------===//
   // Signal Registration
@@ -224,6 +227,12 @@ private:
 
   /// Register a single initial block from a seq.initial operation.
   ProcessId registerInitialBlock(seq::InitialOp initialOp);
+
+  /// Register a module-level drive operation.
+  void registerModuleDrive(llhd::DriveOp driveOp);
+
+  /// Execute module-level drives for a process after it yields.
+  void executeModuleDrives(ProcessId procId);
 
   //===--------------------------------------------------------------------===//
   // Process Execution
@@ -345,9 +354,6 @@ private:
   /// Set the interpreted value for an SSA value.
   void setValue(ProcessId procId, mlir::Value value, InterpretedValue val);
 
-  /// Get the bit width of a type.
-  static unsigned getTypeWidth(mlir::Type type);
-
   //===--------------------------------------------------------------------===//
   // Signal Registry Bridge
   //===--------------------------------------------------------------------===//
@@ -380,6 +386,13 @@ private:
 
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
+
+  /// Module-level drives connected to process results.
+  /// Each entry is a pair of (DriveOp, ProcessId).
+  llvm::SmallVector<std::pair<llhd::DriveOp, ProcessId>, 4> moduleDrives;
+
+  /// Static module-level drives (not connected to process results).
+  llvm::SmallVector<llhd::DriveOp, 4> staticModuleDrives;
 
   /// Callback for sim.terminate operation.
   std::function<void(bool, bool)> terminateCallback;
