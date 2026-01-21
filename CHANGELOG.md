@@ -16,6 +16,36 @@ only supports integer types, this caused a crash.
 
 **Impact**: Unblocks APB AVIP MooreToCore conversion (covergroup `get_coverage()`)
 
+### DPI Handle Conversions ✅ NEW
+
+**Bug Fix**: Added `chandle <-> integer` and `class handle -> integer` conversions in MooreToCore.
+
+**Root Cause**: UVM's DPI-C handle management (e.g., `uvm_regex_cache.svh`) converts
+chandle values to/from integers, and compares chandle with null. These conversions
+were not supported, causing `moore.conversion` legalization failures.
+
+**Fixes Applied**:
+1. `chandle -> integer`: Uses `llvm.ptrtoint` to convert pointer to integer
+2. `integer -> chandle`: Uses `llvm.inttoptr` to convert integer to pointer
+3. `class<@__null__> -> integer`: Handles null literal comparison with chandle
+
+**Impact**: Unblocks I2S, SPI, UART AVIPs through MooreToCore (now blocked by `array.locator`)
+
+### NegOp 4-State Fix ✅ NEW
+
+**Bug Fix**: `NegOpConversion` now handles 4-state types properly.
+
+**Root Cause**: The pattern was using `hw::ConstantOp` which doesn't support 4-state struct
+types. When the input was `!moore.l8` (4-state), it converted to `!hw.struct<value: i8, unknown: i8>`
+causing `cast<IntegerType>` to fail.
+
+**Fix**: Check for 4-state struct types and handle them separately:
+- Extract value/unknown components
+- Perform negation on value component
+- Propagate unknown bits (if any bit is X, result is all X)
+
+**Impact**: Unblocks I2S, SPI, UART AVIP parsing in ImportVerilog
+
 ### AVIP Testbench Survey ✅ NEW
 
 **Found 9 AVIPs in ~/mbit/**:
@@ -31,6 +61,18 @@ only supports integer types, this caused a crash.
 | AXI4Lite | ⚠️ PARTIAL | Missing package dependency |
 | I3C | ⚠️ PARTIAL | Deprecated `uvm_test_done` API |
 | AHB | ❌ FAIL | Bind statement scoping issue |
+
+### SVA Procedural Clocking Defaults ✅ NEW
+
+**ImportVerilog**: Concurrent assertions inside timed procedural blocks now
+apply the surrounding event control as implicit clocking (e.g. `always
+@(posedge clk)`), so `ltl.clock` is emitted for sampled-value assertions.
+
+**Tests**: Added `test/Conversion/ImportVerilog/sva-procedural-clock.sv`.
+
+**Limitation**: BMC `externalize-registers` still fails when `moore.past`
+inside procedural assertions lowers to `seq.compreg` within LLHD processes;
+requires hoisting those registers or externalizing process-local state.
 
 ### Virtual Interface Investigation ✅ COMPLETE
 
