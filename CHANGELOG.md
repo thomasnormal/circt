@@ -46,6 +46,31 @@ causing `cast<IntegerType>` to fail.
 
 **Impact**: Unblocks I2S, SPI, UART AVIP parsing in ImportVerilog
 
+### Array Locator Fix ✅ NEW
+
+**Bug Fix**: `ArrayLocatorOpConversion` now handles external variable references.
+
+**Root Cause**: When the predicate referenced values defined outside the block
+(e.g., `item == read(var)`), the pattern would fail because external values
+weren't properly mapped to their converted versions.
+
+**Fixes Applied**:
+1. Map external values to their converted versions before cloning operations
+2. Fall back to inline loop approach when comparison value is not a constant
+
+**Impact**: Unblocks UVM queue `find`, `find_first`, `find_all` methods used in sequencers
+
+### Dynamic Array Conversions ✅ NEW
+
+**Bug Fix**: Added `open_uarray <-> queue` conversions in MooreToCore.
+
+**Root Cause**: Both `OpenUnpackedArrayType` and `QueueType` convert to the same
+LLVM struct `{ptr, i64}`, but the conversion between them wasn't implemented.
+
+**Fix**: Simple pass-through since both types have identical runtime representation.
+
+**Impact**: Unblocks UVM dynamic array operations
+
 ### AVIP Testbench Survey ✅ NEW
 
 **Found 9 AVIPs in ~/mbit/**:
