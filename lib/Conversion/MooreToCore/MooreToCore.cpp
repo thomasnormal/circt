@@ -5290,11 +5290,41 @@ struct NegOpConversion : public OpConversionPattern<NegOp> {
   LogicalResult
   matchAndRewrite(NegOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
     Type resultType =
         ConversionPattern::typeConverter->convertType(op.getResult().getType());
-    Value zero = hw::ConstantOp::create(rewriter, op.getLoc(), resultType, 0);
 
-    rewriter.replaceOpWithNewOp<comb::SubOp>(op, zero, adaptor.getInput());
+    // Check if we're dealing with 4-state types
+    if (!isFourStateStructType(resultType)) {
+      // Two-valued: simple negation (0 - x)
+      Value zero = hw::ConstantOp::create(rewriter, loc, resultType, 0);
+      rewriter.replaceOpWithNewOp<comb::SubOp>(op, zero, adaptor.getInput());
+      return success();
+    }
+
+    // 4-state negation: if any bit is unknown, entire result is X
+    Value inputVal = extractFourStateValue(rewriter, loc, adaptor.getInput());
+    Value inputUnk = extractFourStateUnknown(rewriter, loc, adaptor.getInput());
+
+    // Perform negation on the value component (0 - inputVal)
+    Value zero = hw::ConstantOp::create(rewriter, loc, inputVal.getType(), 0);
+    Value resultVal = comb::SubOp::create(rewriter, loc, zero, inputVal, false);
+    auto width = resultVal.getType().getIntOrFloatBitWidth();
+
+    // Check if input has any unknown bits
+    // hasUnknown = (inputUnk != 0)
+    Value allOnes =
+        hw::ConstantOp::create(rewriter, loc, rewriter.getIntegerType(width), -1);
+    Value hasUnknown = comb::ICmpOp::create(rewriter, loc,
+                                            comb::ICmpPredicate::ne, inputUnk, zero);
+
+    // If any unknown: result unknown = all ones, else = 0
+    Value resultUnk =
+        comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
+
+    // Create the 4-state struct
+    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -7128,6 +7158,21 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
         Operation *user = use.getOwner();
         if (!visited.insert(user).second)
           continue;
+        if (auto clocked = dyn_cast<ltl::ClockOp>(user)) {
+          verif::ClockEdge edge = verif::ClockEdge::Both;
+          switch (clocked.getEdge()) {
+          case ltl::ClockEdge::Pos:
+            edge = verif::ClockEdge::Pos;
+            break;
+          case ltl::ClockEdge::Neg:
+            edge = verif::ClockEdge::Neg;
+            break;
+          case ltl::ClockEdge::Both:
+            edge = verif::ClockEdge::Both;
+            break;
+          }
+          return std::make_pair(clocked.getClock(), edge);
+        }
         if (auto clocked = dyn_cast<verif::ClockedAssertOp>(user))
           return std::make_pair(clocked.getClock(), clocked.getEdge());
         if (auto clocked = dyn_cast<verif::ClockedAssumeOp>(user))

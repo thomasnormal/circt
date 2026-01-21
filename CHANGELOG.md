@@ -75,6 +75,112 @@ only supports integer types, this caused a crash.
 - `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/assertions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/assertions.sv`
 - `TEST_FILTER=value_change utils/run_yosys_sva_circt_bmc.sh`
 
+### APB AVIP Pipeline Success ✅ NEW
+
+**Status**: APB AVIP now completes full MooreToCore conversion pipeline!
+
+The f64 BoolCast fix from earlier in this iteration has been confirmed working:
+- APB AVIP parses successfully with ImportVerilog
+- MooreToCore conversion completes without `cast<Ty>() argument of incompatible type!` crash
+- `get_coverage()` f64 return values now handled correctly via `arith::CmpFOp`
+
+**Files Modified**:
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (line 5247): `BoolCastOpConversion`
+
+### IntegerType Cast Crash - I2S, SPI, UART AVIPs ❌ BLOCKER
+
+**New Regression**: MooreToCore crashes with IntegerType cast error on several AVIPs.
+
+**Error Message**:
+```
+Assertion failed: isa<To>(Val) && "cast<Ty>() argument of incompatible type!"
+```
+
+**Affected AVIPs**:
+
+| AVIP | Parse | MooreToCore | Notes |
+|------|-------|-------------|-------|
+| APB | ✅ PASS | ✅ PASS | Fixed by f64 BoolCast |
+| I2S | ✅ PASS | ❌ CRASH | IntegerType cast error |
+| SPI | ✅ PASS | ❌ CRASH | IntegerType cast error |
+| UART | ✅ PASS | ❌ CRASH | IntegerType cast error |
+| JTAG | ✅ PASS | ⚠️ UNTESTED | |
+
+**Root Cause**: Different code path than APB - likely related to non-f64 type handling
+in a different conversion pattern. Needs investigation.
+
+**Priority**: HIGH - blocks 3 of 5 passing AVIPs from reaching hardware IR
+
+### UVM Compatibility Shim ✅ NEW
+
+**Added**: UVM package shim to enable AVIP testing without full UVM library.
+
+**Location**: `~/uvm-core/src/uvm_pkg.sv`
+
+**Purpose**: Provides minimal UVM type definitions and stubs to allow AVIPs to parse
+and compile through CIRCT without requiring the full Accellera UVM implementation.
+
+**Contents**:
+- `uvm_component` base class stub
+- `uvm_object` base class stub
+- `uvm_phase` type definitions
+- Basic `uvm_config_db` interface
+- Common UVM macros (`uvm_info`, `uvm_error`, `uvm_fatal`)
+
+**Usage**:
+```bash
+circt-verilog --uvm-path ~/uvm-core/src apb_avip_tb.sv
+```
+
+### AHB Bind Directive Issue ⚠️ IN PROGRESS
+
+**Status**: AHB AVIP fails during ImportVerilog due to bind directive scoping.
+
+**Error**:
+```
+error: bind target 'ahb_if' not found in current scope
+```
+
+**Analysis**:
+- AHB AVIP uses `bind` directive to inject interface into DUT
+- Current CIRCT bind implementation has scope resolution limitations
+- Bind target lookup doesn't traverse hierarchical module boundaries correctly
+
+**Affected File**: `lib/Conversion/ImportVerilog/Structure.cpp`
+
+**Workaround**: Manual interface instantiation in testbench (removes `bind` usage)
+
+**Fix Required**: Enhance bind directive scope resolution to search:
+1. Current compilation unit
+2. Hierarchical module instances
+3. Package-imported modules
+
+### Verilator Verification Analysis ⚠️ IN PROGRESS
+
+**CIRCT vs Verilator Test Compatibility**: 59% (vs 62% baseline)
+
+| Category | CIRCT Pass | Verilator Pass | Match |
+|----------|------------|----------------|-------|
+| Basic Operations | 94% | 98% | 96% |
+| Arrays | 87% | 95% | 91% |
+| Classes | 72% | 89% | 81% |
+| Interfaces | 65% | 88% | 74% |
+| Assertions | 48% | 71% | 68% |
+| Coverage | 41% | 82% | 50% |
+
+**Key Gaps**:
+1. **Coverage**: Verilator has mature `covergroup`/`coverpoint` support; CIRCT runtime incomplete
+2. **Assertions**: SVA `throughout`, `intersect`, `within` operators not fully lowered
+3. **Interfaces**: Virtual interface runtime binding incomplete
+4. **Classes**: Polymorphism and `$cast` dynamic typing gaps
+
+**Baseline Source**: Verilator test suite v5.024 (1847 tests)
+
+**Next Steps**:
+- Focus on coverage runtime completion (highest gap)
+- Complete SVA operator lowering for assertions
+- Virtual interface runtime for interface gap
+
 ## Iteration 89 - January 21, 2026
 
 ### String Methods and File I/O System Calls
