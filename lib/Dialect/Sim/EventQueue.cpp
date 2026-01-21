@@ -194,30 +194,36 @@ bool TimeWheel::findNextEventTime(SimTime &nextTime) {
     return true;
   }
 
-  // Search through levels for the next event
-  for (size_t level = 0; level < config.numLevels; ++level) {
-    uint64_t resolution = config.baseResolution;
-    for (size_t l = 0; l < level; ++l)
-      resolution *= config.slotsPerLevel;
+  // Search through all levels and find the minimum time with events
+  // We need to find the earliest event time, not just the first slot encountered
+  uint64_t minTime = UINT64_MAX;
+  bool found = false;
 
+  for (size_t level = 0; level < config.numLevels; ++level) {
     auto &lvl = levels[level];
     for (size_t i = 0; i < config.slotsPerLevel; ++i) {
-      size_t slotIdx = (lvl.currentSlot + i) % config.slotsPerLevel;
-      auto &slot = lvl.slots[slotIdx];
+      auto &slot = lvl.slots[i];
       if (slot.hasEvents && slot.baseTime >= currentTime.realTime) {
-        nextTime = SimTime(slot.baseTime, 0, 0);
-        return true;
+        if (slot.baseTime < minTime) {
+          minTime = slot.baseTime;
+          found = true;
+        }
       }
     }
   }
 
-  // Check overflow
+  // Check overflow - it's a sorted map so begin() is the minimum
   if (!overflow.empty()) {
     auto it = overflow.begin();
-    if (it->first >= currentTime.realTime) {
-      nextTime = SimTime(it->first, 0, 0);
-      return true;
+    if (it->first >= currentTime.realTime && it->first < minTime) {
+      minTime = it->first;
+      found = true;
     }
+  }
+
+  if (found) {
+    nextTime = SimTime(minTime, 0, 0);
+    return true;
   }
 
   return false;
@@ -418,6 +424,22 @@ bool EventScheduler::stepDelta() {
   if (processed > 0)
     ++stats.deltaCycles;
   return processed > 0;
+}
+
+bool EventScheduler::advanceToNextTime() {
+  if (!wheel->hasEvents())
+    return false;
+
+  // Only advance if current time has no events to process
+  // (This ensures we don't skip events at the current time)
+  SimTime before = wheel->getCurrentTime();
+  if (wheel->advanceToNextEvent()) {
+    if (wheel->getCurrentTime().realTime > before.realTime) {
+      ++stats.realTimeAdvances;
+      return true;
+    }
+  }
+  return false;
 }
 
 bool EventScheduler::isComplete() const { return !wheel->hasEvents(); }

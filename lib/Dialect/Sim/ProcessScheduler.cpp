@@ -441,43 +441,49 @@ bool ProcessScheduler::advanceTime() {
     return false;
   }
 
-  // Advance to the next event time
-  // First try to advance the event scheduler to the next event
+  // Track whether we did any work (advanced time or processed events)
+  bool didWork = false;
+
+  // Advance to the next event time and process ONE time step at a time.
+  // This is critical for correct behavior: we must return control to the
+  // ProcessScheduler after each event time so it can execute processes
+  // that were scheduled by the events.
   while (!eventScheduler->isComplete()) {
-    // Try to step a delta cycle
+    // Try to step a delta cycle at the current time
     if (eventScheduler->stepDelta()) {
+      didWork = true;
       // Events were processed, check if any processes are now ready
       for (auto &queue : readyQueues) {
         if (!queue.empty())
           return true;
       }
-    } else {
-      // No events in current delta/time - need to advance real time
-      // Run until the event scheduler processes at least one event or completes
-      SimTime oldTime = eventScheduler->getCurrentTime();
-
-      // runUntil will advance to the next event and process it
-      // We use UINT64_MAX to run until the next event regardless of time
-      eventScheduler->runUntil(oldTime.realTime + 1000000000000000ULL); // +1 second
-
-      SimTime newTime = eventScheduler->getCurrentTime();
-
-      LLVM_DEBUG(llvm::dbgs() << "Advanced time from " << oldTime.realTime
-                              << " to " << newTime.realTime << " fs\n");
-
-      // Check again for ready processes
-      for (auto &queue : readyQueues) {
-        if (!queue.empty())
-          return true;
-      }
-
-      // If time didn't advance and no events, we're stuck or done
-      if (oldTime == newTime && eventScheduler->isComplete())
-        break;
+      // No processes ready yet, continue processing deltas at this time
+      continue;
     }
+
+    // No events at current time - advance to the next event time.
+    // Use advanceToNextTime which only advances time without processing events.
+    SimTime oldTime = eventScheduler->getCurrentTime();
+    if (!eventScheduler->advanceToNextTime()) {
+      // Could not advance - either no events or already at next event time
+      // Check if there are events to process at the "new" current time
+      if (eventScheduler->isComplete())
+        break;
+      // There might be events at current time that weren't cascaded yet
+      // Try stepping again
+      continue;
+    }
+
+    didWork = true;
+    LLVM_DEBUG(llvm::dbgs() << "Advanced time from " << oldTime.realTime
+                            << " to " << eventScheduler->getCurrentTime().realTime << " fs\n");
+
+    // Time advanced, now process events at the new time
+    // Continue to the next iteration which will call stepDelta
   }
 
-  return !isComplete();
+  // Return true if we did any work or if there's still work to do
+  return didWork || !isComplete();
 }
 
 SimTime ProcessScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
