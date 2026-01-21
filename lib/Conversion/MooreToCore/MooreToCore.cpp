@@ -6110,6 +6110,18 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       return success();
     }
 
+    // Handle open_uarray <-> queue conversions.
+    // Both types convert to the same LLVM struct {ptr, i64}, so this is a no-op.
+    // This is used in UVM for dynamic array operations.
+    if ((isa<OpenUnpackedArrayType>(op.getInput().getType()) &&
+         isa<QueueType>(op.getResult().getType())) ||
+        (isa<QueueType>(op.getInput().getType()) &&
+         isa<OpenUnpackedArrayType>(op.getResult().getType()))) {
+      // Both types lower to the same struct, so just pass through
+      rewriter.replaceOp(op, adaptor.getInput());
+      return success();
+    }
+
     // Handle ref<virtual_interface> to virtual_interface conversions.
     // This is a dereference operation that reads the pointer from the reference.
     // Check the original Moore type rather than the adaptor type, as the adaptor
