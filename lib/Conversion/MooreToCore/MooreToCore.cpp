@@ -5349,6 +5349,66 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
   }
 };
 
+/// Conversion for moore.logic_to_int: converts 4-state logic to 2-state int.
+/// When the input is a 4-state struct {value, unknown}, extract the value field.
+struct LogicToIntOpConversion : public OpConversionPattern<LogicToIntOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(LogicToIntOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+    Value input = adaptor.getInput();
+
+    // If input is a 4-state struct, extract the value field
+    if (isFourStateStructType(input.getType())) {
+      input = extractFourStateValue(rewriter, op.getLoc(), input);
+    }
+
+    // If types now match, just replace; otherwise bitcast
+    if (resultType == input.getType())
+      rewriter.replaceOp(op, input);
+    else
+      rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, resultType, input);
+    return success();
+  }
+};
+
+/// Conversion for moore.int_to_logic: converts 2-state int to 4-state logic.
+/// When the result should be a 4-state struct, wrap in struct with unknown=0.
+struct IntToLogicOpConversion : public OpConversionPattern<IntToLogicOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(IntToLogicOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+    Value input = adaptor.getInput();
+
+    // If result should be a 4-state struct, create it
+    if (isFourStateStructType(resultType)) {
+      // Ensure input is the right integer type for the struct
+      auto structType = cast<hw::StructType>(resultType);
+      auto valueType = structType.getElements()[0].type;
+      if (input.getType() != valueType) {
+        input = rewriter.createOrFold<hw::BitcastOp>(loc, valueType, input);
+      }
+      // Create struct with unknown=0 (2-state values have no X/Z)
+      Value zero = hw::ConstantOp::create(rewriter, loc, valueType, 0);
+      auto result = createFourStateStruct(rewriter, loc, input, zero);
+      rewriter.replaceOp(op, result);
+    } else {
+      // No 4-state struct needed; just bitcast if types differ
+      if (resultType == input.getType())
+        rewriter.replaceOp(op, input);
+      else
+        rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, resultType, input);
+    }
+    return success();
+  }
+};
+
 struct UnrealizedCastToBoolConversion
     : public OpConversionPattern<UnrealizedConversionCastOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -6161,6 +6221,7 @@ struct FormatIntOpConversion : public OpConversionPattern<FormatIntOp> {
   LogicalResult
   matchAndRewrite(FormatIntOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
 
     char padChar = adaptor.getPadding() == IntPadding::Space ? 32 : 48;
     IntegerAttr padCharAttr = rewriter.getI8IntegerAttr(padChar);
@@ -6169,28 +6230,38 @@ struct FormatIntOpConversion : public OpConversionPattern<FormatIntOp> {
     bool isLeftAligned = adaptor.getAlignment() == IntAlign::Left;
     BoolAttr isLeftAlignedAttr = rewriter.getBoolAttr(isLeftAligned);
 
+    // Get the input value, handling 4-state types which are lowered to
+    // {value, unknown} structs. For formatting purposes, we extract just
+    // the 'value' field since sim::Format*Op expects an integer.
+    Value inputValue = adaptor.getValue();
+    Type inputType = inputValue.getType();
+    if (auto structType = dyn_cast<hw::StructType>(inputType)) {
+      // Extract the 'value' field from the 4-state struct representation
+      inputValue = hw::StructExtractOp::create(rewriter, loc, inputValue, "value");
+    }
+
     switch (op.getFormat()) {
     case IntFormat::Decimal:
       rewriter.replaceOpWithNewOp<sim::FormatDecOp>(
-          op, adaptor.getValue(), isLeftAlignedAttr, padCharAttr, widthAttr,
+          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr,
           adaptor.getIsSignedAttr());
       return success();
     case IntFormat::Binary:
       rewriter.replaceOpWithNewOp<sim::FormatBinOp>(
-          op, adaptor.getValue(), isLeftAlignedAttr, padCharAttr, widthAttr);
+          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr);
       return success();
     case IntFormat::Octal:
       rewriter.replaceOpWithNewOp<sim::FormatOctOp>(
-          op, adaptor.getValue(), isLeftAlignedAttr, padCharAttr, widthAttr);
+          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr);
       return success();
     case IntFormat::HexLower:
       rewriter.replaceOpWithNewOp<sim::FormatHexOp>(
-          op, adaptor.getValue(), rewriter.getBoolAttr(false),
+          op, inputValue, rewriter.getBoolAttr(false),
           isLeftAlignedAttr, padCharAttr, widthAttr);
       return success();
     case IntFormat::HexUpper:
       rewriter.replaceOpWithNewOp<sim::FormatHexOp>(
-          op, adaptor.getValue(), rewriter.getBoolAttr(true), isLeftAlignedAttr,
+          op, inputValue, rewriter.getBoolAttr(true), isLeftAlignedAttr,
           padCharAttr, widthAttr);
       return success();
     }
@@ -9578,7 +9649,14 @@ struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
     auto stringStructTy = getStringStructType(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
 
-    auto value = adaptor.getValue();
+    Value value = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs.
+    // Extract the value field to get an integer for string conversion.
+    if (isFourStateStructType(value.getType())) {
+      value = extractFourStateValue(rewriter, loc, value);
+    }
+
     if (!value.getType().isIntOrFloat())
       return rewriter.notifyMatchFailure(op, "value must be an integer type");
     auto valueWidth = value.getType().getIntOrFloatBitWidth();
@@ -10399,11 +10477,35 @@ static LogicalResult convert(LogicToTimeOp op, LogicToTimeOp::Adaptor adaptor,
 }
 
 // moore.time_to_logic
-static LogicalResult convert(TimeToLogicOp op, TimeToLogicOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<llhd::TimeToIntOp>(op, adaptor.getInput());
-  return success();
-}
+// Converts moore.time_to_logic (which implements $time) to llhd::TimeToIntOp.
+// Handles both 2-state and 4-state result types.
+struct TimeToLogicOpConversion : public OpConversionPattern<TimeToLogicOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(TimeToLogicOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Create the TimeToIntOp to get the time as i64
+    auto intType = rewriter.getIntegerType(64);
+    Value timeInt =
+        llhd::TimeToIntOp::create(rewriter, loc, intType, adaptor.getInput());
+
+    // Check if the result type should be a 4-state struct
+    Type resultType = typeConverter->convertType(op.getType());
+    if (isFourStateStructType(resultType)) {
+      // Create 4-state struct with unknown=0 (time is always a known value)
+      Value zero = hw::ConstantOp::create(rewriter, loc, intType, 0);
+      auto result = createFourStateStruct(rewriter, loc, timeInt, zero);
+      rewriter.replaceOp(op, result);
+    } else {
+      // 2-state type: use the integer directly
+      rewriter.replaceOp(op, timeInt);
+    }
+    return success();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Random Number Generation Conversion
@@ -12982,8 +13084,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     UnrealizedCastToBoolConversion,
     BitcastConversion<PackedToSBVOp>,
     BitcastConversion<SBVToPackedOp>,
-    BitcastConversion<LogicToIntOp>,
-    BitcastConversion<IntToLogicOp>,
+    LogicToIntOpConversion,
+    IntToLogicOpConversion,
     ToBuiltinBoolOpConversion,
     TruncOpConversion,
     ZExtOpConversion,
@@ -13246,7 +13348,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // Timing control
   patterns.add<TimeBIOp>(convert);
   patterns.add<LogicToTimeOp>(convert);
-  patterns.add<TimeToLogicOp>(convert);
+  patterns.add<TimeToLogicOpConversion>(typeConverter, patterns.getContext());
 
   // Random number generation
   patterns.add<UrandomBIOpConversion>(typeConverter, patterns.getContext());

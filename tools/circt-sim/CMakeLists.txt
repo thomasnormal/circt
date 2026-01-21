@@ -41,6 +41,7 @@ add_circt_tool(circt-sim
 target_link_libraries(circt-sim
   PRIVATE
   ${libs}
+  MooreRuntime
 )
 
 llvm_update_compile_flags(circt-sim)

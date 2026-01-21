@@ -119,6 +119,8 @@ circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
   structs.
 - Remaining: verify end-to-end BMC pipeline with yosys `basic03.sv`; pass-case
   still reports violations (sampled/clock alignment or BMC semantics issue).
+- In progress: constrain derived `seq.to_clock` inputs to the generated BMC
+  clock (LowerToBMC) to fix sampled-clock misalignment; re-run `basic03`.
 
 **SVA Support Plan (End-to-End)**:
 1. **Pipeline robustness**: keep SV→Moore→HW→BMC→SMT legal (no illegal ops).
