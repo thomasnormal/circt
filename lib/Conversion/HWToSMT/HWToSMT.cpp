@@ -234,6 +234,100 @@ struct ArrayInjectOpConversion : OpConversionPattern<ArrayInjectOp> {
   }
 };
 
+static unsigned getStructFieldOffset(hw::StructType type, unsigned fieldIdx) {
+  unsigned offset = 0;
+  auto fields = type.getElements();
+  for (unsigned i = fieldIdx + 1, e = fields.size(); i < e; ++i) {
+    auto width = hw::getBitWidth(fields[i].type);
+    assert(width >= 0 && "bit width must be known for struct field");
+    offset += width;
+  }
+  return offset;
+}
+
+/// Lower a hw::StructCreateOp operation to smt::ConcatOp.
+struct StructCreateOpConversion : OpConversionPattern<StructCreateOp> {
+  using OpConversionPattern<StructCreateOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StructCreateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto inputs = adaptor.getInput();
+    if (inputs.empty())
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "empty struct create not supported");
+    Value result = inputs.front();
+    if (!isa<mlir::smt::BitVectorType>(result.getType()))
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "struct fields must be bitvectors");
+    for (auto input : inputs.drop_front()) {
+      if (!isa<mlir::smt::BitVectorType>(input.getType()))
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "struct fields must be bitvectors");
+      result =
+          mlir::smt::ConcatOp::create(rewriter, op.getLoc(), result, input);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Lower a hw::StructExtractOp operation to smt::ExtractOp.
+struct StructExtractOpConversion : OpConversionPattern<StructExtractOp> {
+  using OpConversionPattern<StructExtractOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StructExtractOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto structTy = cast<hw::StructType>(op.getInput().getType());
+    unsigned fieldIdx = op.getFieldIndex();
+    auto fieldTy = structTy.getElements()[fieldIdx].type;
+    auto smtFieldTy = typeConverter->convertType(fieldTy);
+    auto bvTy = dyn_cast_or_null<mlir::smt::BitVectorType>(smtFieldTy);
+    if (!bvTy)
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "struct fields must be bitvectors");
+    unsigned width = bvTy.getWidth();
+    if (width == 0)
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "0-bit struct fields not supported");
+    auto offset = getStructFieldOffset(structTy, fieldIdx);
+    rewriter.replaceOpWithNewOp<mlir::smt::ExtractOp>(
+        op, bvTy, offset, adaptor.getInput());
+    return success();
+  }
+};
+
+/// Lower a hw::StructExplodeOp operation to smt::ExtractOp operations.
+struct StructExplodeOpConversion : OpConversionPattern<StructExplodeOp> {
+  using OpConversionPattern<StructExplodeOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StructExplodeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto structTy = cast<hw::StructType>(op.getInput().getType());
+    SmallVector<Value> results;
+    results.reserve(structTy.getElements().size());
+    for (unsigned i = 0, e = structTy.getElements().size(); i < e; ++i) {
+      auto fieldTy = structTy.getElements()[i].type;
+      auto smtFieldTy = typeConverter->convertType(fieldTy);
+      auto bvTy = dyn_cast_or_null<mlir::smt::BitVectorType>(smtFieldTy);
+      if (!bvTy)
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "struct fields must be bitvectors");
+      unsigned width = bvTy.getWidth();
+      if (width == 0)
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "0-bit struct fields not supported");
+      auto offset = getStructFieldOffset(structTy, i);
+      results.push_back(mlir::smt::ExtractOp::create(
+          rewriter, op.getLoc(), bvTy, offset, adaptor.getInput()));
+    }
+    rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
 /// Remove redundant (seq::FromClock and seq::ToClock) ops.
 template <typename OpTy>
 struct ReplaceWithInput : OpConversionPattern<OpTy> {
@@ -285,6 +379,12 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
     auto domainType = mlir::smt::BitVectorType::get(
         type.getContext(), llvm::Log2_64_Ceil(type.getNumElements()));
     return mlir::smt::ArrayType::get(type.getContext(), domainType, rangeType);
+  });
+  converter.addConversion([](StructType type) -> std::optional<Type> {
+    auto width = hw::getBitWidth(type);
+    if (width <= 0)
+      return std::nullopt;
+    return mlir::smt::BitVectorType::get(type.getContext(), width);
   });
 
   // Default target materialization to convert from illegal types to legal
@@ -373,7 +473,9 @@ void circt::populateHWToSMTConversionPatterns(TypeConverter &converter,
   patterns.add<HWConstantOpConversion, InstanceOpConversion,
                ReplaceWithInput<seq::ToClockOp>,
                ReplaceWithInput<seq::FromClockOp>, ArrayCreateOpConversion,
-               ArrayGetOpConversion, ArrayInjectOpConversion>(
+               ArrayGetOpConversion, ArrayInjectOpConversion,
+               StructCreateOpConversion, StructExtractOpConversion,
+               StructExplodeOpConversion>(
       converter, patterns.getContext());
   patterns.add<OutputOpConversion, HWModuleOpConversion>(
       converter, patterns.getContext(), forSMTLIBExport);

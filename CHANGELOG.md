@@ -1,5 +1,115 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 81 - January 21, 2026
+
+### Parallel Agent Improvements: EventScheduler, UVM RAL, BMC, Process Scheduling
+
+**Track A: EventScheduler MultipleDelayedEvents Fix** ⭐ CRITICAL BUG FIX
+- Fixed `TimeWheel::findNextEventTime()` to return minimum time across ALL slots (not first encountered)
+- Root cause: Slots were iterated in order, returning first slot with events instead of minimum baseTime
+- Added `EventScheduler::advanceToNextTime()` for single-step time advancement
+- Rewrote `ProcessScheduler::advanceTime()` to process ONE time step at a time
+- All 22 ProcessScheduler unit tests now pass
+- Files: `lib/Dialect/Sim/EventQueue.cpp`, `lib/Dialect/Sim/ProcessScheduler.cpp`
+
+**Track B: UVM Register Abstraction Layer (RAL)** ⭐ MAJOR ENHANCEMENT
+- Added ~1,711 lines of IEEE 1800.2 compliant UVM RAL stubs
+- Core classes: `uvm_reg_field`, `uvm_reg`, `uvm_reg_block`, `uvm_reg_map`
+- Adapter classes: `uvm_reg_adapter`, `uvm_reg_predictor`, `uvm_reg_sequence`
+- Frontdoor/backdoor: `uvm_reg_frontdoor`, `uvm_reg_backdoor`
+- Helper types: `uvm_hdl_path_slice`, `uvm_hdl_path_concat`, `uvm_reg_cbs`
+- uvm_pkg.sv now ~5600 total lines with ~121 class definitions
+- File: `lib/Runtime/uvm/uvm_pkg.sv`
+
+**Track C: BMC $countones/$onehot Symbol Resolution** ⭐ BUG FIX
+- Added `LLVM::CtPopOp` → SMT conversion in CombToSMT pass
+- SMT-LIB2 lacks native popcount; implemented via bit extraction + summation
+- Enables BMC verification of `$countones(x)`, `$onehot(x)`, `$onehot0(x)` assertions
+- Files: `lib/Conversion/CombToSMT/CombToSMT.cpp`, `lib/Conversion/CombToSMT/CMakeLists.txt`
+
+**Track D: SVA $rose/$fell BMC Support** ⭐ BUG FIX
+- Added `ltl::PastOp` buffer infrastructure to VerifToSMT conversion
+- `$rose(x) = x && !past(x,1)` now correctly tracks signal history
+- `$fell(x) = !x && past(x,1)` also works with past buffers
+- Each `past(signal, N)` gets N buffer slots for temporal history
+- File: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+**Track E: Process Scheduler Sensitivity Persistence** ⭐ BUG FIX
+- Fixed interpreter state mismatch when process triggered by event vs delay callback
+- Improved signal lookup in `interpretWait()` to trace through operations (casts, etc.)
+- Added unit tests: `ConcurrentInitialAndAlwaysBlocks`, `SuspendProcessForEventsPeristsMapping`
+- Files: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`
+
+**Track F: Event-Based Wait Canonicalization** ⭐ BUG FIX
+- Fixed ProcessOp canonicalization incorrectly removing event-based waits
+- `llhd.wait` with observed operands (sensitivity list) now preserved
+- Processes that set up reactive monitoring no longer optimized away
+- File: `lib/Dialect/LLHD/IR/LLHDOps.cpp`
+
+**Track G: UVM Macro Expansion** ⭐ ENHANCEMENT
+- Added 111+ new UVM macros (total now 318+ macros in uvm_macros.svh)
+- TLM implementation port declaration macros (25 macros)
+- Comparer macros for all types (14 macros)
+- Packer macros for associative arrays and reals (20 macros)
+- Printer macros (23 macros)
+- Message context macros (8 macros)
+- File: `lib/Runtime/uvm/uvm_macros.svh` (~2000 lines)
+
+**Track H: SVA Consecutive Repetition Tests** ⭐ TEST COVERAGE
+- Added `repeat_antecedent_fail` test for `a[*3] |-> b` pattern
+- Created `test/Conversion/VerifToSMT/bmc-repetition.mlir` with 8 test cases
+- Tests: exact repeat [*3], range [*1:3], unbounded [*0:$], antecedent/consequent patterns
+- Known limitation documented: multi-cycle sequence delay buffer initialization
+- Files: `integration_test/circt-bmc/sva-e2e.sv`, `test/Conversion/VerifToSMT/bmc-repetition.mlir`
+
+### Real-World Test Results
+
+**AVIP Testbench Validation** (from Track C parallel validation):
+| Suite | Total | Pass | Fail | Pass Rate |
+|-------|-------|------|------|-----------|
+| sv-tests | 1035 | 770 | 265 | 74.4% |
+| verilator-verification | 154 | 97 | 57 | 63.0% |
+| yosys | 105 | 77 | 28 | 73.3% |
+| **Combined** | **1294** | **944** | **350** | **73.0%** |
+
+### Files Modified
+- `lib/Dialect/Sim/EventQueue.cpp` (+48 lines)
+- `include/circt/Dialect/Sim/EventQueue.h` (+5 lines)
+- `lib/Dialect/Sim/ProcessScheduler.cpp` (+56 lines)
+- `lib/Runtime/uvm/uvm_pkg.sv` (+1,711 lines)
+- `lib/Runtime/uvm/uvm_macros.svh` (+500 lines)
+- `lib/Conversion/CombToSMT/CombToSMT.cpp` (+71 lines)
+- `lib/Conversion/CombToSMT/CMakeLists.txt` (MLIRLLVMDialect link)
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (+180 lines)
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (+50 lines)
+- `lib/Dialect/LLHD/IR/LLHDOps.cpp` (+12 lines)
+- `unittests/Dialect/Sim/ProcessSchedulerTest.cpp` (+123 lines)
+- `integration_test/circt-bmc/sva-e2e.sv` (+17 lines)
+- `test/Conversion/VerifToSMT/bmc-repetition.mlir` (new, 243 lines)
+- `test/Conversion/VerifToSMT/bmc-past-edge.mlir` (new)
+- `test/Conversion/CombToSMT/llvm-ctpop-to-smt.mlir` (new)
+- `test/Conversion/CombToSMT/bmc-popcount.mlir` (new)
+
+---
+
+## Iteration 80 - January 21, 2026
+
+### BMC HWToSMT Struct Lowering + Regression Tests
+
+**Track D: HWToSMT Struct Support** ⭐ ENHANCEMENT
+- Lower `hw.struct_create/extract/explode` directly to SMT bitvector concat/extract
+- Treat `hw.struct` types as packed bitvectors for SMT conversion
+- Unblocks BMC pipeline when LowerToBMC produces 4-state structs
+- Added HWToSMT regression coverage for struct create/extract/explode
+- Known limitation: only bitvector-typed struct fields are supported in SMT
+
+### Files Modified
+- `lib/Conversion/HWToSMT/HWToSMT.cpp`
+- `lib/Dialect/HW/Transforms/HWAggregateToComb.cpp`
+- `test/Conversion/HWToSMT/hw-to-smt.mlir`
+
+---
+
 ## Iteration 79 - January 21, 2026
 
 ### EventScheduler Fix, UVM RAL Stubs, SVA Repetition Tests
@@ -25,6 +135,29 @@
 - Created `test/Conversion/VerifToSMT/bmc-repetition.mlir` test file
 - All existing SVA repetition tests pass
 
+**Track E: SVA $past Comparisons + Clocked Past Lowering** ⭐ ENHANCEMENT
+- Added LTL-aware equality/inequality lowering so `$past()` comparisons stay in LTL form
+- Non-overlapped implication with property RHS now uses `seq ##1 true` encoding
+- MooreToCore: boolean `moore.past` prefers explicit clocked register chains when a clocked assert is found
+- Added `test/Conversion/MooreToCore/past-assert-compare.sv` regression
+- Known limitation: yosys `basic03.sv` pass still fails (sampled-value alignment for clocked assertions)
+
+**Track F: BMC Clock Bool + ExternalizeRegisters Clock Tracing** ⭐ ENHANCEMENT
+- Lower `moore.to_builtin_bool` on 4-state inputs to `value & ~unknown` (avoids invalid `hw.bitcast`)
+- Allow `externalize-registers` to accept clocks derived from block-arg signals through simple combinational ops
+- Registered `cf` dialect in `circt-bmc` to accept control-flow ops in LLHD lowering
+- Added `test/Tools/circt-bmc/externalize-registers-ok.mlir` regression
+
+**Track G: SVA External Suite Harnesses** ⭐ TESTING
+- Added `utils/run_sv_tests_circt_bmc.sh` to run sv-tests SVA-tagged suites with circt-bmc
+- Added `utils/run_verilator_verification_circt_bmc.sh` for Verilator SVA/assert/sequence suites
+- Scripts record pass/fail/xpass/xfail/error summaries to result files for regression tracking
+
+**Track H: LLHD Deseq Clock Handling for BMC** ⭐ BUG FIX
+- Allow `llhd.prb` in desequencing and map 4-state clock probes to observed boolean triggers
+- Treat wait-block arguments as past values so posedge detection becomes `~past & present`
+- Enables llhd.process elimination for clocked always blocks (unblocks yosys `basic03.sv` pipeline)
+
 **Track C: AVIP Testbench Crash Investigation** (In Progress)
 - Found crash: `Assertion 'isIntOrFloat() && "only integers and floats have a bitwidth"' failed`
 - Root cause: Shift operations (ShlOp, ShrOp, AShrOp) call getIntOrFloatBitWidth() on non-integer types
@@ -38,6 +171,18 @@
 - `integration_test/circt-bmc/sva-e2e.sv` (+17 lines - repeat_antecedent_fail test)
 - `test/Conversion/VerifToSMT/bmc-repetition.mlir` (new)
 - `lib/Conversion/MooreToCore/MooreToCore.cpp` (type guards for shift ops)
+- `lib/Conversion/ImportVerilog/AssertionExpr.cpp` (SVA |=> property encoding, $past handling)
+- `lib/Conversion/ImportVerilog/Expressions.cpp` (LTL-aware equality/inequality)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (clocked moore.past lowering)
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (4-state to_builtin_bool lowering)
+- `test/Conversion/MooreToCore/past-assert-compare.sv` (new)
+- `lib/Tools/circt-bmc/ExternalizeRegisters.cpp` (clock derivation tracing)
+- `tools/circt-bmc/circt-bmc.cpp` (register cf dialect)
+- `test/Tools/circt-bmc/externalize-registers-ok.mlir` (new)
+- `utils/run_sv_tests_circt_bmc.sh` (sv-tests SVA harness)
+- `utils/run_verilator_verification_circt_bmc.sh` (verilator-verification harness)
+- `lib/Dialect/LLHD/Transforms/Deseq.cpp` (clocked process desequencing improvements)
+- `test/Dialect/LLHD/Transforms/deseq.mlir` (4-state clock desequencing test)
 
 ---
 

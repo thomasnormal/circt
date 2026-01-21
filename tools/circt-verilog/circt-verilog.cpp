@@ -158,6 +158,10 @@ struct CLOptions {
       "uvm-path",
       cl::desc("Path to UVM library root (defaults to $UVM_HOME)"),
       cl::value_desc("dir"), cl::cat(cat)};
+  cl::opt<bool> noUvmAutoInclude{
+      "no-uvm-auto-include",
+      cl::desc("Disable automatic injection of UVM package and macros"),
+      cl::init(false), cl::cat(cat)};
 
   cl::list<std::string> includeSystemDirs{
       "isystem", cl::desc("Additional system include search paths"),
@@ -334,6 +338,9 @@ static bool hasUvmMacrosInput() {
 }
 
 static void addUvmSupportIfAvailable() {
+  if (opts.noUvmAutoInclude)
+    return;
+
   if (opts.format != Format::SV)
     return;
 

@@ -9,12 +9,14 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWInstanceGraph.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-bmc/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -39,6 +41,74 @@ namespace circt {
 //===----------------------------------------------------------------------===//
 
 namespace {
+static bool isConstantInt(Value value, bool wantAllOnes) {
+  if (auto cst = value.getDefiningOp<hw::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValueAttr()))
+      return wantAllOnes ? intAttr.getValue().isAllOnes()
+                         : intAttr.getValue().isZero();
+    if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValueAttr()))
+      return wantAllOnes ? boolAttr.getValue() : !boolAttr.getValue();
+  }
+  if (auto cst = value.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+      return wantAllOnes ? intAttr.getValue().isAllOnes()
+                         : intAttr.getValue().isZero();
+    if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
+      return wantAllOnes ? boolAttr.getValue() : !boolAttr.getValue();
+  }
+  return false;
+}
+
+static bool traceClockRoot(Value value, BlockArgument &root) {
+  if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
+    return traceClockRoot(toClock.getInput(), root);
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    if (!root)
+      root = arg;
+    return arg == root;
+  }
+  if (isConstantInt(value, true) || isConstantInt(value, false))
+    return true;
+  if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
+    return traceClockRoot(extract.getInput(), root);
+  if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
+    return traceClockRoot(bitcast.getInput(), root);
+  if (auto probe = value.getDefiningOp<llhd::ProbeOp>()) {
+    Value signal = probe.getSignal();
+    for (auto *user : signal.getUsers()) {
+      if (auto drive = dyn_cast<llhd::DriveOp>(user)) {
+        if (traceClockRoot(drive.getValue(), root))
+          return true;
+      }
+    }
+    return false;
+  }
+  if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+    for (auto operand : andOp.getOperands())
+      if (!traceClockRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
+    for (auto operand : xorOp.getOperands())
+      if (!traceClockRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
+    return traceClockRoot(icmpOp.getLhs(), root) &&
+           traceClockRoot(icmpOp.getRhs(), root);
+  }
+  return false;
+}
+
+static Value stripClockToBlockArg(Value clock) {
+  BlockArgument root;
+  if (traceClockRoot(clock, root))
+    return root;
+  return {};
+}
+
 struct ExternalizeRegistersPass
     : public circt::impl::ExternalizeRegistersBase<ExternalizeRegistersPass> {
   using ExternalizeRegistersBase::ExternalizeRegistersBase;
@@ -213,10 +283,8 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
     Attribute initState, Value reset, bool isAsync, Value resetValue,
     Value next) {
   // Look through ToClockOp to find the original i1 clock signal.
-  Value originalClock = clock;
-  if (auto toClockOp = clock.getDefiningOp<seq::ToClockOp>())
-    originalClock = toClockOp.getInput();
-  if (!isa<BlockArgument>(originalClock)) {
+  Value originalClock = stripClockToBlockArg(clock);
+  if (!originalClock || !isa<BlockArgument>(originalClock)) {
     op->emitError("only clocks directly given as block arguments "
                   "are supported");
     return failure();

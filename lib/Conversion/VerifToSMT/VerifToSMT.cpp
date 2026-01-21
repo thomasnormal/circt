@@ -8,6 +8,7 @@
 
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
+#include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
@@ -22,6 +23,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Twine.h"
 
 namespace circt {
 #define GEN_PASS_DEF_CONVERTVERIFTOSMT
@@ -1022,6 +1024,51 @@ struct VerifBoundedModelCheckingOpConversion
       if (isa<seq::ClockType>(ty))
         numInitClocks++;
 
+    // Collect circuit argument names for debug-friendly SMT declarations.
+    size_t originalArgCount = oldCircuitInputTy.size();
+    SmallVector<StringAttr> inputNamePrefixes;
+    if (auto nameAttr =
+            op->getAttrOfType<ArrayAttr>("bmc_input_names")) {
+      inputNamePrefixes.reserve(nameAttr.size());
+      for (auto attr : nameAttr) {
+        if (auto strAttr = dyn_cast<StringAttr>(attr))
+          inputNamePrefixes.push_back(strAttr);
+        else
+          inputNamePrefixes.push_back(StringAttr{});
+      }
+    } else {
+      inputNamePrefixes.assign(originalArgCount, StringAttr{});
+    }
+
+    auto maybeAssertKnown = [&](Type originalTy, Value smtVal,
+                                OpBuilder &builder) {
+      auto structTy = dyn_cast<hw::StructType>(originalTy);
+      if (!structTy)
+        return;
+      auto elements = structTy.getElements();
+      if (elements.size() != 2)
+        return;
+      if (!elements[0].name || !elements[1].name)
+        return;
+      if (elements[0].name.getValue() != "value" ||
+          elements[1].name.getValue() != "unknown")
+        return;
+      int64_t valueWidth = hw::getBitWidth(elements[0].type);
+      int64_t unknownWidth = hw::getBitWidth(elements[1].type);
+      if (valueWidth <= 0 || unknownWidth <= 0 || valueWidth != unknownWidth)
+        return;
+      auto bvTy = dyn_cast<smt::BitVectorType>(smtVal.getType());
+      if (!bvTy || bvTy.getWidth() !=
+                       static_cast<unsigned>(valueWidth + unknownWidth))
+        return;
+      auto unkTy = smt::BitVectorType::get(builder.getContext(), unknownWidth);
+      auto unknownBits =
+          smt::ExtractOp::create(builder, loc, unkTy, 0, smtVal);
+      auto zero = smt::BVConstantOp::create(builder, loc, 0, unknownWidth);
+      auto isKnown = smt::EqOp::create(builder, loc, unknownBits, zero);
+      smt::AssertOp::create(builder, loc, isKnown);
+    };
+
     // =========================================================================
     // Multi-step delay tracking:
     // Scan the circuit for ltl.delay operations with delay > 0 and set up
@@ -1076,6 +1123,9 @@ struct VerifBoundedModelCheckingOpConversion
       delayInfos.push_back(info);
       totalDelaySlots += bufferSize;
     });
+
+    // Track delay buffer names (added immediately after original inputs).
+    size_t delaySlots = totalDelaySlots;
 
     // =========================================================================
     // Past operation tracking for $rose/$fell:
@@ -1248,6 +1298,25 @@ struct VerifBoundedModelCheckingOpConversion
       totalDelaySlots += totalPastSlots;
     }
 
+    // Extend name list with delay/past buffer slots appended to the circuit
+    // arguments. These slots are appended after the original inputs.
+    if (inputNamePrefixes.size() != originalArgCount)
+      inputNamePrefixes.resize(originalArgCount, StringAttr{});
+    if (delaySlots > 0) {
+      for (size_t i = 0; i < delaySlots; ++i) {
+        auto name =
+            rewriter.getStringAttr("delay_buf_" + Twine(i).str());
+        inputNamePrefixes.push_back(name);
+      }
+    }
+    if (totalPastSlots > 0) {
+      for (size_t i = 0; i < totalPastSlots; ++i) {
+        auto name =
+            rewriter.getStringAttr("past_buf_" + Twine(i).str());
+        inputNamePrefixes.push_back(name);
+      }
+    }
+
     // Re-compute circuit types after potential modification
     circuitInputTy.clear();
     circuitOutputTy.clear();
@@ -1338,11 +1407,12 @@ struct VerifBoundedModelCheckingOpConversion
       if (isDelayBuffer) {
         // Initialize delay buffers to false (no prior history at step 0)
         if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
-          inputDecls.push_back(
-              smt::BVConstantOp::create(rewriter, loc, 0, bvTy.getWidth()));
+          auto initVal =
+              smt::BVConstantOp::create(rewriter, loc, 0, bvTy.getWidth());
+          inputDecls.push_back(initVal);
         } else if (isa<smt::BoolType>(newTy)) {
-          inputDecls.push_back(
-              smt::BoolConstantOp::create(rewriter, loc, false));
+          auto initVal = smt::BoolConstantOp::create(rewriter, loc, false);
+          inputDecls.push_back(initVal);
         } else {
           op.emitError("unsupported delay buffer type in BMC conversion");
           return failure();
@@ -1377,12 +1447,39 @@ struct VerifBoundedModelCheckingOpConversion
           assert(cstInt.getBitWidth() ==
                      cast<smt::BitVectorType>(newTy).getWidth() &&
                  "Width mismatch between initial value and target type");
-          inputDecls.push_back(
-              smt::BVConstantOp::create(rewriter, loc, cstInt));
+          auto initVal =
+              smt::BVConstantOp::create(rewriter, loc, cstInt);
+          inputDecls.push_back(initVal);
+          maybeAssertKnown(oldTy, initVal, rewriter);
           continue;
         }
+        if (auto initBoolAttr = dyn_cast<BoolAttr>(initVal)) {
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
+            auto initVal = smt::BVConstantOp::create(
+                rewriter, loc, initBoolAttr.getValue() ? 1 : 0,
+                bvTy.getWidth());
+            inputDecls.push_back(initVal);
+            maybeAssertKnown(oldTy, initVal, rewriter);
+            continue;
+          }
+          if (isa<smt::BoolType>(newTy)) {
+            auto initVal = smt::BoolConstantOp::create(
+                rewriter, loc, initBoolAttr.getValue());
+            inputDecls.push_back(initVal);
+            maybeAssertKnown(oldTy, initVal, rewriter);
+            continue;
+          }
+          op.emitError("unsupported bool initial value in BMC conversion");
+          return failure();
+        }
       }
-      inputDecls.push_back(smt::DeclareFunOp::create(rewriter, loc, newTy));
+      StringAttr namePrefix;
+      if (curIndex < inputNamePrefixes.size())
+        namePrefix = inputNamePrefixes[curIndex];
+      auto decl =
+          smt::DeclareFunOp::create(rewriter, loc, newTy, namePrefix);
+      inputDecls.push_back(decl);
+      maybeAssertKnown(oldTy, decl, rewriter);
     }
 
     auto numStateArgs = initVals.size() - initIndex;
@@ -1416,6 +1513,15 @@ struct VerifBoundedModelCheckingOpConversion
           // Drop existing assertions
           smt::PopOp::create(builder, loc, 1);
           smt::PushOp::create(builder, loc, 1);
+
+          // Re-assert 2-state constraints on the current iteration inputs,
+          // since the previous push frame was popped.
+          size_t numCircuitArgs = circuitFuncOp.getNumArguments();
+          for (auto [oldTy, arg] :
+               llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
+                         iterArgs.take_front(numCircuitArgs))) {
+            maybeAssertKnown(oldTy, arg, builder);
+          }
 
           // Execute the circuit
           ValueRange circuitCallOuts =
@@ -1510,6 +1616,7 @@ struct VerifBoundedModelCheckingOpConversion
           // Collect decls to yield at end of iteration
           SmallVector<Value> newDecls;
           size_t nonRegIdx = 0;
+          size_t argIndex = 0;
           // Circuit args are: [clocks, inputs] [registers] [delay buffers]
           // Drop both registers and delay buffers to get just clocks and inputs
           size_t numNonStateArgs = oldCircuitInputTy.size() - numRegs - totalDelaySlots;
@@ -1524,10 +1631,17 @@ struct VerifBoundedModelCheckingOpConversion
                            (isI1Type && nonRegIdx < numInitClocks);
             if (isClock)
               newDecls.push_back(loopVals[loopIndex++]);
-            else
-              newDecls.push_back(
-                  smt::DeclareFunOp::create(builder, loc, newTy));
+            else {
+              auto decl = smt::DeclareFunOp::create(
+                  builder, loc, newTy,
+                  argIndex < inputNamePrefixes.size()
+                      ? inputNamePrefixes[argIndex]
+                      : StringAttr{});
+              newDecls.push_back(decl);
+              maybeAssertKnown(oldTy, decl, builder);
+            }
             nonRegIdx++;
+            argIndex++;
           }
 
           // Only update the registers on a clock posedge unless in rising

@@ -8,6 +8,7 @@
 
 #include "DeseqUtils.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
 #include "circt/Dialect/Seq/SeqOps.h"
@@ -100,6 +101,8 @@ struct Deseq {
   ConstantTimeOp epsilonDelay;
   /// A map of operations that have been checked to be valid reset values.
   DenseMap<Operation *, bool> staticOps;
+  /// Map signals to observed boolean triggers derived from them.
+  DenseMap<Value, Value> triggerForSignal;
 
   /// The boolean expression computed for an `i1` value in the IR.
   DenseMap<Value, TruthTable> booleanLattice;
@@ -139,6 +142,11 @@ private:
   TruthTable getPresentTrigger(unsigned triggerIndex) const {
     return TruthTable::getTerm(triggers.size() * 2 + 1, triggerIndex * 2 + 2);
   }
+
+  Value traceSignal(Value value);
+  Value getSignalFromValueField(Value value);
+  Value getSignalFromNotUnknown(Value value);
+  Value getSignalFromBoolified(Value value);
 
   // Utilities to create value tables. These make working with value tables
   // easier, since the calling code doesn't have to care about how the truth
@@ -198,10 +206,11 @@ void Deseq::deseq() {
 /// the wait and drive ops that are relevant.
 bool Deseq::analyzeProcess() {
   // We can only desequentialize processes with no side-effecting ops besides
-  // the `WaitOp` or `HaltOp` terminators.
+  // the `WaitOp` or `HaltOp` terminators. Allow `llhd.prb` since it is a
+  // read-only access used to sample observed values.
   for (auto &block : process.getBody()) {
     for (auto &op : block) {
-      if (isa<WaitOp, HaltOp>(op))
+      if (isa<WaitOp, HaltOp, ProbeOp>(op))
         continue;
       if (!isMemoryEffectFree(&op)) {
         LLVM_DEBUG({
@@ -288,6 +297,15 @@ bool Deseq::analyzeProcess() {
   for (auto [index, trigger] : llvm::enumerate(triggers))
     booleanLattice.insert({trigger, getPresentTrigger(index)});
 
+  // Record triggers that are derived from 4-state signals (value & ~unknown).
+  for (auto trigger : triggers) {
+    if (auto signal = getSignalFromBoolified(trigger)) {
+      auto it = triggerForSignal.find(signal);
+      if (it == triggerForSignal.end())
+        triggerForSignal.insert({signal, trigger});
+    }
+  }
+
   // Ensure the wait op destination operands, i.e. the values passed from the
   // past into the present, are the observed values.
   for (auto [operand, blockArg] :
@@ -330,6 +348,15 @@ Value Deseq::tracePastValue(Value pastValue) {
     // If this is one of the observed values, we're done. Otherwise trace
     // block arguments backwards to their predecessors.
     if (triggers.contains(value) || !arg) {
+      if (!triggers.contains(value) && !arg) {
+        if (auto signal = getSignalFromBoolified(value)) {
+          if (auto it = triggerForSignal.find(signal);
+              it != triggerForSignal.end()) {
+            distinctValues.insert(it->second);
+            continue;
+          }
+        }
+      }
       distinctValues.insert(value);
       continue;
     }
@@ -393,6 +420,123 @@ Value Deseq::tracePastValue(Value pastValue) {
     return Value{};
   }
   return distinctValue;
+}
+
+Value Deseq::traceSignal(Value value) {
+  SmallVector<Value> worklist;
+  SmallPtrSet<Value, 8> seen;
+  worklist.push_back(value);
+  seen.insert(value);
+
+  Value signal;
+  while (!worklist.empty()) {
+    auto current = worklist.pop_back_val();
+
+    if (auto probe = current.getDefiningOp<ProbeOp>()) {
+      Value sig = probe.getSignal();
+      if (!signal)
+        signal = sig;
+      else if (signal != sig)
+        return Value();
+      continue;
+    }
+
+    if (auto arg = dyn_cast<BlockArgument>(current)) {
+      if (arg.getOwner()->getParentOp() != process)
+        return Value();
+
+      unsigned argIdx = arg.getArgNumber();
+      for (auto *pred : arg.getOwner()->getPredecessors()) {
+        auto *term = pred->getTerminator();
+        if (auto branchOp = dyn_cast<cf::BranchOp>(term)) {
+          if (branchOp.getDest() != arg.getOwner())
+            continue;
+          auto operand = branchOp.getDestOperands()[argIdx];
+          if (seen.insert(operand).second)
+            worklist.push_back(operand);
+          continue;
+        }
+        if (auto condBranchOp = dyn_cast<cf::CondBranchOp>(term)) {
+          if (condBranchOp.getTrueDest() == arg.getOwner()) {
+            auto operand = condBranchOp.getTrueDestOperands()[argIdx];
+            if (seen.insert(operand).second)
+              worklist.push_back(operand);
+          }
+          if (condBranchOp.getFalseDest() == arg.getOwner()) {
+            auto operand = condBranchOp.getFalseDestOperands()[argIdx];
+            if (seen.insert(operand).second)
+              worklist.push_back(operand);
+          }
+          continue;
+        }
+        return Value();
+      }
+      continue;
+    }
+
+    return Value();
+  }
+
+  return signal;
+}
+
+Value Deseq::getSignalFromValueField(Value value) {
+  auto extractOp = value.getDefiningOp<hw::StructExtractOp>();
+  if (!extractOp)
+    return Value();
+  if (extractOp.getFieldName() != "value")
+    return Value();
+  return traceSignal(extractOp.getInput());
+}
+
+Value Deseq::getSignalFromNotUnknown(Value value) {
+  auto xorOp = value.getDefiningOp<comb::XorOp>();
+  if (!xorOp || xorOp.getInputs().size() != 2)
+    return Value();
+
+  auto isTrueConst = [](Value value) -> bool {
+    if (auto constOp = value.getDefiningOp<hw::ConstantOp>())
+      return constOp.getValue().isOne();
+    return false;
+  };
+
+  Value lhs = xorOp.getInputs()[0];
+  Value rhs = xorOp.getInputs()[1];
+  Value unknownValue;
+  if (isTrueConst(lhs))
+    unknownValue = rhs;
+  else if (isTrueConst(rhs))
+    unknownValue = lhs;
+  else
+    return Value();
+
+  auto extractOp = unknownValue.getDefiningOp<hw::StructExtractOp>();
+  if (!extractOp)
+    return Value();
+  if (extractOp.getFieldName() != "unknown")
+    return Value();
+  return traceSignal(extractOp.getInput());
+}
+
+Value Deseq::getSignalFromBoolified(Value value) {
+  auto andOp = value.getDefiningOp<comb::AndOp>();
+  if (!andOp || andOp.getInputs().size() != 2)
+    return Value();
+
+  Value lhs = andOp.getInputs()[0];
+  Value rhs = andOp.getInputs()[1];
+
+  auto signalValue = getSignalFromValueField(lhs);
+  auto signalUnknown = getSignalFromNotUnknown(rhs);
+  if (signalValue && signalUnknown && signalValue == signalUnknown)
+    return signalValue;
+
+  signalValue = getSignalFromValueField(rhs);
+  signalUnknown = getSignalFromNotUnknown(lhs);
+  if (signalValue && signalUnknown && signalValue == signalUnknown)
+    return signalValue;
+
+  return Value();
 }
 
 //===----------------------------------------------------------------------===//
@@ -474,6 +618,34 @@ TruthTable Deseq::computeBoolean(OpResult value) {
   // Handle constants.
   if (auto constOp = dyn_cast<hw::ConstantOp>(op))
     return getConstBoolean(constOp.getValue().isOne());
+
+  // Approximate 4-state clock values in terms of observed triggers.
+  if (auto extractOp = dyn_cast<hw::StructExtractOp>(op)) {
+    if (auto signal = traceSignal(extractOp.getInput())) {
+      auto it = triggerForSignal.find(signal);
+      if (it != triggerForSignal.end()) {
+        auto field = extractOp.getFieldName();
+        auto trigger = it->second;
+        bool isWaitArg = false;
+        if (auto arg = dyn_cast<BlockArgument>(extractOp.getInput()))
+          isWaitArg = (arg.getOwner() == wait->getBlock());
+        if (isWaitArg) {
+          unsigned index =
+              std::distance(triggers.begin(), llvm::find(triggers, trigger));
+          if (index < triggers.size()) {
+            if (field == "value")
+              return getPastTrigger(index);
+            if (field == "unknown")
+              return getConstBoolean(false);
+          }
+        }
+        if (field == "value")
+          return computeBoolean(trigger);
+        if (field == "unknown")
+          return getConstBoolean(false);
+      }
+    }
+  }
 
   // Handle `comb.or`.
   if (auto orOp = dyn_cast<comb::OrOp>(op)) {

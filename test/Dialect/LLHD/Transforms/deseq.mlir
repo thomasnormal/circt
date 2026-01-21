@@ -198,6 +198,49 @@ hw.module @ChasePastValuesThroughControlFlow(in %clock: i1, in %d: i42) {
   llhd.drv %3, %1 after %0 if %2 : i42
 }
 
+// CHECK-LABEL: @ClockPosEdgeFourState(
+hw.module @ClockPosEdgeFourState(in %clock_in: !hw.struct<value: i1, unknown: i1>,
+                                 in %d: i1) {
+  %false = hw.constant false
+  %true = hw.constant true
+  %c0_i2 = hw.constant 0 : i2
+  %t0 = llhd.constant_time <0ns, 0d, 1e>
+  %tEps = llhd.constant_time <0ns, 1d, 0e>
+  %init = hw.bitcast %c0_i2 : (i2) -> !hw.struct<value: i1, unknown: i1>
+  %clk = llhd.sig %init : !hw.struct<value: i1, unknown: i1>
+  %prb = llhd.prb %clk : !hw.struct<value: i1, unknown: i1>
+  %value = hw.struct_extract %prb["value"] : !hw.struct<value: i1, unknown: i1>
+  %unknown = hw.struct_extract %prb["unknown"] : !hw.struct<value: i1, unknown: i1>
+  %not_unknown = comb.xor %unknown, %true : i1
+  %clk_bool = comb.and bin %value, %not_unknown : i1
+  %q = llhd.sig %false : i1
+
+  // CHECK-NOT: llhd.process
+  // CHECK: [[CLK:%.+]] = seq.to_clock %{{.+}}
+  // CHECK: [[REG:%.+]] = seq.firreg {{.+}} clock [[CLK]]{{.*}}: i1
+  %next, %en = llhd.process -> i1, i1 {
+    cf.br ^bb1(%prb, %false : !hw.struct<value: i1, unknown: i1>, i1)
+  ^bb1(%past: !hw.struct<value: i1, unknown: i1>, %latched: i1):
+    %past_val = hw.struct_extract %past["value"] : !hw.struct<value: i1, unknown: i1>
+    %past_unk = hw.struct_extract %past["unknown"] : !hw.struct<value: i1, unknown: i1>
+    %past_not_unk = comb.xor %past_unk, %true : i1
+    %past_bool = comb.and bin %past_val, %past_not_unk : i1
+    llhd.wait yield (%false, %latched : i1, i1), (%clk_bool : i1), ^bb2
+  ^bb2:
+    %curr = llhd.prb %clk : !hw.struct<value: i1, unknown: i1>
+    %curr_val = hw.struct_extract %curr["value"] : !hw.struct<value: i1, unknown: i1>
+    %curr_unk = hw.struct_extract %curr["unknown"] : !hw.struct<value: i1, unknown: i1>
+    %curr_not_unk = comb.xor %curr_unk, %true : i1
+    %not_past = comb.xor %past_bool, %true : i1
+    %posedge = comb.and bin %not_past, %curr_val, %curr_not_unk : i1
+    cf.cond_br %posedge, ^bb3, ^bb1(%curr, %false : !hw.struct<value: i1, unknown: i1>, i1)
+  ^bb3:
+    cf.br ^bb1(%curr, %true : !hw.struct<value: i1, unknown: i1>, i1)
+  }
+  llhd.drv %q, %next after %tEps if %en : i1
+  llhd.drv %clk, %clock_in after %t0 : !hw.struct<value: i1, unknown: i1>
+}
+
 // CHECK-LABEL: @AbortIfPastValueUnobserved(
 hw.module @AbortIfPastValueUnobserved(in %clock: i1, in %d: i42) {
   %c0_i42 = hw.constant 0 : i42

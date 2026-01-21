@@ -9,6 +9,8 @@ BOUND="${BOUND:-10}"
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
+DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
+CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2
@@ -35,7 +37,15 @@ run_case() {
   base="$(basename "$sv" .sv)"
   local mlir="$tmpdir/${base}_${mode}.mlir"
 
-  "$CIRCT_VERILOG" --ir-hw "${extra_def[@]}" "$sv" > "$mlir"
+  local verilog_args=()
+  if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
+    verilog_args+=("--no-uvm-auto-include")
+  fi
+  if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
+    read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
+    verilog_args+=("${extra_args[@]}")
+  fi
+  "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "${extra_def[@]}" "$sv" > "$mlir"
   local out
   out="$("$CIRCT_BMC" -b "$BOUND" --ignore-asserts-until="$IGNORE_ASSERTS_UNTIL" \
       --module "$TOP" --shared-libs="$Z3_LIB" "$mlir" || true)"

@@ -10378,6 +10378,268 @@ extern "C" int32_t __moore_signal_registry_is_connected(void) {
 }
 
 //===----------------------------------------------------------------------===//
+// Signal Registry - Hierarchy Traversal
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Tracks forced signal state separately from simulation values.
+/// This is needed because DPI force/release operates at the HDL access layer.
+struct ForcedSignalEntry {
+  MooreSignalHandle handle;
+  int64_t forcedValue;
+  bool isForced;
+};
+
+/// Global forced signal tracking (path -> forced state).
+std::unordered_map<std::string, ForcedSignalEntry> forcedSignals;
+std::mutex forcedSignalsMutex;
+
+/// Parse array indices from a path component like "mem[5]" or "arr[3][2]".
+/// Returns the base name and fills indices vector.
+/// Example: "mem[5]" -> returns "mem", indices = {5}
+///          "arr[3][2]" -> returns "arr", indices = {3, 2}
+std::string parseArrayIndices(const std::string &component,
+                              std::vector<int64_t> &indices) {
+  indices.clear();
+  size_t bracketPos = component.find('[');
+  if (bracketPos == std::string::npos) {
+    return component;
+  }
+
+  std::string baseName = component.substr(0, bracketPos);
+  size_t pos = bracketPos;
+
+  while (pos < component.size() && component[pos] == '[') {
+    size_t endBracket = component.find(']', pos);
+    if (endBracket == std::string::npos) {
+      break;
+    }
+    std::string indexStr = component.substr(pos + 1, endBracket - pos - 1);
+    try {
+      indices.push_back(std::stoll(indexStr));
+    } catch (...) {
+      // Invalid index, return empty
+      indices.clear();
+      return baseName;
+    }
+    pos = endBracket + 1;
+  }
+
+  return baseName;
+}
+
+/// Parse a hierarchical path into components.
+/// Handles both "." and "/" as separators.
+/// Example: "top.inst1.inst2.sig" -> {"top", "inst1", "inst2", "sig"}
+std::vector<std::string> parseHierarchicalPath(const std::string &path) {
+  std::vector<std::string> components;
+  std::string current;
+
+  for (char c : path) {
+    if (c == '.' || c == '/') {
+      if (!current.empty()) {
+        components.push_back(current);
+        current.clear();
+      }
+    } else {
+      current += c;
+    }
+  }
+
+  if (!current.empty()) {
+    components.push_back(current);
+  }
+
+  return components;
+}
+
+/// Try to find a signal by looking up various path formats.
+/// Handles cases where the path might be relative or use different separators.
+MooreSignalHandle lookupSignalWithAlternatives(const std::string &path) {
+  // Direct lookup
+  auto it = signalRegistry.signals.find(path);
+  if (it != signalRegistry.signals.end()) {
+    return it->second.handle;
+  }
+
+  // Try with dot-separated components
+  std::vector<std::string> components = parseHierarchicalPath(path);
+  if (components.empty()) {
+    return MOORE_INVALID_SIGNAL_HANDLE;
+  }
+
+  // Try just the signal name (last component)
+  const std::string &signalName = components.back();
+  it = signalRegistry.signals.find(signalName);
+  if (it != signalRegistry.signals.end()) {
+    return it->second.handle;
+  }
+
+  // Try partial paths from the end
+  for (size_t i = components.size() - 1; i > 0; --i) {
+    std::string partialPath;
+    for (size_t j = i; j < components.size(); ++j) {
+      if (!partialPath.empty()) {
+        partialPath += ".";
+      }
+      partialPath += components[j];
+    }
+    it = signalRegistry.signals.find(partialPath);
+    if (it != signalRegistry.signals.end()) {
+      return it->second.handle;
+    }
+  }
+
+  // Handle array indices - try base name without indices
+  std::vector<int64_t> indices;
+  std::string baseName = parseArrayIndices(signalName, indices);
+  if (!indices.empty()) {
+    it = signalRegistry.signals.find(baseName);
+    if (it != signalRegistry.signals.end()) {
+      // TODO: Handle array element access via index calculation
+      return it->second.handle;
+    }
+  }
+
+  return MOORE_INVALID_SIGNAL_HANDLE;
+}
+
+/// Get all signals that match a glob pattern.
+/// Patterns can use * for wildcards.
+std::vector<std::pair<std::string, MooreSignalHandle>>
+matchSignalsByPattern(const std::string &pattern) {
+  std::vector<std::pair<std::string, MooreSignalHandle>> matches;
+
+  // Simple pattern matching with * wildcards
+  auto matchPattern = [](const std::string &text, const std::string &pat) -> bool {
+    size_t ti = 0, pi = 0;
+    size_t starIdx = std::string::npos;
+    size_t matchIdx = 0;
+
+    while (ti < text.size()) {
+      if (pi < pat.size() && (pat[pi] == '?' || pat[pi] == text[ti])) {
+        ++pi;
+        ++ti;
+      } else if (pi < pat.size() && pat[pi] == '*') {
+        starIdx = pi++;
+        matchIdx = ti;
+      } else if (starIdx != std::string::npos) {
+        pi = starIdx + 1;
+        ti = ++matchIdx;
+      } else {
+        return false;
+      }
+    }
+
+    while (pi < pat.size() && pat[pi] == '*') {
+      ++pi;
+    }
+
+    return pi == pat.size();
+  };
+
+  for (const auto &entry : signalRegistry.signals) {
+    if (matchPattern(entry.first, pattern)) {
+      matches.emplace_back(entry.first, entry.second.handle);
+    }
+  }
+
+  return matches;
+}
+} // namespace
+
+/// Look up a signal handle supporting hierarchical paths and wildcards.
+extern "C" MooreSignalHandle __moore_signal_registry_lookup_hierarchical(
+    const char *path) {
+  if (!path || !*path)
+    return MOORE_INVALID_SIGNAL_HANDLE;
+
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  return lookupSignalWithAlternatives(std::string(path));
+}
+
+/// Get a list of all registered signal paths.
+/// Returns the count, and fills the buffer with paths (null-separated).
+extern "C" uint64_t __moore_signal_registry_get_paths(char *buffer,
+                                                       uint64_t bufferSize) {
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+
+  uint64_t count = 0;
+  uint64_t offset = 0;
+
+  for (const auto &entry : signalRegistry.signals) {
+    size_t pathLen = entry.first.size() + 1; // Include null terminator
+    if (buffer && offset + pathLen <= bufferSize) {
+      std::memcpy(buffer + offset, entry.first.c_str(), pathLen);
+      offset += pathLen;
+    }
+    ++count;
+  }
+
+  return count;
+}
+
+/// Check if a signal is currently forced via DPI.
+extern "C" int32_t __moore_signal_registry_is_forced(const char *path) {
+  if (!path || !*path)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(forcedSignalsMutex);
+  auto it = forcedSignals.find(std::string(path));
+  if (it != forcedSignals.end()) {
+    return it->second.isForced ? 1 : 0;
+  }
+  return 0;
+}
+
+/// Get the forced value for a signal (if forced).
+extern "C" int32_t __moore_signal_registry_get_forced_value(const char *path,
+                                                             int64_t *value) {
+  if (!path || !*path || !value)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(forcedSignalsMutex);
+  auto it = forcedSignals.find(std::string(path));
+  if (it != forcedSignals.end() && it->second.isForced) {
+    *value = it->second.forcedValue;
+    return 1;
+  }
+  return 0;
+}
+
+/// Set a signal as forced with a specific value.
+extern "C" int32_t __moore_signal_registry_set_forced(const char *path,
+                                                       MooreSignalHandle handle,
+                                                       int64_t value) {
+  if (!path || !*path)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(forcedSignalsMutex);
+  forcedSignals[std::string(path)] = {handle, value, true};
+  return 1;
+}
+
+/// Clear the forced state for a signal.
+extern "C" int32_t __moore_signal_registry_clear_forced(const char *path) {
+  if (!path || !*path)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(forcedSignalsMutex);
+  auto it = forcedSignals.find(std::string(path));
+  if (it != forcedSignals.end()) {
+    it->second.isForced = false;
+    return 1;
+  }
+  return 0;
+}
+
+/// Clear all forced signals.
+extern "C" void __moore_signal_registry_clear_all_forced(void) {
+  std::lock_guard<std::mutex> lock(forcedSignalsMutex);
+  forcedSignals.clear();
+}
+
+//===----------------------------------------------------------------------===//
 // HDL Access Stubs
 //===----------------------------------------------------------------------===//
 
@@ -10397,59 +10659,103 @@ bool getPathKey(MooreString *path, std::string &key) {
   return !key.empty();
 }
 
-/// Helper to try reading from signal registry first, falling back to stub
+/// Helper to try reading from signal registry first, falling back to stub.
+/// Uses hierarchical path lookup to find signals with various path formats.
 bool tryRegistryRead(const std::string &key, uvm_hdl_data_t *value) {
   std::lock_guard<std::mutex> regLock(signalRegistryMutex);
   if (!signalRegistry.isConnected())
     return false;
 
-  auto it = signalRegistry.signals.find(key);
-  if (it == signalRegistry.signals.end())
+  // First check if signal is forced - return forced value
+  {
+    std::lock_guard<std::mutex> forceLock(forcedSignalsMutex);
+    auto forcedIt = forcedSignals.find(key);
+    if (forcedIt != forcedSignals.end() && forcedIt->second.isForced) {
+      *value = forcedIt->second.forcedValue;
+      return true;
+    }
+  }
+
+  // Try hierarchical lookup to find the signal
+  MooreSignalHandle handle = lookupSignalWithAlternatives(key);
+  if (handle == MOORE_INVALID_SIGNAL_HANDLE)
     return false;
 
-  *value = signalRegistry.readCallback(it->second.handle, signalRegistry.userData);
+  *value = signalRegistry.readCallback(handle, signalRegistry.userData);
   return true;
 }
 
-/// Helper to try writing to signal registry first, falling back to stub
+/// Helper to try writing to signal registry first, falling back to stub.
+/// Uses hierarchical path lookup to find signals.
+/// Respects force state - deposits are ignored if signal is forced.
 bool tryRegistryWrite(const std::string &key, uvm_hdl_data_t value) {
   std::lock_guard<std::mutex> regLock(signalRegistryMutex);
   if (!signalRegistry.isConnected())
     return false;
 
-  auto it = signalRegistry.signals.find(key);
-  if (it == signalRegistry.signals.end())
+  // Check if signal is forced - deposits are ignored for forced signals
+  {
+    std::lock_guard<std::mutex> forceLock(forcedSignalsMutex);
+    auto forcedIt = forcedSignals.find(key);
+    if (forcedIt != forcedSignals.end() && forcedIt->second.isForced) {
+      // Signal is forced, deposit is ignored but return success
+      return true;
+    }
+  }
+
+  // Try hierarchical lookup to find the signal
+  MooreSignalHandle handle = lookupSignalWithAlternatives(key);
+  if (handle == MOORE_INVALID_SIGNAL_HANDLE)
     return false;
 
-  signalRegistry.writeCallback(it->second.handle, value, signalRegistry.userData);
+  signalRegistry.writeCallback(handle, value, signalRegistry.userData);
   return true;
 }
 
-/// Helper to try forcing via signal registry first, falling back to stub
+/// Helper to try forcing via signal registry first, falling back to stub.
+/// Uses hierarchical path lookup and updates force tracking.
 bool tryRegistryForce(const std::string &key, uvm_hdl_data_t value) {
   std::lock_guard<std::mutex> regLock(signalRegistryMutex);
   if (!signalRegistry.isConnected() || !signalRegistry.forceCallback)
     return false;
 
-  auto it = signalRegistry.signals.find(key);
-  if (it == signalRegistry.signals.end())
+  // Try hierarchical lookup to find the signal
+  MooreSignalHandle handle = lookupSignalWithAlternatives(key);
+  if (handle == MOORE_INVALID_SIGNAL_HANDLE)
     return false;
 
-  signalRegistry.forceCallback(it->second.handle, value, signalRegistry.userData);
+  // Track the forced state
+  {
+    std::lock_guard<std::mutex> forceLock(forcedSignalsMutex);
+    forcedSignals[key] = {handle, value, true};
+  }
+
+  signalRegistry.forceCallback(handle, value, signalRegistry.userData);
   return true;
 }
 
-/// Helper to try releasing via signal registry first, falling back to stub
+/// Helper to try releasing via signal registry first, falling back to stub.
+/// Uses hierarchical path lookup and clears force tracking.
 bool tryRegistryRelease(const std::string &key) {
   std::lock_guard<std::mutex> regLock(signalRegistryMutex);
   if (!signalRegistry.isConnected() || !signalRegistry.releaseCallback)
     return false;
 
-  auto it = signalRegistry.signals.find(key);
-  if (it == signalRegistry.signals.end())
+  // Try hierarchical lookup to find the signal
+  MooreSignalHandle handle = lookupSignalWithAlternatives(key);
+  if (handle == MOORE_INVALID_SIGNAL_HANDLE)
     return false;
 
-  signalRegistry.releaseCallback(it->second.handle, signalRegistry.userData);
+  // Clear the forced state
+  {
+    std::lock_guard<std::mutex> forceLock(forcedSignalsMutex);
+    auto it = forcedSignals.find(key);
+    if (it != forcedSignals.end()) {
+      it->second.isForced = false;
+    }
+  }
+
+  signalRegistry.releaseCallback(handle, signalRegistry.userData);
   return true;
 }
 } // namespace
@@ -10459,11 +10765,15 @@ extern "C" int32_t uvm_hdl_check_path(MooreString *path) {
   if (!getPathKey(path, key))
     return 0;
 
-  // Check signal registry first (actual simulation signals)
-  if (__moore_signal_registry_exists(key.c_str()))
-    return 1;
+  // Check signal registry first using hierarchical lookup
+  {
+    std::lock_guard<std::mutex> regLock(signalRegistryMutex);
+    MooreSignalHandle handle = lookupSignalWithAlternatives(key);
+    if (handle != MOORE_INVALID_SIGNAL_HANDLE)
+      return 1;
+  }
 
-  // Fall back to stub map
+  // Fall back to stub map - create entry if not exists
   std::lock_guard<std::mutex> lock(hdlMutex);
   (void)hdlValues[key];
   return 1;

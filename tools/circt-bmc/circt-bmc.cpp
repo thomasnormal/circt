@@ -36,6 +36,7 @@
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
@@ -215,8 +216,12 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(hw::createFlattenModules());
   pm.addPass(createExternalizeRegisters());
+  pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
+  pm.addPass(hw::createHWConvertBitcasts());
   LowerToBMCOptions lowerToBMCOptions;
   lowerToBMCOptions.bound = clockBound;
   lowerToBMCOptions.ignoreAssertionsUntil = ignoreAssertionsUntil;
@@ -375,6 +380,7 @@ int main(int argc, char **argv) {
     mlir::smt::SMTDialect,
     circt::verif::VerifDialect,
     mlir::arith::ArithDialect,
+    mlir::cf::ControlFlowDialect,
     mlir::BuiltinDialect,
     mlir::func::FuncDialect,
     mlir::LLVM::LLVMDialect
