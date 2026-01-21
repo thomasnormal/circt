@@ -4537,6 +4537,66 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
       return success();
     }
 
+    // Handle 4-state struct types ({value, unknown} structs in llhd.ref)
+    if (isFourStateStructType(inputType)) {
+      auto loc = op.getLoc();
+      auto structType = cast<hw::StructType>(inputType);
+      auto valueType = structType.getElements()[0].type;
+      auto intType = cast<IntegerType>(valueType);
+      int64_t width = intType.getWidth();
+
+      // Create the index constant
+      Value idx = hw::ConstantOp::create(
+          rewriter, loc, rewriter.getIntegerType(llvm::Log2_64_Ceil(width)),
+          adaptor.getLowBit());
+
+      // For 4-state refs, we need to extract from both value and unknown fields.
+      // Use llhd.sig_struct_extract to get refs to each field, then
+      // llhd.sig.extract to extract the bit(s) from each integer field.
+
+      // Get ref to 'value' field (integer ref)
+      auto valueFieldRef = llhd::SigStructExtractOp::create(
+          rewriter, loc, adaptor.getInput(), "value");
+
+      // Get ref to 'unknown' field (integer ref)
+      auto unknownFieldRef = llhd::SigStructExtractOp::create(
+          rewriter, loc, adaptor.getInput(), "unknown");
+
+      // Determine the result width from the converted result type
+      auto resultRefType = cast<llhd::RefType>(resultType);
+      auto resultStructType = cast<hw::StructType>(resultRefType.getNestedType());
+      auto resultIntType =
+          cast<IntegerType>(resultStructType.getElements()[0].type);
+      auto extractedIntRefType = llhd::RefType::get(resultIntType);
+
+      // Extract bits from value field
+      auto valueExtracted = llhd::SigExtractOp::create(
+          rewriter, loc, extractedIntRefType, valueFieldRef, idx);
+
+      // Extract bits from unknown field
+      auto unknownExtracted = llhd::SigExtractOp::create(
+          rewriter, loc, extractedIntRefType, unknownFieldRef, idx);
+
+      // Probe both extracted refs to get values
+      auto extractedValue =
+          llhd::ProbeOp::create(rewriter, loc, valueExtracted);
+      auto extractedUnknown =
+          llhd::ProbeOp::create(rewriter, loc, unknownExtracted);
+
+      // Create the 4-state struct result
+      auto fourStateStruct = hw::StructCreateOp::create(
+          rewriter, loc, resultStructType,
+          ValueRange{extractedValue, extractedUnknown});
+
+      // Create a new signal to hold the extracted value and return ref to it.
+      // Note: This creates a read-only view; writes won't propagate back.
+      // For full read-write support, a more complex mechanism is needed.
+      auto signal = llhd::SignalOp::create(rewriter, loc, resultType,
+                                           StringAttr{}, fourStateStruct);
+      rewriter.replaceOp(op, signal.getResult());
+      return success();
+    }
+
     return failure();
   }
 };
@@ -4873,11 +4933,50 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
         idx = extractFourStateValue(rewriter, loc, idx);
       idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(width), loc);
 
-      // Use llhd.sig_extract to get a reference to the bit(s)
-      // For 4-state ref, we need to extract from both value and unknown fields
-      // Create a ref to the struct and use llhd.sig_struct_extract to get field refs
-      rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(
-          op, resultType, adaptor.getInput(), idx);
+      // For 4-state refs, we need to extract from both value and unknown fields.
+      // Use llhd.sig_struct_extract to get refs to each field, then
+      // llhd.sig.extract to extract the bit(s) from each integer field.
+
+      // Get ref to 'value' field (integer ref)
+      auto valueFieldRef = llhd::SigStructExtractOp::create(
+          rewriter, loc, adaptor.getInput(), "value");
+
+      // Get ref to 'unknown' field (integer ref)
+      auto unknownFieldRef = llhd::SigStructExtractOp::create(
+          rewriter, loc, adaptor.getInput(), "unknown");
+
+      // Determine the result width from the converted result type
+      auto resultRefType = cast<llhd::RefType>(resultType);
+      auto resultStructType = cast<hw::StructType>(resultRefType.getNestedType());
+      auto resultIntType =
+          cast<IntegerType>(resultStructType.getElements()[0].type);
+      auto extractedIntRefType = llhd::RefType::get(resultIntType);
+
+      // Extract bits from value field
+      auto valueExtracted = llhd::SigExtractOp::create(
+          rewriter, loc, extractedIntRefType, valueFieldRef, idx);
+
+      // Extract bits from unknown field
+      auto unknownExtracted = llhd::SigExtractOp::create(
+          rewriter, loc, extractedIntRefType, unknownFieldRef, idx);
+
+      // Probe both extracted refs to get values
+      auto extractedValue =
+          llhd::ProbeOp::create(rewriter, loc, valueExtracted);
+      auto extractedUnknown =
+          llhd::ProbeOp::create(rewriter, loc, unknownExtracted);
+
+      // Create the 4-state struct result
+      auto fourStateStruct = hw::StructCreateOp::create(
+          rewriter, loc, resultStructType,
+          ValueRange{extractedValue, extractedUnknown});
+
+      // Create a new signal to hold the extracted value and return ref to it.
+      // Note: This creates a read-only view; writes won't propagate back.
+      // For full read-write support, a more complex mechanism is needed.
+      auto signal = llhd::SignalOp::create(rewriter, loc, resultType,
+                                           StringAttr{}, fourStateStruct);
+      rewriter.replaceOp(op, signal.getResult());
       return success();
     }
 
@@ -7070,14 +7169,57 @@ struct PowUOpConversion : public OpConversionPattern<PowUOp> {
   matchAndRewrite(PowUOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
-
     Location loc = op->getLoc();
 
+    Value lhsInput = adaptor.getLhs();
+    Value rhsInput = adaptor.getRhs();
+
+    // Handle 4-state types
+    if (isFourStateStructType(resultType)) {
+      // Extract value and unknown components
+      Value lhsVal = extractFourStateValue(rewriter, loc, lhsInput);
+      Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhsInput);
+      Value rhsVal = extractFourStateValue(rewriter, loc, rhsInput);
+      Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhsInput);
+
+      // Zero extend for unsigned power operation
+      Value zeroVal = hw::ConstantOp::create(rewriter, loc, APInt(1, 0));
+      auto lhsExt = comb::ConcatOp::create(rewriter, loc, zeroVal, lhsVal);
+      auto rhsExt = comb::ConcatOp::create(rewriter, loc, zeroVal, rhsVal);
+
+      // Perform the power operation on value components
+      auto pow = mlir::math::IPowIOp::create(rewriter, loc, lhsExt, rhsExt);
+      auto width = lhsVal.getType().getIntOrFloatBitWidth();
+      Value resultVal =
+          comb::ExtractOp::create(rewriter, loc, rewriter.getIntegerType(width),
+                                  pow, 0);
+
+      // Compute unknown propagation: if any bit is unknown, entire result is X
+      Value zero = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getIntegerType(width), -1);
+      Value lhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, lhsUnk, zero);
+      Value rhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, rhsUnk, zero);
+      Value hasUnknown =
+          comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+
+      // If any unknown: result unknown = all ones, else = 0
+      Value resultUnk =
+          comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
+
+      auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Two-state: original implementation
     Value zeroVal = hw::ConstantOp::create(rewriter, loc, APInt(1, 0));
     // zero extend both LHS & RHS to ensure the unsigned integers are
     // interpreted correctly when calculating power
-    auto lhs = comb::ConcatOp::create(rewriter, loc, zeroVal, adaptor.getLhs());
-    auto rhs = comb::ConcatOp::create(rewriter, loc, zeroVal, adaptor.getRhs());
+    auto lhs = comb::ConcatOp::create(rewriter, loc, zeroVal, lhsInput);
+    auto rhs = comb::ConcatOp::create(rewriter, loc, zeroVal, rhsInput);
 
     // lower the exponentiation via MLIR's math dialect
     auto pow = mlir::math::IPowIOp::create(rewriter, loc, lhs, rhs);
@@ -7094,11 +7236,48 @@ struct PowSOpConversion : public OpConversionPattern<PowSOp> {
   matchAndRewrite(PowSOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    Location loc = op->getLoc();
 
-    // utilize MLIR math dialect's math.ipowi to handle the exponentiation of
-    // expression
-    rewriter.replaceOpWithNewOp<mlir::math::IPowIOp>(
-        op, resultType, adaptor.getLhs(), adaptor.getRhs());
+    Value lhsInput = adaptor.getLhs();
+    Value rhsInput = adaptor.getRhs();
+
+    // Handle 4-state types
+    if (isFourStateStructType(resultType)) {
+      // Extract value and unknown components
+      Value lhsVal = extractFourStateValue(rewriter, loc, lhsInput);
+      Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhsInput);
+      Value rhsVal = extractFourStateValue(rewriter, loc, rhsInput);
+      Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhsInput);
+
+      // Perform the signed power operation on value components
+      auto width = lhsVal.getType().getIntOrFloatBitWidth();
+      Value resultVal =
+          mlir::math::IPowIOp::create(rewriter, loc, lhsVal, rhsVal);
+
+      // Compute unknown propagation: if any bit is unknown, entire result is X
+      Value zero = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getIntegerType(width), -1);
+      Value lhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, lhsUnk, zero);
+      Value rhsHasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, rhsUnk, zero);
+      Value hasUnknown =
+          comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+
+      // If any unknown: result unknown = all ones, else = 0
+      Value resultUnk =
+          comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
+
+      auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Two-state: utilize MLIR math dialect's math.ipowi to handle the
+    // exponentiation of expression
+    rewriter.replaceOpWithNewOp<mlir::math::IPowIOp>(op, resultType, lhsInput,
+                                                     rhsInput);
     return success();
   }
 };
