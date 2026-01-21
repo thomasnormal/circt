@@ -59,27 +59,68 @@ collecting hierarchical paths for interface port member accesses.
 **Details**: The `peelAggregateAttr` function now recursively processes nested ArrayAttr
 and IntegerAttr to extract preset values for registers.
 
-### APB AVIP Full Pipeline Milestone ✅ NEW
+### ModportPortSymbol Handler ✅ NEW
 
-**Major Milestone**: APB AVIP now compiles through the complete CIRCT pipeline!
+**Bug Fix**: Implemented interface modport member access in ImportVerilog.
 
-The APB verification IP from `~/mbit/apb_avip` now successfully compiles through:
+**Root Cause**: When accessing `port.clk` where `port` has type `simple_if.master` (modport),
+the expression was marked as unknown hierarchical name because `ModportPortSymbol` wasn't handled.
+
+**Fix**: Added handler in `Expressions.cpp` to:
+1. Detect `ModportPortSymbol` in HierarchicalValueExpression
+2. Get `internalSymbol` (the actual interface signal)
+3. Look up interface port from `interfacePortValues`
+4. Create `VirtualInterfaceSignalRefOp` for signal access
+
+**Test**: `test/Conversion/ImportVerilog/modport-member-access.sv`
+
+**Impact**: Fixes AHB AVIP interface patterns
+
+### EmptyArgument Expression Support ✅ NEW
+
+**Bug Fix**: Added support for optional/missing arguments in system calls.
+
+**Root Cause**: System calls like `$random()` (no seed) and `$urandom_range(max)` (no min)
+have `EmptyArgumentExpression` for missing optional arguments. These were previously unsupported.
+
+**Fix**:
+1. Added visitor for `EmptyArgumentExpression` returning null Value
+2. Modified arity logic to filter empty arguments
+3. `$random()` is now treated as arity 0 instead of arity 1
+
+**Test**: `test/Conversion/ImportVerilog/empty-argument.sv`
+
+**Impact**: Fixes 10+ sv-tests for $random(), $urandom(), $urandom_range()
+
+### APB AVIP + SPI AVIP Full Pipeline Milestone ✅ NEW
+
+**Major Milestone**: APB AVIP and SPI AVIP now compile through the complete CIRCT pipeline!
+
+The verification IPs from `~/mbit/` now successfully compile through:
 1. **ImportVerilog** (Verilog → Moore IR) ✅
 2. **MooreToCore** (Moore IR → HW/LLHD IR) ✅
 
 This includes the full UVM library from `~/uvm-core/src`.
 
-**Remaining work**:
-- I2S, SPI, UART AVIPs: Still have missing assertion files
-- AHB AVIP: Needs ModportPortSymbol handler
-- Virtual method dispatch for full testbench simulation
+**AVIP Status**:
+- **APB**: ✅ Full pipeline works
+- **SPI**: ✅ Full pipeline works
+- **UART**: ⚠️ Fails on 4-state power operator and bit extraction
+- **I2S**: ⚠️ Missing assertion files
+- **AHB**: ⚠️ Now has ModportPortSymbol support (needs testing)
+
+**Remaining blockers for UART**:
+- `math.ipowi` doesn't handle 4-state types
+- `llhd.sig.extract` doesn't handle 4-state struct types
+- `llvm.store/load` with hw.struct types
 
 ### Test Results
 
-- **sv-tests**: 81.3% adjusted pass rate (improvement from ~70.9%)
+- **sv-tests**: 61.1% core pass rate (727 tests)
 - **verilator-verification**: 62% parse-only, 96% MooreToCore
 - **Yosys SVA**: 75% BMC pass rate
 - **APB AVIP**: Full pipeline works ✅
+- **SPI AVIP**: Full pipeline works ✅
 
 ---
 
@@ -212,6 +253,10 @@ clocking, avoiding `seq.compreg` in `llhd.process` and unblocking BMC.
   $changed outside assertions now lower to a module-scope sampled-value
   procedure (with prev/result state vars) instead of warning and returning 0.
   Added `test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`.
+- **ImportVerilog**: `throughout` now bounds the lhs repeat length to the rhs
+  sequence length when it is statically known (prevents empty-match semantics
+  from weakening the constraint). Added
+  `test/Conversion/ImportVerilog/sva-throughout.sv`.
 - **ImportVerilog**: $rose/$fell now use case-equality comparisons to handle
   X/Z transitions (no unknown-propagation false positives).
 - **BMC**: Preserve initial values for 4-state regs via `seq.firreg` presets,

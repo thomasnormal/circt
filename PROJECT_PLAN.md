@@ -130,7 +130,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ basic03 works | Run ~/yosys/tests/sva suite |
 | ✅ Derived clocks | Multiple derived clocks constrained to single BMC clock |
 | ⚠️ SVA defaults | Default clocking/disable iff reset LTL state; property instances avoid double defaults |
-| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops mostly fixed (changed/rose/wide). Remaining: value_change_sim X/Z edge semantics + explicit clocked sampled value funcs outside assertions, extnets |
+| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops mostly fixed (changed/rose/wide). Remaining: throughout/intersect alignment semantics (yosys `sva_throughout`), value_change_sim X/Z edge semantics, extnets |
 
 **Track C: Test Suite Validation**
 | Test Suite | Location | Purpose | Agent |
