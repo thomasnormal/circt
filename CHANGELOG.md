@@ -2,6 +2,23 @@
 
 ## Iteration 88 - January 21, 2026
 
+### UVM and AVIP Simulation Progress
+
+**UVM `.exists()` Fix**:
+- Changed `AssocArrayExistsOp` result type from i32 to i1 (boolean)
+- Updated MooreToCore conversion to compare runtime i32 result != 0
+- Fixed `BoolCastOpConversion` to use input type for zero constant
+- Fixes `comb.icmp` type mismatch errors in UVM code
+
+**4-State Struct Storage Fix**:
+- Updated `AssignOpConversion` to extract value from 4-state structs before LLVM store
+- Updated `VirtualInterfaceBindOpConversion` similarly
+- Enables APB AVIP compilation to proceed further
+
+**AVIP Testing Progress**:
+- APB AVIP now compiles through ImportVerilog with real UVM library
+- Remaining blocker: delays in class tasks require `llhd.process` parent
+
 ### SVA/BMC Defaults and Robustness
 
 - **LowerToBMC**: Allow multiple derived clocks by constraining each derived
