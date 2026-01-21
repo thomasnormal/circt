@@ -10,6 +10,7 @@
 #include "slang/ast/TimingControl.h"
 #include "llvm/ADT/ScopeExit.h"
 
+using namespace mlir;
 using namespace circt;
 using namespace ImportVerilog;
 
@@ -191,16 +192,82 @@ static LogicalResult handleRoot(Context &context,
 
   using slang::ast::TimingControlKind;
   switch (ctrl.kind) {
-    // TODO: Actually implement a lowering for repeated event control. The main
-    // way to trigger this is through an intra-assignment timing control, which
-    // is not yet supported:
-    //
-    //   a = repeat(3) @(posedge b) c;
-    //
-    // This will want to recursively call this function at the right insertion
-    // point to handle the timing control being repeated.
-  case TimingControlKind::RepeatedEvent:
-    return mlir::emitError(loc) << "unsupported repeated event control";
+    // Handle repeated event control like `@(repeat(N) posedge clk)`.
+    // This is lowered as a countdown loop that waits for the event N times.
+  case TimingControlKind::RepeatedEvent: {
+    auto &repeatedCtrl = ctrl.as<slang::ast::RepeatedEventControl>();
+
+    // Convert the count expression.
+    auto count = context.convertRvalueExpression(repeatedCtrl.expr);
+    if (!count)
+      return failure();
+
+    // Verify the count is an integer type.
+    auto countIntType = dyn_cast<moore::IntType>(count.getType());
+    if (!countIntType) {
+      return mlir::emitError(loc)
+             << "repeat event count must have integer type, but got "
+             << count.getType();
+    }
+
+    // Get the parent region to create blocks in.
+    Region *parentRegion = builder.getInsertionBlock()->getParent();
+
+    // Create the blocks for the loop: check, body, step, exit.
+    auto *exitBlock = new Block();
+    auto *stepBlock = new Block();
+    auto *bodyBlock = new Block();
+    auto *checkBlock = new Block();
+
+    // Insert blocks in forward order after current insertion point.
+    parentRegion->getBlocks().insert(
+        std::next(builder.getInsertionBlock()->getIterator()), checkBlock);
+    parentRegion->getBlocks().insert(
+        std::next(checkBlock->getIterator()), bodyBlock);
+    parentRegion->getBlocks().insert(
+        std::next(bodyBlock->getIterator()), stepBlock);
+    parentRegion->getBlocks().insert(
+        std::next(stepBlock->getIterator()), exitBlock);
+
+    // Add the counter argument to the check block.
+    auto currentCount = checkBlock->addArgument(count.getType(), count.getLoc());
+
+    // Branch to the check block with the initial count.
+    cf::BranchOp::create(builder, loc, checkBlock, count);
+
+    // Generate the loop condition check: while (count != 0).
+    builder.setInsertionPointToEnd(checkBlock);
+    auto cond = context.convertToBool(currentCount);
+    if (!cond)
+      return failure();
+    cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+    cf::CondBranchOp::create(builder, loc, cond, bodyBlock, exitBlock);
+
+    // Generate the loop body: wait for the event.
+    builder.setInsertionPointToEnd(bodyBlock);
+    if (failed(handleRoot(context, repeatedCtrl.event, implicitWaitOp)))
+      return failure();
+    // Branch to the step block (unless the body was terminated).
+    if (builder.getInsertionBlock())
+      cf::BranchOp::create(builder, loc, stepBlock);
+
+    // Decrement the counter and branch back to the check block.
+    builder.setInsertionPointToEnd(stepBlock);
+    auto one =
+        moore::ConstantOp::create(builder, count.getLoc(), countIntType, 1);
+    Value nextCount =
+        moore::SubOp::create(builder, count.getLoc(), currentCount, one);
+    cf::BranchOp::create(builder, loc, checkBlock, nextCount);
+
+    // Continue inserting in the exit block.
+    if (exitBlock->hasNoPredecessors()) {
+      exitBlock->erase();
+      builder.clearInsertionPoint();
+    } else {
+      builder.setInsertionPointToEnd(exitBlock);
+    }
+    return success();
+  }
 
     // Handle implicit events, i.e. `@*` and `@(*)`. This implicitly includes
     // all variables read within the statement that follows after the event

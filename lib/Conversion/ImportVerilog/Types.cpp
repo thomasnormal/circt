@@ -169,18 +169,50 @@ struct TypeVisitor {
     return moore::UnpackedStructType::get(context.getContext(), members);
   }
 
+  // Helper to wrap a union type in a struct with tag and data fields.
+  // Tagged unions are represented as struct<{tag: iN, data: union<...>}>
+  // where N is the number of bits needed to encode the member index.
+  // Uses packed struct for packed unions, unpacked struct for unpacked unions.
+  Type wrapTaggedUnion(Type unionType, size_t memberCount, bool isPacked) {
+    // Calculate tag width: need ceil(log2(memberCount)) bits, minimum 1
+    unsigned tagWidth = 1;
+    if (memberCount > 1)
+      tagWidth = llvm::Log2_64_Ceil(memberCount);
+
+    auto tagType = moore::IntType::get(context.getContext(), tagWidth,
+                                       moore::Domain::TwoValued);
+    SmallVector<moore::StructLikeMember> wrapperMembers;
+    wrapperMembers.push_back(
+        {StringAttr::get(context.getContext(), "tag"), tagType});
+    wrapperMembers.push_back(
+        {StringAttr::get(context.getContext(), "data"),
+         cast<moore::UnpackedType>(unionType)});
+
+    if (isPacked)
+      return moore::StructType::get(context.getContext(), wrapperMembers);
+    return moore::UnpackedStructType::get(context.getContext(), wrapperMembers);
+  }
+
   Type visit(const slang::ast::PackedUnionType &type) {
     SmallVector<moore::StructLikeMember> members;
     if (failed(collectMembers(type, members)))
       return {};
-    return moore::UnionType::get(context.getContext(), members);
+    auto unionType = moore::UnionType::get(context.getContext(), members);
+    // If this is a tagged union, wrap it in a struct with tag and data fields
+    if (type.isTagged)
+      return wrapTaggedUnion(unionType, members.size(), /*isPacked=*/true);
+    return unionType;
   }
 
   Type visit(const slang::ast::UnpackedUnionType &type) {
     SmallVector<moore::StructLikeMember> members;
     if (failed(collectMembers(type, members)))
       return {};
-    return moore::UnpackedUnionType::get(context.getContext(), members);
+    auto unionType = moore::UnpackedUnionType::get(context.getContext(), members);
+    // If this is a tagged union, wrap it in a struct with tag and data fields
+    if (type.isTagged)
+      return wrapTaggedUnion(unionType, members.size(), /*isPacked=*/false);
+    return unionType;
   }
 
   Type visit(const slang::ast::StringType &type) {
