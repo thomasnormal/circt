@@ -143,13 +143,41 @@ struct types (`!hw.struct<value: iN, unknown: iN>`) which it doesn't support dir
 
 **Impact**: Unblocks UART AVIP bit extraction operations
 
-### Test Results
+### 4-State LLVM Store/Load Fix ✅ NEW
 
-- **sv-tests**: 61.1% core pass rate (727 tests)
-- **verilator-verification**: 62% parse-only, 96% MooreToCore
-- **Yosys SVA**: 75% BMC pass rate
+**Bug Fix**: Fixed LLVM store/load operations for 4-state types in unpacked structs.
+
+**Root Cause**: When an unpacked struct contains 4-state logic fields (e.g., `l8`), they
+convert to `hw.struct<value: i8, unknown: i8>`. However, LLVM operations require LLVM-compatible
+types, causing errors like:
+```
+error: 'llvm.extractvalue' op result #0 must be LLVM dialect-compatible type,
+       but got '!hw.struct<value: i8, unknown: i8>'
+```
+
+**Fix**: MooreToCore now:
+1. Converts `hw.struct<value: iN, unknown: iN>` to `llvm.struct<(iN, iN)>` before LLVM store
+2. Uses `UnrealizedConversionCastOp` to bridge between HW and LLVM type representations
+3. Casts back to HW type after LLVM load for downstream consumers
+4. Preserves both value AND unknown bits (previous fix only stored value component)
+
+**Affected Operations**:
+- `VirtualInterfaceBindOpConversion` - storing to virtual interface refs
+- `StructExtractOpConversion` - extracting fields from LLVM structs
+- `ReadOpConversion` - loading from LLVM pointers
+- `AssignOpConversion` - storing to LLVM pointers
+
+**Test**: `test/Conversion/MooreToCore/struct-fourstate-llvm.mlir`
+
+**Impact**: Unblocks UART AVIP unpacked struct operations
+
+### Test Results (Iteration 91 Final)
+
+- **sv-tests**: 78.9% pass rate (810/1027 tests) - **+17.8% improvement!**
+- **verilator-verification**: 63% parse-only, 93% MooreToCore
 - **APB AVIP**: Full pipeline works ✅
 - **SPI AVIP**: Full pipeline works ✅
+- **UART AVIP**: 4-state operations fixed, UVM-free components compile ✅
 
 ---
 
@@ -286,6 +314,11 @@ clocking, avoiding `seq.compreg` in `llhd.process` and unblocking BMC.
   sequence length when it is statically known (prevents empty-match semantics
   from weakening the constraint). Added
   `test/Conversion/ImportVerilog/sva-throughout.sv`.
+- **LTLToCore**: Non-overlapped implication now shifts the antecedent by
+  `delay + (sequence_length - 1)` when the consequent has a fixed-length
+  sequence, aligning the check with the sequence end time. This fixes Yosys
+  SVA `sva_throughout` pass. Added
+  `test/Conversion/LTLToCore/nonoverlap-delay-seq.mlir`.
 - **ImportVerilog**: $rose/$fell now use case-equality comparisons to handle
   X/Z transitions (no unknown-propagation false positives).
 - **BMC**: Preserve initial values for 4-state regs via `seq.firreg` presets,

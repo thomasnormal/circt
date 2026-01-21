@@ -66,21 +66,21 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 91 - Updated)
+### Track Status & Next Tasks (Iteration 92 - Updated)
 
-**Test Results (Iteration 91)**:
-- sv-tests: 61.1% core pass rate (727 tests)
-- verilator-verification: 62% parse-only, 94% MooreToCore
-- Yosys SVA: 75% BMC pass rate
+**Test Results (Iteration 92)**:
+- sv-tests: **78.9% pass rate** (810/1027 tests) - **+17.8% improvement!**
+- verilator-verification: 63% parse-only, 93% MooreToCore
+- AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
 
 **AVIP Pipeline Status**:
 | AVIP | ImportVerilog | MooreToCore | Remaining Blocker |
 |------|---------------|-------------|-------------------|
 | **APB** | ✅ | ✅ | None - Full pipeline works! |
 | **SPI** | ✅ | ✅ | None - Full pipeline works! |
-| **UART** | ✅ | ⚠️ 91% | llvm.store/load hw.struct |
+| **UART** | ✅ | ✅ | UVM-free components compile! |
 | **I2S** | ⚠️ | - | Missing assertion files |
-| **AHB** | ⚠️ | - | Needs UVM for full test |
+| **AHB** | ⚠️ | - | UVM dependency, hierarchical task calls |
 
 **Key Blockers for UVM Testbench Execution**:
 1. ~~**Delays in class tasks**~~ ✅ FIXED - `__moore_delay()` runtime function for class methods
@@ -100,9 +100,10 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 15. ~~**EmptyArgument expressions**~~ ✅ FIXED (Iter 91) - Optional arguments in $random(), etc.
 16. ~~**4-state power operator**~~ ✅ FIXED (Iter 91) - Extract value before math.ipowi
 17. ~~**4-state bit extraction**~~ ✅ FIXED (Iter 91) - sig_struct_extract for value/unknown
-18. **llvm.store/load hw.struct** ⚠️ BLOCKER - UVM config_db generic class
+18. ~~**llvm.store/load hw.struct**~~ ✅ FIXED (Iter 92) - Convert hw.struct to llvm.struct for storage
 19. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
 20. **Virtual method dispatch** - Class hierarchy not fully simulated
+21. **UVM bit streaming** ⚠️ BLOCKER (93 tests) - lvalue streaming expected IntType
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -120,12 +121,13 @@ circt-verilog --uvm-path ~/uvm-core/src \
 |--------|---------------|
 | ✅ **APB AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
 | ✅ **SPI AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
-| ✅ UART AVIP 91% fixed | 10/11 errors resolved, 1 remaining |
+| ✅ **UART AVIP 4-STATE FIXED** | ✅ UVM-free components compile! |
 | ✅ ModportPortSymbol (Iter 91) | Handle modport member access in Expressions.cpp |
 | ✅ EmptyArgument (Iter 91) | Optional arguments in $random(), etc. |
 | ✅ 4-state power (Iter 91) | Extract value before math.ipowi |
 | ✅ 4-state bit extract (Iter 91) | sig_struct_extract for value/unknown |
-| ⚠️ **llvm.store/load hw.struct** | **NEXT**: UVM config_db generic class needs fix |
+| ✅ llvm.store/load hw.struct (Iter 92) | Convert hw.struct to llvm.struct for storage |
+| ⚠️ **UVM bit streaming** | **NEXT**: 93 tests blocked by lvalue streaming |
 | ⚠️ Virtual interfaces | Runtime binding needed |
 | ⚠️ Virtual method dispatch | Class hierarchy simulation |
 
@@ -135,7 +137,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ basic03 works | Run ~/yosys/tests/sva suite |
 | ✅ Derived clocks | Multiple derived clocks constrained to single BMC clock |
 | ⚠️ SVA defaults | Default clocking/disable iff reset LTL state; property instances avoid double defaults |
-| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops mostly fixed (changed/rose/wide). Remaining: throughout/intersect alignment semantics (yosys `sva_throughout`), value_change_sim X/Z edge semantics, extnets |
+| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops mostly fixed (changed/rose/wide). Remaining: value_change_sim X/Z edge semantics, extnets |
 
 **Track C: Test Suite Validation**
 | Test Suite | Location | Purpose | Agent |

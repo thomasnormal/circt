@@ -3709,10 +3709,16 @@ struct VirtualInterfaceBindOpConversion
     if (!destRefType) {
       // If it's already an LLVM pointer (from class property), use llvm.store
       if (isa<LLVM::LLVMPointerType>(dest.getType())) {
-        // If source is a 4-state struct, extract the value component for storage
+        // Convert source to LLVM-compatible type if needed
+        // For 4-state hw.struct<value, unknown>, convert to llvm.struct<(i, i)>
         Value storeVal = source;
-        if (isFourStateStructType(source.getType())) {
-          storeVal = extractFourStateValue(rewriter, loc, source);
+        Type storeType = source.getType();
+        Type llvmStoreType = convertToLLVMType(storeType);
+
+        if (storeType != llvmStoreType) {
+          storeVal = UnrealizedConversionCastOp::create(
+                         rewriter, loc, llvmStoreType, storeVal)
+                         .getResult(0);
         }
         LLVM::StoreOp::create(rewriter, loc, storeVal, dest);
         rewriter.eraseOp(op);
@@ -5072,14 +5078,30 @@ struct StructExtractOpConversion : public OpConversionPattern<StructExtractOp> {
                << fieldName.getValue() << "' not found in struct";
       }
 
-      // Convert the result type
-      auto resultType = typeConverter->convertType(op.getResult().getType());
-      if (!resultType)
+      // Convert the result type - first to HW type, then to LLVM-compatible type
+      // This is needed because the LLVM struct stores LLVM-converted types
+      // (e.g., 4-state hw.struct<value, unknown> becomes LLVM::LLVMStructType{i, i})
+      auto hwResultType = typeConverter->convertType(op.getResult().getType());
+      if (!hwResultType)
         return failure();
 
+      // Convert HW types to LLVM types for the extraction
+      auto llvmResultType = convertToLLVMType(hwResultType);
+
       // Use LLVM::ExtractValueOp for LLVM struct types
-      rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
-          op, resultType, adaptor.getInput(), ArrayRef<int64_t>{fieldIndex});
+      Value extracted = LLVM::ExtractValueOp::create(
+          rewriter, op.getLoc(), llvmResultType, adaptor.getInput(),
+          ArrayRef<int64_t>{fieldIndex});
+
+      // If the HW result type differs from LLVM type (e.g., 4-state struct),
+      // cast back to HW type for downstream consumers
+      if (hwResultType != llvmResultType) {
+        extracted = UnrealizedConversionCastOp::create(
+                        rewriter, op.getLoc(), hwResultType, extracted)
+                        .getResult(0);
+      }
+
+      rewriter.replaceOp(op, extracted);
       return success();
     }
 
@@ -7340,9 +7362,20 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
     // If the input was converted to an LLVM pointer (for queues, dynamic
     // arrays, etc.), use LLVM load instead of llhd.probe.
     if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
-      auto resultType = typeConverter->convertType(op.getResult().getType());
-      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, resultType,
-                                                 adaptor.getInput());
+      auto hwResultType = typeConverter->convertType(op.getResult().getType());
+      // Convert HW type to LLVM type for the load operation
+      auto llvmResultType = convertToLLVMType(hwResultType);
+
+      Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(), llvmResultType,
+                                          adaptor.getInput());
+
+      // Cast back to HW type if needed (e.g., for 4-state structs)
+      if (hwResultType != llvmResultType) {
+        loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
+                                                    hwResultType, loaded)
+                     .getResult(0);
+      }
+      rewriter.replaceOp(op, loaded);
     } else {
       rewriter.replaceOpWithNewOp<llhd::ProbeOp>(op, adaptor.getInput());
     }
@@ -7388,10 +7421,17 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     }
 
     if (llvmPtrDst) {
-      // If source is a 4-state struct, extract the value component for storage
+      // Convert source to LLVM-compatible type if needed
+      // For 4-state hw.struct<value, unknown>, convert to llvm.struct<(i, i)>
       Value storeVal = adaptor.getSrc();
-      if (isFourStateStructType(storeVal.getType())) {
-        storeVal = extractFourStateValue(rewriter, op.getLoc(), storeVal);
+      Type storeType = storeVal.getType();
+      Type llvmStoreType = convertToLLVMType(storeType);
+
+      // If types differ, we need to cast through unrealized_conversion_cast
+      if (storeType != llvmStoreType) {
+        storeVal = UnrealizedConversionCastOp::create(
+                       rewriter, op.getLoc(), llvmStoreType, storeVal)
+                       .getResult(0);
       }
       LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, llvmPtrDst);
       rewriter.eraseOp(op);
