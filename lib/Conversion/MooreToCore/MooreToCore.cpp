@@ -6122,6 +6122,128 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       return success();
     }
 
+    // Handle integer to queue conversion (bit unpacking).
+    // This converts an N-bit integer to a queue of M-bit elements.
+    // Used in streaming concatenation for unpacking bits into queue elements.
+    if (isa<moore::IntType, moore::UnpackedStructType>(op.getInput().getType()) &&
+        isa<QueueType>(op.getResult().getType())) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+      auto queueType = cast<QueueType>(op.getResult().getType());
+      auto elemType = queueType.getElementType();
+
+      // Get the bit widths
+      int64_t inputBitWidth = -1;
+      if (auto intType = dyn_cast<moore::IntType>(op.getInput().getType()))
+        inputBitWidth = intType.getWidth();
+      else
+        inputBitWidth = hw::getBitWidth(adaptor.getInput().getType());
+
+      int64_t elemBitWidth = 1;
+      if (auto elemIntType = dyn_cast<moore::IntType>(elemType))
+        elemBitWidth = elemIntType.getWidth();
+
+      if (inputBitWidth <= 0 || elemBitWidth <= 0)
+        return failure();
+
+      // Calculate number of elements
+      int64_t numElements = inputBitWidth / elemBitWidth;
+      if (numElements <= 0)
+        numElements = 1;
+
+      // Convert the element type for LLVM
+      Type llvmElemType = typeConverter->convertType(elemType);
+      if (!llvmElemType)
+        return failure();
+
+      // Setup LLVM types
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto queueTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+      auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+      // Create function type for push_back: void(queue_ptr, element_ptr, element_size)
+      auto pushBackFnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+      auto pushBackFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                               "__moore_queue_push_back", pushBackFnTy);
+
+      // Constants
+      auto one = LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+
+      // Create an alloca for the queue struct
+      auto queueAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+
+      // Initialize queue to {nullptr, 0}
+      Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      Value zeroLen = LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(0));
+      Value emptyQueue = LLVM::UndefOp::create(rewriter, loc, queueTy);
+      emptyQueue = LLVM::InsertValueOp::create(rewriter, loc, emptyQueue, nullPtr,
+                                               ArrayRef<int64_t>{0});
+      emptyQueue = LLVM::InsertValueOp::create(rewriter, loc, emptyQueue, zeroLen,
+                                               ArrayRef<int64_t>{1});
+      LLVM::StoreOp::create(rewriter, loc, emptyQueue, queueAlloca);
+
+      // Get the input value - extract from 4-state struct if needed
+      Value inputValue = adaptor.getInput();
+      if (isFourStateStructType(inputValue.getType())) {
+        inputValue = extractFourStateValue(rewriter, loc, inputValue);
+      }
+
+      // Ensure input is an integer type
+      if (!isa<IntegerType>(inputValue.getType())) {
+        inputValue = rewriter.createOrFold<hw::BitcastOp>(
+            loc, rewriter.getIntegerType(inputBitWidth), inputValue);
+      }
+
+      // Calculate element size in bytes
+      int64_t elemByteSize = (elemBitWidth + 7) / 8;
+      if (elemByteSize < 1)
+        elemByteSize = 1;
+      auto elemSize = LLVM::ConstantOp::create(rewriter, loc,
+                                               rewriter.getI64IntegerAttr(elemByteSize));
+
+      // Create an alloca for the element
+      auto elemAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElemType, one);
+
+      // For each element, extract bits and push to queue
+      // We extract from LSB to MSB to maintain bit order
+      for (int64_t i = 0; i < numElements; ++i) {
+        Value elemValue;
+        if (elemBitWidth == inputBitWidth) {
+          // Single element case - use the whole input
+          elemValue = inputValue;
+        } else {
+          // Extract bits [i*elemBitWidth, (i+1)*elemBitWidth)
+          int64_t lowBit = i * elemBitWidth;
+          auto lowBitConst = hw::ConstantOp::create(rewriter, loc,
+              rewriter.getIntegerType(inputBitWidth), lowBit);
+          Value shifted = comb::ShrUOp::create(rewriter, loc, inputValue, lowBitConst);
+          elemValue = comb::ExtractOp::create(rewriter, loc,
+              rewriter.getIntegerType(elemBitWidth), shifted, 0);
+        }
+
+        // If the element type is a 4-state struct, wrap it
+        if (isFourStateStructType(llvmElemType)) {
+          Value zero = hw::ConstantOp::create(rewriter, loc,
+              rewriter.getIntegerType(elemBitWidth), 0);
+          elemValue = createFourStateStruct(rewriter, loc, elemValue, zero);
+        } else if (elemValue.getType() != llvmElemType) {
+          // Bitcast to the correct element type
+          elemValue = rewriter.createOrFold<hw::BitcastOp>(loc, llvmElemType, elemValue);
+        }
+
+        // Store element and call push_back
+        LLVM::StoreOp::create(rewriter, loc, elemValue, elemAlloca);
+        LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(pushBackFn),
+                             ValueRange{queueAlloca, elemAlloca, elemSize});
+      }
+
+      // Load and return the final queue
+      Value result = LLVM::LoadOp::create(rewriter, loc, queueTy, queueAlloca);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     // Handle ref<virtual_interface> to virtual_interface conversions.
     // This is a dereference operation that reads the pointer from the reference.
     // Check the original Moore type rather than the adaptor type, as the adaptor
