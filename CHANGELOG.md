@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 87 - January 21, 2026
+
+### Major Test Fix Pass: 96 → 3 Failures (97% Reduction) ⭐
+
+**Test Pattern Updates (107 files)**:
+- **MooreToCore**: Updated patterns for 4-state struct types, constant hoisting,
+  class/vtable conversions, constraint ops, coverage ops
+- **ImportVerilog**: Fixed UVM path resolution, class patterns, queue ops
+- **VerifToSMT**: Fixed BMC patterns for CSE'd constants, LTL temporal ops
+- **Arc/Coverage/LLHD dialect tests**: Updated for new output formats
+
+**Code Fixes**:
+- **MooreRuntime.cpp**: Defensive tracker creation in `__moore_coverpoint_sample`
+- **ProjectConfig.cpp**: Handle empty YAML content as valid config
+- **EventQueue.cpp**: Fix region advancement in `processCurrentRegion`
+- **WaveformDumper.h**: Support contains-match wildcards (`*.pattern*`)
+- **VerifToSMT.cpp**: Handle `smt.bool` vs `smt.bv<1>` type mismatches
+- **MooreToCore.cpp**: Extract 4-state value before `verif.assert/assume/cover`
+
+**Infrastructure**:
+- Built `split-file` tool for tests requiring it
+- Added `--uvm-path` to tests requiring internal UVM library
+
+**Test Results**:
+- CIRCT tests: **2377/2380 PASS (99.87%)**
+- Remaining 3 are test isolation issues in sharded mode (pass standalone)
+
+---
+
+## Iteration 86 - January 21, 2026
+
+### Fix @posedge Sensitivity, LTL Types, Case Pattern Types
+
+- **HoistSignals**: Don't hoist probes from blocks that are wait resumption targets
+- **LLHDProcessInterpreter**: Recursive `traceToSignal` helper for sensitivity
+- **AssertionExpr**: Fix `ltl.past` operand type mismatch for non-i1 sequences
+- **Statements**: Fix `moore.case_eq` operand type mismatch in pattern matching
+- **VerifToSMT**: Fix countones symbol availability in inner scopes
+
+---
+
+## Iteration 85 - January 21, 2026
+
+### Fix $sscanf 4-State Output + ConditionalOp 4-State Condition
+
+- **$sscanf**: Handle 4-state output references correctly
+- **ConditionalOp**: Extract value from 4-state condition before select
+
+---
+
 ## Iteration 84 - January 21, 2026
 
 ### Complete 4-State Type Support - Simulation Now Works! ⭐ MILESTONE
