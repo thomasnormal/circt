@@ -6025,6 +6025,61 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       return success();
     }
 
+    // Handle chandle (pointer) to integer conversions.
+    // This is used in UVM for DPI-C handle conversions.
+    // Check the original Moore types since the adaptor type may not be converted
+    // yet for function block arguments.
+    if (isa<ChandleType>(op.getInput().getType()) &&
+        isa<moore::IntType>(op.getResult().getType())) {
+      // The input is chandle which converts to !llvm.ptr.
+      // The result is an integer type (may be 2-state plain integer or 4-state struct).
+      Value ptrValue = adaptor.getInput();
+      if (!isa<LLVM::LLVMPointerType>(ptrValue.getType())) {
+        ptrValue = rewriter.create<UnrealizedConversionCastOp>(
+            loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
+            ptrValue).getResult(0);
+      }
+
+      // Get the integer width from the Moore result type
+      auto mooreResultType = cast<moore::IntType>(op.getResult().getType());
+      int64_t width = mooreResultType.getWidth();
+      Type intType = rewriter.getIntegerType(width);
+
+      // Convert pointer to integer
+      Value intResult = LLVM::PtrToIntOp::create(rewriter, loc, intType, ptrValue);
+
+      // If the result is a 4-state type, wrap it in a struct
+      if (isFourStateStructType(resultType)) {
+        Value zero = hw::ConstantOp::create(rewriter, loc, intType, 0);
+        intResult = createFourStateStruct(rewriter, loc, intResult, zero);
+      }
+
+      rewriter.replaceOp(op, intResult);
+      return success();
+    }
+
+    // Handle integer to chandle (pointer) conversions.
+    if (isa<ChandleType>(op.getResult().getType()) &&
+        isa<moore::IntType>(op.getInput().getType())) {
+      Value intValue = adaptor.getInput();
+
+      // If input is a 4-state struct, extract the value part
+      if (isFourStateStructType(intValue.getType())) {
+        intValue = extractFourStateValue(rewriter, loc, intValue);
+      }
+
+      // Ensure we have a plain integer type
+      if (!isa<IntegerType>(intValue.getType())) {
+        int64_t width = cast<moore::IntType>(op.getInput().getType()).getWidth();
+        intValue = rewriter.create<UnrealizedConversionCastOp>(
+            loc, rewriter.getIntegerType(width), intValue).getResult(0);
+      }
+
+      Value result = LLVM::IntToPtrOp::create(rewriter, loc, resultType, intValue);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     // Handle ref<virtual_interface> to virtual_interface conversions.
     // This is a dereference operation that reads the pointer from the reference.
     // Check the original Moore type rather than the adaptor type, as the adaptor
