@@ -415,8 +415,3 @@ TEST(IncrementalCompilerTest, Statistics) {
   EXPECT_EQ(stats.unitsRegistered, 1u);
   EXPECT_EQ(stats.unitsCompiled, 1u);
 }
-
-int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

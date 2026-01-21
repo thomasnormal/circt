@@ -711,15 +711,8 @@ inline DPIValue DPIRuntime::callWithContext(const std::string &name,
   DPIContext savedContext = currentContext;
   currentContext = context;
 
-  // Make the call
-  DPIValue result;
-  try {
-    result = reg.callback(args);
-  } catch (...) {
-    stats.callErrors++;
-    currentContext = savedContext;
-    throw;
-  }
+  // Make the call (no try/catch - exceptions disabled with -fno-exceptions)
+  DPIValue result = reg.callback(args);
 
   // Restore context
   context = currentContext;

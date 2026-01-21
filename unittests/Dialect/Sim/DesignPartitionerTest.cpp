@@ -291,8 +291,3 @@ TEST(SignalDependencyAnalyzerTest, HasDependency) {
   // With no actual writes/reads recorded, should return false
   EXPECT_FALSE(analyzer.hasDependency(1, 2));
 }
-
-int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

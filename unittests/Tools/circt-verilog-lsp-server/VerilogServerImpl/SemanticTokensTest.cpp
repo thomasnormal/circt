@@ -136,7 +136,7 @@ TEST(SemanticTokensTest, ParamsFromJSON) {
 TEST(SemanticTokensTest, ServerCapabilities) {
   auto options = getSemanticTokensOptions();
 
-  auto *full = options.getBoolean("full");
+  auto full = options.getBoolean("full");
   EXPECT_TRUE(full && *full);
 
   auto *legend = options.getObject("legend");

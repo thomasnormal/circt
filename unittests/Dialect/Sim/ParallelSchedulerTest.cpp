@@ -388,8 +388,3 @@ TEST(PartitionBalancerTest, NeedsRebalancing) {
 
   EXPECT_TRUE(PartitionBalancer::needsRebalancing(partitions, 1.5));
 }
-
-int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

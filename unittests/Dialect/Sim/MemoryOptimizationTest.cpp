@@ -505,8 +505,3 @@ TEST(WaveformBufferTest, Clear) {
   auto changes = buffer.getChanges(0, 0, 1000);
   EXPECT_TRUE(changes.empty());
 }
-
-int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

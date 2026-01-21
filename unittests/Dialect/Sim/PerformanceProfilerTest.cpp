@@ -413,8 +413,3 @@ TEST(PerformanceProfilerTest, ExportCSV) {
   // Should have header
   EXPECT_NE(output.find("category,name,duration_ns,context"), std::string::npos);
 }
-
-int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}
