@@ -16,6 +16,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
+#include "circt/Runtime/MooreRuntime.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -40,9 +41,15 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing for module '"
                           << hwModule.getName() << "'\n");
 
+  // Store the module name for hierarchical path construction
+  moduleName = hwModule.getName().str();
+
   // Register all signals first
   if (failed(registerSignals(hwModule)))
     return failure();
+
+  // Export signals to MooreRuntime signal registry for DPI/VPI access
+  exportSignalsToRegistry();
 
   // Then register all processes
   if (failed(registerProcesses(hwModule)))
@@ -157,6 +164,136 @@ llvm::StringRef LLHDProcessInterpreter::getSignalName(SignalId id) const {
   if (it != signalIdToName.end())
     return it->second;
   return "";
+}
+
+//===----------------------------------------------------------------------===//
+// Signal Registry Bridge
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Static pointer to the current interpreter for callback access.
+/// This is needed because the MooreRuntime callbacks are C-style function
+/// pointers that don't support closures.
+LLHDProcessInterpreter *currentInterpreter = nullptr;
+
+/// Callback for reading a signal value from the ProcessScheduler.
+int64_t signalReadCallback(MooreSignalHandle handle, void *userData) {
+  auto *scheduler = static_cast<ProcessScheduler *>(userData);
+  if (!scheduler)
+    return 0;
+
+  SignalId sigId = static_cast<SignalId>(handle);
+  const SignalValue &value = scheduler->getSignalValue(sigId);
+  return static_cast<int64_t>(value.getValue());
+}
+
+/// Callback for writing (depositing) a signal value.
+int32_t signalWriteCallback(MooreSignalHandle handle, int64_t value,
+                            void *userData) {
+  auto *scheduler = static_cast<ProcessScheduler *>(userData);
+  if (!scheduler)
+    return 0;
+
+  SignalId sigId = static_cast<SignalId>(handle);
+  // Get the signal's width from the current value
+  const SignalValue &currentVal = scheduler->getSignalValue(sigId);
+  SignalValue newVal(static_cast<uint64_t>(value), currentVal.getWidth());
+  scheduler->updateSignal(sigId, newVal);
+  return 1;
+}
+
+/// Callback for forcing a signal value.
+/// Forces override normal signal updates until released.
+int32_t signalForceCallback(MooreSignalHandle handle, int64_t value,
+                            void *userData) {
+  auto *scheduler = static_cast<ProcessScheduler *>(userData);
+  if (!scheduler)
+    return 0;
+
+  SignalId sigId = static_cast<SignalId>(handle);
+  // Get the signal's width from the current value
+  const SignalValue &currentVal = scheduler->getSignalValue(sigId);
+  SignalValue newVal(static_cast<uint64_t>(value), currentVal.getWidth());
+
+  // Update the signal value (force tracking is done in MooreRuntime)
+  scheduler->updateSignal(sigId, newVal);
+  return 1;
+}
+
+/// Callback for releasing a forced signal.
+int32_t signalReleaseCallback(MooreSignalHandle handle, void *userData) {
+  // Release tracking is handled in MooreRuntime forcedSignals map
+  // Just return success - the signal will resume normal operation
+  (void)handle;
+  (void)userData;
+  return 1;
+}
+} // namespace
+
+void LLHDProcessInterpreter::exportSignalsToRegistry() {
+  // Clear any existing registrations from previous runs
+  __moore_signal_registry_clear();
+  __moore_signal_registry_clear_all_forced();
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Exporting "
+                          << signalIdToName.size()
+                          << " signals to MooreRuntime registry\n");
+
+  // Export each signal with its hierarchical path
+  for (const auto &entry : signalIdToName) {
+    SignalId sigId = entry.first;
+    const std::string &signalName = entry.second;
+
+    // Build hierarchical path: moduleName.signalName
+    std::string hierarchicalPath;
+    if (!moduleName.empty()) {
+      hierarchicalPath = moduleName + "." + signalName;
+    } else {
+      hierarchicalPath = signalName;
+    }
+
+    // Get the signal width from the scheduler
+    const SignalValue &value = scheduler.getSignalValue(sigId);
+    uint32_t width = value.getWidth();
+
+    // Register the signal with both hierarchical and simple paths
+    __moore_signal_registry_register(hierarchicalPath.c_str(),
+                                     static_cast<MooreSignalHandle>(sigId),
+                                     width);
+
+    // Also register with just the signal name for simpler access
+    __moore_signal_registry_register(signalName.c_str(),
+                                     static_cast<MooreSignalHandle>(sigId),
+                                     width);
+
+    LLVM_DEBUG(llvm::dbgs() << "  Exported '" << hierarchicalPath
+                            << "' (ID=" << sigId << ", width=" << width
+                            << ")\n");
+  }
+
+  // Set up the accessor callbacks
+  setupRegistryAccessors();
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Signal registry now has "
+                          << __moore_signal_registry_count() << " entries\n");
+}
+
+void LLHDProcessInterpreter::setupRegistryAccessors() {
+  // Store current interpreter for static callbacks
+  currentInterpreter = this;
+
+  // Set up the accessor callbacks with the ProcessScheduler as user data
+  __moore_signal_registry_set_accessor(
+      signalReadCallback,   // Read callback
+      signalWriteCallback,  // Write/deposit callback
+      signalForceCallback,  // Force callback
+      signalReleaseCallback, // Release callback
+      &scheduler             // User data (ProcessScheduler pointer)
+  );
+
+  LLVM_DEBUG(llvm::dbgs()
+             << "LLHDProcessInterpreter: Registry accessors configured, "
+             << "connected=" << __moore_signal_registry_is_connected() << "\n");
 }
 
 //===----------------------------------------------------------------------===//

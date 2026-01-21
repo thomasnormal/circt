@@ -3088,6 +3088,63 @@ uint64_t __moore_signal_registry_count(void);
 int32_t __moore_signal_registry_is_connected(void);
 
 //===----------------------------------------------------------------------===//
+// Signal Registry - Hierarchy Traversal and Force/Release
+//===----------------------------------------------------------------------===//
+
+/// Look up a signal handle supporting hierarchical paths and wildcards.
+/// This function tries various path formats including:
+/// - Direct path lookup
+/// - Partial path matching from end (e.g., "sig" matches "top.inst.sig")
+/// - Array index parsing (e.g., "mem[5]")
+///
+/// @param path Hierarchical path to look up
+/// @return Signal handle, or MOORE_INVALID_SIGNAL_HANDLE if not found
+MooreSignalHandle __moore_signal_registry_lookup_hierarchical(const char *path);
+
+/// Get a list of all registered signal paths.
+/// Fills a buffer with null-separated path strings.
+///
+/// @param buffer Buffer to fill with null-separated paths (can be NULL)
+/// @param bufferSize Size of the buffer in bytes
+/// @return Number of registered signals
+uint64_t __moore_signal_registry_get_paths(char *buffer, uint64_t bufferSize);
+
+/// Check if a signal is currently forced via DPI.
+///
+/// @param path Hierarchical path to check
+/// @return 1 if signal is forced, 0 otherwise
+int32_t __moore_signal_registry_is_forced(const char *path);
+
+/// Get the forced value for a signal (if forced).
+///
+/// @param path Hierarchical path
+/// @param value Pointer to store the forced value
+/// @return 1 if signal is forced and value was retrieved, 0 otherwise
+int32_t __moore_signal_registry_get_forced_value(const char *path,
+                                                  int64_t *value);
+
+/// Set a signal as forced with a specific value.
+/// This tracks the force state for DPI force/release semantics.
+///
+/// @param path Hierarchical path
+/// @param handle Signal handle from registry
+/// @param value Value to force
+/// @return 1 on success, 0 on failure
+int32_t __moore_signal_registry_set_forced(const char *path,
+                                            MooreSignalHandle handle,
+                                            int64_t value);
+
+/// Clear the forced state for a signal.
+///
+/// @param path Hierarchical path
+/// @return 1 if signal was forced and is now released, 0 otherwise
+int32_t __moore_signal_registry_clear_forced(const char *path);
+
+/// Clear all forced signals.
+/// This is useful for resetting between simulation runs.
+void __moore_signal_registry_clear_all_forced(void);
+
+//===----------------------------------------------------------------------===//
 // HDL Access Stubs (IEEE 1800.2-2017 DPI)
 //===----------------------------------------------------------------------===//
 

@@ -38,3 +38,31 @@ hw.module @inject(in %arr: !hw.array<3xi8>, in %index: i2, in %v: i8, out out: !
   %arr_injected = hw.array_inject %arr[%index], %v : !hw.array<3xi8>, i2
   hw.output %arr_injected : !hw.array<3xi8>
 }
+
+// CHECK-LABEL: func.func @struct_create
+// CHECK-SAME: (%{{.+}}: !smt.bv<1>, %{{.+}}: !smt.bv<1>) -> !smt.bv<2>
+hw.module @struct_create(in %a: i1, in %b: i1, out out: !hw.struct<value: i1, unknown: i1>) {
+  // CHECK-NEXT: %[[CONCAT:.+]] = smt.bv.concat %{{.+}}, %{{.+}} : !smt.bv<1>, !smt.bv<1>
+  // CHECK-NEXT: return %[[CONCAT]] : !smt.bv<2>
+  %s = hw.struct_create (%a, %b) : !hw.struct<value: i1, unknown: i1>
+  hw.output %s : !hw.struct<value: i1, unknown: i1>
+}
+
+// CHECK-LABEL: func.func @struct_extract
+// CHECK-SAME: (%{{.+}}: !smt.bv<2>) -> !smt.bv<1>
+hw.module @struct_extract(in %s: !hw.struct<value: i1, unknown: i1>, out out: i1) {
+  // CHECK-NEXT: %[[EXTRACT:.+]] = smt.bv.extract %{{.+}} from 1 : (!smt.bv<2>) -> !smt.bv<1>
+  // CHECK-NEXT: return %[[EXTRACT]] : !smt.bv<1>
+  %v = hw.struct_extract %s["value"] : !hw.struct<value: i1, unknown: i1>
+  hw.output %v : i1
+}
+
+// CHECK-LABEL: func.func @struct_explode
+// CHECK-SAME: (%{{.+}}: !smt.bv<2>) -> !smt.bv<1>
+hw.module @struct_explode(in %s: !hw.struct<value: i1, unknown: i1>, out out: i1) {
+  // CHECK-NEXT: %[[HI:.+]] = smt.bv.extract %{{.+}} from 1 : (!smt.bv<2>) -> !smt.bv<1>
+  // CHECK-NEXT: %[[LO:.+]] = smt.bv.extract %{{.+}} from 0 : (!smt.bv<2>) -> !smt.bv<1>
+  // CHECK-NEXT: return %[[LO]] : !smt.bv<1>
+  %value, %unknown = hw.struct_explode %s : !hw.struct<value: i1, unknown: i1>
+  hw.output %unknown : i1
+}

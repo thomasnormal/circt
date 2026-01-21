@@ -349,11 +349,25 @@ private:
   static unsigned getTypeWidth(mlir::Type type);
 
   //===--------------------------------------------------------------------===//
+  // Signal Registry Bridge
+  //===--------------------------------------------------------------------===//
+
+  /// Export all registered signals to the MooreRuntime signal registry.
+  /// This enables DPI/VPI functions like uvm_hdl_read() to access signals.
+  void exportSignalsToRegistry();
+
+  /// Set up accessor callbacks for the signal registry.
+  void setupRegistryAccessors();
+
+  //===--------------------------------------------------------------------===//
   // Member Variables
   //===--------------------------------------------------------------------===//
 
   /// Reference to the process scheduler.
   ProcessScheduler &scheduler;
+
+  /// Name of the top module (for hierarchical path construction).
+  std::string moduleName;
 
   /// Map from MLIR signal values to signal IDs.
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;

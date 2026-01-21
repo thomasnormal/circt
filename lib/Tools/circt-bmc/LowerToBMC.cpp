@@ -110,6 +110,9 @@ void LowerToBMCPass::runOnOperation() {
     bmcOp = verif::BoundedModelCheckingOp::create(
         builder, loc, risingClocksOnly ? bound : 2 * bound,
         cast<IntegerAttr>(numRegs).getValue().getZExtValue(), initialValues);
+    auto inputNames = hwModule.getInputNames();
+    if (!inputNames.empty())
+      bmcOp->setAttr("bmc_input_names", builder.getArrayAttr(inputNames));
     // Annotate the op with how many cycles to ignore - again, we may need to
     // double this to account for rising and falling edges
     if (ignoreAssertionsUntil)
@@ -128,6 +131,7 @@ void LowerToBMCPass::runOnOperation() {
   // TODO: supporting multiple clocks isn't too hard, an interleaving of clock
   // toggles just needs to be generated
   bool hasClk = false;
+  bool hasExplicitClockInput = false;
   for (auto input : hwModule.getInputTypes()) {
     if (isa<seq::ClockType>(input)) {
       if (hasClk) {
@@ -135,6 +139,7 @@ void LowerToBMCPass::runOnOperation() {
         return signalPassFailure();
       }
       hasClk = true;
+      hasExplicitClockInput = true;
     }
     if (auto hwStruct = dyn_cast<hw::StructType>(input)) {
       for (auto field : hwStruct.getElements()) {
@@ -145,8 +150,31 @@ void LowerToBMCPass::runOnOperation() {
             return signalPassFailure();
           }
           hasClk = true;
+          hasExplicitClockInput = true;
         }
       }
+    }
+  }
+  if (!hasExplicitClockInput) {
+    SmallVector<seq::ToClockOp> toClockOps;
+    hwModule.walk([&](seq::ToClockOp toClockOp) {
+      toClockOps.push_back(toClockOp);
+    });
+    if (!toClockOps.empty()) {
+      Value clockInput = toClockOps.front().getInput();
+      for (auto toClockOp : llvm::drop_begin(toClockOps)) {
+        if (toClockOp.getInput() != clockInput) {
+          hwModule.emitError("designs with multiple derived clocks not yet supported");
+          return signalPassFailure();
+        }
+      }
+      auto clockTy = seq::ClockType::get(ctx);
+      auto newClock = hwModule.prependInput("bmc_clock", clockTy).second;
+      for (auto toClockOp : toClockOps) {
+        toClockOp.replaceAllUsesWith(newClock);
+        toClockOp.erase();
+      }
+      hasClk = true;
     }
   }
   // Also check for i1 inputs that are converted to clocks via ToClockOp

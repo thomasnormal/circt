@@ -32,6 +32,7 @@
 #include "mlir/IR/Iterators.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseSet.h"
@@ -641,6 +642,22 @@ static void getValuesToObserve(Region *region,
                 rewriter, loc, type, value);
             observeValue = probeIfSignal(converted);
           }
+          if (isFourStateStructType(observeValue.getType())) {
+            auto structType = cast<hw::StructType>(observeValue.getType());
+            auto valueType = structType.getElements()[0].type;
+            if (valueType.isInteger(1)) {
+              Value valueField =
+                  extractFourStateValue(rewriter, loc, observeValue);
+              Value unknownField =
+                  extractFourStateUnknown(rewriter, loc, observeValue);
+              Value trueConst =
+                  hw::ConstantOp::create(rewriter, loc, valueType, 1);
+              Value notUnknown =
+                  comb::XorOp::create(rewriter, loc, unknownField, trueConst);
+              observeValue = comb::AndOp::create(
+                  rewriter, loc, ValueRange{valueField, notUnknown}, true);
+            }
+          }
           if (hw::isHWValueType(observeValue.getType()))
             observeValues.push_back(observeValue);
         }
@@ -904,6 +921,31 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
                                        observeValues, ValueRange{}, checkBlock);
     rewriter.inlineBlockBefore(&clonedOp.getBody().front(), waitOp);
     rewriter.eraseOp(clonedOp);
+    auto convertToBoolIfFourState = [&](Value value) -> Value {
+      if (auto mooreInt = dyn_cast<IntType>(value.getType())) {
+        if (mooreInt.getBitSize() == 1)
+          return moore::ToBuiltinBoolOp::create(rewriter, loc, value);
+        return value;
+      }
+      if (!isFourStateStructType(value.getType()))
+        return value;
+      auto structType = cast<hw::StructType>(value.getType());
+      auto valueType = structType.getElements()[0].type;
+      if (!valueType.isInteger(1))
+        return value;
+      Value valueField = extractFourStateValue(rewriter, loc, value);
+      Value unknownField = extractFourStateUnknown(rewriter, loc, value);
+      Value trueConst = hw::ConstantOp::create(rewriter, loc, valueType, 1);
+      Value notUnknown =
+          comb::XorOp::create(rewriter, loc, unknownField, trueConst);
+      return comb::AndOp::create(rewriter, loc,
+                                 ValueRange{valueField, notUnknown}, true);
+    };
+    for (auto &value : valuesBefore) {
+      OpBuilder::InsertionGuard g(rewriter);
+      setInsertionPointAfterDef(value);
+      value = convertToBoolIfFourState(value);
+    }
 
     // Collect a list of all detect ops and inline the `wait_event` body into
     // the check block.
@@ -917,24 +959,37 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
     auto computeTrigger = [&](Value before, Value after, Edge edge) -> Value {
       assert(before.getType() == after.getType() &&
              "mismatched types after clone op");
-      auto beforeType = cast<IntType>(before.getType());
 
-      // 9.4.2 IEEE 1800-2017: An edge event shall be detected only on the LSB
-      // of the expression
-      if (beforeType.getWidth() != 1 && edge != Edge::AnyChange) {
-        constexpr int LSB = 0;
-        beforeType =
-            IntType::get(rewriter.getContext(), 1, beforeType.getDomain());
-        before =
-            moore::ExtractOp::create(rewriter, loc, beforeType, before, LSB);
-        after = moore::ExtractOp::create(rewriter, loc, beforeType, after, LSB);
+      if (auto mooreInt = dyn_cast<IntType>(before.getType())) {
+        // 9.4.2 IEEE 1800-2017: An edge event shall be detected only on the LSB
+        // of the expression
+        if (mooreInt.getWidth() != 1 && edge != Edge::AnyChange) {
+          constexpr int LSB = 0;
+          mooreInt =
+              IntType::get(rewriter.getContext(), 1, mooreInt.getDomain());
+          before =
+              moore::ExtractOp::create(rewriter, loc, mooreInt, before, LSB);
+          after =
+              moore::ExtractOp::create(rewriter, loc, mooreInt, after, LSB);
+        }
+
+        auto intType = rewriter.getIntegerType(mooreInt.getWidth());
+        before = typeConverter->materializeTargetConversion(rewriter, loc,
+                                                            intType, before);
+        after = typeConverter->materializeTargetConversion(
+            rewriter, loc, intType, after);
+      } else if (auto intType = dyn_cast<IntegerType>(before.getType())) {
+        if (intType.getWidth() != 1 && edge != Edge::AnyChange) {
+          constexpr int LSB = 0;
+          before =
+              comb::ExtractOp::create(rewriter, loc, before, LSB, 1).getResult();
+          after =
+              comb::ExtractOp::create(rewriter, loc, after, LSB, 1).getResult();
+          intType = rewriter.getIntegerType(1);
+        }
+      } else {
+        return Value();
       }
-
-      auto intType = rewriter.getIntegerType(beforeType.getWidth());
-      before = typeConverter->materializeTargetConversion(rewriter, loc,
-                                                          intType, before);
-      after = typeConverter->materializeTargetConversion(rewriter, loc, intType,
-                                                         after);
 
       if (edge == Edge::AnyChange)
         return comb::ICmpOp::create(rewriter, loc, ICmpPredicate::ne, before,
@@ -969,12 +1024,14 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
     SmallVector<Value> triggers;
     for (auto [detectOp, before] : llvm::zip(detectOps, valuesBefore)) {
       if (!allDetectsAreAnyChange) {
-        if (!isa<IntType>(before.getType()))
+        if (!isa<IntType>(before.getType()) &&
+            !before.getType().isSignlessInteger())
           return detectOp->emitError() << "requires int operand";
 
         rewriter.setInsertionPoint(detectOp);
+        auto after = convertToBoolIfFourState(detectOp.getInput());
         auto trigger =
-            computeTrigger(before, detectOp.getInput(), detectOp.getEdge());
+            computeTrigger(before, after, detectOp.getEdge());
         if (detectOp.getCondition()) {
           auto condition = typeConverter->materializeTargetConversion(
               rewriter, loc, rewriter.getI1Type(), detectOp.getCondition());
@@ -3297,6 +3354,58 @@ struct VirtualInterfaceCmpOpConversion
   }
 };
 
+/// Lowering for VirtualInterfaceBindOp.
+/// Binds an interface instance to a virtual interface variable by storing
+/// the interface pointer into the destination reference.
+struct VirtualInterfaceBindOpConversion
+    : public OpConversionPattern<VirtualInterfaceBindOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VirtualInterfaceBindOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // The destination is a reference to a virtual interface (converted to
+    // !llhd.ref<!llvm.ptr>). We need to store the source pointer into it.
+    Value dest = adaptor.getDest();
+    Value source = adaptor.getSource();
+
+    // Check if the source is a reference type (e.g., from interface.instance).
+    // If so, we need to probe it to get the actual pointer value.
+    auto sourceType = op.getSource().getType();
+    if (isa<moore::RefType>(sourceType)) {
+      // The source is a reference to virtual interface - probe to get the
+      // pointer value.
+      source = llhd::ProbeOp::create(rewriter, loc, source);
+    }
+
+    // Get the destination as an LLVM pointer for the store.
+    // The dest should be !llhd.ref<!llvm.ptr>, we need the underlying pointer.
+    auto destRefType = dyn_cast<llhd::RefType>(dest.getType());
+    if (!destRefType) {
+      // If it's already an LLVM pointer (from class property), use llvm.store
+      if (isa<LLVM::LLVMPointerType>(dest.getType())) {
+        LLVM::StoreOp::create(rewriter, loc, source, dest);
+        rewriter.eraseOp(op);
+        return success();
+      }
+      return rewriter.notifyMatchFailure(op,
+                                         "expected ref type for destination");
+    }
+
+    // Use llhd.drv to drive the signal with the new pointer value.
+    auto timeZero = llhd::ConstantTimeOp::create(
+        rewriter, loc,
+        llhd::TimeAttr::get(rewriter.getContext(), 0, "ns", 0, 1));
+    llhd::DriveOp::create(rewriter, loc, dest, source, timeZero.getResult(),
+                          Value{});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct VariableOpConversion : public OpConversionPattern<VariableOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -3662,12 +3771,37 @@ struct ConstantOpConv : public OpConversionPattern<ConstantOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto fvint = op.getValue();
     auto width = fvint.getBitWidth();
-    auto intType = rewriter.getIntegerType(width);
+    auto loc = op.getLoc();
 
-    // Convert the 4-valued FVInt to a 2-valued APInt.
-    // X and Z bits are mapped to 0 for conservative behavior.
-    // The X/Z information is preserved in the Moore IR and can be used
-    // for compile-time X-propagation optimization before this lowering.
+    // Get the converted type (either IntegerType or 4-state struct)
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Check if this is a 4-state type
+    if (isFourStateStructType(resultType)) {
+      // 4-state constant: create a struct {value, unknown}
+      auto intType = rewriter.getIntegerType(width);
+
+      // Get the value component (0/X=0, 1/Z=1)
+      auto valueAPInt = fvint.getRawValue();
+      Value valueConst = hw::ConstantOp::create(
+          rewriter, loc, intType, rewriter.getIntegerAttr(intType, valueAPInt));
+
+      // Get the unknown mask (0/1=0, X/Z=1)
+      auto unknownAPInt = fvint.getRawUnknown();
+      Value unknownConst = hw::ConstantOp::create(
+          rewriter, loc, intType,
+          rewriter.getIntegerAttr(intType, unknownAPInt));
+
+      // Create the 4-state struct
+      auto result =
+          createFourStateStruct(rewriter, loc, valueConst, unknownConst);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Two-valued constant: create a simple integer
+    auto intType = rewriter.getIntegerType(width);
+    // Convert FVInt to APInt - X and Z bits are mapped to 0
     auto value = fvint.toAPInt(false);
     rewriter.replaceOpWithNewOp<hw::ConstantOp>(
         op, intType, rewriter.getIntegerAttr(intType, value));
@@ -4515,6 +4649,62 @@ struct BinaryOpConversion : public OpConversionPattern<SourceOp> {
   }
 };
 
+/// 4-state aware binary arithmetic operation conversion.
+/// For arithmetic operations, if any bit in either operand is unknown (X/Z),
+/// the entire result becomes unknown (X).
+template <typename SourceOp, typename TargetOp>
+struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
+
+    // Check if we're dealing with 4-state types
+    if (!isFourStateStructType(resultType)) {
+      // Two-valued: simple binary op
+      rewriter.replaceOpWithNewOp<TargetOp>(op, adaptor.getLhs(),
+                                            adaptor.getRhs(), false);
+      return success();
+    }
+
+    // 4-state arithmetic: if any bit is unknown, entire result is X
+    Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
+    Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
+    Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
+    Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
+
+    // Perform the arithmetic operation on the value components
+    Value resultVal = TargetOp::create(rewriter, loc, lhsVal, rhsVal, false);
+    auto width = resultVal.getType().getIntOrFloatBitWidth();
+
+    // Check if either operand has any unknown bits
+    // hasUnknown = (lhsUnk != 0) || (rhsUnk != 0)
+    Value zero = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+    Value allOnes =
+        hw::ConstantOp::create(rewriter, loc, rewriter.getIntegerType(width), -1);
+    Value lhsHasUnk = comb::ICmpOp::create(rewriter, loc,
+                                           comb::ICmpPredicate::ne, lhsUnk, zero);
+    Value rhsHasUnk = comb::ICmpOp::create(rewriter, loc,
+                                           comb::ICmpPredicate::ne, rhsUnk, zero);
+    Value hasUnknown = comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+
+    // If any unknown: result unknown = all ones, else = 0
+    // Using mux: resultUnk = hasUnknown ? allOnes : 0
+    Value resultUnk =
+        comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
+
+    // Create the 4-state struct
+    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // 4-State Logic Operation Conversions
 //===----------------------------------------------------------------------===//
@@ -5159,6 +5349,95 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
   }
 };
 
+struct UnrealizedCastToBoolConversion
+    : public OpConversionPattern<UnrealizedConversionCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(UnrealizedConversionCastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getOperands().size() != 1 || op.getNumResults() != 1)
+      return failure();
+    auto input = adaptor.getOperands()[0];
+    auto resultType = op.getResult(0).getType();
+    if (!resultType.isInteger(1))
+      return failure();
+    if (!isFourStateStructType(input.getType()))
+      return failure();
+    auto structType = cast<hw::StructType>(input.getType());
+    auto valueType = structType.getElements()[0].type;
+    if (!valueType.isInteger(1))
+      return failure();
+    Value value = extractFourStateValue(rewriter, op.getLoc(), input);
+    Value unknown = extractFourStateUnknown(rewriter, op.getLoc(), input);
+    Value trueConst =
+        hw::ConstantOp::create(rewriter, op.getLoc(), valueType, 1);
+    Value notUnknown =
+        comb::XorOp::create(rewriter, op.getLoc(), unknown, trueConst);
+    Value result = comb::AndOp::create(
+        rewriter, op.getLoc(), ValueRange{value, notUnknown}, true);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct UnrealizedCastToBoolRewrite
+    : public OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+      return failure();
+    auto input = op.getOperand(0);
+    auto resultType = op.getResult(0).getType();
+    if (!resultType.isInteger(1))
+      return failure();
+    if (!isFourStateStructType(input.getType()))
+      return failure();
+    auto structType = cast<hw::StructType>(input.getType());
+    auto valueType = structType.getElements()[0].type;
+    if (!valueType.isInteger(1))
+      return failure();
+    Value value = extractFourStateValue(rewriter, op.getLoc(), input);
+    Value unknown = extractFourStateUnknown(rewriter, op.getLoc(), input);
+    Value trueConst =
+        hw::ConstantOp::create(rewriter, op.getLoc(), valueType, 1);
+    Value notUnknown =
+        comb::XorOp::create(rewriter, op.getLoc(), unknown, trueConst);
+    Value result = comb::AndOp::create(
+        rewriter, op.getLoc(), ValueRange{value, notUnknown}, true);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct ToBuiltinBoolOpConversion : public OpConversionPattern<ToBuiltinBoolOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(ToBuiltinBoolOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto input = adaptor.getInput();
+    auto inputType = input.getType();
+    if (inputType.isInteger(1)) {
+      rewriter.replaceOp(op, input);
+      return success();
+    }
+    if (isFourStateStructType(inputType)) {
+      auto loc = op.getLoc();
+      Value value = extractFourStateValue(rewriter, loc, input);
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+      Value zero =
+          hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
+      Value unknownIsZero = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::eq, unknown, zero);
+      Value result = comb::AndOp::create(
+          rewriter, loc, ValueRange{value, unknownIsZero}, true);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+    return failure();
+  }
+};
+
 struct TruncOpConversion : public OpConversionPattern<TruncOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -5488,6 +5767,9 @@ struct ShrOpConversion : public OpConversionPattern<ShrOp> {
   matchAndRewrite(ShrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType || !resultType.isIntOrFloat())
+      return rewriter.notifyMatchFailure(
+          op, "shift operations require integer/float result type");
 
     // Comb shift operations require the same bit-width for value and amount
     Value amount =
@@ -5546,6 +5828,9 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
   matchAndRewrite(AShrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType || !resultType.isIntOrFloat())
+      return rewriter.notifyMatchFailure(
+          op, "shift operations require integer/float result type");
 
     // Comb shift operations require the same bit-width for value and amount
     Value amount =
@@ -9294,6 +9579,8 @@ struct StringItoaOpConversion : public OpConversionPattern<StringItoaOp> {
     auto i64Ty = IntegerType::get(ctx, 64);
 
     auto value = adaptor.getValue();
+    if (!value.getType().isIntOrFloat())
+      return rewriter.notifyMatchFailure(op, "value must be an integer type");
     auto valueWidth = value.getType().getIntOrFloatBitWidth();
 
     Value valueI64;
@@ -9644,6 +9931,8 @@ struct IntToStringOpConversion : public OpConversionPattern<IntToStringOp> {
     auto i64Ty = IntegerType::get(ctx, 64);
 
     auto input = adaptor.getInput();
+    if (!input.getType().isIntOrFloat())
+      return rewriter.notifyMatchFailure(op, "input must be an integer type");
     auto inputWidth = input.getType().getIntOrFloatBitWidth();
 
     Value inputI64;
@@ -9682,6 +9971,9 @@ struct StringToIntOpConversion : public OpConversionPattern<StringToIntOp> {
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType || !resultType.isIntOrFloat())
+      return rewriter.notifyMatchFailure(
+          op, "result type must be an integer type");
     auto resultWidth = resultType.getIntOrFloatBitWidth();
 
     auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy});
@@ -9780,26 +10072,51 @@ struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
       // Get the target type to potentially extend/truncate the result
       if (auto sigTy = dyn_cast<llhd::RefType>(destRef.getType())) {
         auto targetTy = sigTy.getNestedType();
-        unsigned targetWidth = targetTy.getIntOrFloatBitWidth();
 
-        // Extend or truncate to match the target type
-        Value valueToStore;
-        if (targetWidth < 32) {
-          valueToStore =
-              arith::TruncIOp::create(rewriter, loc, targetTy, parsedValue);
-        } else if (targetWidth > 32) {
-          // Sign extend for larger types
-          valueToStore =
-              arith::ExtSIOp::create(rewriter, loc, targetTy, parsedValue);
+        // Handle llhd::TimeType specially - it's a 64-bit time value
+        if (isa<llhd::TimeType>(targetTy)) {
+          // For time type, extend i32 to i64 and use llhd.drive
+          Value valueI64 =
+              arith::ExtSIOp::create(rewriter, loc, i64Ty, parsedValue);
+          // Convert i64 to llhd.time using proper time constructor
+          // llhd.time is {realTime: i64, delta: i32, epsilon: i32}
+          // For sscanf, we just set the realTime field
+          auto zeroI32 = arith::ConstantOp::create(
+              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
+          auto timeVal = llhd::ConstantTimeOp::create(
+              rewriter, loc,
+              llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 0));
+          // TODO: Create proper time value from i64. For now, use 0 time.
+          (void)valueI64;
+          (void)zeroI32;
+          llhd::DriveOp::create(rewriter, loc, destRef, timeVal, timeVal,
+                                Value{});
+        } else if (targetTy.isIntOrFloat()) {
+          unsigned targetWidth = targetTy.getIntOrFloatBitWidth();
+
+          // Extend or truncate to match the target type
+          Value valueToStore;
+          if (targetWidth < 32) {
+            valueToStore =
+                arith::TruncIOp::create(rewriter, loc, targetTy, parsedValue);
+          } else if (targetWidth > 32) {
+            // Sign extend for larger types
+            valueToStore =
+                arith::ExtSIOp::create(rewriter, loc, targetTy, parsedValue);
+          } else {
+            valueToStore = parsedValue;
+          }
+
+          // Create llhd.drive to store the value
+          auto timeAttr =
+              llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
+          auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+          llhd::DriveOp::create(rewriter, loc, destRef, valueToStore, time,
+                                Value{});
         } else {
-          valueToStore = parsedValue;
+          return rewriter.notifyMatchFailure(
+              op, "sscanf destination must be an integer or time type");
         }
-
-        // Create llhd.drive to store the value
-        auto timeAttr = llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 1);
-        auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
-        llhd::DriveOp::create(rewriter, loc, destRef, valueToStore, time,
-                              Value{});
       }
     }
 
@@ -12190,11 +12507,19 @@ static void populateLegality(ConversionTarget &target,
   target.addLegalOp<debug::ScopeOp>();
 
   target.addDynamicallyLegalOp<scf::YieldOp, func::CallOp, func::CallIndirectOp,
-                               func::ReturnOp, func::ConstantOp,
-                               UnrealizedConversionCastOp, hw::OutputOp,
+                               func::ReturnOp, func::ConstantOp, hw::OutputOp,
                                hw::InstanceOp, debug::ArrayOp, debug::StructOp,
                                debug::VariableOp>(
       [&](Operation *op) { return converter.isLegal(op); });
+
+  target.addDynamicallyLegalOp<UnrealizedConversionCastOp>(
+      [&](UnrealizedConversionCastOp op) {
+        if (op.getNumOperands() == 1 && op.getNumResults() == 1 &&
+            op.getResult(0).getType().isInteger(1) &&
+            isFourStateStructType(op.getOperand(0).getType()))
+          return false;
+        return converter.isLegal(op);
+      });
 
   target.addDynamicallyLegalOp<scf::IfOp, scf::ForOp, scf::ExecuteRegionOp,
                                scf::WhileOp, scf::ForallOp>([&](Operation *op) {
@@ -12212,14 +12537,24 @@ static void populateLegality(ConversionTarget &target,
 }
 
 static void populateTypeConversion(TypeConverter &typeConverter) {
-  // NOTE: Both two-valued (!moore.iN) and four-valued (!moore.lN) integer types
-  // are currently lowered to plain IntegerType. X/Z information from constants
-  // is preserved in the Moore dialect (FVIntegerAttr) and used for X-propagation
-  // during lowering. A future enhancement could use struct types
-  // {value: iN, unknown: iN} for full 4-state simulation, but this would require
-  // updating all operations to handle the struct type.
-  typeConverter.addConversion([&](IntType type) {
-    return IntegerType::get(type.getContext(), type.getWidth());
+  // Integer type conversion:
+  // - Two-valued types (!moore.iN) are lowered to plain IntegerType (iN)
+  // - Four-valued types (!moore.lN) are lowered to a struct {value: iN, unknown: iN}
+  //   where unknown[i]=1 means bit i is X or Z, and when unknown[i]=1,
+  //   value[i]=0 means X, value[i]=1 means Z.
+  //
+  // This enables proper X/Z propagation through the lowered operations.
+  // Operations check for the struct type to decide whether to use 4-state logic.
+  typeConverter.addConversion([&](IntType type) -> Type {
+    auto width = type.getWidth();
+    auto *ctx = type.getContext();
+
+    if (type.getDomain() == Domain::FourValued) {
+      // Four-valued type: use struct {value: iN, unknown: iN}
+      return getFourStateStructType(ctx, width);
+    }
+    // Two-valued type: plain integer
+    return IntegerType::get(ctx, width);
   });
 
   typeConverter.addConversion([&](RealType type) -> mlir::Type {
@@ -12514,6 +12849,34 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
           mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
         if (inputs.size() != 1 || !inputs[0])
           return Value();
+        if (!resultType.isInteger(1))
+          return Value();
+        if (auto mooreInt = dyn_cast<moore::IntType>(inputs[0].getType())) {
+          if (mooreInt.getBitSize() == 1)
+            return moore::ToBuiltinBoolOp::create(builder, loc, inputs[0]);
+          return Value();
+        }
+        if (!isFourStateStructType(inputs[0].getType()))
+          return Value();
+        auto structType = cast<hw::StructType>(inputs[0].getType());
+        auto valueType = structType.getElements()[0].type;
+        if (!valueType.isInteger(1))
+          return Value();
+        Value value = extractFourStateValue(builder, loc, inputs[0]);
+        Value unknown = extractFourStateUnknown(builder, loc, inputs[0]);
+        Value trueConst = hw::ConstantOp::create(builder, loc,
+                                                builder.getI1Type(), 1);
+        Value notUnknown =
+            comb::XorOp::create(builder, loc, unknown, trueConst);
+        return comb::AndOp::create(builder, loc,
+                                   ValueRange{value, notUnknown}, true);
+      });
+
+  typeConverter.addTargetMaterialization(
+      [&](mlir::OpBuilder &builder, mlir::Type resultType,
+          mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
+        if (inputs.size() != 1 || !inputs[0])
+          return Value();
         return UnrealizedConversionCastOp::create(builder, loc, resultType,
                                                   inputs[0])
             .getResult(0);
@@ -12616,11 +12979,12 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for conversion operations.
     ConversionOpConversion,
     ConcatRefOpConversion,
+    UnrealizedCastToBoolConversion,
     BitcastConversion<PackedToSBVOp>,
     BitcastConversion<SBVToPackedOp>,
     BitcastConversion<LogicToIntOp>,
     BitcastConversion<IntToLogicOp>,
-    BitcastConversion<ToBuiltinBoolOp>,
+    ToBuiltinBoolOpConversion,
     TruncOpConversion,
     ZExtOpConversion,
     SExtOpConversion,
@@ -12661,14 +13025,14 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     NegOpConversion,
     NegRealOpConversion,
 
-    // Patterns of binary operations.
-    BinaryOpConversion<AddOp, comb::AddOp>,
-    BinaryOpConversion<SubOp, comb::SubOp>,
-    BinaryOpConversion<MulOp, comb::MulOp>,
-    BinaryOpConversion<DivUOp, comb::DivUOp>,
-    BinaryOpConversion<DivSOp, comb::DivSOp>,
-    BinaryOpConversion<ModUOp, comb::ModUOp>,
-    BinaryOpConversion<ModSOp, comb::ModSOp>,
+    // Patterns of binary operations (4-state aware for arithmetic).
+    FourStateArithOpConversion<AddOp, comb::AddOp>,
+    FourStateArithOpConversion<SubOp, comb::SubOp>,
+    FourStateArithOpConversion<MulOp, comb::MulOp>,
+    FourStateArithOpConversion<DivUOp, comb::DivUOp>,
+    FourStateArithOpConversion<DivSOp, comb::DivSOp>,
+    FourStateArithOpConversion<ModUOp, comb::ModUOp>,
+    FourStateArithOpConversion<ModSOp, comb::ModSOp>,
     FourStateAndOpConversion,  // 4-state aware AND
     FourStateOrOpConversion,   // 4-state aware OR
     FourStateXorOpConversion,  // 4-state aware XOR
@@ -12948,5 +13312,10 @@ void MooreToCorePass::runOnOperation() {
                                                            patterns, target);
 
   if (failed(applyFullConversion(module, target, std::move(patterns))))
+    signalPassFailure();
+
+  RewritePatternSet cleanupPatterns(&context);
+  cleanupPatterns.add<UnrealizedCastToBoolRewrite>(&context);
+  if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns))))
     signalPassFailure();
 }

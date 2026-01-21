@@ -24,13 +24,16 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 9. ~~**ProcessOp Canonicalization**~~: ✅ FIXED (Iter 74) - Processes with $display/$finish no longer removed
 
 **REMAINING BLOCKERS:**
-1. **Concurrent Process Scheduling** ⚠️ HIGH - ROOT CAUSE IDENTIFIED:
-   - Signal-to-process mapping not persistent across wake/sleep cycles
-   - `waitingSensitivity` cleared when process wakes, must re-execute to `llhd.wait`
-   - Processes end in Suspended state without sensitivity after first execution
-   - **Fix Location**: `ProcessScheduler::triggerSensitiveProcesses()` lines 192-228
+1. **Concurrent Process Scheduling** ✅ FIXED (Iter 81):
+   - Fixed `findNextEventTime()` to return minimum time across ALL slots
+   - Added `advanceToNextTime()` for single-step advancement
+   - Fixed interpreter state mismatch for event-triggered processes
+   - All 22 ProcessScheduler unit tests now pass
 
-2. **UVM Macro Completeness** ⚠️ MEDIUM: Many UVM macros still need stubs (uvm_copier_get_function, etc.). Blocks full UVM core compilation.
+2. **UVM Library** ✅ RESOLVED: **Use the real UVM library from `~/uvm-core`**
+   - `circt-verilog --uvm-path ~/uvm-core/src` parses the real UVM successfully
+   - All AVIP testbenches compile with the real UVM library
+   - No need to maintain UVM stubs - just use the official IEEE 1800.2 implementation
 
 3. **Class Method Inlining** ⚠️ MEDIUM: Virtual method dispatch and class hierarchy not fully simulated.
 
@@ -63,19 +66,30 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 78+)
+### Track Status & Next Tasks (Iteration 82+)
+
+**Using Real UVM Library** (Recommended):
+```bash
+# Compile with real UVM from ~/uvm-core
+circt-verilog --uvm-path ~/uvm-core/src -I ~/uvm-core/src <files>
+
+# Example: APB AVIP testbench
+circt-verilog --uvm-path ~/uvm-core/src --ir-llhd \
+  -I ~/uvm-core/src -I src/hvl_top/env/virtual_sequencer \
+  ~/uvm-core/src/uvm_pkg.sv <testbench files> | circt-sim
+```
 
 **Simulation Runtime (Critical Path)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Concurrent Scheduling | 🔄 Deep analysis ongoing | Root cause: EventScheduler time advancement |
-| **B** | UVM Macro Stubs | ✅ 3650+ lines (Iter 78) | Core services complete, add reg layer stubs |
+| **A** | Concurrent Scheduling | ✅ FIXED (Iter 81) | End-to-end circt-sim testing |
+| **B** | UVM Library | ✅ Use ~/uvm-core directly | No stubs needed! |
 
 **Feature Development (Parallel)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **C** | Real-World Testing | ✅ Dynamic type fix (Iter 78) | Test more AVIP patterns |
-| **D** | BMC/Formal | ✅ $countones/$onehot (Iter 78) | BMC constraint support |
+| **C** | Real-World Testing | ✅ 73% pass rate (Iter 81) | Run all AVIPs with real UVM |
+| **D** | BMC/Formal | ✅ $countones/$rose/$fell (Iter 81) | End-to-end SVA tests |
 | **E** | Coverage Runtime | HTML reports complete | UCDB merge improvements |
 | **F** | LSP Tooling | All 49 tests pass (100%) | Diagnostics improvements |
 
@@ -94,6 +108,31 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - ✅ FIXED: $rose/$fell in implications now work via ltl.past buffer infrastructure
 - ✅ FIXED: $past supported via PastInfo struct and buffer tracking
 - Remaining: $countones/$onehot use llvm.intr.ctpop (pending BMC symbol issue)
+- New: local circt-bmc harnesses for `~/sv-tests` and `~/verilator-verification`
+  to drive test-driven SVA progress (see `utils/run_sv_tests_circt_bmc.sh` and
+  `utils/run_verilator_verification_circt_bmc.sh`).
+- ✅ Progress: LLHD desequencing now treats 4-state clock probes as boolean
+  triggers and recognizes wait-block arguments as past values, allowing
+  `llhd.process` to lower for clocked always blocks (basic03 pipeline unblocked).
+- ✅ Progress: HWToSMT now lowers `hw.struct_create/extract/explode` to SMT
+  bitvector concat/extract, unblocking BMC when LowerToBMC emits 4-state
+  structs.
+- Remaining: verify end-to-end BMC pipeline with yosys `basic03.sv`; pass-case
+  still reports violations (sampled/clock alignment or BMC semantics issue).
+
+**SVA Support Plan (End-to-End)**:
+1. **Pipeline robustness**: keep SV→Moore→HW→BMC→SMT legal (no illegal ops).
+   - Guardrails: HWToSMT aggregate lowering, clock handling in LowerToBMC.
+2. **Temporal semantics**: complete and validate `##[m:$]`, `[*N]`, goto, and
+   non-consecutive repetition in multi-step BMC.
+3. **Clocked sampling correctness**: fix `$past/$rose/$fell` alignment and
+   sampled-value timing in BMC (yosys `basic03.sv` pass must be clean).
+4. **4-state modeling**: ensure `value/unknown` propagation is consistent
+   across SVAToLTL → VerifToSMT → SMT (document X/unknown semantics).
+5. **Solver output + traces**: stable SAT/UNSAT results, trace extraction for
+   counterexamples, and consistent CLI reporting.
+6. **External suite gating**: keep `sv-tests`, `verilator-verification`,
+   `yosys/tests/sva`, and AVIP subsets green with recorded baselines.
 
 ### Feature Completion Matrix
 
@@ -1170,8 +1209,10 @@ ninja -C build check-circt-unit
 - ⛔ Goto/non-consecutive repeat still single-step in BMC
 - ✅ Added local yosys SVA harness script for circt-bmc runs
 - ✅ Import now preserves concurrent assertions with action blocks (`else $error`)
-- ⚠️ yosys `basic00.sv` pass still fails (implication/disable semantics need alignment)
-- ✅ Updated non-overlapped implication lowering to delay consequents (|=> alignment)
+- ✅ yosys `basic00.sv`, `basic01.sv`, `basic02.sv` pass in circt-bmc harness
+- ⚠️ yosys `basic03.sv` pass still fails (sampled-value alignment for clocked assertions; $past comparisons)
+- ✅ Non-overlapped implication for property RHS now uses `seq ##1 true` encoding
+- ✅ LTL-aware equality/inequality enabled for `$past()` comparisons in assertions
 - ✅ Handle unbounded delay ranges (`##[m:$]`) in BMC within bound (bounded approximation)
 - ✅ Added end-to-end SVA BMC integration tests (SV → `circt-bmc`) for delay and range delay (pass + fail cases; pass uses `--ignore-asserts-until=1`)
 - Add more end-to-end BMC tests with Z3 (`circt-bmc`) for temporal properties

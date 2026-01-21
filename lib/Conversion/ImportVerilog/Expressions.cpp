@@ -1771,6 +1771,28 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     case BinaryOperator::Equality:
+      // If either operand is an LTL type, build an LTL equivalence.
+      if (isa<ltl::PropertyType, ltl::SequenceType>(lhs.getType()) ||
+          isa<ltl::PropertyType, ltl::SequenceType>(rhs.getType())) {
+        if (!isa<ltl::PropertyType, ltl::SequenceType>(lhs.getType())) {
+          lhs = context.convertToI1(lhs);
+          if (!lhs)
+            return {};
+        }
+        if (!isa<ltl::PropertyType, ltl::SequenceType>(rhs.getType())) {
+          rhs = context.convertToI1(rhs);
+          if (!rhs)
+            return {};
+        }
+        auto notLhs = ltl::NotOp::create(builder, loc, lhs);
+        auto notRhs = ltl::NotOp::create(builder, loc, rhs);
+        auto both = ltl::AndOp::create(builder, loc,
+                                       SmallVector<Value, 2>{lhs, rhs});
+        auto notBoth = ltl::AndOp::create(builder, loc,
+                                          SmallVector<Value, 2>{notLhs, notRhs});
+        return ltl::OrOp::create(builder, loc,
+                                 SmallVector<Value, 2>{both, notBoth});
+      }
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::eq, lhs, rhs);
@@ -1898,6 +1920,28 @@ struct RvalueExprVisitor : public ExprVisitor {
       } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
+      // If either operand is an LTL type, build an LTL inequality.
+      if (isa<ltl::PropertyType, ltl::SequenceType>(lhs.getType()) ||
+          isa<ltl::PropertyType, ltl::SequenceType>(rhs.getType())) {
+        if (!isa<ltl::PropertyType, ltl::SequenceType>(lhs.getType())) {
+          lhs = context.convertToI1(lhs);
+          if (!lhs)
+            return {};
+        }
+        if (!isa<ltl::PropertyType, ltl::SequenceType>(rhs.getType())) {
+          rhs = context.convertToI1(rhs);
+          if (!rhs)
+            return {};
+        }
+        auto notLhs = ltl::NotOp::create(builder, loc, lhs);
+        auto notRhs = ltl::NotOp::create(builder, loc, rhs);
+        auto lhsNotRhs = ltl::AndOp::create(builder, loc,
+                                            SmallVector<Value, 2>{lhs, notRhs});
+        auto rhsNotLhs = ltl::AndOp::create(builder, loc,
+                                            SmallVector<Value, 2>{notLhs, rhs});
+        return ltl::OrOp::create(builder, loc,
+                                 SmallVector<Value, 2>{lhsNotRhs, rhsNotLhs});
+      }
       if (isa<moore::UnpackedArrayType>(lhs.getType()))
         return moore::UArrayCmpOp::create(
             builder, loc, moore::UArrayCmpPredicate::ne, lhs, rhs);

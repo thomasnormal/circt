@@ -4670,6 +4670,46 @@ def VirtualInterfaceCmpOp : MooreOp<"virtual_interface_cmp", [
   }];
 }
 
+def VirtualInterfaceBindOp : MooreOp<"virtual_interface.bind", []> {
+  let summary = "Bind an interface instance to a virtual interface variable";
+  let description = [{
+    Associates a virtual interface variable (stored at the destination reference)
+    with an actual interface instance. This is the runtime binding operation
+    that enables UVM-style virtual interface patterns.
+
+    The destination must be a reference to a virtual interface type (typically
+    a class property), and the source must be either:
+    - A virtual interface value (from reading another virtual interface)
+    - A reference to an interface instance (from `moore.interface.instance`)
+
+    When the source is a reference to an interface instance, the binding
+    operation implicitly converts it to a virtual interface value by probing
+    the reference to get the interface pointer.
+
+    Example:
+    ```mlir
+    // Bind interface instance to class property
+    %vif_ref = moore.class.property_ref %obj[@vif] : ...
+    %intf = moore.interface.instance @my_bus : !moore.ref<virtual_interface<@my_bus>>
+    moore.virtual_interface.bind %vif_ref, %intf : !moore.ref<virtual_interface<@my_bus>>, !moore.ref<virtual_interface<@my_bus>>
+
+    // Bind virtual interface value to class property
+    %vif_val = moore.read %other_vif : <virtual_interface<@my_bus>>
+    moore.virtual_interface.bind %vif_ref, %vif_val : !moore.ref<virtual_interface<@my_bus>>, !moore.virtual_interface<@my_bus>
+    ```
+
+    See IEEE 1800-2017 Section 25.9 "Virtual interfaces".
+  }];
+  let arguments = (ins
+    VirtualInterfaceRefType:$dest,
+    AnyType:$source
+  );
+  let results = (outs);
+  let assemblyFormat = [{
+    $dest `,` $source attr-dict `:` type($dest) `,` type($source)
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // UVM Factory Support
 //===----------------------------------------------------------------------===//
