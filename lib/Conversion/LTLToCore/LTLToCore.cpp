@@ -259,14 +259,87 @@ struct NFABuilder {
     return concat(result, anyStar);
   }
 
-  Fragment build(Value seq, Location loc) {
+  static std::pair<NFABuilder, Fragment>
+  buildEpsilonFreeNFA(Value seq, Location loc, Value anyCondition,
+                      OpBuilder &builder) {
+    NFABuilder nfa(anyCondition);
+    auto fragment = nfa.build(seq, loc, builder);
+    nfa.eliminateEpsilon();
+    return {std::move(nfa), fragment};
+  }
+
+  static std::pair<NFABuilder, Fragment>
+  intersectNFAs(const NFABuilder &lhs, const Fragment &lhsFrag,
+                const NFABuilder &rhs, const Fragment &rhsFrag, OpBuilder &builder,
+                Location loc, Value anyCondition) {
+    NFABuilder result(anyCondition);
+    DenseMap<uint64_t, int> stateMap;
+    SmallVector<std::pair<int, int>, 8> worklist;
+
+    auto packKey = [](int a, int b) -> uint64_t {
+      return (static_cast<uint64_t>(static_cast<uint32_t>(a)) << 32) |
+             static_cast<uint32_t>(b);
+    };
+
+    auto getState = [&](int a, int b) -> int {
+      uint64_t key = packKey(a, b);
+      auto it = stateMap.find(key);
+      if (it != stateMap.end())
+        return it->second;
+      bool accepting = lhs.states[a].accepting && rhs.states[b].accepting;
+      int id = result.addState(accepting);
+      stateMap[key] = id;
+      worklist.push_back({a, b});
+      return id;
+    };
+
+    int start = getState(lhsFrag.start, rhsFrag.start);
+
+    while (!worklist.empty()) {
+      auto [a, b] = worklist.pop_back_val();
+      int from = stateMap[packKey(a, b)];
+      auto &lhsState = lhs.states[a];
+      auto &rhsState = rhs.states[b];
+      for (auto &lhsTr : lhsState.transitions) {
+        if (lhsTr.isEpsilon)
+          continue;
+        Value lhsCond = lhs.conditions[lhsTr.condIndex];
+        for (auto &rhsTr : rhsState.transitions) {
+          if (rhsTr.isEpsilon)
+            continue;
+          Value rhsCond = rhs.conditions[rhsTr.condIndex];
+          Value cond;
+          if (lhsCond == rhsCond) {
+            cond = lhsCond;
+          } else {
+            cond = comb::AndOp::create(builder, loc,
+                                       SmallVector<Value, 2>{lhsCond, rhsCond},
+                                       true);
+          }
+          int condIndex = result.getCondIndex(cond);
+          int to = getState(lhsTr.to, rhsTr.to);
+          result.states[from].transitions.push_back(
+              Transition{condIndex, to, false});
+        }
+      }
+    }
+
+    SmallVector<int, 4> accepts;
+    for (size_t i = 0; i < result.states.size(); ++i) {
+      if (result.states[i].accepting)
+        accepts.push_back(static_cast<int>(i));
+    }
+    return {std::move(result), Fragment{start, accepts}};
+  }
+
+  Fragment build(Value seq, Location loc, OpBuilder &builder) {
     if (!seq)
       return makeEmpty();
     if (!isa<ltl::SequenceType>(seq.getType()))
       return makeSymbol(seq);
 
     if (auto delayOp = seq.getDefiningOp<ltl::DelayOp>()) {
-      auto input = build(delayOp.getInput(), loc);
+      auto input = build(delayOp.getInput(), loc, builder);
       uint64_t minDelay = delayOp.getDelay();
       std::optional<uint64_t> maxDelay;
       if (auto length = delayOp.getLength())
@@ -277,25 +350,25 @@ struct NFABuilder {
       auto inputs = concatOp.getInputs();
       if (inputs.empty())
         return makeEmpty();
-      Fragment result = build(inputs.front(), loc);
+      Fragment result = build(inputs.front(), loc, builder);
       for (auto input : inputs.drop_front())
-        result = concat(result, build(input, loc));
+        result = concat(result, build(input, loc, builder));
       return result;
     }
     if (auto repeatOp = seq.getDefiningOp<ltl::RepeatOp>()) {
-      auto input = build(repeatOp.getInput(), loc);
+      auto input = build(repeatOp.getInput(), loc, builder);
       std::optional<uint64_t> maxCount;
       if (auto more = repeatOp.getMore())
         maxCount = repeatOp.getBase() + *more;
       return repeat(input, repeatOp.getBase(), maxCount);
     }
     if (auto gotoOp = seq.getDefiningOp<ltl::GoToRepeatOp>()) {
-      auto input = build(gotoOp.getInput(), loc);
+      auto input = build(gotoOp.getInput(), loc, builder);
       return gotoRepeat(input, gotoOp.getBase(),
                         gotoOp.getBase() + gotoOp.getMore());
     }
     if (auto nonconOp = seq.getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
-      auto input = build(nonconOp.getInput(), loc);
+      auto input = build(nonconOp.getInput(), loc, builder);
       return nonConsecutiveRepeat(input, nonconOp.getBase(),
                                   nonconOp.getBase() + nonconOp.getMore());
     }
@@ -303,13 +376,32 @@ struct NFABuilder {
       auto inputs = orOp.getInputs();
       if (inputs.empty())
         return makeEmpty();
-      Fragment result = build(inputs.front(), loc);
+      Fragment result = build(inputs.front(), loc, builder);
       for (auto input : inputs.drop_front())
-        result = makeOr(result, build(input, loc));
+        result = makeOr(result, build(input, loc, builder));
       return result;
     }
+    if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
+      auto inputs = intersectOp.getInputs();
+      if (inputs.empty())
+        return makeEmpty();
+
+      auto [lhsBuilder, lhsFrag] =
+          buildEpsilonFreeNFA(inputs.front(), loc, anyCondition, builder);
+      for (auto input : inputs.drop_front()) {
+        auto [rhsBuilder, rhsFrag] =
+            buildEpsilonFreeNFA(input, loc, anyCondition, builder);
+        auto intersected = intersectNFAs(lhsBuilder, lhsFrag, rhsBuilder,
+                                         rhsFrag, builder, loc, anyCondition);
+        lhsBuilder = std::move(intersected.first);
+        lhsFrag = intersected.second;
+      }
+
+      *this = std::move(lhsBuilder);
+      return lhsFrag;
+    }
     if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>()) {
-      Fragment inner = build(firstMatch.getInput(), loc);
+      Fragment inner = build(firstMatch.getInput(), loc, builder);
       return inner;
     }
     seq.getDefiningOp()->emitError("unsupported sequence lowering");
@@ -463,12 +555,13 @@ struct LTLPropertyLowerer {
       return maxLen;
     }
     if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
-      uint64_t maxLen = 0;
+      std::optional<uint64_t> maxLen;
       for (auto input : intersectOp.getInputs()) {
         auto maxInput = getSequenceMaxLength(input);
         if (!maxInput)
-          return std::nullopt;
-        maxLen = std::max(maxLen, *maxInput);
+          continue;
+        if (!maxLen || *maxInput < *maxLen)
+          maxLen = *maxInput;
       }
       return maxLen;
     }
@@ -554,7 +647,7 @@ struct LTLPropertyLowerer {
     auto trueVal =
         hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
     NFABuilder nfa(trueVal);
-    auto fragment = nfa.build(seq, loc);
+    auto fragment = nfa.build(seq, loc, builder);
     nfa.eliminateEpsilon();
 
     size_t numStates = nfa.states.size();
@@ -741,8 +834,13 @@ struct LTLPropertyLowerer {
       if (auto delayOp = consequentValue.getDefiningOp<ltl::DelayOp>()) {
         if (auto length = delayOp.getLength()) {
           if (*length == 0 && delayOp.getDelay() > 0) {
-            shiftDelay = delayOp.getDelay();
-            consequentValue = delayOp.getInput();
+            auto input = delayOp.getInput();
+            // Only shift for non-sequence consequents; sequence delays must
+            // remain in place to preserve start/end alignment.
+            if (!isa<ltl::SequenceType>(input.getType())) {
+              shiftDelay = delayOp.getDelay();
+              consequentValue = input;
+            }
           }
         }
       }
@@ -854,12 +952,6 @@ struct LTLPropertyLowerer {
         inputs.push_back(lowerSequence(input, clock, edge));
       return comb::OrOp::create(builder, loc, inputs, true);
     }
-    if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
-      SmallVector<Value, 4> inputs;
-      for (auto input : intersectOp.getInputs())
-        inputs.push_back(lowerSequence(input, clock, edge));
-      return comb::AndOp::create(builder, loc, inputs, true);
-    }
     if (!clock) {
       seq.getDefiningOp()->emitError("sequence lowering requires a clock");
       return {};
@@ -878,7 +970,7 @@ struct LTLPropertyLowerer {
       return lowerFirstMatchSequence(firstMatch.getInput(), clock, edge,
                                      *maxLen);
     }
-    auto fragment = nfa.build(seq, loc);
+    auto fragment = nfa.build(seq, loc, builder);
     nfa.eliminateEpsilon();
 
     size_t numStates = nfa.states.size();

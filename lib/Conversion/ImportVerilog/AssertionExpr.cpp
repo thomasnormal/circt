@@ -14,6 +14,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Support/LLVM.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "llvm/ADT/APInt.h"
 
 #include <optional>
 #include <utility>
@@ -24,6 +25,199 @@ using namespace ImportVerilog;
 // NOLINTBEGIN(misc-no-recursion)
 namespace {
 constexpr const char kDisableIffAttr[] = "sva.disable_iff";
+
+static Value createUnknownOrZeroConstant(Context &context, Location loc,
+                                         moore::IntType type) {
+  auto &builder = context.builder;
+  if (type.getDomain() == moore::Domain::TwoValued)
+    return moore::ConstantOp::create(builder, loc, type, 0);
+  auto width = type.getWidth();
+  if (width == 0)
+    return {};
+  return moore::ConstantOp::create(
+      builder, loc, type,
+      FVInt(APInt(width, 0), APInt::getAllOnes(width)));
+}
+
+static std::optional<std::pair<uint64_t, uint64_t>>
+getSequenceLengthBounds(Value seq) {
+  if (!seq)
+    return std::nullopt;
+  if (!isa<ltl::SequenceType>(seq.getType()))
+    return std::make_pair<uint64_t, uint64_t>(1, 1);
+
+  if (auto delayOp = seq.getDefiningOp<ltl::DelayOp>()) {
+    auto inputBounds = getSequenceLengthBounds(delayOp.getInput());
+    if (!inputBounds)
+      return std::nullopt;
+    uint64_t minDelay = delayOp.getDelay();
+    std::optional<uint64_t> maxDelay;
+    if (auto length = delayOp.getLength())
+      maxDelay = minDelay + *length;
+    if (!maxDelay)
+      return std::nullopt;
+    return std::make_pair(inputBounds->first + minDelay,
+                          inputBounds->second + *maxDelay);
+  }
+  if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
+    uint64_t minLen = 0;
+    uint64_t maxLen = 0;
+    for (auto input : concatOp.getInputs()) {
+      auto bounds = getSequenceLengthBounds(input);
+      if (!bounds)
+        return std::nullopt;
+      minLen += bounds->first;
+      maxLen += bounds->second;
+    }
+    return std::make_pair(minLen, maxLen);
+  }
+  if (auto repeatOp = seq.getDefiningOp<ltl::RepeatOp>()) {
+    auto more = repeatOp.getMore();
+    if (!more)
+      return std::nullopt;
+    auto bounds = getSequenceLengthBounds(repeatOp.getInput());
+    if (!bounds)
+      return std::nullopt;
+    uint64_t minLen = bounds->first * repeatOp.getBase();
+    uint64_t maxLen = bounds->second * (repeatOp.getBase() + *more);
+    return std::make_pair(minLen, maxLen);
+  }
+  if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>())
+    return getSequenceLengthBounds(firstMatch.getInput());
+
+  return std::nullopt;
+}
+
+static Value lowerSampledValueFunctionWithClocking(
+    Context &context, const slang::ast::Expression &valueExpr,
+    const slang::ast::TimingControl &timingCtrl, StringRef funcName,
+    Location loc) {
+  auto &builder = context.builder;
+  auto *insertionBlock = builder.getInsertionBlock();
+  if (!insertionBlock)
+    return {};
+  auto *parentOp = insertionBlock->getParentOp();
+  moore::SVModuleOp module;
+  if (parentOp) {
+    if (auto direct = dyn_cast<moore::SVModuleOp>(parentOp))
+      module = direct;
+    else
+      module = parentOp->getParentOfType<moore::SVModuleOp>();
+  }
+  if (!module || !isa<moore::SVModuleOp>(parentOp)) {
+    mlir::emitWarning(loc)
+        << funcName
+        << " with explicit clocking is only supported at module scope; "
+           "returning 0 as a placeholder";
+    auto resultType =
+        moore::IntType::get(builder.getContext(), 1, moore::Domain::FourValued);
+    return moore::ConstantOp::create(builder, loc, resultType, 0);
+  }
+
+  auto valueType = context.convertType(*valueExpr.type);
+  auto intType = dyn_cast_or_null<moore::IntType>(valueType);
+  if (!intType) {
+    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    return {};
+  }
+
+  bool isRose = funcName == "$rose";
+  bool isFell = funcName == "$fell";
+  bool isStable = funcName == "$stable";
+  bool isChanged = funcName == "$changed";
+  bool reduce = (isRose || isFell) && intType.getBitSize() != 1;
+  auto sampleType = reduce
+                        ? moore::IntType::get(builder.getContext(), 1,
+                                              intType.getDomain())
+                        : intType;
+  auto resultType = moore::IntType::getInt(builder.getContext(), 1);
+
+  Value prevVar;
+  Value resultVar;
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    auto *moduleBlock = module.getBody();
+    if (moduleBlock->mightHaveTerminator()) {
+      if (auto *terminator = moduleBlock->getTerminator())
+        builder.setInsertionPoint(terminator);
+      else
+        builder.setInsertionPointToEnd(moduleBlock);
+    } else {
+      builder.setInsertionPointToEnd(moduleBlock);
+    }
+
+    Value prevInit = createUnknownOrZeroConstant(context, loc, sampleType);
+    if (!prevInit)
+      return {};
+    Value resultInit = moore::ConstantOp::create(builder, loc, resultType, 0);
+
+    prevVar = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(sampleType), StringAttr{}, prevInit);
+    resultVar = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(resultType), StringAttr{},
+        resultInit);
+
+    auto proc =
+        moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
+    builder.setInsertionPointToEnd(&proc.getBody().emplaceBlock());
+    if (failed(context.convertTimingControl(timingCtrl)))
+      return {};
+
+    Value current = context.convertRvalueExpression(valueExpr);
+    if (!current)
+      return {};
+    auto currentType = dyn_cast<moore::IntType>(current.getType());
+    if (!currentType) {
+      mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+      return {};
+    }
+    if (reduce)
+      current = moore::ReduceOrOp::create(builder, loc, current);
+    if (current.getType() != sampleType)
+      current = context.materializeConversion(sampleType, current,
+                                              /*isSigned=*/false, loc);
+
+    Value prev = moore::ReadOp::create(builder, loc, prevVar);
+    Value result;
+    if (isStable || isChanged) {
+      auto stable =
+          moore::CaseEqOp::create(builder, loc, current, prev).getResult();
+      result = stable;
+      if (isChanged)
+        result = moore::NotOp::create(builder, loc, stable).getResult();
+    } else {
+      auto zero = moore::ConstantOp::create(builder, loc, sampleType, 0);
+      auto one = moore::ConstantOp::create(builder, loc, sampleType, 1);
+      auto currentIsOne =
+          moore::CaseEqOp::create(builder, loc, current, one).getResult();
+      auto currentIsZero =
+          moore::CaseEqOp::create(builder, loc, current, zero).getResult();
+      auto prevIsOne =
+          moore::CaseEqOp::create(builder, loc, prev, one).getResult();
+      auto prevIsZero =
+          moore::CaseEqOp::create(builder, loc, prev, zero).getResult();
+      if (isRose) {
+        auto notPrevOne =
+            moore::NotOp::create(builder, loc, prevIsOne).getResult();
+        result =
+            moore::AndOp::create(builder, loc, currentIsOne, notPrevOne)
+                .getResult();
+      } else {
+        auto notPrevZero =
+            moore::NotOp::create(builder, loc, prevIsZero).getResult();
+        result =
+            moore::AndOp::create(builder, loc, currentIsZero, notPrevZero)
+                .getResult();
+      }
+    }
+
+    moore::BlockingAssignOp::create(builder, loc, resultVar, result);
+    moore::BlockingAssignOp::create(builder, loc, prevVar, current);
+    moore::ReturnOp::create(builder, loc);
+  }
+
+  return moore::ReadOp::create(builder, loc, resultVar);
+}
 
 struct AssertionExprVisitor {
   Context &context;
@@ -225,8 +419,16 @@ struct AssertionExprVisitor {
     case BinaryAssertionOperator::Intersect:
       return ltl::IntersectOp::create(builder, loc, operands);
     case BinaryAssertionOperator::Throughout: {
-      auto lhsRepeat = ltl::RepeatOp::create(
-          builder, loc, lhs, builder.getI64IntegerAttr(0), mlir::IntegerAttr{});
+      auto minAttr = builder.getI64IntegerAttr(0);
+      mlir::IntegerAttr moreAttr;
+      if (auto bounds = getSequenceLengthBounds(rhs)) {
+        minAttr = builder.getI64IntegerAttr(bounds->first);
+        if (bounds->second >= bounds->first)
+          moreAttr =
+              builder.getI64IntegerAttr(bounds->second - bounds->first);
+      }
+      auto lhsRepeat =
+          ltl::RepeatOp::create(builder, loc, lhs, minAttr, moreAttr);
       return ltl::IntersectOp::create(builder, loc,
                                       SmallVector<Value, 2>{lhsRepeat, rhs});
     }
@@ -511,8 +713,12 @@ Value Context::convertAssertionCallExpression(
         args.size() > 1 &&
         args[1]->kind == slang::ast::ExpressionKind::ClockingEvent;
     if (hasClockingArg && !inAssertionExpr) {
-      auto resultType = moore::IntType::get(
-          builder.getContext(), 1, valueType.getDomain());
+      if (auto *clockExpr =
+              args[1]->as_if<slang::ast::ClockingEventExpression>()) {
+        return lowerSampledValueFunctionWithClocking(
+            *this, *args[0], clockExpr->timingControl, subroutine.name, loc);
+      }
+      auto resultType = moore::IntType::getInt(builder.getContext(), 1);
       mlir::emitWarning(loc)
           << subroutine.name
           << " with explicit clocking is not yet lowered outside assertions; "

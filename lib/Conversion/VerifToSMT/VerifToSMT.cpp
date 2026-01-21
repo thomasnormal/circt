@@ -1949,22 +1949,37 @@ void ConvertVerifToSMTPass::runOnOperation() {
   WalkResult assertionCheck = getOperation().walk(
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
-          // We also currently don't support initial values on registers that
-          // don't have integer inputs.
           auto regTypes = TypeRange(bmcOp.getCircuit().getArgumentTypes())
                               .take_back(bmcOp.getNumRegs());
           for (auto [regType, initVal] :
                llvm::zip(regTypes, bmcOp.getInitialValues())) {
             if (!isa<UnitAttr>(initVal)) {
-              if (!isa<IntegerType>(regType)) {
-                op->emitError("initial values are currently only supported for "
-                              "registers with integer types");
+              int64_t regWidth = hw::getBitWidth(regType);
+              if (regWidth <= 0) {
+                op->emitError(
+                    "initial values require registers with known bit widths");
                 return WalkResult::interrupt();
+              }
+              if (auto initIntAttr = dyn_cast<IntegerAttr>(initVal)) {
+                if (initIntAttr.getValue().getBitWidth() !=
+                    static_cast<unsigned>(regWidth)) {
+                  op->emitError(
+                      "bit width of initial value does not match register");
+                  return WalkResult::interrupt();
+                }
+                continue;
+              }
+              if (auto initBoolAttr = dyn_cast<BoolAttr>(initVal)) {
+                if (regWidth != 1) {
+                  op->emitError(
+                      "bool initial value requires 1-bit register width");
+                  return WalkResult::interrupt();
+                }
+                continue;
               }
               auto tyAttr = dyn_cast<TypedAttr>(initVal);
               if (!tyAttr || tyAttr.getType() != regType) {
-                op->emitError("type of initial value does not match type of "
-                              "initialized register");
+                op->emitError("unsupported initial value for register");
                 return WalkResult::interrupt();
               }
             }

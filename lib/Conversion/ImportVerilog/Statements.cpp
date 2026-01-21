@@ -884,7 +884,16 @@ struct StmtVisitor {
     if ((twoStateExhaustive || (hasFullCaseAttr && !caseStmt.defaultCase)) &&
         lastMatchBlock &&
         caseStmt.condition == CaseStatementCondition::Normal) {
-      mlir::cf::BranchOp::create(builder, loc, lastMatchBlock);
+      // If the last match block has a block argument (for tracking which
+      // expression matched), we need to provide a constant true guard value
+      // since this is the fallback path where no previous items matched.
+      SmallVector<Value> branchArgs;
+      if (lastMatchBlock->getNumArguments() > 0) {
+        auto argType = cast<moore::IntType>(lastMatchBlock->getArgument(0).getType());
+        auto trueGuard = moore::ConstantOp::create(builder, loc, argType, 1);
+        branchArgs.push_back(trueGuard);
+      }
+      mlir::cf::BranchOp::create(builder, loc, lastMatchBlock, branchArgs);
     } else {
       // Generate the default case if present.
       Value defaultGuard = savedAssertionGuard;
