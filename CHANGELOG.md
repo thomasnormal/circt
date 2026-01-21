@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 82 - January 21, 2026
+
+### End-to-End Testing with Real UVM Library
+
+**Key Discovery**: 2-state types (`int`, `bit`) work end-to-end through circt-sim!
+
+**Track A: APB AVIP End-to-End Test**
+- Real UVM library from `~/uvm-core` parses successfully
+- APB AVIP parses successfully
+- **CRASH** during MooreToCore conversion on 4-state types
+- Root cause: `cast<IntegerType>()` fails when 4-state types become `{value, unknown}` structs
+
+**Track B: Simulation Blocker Analysis**
+- Confirmed: **2-state types work correctly** through circt-sim
+- Test passed: `int counter; always @(posedge clk) $display("Counter: %d", counter);`
+- Blockers are in 4-state type conversion, not simulation core
+- Affected: `moore.fmt.int`, `moore.string.itoa`, `moore.time_to_logic`
+
+**Track C: All AVIPs with Real UVM**
+| AVIP | Compiles? | Notes |
+|------|-----------|-------|
+| APB | ✅ Yes | |
+| I2S | ✅ Yes | |
+| SPI | ✅ Yes | |
+| UART | ✅ Yes | |
+| I3C | ⚠️ Partial | 1 error: deprecated `uvm_test_done` |
+| AXI4 | ⚠️ Partial | 8 errors: bind directives |
+| AHB | ❌ No | 20 errors: bind with interface ports |
+| JTAG | ❌ No | 6 errors: bind + virtual interface |
+
+**Track D: BMC Integration Tests**
+- CIRCT MLIR tests: **11/11 PASS**
+- Manual SVA pattern tests: **10/10 PASS**
+- BMC core is working correctly
+- Frontend issues remain for $rose/$fell type mismatch
+
+### Critical Next Step
+Fix 4-state type conversion in MooreToCore:
+- Extract `value` field from 4-state structs before passing to integer-expecting ops
+- Locations: `FormatIntOpConversion`, `TimeToLogicOp`, `StringItoaOpConversion`
+
+---
+
 ## Iteration 81 - January 21, 2026
 
 ### Parallel Agent Improvements: EventScheduler, UVM RAL, BMC, Process Scheduling
