@@ -66,12 +66,21 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 91)
+### Track Status & Next Tasks (Iteration 91 - Updated)
 
 **Test Results (Iteration 91)**:
-- sv-tests: 81.3% adjusted pass rate (improvement)
-- verilator-verification: 62% parse-only, 96% MooreToCore
-- Yosys SVA: 71.4% BMC pass rate
+- sv-tests: 61.1% core pass rate (727 tests)
+- verilator-verification: 62% parse-only, 94% MooreToCore
+- Yosys SVA: 75% BMC pass rate
+
+**AVIP Pipeline Status**:
+| AVIP | ImportVerilog | MooreToCore | Remaining Blocker |
+|------|---------------|-------------|-------------------|
+| **APB** | ✅ | ✅ | None - Full pipeline works! |
+| **SPI** | ✅ | ✅ | None - Full pipeline works! |
+| **UART** | ✅ | ⚠️ 91% | llvm.store/load hw.struct |
+| **I2S** | ⚠️ | - | Missing assertion files |
+| **AHB** | ⚠️ | - | Needs UVM for full test |
 
 **Key Blockers for UVM Testbench Execution**:
 1. ~~**Delays in class tasks**~~ ✅ FIXED - `__moore_delay()` runtime function for class methods
@@ -87,10 +96,13 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 11. ~~**integer -> queue<T>**~~ ✅ FIXED (Iter 91) - Stream unpack to queue conversion
 12. ~~**$past assertion**~~ ✅ FIXED (Iter 91) - moore::PastOp preserves value type
 13. ~~**Interface port members**~~ ✅ FIXED (Iter 91) - Skip hierarchical path for interface ports
-14. **ModportPortSymbol handler** ⚠️ BLOCKER - Need to handle modport member access in Expressions.cpp
-15. **Case statement codegen** ⚠️ BLOCKER - Branch operand mismatch in MooreToCore
-16. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
-17. **Virtual method dispatch** - Class hierarchy not fully simulated
+14. ~~**ModportPortSymbol handler**~~ ✅ FIXED (Iter 91) - Modport member access in Expressions.cpp
+15. ~~**EmptyArgument expressions**~~ ✅ FIXED (Iter 91) - Optional arguments in $random(), etc.
+16. ~~**4-state power operator**~~ ✅ FIXED (Iter 91) - Extract value before math.ipowi
+17. ~~**4-state bit extraction**~~ ✅ FIXED (Iter 91) - sig_struct_extract for value/unknown
+18. **llvm.store/load hw.struct** ⚠️ BLOCKER - UVM config_db generic class
+19. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
+20. **Virtual method dispatch** - Class hierarchy not fully simulated
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -106,21 +118,14 @@ circt-verilog --uvm-path ~/uvm-core/src \
 **Track A: AVIP Simulation (Priority: HIGH)**
 | Status | Next Priority |
 |--------|---------------|
-| ✅ UVM .exists() fixed | Returns i1 boolean correctly |
-| ✅ 4-state struct storage | Extract value before LLVM store |
 | ✅ **APB AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
-| ✅ I2S/SPI/UART ImportVerilog | All three parse (missing assertion files) |
-| ✅ Class task delays | __moore_delay() for class methods |
-| ✅ f64 BoolCast (Iter 90) | arith::CmpFOp for float-to-bool |
-| ✅ NegOp 4-state (Iter 90) | Proper unknown bit propagation |
-| ✅ DPI handles (Iter 90) | chandle/class handle conversions |
-| ✅ array.locator (Iter 90) | External variable refs + inline loop fallback |
-| ✅ open_uarray <-> queue (Iter 90) | Same runtime representation |
-| ✅ integer -> queue<T> (Iter 91) | Stream unpack to queue conversion |
-| ✅ $past assertion (Iter 91) | moore::PastOp preserves value type |
-| ✅ Interface port members (Iter 91) | Skip hierarchical path for interface ports |
-| ⚠️ ModportPortSymbol | **NEXT**: Handle modport member access in Expressions.cpp |
-| ⚠️ EmptyArgument expressions | Optional arguments in $random(), etc. |
+| ✅ **SPI AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
+| ✅ UART AVIP 91% fixed | 10/11 errors resolved, 1 remaining |
+| ✅ ModportPortSymbol (Iter 91) | Handle modport member access in Expressions.cpp |
+| ✅ EmptyArgument (Iter 91) | Optional arguments in $random(), etc. |
+| ✅ 4-state power (Iter 91) | Extract value before math.ipowi |
+| ✅ 4-state bit extract (Iter 91) | sig_struct_extract for value/unknown |
+| ⚠️ **llvm.store/load hw.struct** | **NEXT**: UVM config_db generic class needs fix |
 | ⚠️ Virtual interfaces | Runtime binding needed |
 | ⚠️ Virtual method dispatch | Class hierarchy simulation |
 
