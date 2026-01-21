@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 88 - January 21, 2026
+
+### SVA/BMC Defaults and Robustness
+
+- **LowerToBMC**: Allow multiple derived clocks by constraining each derived
+  clock input to a single generated BMC clock.
+- **MooreToCore**: 4-state logical/relational/case/wildcard comparisons now
+  lower without invalid `comb.icmp` uses; added 4-state equality regression.
+- **MooreToCore**: 4-state boolean cast and reduce ops now lower without invalid
+  `comb.icmp` usage; added 4-state bool-cast regression.
+- **ImportVerilog**: Apply default clocking + default disable iff to concurrent
+  assertions; hierarchical external nets now emit a diagnostic instead of
+  segfaulting.
+- **LTLToCore**: Use a default clock (from `seq.to_clock` or clock inputs) for
+  unclocked LTL properties in the BMC pipeline.
+- **LTLToCore**: Tag `disable iff` properties and lower them with resettable
+  LTL state (registers reset on disable) plus disable-masked final checks; add
+  a disable-iff lowering regression.
+- **Yosys SVA runner**: Skip VHDL-backed tests by default and handle
+  `circt-verilog` failures without aborting the suite.
+
+**Tests run**:
+- `ninja -C build circt-opt circt-bmc circt-verilog`
+- `build/bin/circt-opt --lower-to-bmc="top-module=derived2 bound=4" test/Tools/circt-bmc/lower-to-bmc-derived-clocks.mlir | llvm/build/bin/FileCheck test/Tools/circt-bmc/lower-to-bmc-derived-clocks.mlir`
+- `build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/eq-fourstate.mlir | llvm/build/bin/FileCheck test/Conversion/MooreToCore/eq-fourstate.mlir`
+- `ninja -C build circt-opt`
+- `build/bin/circt-opt test/Conversion/LTLToCore/disable-iff.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/disable-iff.mlir`
+- `utils/run_yosys_sva_circt_bmc.sh` (basic00-03 pass; counter pass still failing; extnets unsupported)
+- `TEST_FILTER=counter utils/run_yosys_sva_circt_bmc.sh` (counter still failing)
+
 ## Iteration 87 - January 21, 2026
 
 ### Major Test Fix Pass: 96 → 3 Failures (97% Reduction) ⭐

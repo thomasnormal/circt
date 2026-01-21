@@ -393,9 +393,12 @@ struct PropertyResult {
   Value finalCheck;
 };
 
+constexpr const char kDisableIffAttr[] = "sva.disable_iff";
+
 struct LTLPropertyLowerer {
   OpBuilder &builder;
   Location loc;
+  Value disable;
 
   std::optional<uint64_t> getSequenceMaxLength(Value seq) {
     if (!seq)
@@ -483,6 +486,52 @@ struct LTLPropertyLowerer {
                                   SmallVector<Value, 2>{lowBits, zeroBit});
   }
 
+  PropertyResult lowerDisableIff(ltl::OrOp orOp, Value clock,
+                                 ltl::ClockEdge edge) {
+    if (disable) {
+      orOp.emitError("nested disable iff is not supported");
+      return {Value(), {}};
+    }
+    auto inputs = orOp.getInputs();
+    if (inputs.size() != 2) {
+      orOp.emitError("disable iff expects two inputs");
+      return {Value(), {}};
+    }
+    Value disableInput;
+    Value propertyInput;
+    auto type0 = inputs[0].getType();
+    auto type1 = inputs[1].getType();
+    bool input0IsBool = type0.isInteger(1);
+    bool input1IsBool = type1.isInteger(1);
+    bool input0IsProp = isa<ltl::PropertyType, ltl::SequenceType>(type0);
+    bool input1IsProp = isa<ltl::PropertyType, ltl::SequenceType>(type1);
+    if (input0IsBool && input1IsProp) {
+      disableInput = inputs[0];
+      propertyInput = inputs[1];
+    } else if (input1IsBool && input0IsProp) {
+      disableInput = inputs[1];
+      propertyInput = inputs[0];
+    } else {
+      orOp.emitError("disable iff expects i1 and property inputs");
+      return {Value(), {}};
+    }
+
+    disable = disableInput;
+    auto result = lowerProperty(propertyInput, clock, edge);
+    if (!result.safety || !result.finalCheck) {
+      orOp.emitError("invalid property lowering");
+      return {Value(), {}};
+    }
+
+    auto safety = comb::OrOp::create(
+        builder, loc, SmallVector<Value, 2>{disableInput, result.safety},
+        true);
+    auto finalCheck = comb::OrOp::create(
+        builder, loc, SmallVector<Value, 2>{disableInput, result.finalCheck},
+        true);
+    return {safety, finalCheck};
+  }
+
   Value lowerFirstMatchSequence(Value seq, Value clock, ltl::ClockEdge edge,
                                 uint64_t maxLen) {
     static_cast<void>(edge);
@@ -525,8 +574,10 @@ struct LTLPropertyLowerer {
       nextStates.push_back(next);
       auto powerOn =
           seq::createConstantInitialValue(builder, zeroBits.getOperation());
-      auto reg = seq::CompRegOp::create(builder, loc, next, clock, Value(),
-                                        Value(),
+      Value reset = disable;
+      Value resetVal = zeroBits;
+      auto reg = seq::CompRegOp::create(builder, loc, next, clock, reset,
+                                        resetVal,
                                         builder.getStringAttr("ltl_state"),
                                         powerOn);
       stateRegs.push_back(reg);
@@ -656,34 +707,12 @@ struct LTLPropertyLowerer {
       return {safety, finalCheck};
     }
     if (auto orOp = prop.getDefiningOp<ltl::OrOp>()) {
+      if (orOp->hasAttr(kDisableIffAttr))
+        return lowerDisableIff(orOp, clock, edge);
       SmallVector<Value, 4> safeties;
       SmallVector<PropertyResult, 4> results;
       Value finalCheck = nullptr;
-      Value disableInput;
-      PropertyResult disableRes;
-      bool haveDisableRes = false;
-      uint64_t disableShift = 0;
-      auto inputs = orOp.getInputs();
-      if (inputs.size() == 2) {
-        auto implOp = inputs[0].getDefiningOp<ltl::ImplicationOp>();
-        if (!implOp)
-          implOp = inputs[1].getDefiningOp<ltl::ImplicationOp>();
-        if (implOp) {
-          Value otherInput = (implOp == inputs[0].getDefiningOp<ltl::ImplicationOp>())
-                                 ? inputs[1]
-                                 : inputs[0];
-          if (auto delayOp =
-                  implOp.getConsequent().getDefiningOp<ltl::DelayOp>()) {
-            if (auto length = delayOp.getLength()) {
-              if (*length == 0 && delayOp.getDelay() > 0) {
-                disableShift = delayOp.getDelay();
-                disableInput = otherInput;
-              }
-            }
-          }
-        }
-      }
-      for (auto input : inputs) {
+      for (auto input : orOp.getInputs()) {
         auto res = lowerProperty(input, clock, edge);
         if (!res.safety || !res.finalCheck) {
           orOp.emitError("invalid property lowering");
@@ -696,24 +725,6 @@ struct LTLPropertyLowerer {
         else
           finalCheck =
               comb::OrOp::create(builder, loc, finalCheck, res.finalCheck);
-        if (input == disableInput) {
-          disableRes = res;
-          haveDisableRes = true;
-        }
-      }
-      if (disableShift > 0) {
-        if (!clock || !haveDisableRes) {
-          orOp.emitError("disable iff requires a clocked property");
-          return {Value(), {}};
-        }
-        Value shiftedDisable =
-            shiftValue(disableRes.safety, disableShift, clock);
-        safeties.push_back(shiftedDisable);
-        if (!finalCheck)
-          finalCheck = shiftedDisable;
-        else
-          finalCheck = comb::OrOp::create(builder, loc, finalCheck,
-                                          shiftedDisable);
       }
       auto safety = comb::OrOp::create(builder, loc, safeties, true);
       return {safety, finalCheck};
@@ -882,8 +893,10 @@ struct LTLPropertyLowerer {
                                                               : falseVal;
       auto powerOn = seq::createConstantInitialValue(
           builder, initVal.getDefiningOp());
-      auto reg = seq::CompRegOp::create(builder, loc, next, clock,
-                                        Value(), Value(),
+      Value reset = disable;
+      Value resetVal = falseVal;
+      auto reg = seq::CompRegOp::create(builder, loc, next, clock, reset,
+                                        resetVal,
                                         builder.getStringAttr("ltl_state"),
                                         powerOn);
       stateRegs.push_back(reg);
@@ -954,7 +967,9 @@ struct LTLPropertyLowerer {
         hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
     auto powerOn = seq::createConstantInitialValue(
         builder, initVal.getOperation());
-    return seq::CompRegOp::create(builder, loc, next, clock, Value(), Value(),
+    Value reset = disable;
+    Value resetVal = initVal;
+    return seq::CompRegOp::create(builder, loc, next, clock, reset, resetVal,
                                   builder.getStringAttr(name), powerOn);
   }
 
@@ -965,8 +980,10 @@ struct LTLPropertyLowerer {
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
       auto powerOn = seq::createConstantInitialValue(
           builder, initVal.getOperation());
-      current = seq::CompRegOp::create(builder, loc, current, clock, Value(),
-                                       Value(),
+      Value reset = disable;
+      Value resetVal = initVal;
+      current = seq::CompRegOp::create(builder, loc, current, clock, reset,
+                                       resetVal,
                                        builder.getStringAttr("ltl_past"),
                                        powerOn);
     }

@@ -47,7 +47,11 @@ run_case() {
     read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
     verilog_args+=("${extra_args[@]}")
   fi
-  "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "${extra_def[@]}" "$sv" > "$mlir"
+  if ! "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "${extra_def[@]}" "$sv" > "$mlir"; then
+    echo "FAIL($mode): $base"
+    failures=$((failures + 1))
+    return
+  fi
   local out
   out="$("$CIRCT_BMC" -b "$BOUND" --ignore-asserts-until="$IGNORE_ASSERTS_UNTIL" \
       --module "$TOP" --shared-libs="$Z3_LIB" "$mlir" || true)"

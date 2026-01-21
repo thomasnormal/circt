@@ -562,10 +562,19 @@ struct ModuleVisitor : public BaseVisitor {
 
     // Here we use the hierarchical value recorded in `Context::valueSymbols`.
     // Then we pass it as the input port with the ref<T> type of the instance.
-    for (const auto &hierPath : context.hierPaths[&instNode.body])
-      if (auto hierValue = context.valueSymbols.lookup(hierPath.valueSym);
-          hierPath.hierName && hierPath.direction == ArgumentDirection::In)
-        inputValues.push_back(hierValue);
+    for (const auto &hierPath : context.hierPaths[&instNode.body]) {
+      if (!hierPath.hierName ||
+          hierPath.direction != ArgumentDirection::In)
+        continue;
+      auto hierValue = context.valueSymbols.lookup(hierPath.valueSym);
+      if (!hierValue) {
+        mlir::emitError(loc)
+            << "missing hierarchical value for `" << hierPath.hierName.getValue()
+            << "`";
+        return failure();
+      }
+      inputValues.push_back(hierValue);
+    }
 
     // Create the instance op itself.
     auto inputNames = builder.getArrayAttr(moduleType.getInputNames());
@@ -1581,11 +1590,24 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
   auto parameters = module->getParameters();
   bool hasModuleSame = false;
   // If there is already exist a module that has the same name with this
-  // module ,has the same parent scope and has the same parameters we can
-  // define this module is a duplicate module
+  // module, has the same parent scope, has the same parameters, and is not
+  // targeted by instance-specific bind directives, we can define this module
+  // is a duplicate module.
+  //
+  // Instance-specific bind directives (e.g., "bind top.inst1 monitor mon()")
+  // create different bound instances in different instance bodies, so we must
+  // treat them as unique modules even if they have the same definition and
+  // parameters.
   for (auto const &existingModule : modules) {
     if (module->getDeclaringDefinition() ==
         existingModule.getFirst()->getDeclaringDefinition()) {
+      // Check if either instance body has instance-specific binds by comparing
+      // their hierarchyOverrideNode pointers. If they differ, the instances
+      // have different bound modules and must be kept separate.
+      if (module->hierarchyOverrideNode !=
+          existingModule.getFirst()->hierarchyOverrideNode)
+        continue;
+
       auto moduleParameters = existingModule.getFirst()->getParameters();
       hasModuleSame = true;
       for (auto it1 = parameters.begin(), it2 = moduleParameters.begin();

@@ -12,6 +12,7 @@ Some general advice:
 - Make unit tests for every bug you fix or new feature you implement
 - Commit regularly and merge with upstream main.
 - Don't be worried if some files are changed without your knowledge. It might just be other agents working on the project.
+- If choosing between multiple options, pick the one that's the best choice long term.
 
 Continue!
 """

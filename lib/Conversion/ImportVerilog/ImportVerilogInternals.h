@@ -175,7 +175,7 @@ struct Context {
 
   // Convert an assertion expression AST node to MLIR ops.
   Value convertAssertionExpression(const slang::ast::AssertionExpr &expr,
-                                   Location loc);
+                                   Location loc, bool applyDefaults = true);
 
   // Convert an assertion expression AST node to MLIR ops.
   Value convertAssertionCallExpression(
