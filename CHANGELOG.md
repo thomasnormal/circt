@@ -27,10 +27,22 @@
 - Solution re-binds expressions from syntax in procedural context
 - Test file validates class property and array element access
 
-**Track A: Sensitivity Persistence Investigation** (In Progress)
-- Deep analysis of ProcessScheduler↔EventScheduler interaction
-- Unit tests added for multi-process scenarios
-- Investigation continues
+**Track A: Process Interpreter Fixes** ⭐ BUG FIX
+- Added defensive handling in `executeProcess()` for waiting flag when destBlock is null
+- Improved signal lookup in `interpretWait()` to trace through operations (casts, etc.)
+- Added `ConcurrentInitialAndAlwaysBlocks` unit test for multi-process scenario
+- Added `SuspendProcessForEventsPeristsMapping` unit test for sensitivity persistence
+- Pre-existing `MultipleDelayedEvents` test failure unrelated to changes
+
+**BMC Instance Handling** ⭐ BUG FIX
+- Added `hw::createFlattenModules()` pass to circt-bmc pipeline
+- Assertions in submodule instances now properly verified
+- New integration tests: `instance_pass`, `instance_fail` in sva-e2e.sv
+
+**$past LTL Improvements** ⭐ BUG FIX
+- Prefer `ltl.PastOp` for 1-bit values in assertion context
+- Avoids unrealized_conversion_cast errors in LTL expressions
+- New test: `past-assert-compare.sv` for $past == comparisons
 
 ### Files Modified
 - `lib/Conversion/CombToSMT/CombToSMT.cpp` (+71 lines - popcount conversion)
@@ -39,9 +51,16 @@
 - `lib/Runtime/uvm/uvm_macros.svh` (fixed duplicate macros)
 - `lib/Conversion/ImportVerilog/Structure.cpp` (+77 lines - dynamic type)
 - `lib/Conversion/ImportVerilog/Expressions.cpp` (+80 lines - InvalidExpr)
+- `lib/Conversion/ImportVerilog/AssertionExpr.cpp` ($past LTL for 1-bit)
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (interpreter fixes)
+- `tools/circt-bmc/circt-bmc.cpp` (FlattenModules pass)
+- `tools/circt-bmc/CMakeLists.txt` (HWPasses link)
+- `unittests/Dialect/Sim/ProcessSchedulerTest.cpp` (+129 lines - new tests)
 - `test/Conversion/CombToSMT/llvm-ctpop-to-smt.mlir` (new)
 - `test/Conversion/CombToSMT/bmc-popcount.mlir` (new)
 - `test/Conversion/ImportVerilog/dynamic-nonprocedural.sv` (new)
+- `test/Conversion/MooreToCore/past-assert-compare.sv` (new)
+- `integration_test/circt-bmc/sva-e2e.sv` (instance tests)
 
 ---
 
