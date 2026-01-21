@@ -45,6 +45,26 @@
 // RUN:   circt-bmc -b 3 --module cover_pass --shared-libs=%libz3 - | \
 // RUN:   FileCheck %s --check-prefix=COVER-PASS
 // COVER-PASS: Bound reached with no violations!
+//
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 3 --module nonoverlap_fail --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=NONOVERLAP-FAIL
+// NONOVERLAP-FAIL: Assertion can be violated!
+//
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 3 --ignore-asserts-until=1 --module nonoverlap_pass --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=NONOVERLAP-PASS
+// NONOVERLAP-PASS: Bound reached with no violations!
+//
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 3 --module nonoverlap_disable_fail --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=NONOVERLAP-DISABLE-FAIL
+// NONOVERLAP-DISABLE-FAIL: Assertion can be violated!
+//
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 3 --ignore-asserts-until=1 --module nonoverlap_disable_pass --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=NONOVERLAP-DISABLE-PASS
+// NONOVERLAP-DISABLE-PASS: Bound reached with no violations!
 
 // TODO: Enable repeat_pass and repeat_range_pass once LTLToCore implication
 // semantics for multi-cycle sequences are corrected.
@@ -107,4 +127,32 @@ endmodule
 module cover_pass(input logic clk, input logic b);
   // Cover should not trigger a violation.
   cover property (@(posedge clk) b);
+endmodule
+
+module nonoverlap_fail(input logic clk, input logic a);
+  logic q;
+  always_ff @(posedge clk)
+    q <= 1'b0;
+  assert property (@(posedge clk) a |=> q);
+endmodule
+
+module nonoverlap_pass(input logic clk, input logic a);
+  logic q;
+  always_ff @(posedge clk)
+    q <= a;
+  assert property (@(posedge clk) a |=> q);
+endmodule
+
+module nonoverlap_disable_fail(input logic clk, input logic reset, input logic a);
+  logic q;
+  always_ff @(posedge clk)
+    q <= reset ? 1'b0 : 1'b0;
+  assert property (@(posedge clk) disable iff (reset) a |=> q);
+endmodule
+
+module nonoverlap_disable_pass(input logic clk, input logic reset, input logic a);
+  logic q;
+  always_ff @(posedge clk)
+    q <= reset ? 1'b0 : a;
+  assert property (@(posedge clk) disable iff (reset) a |=> q);
 endmodule

@@ -64,7 +64,8 @@
 
 **Track G: BMC Non-Overlapped Implication** ⭐ FIX
 - Shifted exact delayed consequents in LTLToCore implication lowering to use past-form antecedent matching.
-- BMC now passes `a |=> q` with single-cycle register delay (nonoverlap pass/fail added).
+- Added disable-iff past-shift for delayed implications so reset can cancel multi-cycle checks.
+- BMC now passes `a |=> q` with single-cycle register delay and disable-iff reset (yosys `basic00` pass/fail).
 - New tests: `bmc-nonoverlap-implication.mlir`, extended `integration_test/circt-bmc/sva-e2e.sv`.
 
 ### Files Modified

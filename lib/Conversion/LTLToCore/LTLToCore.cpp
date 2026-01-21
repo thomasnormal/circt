@@ -659,7 +659,31 @@ struct LTLPropertyLowerer {
       SmallVector<Value, 4> safeties;
       SmallVector<PropertyResult, 4> results;
       Value finalCheck = nullptr;
-      for (auto input : orOp.getInputs()) {
+      Value disableInput;
+      PropertyResult disableRes;
+      bool haveDisableRes = false;
+      uint64_t disableShift = 0;
+      auto inputs = orOp.getInputs();
+      if (inputs.size() == 2) {
+        auto implOp = inputs[0].getDefiningOp<ltl::ImplicationOp>();
+        if (!implOp)
+          implOp = inputs[1].getDefiningOp<ltl::ImplicationOp>();
+        if (implOp) {
+          Value otherInput = (implOp == inputs[0].getDefiningOp<ltl::ImplicationOp>())
+                                 ? inputs[1]
+                                 : inputs[0];
+          if (auto delayOp =
+                  implOp.getConsequent().getDefiningOp<ltl::DelayOp>()) {
+            if (auto length = delayOp.getLength()) {
+              if (*length == 0 && delayOp.getDelay() > 0) {
+                disableShift = delayOp.getDelay();
+                disableInput = otherInput;
+              }
+            }
+          }
+        }
+      }
+      for (auto input : inputs) {
         auto res = lowerProperty(input, clock, edge);
         if (!res.safety || !res.finalCheck) {
           orOp.emitError("invalid property lowering");
@@ -672,14 +696,49 @@ struct LTLPropertyLowerer {
         else
           finalCheck =
               comb::OrOp::create(builder, loc, finalCheck, res.finalCheck);
+        if (input == disableInput) {
+          disableRes = res;
+          haveDisableRes = true;
+        }
+      }
+      if (disableShift > 0) {
+        if (!clock || !haveDisableRes) {
+          orOp.emitError("disable iff requires a clocked property");
+          return {Value(), {}};
+        }
+        Value shiftedDisable =
+            shiftValue(disableRes.safety, disableShift, clock);
+        safeties.push_back(shiftedDisable);
+        if (!finalCheck)
+          finalCheck = shiftedDisable;
+        else
+          finalCheck = comb::OrOp::create(builder, loc, finalCheck,
+                                          shiftedDisable);
       }
       auto safety = comb::OrOp::create(builder, loc, safeties, true);
       return {safety, finalCheck};
     }
     if (auto implOp = prop.getDefiningOp<ltl::ImplicationOp>()) {
-      auto antecedent =
-          lowerSequence(implOp.getAntecedent(), clock, edge);
-      auto consequent = lowerProperty(implOp.getConsequent(), clock, edge);
+      Value antecedentSeq = implOp.getAntecedent();
+      Value consequentValue = implOp.getConsequent();
+      uint64_t shiftDelay = 0;
+      if (auto delayOp = consequentValue.getDefiningOp<ltl::DelayOp>()) {
+        if (auto length = delayOp.getLength()) {
+          if (*length == 0 && delayOp.getDelay() > 0) {
+            shiftDelay = delayOp.getDelay();
+            consequentValue = delayOp.getInput();
+          }
+        }
+      }
+      auto antecedent = lowerSequence(antecedentSeq, clock, edge);
+      if (shiftDelay > 0) {
+        if (!clock) {
+          implOp.emitError("implication requires a clocked property");
+          return {Value(), {}};
+        }
+        antecedent = shiftValue(antecedent, shiftDelay, clock);
+      }
+      auto consequent = lowerProperty(consequentValue, clock, edge);
       if (!consequent.finalCheck) {
         implOp.emitError("invalid property lowering");
         return {Value(), {}};
