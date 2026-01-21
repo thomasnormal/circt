@@ -79,9 +79,11 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 6. ~~**NegOp 4-state types**~~ ✅ FIXED (Iter 90) - Proper 4-state struct handling
 7. ~~**chandle <-> integer**~~ ✅ FIXED (Iter 90) - `llvm.ptrtoint`/`inttoptr` for DPI handles
 8. ~~**class handle -> integer**~~ ✅ FIXED (Iter 90) - null comparison support
-9. **array.locator** ⚠️ BLOCKER - Not supported in MooreToCore (blocks I2S, SPI, UART)
-10. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
-11. **Virtual method dispatch** - Class hierarchy not fully simulated
+9. ~~**array.locator**~~ ✅ FIXED (Iter 90) - External variable references + fallback to inline loop
+10. ~~**open_uarray <-> queue**~~ ✅ FIXED (Iter 90) - Same runtime representation
+11. **integer -> queue<T>** ⚠️ BLOCKER - Stream unpack to queue (blocks I2S, SPI, UART)
+12. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
+13. **Virtual method dispatch** - Class hierarchy not fully simulated
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -100,12 +102,14 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ UVM .exists() fixed | Returns i1 boolean correctly |
 | ✅ 4-state struct storage | Extract value before LLVM store |
 | ✅ APB AVIP full pipeline | ImportVerilog + MooreToCore both pass |
-| ✅ I2S/SPI/UART ImportVerilog | All three parse successfully |
+| ✅ I2S/SPI/UART ImportVerilog | All three parse successfully (240-276K lines) |
 | ✅ Class task delays | __moore_delay() for class methods |
 | ✅ f64 BoolCast (Iter 90) | arith::CmpFOp for float-to-bool |
 | ✅ NegOp 4-state (Iter 90) | Proper unknown bit propagation |
 | ✅ DPI handles (Iter 90) | chandle/class handle conversions |
-| ⚠️ array.locator | **NEXT**: Add MooreToCore pattern |
+| ✅ array.locator (Iter 90) | External variable refs + inline loop fallback |
+| ✅ open_uarray <-> queue (Iter 90) | Same runtime representation |
+| ⚠️ integer -> queue<T> | **NEXT**: Stream unpack to queue conversion |
 | ⚠️ Virtual interfaces | Runtime binding needed |
 | ⚠️ Virtual method dispatch | Class hierarchy simulation |
 
