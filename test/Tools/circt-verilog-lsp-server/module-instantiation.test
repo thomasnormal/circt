@@ -17,9 +17,11 @@
 }}
 // CHECK:       "id": 1,
 // CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
-// CHECK:           "name": "adder"
-// CHECK:           "name": "top_level"
+// CHECK:       "result": [
+// Document symbols include module with children (ports, instances)
+// u_adder instance is listed in children before parent module name
+// CHECK:         "name": "u_adder"
+// CHECK:         "name": "top_level"
 // -----
 // Go to definition of 'adder' module (from instantiation line 16, col 2)
 {"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{
@@ -29,9 +31,9 @@
 // CHECK:       "id": 2,
 // CHECK-NEXT:  "jsonrpc": "2.0",
 // CHECK-NEXT:  "result": [
-// Should navigate to adder module definition
-// CHECK:         "uri": "test:///hierarchy.sv"
+// Should navigate to adder module definition (line 0 is the module declaration)
 // CHECK:         "line": 0
+// CHECK:         "uri": "test:///hierarchy.sv"
 // -----
 // Hover over instance name 'u_adder' (line 16, col 21)
 {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{

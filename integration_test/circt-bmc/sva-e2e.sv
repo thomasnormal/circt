@@ -32,9 +32,22 @@
 // UNBOUNDED-PASS: Bound reached with no violations!
 
 // RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 4 --module repeat_fail --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=REPEAT-FAIL
+// REPEAT-FAIL: Assertion can be violated!
+
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 5 --module repeat_range_fail --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=REPEAT-RANGE-FAIL
+// REPEAT-RANGE-FAIL: Assertion can be violated!
+
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
 // RUN:   circt-bmc -b 3 --module cover_pass --shared-libs=%libz3 - | \
 // RUN:   FileCheck %s --check-prefix=COVER-PASS
 // COVER-PASS: Bound reached with no violations!
+
+// TODO: Enable repeat_pass and repeat_range_pass once LTLToCore implication
+// semantics for multi-cycle sequences are corrected.
 
 module delay_fail(input logic clk);
   // This should be violated once delay buffering is functional.
@@ -67,6 +80,28 @@ module unbounded_pass(input logic clk, input logic b);
   // Constrain b high so ##[1:$] b is satisfied within the bound after warmup.
   assume property (@(posedge clk) b);
   assert property (@(posedge clk) b |-> ##[1:$] b);
+endmodule
+
+module repeat_fail(input logic clk, input logic b);
+  // Consecutive repeat should fail without constraining b.
+  assert property (@(posedge clk) b |-> b[*3]);
+endmodule
+
+module repeat_pass(input logic clk, input logic b);
+  // Constrain b high so b[*3] holds after warmup.
+  assume property (@(posedge clk) b);
+  assert property (@(posedge clk) b |-> b[*3]);
+endmodule
+
+module repeat_range_fail(input logic clk, input logic b);
+  // Bounded repeat range should fail without constraining b.
+  assert property (@(posedge clk) b |-> b[*2:3]);
+endmodule
+
+module repeat_range_pass(input logic clk, input logic b);
+  // Constrain b high so b[*2:3] holds after warmup.
+  assume property (@(posedge clk) b);
+  assert property (@(posedge clk) b |-> b[*2:3]);
 endmodule
 
 module cover_pass(input logic clk, input logic b);

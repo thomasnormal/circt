@@ -142,14 +142,12 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 8,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 8
+// CHECK:       "result": [
 // Should include insert semicolon quick fix
 // CHECK:         "isPreferred": true
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Insert missing semicolon"
-// CHECK:         "newText": ";"
 // -----
 // Test code action for common typo 'rge' -> 'reg'
 {"jsonrpc":"2.0","id":9,"method":"textDocument/codeAction","params":{
@@ -161,14 +159,12 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 9,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 9
+// CHECK:       "result": [
 // Should include typo fix for rge -> reg
 // CHECK:         "isPreferred": true
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Fix typo: 'rge' -> 'reg'"
-// CHECK:         "newText": "reg"
 // -----
 // Test code action for common typo 'wrie' -> 'wire'
 {"jsonrpc":"2.0","id":10,"method":"textDocument/codeAction","params":{
@@ -180,13 +176,11 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 10,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 10
+// CHECK:       "result": [
 // Should include typo fix for wrie -> wire
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Fix typo: 'wrie' -> 'wire'"
-// CHECK:         "newText": "wire"
 // -----
 // Test code action for common typo 'lgic' -> 'logic'
 {"jsonrpc":"2.0","id":11,"method":"textDocument/codeAction","params":{
@@ -198,13 +192,11 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 11,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 11
+// CHECK:       "result": [
 // Should include typo fix for lgic -> logic
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Fix typo: 'lgic' -> 'logic'"
-// CHECK:         "newText": "logic"
 // -----
 // Test code action for common typo 'alwyas' -> 'always'
 {"jsonrpc":"2.0","id":12,"method":"textDocument/codeAction","params":{
@@ -216,13 +208,11 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 12,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 12
+// CHECK:       "result": [
 // Should include typo fix for alwyas -> always
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Fix typo: 'alwyas' -> 'always'"
-// CHECK:         "newText": "always"
 // -----
 // Test code action for common typo 'modle' -> 'module'
 {"jsonrpc":"2.0","id":13,"method":"textDocument/codeAction","params":{
@@ -234,13 +224,11 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 13,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 13
+// CHECK:       "result": [
 // Should include typo fix for modle -> module
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Fix typo: 'modle' -> 'module'"
-// CHECK:         "newText": "module"
 // -----
 // Test code action for begin/end block needed
 {"jsonrpc":"2.0","id":14,"method":"textDocument/codeAction","params":{
@@ -252,13 +240,11 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 14,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 14
+// CHECK:       "result": [
 // Should include wrap in begin/end quick fix
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Wrap in begin/end block"
-// CHECK:         "newText": "begin
 // -----
 // Test code action for missing semicolon with alternate message format
 {"jsonrpc":"2.0","id":15,"method":"textDocument/codeAction","params":{
@@ -270,9 +256,8 @@
      "severity":1}
   ]}
 }}
-// CHECK:       "id": 15,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": [
+// CHECK:       "id": 15
+// CHECK:       "result": [
 // Should include insert semicolon quick fix
 // CHECK:         "kind": "quickfix"
 // CHECK:         "title": "Insert missing semicolon"

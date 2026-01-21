@@ -7,13 +7,14 @@
 // =============================================================================
 
 // CHECK-LABEL: func.func @test_repeat_3
-// Two delay buffer slots initialized to 0 (for delays 1 and 2)
+// Three delay buffer slots initialized to 0 (for delays 1 and 2)
+// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
-// Circuit takes 3 args (a, buf0, buf1)
+// Circuit takes 4 args (a, buf0, buf1, buf2)
 // CHECK: func.call @bmc_circuit
-// CHECK-SAME: : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME: : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
 func.func @test_repeat_3() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -35,14 +36,15 @@ func.func @test_repeat_3() -> i1 {
 // =============================================================================
 
 // CHECK-LABEL: func.func @test_repeat_range
-// Three delay buffer slots initialized to 0 (repeat 2 and 3 without dedup)
+// Four delay buffer slots initialized to 0 (repeat 2 and 3 without dedup)
+// CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK-DAG: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
-// Circuit takes 4 args (a, buf0, buf1, buf2)
+// Circuit takes 5 args (a, buf0, buf1, buf2, buf3)
 // CHECK: func.call @bmc_circuit
-// CHECK-SAME: : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// CHECK-SAME: : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
 func.func @test_repeat_range() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {

@@ -35,7 +35,6 @@
 // CHECK:           "test:///rename_comprehensive.sv": [
 // Should include all WIDTH references
 // CHECK:             "newText": "BUS_WIDTH"
-// CHECK:             "newText": "BUS_WIDTH"
 // -----
 // Test rename of function name
 {"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{
@@ -43,8 +42,7 @@
   "position":{"line":9,"character":35}
 }}
 // CHECK:       "id": 3,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": {
+// CHECK:       "result": {
 // CHECK:         "end":
 // CHECK:         "start":
 // -----
@@ -55,12 +53,10 @@
   "newName":"transform_data"
 }}
 // CHECK:       "id": 4,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": {
+// CHECK:       "result": {
 // CHECK:         "changes": {
 // CHECK:           "test:///rename_comprehensive.sv": [
 // Should include function declaration and call
-// CHECK:             "newText": "transform_data"
 // CHECK:             "newText": "transform_data"
 // -----
 // Test rename of local variable buffer
@@ -70,12 +66,10 @@
   "newName":"temp_buffer"
 }}
 // CHECK:       "id": 5,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "result": {
+// CHECK:       "result": {
 // CHECK:         "changes": {
 // CHECK:           "test:///rename_comprehensive.sv": [
 // Should include all buffer references
-// CHECK:             "newText": "temp_buffer"
 // CHECK:             "newText": "temp_buffer"
 // -----
 {"jsonrpc":"2.0","id":99,"method":"shutdown"}

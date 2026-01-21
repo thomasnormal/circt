@@ -136,9 +136,9 @@
   "position":{"line":1,"character":8},
   "newName":""
 }}
-// CHECK:       "id": 7,
 // CHECK:       "error":
 // CHECK:         "message": "cannot rename symbol at this position"
+// CHECK:       "id": 7
 // -----
 
 //===----------------------------------------------------------------------===//
@@ -149,9 +149,9 @@
   "position":{"line":1,"character":8},
   "newName":"123invalid"
 }}
-// CHECK:       "id": 8,
 // CHECK:       "error":
 // CHECK:         "message": "cannot rename symbol at this position"
+// CHECK:       "id": 8
 // -----
 
 //===----------------------------------------------------------------------===//

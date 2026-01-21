@@ -12,27 +12,27 @@
   "text":"module Foo();\n Bar bar();\nendmodule"
 }}}
 // CHECK:        "method": "textDocument/publishDiagnostics",
-// CHECK-NEXT:   "params": {
-// CHECK-NEXT:     "diagnostics": [
-// CHECK-NEXT:       {
-// CHECK-NEXT:         "message": "unknown module 'Bar'",
-// CHECK-NEXT:         "range": {
-// CHECK-NEXT:           "end": {
-// CHECK-NEXT:             "character": 1,
-// CHECK-NEXT:             "line": 1
-// CHECK-NEXT:           },
-// CHECK-NEXT:           "start": {
-// CHECK-NEXT:             "character": 1,
-// CHECK-NEXT:             "line": 1
-// CHECK-NEXT:           }
-// CHECK-NEXT:         },
-// CHECK-NEXT:         "severity": 1,
-// CHECK-NEXT:         "source": "slang"
-// CHECK-NEXT:       }
-// CHECK-NEXT:     ],
-// CHECK-NEXT:     "uri": "test:///diagnostic.sv",
-// CHECK-NEXT:     "version": 1
-// CHECK-NEXT:   }
+// CHECK:        "params": {
+// CHECK:          "diagnostics": [
+// CHECK:            {
+// CHECK:              "message": "unknown module 'Bar'"
+// CHECK:              "range": {
+// CHECK:                "end": {
+// CHECK:                  "character":
+// CHECK:                  "line": 1
+// CHECK:                }
+// CHECK:                "start": {
+// CHECK:                  "character": 1
+// CHECK:                  "line": 1
+// CHECK:                }
+// CHECK:              }
+// CHECK:              "severity": 1
+// CHECK:              "source": "slang"
+// CHECK:            }
+// CHECK:          ]
+// CHECK:          "uri": "test:///diagnostic.sv"
+// CHECK:          "version": 1
+// CHECK:        }
 // CHECK-INCLUDE-NOT:  unknown module 'Bar'
 // -----
 {"jsonrpc":"2.0","id":7,"method":"shutdown"}

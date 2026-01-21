@@ -1890,6 +1890,20 @@ void __moore_coverage_print_summary(void);
 /// @return Dynamically allocated report string, or NULL on failure
 char *__moore_coverage_get_text_report(int32_t verbosity);
 
+/// Print a text coverage report to stdout.
+/// Outputs the coverage report directly to standard output.
+///
+/// @param verbosity Level of detail (0=summary, 1=normal, 2=detailed)
+void __moore_coverage_print_text(int32_t verbosity);
+
+/// Print a formatted coverage report at simulation finish.
+/// This function is designed to be called at $finish to provide a summary
+/// of all coverage results with pass/fail status based on goals.
+///
+/// @param verbosity Level of detail (-1=auto, 0=summary, 1=normal, 2=detailed)
+///                  When -1, auto-selects based on number of covergroups
+void __moore_coverage_report_on_finish(int32_t verbosity);
+
 //===----------------------------------------------------------------------===//
 // Coverage Database Save/Load/Merge Operations
 //===----------------------------------------------------------------------===//

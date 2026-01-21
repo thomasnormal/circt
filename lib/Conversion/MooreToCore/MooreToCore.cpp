@@ -267,6 +267,48 @@ static LLVM::LLVMStructType getOrCreateOpaqueStruct(MLIRContext *ctx,
   return LLVM::LLVMStructType::getIdentified(ctx, className.getRootReference());
 }
 
+/// Create a struct type for 4-state values: {value: iN, unknown: iN}
+/// where unknown[i]=1 means bit i is X or Z, and when unknown[i]=1,
+/// value[i]=0 means X, value[i]=1 means Z.
+static hw::StructType getFourStateStructType(MLIRContext *ctx, unsigned width) {
+  auto intType = IntegerType::get(ctx, width);
+  return hw::StructType::get(ctx, {{StringAttr::get(ctx, "value"), intType},
+                                   {StringAttr::get(ctx, "unknown"), intType}});
+}
+
+/// Check if a type is a 4-state struct type (has value and unknown fields).
+static bool isFourStateStructType(Type type) {
+  auto structType = dyn_cast<hw::StructType>(type);
+  if (!structType)
+    return false;
+  auto fields = structType.getElements();
+  if (fields.size() != 2)
+    return false;
+  return fields[0].name.getValue() == "value" &&
+         fields[1].name.getValue() == "unknown";
+}
+
+/// Extract the value component from a 4-state struct.
+static Value extractFourStateValue(OpBuilder &builder, Location loc,
+                                   Value fourState) {
+  return hw::StructExtractOp::create(builder, loc, fourState, "value");
+}
+
+/// Extract the unknown mask from a 4-state struct.
+static Value extractFourStateUnknown(OpBuilder &builder, Location loc,
+                                     Value fourState) {
+  return hw::StructExtractOp::create(builder, loc, fourState, "unknown");
+}
+
+/// Create a 4-state struct from value and unknown components.
+static Value createFourStateStruct(OpBuilder &builder, Location loc,
+                                   Value value, Value unknown) {
+  auto structType = getFourStateStructType(
+      builder.getContext(), value.getType().getIntOrFloatBitWidth());
+  return hw::StructCreateOp::create(builder, loc, structType,
+                                    ValueRange{value, unknown});
+}
+
 static LogicalResult resolveClassStructBody(ClassDeclOp op,
                                             TypeConverter const &typeConverter,
                                             ClassTypeCache &cache) {
@@ -1506,8 +1548,17 @@ struct InterfaceInstanceOpConversion
 
     Value ifacePtr = call.getResult();
 
-    // Replace the instance op with the allocated pointer.
-    rewriter.replaceOp(op, ifacePtr);
+    // The InterfaceInstanceOp returns a ref<virtual_interface> which should be
+    // an llhd.ref that holds a pointer to the interface struct. Create a signal
+    // to hold this pointer so that it can be read via probe/drive operations.
+    // This enables virtual interface binding (vif = interface_instance) to work
+    // correctly by reading the pointer from the signal.
+    auto sigRefTy = llhd::RefType::get(ptrTy);
+    auto sigOp = llhd::SignalOp::create(rewriter, loc, sigRefTy, StringAttr{},
+                                        ifacePtr);
+
+    // Replace the instance op with the signal reference.
+    rewriter.replaceOp(op, sigOp.getResult());
     return success();
   }
 
@@ -3608,11 +3659,17 @@ struct ConstantOpConv : public OpConversionPattern<ConstantOp> {
   LogicalResult
   matchAndRewrite(ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // FIXME: Discard unknown bits and map them to 0 for now.
-    auto value = op.getValue().toAPInt(false);
-    auto type = rewriter.getIntegerType(value.getBitWidth());
+    auto fvint = op.getValue();
+    auto width = fvint.getBitWidth();
+    auto intType = rewriter.getIntegerType(width);
+
+    // Convert the 4-valued FVInt to a 2-valued APInt.
+    // X and Z bits are mapped to 0 for conservative behavior.
+    // The X/Z information is preserved in the Moore IR and can be used
+    // for compile-time X-propagation optimization before this lowering.
+    auto value = fvint.toAPInt(false);
     rewriter.replaceOpWithNewOp<hw::ConstantOp>(
-        op, type, rewriter.getIntegerAttr(type, value));
+        op, intType, rewriter.getIntegerAttr(intType, value));
     return success();
   }
 };
@@ -4419,20 +4476,6 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
   }
 };
 
-struct NotOpConversion : public OpConversionPattern<NotOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult
-  matchAndRewrite(NotOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type resultType =
-        ConversionPattern::typeConverter->convertType(op.getResult().getType());
-    Value max = hw::ConstantOp::create(rewriter, op.getLoc(), resultType, -1);
-
-    rewriter.replaceOpWithNewOp<comb::XorOp>(op, adaptor.getInput(), max);
-    return success();
-  }
-};
-
 struct NegOpConversion : public OpConversionPattern<NegOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult
@@ -4467,6 +4510,251 @@ struct BinaryOpConversion : public OpConversionPattern<SourceOp> {
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<TargetOp>(op, adaptor.getLhs(),
                                           adaptor.getRhs(), false);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// 4-State Logic Operation Conversions
+//===----------------------------------------------------------------------===//
+
+/// Conversion for moore.and with 4-state X-propagation.
+/// Implements the truth table:
+///     0 1 X Z
+///   +--------
+/// 0 | 0 0 0 0
+/// 1 | 0 1 X X
+/// X | 0 X X X
+/// Z | 0 X X X
+struct FourStateAndOpConversion : public OpConversionPattern<AndOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AndOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Check if we're dealing with 4-state types
+    if (!isFourStateStructType(resultType)) {
+      // Two-valued: simple AND
+      rewriter.replaceOpWithNewOp<comb::AndOp>(op, adaptor.getLhs(),
+                                               adaptor.getRhs(), false);
+      return success();
+    }
+
+    // 4-state AND with X-propagation
+    Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
+    Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
+    Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
+    Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
+
+    // Compute definite zeros: bits that are definitely 0 in either operand
+    // A bit is definitely 0 if unknown=0 and value=0
+    // ~lhsVal & ~lhsUnk gives bits that are definitely 0 in lhs
+    Value lhsDefZero = comb::AndOp::create(
+        rewriter, loc,
+        comb::XorOp::create(
+            rewriter, loc, lhsVal,
+            hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), -1), false),
+        comb::XorOp::create(
+            rewriter, loc, lhsUnk,
+            hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), -1), false),
+        false);
+    Value rhsDefZero = comb::AndOp::create(
+        rewriter, loc,
+        comb::XorOp::create(
+            rewriter, loc, rhsVal,
+            hw::ConstantOp::create(rewriter, loc, rhsVal.getType(), -1), false),
+        comb::XorOp::create(
+            rewriter, loc, rhsUnk,
+            hw::ConstantOp::create(rewriter, loc, rhsUnk.getType(), -1), false),
+        false);
+    Value defZeros = comb::OrOp::create(rewriter, loc, lhsDefZero, rhsDefZero, false);
+
+    // Result value = lhsVal & rhsVal (with Z bits treated as X, i.e., value=0)
+    Value lhsValMasked =
+        comb::AndOp::create(rewriter, loc, lhsVal,
+                            comb::XorOp::create(rewriter, loc, lhsUnk,
+                                                hw::ConstantOp::create(
+                                                    rewriter, loc, lhsUnk.getType(), -1),
+                                                false),
+                            false);
+    Value rhsValMasked =
+        comb::AndOp::create(rewriter, loc, rhsVal,
+                            comb::XorOp::create(rewriter, loc, rhsUnk,
+                                                hw::ConstantOp::create(
+                                                    rewriter, loc, rhsUnk.getType(), -1),
+                                                false),
+                            false);
+    Value resultVal = comb::AndOp::create(rewriter, loc, lhsValMasked, rhsValMasked, false);
+
+    // Result unknown = (lhsUnk | rhsUnk) & ~defZeros
+    // Unknown bits propagate unless the result is a definite zero
+    Value allUnk = comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+    Value resultUnk =
+        comb::AndOp::create(rewriter, loc, allUnk,
+                            comb::XorOp::create(rewriter, loc, defZeros,
+                                                hw::ConstantOp::create(
+                                                    rewriter, loc, defZeros.getType(), -1),
+                                                false),
+                            false);
+
+    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Conversion for moore.or with 4-state X-propagation.
+/// Implements the truth table:
+///     0 1 X Z
+///   +--------
+/// 0 | 0 1 X X
+/// 1 | 1 1 1 1
+/// X | X 1 X X
+/// Z | X 1 X X
+struct FourStateOrOpConversion : public OpConversionPattern<OrOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(OrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Check if we're dealing with 4-state types
+    if (!isFourStateStructType(resultType)) {
+      // Two-valued: simple OR
+      rewriter.replaceOpWithNewOp<comb::OrOp>(op, adaptor.getLhs(),
+                                              adaptor.getRhs(), false);
+      return success();
+    }
+
+    // 4-state OR with X-propagation
+    Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
+    Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
+    Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
+    Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
+
+    // Compute definite ones: bits that are definitely 1 in either operand
+    // A bit is definitely 1 if unknown=0 and value=1
+    Value lhsDefOne = comb::AndOp::create(
+        rewriter, loc, lhsVal,
+        comb::XorOp::create(
+            rewriter, loc, lhsUnk,
+            hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), -1), false),
+        false);
+    Value rhsDefOne = comb::AndOp::create(
+        rewriter, loc, rhsVal,
+        comb::XorOp::create(
+            rewriter, loc, rhsUnk,
+            hw::ConstantOp::create(rewriter, loc, rhsUnk.getType(), -1), false),
+        false);
+    Value defOnes = comb::OrOp::create(rewriter, loc, lhsDefOne, rhsDefOne, false);
+
+    // Result value = lhsVal | rhsVal
+    Value resultVal = comb::OrOp::create(rewriter, loc, lhsVal, rhsVal, false);
+
+    // Result unknown = (lhsUnk | rhsUnk) & ~defOnes
+    // Unknown bits propagate unless the result is a definite one
+    Value allUnk = comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+    Value resultUnk =
+        comb::AndOp::create(rewriter, loc, allUnk,
+                            comb::XorOp::create(rewriter, loc, defOnes,
+                                                hw::ConstantOp::create(
+                                                    rewriter, loc, defOnes.getType(), -1),
+                                                false),
+                            false);
+
+    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Conversion for moore.xor with 4-state X-propagation.
+/// Implements the truth table:
+///     0 1 X Z
+///   +--------
+/// 0 | 0 1 X X
+/// 1 | 1 0 X X
+/// X | X X X X
+/// Z | X X X X
+struct FourStateXorOpConversion : public OpConversionPattern<XorOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(XorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Check if we're dealing with 4-state types
+    if (!isFourStateStructType(resultType)) {
+      // Two-valued: simple XOR
+      rewriter.replaceOpWithNewOp<comb::XorOp>(op, adaptor.getLhs(),
+                                               adaptor.getRhs(), false);
+      return success();
+    }
+
+    // 4-state XOR with X-propagation
+    Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
+    Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
+    Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
+    Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
+
+    // Result value = lhsVal ^ rhsVal
+    Value resultVal = comb::XorOp::create(rewriter, loc, lhsVal, rhsVal, false);
+
+    // Result unknown = lhsUnk | rhsUnk
+    // Any unknown bit in either operand makes the result unknown
+    Value resultUnk = comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+
+    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Conversion for moore.not with 4-state X-propagation.
+/// Implements the truth table:
+/// 0 | 1
+/// 1 | 0
+/// X | X
+/// Z | X
+struct FourStateNotOpConversion : public OpConversionPattern<NotOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(NotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Check if we're dealing with 4-state types
+    if (!isFourStateStructType(resultType)) {
+      // Two-valued: simple NOT (XOR with all ones)
+      Value max = hw::ConstantOp::create(rewriter, loc, resultType, -1);
+      rewriter.replaceOpWithNewOp<comb::XorOp>(op, adaptor.getInput(), max);
+      return success();
+    }
+
+    // 4-state NOT with X-propagation
+    Value inputVal = extractFourStateValue(rewriter, loc, adaptor.getInput());
+    Value inputUnk = extractFourStateUnknown(rewriter, loc, adaptor.getInput());
+
+    // Result value = ~inputVal (flip all bits)
+    Value resultVal = comb::XorOp::create(
+        rewriter, loc, inputVal,
+        hw::ConstantOp::create(rewriter, loc, inputVal.getType(), -1), false);
+
+    // Result unknown = inputUnk (unknown bits stay unknown)
+    // Note: Z bits become X (unknown stays, but value component is flipped)
+    Value resultUnk = inputUnk;
+
+    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -11365,6 +11653,12 @@ static void populateLegality(ConversionTarget &target,
 }
 
 static void populateTypeConversion(TypeConverter &typeConverter) {
+  // NOTE: Both two-valued (!moore.iN) and four-valued (!moore.lN) integer types
+  // are currently lowered to plain IntegerType. X/Z information from constants
+  // is preserved in the Moore dialect (FVIntegerAttr) and used for X-propagation
+  // during lowering. A future enhancement could use struct types
+  // {value: iN, unknown: iN} for full 4-state simulation, but this would require
+  // updating all operations to handle the struct type.
   typeConverter.addConversion([&](IntType type) {
     return IntegerType::get(type.getContext(), type.getWidth());
   });
@@ -11804,7 +12098,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     ReduceOrOpConversion,
     ReduceXorOpConversion,
     BoolCastOpConversion,
-    NotOpConversion,
+    FourStateNotOpConversion,  // 4-state aware NOT
     NegOpConversion,
     NegRealOpConversion,
 
@@ -11816,9 +12110,9 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     BinaryOpConversion<DivSOp, comb::DivSOp>,
     BinaryOpConversion<ModUOp, comb::ModUOp>,
     BinaryOpConversion<ModSOp, comb::ModSOp>,
-    BinaryOpConversion<AndOp, comb::AndOp>,
-    BinaryOpConversion<OrOp, comb::OrOp>,
-    BinaryOpConversion<XorOp, comb::XorOp>,
+    FourStateAndOpConversion,  // 4-state aware AND
+    FourStateOrOpConversion,   // 4-state aware OR
+    FourStateXorOpConversion,  // 4-state aware XOR
 
     // Patterns for binary real operations.
     BinaryRealOpConversion<AddRealOp, arith::AddFOp>,

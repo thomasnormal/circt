@@ -17,10 +17,9 @@
   "position":{"line":1,"character":8},
   "newName":"123invalid"
 }}
-// CHECK:       "id": 1,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "error":
+// CHECK:       "error":
 // CHECK:         "message": "cannot rename symbol at this position"
+// CHECK:       "id": 1
 // -----
 // Test rename with empty name
 {"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{
@@ -28,10 +27,9 @@
   "position":{"line":1,"character":8},
   "newName":""
 }}
-// CHECK:       "id": 2,
-// CHECK-NEXT:  "jsonrpc": "2.0",
-// CHECK-NEXT:  "error":
+// CHECK:       "error":
 // CHECK:         "message": "cannot rename symbol at this position"
+// CHECK:       "id": 2
 // -----
 // Test valid rename with underscore
 {"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{
