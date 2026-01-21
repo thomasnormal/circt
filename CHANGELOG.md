@@ -143,6 +143,28 @@ struct types (`!hw.struct<value: iN, unknown: iN>`) which it doesn't support dir
 
 **Impact**: Unblocks UART AVIP bit extraction operations
 
+### Lvalue Streaming Fix ✅ NEW
+
+**Bug Fix**: Fixed lvalue streaming operators for packed types and dynamic arrays.
+
+**Root Cause**: Two issues blocked 93 sv-tests:
+1. Packed types (structs, packed arrays) weren't converted to simple bit vectors for lvalue streaming
+2. Dynamic arrays (`!moore.open_uarray<i1>`) couldn't be used in streaming concatenations
+
+**Fix**:
+1. Added conversion to materialize packed type refs to simple bit vectors (lvalue equivalent of `convertToSimpleBitVector`)
+2. Added handling for dynamic arrays to return refs directly and use `StreamUnpackOp` at assignment level
+
+**UVM Pattern Now Supported**:
+```systemverilog
+bit __array[];
+{ << bit { __array}} = VAR;  // Used in uvm_pack_intN macro
+```
+
+**Test**: `test/Conversion/ImportVerilog/lvalue-streaming.sv`
+
+**Impact**: Expected ~12% sv-tests pass rate improvement (93 tests unblocked)
+
 ### 4-State LLVM Store/Load Fix ✅ NEW
 
 **Bug Fix**: Fixed LLVM store/load operations for 4-state types in unpacked structs.

@@ -79,7 +79,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 | **APB** | ✅ | ✅ | None - Full pipeline works! |
 | **SPI** | ✅ | ✅ | None - Full pipeline works! |
 | **UART** | ✅ | ✅ | UVM-free components compile! |
-| **I2S** | ⚠️ | - | Missing assertion files |
+| **I2S** | ✅ | ✅ | Assertions work! Full AVIP needs UVM |
 | **AHB** | ⚠️ | - | UVM dependency, hierarchical task calls |
 
 **Key Blockers for UVM Testbench Execution**:
@@ -101,9 +101,10 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 16. ~~**4-state power operator**~~ ✅ FIXED (Iter 91) - Extract value before math.ipowi
 17. ~~**4-state bit extraction**~~ ✅ FIXED (Iter 91) - sig_struct_extract for value/unknown
 18. ~~**llvm.store/load hw.struct**~~ ✅ FIXED (Iter 92) - Convert hw.struct to llvm.struct for storage
-19. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
-20. **Virtual method dispatch** - Class hierarchy not fully simulated
-21. **UVM bit streaming** ⚠️ BLOCKER (93 tests) - lvalue streaming expected IntType
+19. ~~**Virtual interface binding**~~ ✅ COMPLETE - Full infrastructure in place (VirtualInterface ops + runtime)
+20. ~~**UVM lvalue streaming**~~ ✅ FIXED (Iter 92) - Packed types + dynamic arrays in streaming
+21. **Virtual method dispatch** - Class hierarchy not fully simulated
+22. **TaggedUnion expressions** (7 tests) - `tagged Valid(10)` syntax not supported
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -122,14 +123,16 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ **APB AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
 | ✅ **SPI AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
 | ✅ **UART AVIP 4-STATE FIXED** | ✅ UVM-free components compile! |
+| ✅ **I2S AVIP ASSERTIONS** | ✅ All 6 assertions compile! Full AVIP needs UVM |
 | ✅ ModportPortSymbol (Iter 91) | Handle modport member access in Expressions.cpp |
 | ✅ EmptyArgument (Iter 91) | Optional arguments in $random(), etc. |
 | ✅ 4-state power (Iter 91) | Extract value before math.ipowi |
 | ✅ 4-state bit extract (Iter 91) | sig_struct_extract for value/unknown |
 | ✅ llvm.store/load hw.struct (Iter 92) | Convert hw.struct to llvm.struct for storage |
-| ⚠️ **UVM bit streaming** | **NEXT**: 93 tests blocked by lvalue streaming |
-| ⚠️ Virtual interfaces | Runtime binding needed |
-| ⚠️ Virtual method dispatch | Class hierarchy simulation |
+| ✅ UVM lvalue streaming (Iter 92) | Packed types + dynamic arrays in streaming |
+| ✅ Virtual interfaces | Full infrastructure complete |
+| ⚠️ **Virtual method dispatch** | **NEXT**: Class hierarchy simulation |
+| ⚠️ TaggedUnion expressions | `tagged Valid(10)` syntax (7 tests) |
 
 **Track B: BMC/Formal (Codex Agent Handling)**
 | Status | Next Priority |
