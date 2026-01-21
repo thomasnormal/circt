@@ -66,9 +66,12 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 90)
+### Track Status & Next Tasks (Iteration 91)
 
-**Test Results (Iteration 90)**: sv-tests 86% sample pass rate (no regression)
+**Test Results (Iteration 91)**:
+- sv-tests: 81.3% adjusted pass rate (improvement)
+- verilator-verification: 62% parse-only, 96% MooreToCore
+- Yosys SVA: 71.4% BMC pass rate
 
 **Key Blockers for UVM Testbench Execution**:
 1. ~~**Delays in class tasks**~~ ✅ FIXED - `__moore_delay()` runtime function for class methods
@@ -81,9 +84,13 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 8. ~~**class handle -> integer**~~ ✅ FIXED (Iter 90) - null comparison support
 9. ~~**array.locator**~~ ✅ FIXED (Iter 90) - External variable references + fallback to inline loop
 10. ~~**open_uarray <-> queue**~~ ✅ FIXED (Iter 90) - Same runtime representation
-11. **integer -> queue<T>** ⚠️ BLOCKER - Stream unpack to queue (blocks I2S, SPI, UART)
-12. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
-13. **Virtual method dispatch** - Class hierarchy not fully simulated
+11. ~~**integer -> queue<T>**~~ ✅ FIXED (Iter 91) - Stream unpack to queue conversion
+12. ~~**$past assertion**~~ ✅ FIXED (Iter 91) - moore::PastOp preserves value type
+13. ~~**Interface port members**~~ ✅ FIXED (Iter 91) - Skip hierarchical path for interface ports
+14. **ModportPortSymbol handler** ⚠️ BLOCKER - Need to handle modport member access in Expressions.cpp
+15. **Case statement codegen** ⚠️ BLOCKER - Branch operand mismatch in MooreToCore
+16. **Virtual interface binding** - Runtime binding for UVM drivers/monitors
+17. **Virtual method dispatch** - Class hierarchy not fully simulated
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -101,7 +108,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 |--------|---------------|
 | ✅ UVM .exists() fixed | Returns i1 boolean correctly |
 | ✅ 4-state struct storage | Extract value before LLVM store |
-| ✅ APB AVIP full pipeline | ImportVerilog + MooreToCore both pass |
+| ✅ APB AVIP full pipeline | ImportVerilog passes, MooreToCore has case stmt issues |
 | ✅ I2S/SPI/UART ImportVerilog | All three parse successfully (240-276K lines) |
 | ✅ Class task delays | __moore_delay() for class methods |
 | ✅ f64 BoolCast (Iter 90) | arith::CmpFOp for float-to-bool |
@@ -109,7 +116,11 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ DPI handles (Iter 90) | chandle/class handle conversions |
 | ✅ array.locator (Iter 90) | External variable refs + inline loop fallback |
 | ✅ open_uarray <-> queue (Iter 90) | Same runtime representation |
-| ⚠️ integer -> queue<T> | **NEXT**: Stream unpack to queue conversion |
+| ✅ integer -> queue<T> (Iter 91) | Stream unpack to queue conversion |
+| ✅ $past assertion (Iter 91) | moore::PastOp preserves value type |
+| ✅ Interface port members (Iter 91) | Skip hierarchical path for interface ports |
+| ⚠️ ModportPortSymbol | **NEXT**: Handle modport member access in Expressions.cpp |
+| ⚠️ Case statement codegen | Branch operand mismatch in MooreToCore for UVM case |
 | ⚠️ Virtual interfaces | Runtime binding needed |
 | ⚠️ Virtual method dispatch | Class hierarchy simulation |
 
@@ -306,8 +317,9 @@ Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 - DynamicNotProcedural diagnostics being addressed
 
 **Track D: SVA Edge Functions**
-- Fixing $rose/$fell behavior in implication antecedents
-- Need to evaluate edge functions in the cycle before implication fires
+- ✅ $rose/$fell now use case-equality comparisons (X/Z transitions behave)
+- ✅ Procedural concurrent assertions hoisted with guards to module scope
+- ✅ BMC accepts preset initial values for 4-state regs (bitwidth-matched)
 
 ---
 
