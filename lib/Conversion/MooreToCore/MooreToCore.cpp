@@ -34,6 +34,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/DerivedTypes.h"
 #include <queue>
@@ -5466,6 +5467,9 @@ struct ShlOpConversion : public OpConversionPattern<ShlOp> {
   matchAndRewrite(ShlOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType || !resultType.isIntOrFloat())
+      return rewriter.notifyMatchFailure(
+          op, "shift operations require integer/float result type");
 
     // Comb shift operations require the same bit-width for value and amount
     Value amount =
@@ -5744,12 +5748,38 @@ struct AssertLikeOpConversion : public OpConversionPattern<MooreOpTy> {
 
 /// Lowering for moore.past operation.
 /// The moore.past op captures a value from a previous clock cycle. In the
-/// MooreToCore lowering, we convert it to an ltl.past operation for boolean
-/// values (used in assertion conditions), or pass through the value directly
-/// for non-boolean types (used in comparisons where the verification
-/// infrastructure handles the past semantics).
+/// MooreToCore lowering, we try to lower 1-bit past values to explicit
+/// registers using the enclosing clocked assertion's clock, so they can
+/// participate in comparisons as i1. If no clock is found, fall back to
+/// ltl.past for boolean values. For non-boolean types, pass through the value
+/// directly (used in comparisons where the verification infrastructure handles
+/// the past semantics).
 struct PastOpConversion : public OpConversionPattern<PastOp> {
   using OpConversionPattern::OpConversionPattern;
+
+  static std::optional<std::pair<Value, verif::ClockEdge>>
+  findClockFromUsers(Value value) {
+    SmallVector<Value, 8> worklist{value};
+    llvm::DenseSet<Operation *> visited;
+
+    while (!worklist.empty()) {
+      Value cur = worklist.pop_back_val();
+      for (auto &use : cur.getUses()) {
+        Operation *user = use.getOwner();
+        if (!visited.insert(user).second)
+          continue;
+        if (auto clocked = dyn_cast<verif::ClockedAssertOp>(user))
+          return std::make_pair(clocked.getClock(), clocked.getEdge());
+        if (auto clocked = dyn_cast<verif::ClockedAssumeOp>(user))
+          return std::make_pair(clocked.getClock(), clocked.getEdge());
+        if (auto clocked = dyn_cast<verif::ClockedCoverOp>(user))
+          return std::make_pair(clocked.getClock(), clocked.getEdge());
+        for (auto result : user->getResults())
+          worklist.push_back(result);
+      }
+    }
+    return std::nullopt;
+  }
 
   LogicalResult
   matchAndRewrite(PastOp op, OpAdaptor adaptor,
@@ -5758,8 +5788,44 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
     Value input = adaptor.getInput();
     int64_t delay = op.getDelay();
 
-    // If the input is i1 (boolean), convert to ltl.past for proper LTL semantics
+    // If the input is i1 (boolean), prefer an explicit register chain using a
+    // clock from a surrounding clocked assertion. This keeps the result as i1
+    // for comparisons.
     if (input.getType().isInteger(1)) {
+      if (delay == 0) {
+        rewriter.replaceOp(op, input);
+        return success();
+      }
+      if (auto clockInfo = findClockFromUsers(op.getResult())) {
+        Value clockSignal = clockInfo->first;
+        auto edge = clockInfo->second;
+        if (edge == verif::ClockEdge::Neg) {
+          auto one = hw::ConstantOp::create(rewriter, loc,
+                                            rewriter.getI1Type(), 1);
+          clockSignal =
+              comb::XorOp::create(rewriter, loc, clockSignal, one);
+        } else if (edge == verif::ClockEdge::Both) {
+          op.emitError("both-edge clocks are not supported for moore.past");
+          return failure();
+        }
+        if (!isa<seq::ClockType>(clockSignal.getType()))
+          clockSignal = seq::ToClockOp::create(rewriter, loc, clockSignal);
+
+        Value current = input;
+        for (int64_t i = 0; i < delay; ++i) {
+          auto initVal = hw::ConstantOp::create(
+              rewriter, loc, rewriter.getI1Type(), 0);
+          auto powerOn =
+              seq::createConstantInitialValue(rewriter, initVal.getOperation());
+          current = seq::CompRegOp::create(
+              rewriter, loc, current, clockSignal, Value(), Value(),
+              rewriter.getStringAttr("moore_past"), powerOn);
+        }
+        rewriter.replaceOp(op, current);
+        return success();
+      }
+
+      // Fallback: use ltl.past when no clock is found.
       rewriter.replaceOpWithNewOp<ltl::PastOp>(op, input, delay);
       return success();
     }

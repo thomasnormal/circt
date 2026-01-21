@@ -356,6 +356,11 @@ public:
   /// Returns false if simulation is complete.
   bool stepDelta();
 
+  /// Advance time to the next scheduled event without processing it.
+  /// This allows the caller to control when events are executed.
+  /// Returns true if time was advanced, false if no events or already at next event.
+  bool advanceToNextTime();
+
   /// Check if the simulation is complete (no more events).
   bool isComplete() const;
 

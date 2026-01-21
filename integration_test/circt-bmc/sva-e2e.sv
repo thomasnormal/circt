@@ -77,7 +77,15 @@
 // INSTANCE-PASS: Bound reached with no violations!
 
 // TODO: Enable repeat_pass and repeat_range_pass once LTLToCore implication
-// semantics for multi-cycle sequences are corrected.
+// semantics for multi-cycle sequences are corrected. The issue is that
+// delay buffers for multi-cycle sequences are initialized to false, so
+// assume constraints applied at each step don't affect hypothetical past
+// values from before the trace began.
+
+// RUN: circt-verilog --uvm-path %S/Inputs/uvm_stub --ir-hw %s | \
+// RUN:   circt-bmc -b 4 --module repeat_antecedent_fail --shared-libs=%libz3 - | \
+// RUN:   FileCheck %s --check-prefix=REPEAT-ANTECEDENT-FAIL
+// REPEAT-ANTECEDENT-FAIL: Assertion can be violated!
 
 module delay_fail(input logic clk);
   // This should be violated once delay buffering is functional.
@@ -183,4 +191,11 @@ module instance_pass(input logic clk, input logic a);
   always_ff @(posedge clk)
     q <= a;
   instance_prop props(.clk(clk), .a(a), .b(q));
+endmodule
+
+// Test: a[*3] |-> b - repetition in antecedent
+// When 'a' holds for 3 consecutive cycles, 'b' must hold at the end
+module repeat_antecedent_fail(input logic clk, input logic a, input logic b);
+  // This should fail since b is unconstrained
+  assert property (@(posedge clk) a[*3] |-> b);
 endmodule
