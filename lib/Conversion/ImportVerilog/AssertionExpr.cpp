@@ -536,15 +536,31 @@ Value Context::convertAssertionCallExpression(
       current = moore::ReduceOrOp::create(builder, loc, value).getResult();
     auto past =
         moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
-    auto notPast = moore::NotOp::create(builder, loc, past).getResult();
-    auto notCurrent = moore::NotOp::create(builder, loc, current).getResult();
+    auto currentTy = cast<moore::IntType>(current.getType());
+    auto zero = moore::ConstantOp::create(builder, loc, currentTy, 0);
+    auto one = moore::ConstantOp::create(builder, loc, currentTy, 1);
+    auto currentIsOne =
+        moore::CaseEqOp::create(builder, loc, current, one).getResult();
+    auto pastIsOne =
+        moore::CaseEqOp::create(builder, loc, past, one).getResult();
+    auto currentIsZero =
+        moore::CaseEqOp::create(builder, loc, current, zero).getResult();
+    auto pastIsZero =
+        moore::CaseEqOp::create(builder, loc, past, zero).getResult();
     Value resultVal;
-    if (subroutine.name == "$rose")
+    if (subroutine.name == "$rose") {
+      auto notPastOne =
+          moore::NotOp::create(builder, loc, pastIsOne).getResult();
       resultVal =
-          moore::AndOp::create(builder, loc, current, notPast).getResult();
-    else
+          moore::AndOp::create(builder, loc, currentIsOne, notPastOne)
+              .getResult();
+    } else {
+      auto notPastZero =
+          moore::NotOp::create(builder, loc, pastIsZero).getResult();
       resultVal =
-          moore::AndOp::create(builder, loc, notCurrent, past).getResult();
+          moore::AndOp::create(builder, loc, currentIsZero, notPastZero)
+              .getResult();
+    }
     return resultVal;
   }
 
@@ -568,20 +584,10 @@ Value Context::convertAssertionCallExpression(
       }
     }
 
-    // For 1-bit values in assertion context, prefer ltl.past so the result
-    // can participate in LTL expressions without type casts.
-    if (value.getType().isInteger(1))
-      return ltl::PastOp::create(builder, loc, value, delay).getResult();
-    if (auto intTy = dyn_cast<moore::IntType>(value.getType())) {
-      if (intTy.getBitSize() == 1) {
-        auto boolVal = convertToI1(value);
-        if (!boolVal)
-          return {};
-        return ltl::PastOp::create(builder, loc, boolVal, delay).getResult();
-      }
-    }
-
-    // Use moore::PastOp to preserve the type for comparisons.
+    // Always use moore::PastOp to preserve the type for comparisons.
+    // $past(val) returns the past value with the same type as val, so that
+    // comparisons like `$past(val) == 0` work correctly. LTL-specific temporal
+    // operators like $rose/$fell/$stable/$changed use ltl ops internally.
     return moore::PastOp::create(builder, loc, value, delay).getResult();
   }
 
