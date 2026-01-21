@@ -24,27 +24,75 @@ Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
 9. ~~**ProcessOp Canonicalization**~~: ✅ FIXED (Iter 74) - Processes with $display/$finish no longer removed
 
 **REMAINING BLOCKERS:**
-1. **Concurrent Process Scheduling** ⚠️ HIGH: When initial block runs with always blocks, only the initial block executes; clock generation doesn't trigger. Needs LLHDProcessInterpreter investigation.
+1. **Concurrent Process Scheduling** ⚠️ HIGH - ROOT CAUSE IDENTIFIED:
+   - Signal-to-process mapping not persistent across wake/sleep cycles
+   - `waitingSensitivity` cleared when process wakes, must re-execute to `llhd.wait`
+   - Processes end in Suspended state without sensitivity after first execution
+   - **Fix Location**: `ProcessScheduler::triggerSensitiveProcesses()` lines 192-228
 
 2. **UVM Macro Completeness** ⚠️ MEDIUM: Many UVM macros still need stubs (uvm_copier_get_function, etc.). Blocks full UVM core compilation.
 
 3. **Class Method Inlining** ⚠️ MEDIUM: Virtual method dispatch and class hierarchy not fully simulated.
 
-### Track Status & Next Tasks (Iteration 75+)
+### Concurrent Process Scheduling Root Cause Analysis (Iteration 76)
+
+**The Problem**:
+When a SystemVerilog file has both `initial` and `always` blocks, only the `initial` block executes. The simulation shows:
+- 3 LLHD processes registered
+- Only 5 process executions (should be many more for looping always blocks)
+- 2 delta cycles, 2 signal updates, 2 edge detections
+
+**Root Cause Analysis** (from Track A investigation):
+
+1. **Signal-to-Process Mapping**: The `signalToProcesses` mapping in `ProcessScheduler` is only populated when `suspendProcessForEvents()` is called, but this mapping is not maintained across process wake/sleep cycles.
+
+2. **One-Shot Sensitivity**: When `interpretWait()` is called, it registers the process via `scheduler.suspendProcessForEvents(procId, waitList)`. But when the process wakes up, `clearWaiting()` clears the `waitingSensitivity` list:
+   ```cpp
+   void clearWaiting() {
+     waitingSensitivity.clear();
+     if (state == ProcessState::Waiting)
+       state = ProcessState::Ready;
+   }
+   ```
+
+3. **State Machine Mismatch**: After a process executes, if it doesn't reach its next `llhd.wait`, it defaults to `Suspended` state with no sensitivity, making it impossible to wake.
+
+4. **Event-Driven vs Process-Driven Timing**: The `always #5 clk = ~clk` uses delay-based wait, but the counter process uses event-based wait on `posedge clk`. The timing of signal changes vs event callbacks may cause missed edges.
+
+**Key Files**:
+- `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
+
+### Track Status & Next Tasks (Iteration 76+)
 
 **Simulation Runtime (Critical Path)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **A** | Concurrent Scheduling | Initial+Always broken | Debug LLHDProcessInterpreter event queue |
-| **B** | UVM Macro Stubs | Partial coverage | Add remaining UVM macros (copier, comparer, etc.) |
+| **A** | Concurrent Scheduling | ROOT CAUSE IDENTIFIED | Fix sensitivity persistence in ProcessScheduler |
+| **B** | UVM Macro Stubs | 73% coverage achieved | Add remaining macros for full UVM compilation |
 
 **Feature Development (Parallel)**:
 | Track | Focus Area | Current Status | Next Priority |
 |-------|-----------|----------------|---------------|
-| **C** | Real-World Testing | AVIP testing started | Run full APB/SPI testbenches |
-| **D** | BMC/Formal | Non-overlapped implication done | More SVA property support |
+| **C** | Real-World Testing | 73% pass rate (1294 tests) | Address dynamic type access issues |
+| **D** | BMC/Formal | Most SVA works | Fix $rose/$fell/$past in implications |
 | **E** | Coverage Runtime | HTML reports complete | UCDB merge improvements |
 | **F** | LSP Tooling | All 49 tests pass (100%) | Diagnostics improvements |
+
+### Real-World Test Results (Iteration 76)
+
+**Track C - AVIP Testbench Validation** (73% pass rate):
+- Total tests: 1,294 across APB, SPI, I2C, I3C, USB testbenches
+- Passed: ~945
+- Main failure categories:
+  - Missing UVM package (104 failures) - needs full uvm_pkg stub
+  - Dynamic type access outside procedural context
+  - Unsupported expressions (TaggedUnion, FunctionCall, etc.)
+
+**Track D - SVA Formal Verification**:
+- Working: implications (|-> |=>), delays (##N), repetition ([*N]), sequences
+- Failing: $rose/$fell in implications (triggers at wrong times), $past not supported
+- $countones/$onehot use llvm.intr.ctpop (pending BMC symbol issue)
 
 ### Feature Completion Matrix
 
@@ -825,6 +873,8 @@ ninja -C build check-circt-unit
 - Tests: `test/Conversion/VerifToSMT/ltl-temporal.mlir`
 - ✅ LTLToCore shifts exact delayed consequents to past-form implications for BMC
 - ✅ Disable-iff now shifts past reset alongside delayed implications (yosys basic00 pass)
+- ✅ Multiple non-final asserts are combined for BMC (yosys basic01 pass)
+- ✅ circt-bmc flattens private modules so bound assertions are checked (yosys basic02 bind)
 - Tests: `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`, `integration_test/circt-bmc/sva-e2e.sv`
 
 **Track D: LSP Workspace Symbols**

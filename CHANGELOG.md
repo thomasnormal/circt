@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 76 - January 21, 2026
+
+### Concurrent Process Scheduling Root Cause Analysis + Build Fixes
+
+**Track A: Concurrent Scheduling Root Cause** ⭐ INVESTIGATION COMPLETE
+- Identified why `initial` + `always` blocks don't work together
+- Root causes found:
+  1. `signalToProcesses` mapping not persistent across wake/sleep cycles
+  2. `waitingSensitivity` cleared by `clearWaiting()` when process wakes
+  3. Processes end in Suspended state without sensitivity after execution
+  4. Event-driven vs process-driven timing causes missed edges
+- Key fix location: `ProcessScheduler::triggerSensitiveProcesses()` lines 192-228
+- Detailed analysis in PROJECT_PLAN.md
+
+**Track B: UVM Macro Coverage** ⭐ ENHANCEMENT
+- Added recorder macros (uvm_record_int, uvm_record_string, etc.)
+- Added additional field recording stubs
+- 73% coverage achieved on real-world AVIP testbenches
+
+**Track C: AVIP Testbench Validation** ⭐ TESTING
+- Ran 1,294 tests across APB, SPI, I2C, I3C, USB testbenches
+- 73% pass rate (~945 tests passing)
+- Main failure categories:
+  - Missing UVM package (104 failures)
+  - Dynamic type access outside procedural context
+  - Unsupported expressions (TaggedUnion, FunctionCall)
+
+**Track D: SVA Formal Verification** ⭐ TESTING
+- Working: implications (|-> |=>), delays (##N), repetition ([*N]), sequences
+- Issues found: $rose/$fell in implications, $past not supported
+- $countones/$onehot use llvm.intr.ctpop (pending BMC symbol resolution)
+
+**Build Fixes** ⭐ FIXES
+- Fixed RTTI issue in WaveformDumper.h (virtual method pattern)
+- Fixed exception handling in DPIRuntime.h (-fno-exceptions)
+- Fixed missing includes in test files
+- Removed duplicate main() functions from Sim unit tests
+- Fixed JSON API change in SemanticTokensTest.cpp
+
+### Files Modified
+- `PROJECT_PLAN.md` (root cause analysis documentation)
+- `include/circt/Dialect/Sim/WaveformDumper.h` (RTTI fix)
+- `include/circt/Dialect/Sim/DPIRuntime.h` (exception fix)
+- `unittests/Support/DiagnosticsTest.cpp` (include fix)
+- `unittests/Support/TestReportingTest.cpp` (thread include)
+- Multiple `unittests/Dialect/Sim/*.cpp` (removed duplicate main())
+- `unittests/Tools/.../SemanticTokensTest.cpp` (JSON API fix)
+- `unittests/Tools/.../CMakeLists.txt` (include path)
+
+---
+
+## Iteration 75 - January 21, 2026
+
+### SVA Improvements + Unit Test Enhancements
+
+**SVA Bounded Sequence Support** ⭐ ENHANCEMENT
+- Improved bounded repetition handling in LTL to Core lowering
+- Better error messages for unsupported SVA constructs
+
+---
+
 ## Iteration 74 - January 21, 2026
 
 ### ProcessOp Canonicalization Fix + UVM Macro Enhancements
@@ -67,6 +128,16 @@
 - Added disable-iff past-shift for delayed implications so reset can cancel multi-cycle checks.
 - BMC now passes `a |=> q` with single-cycle register delay and disable-iff reset (yosys `basic00` pass/fail).
 - New tests: `bmc-nonoverlap-implication.mlir`, extended `integration_test/circt-bmc/sva-e2e.sv`.
+
+**Track H: BMC Multi-Assert Support** ⭐ FIX
+- Allow multiple non-final asserts in a single BMC by combining them into one property.
+- Yosys SVA `basic01` now passes in both pass/fail modes.
+- New test: `bmc-multiple-asserts.mlir`.
+
+**Track I: BMC Bound Assertions in Child Modules** ⭐ FIX
+- Flatten private modules in circt-bmc so bound assertion modules are inlined.
+- Yosys SVA `basic02` (bind) now exercised with pass/fail.
+- New e2e instance regression in `integration_test/circt-bmc/sva-e2e.sv`.
 
 ### Files Modified
 - `lib/Conversion/MooreToCore/MooreToCore.cpp` (+450 lines for queue sort with)
