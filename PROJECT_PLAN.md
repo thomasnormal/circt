@@ -122,15 +122,30 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ⚠️ DPI function stubs | Complete runtime stubs for UVM |
 | ⚠️ Coroutine runtime | Full coroutine support for task suspension |
 
-### Real-World Test Results (Iteration 76)
+### Real-World Test Results (Updated Iteration 88)
 
-**Track C - AVIP Testbench Validation** (73% pass rate):
-- Total tests: 1,294 across APB, SPI, I2C, I3C, USB testbenches
-- Passed: ~945
+**APB AVIP Pipeline Status** (Iteration 88):
+- **ImportVerilog → Moore IR**: ✅ SUCCESS (33,153 lines)
+- **MooreToCore**: ✅ SUCCESS (25,279 lines)
+- **Full HW IR**: ❌ Blocked by recursive `get_full_name()` function inlining
+- Progress: Class task delays, constraint properties, virtual interfaces all working
+
+**sv-tests Compliance Suite** (1,028 tests):
+- Overall Pass Rate: **73.6%** (757 passed)
+- Adjusted Pass Rate: **81.3%** (excluding expected failures)
 - Main failure categories:
-  - Missing UVM package (104 failures) - needs full uvm_pkg stub
-  - Dynamic type access outside procedural context
-  - Unsupported expressions (TaggedUnion, FunctionCall, etc.)
+  - UVM package not found (51% of failures)
+  - Unsupported system calls: string methods, file I/O
+  - TaggedUnion expressions not supported
+  - Disable statement not implemented
+
+**verilator-verification Tests** (154 tests):
+- Parse Pass Rate: **62%** (95/154)
+- MooreToCore Pass Rate: **96%** (91/95 of those that parse)
+- Main failure categories:
+  - Dynamic type access outside procedural context (15 failures)
+  - Sequence clocking syntax `@posedge (clk)` vs `@(posedge clk)` (6 failures)
+  - UVM base class resolution (11 failures)
 
 **Track D - SVA Formal Verification** (Updated Iteration 77):
 - Working: implications (|-> |=>), delays (##N), repetition ([*N]), sequences
@@ -191,7 +206,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | LSP code actions | - | - | - | - | ✅ |
 | Illegal/ignore bins | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverage merge | - | - | - | ✅ | ✅ |
-| Virtual interfaces | ✅ | ✅ | ⚠️ | ❌ | ⚠️ |
+| Virtual interfaces | ✅ | ✅ | ✅ | ⚠️ config_db | ⚠️ |
 | Classes | ✅ | ✅ | ✅ | ⚠️ | ✅ |
 | UVM base classes | ✅ | ⚠️ | ⚠️ | ✅ | ✅ |
 | Array unique constraints | ✅ | ✅ | ✅ | ✅ | ✅ |
