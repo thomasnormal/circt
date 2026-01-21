@@ -12,6 +12,8 @@
 // CHECK-DAG: llvm.func @__moore_coverpoint_init(!llvm.ptr, i32, !llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_coverpoint_sample(!llvm.ptr, i32, i64)
 // CHECK-DAG: llvm.func @__moore_covergroup_get_coverage(!llvm.ptr) -> f64
+// CHECK-DAG: llvm.func @__moore_cross_create(!llvm.ptr, !llvm.ptr, !llvm.ptr, i32) -> i32
+// CHECK-DAG: llvm.func @__moore_cross_sample(!llvm.ptr, !llvm.ptr, i32)
 
 // Covergroup declaration with two coverpoints
 moore.covergroup.decl @TestCG {
@@ -51,7 +53,8 @@ func.func @TestCovergroupGetCoverage(%cg: !moore.covergroup<@TestCG>) -> !moore.
   return %cov : !moore.f64
 }
 
-// Test covergroup with cross coverage (currently just erased)
+// Test covergroup with cross coverage (now fully lowered)
+// Function declarations are checked at the top of this file.
 moore.covergroup.decl @CrossCG {
   moore.coverpoint.decl @a : !moore.i4 {}
   moore.coverpoint.decl @b : !moore.i4 {}
@@ -61,7 +64,7 @@ moore.covergroup.decl @CrossCG {
 
 // CHECK-LABEL: func @TestCrossInst
 func.func @TestCrossInst() -> !moore.covergroup<@CrossCG> {
-  // Cross coverage declarations are erased but coverpoints are still initialized
+  // Cross coverage is now initialized with __moore_cross_create
   // CHECK: llvm.call @__cg_init_CrossCG() : () -> ()
   %cg = moore.covergroup.inst @CrossCG : !moore.covergroup<@CrossCG>
   return %cg : !moore.covergroup<@CrossCG>

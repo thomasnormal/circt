@@ -3687,6 +3687,9 @@ def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
     The binsof expression references a coverpoint or coverpoint bin and
     optionally specifies an intersect clause to filter values.
 
+    The optional `negate` attribute implements the `!binsof(...)` syntax,
+    which inverts the selection to match values NOT in the specified set.
+
     Example without intersect (selects all bins of the coverpoint):
     ```mlir
     moore.binsof @addr_cp
@@ -3697,6 +3700,11 @@ def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
     moore.binsof @addr_cp intersect [0, 1, 2, 3]
     ```
 
+    Example with negation (selects values NOT in the set):
+    ```mlir
+    moore.binsof @addr_cp intersect [0, 1, 2, 3] negate
+    ```
+
     Example referencing a specific bin:
     ```mlir
     moore.binsof @addr_cp::@low_bins intersect [0, 1]
@@ -3705,9 +3713,10 @@ def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
     See IEEE 1800-2017 Section 19.6.1.1 "select_expression".
   }];
   let arguments = (ins SymbolRefAttr:$target,
-                       OptionalAttr<ArrayAttr>:$intersect_values);
+                       OptionalAttr<ArrayAttr>:$intersect_values,
+                       UnitAttr:$negate);
   let assemblyFormat = [{
-    $target (`intersect` $intersect_values^)? attr-dict
+    $target (`intersect` $intersect_values^)? (`negate` $negate^)? attr-dict
   }];
 }
 

@@ -9137,31 +9137,73 @@ static LogicalResult convert(FinishBIOp op, FinishBIOp::Adaptor adaptor,
   return success();
 }
 
-// moore.builtin.severity -> sim.proc.print
+// moore.builtin.severity -> runtime function call
+// Calls __moore_error, __moore_warning, or __moore_info to track counts.
+// Note: $fatal is handled separately with FinishBIOp.
 static LogicalResult convert(SeverityBIOp op, SeverityBIOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
+  auto loc = op.getLoc();
+  auto mod = op->getParentOfType<ModuleOp>();
 
-  std::string severityString;
-
+  // Determine which runtime function to call based on severity
+  std::string funcName;
   switch (op.getSeverity()) {
-  case (Severity::Fatal):
-    severityString = "Fatal: ";
+  case Severity::Fatal:
+    // $fatal is handled by the subsequent FinishBIOp, but we still need
+    // to print the message. Use __moore_error to increment the count.
+    funcName = "__moore_error";
     break;
-  case (Severity::Error):
-    severityString = "Error: ";
+  case Severity::Error:
+    funcName = "__moore_error";
     break;
-  case (Severity::Warning):
-    severityString = "Warning: ";
+  case Severity::Warning:
+    funcName = "__moore_warning";
     break;
-  default:
-    return failure();
+  case Severity::Info:
+    funcName = "__moore_info";
+    break;
   }
 
-  auto prefix =
-      sim::FormatLiteralOp::create(rewriter, op.getLoc(), severityString);
+  // Get or create the runtime function
+  // void __moore_xxx(MooreString *message)
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto fnTy = LLVM::LLVMFunctionType::get(
+      LLVM::LLVMVoidType::get(rewriter.getContext()), {ptrTy});
+  auto fn = getOrCreateRuntimeFunc(mod, rewriter, funcName, fnTy);
+
+  // The message is already a formatted string from the sim dialect.
+  // We need to convert it to a MooreString pointer.
+  // For now, use sim.proc.print for the message output and track counts
+  // separately. This is a simplified approach.
+
+  // First, print the message using the sim dialect infrastructure
+  std::string severityPrefix;
+  switch (op.getSeverity()) {
+  case Severity::Fatal:
+    severityPrefix = "Fatal: ";
+    break;
+  case Severity::Error:
+    severityPrefix = "Error: ";
+    break;
+  case Severity::Warning:
+    severityPrefix = "Warning: ";
+    break;
+  case Severity::Info:
+    severityPrefix = "Info: ";
+    break;
+  }
+
+  auto prefix = sim::FormatLiteralOp::create(rewriter, loc, severityPrefix);
   auto message = sim::FormatStringConcatOp::create(
-      rewriter, op.getLoc(), ValueRange{prefix, adaptor.getMessage()});
-  rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(op, message);
+      rewriter, loc, ValueRange{prefix, adaptor.getMessage()});
+  sim::PrintFormattedProcOp::create(rewriter, loc, message);
+
+  // Now call the runtime function with a null message to track counts.
+  // The actual message was already printed above.
+  auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+  LLVM::CallOp::create(rewriter, loc, fn, ValueRange{nullPtr});
+
+  rewriter.eraseOp(op);
   return success();
 }
 

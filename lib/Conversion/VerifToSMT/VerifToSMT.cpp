@@ -746,8 +746,78 @@ struct DelayInfo {
   ltl::DelayOp op;           // The original delay operation
   Value inputSignal;         // The signal being delayed
   uint64_t delay;            // The delay amount (N cycles)
+  uint64_t length;           // Additional range length (0 for exact delay)
+  uint64_t bufferSize;       // Total buffer slots (delay + length)
   size_t bufferStartIndex;   // Index into the delay buffer iter_args
 };
+
+/// Expand ltl.repeat into explicit delay/and/or sequences inside a BMC circuit.
+static void expandRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
+                                 RewriterBase &rewriter) {
+  auto &circuitBlock = bmcOp.getCircuit().front();
+  SmallVector<ltl::RepeatOp> repeatOps;
+  circuitBlock.walk([&](ltl::RepeatOp repeatOp) { repeatOps.push_back(repeatOp); });
+  if (repeatOps.empty())
+    return;
+
+  uint64_t boundValue = bmcOp.getBound();
+
+  for (auto repeatOp : repeatOps) {
+    uint64_t base = repeatOp.getBase();
+    if (base == 0)
+      continue;
+
+    uint64_t maxRepeat = base;
+    if (auto moreAttr = repeatOp.getMoreAttr()) {
+      maxRepeat = base + moreAttr.getValue().getZExtValue();
+    } else if (boundValue > base) {
+      maxRepeat = boundValue;
+    }
+
+    if (maxRepeat < base)
+      continue;
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(repeatOp);
+
+    auto buildExactRepeat = [&](uint64_t count) -> Value {
+      SmallVector<Value> terms;
+      terms.reserve(count);
+      for (uint64_t i = 0; i < count; ++i) {
+        if (i == 0) {
+          terms.push_back(repeatOp.getInput());
+          continue;
+        }
+        auto delayOp = ltl::DelayOp::create(rewriter, repeatOp.getLoc(),
+                                            repeatOp.getInput(), i,
+                                            rewriter.getI64IntegerAttr(0));
+        terms.push_back(delayOp.getResult());
+      }
+      if (terms.size() == 1) {
+        if (isa<ltl::SequenceType>(terms[0].getType()))
+          return terms[0];
+        auto delayOp = ltl::DelayOp::create(rewriter, repeatOp.getLoc(),
+                                            terms[0], 0,
+                                            rewriter.getI64IntegerAttr(0));
+        return delayOp.getResult();
+      }
+      return ltl::AndOp::create(rewriter, repeatOp.getLoc(), terms)
+          .getResult();
+    };
+
+    SmallVector<Value> choices;
+    for (uint64_t count = base; count <= maxRepeat; ++count)
+      choices.push_back(buildExactRepeat(count));
+
+    Value replacement =
+        choices.size() == 1
+            ? choices.front()
+            : ltl::OrOp::create(rewriter, repeatOp.getLoc(), choices)
+                  .getResult();
+
+    rewriter.replaceOp(repeatOp, replacement);
+  }
+}
 
 /// Lower a verif::BMCOp operation to an MLIR program that performs the bounded
 /// model check
@@ -781,6 +851,10 @@ struct VerifBoundedModelCheckingOpConversion
       rewriter.replaceOp(op, trueVal);
       return success();
     }
+
+    // Expand repeat ops inside the BMC circuit before delay scanning so
+    // delay buffers can be allocated for the resulting ltl.delay ops.
+    expandRepeatOpsInBMC(op, rewriter);
 
     // Hoist any final-only asserts into circuit outputs so we can check them
     // only at the final step.
@@ -865,19 +939,41 @@ struct VerifBoundedModelCheckingOpConversion
     // =========================================================================
     SmallVector<DelayInfo> delayInfos;
     size_t totalDelaySlots = 0;
+    bool delaySetupFailed = false;
 
     // First pass: collect all delay ops with delay > 0
+    uint64_t boundValue = op.getBound();
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
       uint64_t delay = delayOp.getDelay();
-      if (delay > 0) {
-        DelayInfo info;
-        info.op = delayOp;
-        info.inputSignal = delayOp.getInput();
-        info.delay = delay;
-        info.bufferStartIndex = totalDelaySlots;
-        delayInfos.push_back(info);
-        totalDelaySlots += delay;
+      if (delay == 0)
+        return;
+
+      uint64_t length = 0;
+      if (auto lengthAttr = delayOp.getLengthAttr()) {
+        length = lengthAttr.getValue().getZExtValue();
+      } else {
+        // Unbounded delay (##[N:$]) is approximated within the BMC bound as
+        // a bounded range [N : bound-1]. When the delay exceeds the bound,
+        // there is no match within the window.
+        if (boundValue > 0 && delay < boundValue)
+          length = boundValue - 1 - delay;
       }
+
+      // NOTE: Unbounded delay (missing length) is approximated by the BMC
+      // bound, bounded range is supported by widening the delay buffer.
+      uint64_t bufferSize = delay + length;
+      if (bufferSize == 0)
+        return;
+
+      DelayInfo info;
+      info.op = delayOp;
+      info.inputSignal = delayOp.getInput();
+      info.delay = delay;
+      info.length = length;
+      info.bufferSize = bufferSize;
+      info.bufferStartIndex = totalDelaySlots;
+      delayInfos.push_back(info);
+      totalDelaySlots += bufferSize;
     });
 
     // Second pass: modify the circuit block to add delay buffer infrastructure
@@ -902,29 +998,41 @@ struct VerifBoundedModelCheckingOpConversion
       SmallVector<Value> delayBufferOutputs;
 
       for (auto &info : delayInfos) {
-        // The input signal type - use i1 for LTL properties (they're booleans)
-        Type bufferElementType = rewriter.getI1Type();
+        // The input signal type - used for delay buffer slots.
+        Type bufferElementType = info.inputSignal.getType();
 
-        // Add N block arguments for the delay buffer (oldest to newest)
+        // Add buffer arguments for the delay buffer (oldest to newest)
         SmallVector<Value> bufferArgs;
-        for (uint64_t i = 0; i < info.delay; ++i) {
+        for (uint64_t i = 0; i < info.bufferSize; ++i) {
           auto arg = circuitBlock.addArgument(bufferElementType, loc);
           bufferArgs.push_back(arg);
         }
 
-        // Replace all uses of the delay op with the oldest buffer entry (index 0)
-        // This is the value from N steps ago
-        // Note: We save the input signal BEFORE replacing uses, as it comes from
-        // the delay op's input operand
+        // Replace all uses of the delay op with the delayed value.
+        // For exact delay: use the oldest buffer entry (value from N steps ago).
+        // For bounded range: OR over the window [delay, delay+length].
         Value inputSig = info.inputSignal;
-        info.op.replaceAllUsesWith(bufferArgs[0]);
+        Value delayedValue = bufferArgs[0];
+        if (info.length > 0) {
+          auto intTy = dyn_cast<IntegerType>(bufferElementType);
+          if (!intTy || intTy.getWidth() != 1) {
+            info.op.emitError("bounded delay in BMC requires i1 sequence input");
+            delaySetupFailed = true;
+            continue;
+          }
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPoint(info.op);
+          for (uint64_t i = 1; i <= info.length; ++i)
+            delayedValue = arith::OrIOp::create(rewriter, loc, delayedValue,
+                                                bufferArgs[i]);
+        }
+        info.op.replaceAllUsesWith(delayedValue);
         delayOpsToErase.push_back(info.op);
 
         // Add yield operands: shifted buffer (drop oldest, add current)
-        // new_buffer = [buffer[1], buffer[2], ..., buffer[N-1], current_signal]
-        for (uint64_t i = 1; i < info.delay; ++i) {
+        // new_buffer = [buffer[1], buffer[2], ..., buffer[bufferSize-1], current_signal]
+        for (uint64_t i = 1; i < info.bufferSize; ++i)
           delayBufferOutputs.push_back(bufferArgs[i]);
-        }
         delayBufferOutputs.push_back(inputSig);
       }
 
@@ -935,6 +1043,9 @@ struct VerifBoundedModelCheckingOpConversion
 
       // Update the yield with new operands
       yieldOp->setOperands(newYieldOperands);
+
+      if (delaySetupFailed)
+        return failure();
 
       // Erase the delay ops (after all replacements are done)
       for (auto delayOp : delayOpsToErase)
@@ -1035,8 +1146,16 @@ struct VerifBoundedModelCheckingOpConversion
       bool isDelayBuffer = curIndex >= origCircuitArgsSize;
       if (isDelayBuffer) {
         // Initialize delay buffers to false (no prior history at step 0)
-        // The type is smt::BVType<1> after conversion (i1 -> bv<1>)
-        inputDecls.push_back(smt::BVConstantOp::create(rewriter, loc, 0, 1));
+        if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
+          inputDecls.push_back(
+              smt::BVConstantOp::create(rewriter, loc, 0, bvTy.getWidth()));
+        } else if (isa<smt::BoolType>(newTy)) {
+          inputDecls.push_back(
+              smt::BoolConstantOp::create(rewriter, loc, false));
+        } else {
+          op.emitError("unsupported delay buffer type in BMC conversion");
+          return failure();
+        }
         continue;
       }
 
@@ -1474,6 +1593,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
       });
   if (assertionCheck.wasInterrupted())
     return signalPassFailure();
+
   RewritePatternSet patterns(&getContext());
   TypeConverter converter;
   populateHWToSMTTypeConverter(converter);

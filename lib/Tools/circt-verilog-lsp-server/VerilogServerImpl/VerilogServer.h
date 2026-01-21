@@ -187,6 +187,33 @@ public:
   void getOutgoingCalls(const CallHierarchyItem &item,
                         std::vector<CallHierarchyOutgoingCall> &calls);
 
+  //===--------------------------------------------------------------------===//
+  // Type Hierarchy
+  //===--------------------------------------------------------------------===//
+
+  /// Type hierarchy item structure for LSP.
+  struct TypeHierarchyItem {
+    std::string name;
+    llvm::lsp::SymbolKind kind;
+    std::string detail;
+    URIForFile uri;
+    llvm::lsp::Range range;
+    llvm::lsp::Range selectionRange;
+    std::string data;
+  };
+
+  /// Prepare type hierarchy at the given position.
+  std::optional<TypeHierarchyItem>
+  prepareTypeHierarchy(const URIForFile &uri, const llvm::lsp::Position &pos);
+
+  /// Get supertypes (parent classes) for a type hierarchy item.
+  void getSupertypes(const TypeHierarchyItem &item,
+                     std::vector<TypeHierarchyItem> &supertypes);
+
+  /// Get subtypes (child classes) for a type hierarchy item.
+  void getSubtypes(const TypeHierarchyItem &item,
+                   std::vector<TypeHierarchyItem> &subtypes);
+
   /// Formatting options for document formatting.
   struct FormattingOptions {
     /// Number of spaces for indentation (ignored if insertSpaces is false).

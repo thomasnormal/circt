@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <map>
 #include <string>
 
 namespace {
@@ -498,6 +499,260 @@ TEST(MooreRuntimeDpiHdlTest, HdlReadInvalidPath) {
   uvm_hdl_data_t value = 5;
   EXPECT_EQ(uvm_hdl_read(&empty, &value), 0);
   EXPECT_EQ(value, 5);
+}
+
+//===----------------------------------------------------------------------===//
+// Signal Registry Bridge Tests
+//===----------------------------------------------------------------------===//
+
+// Test data for signal registry callback testing
+namespace {
+struct MockSignalStore {
+  std::map<MooreSignalHandle, int64_t> values;
+  std::map<MooreSignalHandle, bool> forced;
+
+  void reset() {
+    values.clear();
+    forced.clear();
+  }
+};
+
+thread_local MockSignalStore mockSignalStore;
+
+int64_t mockReadCallback(MooreSignalHandle handle, void *userData) {
+  (void)userData;
+  auto it = mockSignalStore.values.find(handle);
+  return it != mockSignalStore.values.end() ? it->second : 0;
+}
+
+int32_t mockWriteCallback(MooreSignalHandle handle, int64_t value,
+                          void *userData) {
+  (void)userData;
+  if (mockSignalStore.forced[handle])
+    return 1; // Ignore writes to forced signals
+  mockSignalStore.values[handle] = value;
+  return 1;
+}
+
+int32_t mockForceCallback(MooreSignalHandle handle, int64_t value,
+                          void *userData) {
+  (void)userData;
+  mockSignalStore.values[handle] = value;
+  mockSignalStore.forced[handle] = true;
+  return 1;
+}
+
+int32_t mockReleaseCallback(MooreSignalHandle handle, void *userData) {
+  (void)userData;
+  mockSignalStore.forced[handle] = false;
+  return 1;
+}
+} // namespace
+
+TEST(MooreRuntimeSignalRegistryTest, RegisterAndLookupSignal) {
+  // Clear any existing state
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Register a signal
+  EXPECT_EQ(__moore_signal_registry_register("top.dut.clk", 1, 1), 1);
+  EXPECT_EQ(__moore_signal_registry_register("top.dut.data", 2, 8), 1);
+
+  // Look up signals
+  EXPECT_EQ(__moore_signal_registry_lookup("top.dut.clk"), 1u);
+  EXPECT_EQ(__moore_signal_registry_lookup("top.dut.data"), 2u);
+  EXPECT_EQ(__moore_signal_registry_lookup("nonexistent"),
+            MOORE_INVALID_SIGNAL_HANDLE);
+
+  // Check existence
+  EXPECT_EQ(__moore_signal_registry_exists("top.dut.clk"), 1);
+  EXPECT_EQ(__moore_signal_registry_exists("top.dut.data"), 1);
+  EXPECT_EQ(__moore_signal_registry_exists("nonexistent"), 0);
+
+  // Check width
+  EXPECT_EQ(__moore_signal_registry_get_width("top.dut.clk"), 1u);
+  EXPECT_EQ(__moore_signal_registry_get_width("top.dut.data"), 8u);
+  EXPECT_EQ(__moore_signal_registry_get_width("nonexistent"), 0u);
+
+  // Check count
+  EXPECT_EQ(__moore_signal_registry_count(), 2u);
+
+  // Clear and verify
+  __moore_signal_registry_clear();
+  EXPECT_EQ(__moore_signal_registry_count(), 0u);
+  EXPECT_EQ(__moore_signal_registry_exists("top.dut.clk"), 0);
+}
+
+TEST(MooreRuntimeSignalRegistryTest, InvalidRegistration) {
+  __moore_signal_registry_clear();
+
+  // Invalid path
+  EXPECT_EQ(__moore_signal_registry_register(nullptr, 1, 8), 0);
+  EXPECT_EQ(__moore_signal_registry_register("", 1, 8), 0);
+
+  // Invalid handle
+  EXPECT_EQ(__moore_signal_registry_register("valid.path",
+                                              MOORE_INVALID_SIGNAL_HANDLE, 8),
+            0);
+
+  EXPECT_EQ(__moore_signal_registry_count(), 0u);
+}
+
+TEST(MooreRuntimeSignalRegistryTest, ConnectedStatus) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Initially not connected
+  EXPECT_EQ(__moore_signal_registry_is_connected(), 0);
+
+  // Set accessor callbacks
+  __moore_signal_registry_set_accessor(mockReadCallback, mockWriteCallback,
+                                       mockForceCallback, mockReleaseCallback,
+                                       nullptr);
+
+  // Now connected
+  EXPECT_EQ(__moore_signal_registry_is_connected(), 1);
+
+  // Disconnect
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  EXPECT_EQ(__moore_signal_registry_is_connected(), 0);
+}
+
+TEST(MooreRuntimeSignalRegistryTest, HdlReadUsesRegistry) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Register a signal and connect callbacks
+  __moore_signal_registry_register("top.reg_signal", 100, 32);
+  __moore_signal_registry_set_accessor(mockReadCallback, mockWriteCallback,
+                                       mockForceCallback, mockReleaseCallback,
+                                       nullptr);
+
+  // Set value in mock store
+  mockSignalStore.values[100] = 0xDEADBEEF;
+
+  // Read via DPI should get mock value
+  MooreString path = makeMooreString("top.reg_signal");
+  uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 0xDEADBEEF);
+
+  // Disconnect and verify fallback to stub
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  value = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  // Stub returns 0 for new entries
+  EXPECT_EQ(value, 0);
+
+  __moore_signal_registry_clear();
+}
+
+TEST(MooreRuntimeSignalRegistryTest, HdlDepositUsesRegistry) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Register and connect
+  __moore_signal_registry_register("top.write_signal", 200, 16);
+  __moore_signal_registry_set_accessor(mockReadCallback, mockWriteCallback,
+                                       mockForceCallback, mockReleaseCallback,
+                                       nullptr);
+
+  // Deposit value
+  MooreString path = makeMooreString("top.write_signal");
+  EXPECT_EQ(uvm_hdl_deposit(&path, 12345), 1);
+
+  // Verify it was written to mock store
+  EXPECT_EQ(mockSignalStore.values[200], 12345);
+
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  __moore_signal_registry_clear();
+}
+
+TEST(MooreRuntimeSignalRegistryTest, HdlForceUsesRegistry) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Register and connect
+  __moore_signal_registry_register("top.force_signal", 300, 8);
+  __moore_signal_registry_set_accessor(mockReadCallback, mockWriteCallback,
+                                       mockForceCallback, mockReleaseCallback,
+                                       nullptr);
+
+  // Force value
+  MooreString path = makeMooreString("top.force_signal");
+  EXPECT_EQ(uvm_hdl_force(&path, 0xAB), 1);
+
+  // Verify force was applied
+  EXPECT_EQ(mockSignalStore.values[300], 0xAB);
+  EXPECT_TRUE(mockSignalStore.forced[300]);
+
+  // Deposit should be ignored (forced)
+  EXPECT_EQ(uvm_hdl_deposit(&path, 0xCD), 1);
+  EXPECT_EQ(mockSignalStore.values[300], 0xAB); // Still AB, deposit ignored
+
+  // Release
+  EXPECT_EQ(uvm_hdl_release(&path), 1);
+  EXPECT_FALSE(mockSignalStore.forced[300]);
+
+  // Now deposit should work
+  EXPECT_EQ(uvm_hdl_deposit(&path, 0xEF), 1);
+  EXPECT_EQ(mockSignalStore.values[300], 0xEF);
+
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  __moore_signal_registry_clear();
+}
+
+TEST(MooreRuntimeSignalRegistryTest, HdlReleaseAndReadUsesRegistry) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Register and connect
+  __moore_signal_registry_register("top.release_read_signal", 400, 32);
+  __moore_signal_registry_set_accessor(mockReadCallback, mockWriteCallback,
+                                       mockForceCallback, mockReleaseCallback,
+                                       nullptr);
+
+  // Force and set value
+  mockSignalStore.values[400] = 0x1234;
+  mockSignalStore.forced[400] = true;
+
+  // Release and read
+  MooreString path = makeMooreString("top.release_read_signal");
+  uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_release_and_read(&path, &value), 1);
+  EXPECT_EQ(value, 0x1234);
+  EXPECT_FALSE(mockSignalStore.forced[400]);
+
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  __moore_signal_registry_clear();
+}
+
+TEST(MooreRuntimeSignalRegistryTest, FallbackToStubWhenNotRegistered) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  // Connect callbacks but don't register this path
+  __moore_signal_registry_set_accessor(mockReadCallback, mockWriteCallback,
+                                       mockForceCallback, mockReleaseCallback,
+                                       nullptr);
+
+  // Path not in registry should fall back to stub behavior
+  MooreString path = makeMooreString("top.stub_only_signal");
+  EXPECT_EQ(uvm_hdl_deposit(&path, 999), 1);
+
+  // Read should get stub value (not from mock store)
+  uvm_hdl_data_t value = 0;
+  EXPECT_EQ(uvm_hdl_read(&path, &value), 1);
+  EXPECT_EQ(value, 999); // From stub map
+
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  __moore_signal_registry_clear();
 }
 
 TEST(MooreRuntimeStringTest, StringToLower) {
@@ -4372,6 +4627,302 @@ TEST(MooreRuntimeCoverageTest, HtmlReportColorCodingThresholds) {
 }
 
 //===----------------------------------------------------------------------===//
+// Text Report Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeCoverageTest, TextReportGeneration) {
+  void *cg = __moore_covergroup_create("text_report_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "signal_a");
+  __moore_coverpoint_init(cg, 1, "signal_b");
+
+  __moore_coverpoint_sample(cg, 0, 1);
+  __moore_coverpoint_sample(cg, 0, 2);
+  __moore_coverpoint_sample(cg, 1, 10);
+
+  // Generate text report with normal verbosity
+  const char *filename = "/tmp/coverage_test_report.txt";
+  int32_t result = __moore_coverage_report_text(filename, MOORE_TEXT_REPORT_NORMAL);
+  EXPECT_EQ(result, 0);
+
+  // Verify file was created
+  FILE *fp = std::fopen(filename, "r");
+  EXPECT_NE(fp, nullptr);
+  if (fp) {
+    std::fclose(fp);
+    std::remove(filename);
+  }
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportNullFilename) {
+  int32_t result = __moore_coverage_report_text(nullptr, MOORE_TEXT_REPORT_NORMAL);
+  EXPECT_NE(result, 0);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportSummaryOnly) {
+  // Create a covergroup with bins and sample values
+  void *cg = __moore_covergroup_create("text_summary_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"bin_a", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 10, 0},
+      {"bin_b", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 11, 20, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp_test", bins, 2);
+  __moore_coverpoint_sample(cg, 0, 5);
+
+  // Generate summary-only report
+  const char *filename = "/tmp/coverage_summary_test.txt";
+  int32_t result = __moore_coverage_report_text(filename, MOORE_TEXT_REPORT_SUMMARY);
+  EXPECT_EQ(result, 0);
+
+  // Read and verify content
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string content(fileSize, '\0');
+  std::fread(&content[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Summary should contain overall coverage
+  EXPECT_NE(content.find("Coverage Report"), std::string::npos);
+  EXPECT_NE(content.find("Overall Coverage"), std::string::npos);
+  EXPECT_NE(content.find("Summary:"), std::string::npos);
+
+  // Summary mode should NOT contain covergroup details
+  EXPECT_EQ(content.find("text_summary_cg"), std::string::npos);
+
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportDetailedWithBins) {
+  // Create a covergroup with bins
+  void *cg = __moore_covergroup_create("text_detail_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"low_range", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 50, 0},
+      {"high_range", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 51, 100, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "addr", bins, 2);
+
+  // Sample only low range
+  __moore_coverpoint_sample(cg, 0, 25);
+  __moore_coverpoint_sample(cg, 0, 30);
+
+  // Generate detailed report
+  const char *filename = "/tmp/coverage_detail_test.txt";
+  int32_t result = __moore_coverage_report_text(filename, MOORE_TEXT_REPORT_DETAILED);
+  EXPECT_EQ(result, 0);
+
+  // Read and verify content
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string content(fileSize, '\0');
+  std::fread(&content[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Detailed report should contain bin information
+  EXPECT_NE(content.find("text_detail_cg"), std::string::npos);
+  EXPECT_NE(content.find("addr"), std::string::npos);
+  EXPECT_NE(content.find("low_range"), std::string::npos);
+  EXPECT_NE(content.find("high_range"), std::string::npos);
+
+  // High range should be marked as a hole (0 hits)
+  EXPECT_NE(content.find("HOLE"), std::string::npos);
+
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportSummaryFunction) {
+  // Create a covergroup
+  void *cg = __moore_covergroup_create("summary_test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp1");
+  __moore_coverpoint_sample(cg, 0, 42);
+
+  // Get summary string
+  char *summary = __moore_coverage_report_summary();
+  ASSERT_NE(summary, nullptr);
+
+  // Verify it contains coverage percentage
+  std::string summaryStr(summary);
+  EXPECT_NE(summaryStr.find("Coverage:"), std::string::npos);
+  EXPECT_NE(summaryStr.find("%"), std::string::npos);
+  EXPECT_NE(summaryStr.find("covergroup"), std::string::npos);
+
+  __moore_free(summary);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportGetFullReport) {
+  // Create a covergroup
+  void *cg = __moore_covergroup_create("get_report_cg", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "test_cp");
+  __moore_coverpoint_sample(cg, 0, 100);
+
+  // Get full text report
+  char *report = __moore_coverage_get_text_report(MOORE_TEXT_REPORT_NORMAL);
+  ASSERT_NE(report, nullptr);
+
+  std::string reportStr(report);
+  EXPECT_NE(reportStr.find("Coverage Report"), std::string::npos);
+  EXPECT_NE(reportStr.find("get_report_cg"), std::string::npos);
+  EXPECT_NE(reportStr.find("test_cp"), std::string::npos);
+
+  __moore_free(report);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportWithCrossCoverage) {
+  // Create a covergroup with cross coverage
+  void *cg = __moore_covergroup_create("text_cross_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "addr");
+  __moore_coverpoint_init(cg, 1, "data");
+
+  // Create cross coverage
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "addr_x_data", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Sample some values
+  __moore_coverpoint_sample(cg, 0, 10);
+  __moore_coverpoint_sample(cg, 1, 20);
+  int64_t crossValues[] = {10, 20};
+  __moore_cross_sample(cg, crossValues, 2);
+
+  // Generate detailed report
+  const char *filename = "/tmp/coverage_cross_text_test.txt";
+  int32_t result = __moore_coverage_report_text(filename, MOORE_TEXT_REPORT_DETAILED);
+  EXPECT_EQ(result, 0);
+
+  // Read and verify content
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string content(fileSize, '\0');
+  std::fread(&content[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Verify cross coverage is included
+  EXPECT_NE(content.find("text_cross_cg"), std::string::npos);
+  EXPECT_NE(content.find("Cross:"), std::string::npos);
+  EXPECT_NE(content.find("addr_x_data"), std::string::npos);
+
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportCoverageHolesSummary) {
+  // Create a covergroup with multiple bins, some with 0 hits
+  void *cg = __moore_covergroup_create("holes_test_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"bin_hit", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 1, 1, 0},
+      {"bin_miss1", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 2, 2, 0},
+      {"bin_miss2", MOORE_BIN_VALUE, MOORE_BIN_KIND_NORMAL, 3, 3, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "test_cp", bins, 3);
+
+  // Only hit bin_hit
+  __moore_coverpoint_sample(cg, 0, 1);
+
+  // Generate report
+  const char *filename = "/tmp/coverage_holes_test.txt";
+  int32_t result = __moore_coverage_report_text(filename, MOORE_TEXT_REPORT_NORMAL);
+  EXPECT_EQ(result, 0);
+
+  // Read and verify content
+  FILE *fp = std::fopen(filename, "r");
+  ASSERT_NE(fp, nullptr);
+
+  std::fseek(fp, 0, SEEK_END);
+  long fileSize = std::ftell(fp);
+  std::fseek(fp, 0, SEEK_SET);
+
+  std::string content(fileSize, '\0');
+  std::fread(&content[0], 1, fileSize, fp);
+  std::fclose(fp);
+
+  // Verify holes summary section is present
+  EXPECT_NE(content.find("Coverage Holes"), std::string::npos);
+
+  std::remove(filename);
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportVerbosityLevels) {
+  // Create a covergroup
+  void *cg = __moore_covergroup_create("verbosity_cg", 1);
+  ASSERT_NE(cg, nullptr);
+
+  MooreCoverageBin bins[] = {
+      {"test_bin", MOORE_BIN_RANGE, MOORE_BIN_KIND_NORMAL, 0, 100, 0}
+  };
+  __moore_coverpoint_init_with_bins(cg, 0, "cp1", bins, 1);
+  __moore_coverpoint_sample(cg, 0, 50);
+
+  // Summary level
+  char *summaryReport = __moore_coverage_get_text_report(MOORE_TEXT_REPORT_SUMMARY);
+  ASSERT_NE(summaryReport, nullptr);
+  std::string summaryStr(summaryReport);
+  EXPECT_EQ(summaryStr.find("verbosity_cg"), std::string::npos);  // No covergroup details
+  __moore_free(summaryReport);
+
+  // Normal level
+  char *normalReport = __moore_coverage_get_text_report(MOORE_TEXT_REPORT_NORMAL);
+  ASSERT_NE(normalReport, nullptr);
+  std::string normalStr(normalReport);
+  EXPECT_NE(normalStr.find("verbosity_cg"), std::string::npos);   // Has covergroup
+  EXPECT_EQ(normalStr.find("test_bin"), std::string::npos);        // No bin details
+  __moore_free(normalReport);
+
+  // Detailed level
+  char *detailReport = __moore_coverage_get_text_report(MOORE_TEXT_REPORT_DETAILED);
+  ASSERT_NE(detailReport, nullptr);
+  std::string detailStr(detailReport);
+  EXPECT_NE(detailStr.find("verbosity_cg"), std::string::npos);   // Has covergroup
+  EXPECT_NE(detailStr.find("test_bin"), std::string::npos);       // Has bin details
+  __moore_free(detailReport);
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCoverageTest, TextReportEmptyCovergroups) {
+  // Generate report with no covergroups
+  char *report = __moore_coverage_get_text_report(MOORE_TEXT_REPORT_NORMAL);
+  ASSERT_NE(report, nullptr);
+
+  std::string reportStr(report);
+  EXPECT_NE(reportStr.find("Coverage Report"), std::string::npos);
+  EXPECT_NE(reportStr.find("Covergroups: 0"), std::string::npos);
+
+  __moore_free(report);
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Database Save/Load/Merge Tests
 //===----------------------------------------------------------------------===//
 
@@ -7956,6 +8507,283 @@ TEST(MooreRuntimeImplicationTest, NestedImplicationStatistics) {
   EXPECT_EQ(stats->satisfiedImplications, 2);
 
   __moore_implication_reset_stats();
+}
+
+//===----------------------------------------------------------------------===//
+// Simulation Control Task Tests
+// IEEE 1800-2017 Section 21 "System tasks and system functions"
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeSimControlTest, FinishSetsState) {
+  // Disable actual exit for testing
+  __moore_set_finish_exits(false);
+  __moore_reset_finish_state();
+
+  EXPECT_FALSE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 0);
+
+  testing::internal::CaptureStderr();
+  __moore_finish(0);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 0);
+  EXPECT_NE(output.find("$finish called with exit code 0"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, FinishWithExitCode) {
+  __moore_set_finish_exits(false);
+  __moore_reset_finish_state();
+
+  testing::internal::CaptureStderr();
+  __moore_finish(42);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 42);
+  EXPECT_NE(output.find("$finish called with exit code 42"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, FatalWithMessage) {
+  __moore_set_finish_exits(false);
+  __moore_reset_finish_state();
+
+  char data[] = "Test fatal error";
+  MooreString msg = {data, 16};
+
+  testing::internal::CaptureStderr();
+  __moore_fatal(1, &msg);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 1);
+  EXPECT_EQ(__moore_get_error_count(), 1);
+  EXPECT_NE(output.find("Fatal: Test fatal error"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, FatalWithNullMessage) {
+  __moore_set_finish_exits(false);
+  __moore_reset_finish_state();
+
+  testing::internal::CaptureStderr();
+  __moore_fatal(2, nullptr);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 2);
+  EXPECT_NE(output.find("Fatal:"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, ErrorIncreasesCount) {
+  __moore_reset_finish_state();
+
+  EXPECT_EQ(__moore_get_error_count(), 0);
+
+  char data[] = "Error message 1";
+  MooreString msg = {data, 15};
+
+  testing::internal::CaptureStderr();
+  __moore_error(&msg);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_error_count(), 1);
+  EXPECT_NE(output.find("Error: Error message 1"), std::string::npos);
+
+  // Second error
+  testing::internal::CaptureStderr();
+  __moore_error(&msg);
+  output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_error_count(), 2);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, WarningIncreasesCount) {
+  __moore_reset_finish_state();
+
+  EXPECT_EQ(__moore_get_warning_count(), 0);
+
+  char data[] = "Warning message";
+  MooreString msg = {data, 15};
+
+  testing::internal::CaptureStderr();
+  __moore_warning(&msg);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_warning_count(), 1);
+  EXPECT_NE(output.find("Warning: Warning message"), std::string::npos);
+
+  // Second warning
+  testing::internal::CaptureStderr();
+  __moore_warning(&msg);
+  output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_warning_count(), 2);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, InfoDoesNotIncreaseCounts) {
+  __moore_reset_finish_state();
+
+  char data[] = "Info message";
+  MooreString msg = {data, 12};
+
+  testing::internal::CaptureStdout();
+  __moore_info(&msg);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Info should not increment error or warning count
+  EXPECT_EQ(__moore_get_error_count(), 0);
+  EXPECT_EQ(__moore_get_warning_count(), 0);
+  EXPECT_NE(output.find("Info: Info message"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, InfoWithNullMessage) {
+  __moore_reset_finish_state();
+
+  testing::internal::CaptureStdout();
+  __moore_info(nullptr);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(output.find("Info:"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, ResetSeverityCounts) {
+  __moore_reset_finish_state();
+
+  char data[] = "msg";
+  MooreString msg = {data, 3};
+
+  // Generate some errors and warnings
+  testing::internal::CaptureStderr();
+  __moore_error(&msg);
+  __moore_warning(&msg);
+  __moore_warning(&msg);
+  testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_error_count(), 1);
+  EXPECT_EQ(__moore_get_warning_count(), 2);
+
+  // Reset
+  __moore_reset_severity_counts();
+
+  EXPECT_EQ(__moore_get_error_count(), 0);
+  EXPECT_EQ(__moore_get_warning_count(), 0);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, SeveritySummary) {
+  __moore_reset_finish_state();
+
+  // No errors or warnings - should return 0
+  EXPECT_EQ(__moore_severity_summary(), 0);
+
+  char data[] = "test";
+  MooreString msg = {data, 4};
+
+  // Add some errors and warnings
+  testing::internal::CaptureStderr();
+  __moore_error(&msg);
+  __moore_error(&msg);
+  __moore_warning(&msg);
+  testing::internal::GetCapturedStderr();
+
+  // Get summary
+  testing::internal::CaptureStderr();
+  int32_t result = __moore_severity_summary();
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, 2);  // 2 errors
+  EXPECT_NE(output.find("2 error(s)"), std::string::npos);
+  EXPECT_NE(output.find("1 warning(s)"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, SeveritySummaryNoIssues) {
+  __moore_reset_finish_state();
+
+  // No errors or warnings - should not print anything
+  testing::internal::CaptureStderr();
+  int32_t result = __moore_severity_summary();
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result, 0);
+  EXPECT_EQ(output, "");  // No output when no issues
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, ErrorWithEmptyMessage) {
+  __moore_reset_finish_state();
+
+  MooreString empty = {nullptr, 0};
+
+  testing::internal::CaptureStderr();
+  __moore_error(&empty);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_error_count(), 1);
+  EXPECT_NE(output.find("Error:"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, WarningWithEmptyMessage) {
+  __moore_reset_finish_state();
+
+  MooreString empty = {nullptr, 0};
+
+  testing::internal::CaptureStderr();
+  __moore_warning(&empty);
+  std::string output = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(__moore_get_warning_count(), 1);
+  EXPECT_NE(output.find("Warning:"), std::string::npos);
+
+  __moore_reset_finish_state();
+}
+
+TEST(MooreRuntimeSimControlTest, ResetFinishStateResetsAll) {
+  __moore_set_finish_exits(false);
+
+  char data[] = "test";
+  MooreString msg = {data, 4};
+
+  // Set various states
+  testing::internal::CaptureStderr();
+  __moore_finish(5);
+  __moore_error(&msg);
+  __moore_warning(&msg);
+  testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 5);
+  EXPECT_EQ(__moore_get_error_count(), 1);
+  EXPECT_EQ(__moore_get_warning_count(), 1);
+
+  // Reset all
+  __moore_reset_finish_state();
+
+  EXPECT_FALSE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_exit_code(), 0);
+  EXPECT_EQ(__moore_get_error_count(), 0);
+  EXPECT_EQ(__moore_get_warning_count(), 0);
 }
 
 } // namespace

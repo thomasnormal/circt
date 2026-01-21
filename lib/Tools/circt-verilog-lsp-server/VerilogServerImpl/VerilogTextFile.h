@@ -148,6 +148,22 @@ public:
       const VerilogDocument::CallHierarchyItem &item,
       std::vector<VerilogDocument::CallHierarchyOutgoingCall> &calls);
 
+  /// Prepare type hierarchy at the given position.
+  /// Thread-safe; acquires docMutex.
+  std::optional<VerilogDocument::TypeHierarchyItem>
+  prepareTypeHierarchy(const llvm::lsp::URIForFile &uri,
+                       llvm::lsp::Position pos);
+
+  /// Get supertypes (parent classes) for a type hierarchy item.
+  /// Thread-safe; acquires docMutex.
+  void getSupertypes(const VerilogDocument::TypeHierarchyItem &item,
+                     std::vector<VerilogDocument::TypeHierarchyItem> &supertypes);
+
+  /// Get subtypes (child classes) for a type hierarchy item.
+  /// Thread-safe; acquires docMutex.
+  void getSubtypes(const VerilogDocument::TypeHierarchyItem &item,
+                   std::vector<VerilogDocument::TypeHierarchyItem> &subtypes);
+
   /// Format the entire document.
   /// Thread-safe; acquires docMutex.
   void formatDocument(const llvm::lsp::URIForFile &uri,

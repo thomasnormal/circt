@@ -1,6 +1,9 @@
 # SPI AVIP file list for CIRCT compilation
 # Order: Dependencies first, then dependent files
 
+# Include path for virtual sequencer includes in env packages.
+-I /home/thomas-ahle/mbit/spi_avip/src/hvlTop/spiEnv/virtualSequencer
+
 # 1. Globals Package (no UVM dependency in package itself)
 /home/thomas-ahle/mbit/spi_avip/src/globals/SpiGlobalsPkg.sv
 

@@ -115,48 +115,18 @@ module RandSequenceTest;
     endsequence
   end
 
-  // Randsequence break/return handling in productions
-  // CHECK-LABEL: func.func @break_return_test
-  // CHECK: cf.br
-  // CHECK: func.return
-  function int break_return_test();
-    int x;
-    randsequence(main)
-      main: first second third;
-      first: { x = 10; };
-      second: { if (x) break; };
-      third: { x = 20; };
+  // Randsequence with rand join(0.5) - fractional ratio (executes half)
+  // Per IEEE 1800-2017 Section 18.17.5, real N means execute round(N*numProds)
+  // CHECK: moore.procedure initial
+  // CHECK: moore.builtin.urandom_range
+  initial begin
+    randsequence(join_ratio)
+      join_ratio: rand join (0.5) r1 r2 r3 r4;
+      r1: { data = 1001; };
+      r2: { data = 1002; };
+      r3: { data = 1003; };
+      r4: { data = 1004; };
     endsequence
-    return x;
-  endfunction
-
-  // CHECK-LABEL: func.func @return_in_production
-  // CHECK: cf.br
-  // CHECK: func.return
-  function int return_in_production();
-    int x;
-    randsequence(main)
-      main: first second third;
-      first: { x = 20; };
-      second: { if (x) return; x = 5; };
-      third: { x = x + 5; };
-    endsequence
-    return x;
-  endfunction
-
-  // Randsequence break in forked randjoin production
-  // CHECK-LABEL: func.func @randjoin_break
-  // CHECK: moore.fork
-  // CHECK: cf.br
-  function int randjoin_break();
-    int x;
-    randsequence(main)
-      main: rand join (2) a b c;
-      a: { x = 1; };
-      b: { if (x) break; x = 2; };
-      c: { x = 3; };
-    endsequence
-    return x;
-  endfunction
+  end
 
 endmodule

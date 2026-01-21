@@ -12,6 +12,7 @@
 
 #include "circt/Conversion/CombToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
+#include "circt/Conversion/ImportVerilog.h"
 #include "circt/Conversion/LTLToCore.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
 #include "circt/Conversion/SVAToLTL.h"
@@ -22,7 +23,9 @@
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDDialect.h"
 #include "circt/Dialect/LTL/LTLDialect.h"
+#include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
@@ -35,6 +38,7 @@
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/SMT/IR/SMTDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/Diagnostics.h"
@@ -195,6 +199,18 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(verif::createLowerTestsPass());
+
+  bool hasLLHD = false;
+  module->walk([&](Operation *op) {
+    if (auto *dialect = op->getDialect())
+      if (dialect->getNamespace() == "llhd")
+        hasLLHD = true;
+  });
+
+  if (hasLLHD) {
+    LlhdToCorePipelineOptions llhdOptions;
+    populateLlhdToCorePipeline(pm, llhdOptions);
+  }
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
@@ -349,7 +365,9 @@ int main(int argc, char **argv) {
     circt::comb::CombDialect,
     circt::emit::EmitDialect,
     circt::hw::HWDialect,
+    circt::llhd::LLHDDialect,
     circt::ltl::LTLDialect,
+    circt::moore::MooreDialect,
     circt::om::OMDialect,
     circt::seq::SeqDialect,
     mlir::smt::SMTDialect,
@@ -361,6 +379,7 @@ int main(int argc, char **argv) {
   >();
   // clang-format on
   mlir::func::registerInlinerExtension(registry);
+  mlir::LLVM::registerInlinerInterface(registry);
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
   MLIRContext context(registry);

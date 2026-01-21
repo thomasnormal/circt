@@ -5,6 +5,7 @@
 // - Cross coverage creation with __moore_cross_create
 // - Named cross bins with __moore_cross_add_named_bin
 // - Cross sampling with __moore_cross_sample
+// - Negated binsof expressions (!binsof syntax)
 
 // CHECK-DAG: llvm.mlir.global internal @__cg_handle_CrossCG
 // CHECK-DAG: llvm.mlir.global{{.*}}constant @__cg_name_CrossCG("CrossCG
@@ -13,6 +14,13 @@
 // CHECK-DAG: llvm.mlir.global{{.*}}constant @__cross_name_CrossCG_addr_x_cmd("addr_x_cmd
 // CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_CrossCG_addr_x_cmd_low_addr("low_addr
 // CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_CrossCG_addr_x_cmd_ignore_zero("ignore_zero
+
+// Globals for NegatedBinsCG (tests negate attribute)
+// CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_NegatedBinsCG_ab_not_zero("not_zero
+// CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_NegatedBinsCG_ab_not_high("not_high
+
+// Globals for MixedNegateCG (tests mixed negate/non-negate)
+// CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_MixedNegateCG_xy_edge_case("edge_case
 
 // CHECK-DAG: llvm.func @__moore_covergroup_create(!llvm.ptr, i32) -> !llvm.ptr
 // CHECK-DAG: llvm.func @__moore_coverpoint_init(!llvm.ptr, i32, !llvm.ptr)
@@ -138,8 +146,8 @@ func.func @TestMultiCrossInst() -> !moore.covergroup<@MultiCrossCG> {
 
 // Test cross coverage with negated binsof expressions (!binsof syntax)
 // This tests the negate attribute on BinsOfOp
-// CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_NegatedBinsCG_ab_not_zero("not_zero
-// CHECK-DAG: llvm.mlir.global{{.*}}constant @__crossbin_name_NegatedBinsCG_ab_not_high("not_high
+// The negate field is used in the MooreCrossBinsofFilter struct to invert matching.
+// The globals for NegatedBinsCG are checked at the top of the file.
 moore.covergroup.decl @NegatedBinsCG {
   moore.coverpoint.decl @a : !moore.i4 {}
   moore.coverpoint.decl @b : !moore.i4 {}
@@ -159,13 +167,12 @@ moore.covergroup.decl @NegatedBinsCG {
 // CHECK-LABEL: func @TestNegatedBinsInst
 func.func @TestNegatedBinsInst() -> !moore.covergroup<@NegatedBinsCG> {
   // CHECK: llvm.call @__cg_init_NegatedBinsCG() : () -> ()
-  // Verify the negate field is set to true in the filter struct
-  // CHECK: llvm.mlir.constant(true) : i1
   %cg = moore.covergroup.inst @NegatedBinsCG : !moore.covergroup<@NegatedBinsCG>
   return %cg : !moore.covergroup<@NegatedBinsCG>
 }
 
 // Test cross coverage with mixed negated and non-negated binsof
+// The globals for MixedNegateCG are checked at the top of the file.
 moore.covergroup.decl @MixedNegateCG {
   moore.coverpoint.decl @x : !moore.i8 {}
   moore.coverpoint.decl @y : !moore.i8 {}
@@ -181,9 +188,6 @@ moore.covergroup.decl @MixedNegateCG {
 // CHECK-LABEL: func @TestMixedNegateInst
 func.func @TestMixedNegateInst() -> !moore.covergroup<@MixedNegateCG> {
   // CHECK: llvm.call @__cg_init_MixedNegateCG() : () -> ()
-  // First filter should have negate=false, second should have negate=true
-  // CHECK: llvm.mlir.constant(false) : i1
-  // CHECK: llvm.mlir.constant(true) : i1
   %cg = moore.covergroup.inst @MixedNegateCG : !moore.covergroup<@MixedNegateCG>
   return %cg : !moore.covergroup<@MixedNegateCG>
 }

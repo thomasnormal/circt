@@ -533,8 +533,14 @@ public:
   /// Returns the number of delta cycles executed.
   size_t executeCurrentTime();
 
-  /// Step to the next event time.
-  /// Returns false if there are no more events.
+  /// Advance simulation time to the next scheduled event.
+  ///
+  /// This method first processes any ready processes at the current time,
+  /// then checks the EventScheduler for pending delayed events. If events
+  /// are found (e.g., from llhd.wait with delay), it advances time to execute
+  /// them and resumes any processes that were waiting for that time.
+  ///
+  /// Returns false if there are no more events or processes to run.
   bool advanceTime();
 
   /// Run the simulation until completion or time limit.

@@ -219,6 +219,37 @@ public:
                         std::vector<CallHierarchyOutgoingCall> &calls);
 
   //===--------------------------------------------------------------------===//
+  // Type Hierarchy
+  //===--------------------------------------------------------------------===//
+
+  /// Represents a type hierarchy item (class).
+  struct TypeHierarchyItem {
+    std::string name;
+    llvm::lsp::SymbolKind kind;
+    std::string detail;
+    llvm::lsp::URIForFile uri;
+    llvm::lsp::Range range;
+    llvm::lsp::Range selectionRange;
+    std::string data; // Encoded symbol info for later lookup
+  };
+
+  /// Prepare type hierarchy at the given position.
+  /// Returns the type hierarchy item for the class at position if any.
+  std::optional<TypeHierarchyItem>
+  prepareTypeHierarchy(const llvm::lsp::URIForFile &uri,
+                       const llvm::lsp::Position &pos);
+
+  /// Get supertypes (parent classes) for a type hierarchy item.
+  /// Returns all base classes of the given class.
+  void getSupertypes(const TypeHierarchyItem &item,
+                     std::vector<TypeHierarchyItem> &supertypes);
+
+  /// Get subtypes (child classes) for a type hierarchy item.
+  /// Returns all classes that extend the given class.
+  void getSubtypes(const TypeHierarchyItem &item,
+                   std::vector<TypeHierarchyItem> &subtypes);
+
+  //===--------------------------------------------------------------------===//
   // Document Formatting
   //===--------------------------------------------------------------------===//
 

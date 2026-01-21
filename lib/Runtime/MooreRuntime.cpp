@@ -5966,6 +5966,310 @@ extern "C" int32_t __moore_coverage_report_html(const char *filename) {
 }
 
 //===----------------------------------------------------------------------===//
+// Text Coverage Report
+//===----------------------------------------------------------------------===//
+//
+// Text-based coverage report functions for CI/automation use.
+// These provide simple, parseable output that is faster to generate than HTML.
+//
+
+namespace {
+
+/// Generate text coverage report as a string.
+/// @param verbosity 0=summary only, 1=normal (covergroups+coverpoints), 2=detailed (includes bins)
+std::string generateCoverageText(int32_t verbosity) {
+  std::string report;
+  char buf[256];
+
+  // Get overall statistics
+  double totalCoverage = __moore_coverage_get_total();
+  int32_t numCovergroups = __moore_coverage_get_num_covergroups();
+  int32_t totalCoverpoints = 0;
+  int64_t totalHits = 0;
+  int32_t holesCount = 0;  // Bins with 0 hits
+
+  for (auto *cg : registeredCovergroups) {
+    if (cg) {
+      totalCoverpoints += cg->num_coverpoints;
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        if (cg->coverpoints[i]) {
+          totalHits += cg->coverpoints[i]->hits;
+          // Count bins with 0 hits
+          auto binIt = explicitBinData.find(cg->coverpoints[i]);
+          if (binIt != explicitBinData.end()) {
+            for (const auto &bin : binIt->second.bins) {
+              if (bin.kind == MOORE_BIN_KIND_NORMAL && bin.hit_count == 0)
+                ++holesCount;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Header
+  report += "Coverage Report\n";
+  report += "================================\n";
+  std::snprintf(buf, sizeof(buf), "Overall Coverage: %.1f%%\n", totalCoverage);
+  report += buf;
+  report += "\n";
+
+  // Summary statistics
+  report += "Summary:\n";
+  std::snprintf(buf, sizeof(buf), "  Covergroups: %d\n", numCovergroups);
+  report += buf;
+  std::snprintf(buf, sizeof(buf), "  Coverpoints: %d\n", totalCoverpoints);
+  report += buf;
+  std::snprintf(buf, sizeof(buf), "  Total Samples: %ld\n", static_cast<long>(totalHits));
+  report += buf;
+  if (holesCount > 0) {
+    std::snprintf(buf, sizeof(buf), "  Coverage Holes: %d\n", holesCount);
+    report += buf;
+  }
+  report += "\n";
+
+  // If summary only, return here
+  if (verbosity == MOORE_TEXT_REPORT_SUMMARY) {
+    return report;
+  }
+
+  // Per-covergroup details
+  for (auto *cg : registeredCovergroups) {
+    if (!cg)
+      continue;
+
+    double cgCoverage = __moore_covergroup_get_coverage(cg);
+    double goal = __moore_covergroup_get_goal(cg);
+    bool goalMet = cgCoverage >= goal;
+
+    report += "Covergroup: ";
+    report += cg->name ? cg->name : "(unnamed)";
+    report += "\n";
+
+    std::snprintf(buf, sizeof(buf), "  Coverage: %.1f%% (goal: %.0f%%)%s\n",
+                  cgCoverage, goal, goalMet ? "" : " <-- NOT MET");
+    report += buf;
+
+    // Coverpoints
+    for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+      auto *cp = cg->coverpoints[i];
+      if (!cp)
+        continue;
+
+      double cpCoverage = __moore_coverpoint_get_coverage(cg, i);
+      std::snprintf(buf, sizeof(buf), "  Coverpoint: %s (%.1f%%)\n",
+                    cp->name ? cp->name : "(unnamed)", cpCoverage);
+      report += buf;
+
+      // Show bins in detailed mode
+      if (verbosity == MOORE_TEXT_REPORT_DETAILED) {
+        auto binIt = explicitBinData.find(cp);
+        if (binIt != explicitBinData.end() && !binIt->second.bins.empty()) {
+          for (size_t binIdx = 0; binIdx < binIt->second.bins.size(); ++binIdx) {
+            const auto &bin = binIt->second.bins[binIdx];
+
+            // Skip ignore/illegal bins in summary
+            if (bin.kind != MOORE_BIN_KIND_NORMAL)
+              continue;
+
+            // Get hit count
+            int64_t hitCount = (cp->bins && static_cast<int32_t>(binIdx) < cp->num_bins)
+                                   ? cp->bins[binIdx]
+                                   : bin.hit_count;
+
+            // Format bin info
+            std::string binRange;
+            if (bin.type == MOORE_BIN_VALUE) {
+              std::snprintf(buf, sizeof(buf), "%ld", static_cast<long>(bin.low));
+              binRange = buf;
+            } else if (bin.type == MOORE_BIN_RANGE) {
+              std::snprintf(buf, sizeof(buf), "%ld..%ld",
+                            static_cast<long>(bin.low), static_cast<long>(bin.high));
+              binRange = buf;
+            } else if (bin.type == MOORE_BIN_WILDCARD) {
+              binRange = "wildcard";
+            } else if (bin.type == MOORE_BIN_TRANSITION) {
+              binRange = "transition";
+            }
+
+            std::snprintf(buf, sizeof(buf), "    bin %s: %ld hits",
+                          bin.name ? bin.name : "(unnamed)",
+                          static_cast<long>(hitCount));
+            report += buf;
+
+            if (!binRange.empty()) {
+              report += " [";
+              report += binRange;
+              report += "]";
+            }
+
+            if (hitCount == 0) {
+              report += "  <-- HOLE";
+            }
+            report += "\n";
+          }
+        }
+      }
+    }
+
+    // Cross coverage
+    auto crossIt = crossCoverageData.find(cg);
+    if (crossIt != crossCoverageData.end() && !crossIt->second.crosses.empty()) {
+      for (size_t crossIdx = 0; crossIdx < crossIt->second.crosses.size(); ++crossIdx) {
+        const auto &cross = crossIt->second.crosses[crossIdx];
+        double crossCov = __moore_cross_get_coverage(cg, static_cast<int32_t>(crossIdx));
+        int64_t binsHit = __moore_cross_get_bins_hit(cg, static_cast<int32_t>(crossIdx));
+
+        // Build coverpoint list
+        std::string cpList;
+        for (int32_t cpIdx = 0; cpIdx < cross.num_cps; ++cpIdx) {
+          if (cpIdx > 0)
+            cpList += " x ";
+          int32_t realCpIdx = cross.cp_indices[cpIdx];
+          if (realCpIdx >= 0 && realCpIdx < cg->num_coverpoints &&
+              cg->coverpoints[realCpIdx] && cg->coverpoints[realCpIdx]->name) {
+            cpList += cg->coverpoints[realCpIdx]->name;
+          } else {
+            std::snprintf(buf, sizeof(buf), "cp%d", realCpIdx);
+            cpList += buf;
+          }
+        }
+
+        std::snprintf(buf, sizeof(buf), "  Cross: %s (%.1f%%, %ld bins hit)\n",
+                      cross.name ? cross.name : "(unnamed)", crossCov,
+                      static_cast<long>(binsHit));
+        report += buf;
+
+        if (verbosity == MOORE_TEXT_REPORT_DETAILED) {
+          report += "    Coverpoints: ";
+          report += cpList;
+          report += "\n";
+        }
+      }
+    }
+
+    report += "\n";
+  }
+
+  // Coverage holes summary
+  if (holesCount > 0 && verbosity >= MOORE_TEXT_REPORT_NORMAL) {
+    report += "================================\n";
+    report += "Coverage Holes (0 hits):\n";
+    report += "================================\n";
+
+    for (auto *cg : registeredCovergroups) {
+      if (!cg)
+        continue;
+
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        auto *cp = cg->coverpoints[i];
+        if (!cp)
+          continue;
+
+        auto binIt = explicitBinData.find(cp);
+        if (binIt != explicitBinData.end()) {
+          for (size_t binIdx = 0; binIdx < binIt->second.bins.size(); ++binIdx) {
+            const auto &bin = binIt->second.bins[binIdx];
+            if (bin.kind != MOORE_BIN_KIND_NORMAL)
+              continue;
+
+            int64_t hitCount = (cp->bins && static_cast<int32_t>(binIdx) < cp->num_bins)
+                                   ? cp->bins[binIdx]
+                                   : bin.hit_count;
+
+            if (hitCount == 0) {
+              std::snprintf(buf, sizeof(buf), "  %s.%s.%s\n",
+                            cg->name ? cg->name : "(unnamed)",
+                            cp->name ? cp->name : "(unnamed)",
+                            bin.name ? bin.name : "(unnamed)");
+              report += buf;
+            }
+          }
+        }
+      }
+    }
+    report += "\n";
+  }
+
+  return report;
+}
+
+} // anonymous namespace
+
+extern "C" int32_t __moore_coverage_report_text(const char *filename,
+                                                  int32_t verbosity) {
+  if (!filename)
+    return 1;
+
+  FILE *fp = std::fopen(filename, "w");
+  if (!fp)
+    return 1;
+
+  std::string report = generateCoverageText(verbosity);
+  std::fwrite(report.c_str(), 1, report.size(), fp);
+  std::fclose(fp);
+
+  return 0;
+}
+
+extern "C" char *__moore_coverage_report_summary(void) {
+  // Generate a brief one-line summary
+  double totalCoverage = __moore_coverage_get_total();
+  int32_t numCovergroups = __moore_coverage_get_num_covergroups();
+
+  char buf[256];
+  std::snprintf(buf, sizeof(buf),
+                "Coverage: %.1f%% (%d covergroups)",
+                totalCoverage, numCovergroups);
+
+  char *result = static_cast<char *>(std::malloc(std::strlen(buf) + 1));
+  if (!result)
+    return nullptr;
+
+  std::strcpy(result, buf);
+  return result;
+}
+
+extern "C" void __moore_coverage_print_summary(void) {
+  double totalCoverage = __moore_coverage_get_total();
+  int32_t numCovergroups = __moore_coverage_get_num_covergroups();
+  int32_t totalCoverpoints = 0;
+  int64_t totalHits = 0;
+
+  for (auto *cg : registeredCovergroups) {
+    if (cg) {
+      totalCoverpoints += cg->num_coverpoints;
+      for (int32_t i = 0; i < cg->num_coverpoints; ++i) {
+        if (cg->coverpoints[i])
+          totalHits += cg->coverpoints[i]->hits;
+      }
+    }
+  }
+
+  std::printf("\n");
+  std::printf("================================\n");
+  std::printf("Coverage Summary\n");
+  std::printf("================================\n");
+  std::printf("Overall Coverage: %.1f%%\n", totalCoverage);
+  std::printf("Covergroups:      %d\n", numCovergroups);
+  std::printf("Coverpoints:      %d\n", totalCoverpoints);
+  std::printf("Total Samples:    %ld\n", static_cast<long>(totalHits));
+  std::printf("================================\n");
+  std::printf("\n");
+}
+
+extern "C" char *__moore_coverage_get_text_report(int32_t verbosity) {
+  std::string report = generateCoverageText(verbosity);
+
+  char *result = static_cast<char *>(std::malloc(report.size() + 1));
+  if (!result)
+    return nullptr;
+
+  std::memcpy(result, report.c_str(), report.size() + 1);
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
 // Coverage Database Save/Load/Merge Operations
 //===----------------------------------------------------------------------===//
 //
@@ -9599,6 +9903,144 @@ extern "C" void __moore_monitor_check(void) {
 }
 
 //===----------------------------------------------------------------------===//
+// Simulation Control Tasks
+//===----------------------------------------------------------------------===//
+
+namespace {
+// Global state for simulation control and severity tracking
+struct SimulationControlState {
+  std::atomic<int32_t> errorCount{0};
+  std::atomic<int32_t> warningCount{0};
+  std::atomic<bool> finishCalled{false};
+  std::atomic<int32_t> exitCode{0};
+  std::atomic<bool> finishExits{true}; // Default: actually exit on $finish
+};
+
+SimulationControlState simControlState;
+std::mutex simControlMutex;
+} // namespace
+
+extern "C" void __moore_finish(int32_t exit_code) {
+  std::lock_guard<std::mutex> lock(simControlMutex);
+  simControlState.finishCalled.store(true);
+  simControlState.exitCode.store(exit_code);
+
+  // Print finish message to stderr
+  std::fprintf(stderr, "$finish called with exit code %d\n", exit_code);
+  std::fflush(stderr);
+
+  // If configured to actually exit, do so
+  if (simControlState.finishExits.load()) {
+    std::exit(exit_code);
+  }
+}
+
+extern "C" void __moore_fatal(int32_t exit_code, MooreString *message) {
+  std::lock_guard<std::mutex> lock(simControlMutex);
+
+  // Print fatal message to stderr
+  std::fprintf(stderr, "Fatal: ");
+  if (message && message->data && message->len > 0) {
+    std::fwrite(message->data, 1, static_cast<size_t>(message->len), stderr);
+  }
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+
+  // Increment error count (fatal is an error)
+  simControlState.errorCount.fetch_add(1);
+  simControlState.finishCalled.store(true);
+  simControlState.exitCode.store(exit_code);
+
+  // If configured to actually exit, do so
+  if (simControlState.finishExits.load()) {
+    std::exit(exit_code);
+  }
+}
+
+extern "C" void __moore_error(MooreString *message) {
+  // Print error message to stderr
+  std::fprintf(stderr, "Error: ");
+  if (message && message->data && message->len > 0) {
+    std::fwrite(message->data, 1, static_cast<size_t>(message->len), stderr);
+  }
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+
+  // Increment error count
+  simControlState.errorCount.fetch_add(1);
+}
+
+extern "C" void __moore_warning(MooreString *message) {
+  // Print warning message to stderr
+  std::fprintf(stderr, "Warning: ");
+  if (message && message->data && message->len > 0) {
+    std::fwrite(message->data, 1, static_cast<size_t>(message->len), stderr);
+  }
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+
+  // Increment warning count
+  simControlState.warningCount.fetch_add(1);
+}
+
+extern "C" void __moore_info(MooreString *message) {
+  // Print info message to stdout (info is not an error)
+  std::fprintf(stdout, "Info: ");
+  if (message && message->data && message->len > 0) {
+    std::fwrite(message->data, 1, static_cast<size_t>(message->len), stdout);
+  }
+  std::fputc('\n', stdout);
+  std::fflush(stdout);
+}
+
+extern "C" int32_t __moore_get_error_count(void) {
+  return simControlState.errorCount.load();
+}
+
+extern "C" int32_t __moore_get_warning_count(void) {
+  return simControlState.warningCount.load();
+}
+
+extern "C" void __moore_reset_severity_counts(void) {
+  simControlState.errorCount.store(0);
+  simControlState.warningCount.store(0);
+}
+
+extern "C" int32_t __moore_severity_summary(void) {
+  int32_t errors = simControlState.errorCount.load();
+  int32_t warnings = simControlState.warningCount.load();
+
+  if (errors > 0 || warnings > 0) {
+    std::fprintf(stderr,
+                 "Simulation completed with %d error(s) and %d warning(s)\n",
+                 errors, warnings);
+    std::fflush(stderr);
+  }
+
+  return errors;
+}
+
+extern "C" void __moore_set_finish_exits(bool should_exit) {
+  simControlState.finishExits.store(should_exit);
+}
+
+extern "C" bool __moore_finish_called(void) {
+  return simControlState.finishCalled.load();
+}
+
+extern "C" int32_t __moore_get_exit_code(void) {
+  return simControlState.exitCode.load();
+}
+
+extern "C" void __moore_reset_finish_state(void) {
+  std::lock_guard<std::mutex> lock(simControlMutex);
+  simControlState.finishCalled.store(false);
+  simControlState.exitCode.store(0);
+  simControlState.errorCount.store(0);
+  simControlState.warningCount.store(0);
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
@@ -9614,6 +10056,106 @@ extern "C" void __moore_free(void *ptr) {
 // They allow UVM code to compile and run without requiring external C libraries.
 // For production use, these should be replaced with full implementations.
 //
+
+//===----------------------------------------------------------------------===//
+// Signal Registry Bridge
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Entry for a registered signal in the signal registry
+struct SignalRegistryEntry {
+  MooreSignalHandle handle;
+  uint32_t width;
+};
+
+/// Global signal registry state
+struct SignalRegistryState {
+  /// Map from hierarchical path to signal entry
+  std::unordered_map<std::string, SignalRegistryEntry> signals;
+
+  /// Accessor callbacks
+  MooreSignalReadCallback readCallback = nullptr;
+  MooreSignalWriteCallback writeCallback = nullptr;
+  MooreSignalForceCallback forceCallback = nullptr;
+  MooreSignalReleaseCallback releaseCallback = nullptr;
+  void *userData = nullptr;
+
+  /// Check if the registry is connected to actual simulation
+  bool isConnected() const { return readCallback != nullptr; }
+};
+
+SignalRegistryState signalRegistry;
+std::mutex signalRegistryMutex;
+} // namespace
+
+extern "C" int32_t __moore_signal_registry_register(const char *path,
+                                                     MooreSignalHandle signalHandle,
+                                                     uint32_t width) {
+  if (!path || !*path || signalHandle == MOORE_INVALID_SIGNAL_HANDLE)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  signalRegistry.signals[std::string(path)] = {signalHandle, width};
+  return 1;
+}
+
+extern "C" void __moore_signal_registry_set_accessor(
+    MooreSignalReadCallback readCallback, MooreSignalWriteCallback writeCallback,
+    MooreSignalForceCallback forceCallback,
+    MooreSignalReleaseCallback releaseCallback, void *userData) {
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  signalRegistry.readCallback = readCallback;
+  signalRegistry.writeCallback = writeCallback;
+  signalRegistry.forceCallback = forceCallback;
+  signalRegistry.releaseCallback = releaseCallback;
+  signalRegistry.userData = userData;
+}
+
+extern "C" MooreSignalHandle __moore_signal_registry_lookup(const char *path) {
+  if (!path || !*path)
+    return MOORE_INVALID_SIGNAL_HANDLE;
+
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  auto it = signalRegistry.signals.find(std::string(path));
+  if (it != signalRegistry.signals.end())
+    return it->second.handle;
+  return MOORE_INVALID_SIGNAL_HANDLE;
+}
+
+extern "C" int32_t __moore_signal_registry_exists(const char *path) {
+  if (!path || !*path)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  return signalRegistry.signals.count(std::string(path)) > 0 ? 1 : 0;
+}
+
+extern "C" uint32_t __moore_signal_registry_get_width(const char *path) {
+  if (!path || !*path)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  auto it = signalRegistry.signals.find(std::string(path));
+  if (it != signalRegistry.signals.end())
+    return it->second.width;
+  return 0;
+}
+
+extern "C" void __moore_signal_registry_clear(void) {
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  signalRegistry.signals.clear();
+  // Note: We don't clear the callbacks - they're managed by the simulation
+}
+
+extern "C" uint64_t __moore_signal_registry_count(void) {
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  return static_cast<uint64_t>(signalRegistry.signals.size());
+}
+
+extern "C" int32_t __moore_signal_registry_is_connected(void) {
+  std::lock_guard<std::mutex> lock(signalRegistryMutex);
+  return signalRegistry.isConnected() ? 1 : 0;
+}
 
 //===----------------------------------------------------------------------===//
 // HDL Access Stubs
@@ -9634,12 +10176,74 @@ bool getPathKey(MooreString *path, std::string &key) {
   key.assign(path->data, path->len);
   return !key.empty();
 }
+
+/// Helper to try reading from signal registry first, falling back to stub
+bool tryRegistryRead(const std::string &key, uvm_hdl_data_t *value) {
+  std::lock_guard<std::mutex> regLock(signalRegistryMutex);
+  if (!signalRegistry.isConnected())
+    return false;
+
+  auto it = signalRegistry.signals.find(key);
+  if (it == signalRegistry.signals.end())
+    return false;
+
+  *value = signalRegistry.readCallback(it->second.handle, signalRegistry.userData);
+  return true;
+}
+
+/// Helper to try writing to signal registry first, falling back to stub
+bool tryRegistryWrite(const std::string &key, uvm_hdl_data_t value) {
+  std::lock_guard<std::mutex> regLock(signalRegistryMutex);
+  if (!signalRegistry.isConnected())
+    return false;
+
+  auto it = signalRegistry.signals.find(key);
+  if (it == signalRegistry.signals.end())
+    return false;
+
+  signalRegistry.writeCallback(it->second.handle, value, signalRegistry.userData);
+  return true;
+}
+
+/// Helper to try forcing via signal registry first, falling back to stub
+bool tryRegistryForce(const std::string &key, uvm_hdl_data_t value) {
+  std::lock_guard<std::mutex> regLock(signalRegistryMutex);
+  if (!signalRegistry.isConnected() || !signalRegistry.forceCallback)
+    return false;
+
+  auto it = signalRegistry.signals.find(key);
+  if (it == signalRegistry.signals.end())
+    return false;
+
+  signalRegistry.forceCallback(it->second.handle, value, signalRegistry.userData);
+  return true;
+}
+
+/// Helper to try releasing via signal registry first, falling back to stub
+bool tryRegistryRelease(const std::string &key) {
+  std::lock_guard<std::mutex> regLock(signalRegistryMutex);
+  if (!signalRegistry.isConnected() || !signalRegistry.releaseCallback)
+    return false;
+
+  auto it = signalRegistry.signals.find(key);
+  if (it == signalRegistry.signals.end())
+    return false;
+
+  signalRegistry.releaseCallback(it->second.handle, signalRegistry.userData);
+  return true;
+}
 } // namespace
 
 extern "C" int32_t uvm_hdl_check_path(MooreString *path) {
   std::string key;
   if (!getPathKey(path, key))
     return 0;
+
+  // Check signal registry first (actual simulation signals)
+  if (__moore_signal_registry_exists(key.c_str()))
+    return 1;
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   (void)hdlValues[key];
   return 1;
@@ -9649,6 +10253,27 @@ extern "C" int32_t uvm_hdl_deposit(MooreString *path, uvm_hdl_data_t value) {
   std::string key;
   if (!getPathKey(path, key))
     return 0;
+
+  // Try signal registry first (actual simulation signals)
+  // Note: Check hdlValues first for forced status
+  {
+    std::lock_guard<std::mutex> lock(hdlMutex);
+    auto it = hdlValues.find(key);
+    if (it != hdlValues.end() && it->second.forced) {
+      // Signal is forced, deposit is ignored
+      return 1;
+    }
+  }
+
+  // Try to deposit via registry
+  if (tryRegistryWrite(key, value)) {
+    // Also update stub map to keep them in sync for VPI access
+    std::lock_guard<std::mutex> lock(hdlMutex);
+    hdlValues[key].value = value;
+    return 1;
+  }
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto &entry = hdlValues[key];
   if (!entry.forced)
@@ -9660,6 +10285,18 @@ extern "C" int32_t uvm_hdl_force(MooreString *path, uvm_hdl_data_t value) {
   std::string key;
   if (!getPathKey(path, key))
     return 0;
+
+  // Try signal registry first (actual simulation signals)
+  if (tryRegistryForce(key, value)) {
+    // Also update stub map to track forced status
+    std::lock_guard<std::mutex> lock(hdlMutex);
+    auto &entry = hdlValues[key];
+    entry.value = value;
+    entry.forced = true;
+    return 1;
+  }
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto &entry = hdlValues[key];
   entry.value = value;
@@ -9672,6 +10309,22 @@ extern "C" int32_t uvm_hdl_release_and_read(MooreString *path,
   std::string key;
   if (!value || !getPathKey(path, key))
     return 0;
+
+  // Try signal registry first (actual simulation signals)
+  if (tryRegistryRelease(key)) {
+    // Clear forced status in stub map
+    {
+      std::lock_guard<std::mutex> lock(hdlMutex);
+      auto it = hdlValues.find(key);
+      if (it != hdlValues.end())
+        it->second.forced = false;
+    }
+    // Read the released value
+    if (tryRegistryRead(key, value))
+      return 1;
+  }
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto it = hdlValues.find(key);
   if (it != hdlValues.end()) {
@@ -9687,6 +10340,18 @@ extern "C" int32_t uvm_hdl_release(MooreString *path) {
   std::string key;
   if (!getPathKey(path, key))
     return 0;
+
+  // Try signal registry first (actual simulation signals)
+  if (tryRegistryRelease(key)) {
+    // Also clear forced status in stub map
+    std::lock_guard<std::mutex> lock(hdlMutex);
+    auto it = hdlValues.find(key);
+    if (it != hdlValues.end())
+      it->second.forced = false;
+    return 1;
+  }
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto it = hdlValues.find(key);
   if (it != hdlValues.end())
@@ -9698,6 +10363,12 @@ extern "C" int32_t uvm_hdl_read(MooreString *path, uvm_hdl_data_t *value) {
   std::string key;
   if (!value || !getPathKey(path, key))
     return 0;
+
+  // Try signal registry first (actual simulation signals)
+  if (tryRegistryRead(key, value))
+    return 1;
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto it = hdlValues.find(key);
   if (it != hdlValues.end())
@@ -10412,10 +11083,13 @@ extern "C" vpiHandle vpi_handle_by_name(const char *name, vpiHandle scope) {
   (void)scope;
   if (!name || !*name)
     return nullptr;
+
+  // Initialize in stub map (for compatibility)
   {
     std::lock_guard<std::mutex> lock(hdlMutex);
     (void)hdlValues[std::string(name)];
   }
+
   auto *handle = new VpiHandleImpl();
   handle->name = name;
   return static_cast<vpiHandle>(handle);
@@ -10443,6 +11117,15 @@ extern "C" int32_t vpi_get_value(vpiHandle obj, vpi_value *value) {
   if (!obj || !value || !value->value)
     return 0;
   auto *handle = static_cast<VpiHandleImpl *>(obj);
+
+  // Try signal registry first (actual simulation signals)
+  uvm_hdl_data_t readValue = 0;
+  if (tryRegistryRead(handle->name, &readValue)) {
+    *static_cast<uvm_hdl_data_t *>(value->value) = readValue;
+    return 1;
+  }
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto it = hdlValues.find(handle->name);
   if (it == hdlValues.end()) {
@@ -10459,9 +11142,41 @@ extern "C" int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
   if (!obj || !value || !value->value)
     return 0;
   auto *handle = static_cast<VpiHandleImpl *>(obj);
+  uvm_hdl_data_t writeValue = *static_cast<uvm_hdl_data_t *>(value->value);
+  bool isForce = (flags != 0);
+
+  // Try signal registry first (actual simulation signals)
+  if (isForce) {
+    if (tryRegistryForce(handle->name, writeValue)) {
+      // Also update stub map to track forced status
+      std::lock_guard<std::mutex> lock(hdlMutex);
+      auto &entry = hdlValues[handle->name];
+      entry.value = writeValue;
+      entry.forced = true;
+      return 1;
+    }
+  } else {
+    // Check if forced
+    {
+      std::lock_guard<std::mutex> lock(hdlMutex);
+      auto it = hdlValues.find(handle->name);
+      if (it != hdlValues.end() && it->second.forced) {
+        // Signal is forced, normal write is ignored
+        return 1;
+      }
+    }
+    if (tryRegistryWrite(handle->name, writeValue)) {
+      // Also update stub map
+      std::lock_guard<std::mutex> lock(hdlMutex);
+      hdlValues[handle->name].value = writeValue;
+      return 1;
+    }
+  }
+
+  // Fall back to stub map
   std::lock_guard<std::mutex> lock(hdlMutex);
   auto &entry = hdlValues[handle->name];
-  entry.value = *static_cast<uvm_hdl_data_t *>(value->value);
-  entry.forced = (flags != 0);
+  entry.value = writeValue;
+  entry.forced = isForce;
   return 1;
 }

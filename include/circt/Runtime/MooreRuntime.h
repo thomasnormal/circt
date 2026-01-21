@@ -1849,6 +1849,48 @@ int32_t __moore_coverage_get_exclusion_count(void);
 int32_t __moore_coverage_report_html(const char *filename);
 
 //===----------------------------------------------------------------------===//
+// Text Coverage Report
+//===----------------------------------------------------------------------===//
+//
+// Text-based coverage report functions for CI/automation use.
+// These provide simple, parseable output that is faster to generate than HTML.
+//
+
+/// Verbosity levels for text coverage reports.
+typedef enum {
+  MOORE_TEXT_REPORT_SUMMARY = 0,  ///< Only overall summary
+  MOORE_TEXT_REPORT_NORMAL = 1,   ///< Covergroups and coverpoints
+  MOORE_TEXT_REPORT_DETAILED = 2  ///< Include all bins
+} MooreTextReportVerbosity;
+
+/// Generate a text coverage report file.
+/// Creates a simple text file with coverage information suitable for CI parsing.
+///
+/// @param filename Path to the output text file
+/// @param verbosity Level of detail (0=summary, 1=normal, 2=detailed)
+/// @return 0 on success, non-zero on failure
+int32_t __moore_coverage_report_text(const char *filename, int32_t verbosity);
+
+/// Get a coverage summary string.
+/// Returns a dynamically allocated string containing a brief coverage summary.
+/// The caller is responsible for freeing the returned string with __moore_free.
+///
+/// @return Dynamically allocated summary string, or NULL on failure
+char *__moore_coverage_report_summary(void);
+
+/// Print a coverage summary to stdout.
+/// Outputs a brief coverage summary directly to standard output.
+void __moore_coverage_print_summary(void);
+
+/// Generate a text coverage report to a string.
+/// Returns a dynamically allocated string containing the full report.
+/// The caller is responsible for freeing the returned string with __moore_free.
+///
+/// @param verbosity Level of detail (0=summary, 1=normal, 2=detailed)
+/// @return Dynamically allocated report string, or NULL on failure
+char *__moore_coverage_get_text_report(int32_t verbosity);
+
+//===----------------------------------------------------------------------===//
 // Coverage Database Save/Load/Merge Operations
 //===----------------------------------------------------------------------===//
 //
@@ -2665,6 +2707,84 @@ void __moore_strobe_flush(void);
 void __moore_monitor_check(void);
 
 //===----------------------------------------------------------------------===//
+// Simulation Control Tasks
+//===----------------------------------------------------------------------===//
+//
+// These functions implement the SystemVerilog simulation control and severity
+// reporting tasks: $finish, $fatal, $error, $warning, $info.
+//
+// The severity tasks track error and warning counts during simulation, which
+// can be queried at the end to determine overall simulation status.
+//
+// Severity Levels (from IEEE 1800-2017):
+// - $fatal: Stop simulation immediately with exit code
+// - $error: Report error, increment error count, continue simulation
+// - $warning: Report warning, increment warning count, continue simulation
+// - $info: Report informational message, continue simulation
+//
+
+/// End simulation with the specified exit code.
+/// Implements the SystemVerilog $finish system task.
+/// @param exit_code The exit code to return (0 = success, non-zero = failure)
+void __moore_finish(int32_t exit_code);
+
+/// Report a fatal error and stop simulation.
+/// Implements the SystemVerilog $fatal system task.
+/// @param exit_code The exit code to return (typically 1)
+/// @param message Pointer to the message string structure (may be NULL)
+void __moore_fatal(int32_t exit_code, MooreString *message);
+
+/// Report a non-fatal error and continue simulation.
+/// Implements the SystemVerilog $error system task.
+/// Increments the error count.
+/// @param message Pointer to the message string structure (may be NULL)
+void __moore_error(MooreString *message);
+
+/// Report a warning and continue simulation.
+/// Implements the SystemVerilog $warning system task.
+/// Increments the warning count.
+/// @param message Pointer to the message string structure (may be NULL)
+void __moore_warning(MooreString *message);
+
+/// Report an informational message and continue simulation.
+/// Implements the SystemVerilog $info system task.
+/// @param message Pointer to the message string structure (may be NULL)
+void __moore_info(MooreString *message);
+
+/// Get the current error count.
+/// @return Number of errors reported during simulation
+int32_t __moore_get_error_count(void);
+
+/// Get the current warning count.
+/// @return Number of warnings reported during simulation
+int32_t __moore_get_warning_count(void);
+
+/// Reset error and warning counts to zero.
+/// Useful for test frameworks that want to clear counts between tests.
+void __moore_reset_severity_counts(void);
+
+/// Get a summary of errors and warnings at end of simulation.
+/// Prints a summary message if there were any errors or warnings.
+/// @return The total number of errors (0 if no errors)
+int32_t __moore_severity_summary(void);
+
+/// Set whether $finish should actually exit or just set a flag.
+/// This is useful for testing the runtime functions.
+/// @param should_exit true to exit on $finish, false to just set flag
+void __moore_set_finish_exits(bool should_exit);
+
+/// Check if $finish has been called.
+/// @return true if $finish or $fatal was called
+bool __moore_finish_called(void);
+
+/// Get the exit code from the last $finish or $fatal call.
+/// @return The exit code (0 if $finish not called)
+int32_t __moore_get_exit_code(void);
+
+/// Reset the finish state (for testing purposes).
+void __moore_reset_finish_state(void);
+
+//===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
 
@@ -2836,6 +2956,122 @@ void __moore_uvm_set_field_range(const char *field_name, int64_t min_val,
 // - Regex: uvm_re_* functions for pattern matching
 // - Command Line: uvm_dpi_* functions for tool information
 //
+
+//===----------------------------------------------------------------------===//
+// Signal Registry Bridge
+//===----------------------------------------------------------------------===//
+//
+// The Signal Registry Bridge connects DPI/VPI functions to actual simulation
+// signals managed by the ProcessScheduler. This enables UVM HDL access
+// functions like uvm_hdl_read() to return actual signal values from the
+// simulation.
+//
+// Architecture:
+// 1. LLHDProcessInterpreter registers signals with hierarchical names
+// 2. Signal names are exported via __moore_signal_registry_register()
+// 3. DPI functions query the registry to get SignalIds
+// 4. SignalIds are used to access values via ProcessScheduler
+//
+// Usage:
+// - During simulation initialization, register all signals with their
+//   hierarchical paths using __moore_signal_registry_register()
+// - Set the accessor callbacks via __moore_signal_registry_set_accessor()
+// - DPI functions will automatically use the registry when available
+//
+
+/// Opaque handle to a signal in the registry
+typedef uint64_t MooreSignalHandle;
+
+/// Invalid signal handle constant
+#define MOORE_INVALID_SIGNAL_HANDLE 0
+
+/// Callback type for reading a signal value.
+/// @param signalHandle The signal handle from the registry
+/// @param userData User-provided context
+/// @return The current signal value
+typedef int64_t (*MooreSignalReadCallback)(MooreSignalHandle signalHandle,
+                                           void *userData);
+
+/// Callback type for writing/depositing a signal value.
+/// @param signalHandle The signal handle from the registry
+/// @param value The value to write
+/// @param userData User-provided context
+/// @return 1 on success, 0 on failure
+typedef int32_t (*MooreSignalWriteCallback)(MooreSignalHandle signalHandle,
+                                            int64_t value, void *userData);
+
+/// Callback type for forcing a signal value.
+/// @param signalHandle The signal handle from the registry
+/// @param value The value to force
+/// @param userData User-provided context
+/// @return 1 on success, 0 on failure
+typedef int32_t (*MooreSignalForceCallback)(MooreSignalHandle signalHandle,
+                                            int64_t value, void *userData);
+
+/// Callback type for releasing a forced signal.
+/// @param signalHandle The signal handle from the registry
+/// @param userData User-provided context
+/// @return 1 on success, 0 on failure
+typedef int32_t (*MooreSignalReleaseCallback)(MooreSignalHandle signalHandle,
+                                              void *userData);
+
+/// Register a signal with its hierarchical path.
+/// This function is called by the simulation infrastructure to populate the
+/// signal registry during initialization.
+///
+/// @param path Hierarchical path (e.g., "top.dut.clk")
+/// @param signalHandle The signal handle (typically SignalId from ProcessScheduler)
+/// @param width Bit width of the signal
+/// @return 1 on success, 0 if path is invalid
+int32_t __moore_signal_registry_register(const char *path,
+                                         MooreSignalHandle signalHandle,
+                                         uint32_t width);
+
+/// Set the accessor callbacks for the signal registry.
+/// This connects the DPI functions to the actual signal value access.
+///
+/// @param readCallback Callback for reading signal values
+/// @param writeCallback Callback for writing/depositing signal values
+/// @param forceCallback Callback for forcing signal values
+/// @param releaseCallback Callback for releasing forced signals
+/// @param userData User data passed to all callbacks
+void __moore_signal_registry_set_accessor(MooreSignalReadCallback readCallback,
+                                          MooreSignalWriteCallback writeCallback,
+                                          MooreSignalForceCallback forceCallback,
+                                          MooreSignalReleaseCallback releaseCallback,
+                                          void *userData);
+
+/// Look up a signal handle by hierarchical path.
+///
+/// @param path Hierarchical path to look up
+/// @return Signal handle, or MOORE_INVALID_SIGNAL_HANDLE if not found
+MooreSignalHandle __moore_signal_registry_lookup(const char *path);
+
+/// Check if a signal path exists in the registry.
+///
+/// @param path Hierarchical path to check
+/// @return 1 if path exists in registry, 0 otherwise
+int32_t __moore_signal_registry_exists(const char *path);
+
+/// Get the bit width of a registered signal.
+///
+/// @param path Hierarchical path
+/// @return Bit width, or 0 if path not found
+uint32_t __moore_signal_registry_get_width(const char *path);
+
+/// Clear all registered signals from the registry.
+/// This is useful for resetting between simulation runs.
+void __moore_signal_registry_clear(void);
+
+/// Get the number of registered signals.
+///
+/// @return Number of signals in the registry
+uint64_t __moore_signal_registry_count(void);
+
+/// Check if the signal registry is connected (has accessor callbacks set).
+///
+/// @return 1 if connected to actual simulation, 0 if using stub mode
+int32_t __moore_signal_registry_is_connected(void);
 
 //===----------------------------------------------------------------------===//
 // HDL Access Stubs (IEEE 1800.2-2017 DPI)

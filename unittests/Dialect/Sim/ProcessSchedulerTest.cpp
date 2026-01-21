@@ -506,9 +506,10 @@ TEST(ProcessScheduler, DeltaCycleLimit) {
   ProcessScheduler scheduler(config);
 
   // Create a process that reschedules itself infinitely
-  ProcessId id = scheduler.registerProcess("infinite_loop", [&scheduler]() {
-    // This would create an infinite loop
-  });
+  [[maybe_unused]] ProcessId id =
+      scheduler.registerProcess("infinite_loop", [&scheduler]() {
+        // This would create an infinite loop
+      });
 
   scheduler.initialize();
 
@@ -677,6 +678,164 @@ TEST(ProcessSchedulerIntegration, MultipleSignalSensitivity) {
 
   // Both events should have triggered the process
   EXPECT_GE(events.size(), initialEvents + 2);
+}
+
+//===----------------------------------------------------------------------===//
+// ProcessScheduler Tests - Delayed Event Time Advancement
+//===----------------------------------------------------------------------===//
+
+TEST(ProcessSchedulerIntegration, DelayedEventAdvancesTime) {
+  // This test verifies that when an event is scheduled on the EventScheduler
+  // for a future time, advanceTime() properly advances to that time and
+  // executes the callback.
+  ProcessScheduler scheduler;
+  int processExecuted = 0;
+  uint64_t resumeTime = 10000000; // 10 ms in femtoseconds
+
+  ProcessId procId = scheduler.registerProcess("delayed_proc",
+                                               [&processExecuted]() {
+                                                 processExecuted++;
+                                               });
+
+  scheduler.initialize();
+
+  // Execute initial delta - process runs once
+  scheduler.executeDeltaCycle();
+  EXPECT_EQ(processExecuted, 1);
+  EXPECT_EQ(scheduler.getCurrentTime().realTime, 0u);
+
+  // Schedule a delayed event via the EventScheduler (simulating llhd.wait)
+  scheduler.getEventScheduler().schedule(
+      SimTime(resumeTime, 0, 0), SchedulingRegion::Active,
+      Event([&scheduler, procId]() {
+        scheduler.resumeProcess(procId);
+      }));
+
+  // Verify event is pending
+  EXPECT_FALSE(scheduler.getEventScheduler().isComplete());
+
+  // Advance time - should move to the scheduled event time
+  bool advanced = scheduler.advanceTime();
+  EXPECT_TRUE(advanced);
+  EXPECT_EQ(scheduler.getCurrentTime().realTime, resumeTime);
+
+  // Execute the resumed process
+  scheduler.executeCurrentTime();
+  EXPECT_EQ(processExecuted, 2);
+}
+
+TEST(ProcessSchedulerIntegration, MultipleDelayedEvents) {
+  // Test scheduling multiple events at different future times
+  ProcessScheduler scheduler;
+  std::vector<uint64_t> executedTimes;
+
+  ProcessId proc = scheduler.registerProcess("time_logger",
+                                             [&scheduler, &executedTimes]() {
+                                               executedTimes.push_back(
+                                                   scheduler.getCurrentTime().realTime);
+                                             });
+
+  scheduler.initialize();
+  scheduler.executeDeltaCycle();
+
+  // Clear the initial execution
+  executedTimes.clear();
+
+  // Schedule events at different times
+  uint64_t times[] = {1000, 5000, 3000, 10000, 2000};
+  for (uint64_t t : times) {
+    scheduler.getEventScheduler().schedule(
+        SimTime(t, 0, 0), SchedulingRegion::Active,
+        Event([&scheduler, proc]() {
+          scheduler.resumeProcess(proc);
+        }));
+  }
+
+  // Run until all events are processed
+  scheduler.runUntil(20000);
+
+  // All events should have been executed
+  EXPECT_EQ(executedTimes.size(), 5u);
+
+  // Times should be in order (events sorted by time)
+  EXPECT_EQ(executedTimes[0], 1000u);
+  EXPECT_EQ(executedTimes[1], 2000u);
+  EXPECT_EQ(executedTimes[2], 3000u);
+  EXPECT_EQ(executedTimes[3], 5000u);
+  EXPECT_EQ(executedTimes[4], 10000u);
+}
+
+TEST(ProcessSchedulerIntegration, DelayedWaitPattern) {
+  // This test simulates the exact pattern used by llhd.wait with delay:
+  // 1. Process starts and schedules a delayed resume
+  // 2. Process suspends
+  // 3. Time advances to the resume time
+  // 4. Process resumes and continues execution
+  ProcessScheduler scheduler;
+
+  enum class Phase { Initial, AfterWait, Completed };
+  Phase currentPhase = Phase::Initial;
+  ProcessId procId;
+
+  procId = scheduler.registerProcess("wait_pattern", [&]() {
+    if (currentPhase == Phase::Initial) {
+      // First execution - schedule delayed resume and "wait"
+      currentPhase = Phase::AfterWait;
+      scheduler.getEventScheduler().schedule(
+          SimTime(10000000, 0, 0), SchedulingRegion::Active,
+          Event([&scheduler, procId]() {
+            scheduler.resumeProcess(procId);
+          }));
+      // Process would normally be suspended here by the interpreter
+    } else if (currentPhase == Phase::AfterWait) {
+      // Second execution - after wait completes
+      currentPhase = Phase::Completed;
+    }
+  });
+
+  scheduler.initialize();
+
+  // First execution
+  scheduler.executeDeltaCycle();
+  EXPECT_EQ(currentPhase, Phase::AfterWait);
+  EXPECT_EQ(scheduler.getCurrentTime().realTime, 0u);
+
+  // Time should advance to the delayed event
+  SimTime finalTime = scheduler.runUntil(20000000);
+
+  // Process should have completed
+  EXPECT_EQ(currentPhase, Phase::Completed);
+  // Time should have advanced to at least the wait time
+  EXPECT_GE(finalTime.realTime, 10000000u);
+
+  // Verify statistics
+  auto stats = scheduler.getStatistics();
+  EXPECT_EQ(stats.processesExecuted, 2u);
+}
+
+TEST(ProcessSchedulerIntegration, EventSchedulerIntegrationCheck) {
+  // Verify that advanceTime() properly checks the EventScheduler
+  // and doesn't return false prematurely when events are pending
+  ProcessScheduler scheduler;
+  bool eventExecuted = false;
+
+  scheduler.registerProcess("dummy", []() {});
+  scheduler.initialize();
+  scheduler.executeDeltaCycle();
+
+  // Schedule a future event
+  scheduler.getEventScheduler().schedule(
+      SimTime(5000, 0, 0), SchedulingRegion::Active,
+      Event([&eventExecuted]() { eventExecuted = true; }));
+
+  // isComplete should return false - we have pending events
+  EXPECT_FALSE(scheduler.isComplete());
+
+  // advanceTime should advance to the event and return true
+  bool canAdvance = scheduler.advanceTime();
+  EXPECT_TRUE(canAdvance);
+  EXPECT_TRUE(eventExecuted);
+  EXPECT_EQ(scheduler.getCurrentTime().realTime, 5000u);
 }
 
 } // namespace
