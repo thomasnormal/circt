@@ -17,11 +17,13 @@ module testExhaustiveCaseBlockArgs(
   // which expression matched. When branching to the last match block
   // for the "exhaustive" fallback, we need to provide this argument.
   //
-  // CHECK: cf.cond_br {{.*}}, ^[[MATCH0:bb[0-9]+]]
-  // CHECK: cf.cond_br {{.*}}, ^[[MATCH0]]
-  // CHECK: cf.cond_br {{.*}}, ^[[MATCH1:bb[0-9]+]]
-  // CHECK: cf.cond_br {{.*}}, ^[[MATCH1]]
-  // For exhaustive case, the fallback branches to last match block with a constant guard
+  // The first case item (2'd0, 2'd1) creates match block MATCH0 with a block arg.
+  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH0:bb[0-9]+]]({{.*}}), ^bb
+  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH0]]({{.*}}), ^bb
+  // The second case item (2'd2, 2'd3) creates match block MATCH1 with a block arg.
+  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH1:bb[0-9]+]]({{.*}}), ^bb
+  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH1]]({{.*}}), ^bb
+  // For exhaustive case, the fallback branches to last match block with a constant guard.
   // CHECK: moore.constant 1
   // CHECK: cf.br ^[[MATCH1]]
   always_comb begin
