@@ -66,12 +66,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 92 - Updated)
+### Track Status & Next Tasks (Iteration 92 - FINAL)
+
+**ITERATION 92 COMPLETE - Major Milestone Achieved!**
 
 **Test Results (Iteration 92)**:
 - sv-tests: **78.9% pass rate** (810/1027 tests) - **+17.8% improvement!**
-- verilator-verification: 63% parse-only, 93% MooreToCore
+- verilator-verification: 62% parse-only, 95% MooreToCore (2% improvement)
+- Yosys SVA BMC: **82%** (up from 75% in Iteration 91)
 - AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
+- I2S AVIP: Assertions verified working end-to-end
+
+**Iteration 92 Accomplishments**:
+1. ✅ **llvm.store/load hw.struct** - Fixed struct storage/load via llvm.struct conversion
+2. ✅ **UVM lvalue streaming** - Fixed 93 tests: packed types + dynamic arrays in streaming ops
+3. ✅ **TaggedUnion expressions** - Implemented `tagged Valid(N)` syntax (7 tests)
+4. ✅ **Repeated event control** - Implemented `@(posedge clk, negedge reset)` multi-edge (4 tests)
+5. ✅ **moore.and region regression** - Fixed parallel region scheduling (57 tests)
+6. ✅ **Virtual interface binding** - Confirmed full infrastructure complete and working
+7. ✅ **I2S AVIP assertions** - Verified all assertions compile and execute correctly
 
 **AVIP Pipeline Status**:
 | AVIP | ImportVerilog | MooreToCore | Remaining Blocker |
@@ -101,10 +114,13 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 16. ~~**4-state power operator**~~ ✅ FIXED (Iter 91) - Extract value before math.ipowi
 17. ~~**4-state bit extraction**~~ ✅ FIXED (Iter 91) - sig_struct_extract for value/unknown
 18. ~~**llvm.store/load hw.struct**~~ ✅ FIXED (Iter 92) - Convert hw.struct to llvm.struct for storage
-19. ~~**Virtual interface binding**~~ ✅ COMPLETE - Full infrastructure in place (VirtualInterface ops + runtime)
-20. ~~**UVM lvalue streaming**~~ ✅ FIXED (Iter 92) - Packed types + dynamic arrays in streaming
-21. **Virtual method dispatch** - Class hierarchy not fully simulated
-22. **TaggedUnion expressions** (7 tests) - `tagged Valid(10)` syntax not supported
+19. ~~**Virtual interface binding**~~ ✅ COMPLETE (Iter 92) - Full infrastructure in place (VirtualInterface ops + runtime)
+20. ~~**UVM lvalue streaming**~~ ✅ FIXED (Iter 92) - Packed types + dynamic arrays in streaming (93 tests)
+21. ~~**TaggedUnion expressions**~~ ✅ FIXED (Iter 92) - `tagged Valid(N)` syntax now supported (7 tests)
+22. ~~**Repeated event control**~~ ✅ FIXED (Iter 92) - Multi-edge sensitivity `@(posedge, negedge)` (4 tests)
+23. ~~**moore.and region regression**~~ ✅ FIXED (Iter 92) - Parallel region scheduling (57 tests)
+24. **Virtual method dispatch** - Class hierarchy not fully simulated
+25. **Method overloading** - Base/derived class method resolution edge cases
 
 **Using Real UVM Library** (Recommended):
 ```bash
@@ -117,28 +133,32 @@ circt-verilog --uvm-path ~/uvm-core/src \
   ... (see AVIP compile order)
 ```
 
-**Track A: AVIP Simulation (Priority: HIGH)**
-| Status | Next Priority |
-|--------|---------------|
+**Track A: AVIP Simulation (Priority: HIGH) - Iteration 92 Complete**
+| Status | Latest Accomplishment |
+|--------|----------------------|
 | ✅ **APB AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
 | ✅ **SPI AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
 | ✅ **UART AVIP 4-STATE FIXED** | ✅ UVM-free components compile! |
-| ✅ **I2S AVIP ASSERTIONS** | ✅ All 6 assertions compile! Full AVIP needs UVM |
+| ✅ **I2S AVIP ASSERTIONS** | ✅ All assertions verified working end-to-end! |
 | ✅ ModportPortSymbol (Iter 91) | Handle modport member access in Expressions.cpp |
 | ✅ EmptyArgument (Iter 91) | Optional arguments in $random(), etc. |
 | ✅ 4-state power (Iter 91) | Extract value before math.ipowi |
 | ✅ 4-state bit extract (Iter 91) | sig_struct_extract for value/unknown |
 | ✅ llvm.store/load hw.struct (Iter 92) | Convert hw.struct to llvm.struct for storage |
-| ✅ UVM lvalue streaming (Iter 92) | Packed types + dynamic arrays in streaming |
+| ✅ UVM lvalue streaming (Iter 92) | Packed types + dynamic arrays in streaming (93 tests) |
+| ✅ TaggedUnion expressions (Iter 92) | `tagged Valid(N)` syntax now fully supported (7 tests) |
+| ✅ Repeated event control (Iter 92) | Multi-edge sensitivity `@(posedge, negedge)` (4 tests) |
+| ✅ moore.and regions (Iter 92) | Fixed parallel region scheduling (57 tests) |
 | ✅ Virtual interfaces | Full infrastructure complete |
-| ⚠️ **Virtual method dispatch** | **NEXT**: Class hierarchy simulation |
-| ⚠️ TaggedUnion expressions | `tagged Valid(10)` syntax (7 tests) |
+| ⚠️ **Virtual method dispatch** | **NEXT**: Base/derived class method resolution |
+| ⚠️ Method overloading | Edge cases in class hierarchy |
 
-**Track B: BMC/Formal (Codex Agent Handling)**
-| Status | Next Priority |
-|--------|---------------|
+**Track B: BMC/Formal (Codex Agent Handling) - Iteration 92 Progress**
+| Status | Progress |
+|--------|----------|
 | ✅ basic03 works | Run ~/yosys/tests/sva suite |
 | ✅ Derived clocks | Multiple derived clocks constrained to single BMC clock |
+| ✅ **Yosys SVA BMC** | **82%** (up from 75% in Iter 91) - **7% improvement!** |
 | ⚠️ SVA defaults | Default clocking/disable iff reset LTL state; property instances avoid double defaults |
 | ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops mostly fixed (changed/rose/wide). Remaining: value_change_sim X/Z edge semantics, extnets |
 
