@@ -468,6 +468,9 @@ struct Context {
   /// specifier to determine the hierarchical path.
   const slang::ast::Scope *currentScope = nullptr;
 
+  /// Guard condition for procedural concurrent assertions.
+  Value currentAssertionGuard = {};
+
   /// The current clocking event for assertions within a timed statement.
   const slang::ast::SignalEventControl *currentAssertionClock = nullptr;
 

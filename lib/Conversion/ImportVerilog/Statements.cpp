@@ -15,7 +15,11 @@
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 using namespace mlir;
 using namespace circt;
@@ -36,6 +40,83 @@ convertEdgeKindVerif(const slang::ast::EdgeKind edge) {
   default:
     return verif::ClockEdge::Both;
   }
+}
+
+static bool isHoistableAssertionOp(Operation *op) {
+  if (!op || op->getNumRegions() != 0)
+    return false;
+  if (isPure(op))
+    return true;
+  return isa<moore::ReadOp>(op);
+}
+
+static Value cloneAssertionValueIntoBlock(Value value, OpBuilder &builder,
+                                          Block *destBlock,
+                                          IRMapping &mapping,
+                                          llvm::DenseSet<Operation *> &active) {
+  if (!value)
+    return {};
+  if (mapping.contains(value))
+    return mapping.lookup(value);
+  if (auto *defOp = value.getDefiningOp();
+      defOp && defOp->getBlock() == destBlock)
+    return value;
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    if (arg.getOwner() == destBlock)
+      return arg;
+    Value merged;
+    auto *owner = arg.getOwner();
+    for (auto *pred : owner->getPredecessors()) {
+      Value incoming;
+      Operation *term = pred->getTerminator();
+      if (auto br = dyn_cast<cf::BranchOp>(term)) {
+        if (br.getDest() == owner)
+          incoming = br.getDestOperands()[arg.getArgNumber()];
+      } else if (auto condBr = dyn_cast<cf::CondBranchOp>(term)) {
+        if (condBr.getTrueDest() == owner)
+          incoming = condBr.getTrueDestOperands()[arg.getArgNumber()];
+        else if (condBr.getFalseDest() == owner)
+          incoming = condBr.getFalseDestOperands()[arg.getArgNumber()];
+      }
+      if (!incoming)
+        return {};
+      auto cloned = cloneAssertionValueIntoBlock(incoming, builder, destBlock,
+                                                 mapping, active);
+      if (!cloned)
+        return {};
+      if (merged)
+        merged = moore::OrOp::create(builder, builder.getUnknownLoc(), merged,
+                                     cloned);
+      else
+        merged = cloned;
+    }
+    return merged;
+  }
+  auto *defOp = value.getDefiningOp();
+  if (!defOp || !isHoistableAssertionOp(defOp))
+    return {};
+  if (!active.insert(defOp).second)
+    return {};
+
+  for (auto operand : defOp->getOperands()) {
+    auto cloned = cloneAssertionValueIntoBlock(operand, builder, destBlock,
+                                               mapping, active);
+    if (!cloned)
+      return {};
+  }
+
+  OpBuilder::InsertionGuard guard(builder);
+  if (destBlock->mightHaveTerminator()) {
+    if (auto *terminator = destBlock->getTerminator())
+      builder.setInsertionPoint(terminator);
+    else
+      builder.setInsertionPointToEnd(destBlock);
+  } else {
+    builder.setInsertionPointToEnd(destBlock);
+  }
+  builder.clone(*defOp, mapping);
+  active.erase(defOp);
+  return mapping.lookup(value);
 }
 
 struct StmtVisitor {
@@ -529,6 +610,8 @@ struct StmtVisitor {
 
     auto &exitBlock = createBlock();
     Block *lastMatchBlock = nullptr;
+    Value savedAssertionGuard = context.currentAssertionGuard;
+    Value anyMatch;
 
     for (const auto &item : stmt.items) {
       auto &matchBlock = createBlock();
@@ -552,6 +635,11 @@ struct StmtVisitor {
         cond = moore::AndOp::create(builder, loc, cond, filter);
       }
 
+      Value condLogic = cond;
+      if (anyMatch)
+        anyMatch = moore::OrOp::create(builder, loc, anyMatch, condLogic);
+      else
+        anyMatch = condLogic;
       cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
       auto &nextBlock = createBlock();
       cf::CondBranchOp::create(builder, loc, cond, &matchBlock, &nextBlock);
@@ -560,8 +648,14 @@ struct StmtVisitor {
       matchBlock.moveBefore(builder.getInsertionBlock());
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToEnd(&matchBlock);
+      Value matchGuard = condLogic;
+      if (savedAssertionGuard)
+        matchGuard = moore::AndOp::create(builder, loc, savedAssertionGuard,
+                                          matchGuard);
+      context.currentAssertionGuard = matchGuard;
       if (failed(context.convertStatement(*item.stmt)))
         return failure();
+      context.currentAssertionGuard = savedAssertionGuard;
       if (!isTerminated()) {
         auto itemLoc = context.convertLocation(item.stmt->sourceRange);
         cf::BranchOp::create(builder, itemLoc, &exitBlock);
@@ -572,8 +666,18 @@ struct StmtVisitor {
       auto &defaultBlock = createBlock();
       cf::BranchOp::create(builder, loc, &defaultBlock);
       builder.setInsertionPointToEnd(&defaultBlock);
+      Value defaultGuard = savedAssertionGuard;
+      if (anyMatch) {
+        Value noMatch = moore::NotOp::create(builder, loc, anyMatch);
+        defaultGuard = defaultGuard
+                           ? moore::AndOp::create(builder, loc, defaultGuard,
+                                                  noMatch)
+                           : noMatch;
+      }
+      context.currentAssertionGuard = defaultGuard;
       if (failed(context.convertStatement(*stmt.defaultCase)))
         return failure();
+      context.currentAssertionGuard = savedAssertionGuard;
       if (!isTerminated()) {
         auto defLoc = context.convertLocation(stmt.defaultCase->sourceRange);
         cf::BranchOp::create(builder, defLoc, &exitBlock);
@@ -605,12 +709,20 @@ struct StmtVisitor {
     auto &exitBlock = createBlock();
     Block *lastMatchBlock = nullptr;
     SmallVector<moore::FVIntegerAttr> itemConsts;
+    Value savedAssertionGuard = context.currentAssertionGuard;
+    Value anyMatch;
 
     for (const auto &item : caseStmt.items) {
       // Create the block that will contain the main body of the expression.
       // This is where any of the comparisons will branch to if they match.
       auto &matchBlock = createBlock();
       lastMatchBlock = &matchBlock;
+      BlockArgument matchGuardArg;
+      bool hasMatchGuardArg = false;
+
+      // Snapshot the match status of previous items to preserve priority.
+      Value anyMatchBeforeItem = anyMatch;
+      Value itemMatch;
 
       // The SV standard requires expressions to be checked in the order
       // specified by the user, and for the evaluation to stop as soon as the
@@ -631,14 +743,14 @@ struct StmtVisitor {
 
         // Generate the appropriate equality operator based on type.
         Value cond;
+        Value condLogic;
         if (isa<moore::StringType>(caseExpr.getType())) {
           // String case statement - use string comparison.
           cond = moore::StringCmpOp::create(
               builder, itemLoc, moore::StringCmpPredicate::eq, caseExpr, value);
-          cond = context.convertToBool(cond);
-          if (!cond)
+          condLogic = context.convertToBool(cond);
+          if (!condLogic)
             return failure();
-          cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, cond);
         } else {
           // Integer/enum case statement - convert to simple bit vector.
           auto caseExprSBV = context.convertToSimpleBitVector(caseExpr);
@@ -662,16 +774,43 @@ struct StmtVisitor {
             mlir::emitError(loc, "unsupported set membership case statement");
             return failure();
           }
-          cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, cond);
+          condLogic = cond;
         }
+
+        cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, condLogic);
+
+        Value branchGuard = condLogic;
+        if (anyMatchBeforeItem) {
+          Value noPrevMatch =
+              moore::NotOp::create(builder, itemLoc, anyMatchBeforeItem);
+          branchGuard = moore::AndOp::create(builder, itemLoc, noPrevMatch,
+                                             branchGuard);
+        }
+
+        if (!hasMatchGuardArg) {
+          matchGuardArg =
+              matchBlock.addArgument(branchGuard.getType(), itemLoc);
+          hasMatchGuardArg = true;
+        }
+        if (itemMatch)
+          itemMatch =
+              moore::OrOp::create(builder, itemLoc, itemMatch, branchGuard);
+        else
+          itemMatch = branchGuard;
 
         // If the condition matches, branch to the match block. Otherwise
         // continue checking the next expression in a new block.
         auto &nextBlock = createBlock();
-        mlir::cf::CondBranchOp::create(builder, itemLoc, cond, &matchBlock,
-                                       &nextBlock);
+        mlir::cf::CondBranchOp::create(
+            builder, itemLoc, cond, &matchBlock, ValueRange{branchGuard},
+            &nextBlock, ValueRange{});
         builder.setInsertionPointToEnd(&nextBlock);
       }
+
+      if (anyMatch)
+        anyMatch = moore::OrOp::create(builder, loc, anyMatch, itemMatch);
+      else
+        anyMatch = itemMatch;
 
       // The current block is the fall-through after all conditions have been
       // checked and nothing matched. Move the match block up before this point
@@ -681,8 +820,16 @@ struct StmtVisitor {
       // Generate the code for this item's statement in the match block.
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToEnd(&matchBlock);
+      Value matchGuard = hasMatchGuardArg ? matchGuardArg : Value{};
+      if (savedAssertionGuard)
+        matchGuard = matchGuard
+                         ? moore::AndOp::create(builder, loc,
+                                                savedAssertionGuard, matchGuard)
+                         : savedAssertionGuard;
+      context.currentAssertionGuard = matchGuard;
       if (failed(context.convertStatement(*item.stmt)))
         return failure();
+      context.currentAssertionGuard = savedAssertionGuard;
       if (!isTerminated()) {
         auto loc = context.convertLocation(item.stmt->sourceRange);
         mlir::cf::BranchOp::create(builder, loc, &exitBlock);
@@ -740,9 +887,19 @@ struct StmtVisitor {
       mlir::cf::BranchOp::create(builder, loc, lastMatchBlock);
     } else {
       // Generate the default case if present.
+      Value defaultGuard = savedAssertionGuard;
+      if (anyMatch) {
+        Value noMatch = moore::NotOp::create(builder, loc, anyMatch);
+        defaultGuard = defaultGuard
+                           ? moore::AndOp::create(builder, loc, defaultGuard,
+                                                  noMatch)
+                           : noMatch;
+      }
+      context.currentAssertionGuard = defaultGuard;
       if (caseStmt.defaultCase)
         if (failed(context.convertStatement(*caseStmt.defaultCase)))
           return failure();
+      context.currentAssertionGuard = savedAssertionGuard;
       if (!isTerminated())
         mlir::cf::BranchOp::create(builder, loc, &exitBlock);
     }
@@ -1349,6 +1506,20 @@ struct StmtVisitor {
       auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
       if (!property)
         return failure();
+      Value enable;
+      if (context.currentAssertionGuard) {
+        IRMapping mapping;
+        llvm::DenseSet<Operation *> active;
+        auto *moduleBlock = builder.getInsertionBlock();
+        enable = cloneAssertionValueIntoBlock(context.currentAssertionGuard,
+                                              builder, moduleBlock, mapping,
+                                              active);
+        if (enable)
+          enable = moore::ToBuiltinBoolOp::create(builder, loc, enable);
+        else
+          mlir::emitWarning(loc)
+              << "unable to hoist assertion guard; emitting unguarded assert";
+      }
       auto clockVal =
           context.convertRvalueExpression(context.currentAssertionClock->expr);
       clockVal = context.convertToI1(clockVal);
@@ -1358,15 +1529,15 @@ struct StmtVisitor {
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
         verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
-                                       Value(), StringAttr{});
+                                       enable, StringAttr{});
         return success();
       case slang::ast::AssertionKind::Assume:
         verif::ClockedAssumeOp::create(builder, loc, property, edge, clockVal,
-                                       Value(), StringAttr{});
+                                       enable, StringAttr{});
         return success();
       case slang::ast::AssertionKind::CoverProperty:
         verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
-                                      Value(), StringAttr{});
+                                      enable, StringAttr{});
         return success();
       default:
         break;
