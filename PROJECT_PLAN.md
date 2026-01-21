@@ -108,8 +108,8 @@ circt-verilog --uvm-path ~/uvm-core/src \
 |--------|---------------|
 | ✅ UVM .exists() fixed | Returns i1 boolean correctly |
 | ✅ 4-state struct storage | Extract value before LLVM store |
-| ✅ APB AVIP full pipeline | ImportVerilog passes, MooreToCore has case stmt issues |
-| ✅ I2S/SPI/UART ImportVerilog | All three parse successfully (240-276K lines) |
+| ✅ **APB AVIP FULL PIPELINE** | ✅ ImportVerilog + MooreToCore both work! |
+| ✅ I2S/SPI/UART ImportVerilog | All three parse (missing assertion files) |
 | ✅ Class task delays | __moore_delay() for class methods |
 | ✅ f64 BoolCast (Iter 90) | arith::CmpFOp for float-to-bool |
 | ✅ NegOp 4-state (Iter 90) | Proper unknown bit propagation |
@@ -120,7 +120,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ $past assertion (Iter 91) | moore::PastOp preserves value type |
 | ✅ Interface port members (Iter 91) | Skip hierarchical path for interface ports |
 | ⚠️ ModportPortSymbol | **NEXT**: Handle modport member access in Expressions.cpp |
-| ⚠️ Case statement codegen | Branch operand mismatch in MooreToCore for UVM case |
+| ⚠️ EmptyArgument expressions | Optional arguments in $random(), etc. |
 | ⚠️ Virtual interfaces | Runtime binding needed |
 | ⚠️ Virtual method dispatch | Class hierarchy simulation |
 

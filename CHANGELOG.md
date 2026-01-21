@@ -59,11 +59,27 @@ collecting hierarchical paths for interface port member accesses.
 **Details**: The `peelAggregateAttr` function now recursively processes nested ArrayAttr
 and IntegerAttr to extract preset values for registers.
 
+### APB AVIP Full Pipeline Milestone ✅ NEW
+
+**Major Milestone**: APB AVIP now compiles through the complete CIRCT pipeline!
+
+The APB verification IP from `~/mbit/apb_avip` now successfully compiles through:
+1. **ImportVerilog** (Verilog → Moore IR) ✅
+2. **MooreToCore** (Moore IR → HW/LLHD IR) ✅
+
+This includes the full UVM library from `~/uvm-core/src`.
+
+**Remaining work**:
+- I2S, SPI, UART AVIPs: Still have missing assertion files
+- AHB AVIP: Needs ModportPortSymbol handler
+- Virtual method dispatch for full testbench simulation
+
 ### Test Results
 
 - **sv-tests**: 81.3% adjusted pass rate (improvement from ~70.9%)
 - **verilator-verification**: 62% parse-only, 96% MooreToCore
-- **Yosys SVA**: 71.4% BMC pass rate maintained
+- **Yosys SVA**: 75% BMC pass rate
+- **APB AVIP**: Full pipeline works ✅
 
 ---
 
@@ -192,8 +208,10 @@ clocking, avoiding `seq.compreg` in `llhd.process` and unblocking BMC.
 - **ImportVerilog**: Concurrent assertions inside timed statements emit
   clocked verif ops at module scope when the timing control is a simple
   signal event (posedge/negedge).
-- **SVA limitations**: Explicit clocking arguments to $rose/$fell/$stable/
-  $changed outside assertions currently warn and return 0 as a placeholder.
+- **ImportVerilog**: Explicit clocking arguments to $rose/$fell/$stable/
+  $changed outside assertions now lower to a module-scope sampled-value
+  procedure (with prev/result state vars) instead of warning and returning 0.
+  Added `test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`.
 - **ImportVerilog**: $rose/$fell now use case-equality comparisons to handle
   X/Z transitions (no unknown-propagation false positives).
 - **BMC**: Preserve initial values for 4-state regs via `seq.firreg` presets,
