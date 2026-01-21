@@ -1164,6 +1164,66 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle modport port access (e.g., port.clk where port has type
+    // interface.modport). The expr.symbol is a ModportPortSymbol, and we need
+    // to access the actual interface signal via its internalSymbol.
+    if (auto *modportPort =
+            expr.symbol.as_if<slang::ast::ModportPortSymbol>()) {
+      // Get the internal symbol (the actual interface signal)
+      auto *internalSym = modportPort->internalSymbol;
+      if (internalSym) {
+        // Get the parent scope of the internal symbol to verify it's in an
+        // interface
+        auto *parentScope = internalSym->getParentScope();
+        if (parentScope) {
+          if (auto *instBody = parentScope->asSymbol()
+                                   .as_if<slang::ast::InstanceBodySymbol>()) {
+            if (instBody->getDefinition().definitionKind ==
+                slang::ast::DefinitionKind::Interface) {
+              // Find the interface port from the hierarchical path
+              for (const auto &elem : expr.ref.path) {
+                Value instRef;
+                if (auto *instSym =
+                        elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+                  if (auto it = context.interfaceInstances.find(instSym);
+                      it != context.interfaceInstances.end())
+                    instRef = it->second;
+                } else if (auto *ifacePort =
+                               elem.symbol
+                                   ->as_if<slang::ast::InterfacePortSymbol>()) {
+                  if (auto it = context.interfacePortValues.find(ifacePort);
+                      it != context.interfacePortValues.end())
+                    instRef = it->second;
+                }
+
+                if (!instRef)
+                  continue;
+
+                // Found the interface instance. Read from the RefType.
+                Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+                // Create a signal reference using the internal symbol's name.
+                auto type = context.convertType(*expr.type);
+                if (!type)
+                  return {};
+                auto signalSym = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), internalSym->name);
+                auto refTy =
+                    moore::RefType::get(cast<moore::UnpackedType>(type));
+                Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+                    builder, loc, refTy, vifValue, signalSym);
+                // For rvalue, read from the reference
+                auto readOp = moore::ReadOp::create(builder, loc, signalRef);
+                if (context.rvalueReadCallback)
+                  context.rvalueReadCallback(readOp);
+                return readOp.getResult();
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Emit an error for those hierarchical values not recorded in the
     // `valueSymbols`.
     auto d = mlir::emitError(loc, "unknown hierarchical name `")
@@ -4114,31 +4174,63 @@ struct RvalueExprVisitor : public ExprVisitor {
           expr.type->isSigned(), loc);
     }
 
+    // Helper to check if an argument is an EmptyArgumentExpression.
+    auto isEmptyArg = [](const slang::ast::Expression *arg) {
+      return arg->kind == slang::ast::ExpressionKind::EmptyArgument;
+    };
+
+    // Count non-empty arguments to determine effective arity.
+    // EmptyArgumentExpression represents optional arguments that were not
+    // provided, so we filter them out when determining the arity.
+    size_t effectiveArity = 0;
+    for (auto *arg : args)
+      if (!isEmptyArg(arg))
+        ++effectiveArity;
+
     // Call the conversion function with the appropriate arity. These return one
     // of the following:
     //
     // - `failure()` if the system call was recognized but some error occurred
     // - `Value{}` if the system call was not recognized
     // - non-null `Value` result otherwise
-    switch (args.size()) {
+    switch (effectiveArity) {
     case (0):
       result = context.convertSystemCallArity0(subroutine, loc);
       break;
 
     case (1):
-      value = context.convertRvalueExpression(*args[0]);
+      // Find the first non-empty argument.
+      for (auto *arg : args) {
+        if (!isEmptyArg(arg)) {
+          value = context.convertRvalueExpression(*arg);
+          break;
+        }
+      }
       if (!value)
         return {};
       result = context.convertSystemCallArity1(subroutine, loc, value);
       break;
 
-    case (2):
-      value = context.convertRvalueExpression(*args[0]);
-      value2 = context.convertRvalueExpression(*args[1]);
-      if (!value || !value2)
+    case (2): {
+      // Find the first two non-empty arguments.
+      SmallVector<Value, 2> nonEmptyValues;
+      for (auto *arg : args) {
+        if (!isEmptyArg(arg)) {
+          Value v = context.convertRvalueExpression(*arg);
+          if (!v)
+            return {};
+          nonEmptyValues.push_back(v);
+          if (nonEmptyValues.size() == 2)
+            break;
+        }
+      }
+      if (nonEmptyValues.size() < 2)
         return {};
+      value = nonEmptyValues[0];
+      value2 = nonEmptyValues[1];
       result = context.convertSystemCallArity2(subroutine, loc, value, value2);
       break;
+    }
 
     default:
       break;
@@ -4807,6 +4899,17 @@ struct RvalueExprVisitor : public ExprVisitor {
     return moore::ConstantOp::create(builder, loc, boolType, 1);
   }
 
+  /// Handle empty argument expressions.
+  /// These represent optional arguments that were not provided in the call.
+  /// Returns a null Value to indicate the argument is missing, which the
+  /// calling code should handle appropriately (e.g., use default values).
+  Value visit(const slang::ast::EmptyArgumentExpression &expr) {
+    // Return null to indicate this is an empty/missing argument.
+    // The caller (e.g., system call handling code) is responsible for
+    // detecting this and using appropriate default values.
+    return {};
+  }
+
   /// Emit an error for all other expressions.
   template <typename T>
   Value visit(T &&node) {
@@ -5023,6 +5126,62 @@ struct LvalueExprVisitor : public ExprVisitor {
               // For lvalue, return the reference directly
               return moore::VirtualInterfaceSignalRefOp::create(
                   builder, loc, refTy, vifValue, signalSym);
+            }
+          }
+        }
+      }
+    }
+
+    // Handle modport port access for lvalue (e.g., port.clk = value where port
+    // has type interface.modport). The expr.symbol is a ModportPortSymbol, and
+    // we need to access the actual interface signal via its internalSymbol.
+    if (auto *modportPort =
+            expr.symbol.as_if<slang::ast::ModportPortSymbol>()) {
+      // Get the internal symbol (the actual interface signal)
+      auto *internalSym = modportPort->internalSymbol;
+      if (internalSym) {
+        // Get the parent scope of the internal symbol to verify it's in an
+        // interface
+        auto *parentScope = internalSym->getParentScope();
+        if (parentScope) {
+          if (auto *instBody = parentScope->asSymbol()
+                                   .as_if<slang::ast::InstanceBodySymbol>()) {
+            if (instBody->getDefinition().definitionKind ==
+                slang::ast::DefinitionKind::Interface) {
+              // Find the interface port from the hierarchical path
+              for (const auto &elem : expr.ref.path) {
+                Value instRef;
+                if (auto *instSym =
+                        elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+                  if (auto it = context.interfaceInstances.find(instSym);
+                      it != context.interfaceInstances.end())
+                    instRef = it->second;
+                } else if (auto *ifacePort =
+                               elem.symbol
+                                   ->as_if<slang::ast::InterfacePortSymbol>()) {
+                  if (auto it = context.interfacePortValues.find(ifacePort);
+                      it != context.interfacePortValues.end())
+                    instRef = it->second;
+                }
+
+                if (!instRef)
+                  continue;
+
+                // Found the interface instance. Read from the RefType.
+                Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+                // Create a signal reference using the internal symbol's name.
+                auto type = context.convertType(*expr.type);
+                if (!type)
+                  return {};
+                auto signalSym = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), internalSym->name);
+                auto refTy =
+                    moore::RefType::get(cast<moore::UnpackedType>(type));
+                // For lvalue, return the reference directly
+                return moore::VirtualInterfaceSignalRefOp::create(
+                    builder, loc, refTy, vifValue, signalSym);
+              }
             }
           }
         }
