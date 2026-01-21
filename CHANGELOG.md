@@ -1,5 +1,80 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 90 - January 21, 2026
+
+### MooreToCore f64 BoolCast Fix ✅ NEW
+
+**Bug Fix**: Fixed `cast<Ty>() argument of incompatible type!` crash in MooreToCore.
+
+**Root Cause**: `BoolCastOpConversion` was attempting to create `hw::ConstantOp`
+with float types (like f64 from `get_coverage()` methods). Since `hw::ConstantOp`
+only supports integer types, this caused a crash.
+
+**Fix**: Modified `BoolCastOpConversion` (line 5247) to handle float types:
+- For float inputs: Use `arith::ConstantOp` with 0.0 and `arith::CmpFOp`
+- For integer inputs: Use existing `hw::ConstantOp` and `comb::ICmpOp`
+
+**Impact**: Unblocks APB AVIP MooreToCore conversion (covergroup `get_coverage()`)
+
+### AVIP Testbench Survey ✅ NEW
+
+**Found 9 AVIPs in ~/mbit/**:
+
+| AVIP | Parse Status | Notes |
+|------|--------------|-------|
+| APB | ✅ PASS | Ready for MooreToCore |
+| I2S | ✅ PASS | |
+| JTAG | ✅ PASS | |
+| SPI | ✅ PASS | |
+| UART | ✅ PASS | |
+| AXI4 | ⚠️ PARTIAL | Deprecated `uvm_test_done` API |
+| AXI4Lite | ⚠️ PARTIAL | Missing package dependency |
+| I3C | ⚠️ PARTIAL | Deprecated `uvm_test_done` API |
+| AHB | ❌ FAIL | Bind statement scoping issue |
+
+### Virtual Interface Investigation ✅ COMPLETE
+
+**Status**: 70-80% complete in CIRCT
+
+**Already Implemented**:
+- Type system: `!moore.virtual_interface<@interface>` with modport support
+- IR operations: InterfaceInstanceOp, VirtualInterfaceBindOp, VirtualInterfaceGetOp,
+  VirtualInterfaceSignalRefOp, VirtualInterfaceNullOp, VirtualInterfaceCmpOp
+- Verilog Import: Full support for virtual interface types, member access, comparisons
+- config_db: Runtime storage with type ID-based checking
+
+**Gaps for Full Runtime Binding**:
+1. Type ID registry (currently implicit in conversions)
+2. Interface descriptor structures at runtime
+3. Virtual interface method call support in MooreToCore
+4. Enhanced type checking in config_db
+
+### SVA Value-Change Progress
+
+- **ImportVerilog**: $rose/$fell/$stable/$changed now lower to sampled-value
+  logic that works in sequences and regular assertion expressions without
+  producing property-only types.
+- **ImportVerilog**: Apply default clocking/disable to i1 assertion expressions
+  so simple properties don't drop defaults.
+- **ImportVerilog**: Concurrent assertions inside timed statements emit
+  clocked verif ops at module scope when the timing control is a simple
+  signal event (posedge/negedge).
+- **SVA limitations**: Explicit clocking arguments to $rose/$fell/$stable/
+  $changed outside assertions currently warn and return 0 as a placeholder.
+  X/Z edge semantics for $rose/$fell are still incomplete (see yosys
+  `sva_value_change_sim`).
+
+**Yosys SVA progress**:
+- `sva_value_change_changed` + `sva_value_change_changed_wide` now pass
+  (pass/fail).
+- `sva_value_change_rose` now pass (pass/fail).
+- `sva_value_change_sim` still fails in pass mode (X/Z edge semantics).
+
+**Tests run**:
+- `ninja -C build circt-verilog`
+- `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/assertions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/assertions.sv`
+- `TEST_FILTER=value_change utils/run_yosys_sva_circt_bmc.sh`
+
 ## Iteration 89 - January 21, 2026
 
 ### String Methods and File I/O System Calls

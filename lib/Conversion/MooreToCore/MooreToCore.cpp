@@ -5245,7 +5245,17 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
       return success();
     }
     if (isa_and_nonnull<IntegerType>(resultType)) {
-      // Compare input to zero of the input's type, not result type
+      // Compare input to zero of the input's type, not result type.
+      // Handle both integer and float input types.
+      if (auto floatTy = dyn_cast<FloatType>(input.getType())) {
+        // For float types, use arith::CmpFOp to compare to 0.0
+        Value zero = arith::ConstantOp::create(
+            rewriter, loc, rewriter.getFloatAttr(floatTy, 0.0));
+        rewriter.replaceOpWithNewOp<arith::CmpFOp>(
+            op, arith::CmpFPredicate::UNE, input, zero);
+        return success();
+      }
+      // For integer types, use comb::ICmpOp
       Value zero =
           hw::ConstantOp::create(rewriter, loc, input.getType(), 0);
       rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, comb::ICmpPredicate::ne,
