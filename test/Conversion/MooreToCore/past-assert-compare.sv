@@ -9,8 +9,9 @@ module PastCompare(input logic clk, a, b);
   assert property (past_eq);
 
   // CHECK-LABEL: hw.module @PastCompare
-  // CHECK: ltl.past
-  // CHECK: ltl.or
+  // CHECK: seq.compreg
+  // CHECK: ltl.delay
+  // CHECK: ltl.implication
   // CHECK: verif.clocked_assert
   // CHECK-NOT: unrealized_conversion_cast
 endmodule

@@ -1,15 +1,18 @@
 // RUN: circt-verilog --ir-moore --no-uvm-auto-include %s 2>&1 | FileCheck %s
 // REQUIRES: slang
 
-// Test that property types used in invalid contexts produce clear error messages
-// instead of crashes or MLIR verifier failures.
+// Test that $rose can be used as implication antecedent.
+// With the moore.past-based implementation, $rose returns a value type
+// that can be properly used in overlapped implication antecedent.
 
-module PropertyTypeErrors(input logic clk, a, b);
+module PropertyTypeValid(input logic clk, a, b);
 
   // Test: $rose as overlapped implication antecedent
-  // $rose returns a property type (!ltl.property) because it uses ltl.and/ltl.not,
-  // but implication antecedent requires a sequence type (i1 or !ltl.sequence).
-  // CHECK: error: property type cannot be used as implication antecedent; consider restructuring the assertion to use the property as a consequent
+  // $rose returns a moore value type (i1) which can be used as antecedent.
+  // CHECK: moore.past
+  // CHECK: moore.case_eq
+  // CHECK: ltl.implication
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) $rose(a) |-> b);
 
 endmodule

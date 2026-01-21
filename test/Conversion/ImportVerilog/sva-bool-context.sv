@@ -6,8 +6,8 @@
 module test_changed_or(input logic clk);
     int cyc = 0;
     logic val = 0;
-    // $changed returns LTL property, OR with boolean should use ltl.or
-    // CHECK: ltl.or
+    // $changed returns moore value type, OR with boolean uses moore.or
+    // CHECK: moore.or
     assert property(@(posedge clk) cyc == 0 || $changed(val));
 endmodule
 
@@ -16,8 +16,8 @@ endmodule
 module test_stable_not(input logic clk);
     int cyc = 0;
     logic val = 0;
-    // !$stable should use ltl.not
-    // CHECK: ltl.not
+    // !$stable uses moore.not on the result
+    // CHECK: moore.not
     assert property(@(posedge clk) cyc == 0 || !$stable(val));
 endmodule
 
@@ -37,8 +37,8 @@ endmodule
 // CHECK-LABEL: moore.module @test_changed_and
 module test_changed_and(input logic clk);
     logic a, b;
-    // Both LTL properties, should use ltl.and
-    // CHECK: ltl.and
+    // Both return moore values, AND uses moore.and
+    // CHECK: moore.and
     assert property(@(posedge clk) $changed(a) && $changed(b));
 endmodule
 

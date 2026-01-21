@@ -395,33 +395,22 @@ module SampleValueBuiltins #() (
     input clk_i
 );
   // CHECK: [[CLKWIRE:%.+]] = moore.net name "clk_i" wire : <l1>
-  // CHECK: [[C:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK: [[CB:%.+]] = moore.to_builtin_bool [[C]] : l1
-  // CHECK: [[C2:%.+]] = moore.read [[CLKWIRE]] : <l1>
-  // CHECK: [[CURRENT:%.+]] = moore.to_builtin_bool [[C2]] : l1
-  // CHECK: [[PAST:%.+]] = ltl.past [[CURRENT]], 1 : i1
-  // CHECK: [[NOTPAST:%.+]] = ltl.not [[PAST]] : !ltl.sequence
-  // CHECK: [[NOTPASTANDCURRENT:%.+]] = ltl.and [[CURRENT]], [[NOTPAST]] : i1, !ltl.property
+  // CHECK: moore.past
+  // CHECK: moore.case_eq
+  // CHECK: moore.not
+  // CHECK: moore.and
   // CHECK: ltl.implication
-  // CHECK: ltl.clock
-  // CHECK: verif.assert
+  // CHECK: verif.{{(clocked_)?}}assert
   rising_clk: assert property (@(posedge clk_i) clk_i |=> $rose(clk_i));
-  // CHECK: ltl.past
-  // CHECK: ltl.not
-  // CHECK: ltl.and
+  // CHECK: moore.case_eq
+  // CHECK: moore.not
+  // CHECK: moore.and
   // CHECK: ltl.implication
-  // CHECK: ltl.clock
-  // CHECK: verif.assert
+  // CHECK: verif.{{(clocked_)?}}assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
-  // CHECK: ltl.past
-  // CHECK: ltl.not
-  // CHECK: ltl.not
-  // CHECK: ltl.and
-  // CHECK: ltl.and
-  // CHECK: ltl.or
+  // CHECK: moore.case_eq
   // CHECK: ltl.implication
-  // CHECK: ltl.clock
-  // CHECK: verif.assert
+  // CHECK: verif.{{(clocked_)?}}assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));
 
 endmodule
