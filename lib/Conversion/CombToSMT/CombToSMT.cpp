@@ -11,6 +11,7 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -253,6 +254,68 @@ struct VariadicToBinaryOpConversion : OpConversionPattern<SourceOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// LLVM Dialect Conversion Patterns (for operations used by MooreToCore)
+//===----------------------------------------------------------------------===//
+
+/// Lower an llvm.intr.ctpop (count population / popcount) operation to SMT.
+/// SMT-LIB2 does not have a native popcount operation, so we implement it
+/// by extracting each bit and summing them.
+///
+/// For a bitvector of width N, the result is:
+///   sum(i=0 to N-1) zext(extract(x, i, i))
+///
+/// This is used for $countones, $onehot, and $onehot0 SystemVerilog functions.
+struct LLVMCtPopOpConversion : OpConversionPattern<LLVM::CtPopOp> {
+  using OpConversionPattern<LLVM::CtPopOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(LLVM::CtPopOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value input = adaptor.getIn();
+    auto inputType = dyn_cast<smt::BitVectorType>(input.getType());
+    if (!inputType)
+      return rewriter.notifyMatchFailure(op, "input must be a bitvector type");
+
+    unsigned bitWidth = inputType.getWidth();
+    if (bitWidth == 0)
+      return rewriter.notifyMatchFailure(op, "0-bit vectors not supported");
+
+    // Result type is the same width as input (popcount result fits in input width)
+    Type oneBitTy = smt::BitVectorType::get(getContext(), 1);
+
+    // Start with zero
+    Value result =
+        smt::BVConstantOp::create(rewriter, loc, APInt(bitWidth, 0));
+
+    // Sum each bit: for each bit position, extract it, zero-extend to full
+    // width, and add to the running sum.
+    for (unsigned i = 0; i < bitWidth; ++i) {
+      // Extract bit i
+      Value bit =
+          smt::ExtractOp::create(rewriter, loc, oneBitTy, i, input);
+
+      // Zero-extend to the result width
+      Value extended;
+      if (bitWidth > 1) {
+        // Zero-extend by concatenating zeros on the left
+        Value zeros = smt::BVConstantOp::create(rewriter, loc,
+                                                 APInt(bitWidth - 1, 0));
+        extended = smt::ConcatOp::create(rewriter, loc, zeros, bit);
+      } else {
+        extended = bit;
+      }
+
+      // Add to running sum
+      result = smt::BVAddOp::create(rewriter, loc, result, extended);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -282,8 +345,9 @@ void circt::populateCombToSMTConversionPatterns(TypeConverter &converter,
                VariadicToBinaryOpConversion<MulOp, smt::BVMulOp>,
                VariadicToBinaryOpConversion<AndOp, smt::BVAndOp>,
                VariadicToBinaryOpConversion<OrOp, smt::BVOrOp>,
-               VariadicToBinaryOpConversion<XorOp, smt::BVXOrOp>>(
-      converter, patterns.getContext());
+               VariadicToBinaryOpConversion<XorOp, smt::BVXOrOp>,
+               // LLVM intrinsics used by MooreToCore for bit manipulation
+               LLVMCtPopOpConversion>(converter, patterns.getContext());
 
   // TODO: there are two unsupported operations in the comb dialect: 'parity'
   // and 'truth_table'.
@@ -295,6 +359,9 @@ void ConvertCombToSMTPass::runOnOperation() {
   target.addIllegalOp<seq::FromClockOp>();
   target.addIllegalOp<seq::ToClockOp>();
   target.addIllegalDialect<comb::CombDialect>();
+  // LLVM intrinsics used by MooreToCore for bit manipulation functions
+  // ($countones, $onehot, $onehot0)
+  target.addIllegalOp<LLVM::CtPopOp>();
   target.addLegalDialect<smt::SMTDialect>();
   target.addLegalDialect<mlir::func::FuncDialect>();
 

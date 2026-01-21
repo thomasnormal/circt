@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 78 - January 21, 2026
+
+### BMC Popcount Fix, UVM Core Services, Dynamic Type Access
+
+**Track D: BMC $countones/$onehot Fix** ⭐ BUG FIX
+- Added `LLVM::CtPopOp` → SMT conversion in CombToSMT.cpp
+- SMT-LIB2 has no native popcount, so we: extract each bit, zero-extend, and sum
+- Enables BMC verification of `$countones(x)`, `$onehot(x)`, `$onehot0(x)` assertions
+- Updated CMakeLists.txt to link MLIRLLVMDialect
+- New test files: `llvm-ctpop-to-smt.mlir`, `bmc-popcount.mlir`
+
+**Track B: UVM Core Service Classes** ⭐ ENHANCEMENT
+- Expanded uvm_pkg.sv from ~3000 to ~3650 lines (+628 lines)
+- Added IEEE 1800.2 core service classes:
+  - `uvm_coreservice_t` - Abstract core service interface
+  - `uvm_default_coreservice_t` - Default implementation with factory, report server
+  - `uvm_tr_database`, `uvm_text_tr_database` - Transaction recording stubs
+  - `uvm_resource_base`, `uvm_resource_pool` - Resource management
+  - `uvm_visitor` - Component visitor pattern
+- Fixed duplicate macro definitions in uvm_macros.svh
+- Added more TLM ports/exports: nonblocking_put, put, get, get_peek, exports
+
+**Track C: Dynamic Type Access Fix (Continued)** ⭐ BUG FIX
+- Completed from Iteration 77
+- Solution re-binds expressions from syntax in procedural context
+- Test file validates class property and array element access
+
+**Track A: Sensitivity Persistence Investigation** (In Progress)
+- Deep analysis of ProcessScheduler↔EventScheduler interaction
+- Unit tests added for multi-process scenarios
+- Investigation continues
+
+### Files Modified
+- `lib/Conversion/CombToSMT/CombToSMT.cpp` (+71 lines - popcount conversion)
+- `lib/Conversion/CombToSMT/CMakeLists.txt` (MLIRLLVMDialect link)
+- `lib/Runtime/uvm/uvm_pkg.sv` (+628 lines - core service classes)
+- `lib/Runtime/uvm/uvm_macros.svh` (fixed duplicate macros)
+- `lib/Conversion/ImportVerilog/Structure.cpp` (+77 lines - dynamic type)
+- `lib/Conversion/ImportVerilog/Expressions.cpp` (+80 lines - InvalidExpr)
+- `test/Conversion/CombToSMT/llvm-ctpop-to-smt.mlir` (new)
+- `test/Conversion/CombToSMT/bmc-popcount.mlir` (new)
+- `test/Conversion/ImportVerilog/dynamic-nonprocedural.sv` (new)
+
+---
+
 ## Iteration 77 - January 21, 2026
 
 ### Event-Wait Fix, UVM Macros Expansion, SVA Past Patterns
@@ -28,14 +73,21 @@
 - Buffers shift each BMC iteration: oldest value used, newest added
 - New test file: `test/Conversion/VerifToSMT/bmc-past-edge.mlir`
 
-**Track C: Dynamic Type Access (In Progress)**
-- Investigating slang AST handling for class member access
-- InvalidExpression unwrapping challenge identified
-- Work continues in next iteration
+**Track C: Dynamic Type Access Fix** ⭐ BUG FIX
+- Fixed "dynamic type access outside procedural context" errors in AVIP testbenches
+- When `--allow-nonprocedural-dynamic` is set, continuous assignments like `assign o = obj.val`
+  are now converted to `always_comb` blocks instead of being skipped
+- Solution: Re-bind the expression from syntax in a non-procedural AST context
+- Slang wraps only the base expression (not the member access) in InvalidExpression,
+  so we must re-parse the syntax to recover the full `obj.val` member access
+- Works for class property access, array element access within classes
+- New test file: `test/Conversion/ImportVerilog/dynamic-nonprocedural.sv`
 
 ### Files Modified
 - `lib/Dialect/LLHD/IR/LLHDOps.cpp` (event-wait side-effect detection)
 - `lib/Runtime/uvm/uvm_macros.svh` (+1588 lines of macros)
+- `lib/Conversion/ImportVerilog/Structure.cpp` (dynamic type access fix)
+- `lib/Conversion/ImportVerilog/Expressions.cpp` (InvalidExpression unwrapping helper)
 - `lib/Conversion/VerifToSMT/VerifToSMT.cpp` (ltl.past buffer infrastructure)
 - `test/Conversion/VerifToSMT/bmc-past-edge.mlir` (new)
 - `test/Dialect/LLHD/Transforms/canonicalize-process-with-side-effects.mlir`

@@ -11,5 +11,6 @@ add_circt_conversion_library(CIRCTCombToSMT
   CIRCTComb
   CIRCTHWToSMT
   MLIRSMT
+  MLIRLLVMDialect
   MLIRTransforms
 )

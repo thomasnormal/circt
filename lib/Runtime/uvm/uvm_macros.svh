@@ -1574,35 +1574,21 @@ typedef enum {
   endclass
 
 // Blocking-only TLM port declaration macros
-`define uvm_blocking_put_imp_decl(SFX) \
-  class uvm_blocking_put_imp``SFX #(type T=int, type IMP=int) \
-    extends uvm_port_base #(uvm_tlm_if_base #(T,T)); \
-    `UVM_IMP_COMMON(`UVM_TLM_BLOCKING_PUT_MASK, `"uvm_blocking_put_imp``SFX`", IMP) \
-    `UVM_BLOCKING_PUT_IMP_SFX(SFX, m_imp, T, t) \
-  endclass
-
-`define uvm_blocking_get_imp_decl(SFX) \
-  class uvm_blocking_get_imp``SFX #(type T=int, type IMP=int) \
-    extends uvm_port_base #(uvm_tlm_if_base #(T,T)); \
-    `UVM_IMP_COMMON(`UVM_TLM_BLOCKING_GET_MASK, `"uvm_blocking_get_imp``SFX`", IMP) \
-    `UVM_BLOCKING_GET_IMP_SFX(SFX, m_imp, T, t) \
-  endclass
+// Note: uvm_blocking_put_imp_decl, uvm_blocking_get_imp_decl, and uvm_analysis_imp_decl
+// are defined earlier in this file with simpler implementations that don't require
+// the UVM_IMP_COMMON and related helper macros.
 
 `define uvm_blocking_peek_imp_decl(SFX) \
   class uvm_blocking_peek_imp``SFX #(type T=int, type IMP=int) \
     extends uvm_port_base #(uvm_tlm_if_base #(T,T)); \
-    `UVM_IMP_COMMON(`UVM_TLM_BLOCKING_PEEK_MASK, `"uvm_blocking_peek_imp``SFX`", IMP) \
-    `UVM_BLOCKING_PEEK_IMP_SFX(SFX, m_imp, T, t) \
-  endclass
-
-// Analysis imp declaration macro
-`define uvm_analysis_imp_decl(SFX) \
-  class uvm_analysis_imp``SFX #(type T=int, type IMP=int) \
-    extends uvm_port_base #(uvm_tlm_if_base #(T,T)); \
-    `UVM_IMP_COMMON(`UVM_TLM_ANALYSIS_MASK, `"uvm_analysis_imp``SFX`", IMP) \
-    function void write(input T t); \
-      m_imp.write``SFX(t); \
+    local IMP m_imp; \
+    function new(string name, IMP imp); \
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1); \
+      m_imp = imp; \
     endfunction \
+    task peek(output T t); \
+      m_imp.peek``SFX(t); \
+    endtask \
   endclass
 
 // Master/Slave TLM port declaration macros
