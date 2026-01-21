@@ -47,7 +47,15 @@ package uvm_pkg;
   typedef class uvm_subscriber;
   typedef class uvm_tlm_fifo;
   typedef class uvm_reg_map;
+  typedef class uvm_reg;
+  typedef class uvm_reg_field;
+  typedef class uvm_mem;
   typedef class uvm_component_registry;
+  typedef class uvm_tr_database;
+  typedef class uvm_report_server;
+  typedef class uvm_resource_base;
+  typedef class uvm_resource_pool;
+  typedef class uvm_default_coreservice_t;
 
   typedef int unsigned uvm_bitstream_t;
   typedef longint uvm_integral_t;
@@ -3016,6 +3024,626 @@ package uvm_pkg;
   // Global cmdline processor instance
   //=========================================================================
   uvm_cmdline_processor uvm_cmdline_proc = uvm_cmdline_processor::get_inst();
+
+  //=========================================================================
+  // uvm_tr_database - Transaction recording database
+  //=========================================================================
+  class uvm_tr_database extends uvm_object;
+    function new(string name = "uvm_tr_database");
+      super.new(name);
+    endfunction
+
+    virtual function bit open_db();
+      return 1;
+    endfunction
+
+    virtual function bit close_db();
+      return 1;
+    endfunction
+
+    virtual function bit is_open();
+      return 1;
+    endfunction
+
+  endclass
+
+  class uvm_text_tr_database extends uvm_tr_database;
+    function new(string name = "uvm_text_tr_database");
+      super.new(name);
+    endfunction
+  endclass
+
+  //=========================================================================
+  // uvm_copier - Object copying utility
+  //=========================================================================
+  class uvm_copier extends uvm_object;
+    int unsigned policy = UVM_COPY;
+
+    function new(string name = "copier");
+      super.new(name);
+    endfunction
+
+    virtual function void copy_object(uvm_object lhs, uvm_object rhs);
+      if (lhs != null && rhs != null)
+        lhs.copy(rhs);
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_resource_base - Resource base class
+  //=========================================================================
+  class uvm_resource_base extends uvm_object;
+    function new(string name = "");
+      super.new(name);
+    endfunction
+
+    virtual function void set_read_only();
+    endfunction
+
+    virtual function bit is_read_only();
+      return 0;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_resource_pool - Resource pool
+  //=========================================================================
+  class uvm_resource_pool extends uvm_object;
+    local static uvm_resource_pool m_inst;
+
+    function new(string name = "");
+      super.new(name);
+    endfunction
+
+    static function uvm_resource_pool get();
+      if (m_inst == null)
+        m_inst = new();
+      return m_inst;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_visitor - Component visitor pattern
+  //=========================================================================
+  class uvm_visitor #(type T = uvm_component) extends uvm_object;
+    function new(string name = "");
+      super.new(name);
+    endfunction
+
+    virtual function void begin_v();
+    endfunction
+
+    virtual function void end_v();
+    endfunction
+
+    virtual function void visit(T node);
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_coreservice_t - Core service singleton
+  //=========================================================================
+  virtual class uvm_coreservice_t extends uvm_void;
+
+    pure virtual function uvm_factory get_factory();
+    pure virtual function void set_factory(uvm_factory f);
+    pure virtual function uvm_report_server get_report_server();
+    pure virtual function void set_report_server(uvm_report_server server);
+    pure virtual function uvm_tr_database get_default_tr_database();
+    pure virtual function void set_default_tr_database(uvm_tr_database db);
+    pure virtual function uvm_root get_root();
+    pure virtual function void set_component_visitor(uvm_visitor #(uvm_component) v);
+    pure virtual function uvm_visitor #(uvm_component) get_component_visitor();
+
+    local static uvm_coreservice_t inst;
+
+    static function uvm_coreservice_t get();
+      if (inst == null) begin
+        uvm_default_coreservice_t cs = new();
+        inst = cs;
+      end
+      return inst;
+    endfunction
+
+    static function void set(uvm_coreservice_t cs);
+      inst = cs;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_default_coreservice_t - Default core service implementation
+  //=========================================================================
+  class uvm_default_coreservice_t extends uvm_coreservice_t;
+    local uvm_factory m_factory;
+    local uvm_report_server m_report_server;
+    local uvm_tr_database m_tr_database;
+    local uvm_root m_root;
+    local uvm_visitor #(uvm_component) m_visitor;
+
+    function new();
+    endfunction
+
+    virtual function uvm_factory get_factory();
+      if (m_factory == null)
+        m_factory = uvm_factory::get();
+      return m_factory;
+    endfunction
+
+    virtual function void set_factory(uvm_factory f);
+      m_factory = f;
+    endfunction
+
+    virtual function uvm_report_server get_report_server();
+      if (m_report_server == null)
+        m_report_server = uvm_report_server::get_server();
+      return m_report_server;
+    endfunction
+
+    virtual function void set_report_server(uvm_report_server server);
+      m_report_server = server;
+    endfunction
+
+    virtual function uvm_tr_database get_default_tr_database();
+      if (m_tr_database == null)
+        m_tr_database = new("uvm_text_tr_database");
+      return m_tr_database;
+    endfunction
+
+    virtual function void set_default_tr_database(uvm_tr_database db);
+      m_tr_database = db;
+    endfunction
+
+    virtual function uvm_root get_root();
+      if (m_root == null)
+        m_root = uvm_root::get();
+      return m_root;
+    endfunction
+
+    virtual function void set_component_visitor(uvm_visitor #(uvm_component) v);
+      m_visitor = v;
+    endfunction
+
+    virtual function uvm_visitor #(uvm_component) get_component_visitor();
+      return m_visitor;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // Additional TLM Ports and Exports commonly used
+  //=========================================================================
+
+  // uvm_nonblocking_put_port
+  class uvm_nonblocking_put_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual function bit try_put(input T t);
+      if (m_if != null)
+        return m_if.try_put(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_put();
+      if (m_if != null)
+        return m_if.can_put();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_put_port - combined blocking and nonblocking
+  class uvm_put_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual task put(input T t);
+      if (m_if != null)
+        m_if.put(t);
+    endtask
+
+    virtual function bit try_put(input T t);
+      if (m_if != null)
+        return m_if.try_put(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_put();
+      if (m_if != null)
+        return m_if.can_put();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_nonblocking_get_port
+  class uvm_nonblocking_get_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_get_port - combined blocking and nonblocking
+  class uvm_get_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual task get(output T t);
+      if (m_if != null)
+        m_if.get(t);
+    endtask
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_get_peek_port - combined get and peek port
+  class uvm_get_peek_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual task get(output T t);
+      if (m_if != null)
+        m_if.get(t);
+    endtask
+
+    virtual task peek(output T t);
+      if (m_if != null)
+        m_if.peek(t);
+    endtask
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_blocking_put_export
+  class uvm_blocking_put_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task put(input T t);
+      if (m_if != null)
+        m_if.put(t);
+    endtask
+
+  endclass
+
+  // uvm_blocking_get_export
+  class uvm_blocking_get_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task get(output T t);
+      if (m_if != null)
+        m_if.get(t);
+    endtask
+
+  endclass
+
+  // uvm_blocking_peek_export
+  class uvm_blocking_peek_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task peek(output T t);
+      if (m_if != null)
+        m_if.peek(t);
+    endtask
+
+  endclass
+
+  // uvm_blocking_get_peek_export
+  class uvm_blocking_get_peek_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task get(output T t);
+      if (m_if != null)
+        m_if.get(t);
+    endtask
+
+    virtual task peek(output T t);
+      if (m_if != null)
+        m_if.peek(t);
+    endtask
+
+  endclass
+
+  // uvm_put_export - combined blocking and nonblocking export
+  class uvm_put_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task put(input T t);
+      if (m_if != null)
+        m_if.put(t);
+    endtask
+
+    virtual function bit try_put(input T t);
+      if (m_if != null)
+        return m_if.try_put(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_put();
+      if (m_if != null)
+        return m_if.can_put();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_get_export - combined blocking and nonblocking export
+  class uvm_get_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task get(output T t);
+      if (m_if != null)
+        m_if.get(t);
+    endtask
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_get_peek_export - combined get and peek export
+  class uvm_get_peek_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual task get(output T t);
+      if (m_if != null)
+        m_if.get(t);
+    endtask
+
+    virtual task peek(output T t);
+      if (m_if != null)
+        m_if.peek(t);
+    endtask
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_reg_field - Register field stub
+  //=========================================================================
+  class uvm_reg_field extends uvm_object;
+    function new(string name = "");
+      super.new(name);
+    endfunction
+
+    virtual function void configure(uvm_reg parent,
+                                    int unsigned size,
+                                    int unsigned lsb_pos,
+                                    string access,
+                                    bit volatile_,
+                                    uvm_reg_data_t reset,
+                                    bit has_reset,
+                                    bit is_rand,
+                                    bit individually_accessible);
+    endfunction
+
+    virtual task write(output uvm_status_e status, input uvm_reg_data_t value,
+                       input uvm_path_e path = UVM_DEFAULT_PATH,
+                       input uvm_reg_map map = null,
+                       input uvm_sequence_base parent = null,
+                       input int prior = -1,
+                       input uvm_object extension = null,
+                       input string fname = "", input int lineno = 0);
+      status = UVM_IS_OK;
+    endtask
+
+    virtual task read(output uvm_status_e status, output uvm_reg_data_t value,
+                      input uvm_path_e path = UVM_DEFAULT_PATH,
+                      input uvm_reg_map map = null,
+                      input uvm_sequence_base parent = null,
+                      input int prior = -1,
+                      input uvm_object extension = null,
+                      input string fname = "", input int lineno = 0);
+      status = UVM_IS_OK;
+      value = 0;
+    endtask
+
+    virtual function uvm_reg_data_t get();
+      return 0;
+    endfunction
+
+    virtual function void set(uvm_reg_data_t value);
+    endfunction
+
+    virtual function uvm_reg_data_t get_reset(string kind = "HARD");
+      return 0;
+    endfunction
+
+    virtual function int unsigned get_n_bits();
+      return 0;
+    endfunction
+
+    virtual function int unsigned get_lsb_pos();
+      return 0;
+    endfunction
+
+    virtual function string get_access(uvm_reg_map map = null);
+      return "RW";
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_mem - Memory stub
+  //=========================================================================
+  class uvm_mem extends uvm_object;
+    function new(string name = "", longint unsigned size = 0, int unsigned n_bits = 0,
+                 string access = "RW", int has_coverage = 0);
+      super.new(name);
+    endfunction
+
+    virtual task write(output uvm_status_e status, input uvm_reg_addr_t offset,
+                       input uvm_reg_data_t value,
+                       input uvm_path_e path = UVM_DEFAULT_PATH,
+                       input uvm_reg_map map = null,
+                       input uvm_sequence_base parent = null,
+                       input int prior = -1,
+                       input uvm_object extension = null,
+                       input string fname = "", input int lineno = 0);
+      status = UVM_IS_OK;
+    endtask
+
+    virtual task read(output uvm_status_e status, input uvm_reg_addr_t offset,
+                      output uvm_reg_data_t value,
+                      input uvm_path_e path = UVM_DEFAULT_PATH,
+                      input uvm_reg_map map = null,
+                      input uvm_sequence_base parent = null,
+                      input int prior = -1,
+                      input uvm_object extension = null,
+                      input string fname = "", input int lineno = 0);
+      status = UVM_IS_OK;
+      value = 0;
+    endtask
+
+    virtual function longint unsigned get_size();
+      return 0;
+    endfunction
+
+    virtual function int unsigned get_n_bits();
+      return 0;
+    endfunction
+
+    virtual function string get_access(uvm_reg_map map = null);
+      return "RW";
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // run_test task (module-level task)
+  //=========================================================================
+  // Note: run_test function is already defined in uvm_pkg as a function.
+  // In real UVM this is a task. We provide a task version for compatibility.
+  task automatic uvm_run_test(string test_name = "");
+    uvm_coreservice_t cs = uvm_coreservice_t::get();
+    uvm_root top = cs.get_root();
+    $display("[UVM] Running test: %s", test_name);
+  endtask
 
 endpackage
 
