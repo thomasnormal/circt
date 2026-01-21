@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 84 - January 21, 2026
+
+### Complete 4-State Type Support - Simulation Now Works! ⭐ MILESTONE
+
+**4-state logic (`logic`, `reg`) now simulates correctly end-to-end!**
+
+**Track A: circt-sim 4-State Signal Interpretation** ⭐ CRITICAL FIX
+- Added `flattenAggregateConstant()` for struct signal initialization
+- Added interpretation for `hw::StructExtractOp`, `hw::StructCreateOp`, `hw::AggregateConstantOp`
+- Fixed probe caching to always re-read current signal values
+- **Result**: "Counter: 42" (was "Counter: x")
+
+**Track B: Additional 4-State MooreToCore Conversions**
+- `Clog2BIOpConversion`, `DynExtractOpConversion`, `SExtOpConversion`
+- Shift operations: `ShlOpConversion`, `ShrOpConversion`, `AShrOpConversion`
+- `CountOnesBIOpConversion`, `OneHotBIOpConversion`, `OneHot0BIOpConversion`
+
+**Track C: APB AVIP Compilation Progress**
+- Compiles further through LLHD lowering
+- Remaining blocker: `$sscanf` with 4-state output ref
+
+**Test Results**:
+- MooreRuntime tests: **435/435 PASS**
+- Unit tests: 1132/1140 pass (8 pre-existing failures)
+
+---
+
 ## Iteration 83 - January 21, 2026
 
 ### Fix 4-State Type Conversion in MooreToCore
