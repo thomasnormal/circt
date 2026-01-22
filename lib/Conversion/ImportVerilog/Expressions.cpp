@@ -4261,6 +4261,60 @@ struct RvalueExprVisitor : public ExprVisitor {
           expr.type->isSigned(), loc);
     }
 
+    // Handle $ferror separately since it has an output argument.
+    // $ferror(fd, str) returns error code and writes error message to str.
+    // IEEE 1800-2017 Section 21.3.1 "File I/O system functions"
+    if (subroutine.name == "$ferror" && args.size() == 2) {
+      // First argument: file descriptor (input)
+      value = context.convertRvalueExpression(*args[0]);
+      if (!value)
+        return {};
+      // Second argument: string output - wrapped as AssignmentExpression
+      // Slang produces AssignmentExpression(str = EmptyArgument)
+      Value strLhs;
+      if (auto *assignExpr =
+              args[1]->as_if<slang::ast::AssignmentExpression>()) {
+        strLhs = context.convertLvalueExpression(assignExpr->left());
+        if (!strLhs)
+          return {};
+      } else {
+        mlir::emitError(loc) << "$ferror second argument must be an output string";
+        return {};
+      }
+      // Create the ferror operation
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto errCode = moore::FErrorBIOp::create(builder, loc, intTy, value, strLhs);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, errCode, expr.type->isSigned(), loc);
+    }
+
+    // Handle $fgets separately since it has an output argument.
+    // $fgets(str, fd) returns number of chars read and writes to str.
+    // IEEE 1800-2017 Section 21.3.3 "File input functions"
+    if (subroutine.name == "$fgets" && args.size() == 2) {
+      // First argument: string output - wrapped as AssignmentExpression
+      // Slang produces AssignmentExpression(str = EmptyArgument)
+      Value strLhs;
+      if (auto *assignExpr =
+              args[0]->as_if<slang::ast::AssignmentExpression>()) {
+        strLhs = context.convertLvalueExpression(assignExpr->left());
+        if (!strLhs)
+          return {};
+      } else {
+        mlir::emitError(loc) << "$fgets first argument must be an output string";
+        return {};
+      }
+      // Second argument: file descriptor (input)
+      value = context.convertRvalueExpression(*args[1]);
+      if (!value)
+        return {};
+      // Create the fgets operation
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto charCount = moore::FGetSBIOp::create(builder, loc, intTy, strLhs, value);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, charCount, expr.type->isSigned(), loc);
+    }
+
     // Helper to check if an argument is an EmptyArgumentExpression.
     auto isEmptyArg = [](const slang::ast::Expression *arg) {
       return arg->kind == slang::ast::ExpressionKind::EmptyArgument;
@@ -6851,6 +6905,14 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                     }
                   }
                   return moore::FOpenBIOp::create(builder, loc, filename, mode);
+                })
+          .Case("$ungetc",
+                [&]() -> Value {
+                  // $ungetc(c, fd) pushes character c back to file stream fd
+                  // IEEE 1800-2017 Section 21.3.4 "File positioning functions"
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::UngetCBIOp::create(builder, loc, intTy, value1,
+                                                   value2);
                 })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||

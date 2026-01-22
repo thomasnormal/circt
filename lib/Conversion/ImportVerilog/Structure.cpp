@@ -613,9 +613,93 @@ struct ModuleVisitor : public BaseVisitor {
 
     Value initial;
     if (const auto *init = varNode.getInitializer()) {
-      initial = context.convertRvalueExpression(*init, loweredType);
-      if (!initial)
-        return failure();
+      // Special handling for dynamic array initialization with assignment
+      // patterns. When the target is an OpenUnpackedArrayType (e.g., string[]),
+      // slang may report the assignment pattern type as a packed integer
+      // (concatenation), but we need to treat each element as a separate value.
+      if (auto arrayType = dyn_cast<moore::OpenUnpackedArrayType>(loweredType)) {
+        // Check for SimpleAssignmentPatternExpression
+        const slang::ast::AssignmentPatternExpressionBase *pattern = nullptr;
+        if (auto *simple =
+                init->as_if<slang::ast::SimpleAssignmentPatternExpression>())
+          pattern = simple;
+        else if (auto *structured =
+                     init->as_if<slang::ast::StructuredAssignmentPatternExpression>())
+          pattern = structured;
+        else if (auto *replicated =
+                     init->as_if<slang::ast::ReplicatedAssignmentPatternExpression>())
+          pattern = replicated;
+        // Also check for ConcatenationExpression - slang may interpret
+        // { "a", "b" } as a concatenation rather than an assignment pattern.
+        if (!pattern) {
+          if (auto *concat =
+                  init->as_if<slang::ast::ConcatenationExpression>()) {
+            auto elementType = arrayType.getElementType();
+            SmallVector<Value> elements;
+            bool success = true;
+            for (const auto *operand : concat->operands()) {
+              Value elem = context.convertRvalueExpression(*operand, elementType);
+              if (!elem) {
+                success = false;
+                break;
+              }
+              elements.push_back(elem);
+            }
+            if (success && !elements.empty()) {
+              // Create a queue, push elements, then convert to dynamic array.
+              auto queueType =
+                  moore::QueueType::get(elementType, /*bound=*/0);
+              Value queueValue =
+                  moore::QueueConcatOp::create(builder, loc, queueType, {});
+              auto refTy = moore::RefType::get(queueType);
+              auto tmpVar = moore::VariableOp::create(
+                  builder, loc, refTy,
+                  builder.getStringAttr("dyn_array_init_tmp"), queueValue);
+              for (Value elem : elements)
+                moore::QueuePushBackOp::create(builder, loc, tmpVar, elem);
+              Value result = moore::ReadOp::create(builder, loc, tmpVar);
+              initial =
+                  moore::ConversionOp::create(builder, loc, arrayType, result);
+            }
+          }
+        }
+
+        if (pattern) {
+          auto elementType = arrayType.getElementType();
+          SmallVector<Value> elements;
+          bool success = true;
+          for (const auto *elemExpr : pattern->elements()) {
+            Value elem = context.convertRvalueExpression(*elemExpr, elementType);
+            if (!elem) {
+              success = false;
+              break;
+            }
+            elements.push_back(elem);
+          }
+          if (success && !elements.empty()) {
+            // Create a queue, push elements, then convert to dynamic array.
+            auto queueType =
+                moore::QueueType::get(elementType, /*bound=*/0);
+            Value queueValue =
+                moore::QueueConcatOp::create(builder, loc, queueType, {});
+            auto refTy = moore::RefType::get(queueType);
+            auto tmpVar = moore::VariableOp::create(
+                builder, loc, refTy,
+                builder.getStringAttr("dyn_array_init_tmp"), queueValue);
+            for (Value elem : elements)
+              moore::QueuePushBackOp::create(builder, loc, tmpVar, elem);
+            Value result = moore::ReadOp::create(builder, loc, tmpVar);
+            initial =
+                moore::ConversionOp::create(builder, loc, arrayType, result);
+          }
+        }
+      }
+      // Fall back to standard conversion if special handling didn't work.
+      if (!initial) {
+        initial = context.convertRvalueExpression(*init, loweredType);
+        if (!initial)
+          return failure();
+      }
     }
 
     auto varOp = moore::VariableOp::create(
