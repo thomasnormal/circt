@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 96 - January 22, 2026
+
+### Full UVM AVIP Compilation ✅ MAJOR MILESTONE
+
+**Result**: APB AVIP compiles to Moore IR (231,461 lines)
+
+The vtable polymorphism fix enables complete UVM testbench compilation:
+- All UVM components: agents, drivers, monitors, sequencers, coverage, tests
+- Deep class hierarchies with proper vtable inheritance
+- Virtual method dispatch through `func.call_indirect`
+
+**Remaining blocker for HW lowering**: `moore.array.locator` (find with predicate) not yet lowered
+
+### sv-tests Chapter-7 ✅ 97% (100/103)
+
+**Fixes Implemented**:
+- Wildcard associative array `[*]` support (WildcardAssocArrayType)
+- Array locator `item.index` support in predicate regions
+
+### sv-tests Chapter-18 ✅ 41% (55/134)
+
+**Fixes Implemented**:
+- `arith.select` on Moore types: Dynamic legality + MooreToCore conversion
+- Static class property access in constraints: Fixed symbol lookup
+- Implicit constraint blocks: Handle Invalid constraint kind
+
+### circt-sim Verification ✅ 90% (26/29)
+
+**Fixes Implemented**:
+- Struct type port handling: Use `getTypeWidth()` for all types
+- Verified class support, virtual interfaces, unpacked structs
+
+### Commits
+- `f4b0b213c` [ImportVerilog] Handle implicit constraint blocks
+- `3fdef070c` [Moore] Add wildcard arrays and item.index support
+- `89349fff3` [circt-sim] Fix struct type port handling
+- `b4a08923c` [Moore] Fix arith.select on Moore types
+
+---
+
 ## Iteration 95 - January 22, 2026
 
 ### sv-tests Chapter-21 ✅ COMPLETE (100%)
@@ -34,6 +74,15 @@
 2. **Register Type Consistency**: Fixed `smt.ite` type mismatch in ExternalizeRegisters
 3. **Interface Instance Ordering**: Process interface instances before other members for virtual interface access
 4. **LLHD Process Stripping**: Replace `llhd.process` results with module inputs before BMC lowering to avoid `verif.bmc` parent verifier failures
+5. **Sequence Property Shifting**: Fixed fixed-length sequence properties to shift match signals back to the start cycle
+6. **Clocked Assertion Sampling**: Shifted clocked property checks by one cycle to model pre-edge sampled values in BMC
+
+### sv-tests BMC Local-Var Status ✅ UPDATE
+
+**Result**: TEST_FILTER=local-var total=4 pass=1 fail=1 xfail=2 skip=1032
+
+**Remaining Failure**:
+- `16.10--sequence-local-var` still fails (sequence matching vs. local-var binding alignment)
 5. **Sequence Delay Alignment**: Adjusted `##N` delays in concatenated sequences to align with `ltl.concat` step semantics
 
 ### sv-tests BMC Local-Var Status ✅ UPDATE
