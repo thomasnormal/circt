@@ -33,6 +33,8 @@ target_link_libraries(circt-bmc
   CIRCTLTLToCore
   CIRCTOMTransforms
   CIRCTSeq
+  CIRCTSim
+  CIRCTSimTransforms
   CIRCTSMTToZ3LLVM
   CIRCTSVAToLTL
   CIRCTSupport

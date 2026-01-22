@@ -1003,3 +1003,28 @@ hw.module @OpOnConstantInputsMistakenlyPoison(in %clock: i1, in %d: i42) {
   // CHECK: llhd.drv {{%.+}}, [[REG]] after {{%.+}} :
   llhd.drv %3, %1 after %0 if %2 : i42
 }
+
+// CHECK-LABEL: @DeseqHalt(
+hw.module @DeseqHalt(in %clock: i1, in %d: i1) {
+  %c0_i1 = hw.constant 0 : i1
+  %0 = llhd.constant_time <0ns, 1d, 0e>
+  // CHECK-NOT: llhd.process
+  // CHECK-NOT: llhd.halt
+  %1, %2 = llhd.process -> i1, i1 {
+    %true = hw.constant true
+    %false = hw.constant false
+    cf.br ^bb1(%c0_i1, %false : i1, i1)
+  ^bb1(%3: i1, %4: i1):
+    llhd.wait yield (%3, %4 : i1, i1), (%clock : i1), ^bb2(%clock : i1)
+  ^bb2(%5: i1):
+    %6 = comb.xor bin %5, %true : i1
+    %7 = comb.and bin %6, %clock : i1
+    cf.cond_br %7, ^bb3, ^bb1(%3, %false : i1, i1)
+  ^bb3:
+    cf.cond_br %d, ^bb4, ^bb1(%d, %true : i1, i1)
+  ^bb4:
+    llhd.halt %d, %true : i1, i1
+  }
+  %8 = llhd.sig %c0_i1 : i1
+  llhd.drv %8, %1 after %0 if %2 : i1
+}

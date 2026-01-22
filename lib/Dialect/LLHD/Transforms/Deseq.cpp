@@ -1580,6 +1580,14 @@ ValueRange Deseq::specializeProcess(FixedValues fixedValues) {
   // Clone everything after the wait operation.
   cloneBlocks(false);
 
+  // Replace llhd.halt terminators in the specialized combinational region with
+  // llhd.yield to avoid invalid halts after desequencing.
+  executeOp.walk([&](HaltOp op) {
+    OpBuilder haltBuilder(op);
+    YieldOp::create(haltBuilder, op.getLoc(), op.getYieldOperands());
+    op.erase();
+  });
+
   // Don't leave unused constants behind.
   if (isOpTriviallyDead(trueValue))
     trueValue.erase();

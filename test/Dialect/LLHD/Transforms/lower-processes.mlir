@@ -157,6 +157,24 @@ hw.module @SkipIfNoWaits() {
   }
 }
 
+// CHECK-LABEL: @LowerHaltToYield(
+hw.module @LowerHaltToYield(in %a: i1) {
+  // CHECK: llhd.combinational -> i1 {
+  // CHECK: cf.cond_br %a, ^bb2, ^bb2
+  // CHECK: ^bb2:
+  // CHECK: llhd.yield %a : i1
+  // CHECK-NOT: llhd.halt
+  llhd.process -> i1 {
+    cf.br ^bb1
+  ^bb1:
+    cf.cond_br %a, ^bb2, ^bb3
+  ^bb2:
+    llhd.halt %a : i1
+  ^bb3:
+    llhd.wait yield (%a : i1), (%a : i1), ^bb1
+  }
+}
+
 // CHECK-LABEL: @SkipIfWaitHasDestinationOperands(
 hw.module @SkipIfWaitHasDestinationOperands(in %a: i42) {
   // CHECK: llhd.process

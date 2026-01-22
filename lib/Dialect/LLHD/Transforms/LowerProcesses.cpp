@@ -67,6 +67,14 @@ void Lowering::lower() {
   YieldOp::create(builder, waitOp.getLoc(), waitOp.getYieldOperands());
   waitOp.erase();
 
+  // Replace any llhd.halt terminators with llhd.yield in the new combinational
+  // region to avoid invalid halts after process lowering.
+  executeOp.walk([&](HaltOp op) {
+    OpBuilder haltBuilder(op);
+    YieldOp::create(haltBuilder, op.getLoc(), op.getYieldOperands());
+    op.erase();
+  });
+
   // Simplify the execute op body region since disconnecting the control flow
   // loop through the wait op has potentially created unreachable blocks.
   IRRewriter rewriter(builder);

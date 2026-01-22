@@ -194,7 +194,7 @@ void CFRemover::run() {
 
     // Give up if there are any side-effecting ops in the region.
     for (auto &op : block) {
-      if (!isMemoryEffectFree(&op)) {
+      if (!isMemoryEffectFree(&op) && !isa<ProbeOp>(op)) {
         LLVM_DEBUG(llvm::dbgs() << "- Has side effects, giving up\n");
         return;
       }
