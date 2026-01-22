@@ -1647,6 +1647,15 @@ struct StmtVisitor {
       return true;
     }
 
+    // Time formatting task (IEEE 1800-2017 Section 20.4.3)
+    // $timeformat sets the display format for %t in $display/$write.
+    // This is purely a display formatting function, stub as no-op.
+    if (subroutine.name == "$timeformat") {
+      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
+                            << "`";
+      return true;
+    }
+
     if (subroutine.name == "$stop") {
       createFinishMessage(args.size() >= 1 ? args[0] : nullptr);
       moore::StopBIOp::create(builder, loc);
