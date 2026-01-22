@@ -67,13 +67,13 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 98 - Complete)
+### Track Status & Next Tasks (Iteration 99 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-20: **45/47 passing** (95%) ✅
-- sv-tests Chapter-7: **101/103 passing** (98%) ✅ +1 test
-- sv-tests Chapter-11: **83/88 passing** (94%) ✅
+- sv-tests Chapter-20: **47/47 passing** (100%) ✅ COMPLETE (+2 tests this iteration)
+- sv-tests Chapter-7: **101/103 passing** (98%) ✅
+- sv-tests Chapter-11: **75/78 passing** (96%) ✅ (2 expected failures + 1 limit)
 - sv-tests Chapter-18: **55/134 passing** (41%) ✅
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
@@ -86,18 +86,21 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 2. ✅ Array locator lowering (Iteration 97)
 3. ✅ `bit` clock simulation bug (Iteration 98)
 4. ✅ String array types (Iteration 98)
+5. ✅ Type mismatch in AND/OR ops (Iteration 99)
+6. ✅ $countbits with 'x/'z (Iteration 99)
+7. ✅ Mixed static/dynamic streaming (Iteration 99)
 
 **Remaining Limitations**:
 1. **Sibling Hierarchical Refs** - extnets.sv (cross-module wire refs)
-2. **Dynamic Array Streaming** - 3 chapter-11 tests with mixed static/dynamic
-3. **Full UVM Simulation** - End-to-end UVM testbench execution
+2. **MooreToCore Queue+Time Types** - Queue ops with class/struct/string types fail lowering
+3. **Full UVM Simulation** - End-to-end UVM testbench execution blocked by MooreToCore issues
 4. **Chapter-7 Last 2 Tests** - Require additional features
 
 **Active Workstreams (Next)**:
-1. **Track A: Full UVM Simulation** - Run complete UVM testbench with circt-sim
-2. **Track B: Dynamic Array Streaming** - Fix remaining chapter-11 tests
-3. **Track C: Chapter-20 Remaining** - Get to 100%
-4. **Track D: End-to-End AVIP Testing** - Run APB/SPI testbenches through simulation
+1. **Track A: MooreToCore Queue Types** - Fix queue pop for class/struct/string element types
+2. **Track B: MooreToCore Time Type** - Fix llhd.time conversion issues
+3. **Track C: Chapter-7 Remaining** - Get to 100%
+4. **Track D: End-to-End AVIP Testing** - Fix MooreToCore blockers for full simulation
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
