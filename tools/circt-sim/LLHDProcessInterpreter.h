@@ -30,7 +30,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
-// Forward declarations for SCF and Func dialects
+// Forward declarations for SCF, Func, and LLVM dialects
 namespace mlir {
 namespace scf {
 class IfOp;
@@ -41,6 +41,14 @@ namespace func {
 class CallOp;
 class FuncOp;
 } // namespace func
+namespace LLVM {
+class AllocaOp;
+class LoadOp;
+class StoreOp;
+class GEPOp;
+class CallOp;
+class LLVMFuncOp;
+} // namespace LLVM
 } // namespace mlir
 
 namespace circt {
@@ -111,6 +119,26 @@ private:
 // ProcessExecutionState - Per-process execution state
 //===----------------------------------------------------------------------===//
 
+/// Simple memory block for LLVM alloca operations.
+/// Stores a contiguous block of bytes that can be read/written.
+struct MemoryBlock {
+  /// The raw memory storage.
+  std::vector<uint8_t> data;
+
+  /// The size of the allocated memory in bytes.
+  size_t size = 0;
+
+  /// The element type width in bits (for type tracking).
+  unsigned elementBitWidth = 0;
+
+  /// Whether the memory has been initialized.
+  bool initialized = false;
+
+  MemoryBlock() = default;
+  MemoryBlock(size_t sz, unsigned elemBits)
+      : data(sz, 0), size(sz), elementBitWidth(elemBits), initialized(false) {}
+};
+
 /// Execution state for an LLHD process or seq.initial block being interpreted.
 struct ProcessExecutionState {
   /// The process operation being executed (either llhd.process or seq.initial).
@@ -124,6 +152,13 @@ struct ProcessExecutionState {
 
   /// SSA value map: maps MLIR Values to their interpreted runtime values.
   llvm::DenseMap<mlir::Value, InterpretedValue> valueMap;
+
+  /// Memory model for LLVM dialect operations.
+  /// Maps pointer values to their allocated memory blocks.
+  llvm::DenseMap<mlir::Value, MemoryBlock> memoryBlocks;
+
+  /// Counter for generating unique memory addresses.
+  uint64_t nextMemoryAddress = 0x1000;
 
   /// Flag indicating whether the process has halted.
   bool halted = false;
@@ -353,6 +388,42 @@ private:
 
   /// Interpret a seq.yield operation (terminator for seq.initial).
   mlir::LogicalResult interpretSeqYield(ProcessId procId, seq::YieldOp yieldOp);
+
+  //===--------------------------------------------------------------------===//
+  // LLVM Dialect Operation Handlers
+  //===--------------------------------------------------------------------===//
+
+  /// Interpret an llvm.alloca operation.
+  mlir::LogicalResult interpretLLVMAlloca(ProcessId procId,
+                                           mlir::LLVM::AllocaOp allocaOp);
+
+  /// Interpret an llvm.load operation.
+  mlir::LogicalResult interpretLLVMLoad(ProcessId procId,
+                                         mlir::LLVM::LoadOp loadOp);
+
+  /// Interpret an llvm.store operation.
+  mlir::LogicalResult interpretLLVMStore(ProcessId procId,
+                                          mlir::LLVM::StoreOp storeOp);
+
+  /// Interpret an llvm.getelementptr operation.
+  mlir::LogicalResult interpretLLVMGEP(ProcessId procId,
+                                        mlir::LLVM::GEPOp gepOp);
+
+  /// Interpret an llvm.call operation.
+  mlir::LogicalResult interpretLLVMCall(ProcessId procId,
+                                         mlir::LLVM::CallOp callOp);
+
+  /// Interpret an LLVM function body.
+  mlir::LogicalResult
+  interpretLLVMFuncBody(ProcessId procId, mlir::LLVM::LLVMFuncOp funcOp,
+                        llvm::ArrayRef<InterpretedValue> args,
+                        llvm::SmallVectorImpl<InterpretedValue> &results);
+
+  /// Get the size in bytes for an LLVM type.
+  unsigned getLLVMTypeSize(mlir::Type type);
+
+  /// Find the memory block for a pointer value.
+  MemoryBlock *findMemoryBlock(ProcessId procId, mlir::Value ptr);
 
   //===--------------------------------------------------------------------===//
   // Value Management

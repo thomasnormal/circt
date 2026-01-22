@@ -20,8 +20,10 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "llhd-interpreter"
@@ -2162,6 +2164,288 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     return success();
   }
 
+  //===--------------------------------------------------------------------===//
+  // LLVM Dialect Operations
+  //===--------------------------------------------------------------------===//
+
+  if (auto allocaOp = dyn_cast<LLVM::AllocaOp>(op))
+    return interpretLLVMAlloca(procId, allocaOp);
+
+  if (auto loadOp = dyn_cast<LLVM::LoadOp>(op))
+    return interpretLLVMLoad(procId, loadOp);
+
+  if (auto storeOp = dyn_cast<LLVM::StoreOp>(op))
+    return interpretLLVMStore(procId, storeOp);
+
+  if (auto gepOp = dyn_cast<LLVM::GEPOp>(op))
+    return interpretLLVMGEP(procId, gepOp);
+
+  if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(op))
+    return interpretLLVMCall(procId, llvmCallOp);
+
+  // LLVM return op is handled by call interpreter
+  if (isa<LLVM::ReturnOp>(op))
+    return success();
+
+  // LLVM undef creates an undefined value
+  if (auto undefOp = dyn_cast<LLVM::UndefOp>(op)) {
+    setValue(procId, undefOp.getResult(),
+             InterpretedValue::makeX(getTypeWidth(undefOp.getType())));
+    return success();
+  }
+
+  // LLVM null pointer constant
+  if (auto nullOp = dyn_cast<LLVM::ZeroOp>(op)) {
+    setValue(procId, nullOp.getResult(), InterpretedValue(0, 64));
+    return success();
+  }
+
+  // LLVM inttoptr
+  if (auto intToPtrOp = dyn_cast<LLVM::IntToPtrOp>(op)) {
+    InterpretedValue input = getValue(procId, intToPtrOp.getArg());
+    setValue(procId, intToPtrOp.getResult(), input);
+    return success();
+  }
+
+  // LLVM ptrtoint
+  if (auto ptrToIntOp = dyn_cast<LLVM::PtrToIntOp>(op)) {
+    InterpretedValue input = getValue(procId, ptrToIntOp.getArg());
+    unsigned width = getTypeWidth(ptrToIntOp.getType());
+    if (input.isX()) {
+      setValue(procId, ptrToIntOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      APInt val = input.getAPInt();
+      if (val.getBitWidth() < width)
+        val = val.zext(width);
+      else if (val.getBitWidth() > width)
+        val = val.trunc(width);
+      setValue(procId, ptrToIntOp.getResult(), InterpretedValue(val));
+    }
+    return success();
+  }
+
+  // LLVM bitcast
+  if (auto bitcastOp = dyn_cast<LLVM::BitcastOp>(op)) {
+    InterpretedValue input = getValue(procId, bitcastOp.getArg());
+    setValue(procId, bitcastOp.getResult(), input);
+    return success();
+  }
+
+  // LLVM trunc
+  if (auto truncOp = dyn_cast<LLVM::TruncOp>(op)) {
+    InterpretedValue input = getValue(procId, truncOp.getArg());
+    unsigned width = getTypeWidth(truncOp.getType());
+    if (input.isX()) {
+      setValue(procId, truncOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, truncOp.getResult(),
+               InterpretedValue(input.getAPInt().trunc(width)));
+    }
+    return success();
+  }
+
+  // LLVM zext
+  if (auto zextOp = dyn_cast<LLVM::ZExtOp>(op)) {
+    InterpretedValue input = getValue(procId, zextOp.getArg());
+    unsigned width = getTypeWidth(zextOp.getType());
+    if (input.isX()) {
+      setValue(procId, zextOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, zextOp.getResult(),
+               InterpretedValue(input.getAPInt().zext(width)));
+    }
+    return success();
+  }
+
+  // LLVM sext
+  if (auto sextOp = dyn_cast<LLVM::SExtOp>(op)) {
+    InterpretedValue input = getValue(procId, sextOp.getArg());
+    unsigned width = getTypeWidth(sextOp.getType());
+    if (input.isX()) {
+      setValue(procId, sextOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, sextOp.getResult(),
+               InterpretedValue(input.getAPInt().sext(width)));
+    }
+    return success();
+  }
+
+  // LLVM add
+  if (auto addOp = dyn_cast<LLVM::AddOp>(op)) {
+    InterpretedValue lhs = getValue(procId, addOp.getLhs());
+    InterpretedValue rhs = getValue(procId, addOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, addOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(addOp.getType())));
+    } else {
+      setValue(procId, addOp.getResult(),
+               InterpretedValue(lhs.getAPInt() + rhs.getAPInt()));
+    }
+    return success();
+  }
+
+  // LLVM sub
+  if (auto subOp = dyn_cast<LLVM::SubOp>(op)) {
+    InterpretedValue lhs = getValue(procId, subOp.getLhs());
+    InterpretedValue rhs = getValue(procId, subOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, subOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(subOp.getType())));
+    } else {
+      setValue(procId, subOp.getResult(),
+               InterpretedValue(lhs.getAPInt() - rhs.getAPInt()));
+    }
+    return success();
+  }
+
+  // LLVM mul
+  if (auto mulOp = dyn_cast<LLVM::MulOp>(op)) {
+    InterpretedValue lhs = getValue(procId, mulOp.getLhs());
+    InterpretedValue rhs = getValue(procId, mulOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, mulOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(mulOp.getType())));
+    } else {
+      setValue(procId, mulOp.getResult(),
+               InterpretedValue(lhs.getAPInt() * rhs.getAPInt()));
+    }
+    return success();
+  }
+
+  // LLVM icmp
+  if (auto icmpOp = dyn_cast<LLVM::ICmpOp>(op)) {
+    InterpretedValue lhs = getValue(procId, icmpOp.getLhs());
+    InterpretedValue rhs = getValue(procId, icmpOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, icmpOp.getResult(), InterpretedValue::makeX(1));
+      return success();
+    }
+    bool result = false;
+    const APInt &lhsVal = lhs.getAPInt();
+    const APInt &rhsVal = rhs.getAPInt();
+    switch (icmpOp.getPredicate()) {
+    case LLVM::ICmpPredicate::eq:
+      result = lhsVal == rhsVal;
+      break;
+    case LLVM::ICmpPredicate::ne:
+      result = lhsVal != rhsVal;
+      break;
+    case LLVM::ICmpPredicate::slt:
+      result = lhsVal.slt(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::sle:
+      result = lhsVal.sle(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::sgt:
+      result = lhsVal.sgt(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::sge:
+      result = lhsVal.sge(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::ult:
+      result = lhsVal.ult(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::ule:
+      result = lhsVal.ule(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::ugt:
+      result = lhsVal.ugt(rhsVal);
+      break;
+    case LLVM::ICmpPredicate::uge:
+      result = lhsVal.uge(rhsVal);
+      break;
+    }
+    setValue(procId, icmpOp.getResult(), InterpretedValue(result ? 1 : 0, 1));
+    return success();
+  }
+
+  // LLVM and
+  if (auto andOp = dyn_cast<LLVM::AndOp>(op)) {
+    InterpretedValue lhs = getValue(procId, andOp.getLhs());
+    InterpretedValue rhs = getValue(procId, andOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, andOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(andOp.getType())));
+    } else {
+      setValue(procId, andOp.getResult(),
+               InterpretedValue(lhs.getAPInt() & rhs.getAPInt()));
+    }
+    return success();
+  }
+
+  // LLVM or
+  if (auto orOp = dyn_cast<LLVM::OrOp>(op)) {
+    InterpretedValue lhs = getValue(procId, orOp.getLhs());
+    InterpretedValue rhs = getValue(procId, orOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, orOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(orOp.getType())));
+    } else {
+      setValue(procId, orOp.getResult(),
+               InterpretedValue(lhs.getAPInt() | rhs.getAPInt()));
+    }
+    return success();
+  }
+
+  // LLVM xor
+  if (auto xorOp = dyn_cast<LLVM::XOrOp>(op)) {
+    InterpretedValue lhs = getValue(procId, xorOp.getLhs());
+    InterpretedValue rhs = getValue(procId, xorOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, xorOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(xorOp.getType())));
+    } else {
+      setValue(procId, xorOp.getResult(),
+               InterpretedValue(lhs.getAPInt() ^ rhs.getAPInt()));
+    }
+    return success();
+  }
+
+  // LLVM shl
+  if (auto shlOp = dyn_cast<LLVM::ShlOp>(op)) {
+    InterpretedValue lhs = getValue(procId, shlOp.getLhs());
+    InterpretedValue rhs = getValue(procId, shlOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, shlOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(shlOp.getType())));
+    } else {
+      uint64_t shift = rhs.getAPInt().getLimitedValue();
+      setValue(procId, shlOp.getResult(),
+               InterpretedValue(lhs.getAPInt().shl(shift)));
+    }
+    return success();
+  }
+
+  // LLVM lshr
+  if (auto lshrOp = dyn_cast<LLVM::LShrOp>(op)) {
+    InterpretedValue lhs = getValue(procId, lshrOp.getLhs());
+    InterpretedValue rhs = getValue(procId, lshrOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, lshrOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(lshrOp.getType())));
+    } else {
+      uint64_t shift = rhs.getAPInt().getLimitedValue();
+      setValue(procId, lshrOp.getResult(),
+               InterpretedValue(lhs.getAPInt().lshr(shift)));
+    }
+    return success();
+  }
+
+  // LLVM ashr
+  if (auto ashrOp = dyn_cast<LLVM::AShrOp>(op)) {
+    InterpretedValue lhs = getValue(procId, ashrOp.getLhs());
+    InterpretedValue rhs = getValue(procId, ashrOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, ashrOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(ashrOp.getType())));
+    } else {
+      uint64_t shift = rhs.getAPInt().getLimitedValue();
+      setValue(procId, ashrOp.getResult(),
+               InterpretedValue(lhs.getAPInt().ashr(shift)));
+    }
+    return success();
+  }
+
   // For unhandled operations, issue a warning but continue
   LLVM_DEBUG(llvm::dbgs() << "  Warning: Unhandled operation: "
                           << op->getName().getStringRef() << "\n");
@@ -3084,5 +3368,413 @@ LogicalResult LLHDProcessInterpreter::interpretSeqYield(ProcessId procId,
   // Terminate the process in the scheduler
   scheduler.terminateProcess(procId);
 
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// LLVM Dialect Operation Handlers
+//===----------------------------------------------------------------------===//
+
+unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
+  // For LLVM pointer types, use 64 bits (8 bytes)
+  if (isa<LLVM::LLVMPointerType>(type))
+    return 8;
+
+  // For LLVM struct types, sum the sizes of all elements
+  if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    unsigned size = 0;
+    for (Type elemType : structType.getBody()) {
+      size += getLLVMTypeSize(elemType);
+    }
+    return size;
+  }
+
+  // For LLVM array types, multiply element size by count
+  if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    return getLLVMTypeSize(arrayType.getElementType()) *
+           arrayType.getNumElements();
+  }
+
+  // For integer types, round up to bytes
+  if (auto intType = dyn_cast<IntegerType>(type))
+    return (intType.getWidth() + 7) / 8;
+
+  // Default: try to use getTypeWidth and convert to bytes
+  unsigned bitWidth = getTypeWidth(type);
+  return (bitWidth + 7) / 8;
+}
+
+MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
+                                                      Value ptr) {
+  auto &state = processStates[procId];
+
+  // First check if this is a direct alloca result
+  auto it = state.memoryBlocks.find(ptr);
+  if (it != state.memoryBlocks.end())
+    return &it->second;
+
+  // Check if this is a GEP result - trace back to find the base pointer
+  if (auto gepOp = ptr.getDefiningOp<LLVM::GEPOp>()) {
+    return findMemoryBlock(procId, gepOp.getBase());
+  }
+
+  // Check if this is a bitcast - trace through
+  if (auto bitcastOp = ptr.getDefiningOp<LLVM::BitcastOp>()) {
+    return findMemoryBlock(procId, bitcastOp.getArg());
+  }
+
+  return nullptr;
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
+    ProcessId procId, LLVM::AllocaOp allocaOp) {
+  auto &state = processStates[procId];
+
+  // Get the element type and array size
+  Type elemType = allocaOp.getElemType();
+  InterpretedValue arraySizeVal = getValue(procId, allocaOp.getArraySize());
+
+  uint64_t arraySize = 1;
+  if (!arraySizeVal.isX())
+    arraySize = arraySizeVal.getUInt64();
+
+  // Calculate total size in bytes
+  unsigned elemSize = getLLVMTypeSize(elemType);
+  size_t totalSize = elemSize * arraySize;
+
+  // Create a memory block
+  MemoryBlock block(totalSize, getTypeWidth(elemType));
+
+  // Store the memory block
+  state.memoryBlocks[allocaOp.getResult()] = std::move(block);
+
+  // Assign a unique address to this pointer (for tracking purposes)
+  uint64_t addr = state.nextMemoryAddress;
+  state.nextMemoryAddress += totalSize;
+
+  // Store the pointer value (the address)
+  setValue(procId, allocaOp.getResult(), InterpretedValue(addr, 64));
+
+  LLVM_DEBUG(llvm::dbgs() << "  llvm.alloca: allocated " << totalSize
+                          << " bytes at address 0x" << llvm::format_hex(addr, 16)
+                          << "\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
+                                                         LLVM::LoadOp loadOp) {
+  // Find the memory block for this pointer
+  MemoryBlock *block = findMemoryBlock(procId, loadOp.getAddr());
+  if (!block) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: no memory block found for pointer\n");
+    setValue(procId, loadOp.getResult(),
+             InterpretedValue::makeX(getTypeWidth(loadOp.getType())));
+    return success();
+  }
+
+  // Calculate the offset within the memory block
+  InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
+  uint64_t offset = 0;
+
+  // If the address is from a GEP, the offset should be encoded in the value
+  // For now, we use a simple approach: get the byte offset from the pointer value
+  // relative to the base address
+  if (auto gepOp = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
+    InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+    if (!baseVal.isX() && !ptrVal.isX()) {
+      offset = ptrVal.getUInt64() - baseVal.getUInt64();
+    }
+  }
+
+  // Read the value from memory
+  Type resultType = loadOp.getType();
+  unsigned loadSize = getLLVMTypeSize(resultType);
+
+  if (offset + loadSize > block->size) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: out of bounds access\n");
+    setValue(procId, loadOp.getResult(),
+             InterpretedValue::makeX(getTypeWidth(resultType)));
+    return success();
+  }
+
+  // Check if memory has been initialized
+  if (!block->initialized) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: reading uninitialized memory\n");
+    setValue(procId, loadOp.getResult(),
+             InterpretedValue::makeX(getTypeWidth(resultType)));
+    return success();
+  }
+
+  // Read bytes from memory and construct the value (little-endian)
+  uint64_t value = 0;
+  for (unsigned i = 0; i < loadSize && i < 8; ++i) {
+    value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+  }
+
+  unsigned bitWidth = getTypeWidth(resultType);
+  setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
+
+  LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded " << value << " ("
+                          << loadSize << " bytes) from offset " << offset << "\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
+    ProcessId procId, LLVM::StoreOp storeOp) {
+  // Find the memory block for this pointer
+  MemoryBlock *block = findMemoryBlock(procId, storeOp.getAddr());
+  if (!block) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.store: no memory block found for pointer\n");
+    return success(); // Don't fail, just skip the store
+  }
+
+  // Calculate the offset within the memory block
+  InterpretedValue ptrVal = getValue(procId, storeOp.getAddr());
+  uint64_t offset = 0;
+
+  // If the address is from a GEP, calculate the offset
+  if (auto gepOp = storeOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
+    InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+    if (!baseVal.isX() && !ptrVal.isX()) {
+      offset = ptrVal.getUInt64() - baseVal.getUInt64();
+    }
+  }
+
+  // Get the value to store
+  InterpretedValue storeVal = getValue(procId, storeOp.getValue());
+  unsigned storeSize = getLLVMTypeSize(storeOp.getValue().getType());
+
+  if (offset + storeSize > block->size) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.store: out of bounds access\n");
+    return success();
+  }
+
+  // Write bytes to memory (little-endian)
+  if (!storeVal.isX()) {
+    uint64_t value = storeVal.getUInt64();
+    for (unsigned i = 0; i < storeSize && i < 8; ++i) {
+      block->data[offset + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+    }
+    block->initialized = true;
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored "
+                          << (storeVal.isX() ? "X" : std::to_string(storeVal.getUInt64()))
+                          << " (" << storeSize << " bytes) at offset " << offset << "\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMGEP(ProcessId procId,
+                                                        LLVM::GEPOp gepOp) {
+  // Get the base pointer value
+  InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+  if (baseVal.isX()) {
+    setValue(procId, gepOp.getResult(), InterpretedValue::makeX(64));
+    return success();
+  }
+
+  uint64_t baseAddr = baseVal.getUInt64();
+  uint64_t offset = 0;
+
+  // Get the element type
+  Type elemType = gepOp.getElemType();
+
+  // Process indices using the GEPIndicesAdaptor
+  auto indices = gepOp.getIndices();
+  Type currentType = elemType;
+
+  size_t idx = 0;
+  for (auto indexValue : indices) {
+    int64_t indexVal = 0;
+
+    // Check if this is a constant index (IntegerAttr) or dynamic (Value)
+    if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(indexValue)) {
+      indexVal = intAttr.getInt();
+    } else if (auto dynamicIdx = llvm::dyn_cast_if_present<Value>(indexValue)) {
+      InterpretedValue dynVal = getValue(procId, dynamicIdx);
+      if (dynVal.isX()) {
+        setValue(procId, gepOp.getResult(), InterpretedValue::makeX(64));
+        return success();
+      }
+      indexVal = static_cast<int64_t>(dynVal.getUInt64());
+    }
+
+    if (idx == 0) {
+      // First index: scales by the size of the pointed-to type
+      offset += indexVal * getLLVMTypeSize(elemType);
+    } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
+      // Struct indexing: accumulate offsets of previous fields
+      auto body = structType.getBody();
+      for (int64_t i = 0; i < indexVal && static_cast<size_t>(i) < body.size(); ++i) {
+        offset += getLLVMTypeSize(body[i]);
+      }
+      if (static_cast<size_t>(indexVal) < body.size()) {
+        currentType = body[indexVal];
+      }
+    } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+      // Array indexing: multiply by element size
+      offset += indexVal * getLLVMTypeSize(arrayType.getElementType());
+      currentType = arrayType.getElementType();
+    } else {
+      // For other types, treat as array of the current type
+      offset += indexVal * getLLVMTypeSize(currentType);
+    }
+    ++idx;
+  }
+
+  uint64_t resultAddr = baseAddr + offset;
+  setValue(procId, gepOp.getResult(), InterpretedValue(resultAddr, 64));
+
+  LLVM_DEBUG(llvm::dbgs() << "  llvm.getelementptr: base=0x"
+                          << llvm::format_hex(baseAddr, 16) << " offset="
+                          << offset << " result=0x"
+                          << llvm::format_hex(resultAddr, 16) << "\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
+                                                         LLVM::CallOp callOp) {
+  // Get the callee name
+  auto callee = callOp.getCallee();
+  if (!callee) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect calls not supported\n");
+    for (Value result : callOp.getResults()) {
+      setValue(procId, result,
+               InterpretedValue::makeX(getTypeWidth(result.getType())));
+    }
+    return success();
+  }
+
+  StringRef calleeName = *callee;
+
+  // Look up the function in the module
+  auto &state = processStates[procId];
+  Operation *parent = state.processOrInitialOp;
+  while (parent && !isa<ModuleOp>(parent))
+    parent = parent->getParentOp();
+
+  if (!parent) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: could not find module\n");
+    for (Value result : callOp.getResults()) {
+      setValue(procId, result,
+               InterpretedValue::makeX(getTypeWidth(result.getType())));
+    }
+    return success();
+  }
+
+  auto moduleOp = cast<ModuleOp>(parent);
+  auto funcOp = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(calleeName);
+  if (!funcOp) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
+                            << "' not found\n");
+    for (Value result : callOp.getResults()) {
+      setValue(procId, result,
+               InterpretedValue::makeX(getTypeWidth(result.getType())));
+    }
+    return success();
+  }
+
+  // Check if function has a body
+  if (funcOp.isExternal()) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
+                            << "' is external (no body)\n");
+    for (Value result : callOp.getResults()) {
+      setValue(procId, result,
+               InterpretedValue::makeX(getTypeWidth(result.getType())));
+    }
+    return success();
+  }
+
+  // Gather argument values
+  SmallVector<InterpretedValue, 4> args;
+  for (Value arg : callOp.getArgOperands()) {
+    args.push_back(getValue(procId, arg));
+  }
+
+  // Interpret the function body
+  SmallVector<InterpretedValue, 2> results;
+  if (failed(interpretLLVMFuncBody(procId, funcOp, args, results)))
+    return failure();
+
+  // Set the return values
+  for (auto [result, retVal] : llvm::zip(callOp.getResults(), results)) {
+    setValue(procId, result, retVal);
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "  llvm.call: called '" << calleeName << "'\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
+    ProcessId procId, LLVM::LLVMFuncOp funcOp, ArrayRef<InterpretedValue> args,
+    SmallVectorImpl<InterpretedValue> &results) {
+  auto &state = processStates[procId];
+
+  // Map arguments to block arguments
+  Block &entryBlock = funcOp.getBody().front();
+  for (auto [blockArg, argVal] : llvm::zip(entryBlock.getArguments(), args)) {
+    state.valueMap[blockArg] = argVal;
+  }
+
+  // Execute the function body
+  Block *currentBlock = &entryBlock;
+  while (currentBlock) {
+    for (Operation &op : *currentBlock) {
+      // Handle return
+      if (auto returnOp = dyn_cast<LLVM::ReturnOp>(&op)) {
+        for (Value retVal : returnOp.getOperands()) {
+          results.push_back(getValue(procId, retVal));
+        }
+        return success();
+      }
+
+      // Handle branch
+      if (auto branchOp = dyn_cast<LLVM::BrOp>(&op)) {
+        currentBlock = branchOp.getDest();
+        for (auto [blockArg, operand] :
+             llvm::zip(currentBlock->getArguments(), branchOp.getDestOperands())) {
+          state.valueMap[blockArg] = getValue(procId, operand);
+        }
+        break;
+      }
+
+      // Handle conditional branch
+      if (auto condBrOp = dyn_cast<LLVM::CondBrOp>(&op)) {
+        InterpretedValue cond = getValue(procId, condBrOp.getCondition());
+        if (!cond.isX() && cond.getUInt64() != 0) {
+          currentBlock = condBrOp.getTrueDest();
+          for (auto [blockArg, operand] :
+               llvm::zip(currentBlock->getArguments(),
+                        condBrOp.getTrueDestOperands())) {
+            state.valueMap[blockArg] = getValue(procId, operand);
+          }
+        } else {
+          currentBlock = condBrOp.getFalseDest();
+          for (auto [blockArg, operand] :
+               llvm::zip(currentBlock->getArguments(),
+                        condBrOp.getFalseDestOperands())) {
+            state.valueMap[blockArg] = getValue(procId, operand);
+          }
+        }
+        break;
+      }
+
+      // Interpret other operations
+      if (failed(interpretOperation(procId, &op)))
+        return failure();
+    }
+
+    // If we didn't branch, we're done
+    if (currentBlock == &entryBlock ||
+        !currentBlock->back().hasTrait<OpTrait::IsTerminator>())
+      break;
+  }
+
+  // If no return was encountered, return nothing
   return success();
 }
