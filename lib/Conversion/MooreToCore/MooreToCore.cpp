@@ -382,7 +382,7 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
 
   // Set the vtable global name for this class
   structBody.vtableGlobalName =
-      (classSym.getRootReference().str() + "::__vtable__").str();
+      classSym.getRootReference().str() + "::__vtable__";
 
   // Collect virtual method indices for the vtable.
   // The vtable contains function pointers for all virtual methods,
@@ -392,12 +392,14 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
   auto &block = op.getBody().front();
 
   // If this class has a base, inherit its method indices
-  if (hasBase) {
-    auto baseClassStruct = cache.getStructInfo(baseClass);
-    for (const auto &kv : baseClassStruct->methodToVtableIndex) {
-      structBody.methodToVtableIndex[kv.first] = kv.second;
-      if (kv.second >= vtableIdx)
-        vtableIdx = kv.second + 1;
+  if (auto baseAttr = op.getBaseAttr()) {
+    auto baseClassStruct = cache.getStructInfo(baseAttr);
+    if (baseClassStruct) {
+      for (const auto &kv : baseClassStruct->methodToVtableIndex) {
+        structBody.methodToVtableIndex[kv.first] = kv.second;
+        if (kv.second >= vtableIdx)
+          vtableIdx = kv.second + 1;
+      }
     }
   }
 
