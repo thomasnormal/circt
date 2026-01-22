@@ -77,13 +77,19 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
 - I2S AVIP: Assertions verified working end-to-end
 
-**Iteration 93 Accomplishments (In Progress)**:
+**Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
 2. ✅ **$fgets system call** - Connected existing FGetSBIOp to ImportVerilog
 3. ✅ **$ungetc system call** - Connected existing UngetCBIOp
 4. ✅ **Dynamic array string init** - Fixed hw.bitcast for concatenation patterns
 5. ✅ **BMC Sim stripping** - Added sim-strip pass for formal flows
 6. ✅ **LLHD halt handling** - Fixed halt→yield for combinational regions
+7. ✅ **$strobe/$monitor support** - Full $strobe/b/o/h, $fstrobe, $monitor/b/o/h, $fmonitor, $monitoron/off
+8. ✅ **File positioning** - $fseek, $ftell, $rewind file position functions
+9. ✅ **Binary file I/O** - $fread binary data reading
+10. ✅ **Memory loading** - $readmemb, $readmemh for memory initialization
+11. ✅ **$fflush, $printtimescale** - Buffer flush and timescale printing
+12. ✅ **BMC LLHD lowering** - Inline llhd.combinational, replace llhd.sig with SSA values
 
 **Iteration 92 Accomplishments**:
 1. ✅ **llvm.store/load hw.struct** - Fixed struct storage/load via llvm.struct conversion
@@ -174,7 +180,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 
 **Remaining Limitations**:
 - Virtual method dispatch not implemented (critical for UVM factory/callbacks)
-- Some file I/O system calls still missing ($fread, $fscanf, $fpos, $readmemb/h)
+- Some file I/O system calls still missing ($fscanf improvements, $value$plusargs)
 - VCD dump functions ($dumpfile, $dumpvars, $dumpports) not implemented
 - Hierarchical interface task calls need work for AHB AVIP
 
