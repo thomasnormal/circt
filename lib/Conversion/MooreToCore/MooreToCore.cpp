@@ -4140,6 +4140,32 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       }
     }
 
+    // Handle fixed-size unpacked arrays containing LLVM types (e.g., string[N])
+    // These get converted to LLVM array types, not hw::ArrayType
+    if (auto unpackedArrayType = dyn_cast<UnpackedArrayType>(nestedMooreType)) {
+      auto convertedType = typeConverter->convertType(nestedMooreType);
+      if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(convertedType)) {
+        auto *ctx = rewriter.getContext();
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+        // Create an alloca for the array
+        auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                            rewriter.getI64IntegerAttr(1));
+        auto alloca =
+            LLVM::AllocaOp::create(rewriter, loc, ptrTy, arrayTy, one);
+
+        // Initialize with zero values - use LLVM's ZeroOp to create a zeroed
+        // array (all elements zero-initialized, e.g., empty strings)
+        auto zeroVal = LLVM::ZeroOp::create(rewriter, loc, arrayTy);
+
+        // Store the zero-initialized value to alloca
+        LLVM::StoreOp::create(rewriter, loc, zeroVal, alloca);
+
+        rewriter.replaceOp(op, alloca.getResult());
+        return success();
+      }
+    }
+
     // For dynamic container types (queues, dynamic arrays, associative arrays),
     // the converted type is an LLVM pointer, not llhd.ref. These are handled
     // differently since they don't fit the llhd signal model.
@@ -4612,6 +4638,34 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
       return success();
     }
 
+    // Handle LLVM array types (arrays of LLVM types like strings)
+    if (auto llvmArrTy = dyn_cast<LLVM::LLVMArrayType>(inputType)) {
+      auto loc = op.getLoc();
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto elemType = llvmArrTy.getElementType();
+
+      // Store the array to get a pointer
+      auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(1));
+      auto alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), alloca);
+
+      // GEP to the element
+      auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(0));
+      auto idx = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(low));
+      Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, llvmArrTy,
+                                          alloca, ValueRange{zero, idx});
+
+      // Load the element
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
+      rewriter.replaceOp(op, elem);
+      return success();
+    }
+
     // Handle 4-state struct types ({value, unknown} structs)
     if (isFourStateStructType(inputType)) {
       auto loc = op.getLoc();
@@ -4709,14 +4763,49 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
   matchAndRewrite(ExtractRefOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: properly handle out-of-bounds accesses
+    auto loc = op.getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+
+    // Handle LLVM pointer inputs (for fixed-size arrays containing LLVM types,
+    // like string arrays)
+    if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // Get the original Moore array type to determine element type
+      auto mooreInputRefType = cast<moore::RefType>(op.getInput().getType());
+      auto nestedType = mooreInputRefType.getNestedType();
+
+      if (auto arrayType = dyn_cast<UnpackedArrayType>(nestedType)) {
+        auto elemMooreType = arrayType.getElementType();
+        auto elemType = typeConverter->convertType(elemMooreType);
+
+        // Create GEP with constant index to access the element
+        auto i64Ty = IntegerType::get(ctx, 64);
+        auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                             rewriter.getI64IntegerAttr(0));
+        auto idx = LLVM::ConstantOp::create(
+            rewriter, loc, i64Ty,
+            rewriter.getI64IntegerAttr(adaptor.getLowBit()));
+
+        // Create the converted array type to use as GEP base type
+        auto llvmArrayType = LLVM::LLVMArrayType::get(elemType, arrayType.getSize());
+
+        // GEP to the element - use two indices: [0][idx] to deref ptr and index
+        Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, llvmArrayType,
+                                            adaptor.getInput(), ValueRange{zero, idx});
+
+        rewriter.replaceOp(op, elemPtr);
+        return success();
+      }
+    }
 
     // The input must be an llhd.ref type (not LLVM pointer which is used for
     // dynamic containers like strings, queues, etc.)
     auto inputRefType = dyn_cast<llhd::RefType>(adaptor.getInput().getType());
     if (!inputRefType)
       return rewriter.notifyMatchFailure(
-          op.getLoc(), "input type must be llhd.ref, not LLVM pointer");
+          loc, "input type must be llhd.ref, not LLVM pointer");
     Type inputType = inputRefType.getNestedType();
 
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
@@ -4938,6 +5027,45 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       return success();
     }
 
+    // Handle LLVM array types (arrays of LLVM types like strings)
+    if (auto llvmArrTy = dyn_cast<LLVM::LLVMArrayType>(inputType)) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto elemType = llvmArrTy.getElementType();
+
+      // Store the array to get a pointer
+      auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(1));
+      auto alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), alloca);
+
+      // Convert index to i64 for GEP
+      Value idx = adaptor.getLowBit();
+
+      // Handle 4-state index types which are lowered to {value, unknown} structs
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+
+      if (idx.getType() != i64Ty) {
+        if (cast<IntegerType>(idx.getType()).getWidth() < 64)
+          idx = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
+        else
+          idx = arith::TruncIOp::create(rewriter, loc, i64Ty, idx);
+      }
+
+      // GEP to the element
+      auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(0));
+      Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, llvmArrTy,
+                                          alloca, ValueRange{zero, idx});
+
+      // Load the element
+      Value elem = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
+      rewriter.replaceOp(op, elem);
+      return success();
+    }
+
     // Handle 4-state struct types ({value, unknown} structs)
     if (isFourStateStructType(inputType)) {
       auto structType = cast<hw::StructType>(inputType);
@@ -5003,6 +5131,40 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       // Get the nested type from the input ref type
       auto mooreInputRefType = cast<moore::RefType>(op.getInput().getType());
       auto nestedType = mooreInputRefType.getNestedType();
+
+      // Handle fixed-size unpacked arrays containing LLVM types (e.g., string[N])
+      // These get converted to LLVM array types, and the ref is an LLVM pointer
+      if (auto arrayType = dyn_cast<UnpackedArrayType>(nestedType)) {
+        auto elemMooreType = arrayType.getElementType();
+        auto elemType = typeConverter->convertType(elemMooreType);
+
+        // Convert index to i64 for GEP
+        auto i64Ty = IntegerType::get(ctx, 64);
+        Value idx = adaptor.getLowBit();
+
+        // Handle 4-state index types which are lowered to {value, unknown} structs
+        if (isFourStateStructType(idx.getType()))
+          idx = extractFourStateValue(rewriter, loc, idx);
+
+        if (idx.getType() != i64Ty) {
+          if (cast<IntegerType>(idx.getType()).getWidth() < 64)
+            idx = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
+          else
+            idx = arith::TruncIOp::create(rewriter, loc, i64Ty, idx);
+        }
+
+        // Create the converted array type to use as GEP base type
+        auto llvmArrayType = LLVM::LLVMArrayType::get(elemType, arrayType.getSize());
+
+        // GEP to the element - use two indices: [0][idx] to deref ptr and index
+        auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                             rewriter.getI64IntegerAttr(0));
+        Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, llvmArrayType,
+                                            adaptor.getInput(), ValueRange{zero, idx});
+
+        rewriter.replaceOp(op, elemPtr);
+        return success();
+      }
 
       // Handle queue and dynamic array element access (ref version)
       // ref<queue<T>> or ref<open_uarray<T>> -> ptr to {ptr, i64} struct
@@ -11512,6 +11674,61 @@ struct AssocArrayDeleteKeyOpConversion
   }
 };
 
+/// Conversion for moore.assoc.create -> runtime function call.
+struct AssocArrayCreateOpConversion
+    : public OpConversionPattern<AssocArrayCreateOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AssocArrayCreateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    // Get or create __moore_assoc_create function
+    auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {i32Ty, i32Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
+
+    // Determine key size (0 for string keys)
+    int32_t keySize = 0;
+    int32_t valueSize = 4; // Default
+
+    auto resultType = op.getResult().getType();
+    if (auto assocType = dyn_cast<AssocArrayType>(resultType)) {
+      auto keyType = assocType.getIndexType();
+      if (!isa<StringType>(keyType)) {
+        auto convertedKeyType = typeConverter->convertType(keyType);
+        if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
+          keySize = intTy.getWidth() / 8;
+        else
+          keySize = 8; // Default to 64-bit for unknown types
+      }
+      auto valueType = assocType.getElementType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+    }
+    // For WildcardAssocArrayType, use defaults (string key = 0, 4-byte value)
+
+    auto keySizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
+    auto valueSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(fn),
+        ValueRange{keySizeConst, valueSizeConst});
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 /// Base class for associative array iterator operations (first, next, last,
 /// prev).
 template <typename SourceOp>
@@ -15100,9 +15317,15 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   // also the analogous note below concerning unpacked struct type conversion.
   typeConverter.addConversion(
       [&](UnpackedArrayType type) -> std::optional<Type> {
-        if (auto elementType = typeConverter.convertType(type.getElementType()))
-          return hw::ArrayType::get(elementType, type.getSize());
-        return {};
+        auto elementType = typeConverter.convertType(type.getElementType());
+        if (!elementType)
+          return {};
+        // If the element type converts to an LLVM type (e.g., strings which
+        // become {ptr, i64} structs), use LLVM::LLVMArrayType instead of
+        // hw::ArrayType since hw::ArrayType cannot contain LLVM types.
+        if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(elementType))
+          return LLVM::LLVMArrayType::get(elementType, type.getSize());
+        return hw::ArrayType::get(elementType, type.getSize());
       });
 
   typeConverter.addConversion([&](StructType type) -> std::optional<Type> {
@@ -15277,6 +15500,10 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
       // If the inner type converted to an LLVM struct (e.g., unpacked struct
       // containing dynamic types like strings), also use LLVM pointer.
       if (isa<LLVM::LLVMStructType>(innerType))
+        return LLVM::LLVMPointerType::get(type.getContext());
+      // If the inner type converted to an LLVM array (e.g., fixed-size array
+      // of strings), also use LLVM pointer.
+      if (isa<LLVM::LLVMArrayType>(innerType))
         return LLVM::LLVMPointerType::get(type.getContext());
       return llhd::RefType::get(innerType);
     }
@@ -15714,6 +15941,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     ArraySizeOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
+    AssocArrayCreateOpConversion,
     AssocArrayExistsOpConversion,
 
     // Patterns for string operations.
