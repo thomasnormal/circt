@@ -137,6 +137,8 @@ struct Context {
   ModuleLowering *
   convertModuleHeader(const slang::ast::InstanceBodySymbol *module);
   LogicalResult convertModuleBody(const slang::ast::InstanceBodySymbol *module);
+  Value getOrCreateHierarchicalPlaceholder(const slang::ast::ValueSymbol *sym,
+                                           Location loc);
   LogicalResult convertPackage(const slang::ast::PackageSymbol &package);
   FunctionLowering *
   declareFunction(const slang::ast::SubroutineSymbol &subroutine);
@@ -461,6 +463,11 @@ struct Context {
   /// converted.
   SmallVector<const slang::ast::ValueSymbol *> globalVariableWorklist;
 
+  /// Placeholders for hierarchical references that are resolved after instance
+  /// creation.
+  DenseMap<const slang::ast::ValueSymbol *, Value> hierValuePlaceholders;
+  unsigned int nextHierPlaceholderId = 0;
+
   /// Collect all hierarchical names used for the per module/instance.
   DenseMap<const slang::ast::InstanceBodySymbol *, SmallVector<HierPathInfo>>
       hierPaths;
@@ -536,6 +543,10 @@ struct Context {
 
   /// True while converting an assertion expression.
   bool inAssertionExpr = false;
+
+  /// True while converting a constraint expression inside a constraint block.
+  /// This affects method call generation to use ConstraintMethodCallOp.
+  bool inConstraintExpr = false;
 
   /// The function currently being converted (if any). Used to propagate
   /// captures from callee functions to the caller when the caller is also
