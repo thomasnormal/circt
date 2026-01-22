@@ -4389,6 +4389,23 @@ struct RvalueExprVisitor : public ExprVisitor {
       return context.materializeConversion(ty, bytesRead, expr.type->isSigned(), loc);
     }
 
+    // Handle $value$plusargs separately since it has an output argument.
+    // $value$plusargs(format, var) returns 1 if arg found, 0 otherwise.
+    // IEEE 1800-2017 Section 21.6 "Command line input"
+    // Currently stubbed to always return 0 (not found) since we don't
+    // have command line argument handling.
+    if (subroutine.name == "$value$plusargs" && args.size() == 2) {
+      // First argument is format string (input), second is output variable.
+      // The output variable is wrapped as AssignmentExpression.
+      // Since we're stubbing this to "not found", we don't write to the output.
+      // Just return 0.
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, result, expr.type->isSigned(),
+                                           loc);
+    }
+
     // Helper to check if an argument is an EmptyArgumentExpression.
     auto isEmptyArg = [](const slang::ast::Expression *arg) {
       return arg->kind == slang::ast::ExpressionKind::EmptyArgument;

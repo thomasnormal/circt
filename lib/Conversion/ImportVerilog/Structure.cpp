@@ -1929,14 +1929,18 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       valueSymbols.insert(hierPath.valueSym,
                           lowering.op.getBody()->getArgument(*hierPath.idx));
 
-  // Convert the body of the module.
+  // Convert non-instance members first to populate value symbols used in
+  // instance connections, then lower instances once their hierarchical inputs
+  // are ready.
   SmallVector<const slang::ast::Symbol *> instanceMembers;
-  SmallVector<const slang::ast::Symbol *> otherMembers;
   for (auto &member : module->members()) {
-    if (member.kind == slang::ast::SymbolKind::Instance)
+    if (member.kind == slang::ast::SymbolKind::Instance) {
       instanceMembers.push_back(&member);
-    else
-      otherMembers.push_back(&member);
+      continue;
+    }
+    auto memberLoc = convertLocation(member.location);
+    if (failed(member.visit(ModuleVisitor(*this, memberLoc))))
+      return failure();
   }
 
   auto canConvertInstance = [&](const slang::ast::InstanceSymbol &instNode) {
@@ -1982,12 +1986,6 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       }
     }
     return failure();
-  }
-
-  for (auto *member : otherMembers) {
-    auto loc = convertLocation(member->location);
-    if (failed(member->visit(ModuleVisitor(*this, loc))))
-      return failure();
   }
 
   // Create additional ops to drive input port values onto the corresponding

@@ -1630,7 +1630,17 @@ struct StmtVisitor {
 
     // Simulation Control Tasks
 
-    if (subroutine.name == "$dumpfile" || subroutine.name == "$dumpvars") {
+    // VCD dump tasks (IEEE 1800-2017 Section 21.7)
+    // These are simulator-specific and can be ignored for RTL compilation.
+    if (subroutine.name == "$dumpfile" || subroutine.name == "$dumpvars" ||
+        subroutine.name == "$dumplimit" || subroutine.name == "$dumpoff" ||
+        subroutine.name == "$dumpon" || subroutine.name == "$dumpflush" ||
+        subroutine.name == "$dumpall" || subroutine.name == "$dumpports" ||
+        subroutine.name == "$dumpportslimit" ||
+        subroutine.name == "$dumpportsoff" ||
+        subroutine.name == "$dumpportson" ||
+        subroutine.name == "$dumpportsflush" ||
+        subroutine.name == "$dumpportsall") {
       // These tasks are simulator-specific; ignore for now.
       mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
                             << "`";
@@ -1804,7 +1814,15 @@ struct StmtVisitor {
           return failure();
         }
       }
-      auto mem = context.convertLvalueExpression(*args[1]);
+      // Second argument is the memory array (output)
+      // Slang wraps it as AssignmentExpression(mem = EmptyArgument)
+      Value mem;
+      if (auto *assignExpr =
+              args[1]->as_if<slang::ast::AssignmentExpression>()) {
+        mem = context.convertLvalueExpression(assignExpr->left());
+      } else {
+        mem = context.convertLvalueExpression(*args[1]);
+      }
       if (!mem)
         return failure();
       moore::ReadMemBBIOp::create(builder, loc, filename, mem);
@@ -1830,10 +1848,29 @@ struct StmtVisitor {
           return failure();
         }
       }
-      auto mem = context.convertLvalueExpression(*args[1]);
+      // Second argument is the memory array (output)
+      // Slang wraps it as AssignmentExpression(mem = EmptyArgument)
+      Value mem;
+      if (auto *assignExpr =
+              args[1]->as_if<slang::ast::AssignmentExpression>()) {
+        mem = context.convertLvalueExpression(assignExpr->left());
+      } else {
+        mem = context.convertLvalueExpression(*args[1]);
+      }
       if (!mem)
         return failure();
       moore::ReadMemHBIOp::create(builder, loc, filename, mem);
+      return true;
+    }
+
+    // $fscanf and $sscanf - stub implementation
+    // IEEE 1800-2017 Section 21.3.3 "File input functions"
+    // When used as a task (return value discarded), we can just ignore
+    // the operation since the output variables won't be used anyway.
+    if (subroutine.name == "$fscanf" || subroutine.name == "$sscanf") {
+      // For now, just ignore. The output variables aren't written to.
+      mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
+                            << "` (stub: no I/O performed)";
       return true;
     }
 
