@@ -1135,24 +1135,31 @@ struct WaitDelayOpConversion : public OpConversionPattern<WaitDelayOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
+    // Get the delay value. The adaptor gives us the converted operand.
+    // Since TimeType now converts to i64, the delay should be i64.
+    Value delay = adaptor.getDelay();
+
     // Check if we're inside a moore.procedure (which will become llhd.process)
     // or already inside an llhd.process. In these cases, use llhd.wait.
     // Note: During conversion, we check for ProcedureOp because the conversion
     // of ProcedureOp to llhd.process may happen after this conversion.
     if (op->getParentOfType<ProcedureOp>() ||
         op->getParentOfType<llhd::ProcessOp>()) {
+      // llhd.wait expects llhd::TimeType, so we need to convert from i64.
+      // Use llhd.int_to_time to convert i64 (femtoseconds) to llhd.time.
+      Value llhdTime = llhd::IntToTimeOp::create(rewriter, loc, delay);
       auto *resumeBlock =
           rewriter.splitBlock(op->getBlock(), ++Block::iterator(op));
       rewriter.setInsertionPoint(op);
       rewriter.replaceOpWithNewOp<llhd::WaitOp>(op, ValueRange{},
-                                                adaptor.getDelay(), ValueRange{},
+                                                llhdTime, ValueRange{},
                                                 ValueRange{}, resumeBlock);
       rewriter.setInsertionPointToStart(resumeBlock);
       return success();
     }
 
     // We're inside a func.func (class method context) - use runtime call.
-    // We pass the real time component (i64) in time units to the runtime.
+    // We pass the time (i64 in femtoseconds) to the runtime.
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
@@ -1163,45 +1170,10 @@ struct WaitDelayOpConversion : public OpConversionPattern<WaitDelayOp> {
     auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i64Ty});
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_delay", fnTy);
 
-    // Get the delay value. The adaptor gives us the converted operand.
-    Value delay = adaptor.getDelay();
-
-    // Extract the real time component based on the type of the delay value.
-    Value delayTime;
-    if (delay.getType().isInteger(64)) {
-      // Already an i64 (unlikely but possible)
-      delayTime = delay;
-    } else if (auto structTy = dyn_cast<LLVM::LLVMStructType>(delay.getType())) {
-      // LLVM struct {i64 realTime, i32 delta, i32 epsilon}
-      delayTime = LLVM::ExtractValueOp::create(rewriter, loc, delay,
-                                               ArrayRef<int64_t>{0});
-    } else if (isa<llhd::TimeType>(delay.getType())) {
-      // llhd::TimeType - need to check if the defining op is llhd.constant_time
-      // and extract the time value directly from the attribute.
-      if (auto constTimeOp = delay.getDefiningOp<llhd::ConstantTimeOp>()) {
-        // Get the time value from the constant
-        auto timeAttr = constTimeOp.getValueAttr();
-        // Extract the real time in femtoseconds
-        uint64_t timeValue = timeAttr.getTime();
-        delayTime = LLVM::ConstantOp::create(
-            rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(timeValue));
-      } else {
-        // For non-constant time values (e.g., function arguments of type time),
-        // we use an unrealized_conversion_cast to indicate this needs further
-        // conversion. The LLHD to LLVM conversion pass will handle the actual
-        // conversion of llhd.time to the LLVM struct type.
-        delayTime = UnrealizedConversionCastOp::create(rewriter, loc, i64Ty,
-                                                       delay)
-                        .getResult(0);
-      }
-    } else {
-      return rewriter.notifyMatchFailure(
-          op, "unsupported delay type for class method context");
-    }
-
+    // The delay value should already be i64 (time in femtoseconds).
     // Call the runtime function.
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{delayTime});
+                         ValueRange{delay});
 
     rewriter.eraseOp(op);
     return success();
@@ -1708,7 +1680,8 @@ static Value createZeroValue(Type type, Location loc,
   if (isa<mlir::LLVM::LLVMPointerType>(type))
     return mlir::LLVM::ZeroOp::create(rewriter, loc, type);
 
-  // Handle time values.
+  // Handle llhd::TimeType (for LLHD-native code, not MooreToCore conversion).
+  // Note: moore::TimeType now converts to i64, not llhd::TimeType.
   if (isa<llhd::TimeType>(type)) {
     auto timeAttr =
         llhd::TimeAttr::get(type.getContext(), 0U, llvm::StringRef("ns"), 0, 0);
@@ -6937,10 +6910,38 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto type = typeConverter->convertType(op.getResult().getType());
-    if (type == adaptor.getInput().getType())
-      rewriter.replaceOp(op, adaptor.getInput());
-    else
-      rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, type, adaptor.getInput());
+    Value input = adaptor.getInput();
+    Type inputType = input.getType();
+
+    // If types already match, just forward the value.
+    if (type == inputType) {
+      rewriter.replaceOp(op, input);
+      return success();
+    }
+
+    // Special handling for conversions between 4-state types and integers.
+    // Time is 64-bit (i64) but l64 (4-state) is a struct with 128 bits total.
+    // We need to extract/wrap the value component instead of bitcasting.
+    if (isFourStateStructType(inputType) && isa<IntegerType>(type)) {
+      // 4-state struct -> integer: extract the value component
+      Value result = extractFourStateValue(rewriter, op.getLoc(), input);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+    if (isa<IntegerType>(inputType) && isFourStateStructType(type)) {
+      // integer -> 4-state struct: wrap in struct with unknown=0
+      Location loc = op.getLoc();
+      auto intType = cast<IntegerType>(inputType);
+      Value zero = hw::ConstantOp::create(rewriter, loc, intType, 0);
+      auto structType = cast<hw::StructType>(type);
+      Value result = hw::StructCreateOp::create(rewriter, loc, structType,
+                                                ValueRange{input, zero});
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Otherwise use bitcast.
+    rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, type, input);
     return success();
   }
 };
@@ -7851,7 +7852,9 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
           llhd::TimeAttr::get(op->getContext(), 0U, "ns", 1, 0));
     } else {
       // Delayed assignments have a delay operand.
-      delay = adaptor.getDelay();
+      // Since TimeType now converts to i64, convert it to llhd.time for llhd.drv.
+      delay = llhd::IntToTimeOp::create(rewriter, op->getLoc(),
+                                        adaptor.getDelay());
     }
 
     rewriter.replaceOpWithNewOp<llhd::DriveOp>(
@@ -9293,14 +9296,9 @@ struct QueuePopBackOpConversion
     auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
-
-    // Function signature: i64 pop_back(queue_ptr, element_size)
-    // Returns the element as i64 (caller truncates/extends as needed)
-    auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
-    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
-                                     "__moore_queue_pop_back", fnTy);
 
     // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
@@ -9313,25 +9311,52 @@ struct QueuePopBackOpConversion
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(resultType)));
 
-    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
-                                     SymbolRefAttr::get(fn),
-                                     ValueRange{queueAlloca, elemSize});
+    // For complex types (pointers, structs), use output pointer approach
+    // For simple integer types that fit in i64, use the i64 return approach
+    bool useOutputPointer = isa<LLVM::LLVMPointerType>(resultType) ||
+                            isa<LLVM::LLVMStructType>(resultType) ||
+                            isa<hw::StructType>(resultType);
 
-    // Convert result to the expected type
-    Value result = call.getResult();
-    if (resultType.isIntOrFloat()) {
-      auto resultWidth = resultType.getIntOrFloatBitWidth();
-      if (resultWidth < 64) {
-        result = arith::TruncIOp::create(rewriter, loc, resultType, result);
-      } else if (resultWidth > 64) {
-        result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
-      }
+    if (useOutputPointer) {
+      // Function signature: void pop_back_ptr(queue_ptr, result_ptr, element_size)
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_queue_pop_back_ptr", fnTy);
+
+      // Allocate space for the result
+      auto resultAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultType, one);
+
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca, resultAlloca, elemSize});
+
+      // Load the result from the alloca
+      Value result = LLVM::LoadOp::create(rewriter, loc, resultType, resultAlloca);
+      rewriter.replaceOp(op, result);
     } else {
-      // For non-integer types (structs, etc.), bitcast from i64
-      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
-    }
+      // Function signature: i64 pop_back(queue_ptr, element_size)
+      // Returns the element as i64 (caller truncates/extends as needed)
+      auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_queue_pop_back", fnTy);
 
-    rewriter.replaceOp(op, result);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{queueAlloca, elemSize});
+
+      // Convert result to the expected type
+      Value result = call.getResult();
+      if (resultType.isIntOrFloat()) {
+        auto resultWidth = resultType.getIntOrFloatBitWidth();
+        if (resultWidth < 64) {
+          result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+        } else if (resultWidth > 64) {
+          result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+        }
+      }
+
+      rewriter.replaceOp(op, result);
+    }
     return success();
   }
 };
@@ -9351,14 +9376,9 @@ struct QueuePopFrontOpConversion
     auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
-
-    // Function signature: i64 pop_front(queue_ptr, element_size)
-    // Returns the element as i64 (caller truncates/extends as needed)
-    auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
-    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
-                                     "__moore_queue_pop_front", fnTy);
 
     // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
@@ -9371,25 +9391,52 @@ struct QueuePopFrontOpConversion
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(resultType)));
 
-    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
-                                     SymbolRefAttr::get(fn),
-                                     ValueRange{queueAlloca, elemSize});
+    // For complex types (pointers, structs), use output pointer approach
+    // For simple integer types that fit in i64, use the i64 return approach
+    bool useOutputPointer = isa<LLVM::LLVMPointerType>(resultType) ||
+                            isa<LLVM::LLVMStructType>(resultType) ||
+                            isa<hw::StructType>(resultType);
 
-    // Convert result to the expected type
-    Value result = call.getResult();
-    if (resultType.isIntOrFloat()) {
-      auto resultWidth = resultType.getIntOrFloatBitWidth();
-      if (resultWidth < 64) {
-        result = arith::TruncIOp::create(rewriter, loc, resultType, result);
-      } else if (resultWidth > 64) {
-        result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
-      }
+    if (useOutputPointer) {
+      // Function signature: void pop_front_ptr(queue_ptr, result_ptr, element_size)
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_queue_pop_front_ptr", fnTy);
+
+      // Allocate space for the result
+      auto resultAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultType, one);
+
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca, resultAlloca, elemSize});
+
+      // Load the result from the alloca
+      Value result = LLVM::LoadOp::create(rewriter, loc, resultType, resultAlloca);
+      rewriter.replaceOp(op, result);
     } else {
-      // For non-integer types (structs, etc.), bitcast from i64
-      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
-    }
+      // Function signature: i64 pop_front(queue_ptr, element_size)
+      // Returns the element as i64 (caller truncates/extends as needed)
+      auto fnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                       "__moore_queue_pop_front", fnTy);
 
-    rewriter.replaceOp(op, result);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{queueAlloca, elemSize});
+
+      // Convert result to the expected type
+      Value result = call.getResult();
+      if (resultType.isIntOrFloat()) {
+        auto resultWidth = resultType.getIntOrFloatBitWidth();
+        if (resultWidth < 64) {
+          result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+        } else if (resultWidth > 64) {
+          result = arith::ExtUIOp::create(rewriter, loc, resultType, result);
+        }
+      }
+
+      rewriter.replaceOp(op, result);
+    }
     return success();
   }
 };
@@ -13040,25 +13087,9 @@ struct SScanfBIOpConversion : public OpConversionPattern<SScanfBIOp> {
       if (auto sigTy = dyn_cast<llhd::RefType>(destRef.getType())) {
         auto targetTy = sigTy.getNestedType();
 
-        // Handle llhd::TimeType specially - it's a 64-bit time value
-        if (isa<llhd::TimeType>(targetTy)) {
-          // For time type, extend i32 to i64 and use llhd.drive
-          Value valueI64 =
-              arith::ExtSIOp::create(rewriter, loc, i64Ty, parsedValue);
-          // Convert i64 to llhd.time using proper time constructor
-          // llhd.time is {realTime: i64, delta: i32, epsilon: i32}
-          // For sscanf, we just set the realTime field
-          auto zeroI32 = arith::ConstantOp::create(
-              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
-          auto timeVal = llhd::ConstantTimeOp::create(
-              rewriter, loc,
-              llhd::TimeAttr::get(ctx, 0U, llvm::StringRef("ns"), 0, 0));
-          // TODO: Create proper time value from i64. For now, use 0 time.
-          (void)valueI64;
-          (void)zeroI32;
-          llhd::DriveOp::create(rewriter, loc, destRef, timeVal, timeVal,
-                                Value{});
-        } else if (isFourStateStructType(targetTy)) {
+        // Note: TimeType now converts to i64, so time values are handled
+        // by the targetTy.isIntOrFloat() case below.
+        if (isFourStateStructType(targetTy)) {
           // 4-state type: wrap the integer result in a 4-state struct
           auto structType = cast<hw::StructType>(targetTy);
           auto valueType = structType.getElements()[0].type;
@@ -13413,6 +13444,8 @@ static LogicalResult convert(TimeBIOp op, TimeBIOp::Adaptor adaptor,
 }
 
 // moore.logic_to_time
+// Since TimeType now converts to i64, this operation just extracts the value
+// from a 4-state struct (if present) and produces an i64.
 static LogicalResult convert(LogicToTimeOp op, LogicToTimeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   Location loc = op.getLoc();
@@ -13420,13 +13453,14 @@ static LogicalResult convert(LogicToTimeOp op, LogicToTimeOp::Adaptor adaptor,
   // Handle 4-state struct types by extracting the value component
   if (isFourStateStructType(input.getType()))
     input = extractFourStateValue(rewriter, loc, input);
-  rewriter.replaceOpWithNewOp<llhd::IntToTimeOp>(op, input);
+  // The result type is i64 (time in femtoseconds), no conversion needed
+  rewriter.replaceOp(op, input);
   return success();
 }
 
 // moore.time_to_logic
-// Converts moore.time_to_logic (which implements $time) to llhd::TimeToIntOp.
-// Handles both 2-state and 4-state result types.
+// Since TimeType now converts to i64, this operation converts i64 to the
+// 4-state l64 result type (a struct {value: i64, unknown: i64}).
 struct TimeToLogicOpConversion : public OpConversionPattern<TimeToLogicOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -13435,10 +13469,9 @@ struct TimeToLogicOpConversion : public OpConversionPattern<TimeToLogicOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    // Create the TimeToIntOp to get the time as i64
+    // The input is now i64 (time in femtoseconds)
+    Value timeInt = adaptor.getInput();
     auto intType = rewriter.getIntegerType(64);
-    Value timeInt =
-        llhd::TimeToIntOp::create(rewriter, loc, intType, adaptor.getInput());
 
     // Check if the result type should be a 4-state struct
     Type resultType = typeConverter->convertType(op.getType());
@@ -15643,8 +15676,14 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     llvm_unreachable("unhandled RealWidth");
   });
 
-  typeConverter.addConversion(
-      [&](TimeType type) { return llhd::TimeType::get(type.getContext()); });
+  // TimeType -> i64 (time in femtoseconds as a 64-bit integer)
+  // We use i64 instead of llhd::TimeType because:
+  // 1. hw::BitcastOp doesn't support llhd::TimeType
+  // 2. Most operations treat time as a 64-bit integer anyway
+  // 3. llhd.wait and other LLHD ops that need llhd.time can construct it
+  typeConverter.addConversion([&](TimeType type) -> Type {
+    return IntegerType::get(type.getContext(), 64);
+  });
 
   // EventType -> i1 (tracks whether the event has been triggered).
   // In simulation, events are tracked as boolean flags indicating their
@@ -15717,9 +15756,9 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
             return {};
           fieldTypes.push_back(convertedType);
           // Check if any field converts to an LLVM type (strings, queues,
-          // dynamic arrays, assoc arrays, time, or nested structs with these)
-          if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType, llhd::TimeType>(
-                  convertedType))
+          // dynamic arrays, assoc arrays, or nested structs with these).
+          // Note: TimeType now converts to i64, not llhd::TimeType.
+          if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(convertedType))
             hasLLVMType = true;
         }
 
