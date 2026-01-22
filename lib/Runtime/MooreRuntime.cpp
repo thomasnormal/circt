@@ -1212,6 +1212,276 @@ extern "C" void __moore_stream_unpack_bits(MooreQueue *array, int64_t sourceBits
   }
 }
 
+/// Mixed streaming concatenation with arbitrary-width prefix and suffix.
+/// This function handles streaming concatenation where static prefix and suffix
+/// values are stored in byte arrays (to support widths > 64 bits).
+///
+/// Parameters:
+/// - prefixData: Pointer to byte array containing prefix bits (little-endian)
+/// - prefixBits: Number of bits in prefix
+/// - arrayPtr: Pointer to the dynamic array/queue
+/// - elemWidth: Bit width of each element in the dynamic array
+/// - suffixData: Pointer to byte array containing suffix bits (little-endian)
+/// - suffixBits: Number of bits in suffix
+/// - sliceSize: Streaming slice size (usually 8 for byte streaming)
+/// - isRightToLeft: Direction of streaming
+///
+/// Returns a new queue containing all the concatenated bits.
+extern "C" MooreQueue __moore_stream_concat_mixed(uint8_t *prefixData,
+                                                   int32_t prefixBits,
+                                                   MooreQueue *arrayPtr,
+                                                   int32_t elemWidth,
+                                                   uint8_t *suffixData,
+                                                   int32_t suffixBits,
+                                                   int32_t sliceSize,
+                                                   bool isRightToLeft) {
+  MooreQueue result = {nullptr, 0};
+
+  // Calculate total bits
+  int64_t arrayBits = 0;
+  if (arrayPtr && arrayPtr->data && arrayPtr->len > 0) {
+    arrayBits = arrayPtr->len * elemWidth;
+  }
+  int64_t totalBits = prefixBits + arrayBits + suffixBits;
+
+  if (totalBits == 0)
+    return result;
+
+  // Determine output element size based on slice size (usually byte-sized)
+  int32_t outputElemWidth = sliceSize > 0 ? sliceSize : 8;
+  int32_t outputElemBytes = (outputElemWidth + 7) / 8;
+
+  // Calculate number of output elements (round up)
+  int64_t numOutputElems = (totalBits + outputElemWidth - 1) / outputElemWidth;
+
+  // Allocate output queue
+  result.data = malloc(numOutputElems * outputElemBytes);
+  if (!result.data)
+    return result;
+  result.len = numOutputElems;
+  memset(result.data, 0, numOutputElems * outputElemBytes);
+
+  auto *outData = static_cast<uint8_t *>(result.data);
+
+  // Helper lambda to copy bits from source to destination
+  auto copyBits = [](uint8_t *dst, int64_t dstBitOffset, const uint8_t *src,
+                     int64_t srcBitOffset, int64_t numBits) {
+    for (int64_t i = 0; i < numBits; ++i) {
+      int64_t srcByteIdx = (srcBitOffset + i) / 8;
+      int64_t srcBitIdx = (srcBitOffset + i) % 8;
+      int64_t dstByteIdx = (dstBitOffset + i) / 8;
+      int64_t dstBitIdx = (dstBitOffset + i) % 8;
+
+      uint8_t bit = (src[srcByteIdx] >> srcBitIdx) & 1;
+      dst[dstByteIdx] |= (bit << dstBitIdx);
+    }
+  };
+
+  // Get array data
+  auto *arrData = arrayPtr ? static_cast<uint8_t *>(arrayPtr->data) : nullptr;
+  int64_t arrLen = arrayPtr ? arrayPtr->len : 0;
+  int32_t elemBytes = (elemWidth + 7) / 8;
+
+  if (isRightToLeft) {
+    // Right-to-left streaming: process in reverse order
+    // Order: suffix first (reversed), then array (reversed), then prefix (reversed)
+    int64_t outBitPos = 0;
+
+    // Copy suffix bits (reversed)
+    if (suffixBits > 0 && suffixData) {
+      copyBits(outData, outBitPos, suffixData, 0, suffixBits);
+      outBitPos += suffixBits;
+    }
+
+    // Copy array elements (reversed)
+    if (arrLen > 0 && arrData) {
+      for (int64_t i = arrLen - 1; i >= 0; --i) {
+        copyBits(outData, outBitPos, arrData + i * elemBytes, 0, elemWidth);
+        outBitPos += elemWidth;
+      }
+    }
+
+    // Copy prefix bits (reversed)
+    if (prefixBits > 0 && prefixData) {
+      copyBits(outData, outBitPos, prefixData, 0, prefixBits);
+      outBitPos += prefixBits;
+    }
+  } else {
+    // Left-to-right streaming: process in normal order
+    // Order: prefix first, then array, then suffix
+    int64_t outBitPos = 0;
+
+    // Copy prefix bits
+    if (prefixBits > 0 && prefixData) {
+      copyBits(outData, outBitPos, prefixData, 0, prefixBits);
+      outBitPos += prefixBits;
+    }
+
+    // Copy array elements
+    if (arrLen > 0 && arrData) {
+      for (int64_t i = 0; i < arrLen; ++i) {
+        copyBits(outData, outBitPos, arrData + i * elemBytes, 0, elemWidth);
+        outBitPos += elemWidth;
+      }
+    }
+
+    // Copy suffix bits
+    if (suffixBits > 0 && suffixData) {
+      copyBits(outData, outBitPos, suffixData, 0, suffixBits);
+      outBitPos += suffixBits;
+    }
+  }
+
+  return result;
+}
+
+/// Result structure for mixed streaming unpack extraction.
+/// Contains the extracted prefix, middle (dynamic array), and suffix.
+struct StreamUnpackMixedResult {
+  uint8_t *prefixData;  // Extracted prefix bits (caller must free)
+  int32_t prefixBytes;  // Number of bytes in prefix
+  MooreQueue middle;    // Extracted middle queue
+  uint8_t *suffixData;  // Extracted suffix bits (caller must free)
+  int32_t suffixBytes;  // Number of bytes in suffix
+};
+
+/// Mixed streaming unpack extraction with arbitrary-width prefix and suffix.
+/// This function extracts bits from a source queue into prefix, middle, and
+/// suffix portions for streaming unpack operations.
+///
+/// Parameters:
+/// - srcPtr: Pointer to the source queue
+/// - prefixBits: Number of bits to extract for prefix
+/// - elemWidth: Bit width of each element in the dynamic array
+/// - suffixBits: Number of bits to extract for suffix
+/// - sliceSize: Streaming slice size
+/// - isRightToLeft: Direction of streaming
+///
+/// Returns a result structure with extracted prefix, middle queue, and suffix.
+extern "C" StreamUnpackMixedResult
+__moore_stream_unpack_mixed_extract(MooreQueue *srcPtr, int32_t prefixBits,
+                                     int32_t elemWidth, int32_t suffixBits,
+                                     int32_t sliceSize, bool isRightToLeft) {
+  StreamUnpackMixedResult result = {nullptr, 0, {nullptr, 0}, nullptr, 0};
+
+  if (!srcPtr || !srcPtr->data || srcPtr->len <= 0)
+    return result;
+
+  auto *srcData = static_cast<uint8_t *>(srcPtr->data);
+  int64_t srcLen = srcPtr->len;
+
+  // Calculate total source bits
+  int64_t totalSrcBits = srcLen * sliceSize;
+
+  // Calculate middle bits (what's left after prefix and suffix)
+  int64_t middleBits = totalSrcBits - prefixBits - suffixBits;
+  if (middleBits < 0)
+    middleBits = 0;
+
+  // Allocate prefix buffer
+  int32_t prefixBytes = (prefixBits + 7) / 8;
+  if (prefixBytes > 0) {
+    result.prefixData = static_cast<uint8_t *>(malloc(prefixBytes));
+    if (result.prefixData) {
+      memset(result.prefixData, 0, prefixBytes);
+      result.prefixBytes = prefixBytes;
+    }
+  }
+
+  // Allocate suffix buffer
+  int32_t suffixBytes = (suffixBits + 7) / 8;
+  if (suffixBytes > 0) {
+    result.suffixData = static_cast<uint8_t *>(malloc(suffixBytes));
+    if (result.suffixData) {
+      memset(result.suffixData, 0, suffixBytes);
+      result.suffixBytes = suffixBytes;
+    }
+  }
+
+  // Calculate middle elements
+  int64_t middleElems = (middleBits + elemWidth - 1) / elemWidth;
+  int32_t middleElemBytes = (elemWidth + 7) / 8;
+  if (middleElems > 0) {
+    result.middle.data = malloc(middleElems * middleElemBytes);
+    if (result.middle.data) {
+      memset(result.middle.data, 0, middleElems * middleElemBytes);
+      result.middle.len = middleElems;
+    }
+  }
+
+  // Helper lambda to copy bits
+  auto copyBits = [](uint8_t *dst, int64_t dstBitOffset, const uint8_t *src,
+                     int64_t srcBitOffset, int64_t numBits) {
+    for (int64_t i = 0; i < numBits; ++i) {
+      int64_t srcByteIdx = (srcBitOffset + i) / 8;
+      int64_t srcBitIdx = (srcBitOffset + i) % 8;
+      int64_t dstByteIdx = (dstBitOffset + i) / 8;
+      int64_t dstBitIdx = (dstBitOffset + i) % 8;
+
+      uint8_t bit = (src[srcByteIdx] >> srcBitIdx) & 1;
+      dst[dstByteIdx] |= (bit << dstBitIdx);
+    }
+  };
+
+  auto *middleData = static_cast<uint8_t *>(result.middle.data);
+
+  if (isRightToLeft) {
+    // Right-to-left: suffix is at the beginning, then middle (reversed), then
+    // prefix
+    int64_t srcBitPos = 0;
+
+    // Extract suffix from the beginning
+    if (suffixBits > 0 && result.suffixData) {
+      copyBits(result.suffixData, 0, srcData, srcBitPos, suffixBits);
+      srcBitPos += suffixBits;
+    }
+
+    // Extract middle elements (reversed)
+    if (middleElems > 0 && middleData) {
+      for (int64_t i = middleElems - 1; i >= 0; --i) {
+        int64_t bitsToExtract =
+            (i == 0) ? (middleBits - (middleElems - 1) * elemWidth) : elemWidth;
+        copyBits(middleData + i * middleElemBytes, 0, srcData, srcBitPos,
+                 bitsToExtract);
+        srcBitPos += bitsToExtract;
+      }
+    }
+
+    // Extract prefix from the end
+    if (prefixBits > 0 && result.prefixData) {
+      copyBits(result.prefixData, 0, srcData, srcBitPos, prefixBits);
+    }
+  } else {
+    // Left-to-right: prefix is at the beginning, then middle, then suffix
+    int64_t srcBitPos = 0;
+
+    // Extract prefix from the beginning
+    if (prefixBits > 0 && result.prefixData) {
+      copyBits(result.prefixData, 0, srcData, srcBitPos, prefixBits);
+      srcBitPos += prefixBits;
+    }
+
+    // Extract middle elements
+    if (middleElems > 0 && middleData) {
+      for (int64_t i = 0; i < middleElems; ++i) {
+        int64_t bitsToExtract = (i == middleElems - 1)
+                                    ? (middleBits - i * elemWidth)
+                                    : elemWidth;
+        copyBits(middleData + i * middleElemBytes, 0, srcData, srcBitPos,
+                 bitsToExtract);
+        srcBitPos += bitsToExtract;
+      }
+    }
+
+    // Extract suffix from the end
+    if (suffixBits > 0 && result.suffixData) {
+      copyBits(result.suffixData, 0, srcData, srcBitPos, suffixBits);
+    }
+  }
+
+  return result;
+}
+
 //===----------------------------------------------------------------------===//
 // Event Operations
 //===----------------------------------------------------------------------===//
