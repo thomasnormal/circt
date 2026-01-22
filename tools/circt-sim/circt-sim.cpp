@@ -33,6 +33,7 @@
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/LTL/LTLDialect.h"
 #include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/SV/SVDialect.h"
@@ -855,6 +856,7 @@ int main(int argc, char **argv) {
       emit::EmitDialect,
       hw::HWDialect,
       llhd::LLHDDialect,
+      ltl::LTLDialect,
       mlir::arith::ArithDialect,
       mlir::cf::ControlFlowDialect,
       mlir::DLTIDialect,
