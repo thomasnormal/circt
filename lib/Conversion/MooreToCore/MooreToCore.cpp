@@ -3760,17 +3760,26 @@ struct VTableLoadMethodOpConversion
     // Load the vtable pointer
     Value vtablePtr = LLVM::LoadOp::create(rewriter, loc, ptrTy, vtablePtrPtr);
 
-    // Create vtable array type for GEP (we need to know the array element type)
-    // The vtable is an array of pointers, so we use a simple GEP with byte offset
-    // calculated from the method index.
+    // GEP into the vtable array at the method's index.
+    // The vtable is an array of pointers, so we create a GEP that indexes
+    // into the array. For LLVM GEP on an array type:
+    // - First index (0) dereferences the pointer to the array
+    // - Second index (vtableIndex) selects the element
+    //
+    // vtable[vtableIndex] = &((*vtablePtr)[vtableIndex])
+    unsigned vtableSize = 0;
+    for (const auto &kv : structInfo.methodToVtableIndex) {
+      if (kv.second >= vtableSize)
+        vtableSize = kv.second + 1;
+    }
+    auto vtableArrayTy = LLVM::LLVMArrayType::get(ptrTy, vtableSize > 0 ? vtableSize : 1);
 
-    // GEP into the vtable array at the method's index
-    // vtable[vtableIndex] = *(vtablePtr + vtableIndex * sizeof(ptr))
     SmallVector<LLVM::GEPArg> vtableGepIndices;
-    vtableGepIndices.push_back(static_cast<int64_t>(vtableIndex));
+    vtableGepIndices.push_back(static_cast<int64_t>(0));  // Dereference pointer
+    vtableGepIndices.push_back(static_cast<int64_t>(vtableIndex));  // Array index
 
     Value funcPtrPtr =
-        LLVM::GEPOp::create(rewriter, loc, ptrTy, ptrTy, vtablePtr, vtableGepIndices);
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, vtableArrayTy, vtablePtr, vtableGepIndices);
 
     // Load the function pointer from the vtable
     Value funcPtr = LLVM::LoadOp::create(rewriter, loc, ptrTy, funcPtrPtr);
