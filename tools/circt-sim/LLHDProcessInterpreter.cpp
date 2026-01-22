@@ -55,6 +55,10 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(registerProcesses(hwModule)))
     return failure();
 
+  // Register combinational processes for static module-level drives
+  // (continuous assignments like port connections)
+  registerContinuousAssignments(hwModule);
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
                           << getNumSignals() << " signals and "
                           << getNumProcesses() << " processes\n");
@@ -540,6 +544,294 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
           scheduler.updateSignal(sigId, newVal);
         }));
   }
+}
+
+void LLHDProcessInterpreter::registerContinuousAssignments(
+    hw::HWModuleOp hwModule) {
+  // For each static module-level drive, we need to:
+  // 1. Find which signals the drive value depends on (via llhd.prb)
+  // 2. Create a combinational process that re-executes when those signals change
+  // 3. The process evaluates the drive value and schedules the signal update
+
+  for (llhd::DriveOp driveOp : staticModuleDrives) {
+    // Find the signal being driven
+    SignalId targetSigId = getSignalId(driveOp.getSignal());
+    if (targetSigId == 0) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Warning: Unknown target signal in continuous assignment\n");
+      continue;
+    }
+
+    // Find all source signals (signals that are probed to compute the value)
+    llvm::SmallVector<SignalId, 4> sourceSignals;
+
+    // Walk back from the drive value to find all llhd.prb operations
+    llvm::SmallVector<mlir::Value, 8> worklist;
+    llvm::DenseSet<mlir::Value> visited;
+    worklist.push_back(driveOp.getValue());
+
+    while (!worklist.empty()) {
+      mlir::Value val = worklist.pop_back_val();
+      if (!visited.insert(val).second)
+        continue;
+
+      // If this value comes from a probe, record the signal
+      if (auto probeOp = val.getDefiningOp<llhd::ProbeOp>()) {
+        SignalId srcSigId = getSignalId(probeOp.getSignal());
+        if (srcSigId != 0 && srcSigId != targetSigId) {
+          sourceSignals.push_back(srcSigId);
+        }
+        continue;
+      }
+
+      // For other operations, add their operands to the worklist
+      if (Operation *defOp = val.getDefiningOp()) {
+        for (Value operand : defOp->getOperands()) {
+          worklist.push_back(operand);
+        }
+      }
+    }
+
+    if (sourceSignals.empty()) {
+      // No source signals - this is a constant drive, execute once at init
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Constant continuous assignment to signal " << targetSigId
+                 << "\n");
+      executeContinuousAssignment(driveOp);
+      continue;
+    }
+
+    LLVM_DEBUG(llvm::dbgs() << "  Continuous assignment to signal "
+                            << targetSigId << " depends on " << sourceSignals.size()
+                            << " source signals\n");
+
+    // Generate a unique process name
+    std::string processName =
+        "cont_assign_" + std::to_string(targetSigId);
+
+    // Register a combinational process that executes the drive
+    ProcessId procId = scheduler.registerProcess(
+        processName, [this, driveOp]() { executeContinuousAssignment(driveOp); });
+
+    // Mark as combinational and add sensitivities to all source signals
+    auto *process = scheduler.getProcess(procId);
+    if (process) {
+      process->setCombinational(true);
+      for (SignalId srcSigId : sourceSignals) {
+        scheduler.addSensitivity(procId, srcSigId);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Added sensitivity to signal " << srcSigId << "\n");
+      }
+    }
+
+    // Execute once at initialization
+    executeContinuousAssignment(driveOp);
+
+    // Schedule the process to run at time 0 to ensure initial state is correct
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+}
+
+void LLHDProcessInterpreter::executeContinuousAssignment(
+    llhd::DriveOp driveOp) {
+  // Get the signal being driven
+  SignalId targetSigId = getSignalId(driveOp.getSignal());
+  if (targetSigId == 0) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Error: Unknown signal in continuous assignment\n");
+    return;
+  }
+
+  // Evaluate the drive value by interpreting the defining operation chain
+  // We use process ID 0 as a dummy since continuous assignments don't have
+  // their own process state - they evaluate values directly from signal state
+  InterpretedValue driveVal = evaluateContinuousValue(driveOp.getValue());
+
+  // Get the delay time
+  SimTime delay;
+  if (auto timeOp = driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>()) {
+    delay = convertTime(timeOp.getValueAttr());
+  } else {
+    // Default to epsilon delay
+    delay = SimTime(0, 0, 1);
+  }
+
+  // Calculate the target time
+  SimTime currentTime = scheduler.getCurrentTime();
+  SimTime targetTime = currentTime.advanceTime(delay.realTime);
+  if (delay.deltaStep > 0) {
+    targetTime.deltaStep = currentTime.deltaStep + delay.deltaStep;
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "  Continuous assignment: scheduling update to signal "
+                          << targetSigId << " value="
+                          << (driveVal.isX() ? "X"
+                                             : std::to_string(driveVal.getUInt64()))
+                          << " at time " << targetTime.realTime << " fs\n");
+
+  // Schedule the signal update
+  SignalValue newVal = driveVal.toSignalValue();
+  scheduler.getEventScheduler().schedule(
+      targetTime, SchedulingRegion::Active,
+      Event([this, targetSigId, newVal]() {
+        scheduler.updateSignal(targetSigId, newVal);
+      }));
+}
+
+/// Evaluate a value for continuous assignments by reading from current signal
+/// state.
+InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
+    mlir::Value value) {
+  // Check if this is a probe operation - read from signal state
+  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
+    SignalId sigId = getSignalId(probeOp.getSignal());
+    if (sigId != 0) {
+      const SignalValue &sv = scheduler.getSignalValue(sigId);
+      return InterpretedValue::fromSignalValue(sv);
+    }
+    return InterpretedValue::makeX(getTypeWidth(value.getType()));
+  }
+
+  // Handle constants
+  if (auto constOp = value.getDefiningOp<hw::ConstantOp>()) {
+    return InterpretedValue(constOp.getValue());
+  }
+
+  // Handle aggregate constants
+  if (auto aggConstOp = value.getDefiningOp<hw::AggregateConstantOp>()) {
+    llvm::APInt flatValue = flattenAggregateConstant(aggConstOp);
+    return InterpretedValue(flatValue);
+  }
+
+  // Handle struct extract
+  if (auto extractOp = value.getDefiningOp<hw::StructExtractOp>()) {
+    InterpretedValue inputVal = evaluateContinuousValue(extractOp.getInput());
+    if (inputVal.isX())
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+
+    auto structType = hw::type_cast<hw::StructType>(extractOp.getInput().getType());
+    StringRef fieldName = extractOp.getFieldName();
+
+    // Find the field offset and width
+    unsigned bitOffset = 0;
+    unsigned fieldWidth = 0;
+    auto elements = structType.getElements();
+    // Struct fields are packed from high bits to low bits
+    unsigned totalWidth = getTypeWidth(structType);
+    for (auto &element : elements) {
+      unsigned elemWidth = getTypeWidth(element.type);
+      if (element.name == fieldName) {
+        fieldWidth = elemWidth;
+        break;
+      }
+      bitOffset += elemWidth;
+    }
+
+    // Extract the field value
+    uint64_t val = inputVal.getUInt64();
+    // bitOffset is from the MSB, so we need to adjust
+    unsigned shiftAmount = totalWidth - bitOffset - fieldWidth;
+    uint64_t fieldVal = (val >> shiftAmount) & ((1ULL << fieldWidth) - 1);
+    return InterpretedValue(fieldVal, fieldWidth);
+  }
+
+  // Handle struct create
+  if (auto createOp = value.getDefiningOp<hw::StructCreateOp>()) {
+    auto structType = hw::type_cast<hw::StructType>(createOp.getType());
+    unsigned totalWidth = getTypeWidth(structType);
+    llvm::APInt result(totalWidth, 0);
+
+    auto elements = structType.getElements();
+    unsigned bitOffset = totalWidth;
+    for (size_t i = 0; i < createOp.getInput().size(); ++i) {
+      InterpretedValue fieldVal =
+          evaluateContinuousValue(createOp.getInput()[i]);
+      unsigned fieldWidth = getTypeWidth(elements[i].type);
+      bitOffset -= fieldWidth;
+
+      if (!fieldVal.isX()) {
+        APInt fieldBits(fieldWidth, fieldVal.getUInt64());
+        result.insertBits(fieldBits, bitOffset);
+      }
+    }
+    return InterpretedValue(result);
+  }
+
+  // Handle comb operations
+  if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
+    InterpretedValue lhs = evaluateContinuousValue(xorOp.getOperand(0));
+    InterpretedValue rhs = evaluateContinuousValue(xorOp.getOperand(1));
+    if (lhs.isX() || rhs.isX())
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+    return InterpretedValue(lhs.getUInt64() ^ rhs.getUInt64(),
+                            lhs.getWidth());
+  }
+
+  if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+    uint64_t result = ~0ULL;
+    unsigned width = getTypeWidth(value.getType());
+    for (Value operand : andOp.getOperands()) {
+      InterpretedValue opVal = evaluateContinuousValue(operand);
+      if (opVal.isX())
+        return InterpretedValue::makeX(width);
+      result &= opVal.getUInt64();
+    }
+    return InterpretedValue(result, width);
+  }
+
+  if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
+    uint64_t result = 0;
+    unsigned width = getTypeWidth(value.getType());
+    for (Value operand : orOp.getOperands()) {
+      InterpretedValue opVal = evaluateContinuousValue(operand);
+      if (opVal.isX())
+        return InterpretedValue::makeX(width);
+      result |= opVal.getUInt64();
+    }
+    return InterpretedValue(result, width);
+  }
+
+  if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
+    InterpretedValue lhs = evaluateContinuousValue(icmpOp.getLhs());
+    InterpretedValue rhs = evaluateContinuousValue(icmpOp.getRhs());
+    if (lhs.isX() || rhs.isX())
+      return InterpretedValue::makeX(1);
+
+    bool result = false;
+    uint64_t lVal = lhs.getUInt64();
+    uint64_t rVal = rhs.getUInt64();
+
+    switch (icmpOp.getPredicate()) {
+    case comb::ICmpPredicate::eq:
+      result = (lVal == rVal);
+      break;
+    case comb::ICmpPredicate::ne:
+      result = (lVal != rVal);
+      break;
+    case comb::ICmpPredicate::ult:
+      result = (lVal < rVal);
+      break;
+    case comb::ICmpPredicate::ule:
+      result = (lVal <= rVal);
+      break;
+    case comb::ICmpPredicate::ugt:
+      result = (lVal > rVal);
+      break;
+    case comb::ICmpPredicate::uge:
+      result = (lVal >= rVal);
+      break;
+    default:
+      // Signed comparisons would need sign extension handling
+      result = false;
+      break;
+    }
+    return InterpretedValue(result ? 1ULL : 0ULL, 1);
+  }
+
+  // Default: return unknown
+  LLVM_DEBUG(llvm::dbgs() << "  Warning: Cannot evaluate continuous value for "
+                          << *value.getDefiningOp() << "\n");
+  return InterpretedValue::makeX(getTypeWidth(value.getType()));
 }
 
 //===----------------------------------------------------------------------===//

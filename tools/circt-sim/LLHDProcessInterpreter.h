@@ -234,6 +234,16 @@ private:
   /// Execute module-level drives for a process after it yields.
   void executeModuleDrives(ProcessId procId);
 
+  /// Register combinational processes for static module-level drives.
+  /// These drives need to re-execute when their input signals change.
+  void registerContinuousAssignments(hw::HWModuleOp hwModule);
+
+  /// Execute a single continuous assignment (static module-level drive).
+  void executeContinuousAssignment(llhd::DriveOp driveOp);
+
+  /// Evaluate a value for continuous assignments by reading from signal state.
+  InterpretedValue evaluateContinuousValue(mlir::Value value);
+
   //===--------------------------------------------------------------------===//
   // Process Execution
   //===--------------------------------------------------------------------===//
