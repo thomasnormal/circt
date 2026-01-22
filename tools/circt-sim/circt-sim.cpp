@@ -449,12 +449,13 @@ hw::HWModuleOp SimulationContext::findTopModule(mlir::ModuleOp module,
 LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
   // Register signals for all ports
   for (auto portInfo : hwModule.getPortList()) {
-    // Determine bit width - clock types are treated as 1-bit signals
+    // Determine bit width - use getTypeWidth to handle all types including
+    // structs, arrays, and other complex types
     unsigned bitWidth;
     if (isa<seq::ClockType>(portInfo.type)) {
       bitWidth = 1;
     } else {
-      bitWidth = portInfo.type.getIntOrFloatBitWidth();
+      bitWidth = LLHDProcessInterpreter::getTypeWidth(portInfo.type);
     }
 
     auto signalId = scheduler.registerSignal(portInfo.getName().str(),
