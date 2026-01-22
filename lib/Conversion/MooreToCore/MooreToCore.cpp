@@ -10578,6 +10578,364 @@ struct StreamUnpackOpConversion
   }
 };
 
+/// Conversion for moore.stream_concat_mixed -> runtime function call.
+/// This handles streaming concatenation with a mix of static bit vectors
+/// and a dynamic array/queue in the middle.
+struct StreamConcatMixedOpConversion
+    : public RuntimeCallConversionBase<StreamConcatMixedOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(StreamConcatMixedOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto queueTy = getQueueStructType(ctx);
+
+    // Get the operands
+    auto staticPrefix = adaptor.getStaticPrefix();
+    auto dynamicArray = adaptor.getDynamicArray();
+    auto staticSuffix = adaptor.getStaticSuffix();
+    bool isRightToLeft = op.getIsRightToLeft();
+    int32_t sliceSize = op.getSliceSize();
+
+    // Calculate total prefix bits
+    int64_t prefixBits = 0;
+    for (auto val : staticPrefix) {
+      if (val.getType().isIntOrFloat())
+        prefixBits += val.getType().getIntOrFloatBitWidth();
+    }
+
+    // Calculate total suffix bits
+    int64_t suffixBits = 0;
+    for (auto val : staticSuffix) {
+      if (val.getType().isIntOrFloat())
+        suffixBits += val.getType().getIntOrFloatBitWidth();
+    }
+
+    // Check that static prefix/suffix fit within 64 bits
+    if (prefixBits > 64) {
+      return rewriter.notifyMatchFailure(
+          op, "static prefix exceeds 64 bits (" + std::to_string(prefixBits) +
+                  " bits); not yet supported");
+    }
+    if (suffixBits > 64) {
+      return rewriter.notifyMatchFailure(
+          op, "static suffix exceeds 64 bits (" + std::to_string(suffixBits) +
+                  " bits); not yet supported");
+    }
+
+    // Concatenate prefix bits into a single i64
+    Value prefixValue;
+    if (!staticPrefix.empty()) {
+      if (staticPrefix.size() == 1) {
+        prefixValue = staticPrefix[0];
+        // Extend to i64
+        if (prefixValue.getType().getIntOrFloatBitWidth() < 64)
+          prefixValue = arith::ExtUIOp::create(rewriter, loc, i64Ty, prefixValue);
+      } else {
+        // Concat prefix values
+        prefixValue = staticPrefix[0];
+        if (prefixValue.getType().getIntOrFloatBitWidth() < 64)
+          prefixValue = arith::ExtUIOp::create(rewriter, loc, i64Ty, prefixValue);
+        int64_t offset = staticPrefix[0].getType().getIntOrFloatBitWidth();
+        for (size_t i = 1; i < staticPrefix.size(); ++i) {
+          Value val = staticPrefix[i];
+          if (val.getType().getIntOrFloatBitWidth() < 64)
+            val = arith::ExtUIOp::create(rewriter, loc, i64Ty, val);
+          auto shiftAmount = LLVM::ConstantOp::create(
+              rewriter, loc, rewriter.getI64IntegerAttr(offset));
+          auto shifted = LLVM::ShlOp::create(rewriter, loc, val, shiftAmount);
+          prefixValue = LLVM::OrOp::create(rewriter, loc, prefixValue, shifted);
+          offset += staticPrefix[i].getType().getIntOrFloatBitWidth();
+        }
+      }
+    } else {
+      prefixValue = LLVM::ConstantOp::create(rewriter, loc,
+                                             rewriter.getI64IntegerAttr(0));
+    }
+
+    // Concatenate suffix bits into a single i64
+    Value suffixValue;
+    if (!staticSuffix.empty()) {
+      if (staticSuffix.size() == 1) {
+        suffixValue = staticSuffix[0];
+        if (suffixValue.getType().getIntOrFloatBitWidth() < 64)
+          suffixValue = arith::ExtUIOp::create(rewriter, loc, i64Ty, suffixValue);
+      } else {
+        suffixValue = staticSuffix[0];
+        if (suffixValue.getType().getIntOrFloatBitWidth() < 64)
+          suffixValue = arith::ExtUIOp::create(rewriter, loc, i64Ty, suffixValue);
+        int64_t offset = staticSuffix[0].getType().getIntOrFloatBitWidth();
+        for (size_t i = 1; i < staticSuffix.size(); ++i) {
+          Value val = staticSuffix[i];
+          if (val.getType().getIntOrFloatBitWidth() < 64)
+            val = arith::ExtUIOp::create(rewriter, loc, i64Ty, val);
+          auto shiftAmount = LLVM::ConstantOp::create(
+              rewriter, loc, rewriter.getI64IntegerAttr(offset));
+          auto shifted = LLVM::ShlOp::create(rewriter, loc, val, shiftAmount);
+          suffixValue = LLVM::OrOp::create(rewriter, loc, suffixValue, shifted);
+          offset += staticSuffix[i].getType().getIntOrFloatBitWidth();
+        }
+      }
+    } else {
+      suffixValue = LLVM::ConstantOp::create(rewriter, loc,
+                                             rewriter.getI64IntegerAttr(0));
+    }
+
+    // Store dynamic array to alloca and pass pointer
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto arrayAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, dynamicArray, arrayAlloca);
+
+    // Get element bit width from the dynamic array
+    auto inputType = op.getDynamicArray().getType();
+    Type elementType;
+    if (auto queueType = dyn_cast<QueueType>(inputType)) {
+      elementType = queueType.getElementType();
+    } else if (auto dynArrayType = dyn_cast<OpenUnpackedArrayType>(inputType)) {
+      elementType = dynArrayType.getElementType();
+    }
+
+    int64_t elementBitWidth = 8; // default
+    if (elementType) {
+      if (auto intType = dyn_cast<IntType>(elementType)) {
+        elementBitWidth = intType.getWidth();
+      } else if (auto packedType = dyn_cast<PackedType>(elementType)) {
+        elementBitWidth = packedType.getBitSize().value_or(8);
+      }
+    }
+
+    // Create constants
+    auto prefixBitsConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(prefixBits));
+    auto suffixBitsConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(suffixBits));
+    auto elemWidthConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(elementBitWidth));
+    auto sliceSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(sliceSize));
+    auto directionConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(i1Ty, isRightToLeft ? 1 : 0));
+
+    // Call __moore_stream_concat_mixed(prefix, prefix_bits, array_ptr,
+    // elem_width, suffix, suffix_bits, slice_size, direction) -> queue
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        queueTy, {i64Ty, i32Ty, ptrTy, i32Ty, i64Ty, i32Ty, i32Ty, i1Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_stream_concat_mixed", fnTy);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
+        ValueRange{prefixValue, prefixBitsConst, arrayAlloca, elemWidthConst,
+                   suffixValue, suffixBitsConst, sliceSizeConst, directionConst});
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.stream_unpack_mixed -> inline unpacking with runtime
+/// call for the dynamic array portion. This handles streaming unpacking into
+/// a mix of static lvalue references and a dynamic array/queue reference.
+/// For static targets (prefix/suffix), we extract bits and drive using llhd.
+/// For the dynamic array target, we call the stream_unpack runtime function.
+struct StreamUnpackMixedOpConversion
+    : public RuntimeCallConversionBase<StreamUnpackMixedOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(StreamUnpackMixedOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto queueTy = getQueueStructType(ctx);
+
+    auto staticPrefixRefs = adaptor.getStaticPrefixRefs();
+    auto dynamicArrayRef = adaptor.getDynamicArrayRef();
+    auto staticSuffixRefs = adaptor.getStaticSuffixRefs();
+    auto src = adaptor.getSrc();
+    bool isRightToLeft = op.getIsRightToLeft();
+    int32_t sliceSize = op.getSliceSize();
+
+    // Calculate prefix and suffix bit widths from original Moore types
+    SmallVector<int64_t> prefixWidths;
+    int64_t totalPrefixBits = 0;
+    for (auto ref : op.getStaticPrefixRefs()) {
+      if (auto refType = dyn_cast<RefType>(ref.getType())) {
+        if (auto intType = dyn_cast<IntType>(refType.getNestedType())) {
+          prefixWidths.push_back(intType.getWidth());
+          totalPrefixBits += intType.getWidth();
+        }
+      }
+    }
+
+    SmallVector<int64_t> suffixWidths;
+    int64_t totalSuffixBits = 0;
+    for (auto ref : op.getStaticSuffixRefs()) {
+      if (auto refType = dyn_cast<RefType>(ref.getType())) {
+        if (auto intType = dyn_cast<IntType>(refType.getNestedType())) {
+          suffixWidths.push_back(intType.getWidth());
+          totalSuffixBits += intType.getWidth();
+        }
+      }
+    }
+
+    // Get element bit width from the dynamic array ref
+    int64_t elementBitWidth = 8;
+    auto dstType = op.getDynamicArrayRef().getType();
+    if (auto refType = dyn_cast<RefType>(dstType)) {
+      auto nestedType = refType.getNestedType();
+      Type elementType;
+      if (auto queueType = dyn_cast<QueueType>(nestedType)) {
+        elementType = queueType.getElementType();
+      } else if (auto dynArrayType =
+                     dyn_cast<OpenUnpackedArrayType>(nestedType)) {
+        elementType = dynArrayType.getElementType();
+      }
+      if (elementType) {
+        if (auto intType = dyn_cast<IntType>(elementType)) {
+          elementBitWidth = intType.getWidth();
+        }
+      }
+    }
+
+    // Store source queue to alloca for the runtime call
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto srcAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+
+    if (src.getType() == queueTy) {
+      LLVM::StoreOp::create(rewriter, loc, src, srcAlloca);
+    } else {
+      // Source should be a queue - if not, this is an error
+      std::string typeStr;
+      llvm::raw_string_ostream os(typeStr);
+      os << src.getType();
+      return rewriter.notifyMatchFailure(
+          op, "mixed streaming unpack requires queue source, got " + typeStr);
+    }
+
+    // Call runtime to get prefix bits, middle bits for dynamic array, and
+    // suffix bits For simplicity, we use a single runtime call that returns
+    // the extracted values as i64 (prefix), queue (middle), i64 (suffix)
+    auto prefixBitsConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(totalPrefixBits));
+    auto suffixBitsConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(totalSuffixBits));
+    auto elemWidthConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(elementBitWidth));
+    auto sliceSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI32IntegerAttr(sliceSize));
+    auto directionConst = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(i1Ty, isRightToLeft ? 1 : 0));
+
+    // Create result struct type: { i64 prefix, queue middle, i64 suffix }
+    auto resultStructTy =
+        LLVM::LLVMStructType::getLiteral(ctx, {i64Ty, queueTy, i64Ty});
+
+    // Call __moore_stream_unpack_mixed_extract(src_ptr, prefix_bits,
+    // elem_width, suffix_bits, slice_size, direction) -> { prefix, middle,
+    // suffix }
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        resultStructTy, {ptrTy, i32Ty, i32Ty, i32Ty, i32Ty, i1Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_stream_unpack_mixed_extract", fnTy);
+
+    auto call = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{resultStructTy}, SymbolRefAttr::get(fn),
+        ValueRange{srcAlloca, prefixBitsConst, elemWidthConst, suffixBitsConst,
+                   sliceSizeConst, directionConst});
+
+    Value resultStruct = call.getResult();
+
+    // Extract prefix bits
+    Value prefixBitsValue =
+        LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, resultStruct,
+                                     ArrayRef<int64_t>{0});
+
+    // Extract middle queue
+    Value middleQueue =
+        LLVM::ExtractValueOp::create(rewriter, loc, queueTy, resultStruct,
+                                     ArrayRef<int64_t>{1});
+
+    // Extract suffix bits
+    Value suffixBitsValue =
+        LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, resultStruct,
+                                     ArrayRef<int64_t>{2});
+
+    // Create 0ns 0d 1e delay for blocking assignments
+    Value delay = llhd::ConstantTimeOp::create(
+        rewriter, loc, llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
+
+    // Assign prefix values using llhd.drive
+    int64_t bitOffset = 0;
+    for (size_t i = 0; i < staticPrefixRefs.size(); ++i) {
+      Value ref = staticPrefixRefs[i];
+      int64_t width = prefixWidths[i];
+
+      // Extract bits for this target
+      auto targetType = IntegerType::get(ctx, width);
+      Value shifted = prefixBitsValue;
+      if (bitOffset > 0) {
+        auto shiftAmount = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(bitOffset));
+        shifted = LLVM::LShrOp::create(rewriter, loc, prefixBitsValue, shiftAmount);
+      }
+      Value extracted = arith::TruncIOp::create(rewriter, loc, targetType, shifted);
+
+      // Drive the target using llhd.drive
+      llhd::DriveOp::create(rewriter, loc, ref, extracted, delay, Value{});
+
+      bitOffset += width;
+    }
+
+    // Assign the dynamic array using stream_unpack_bits runtime call
+    // First store the queue to the dynamic array ref
+    LLVM::StoreOp::create(rewriter, loc, middleQueue, dynamicArrayRef);
+
+    // Assign suffix values using llhd.drive
+    bitOffset = 0;
+    for (size_t i = 0; i < staticSuffixRefs.size(); ++i) {
+      Value ref = staticSuffixRefs[i];
+      int64_t width = suffixWidths[i];
+
+      // Extract bits for this target
+      auto targetType = IntegerType::get(ctx, width);
+      Value shifted = suffixBitsValue;
+      if (bitOffset > 0) {
+        auto shiftAmount = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(bitOffset));
+        shifted = LLVM::LShrOp::create(rewriter, loc, suffixBitsValue, shiftAmount);
+      }
+      Value extracted = arith::TruncIOp::create(rewriter, loc, targetType, shifted);
+
+      // Drive the target using llhd.drive
+      llhd::DriveOp::create(rewriter, loc, ref, extracted, delay, Value{});
+
+      bitOffset += width;
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.array.locator -> runtime function call.
 /// This pattern-matches the predicate region to detect common patterns
 /// (comparison operations) and uses specialized runtime functions.
@@ -15937,6 +16295,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueuePopFrontOpConversion,
     StreamConcatOpConversion,
     StreamUnpackOpConversion,
+    StreamConcatMixedOpConversion,
+    StreamUnpackMixedOpConversion,
     DynArrayNewOpConversion,
     ArraySizeOpConversion,
     AssocArrayDeleteOpConversion,

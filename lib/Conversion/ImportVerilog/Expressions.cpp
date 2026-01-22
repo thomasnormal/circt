@@ -1383,36 +1383,6 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (!rhs)
           return {};
 
-        // If the RHS is a queue or dynamic array, we need to first stream-concat
-        // it to get bits, then stream-unpack those bits into the LHS.
-        if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(rhs.getType())) {
-          // Determine the element type of the source queue/array
-          Type elementType;
-          if (auto queueType = dyn_cast<moore::QueueType>(rhs.getType()))
-            elementType = queueType.getElementType();
-          else if (auto arrayType =
-                       dyn_cast<moore::OpenUnpackedArrayType>(rhs.getType()))
-            elementType = arrayType.getElementType();
-
-          // Determine result type for stream concat - use element size as base
-          Type resultType;
-          auto unpackedElem = cast<moore::UnpackedType>(elementType);
-          if (auto bitSize = unpackedElem.getBitSize()) {
-            resultType = moore::IntType::get(context.getContext(), *bitSize,
-                                             unpackedElem.getDomain());
-          } else {
-            mlir::emitError(loc) << "cannot determine bit size of queue "
-                                    "element for streaming unpack";
-            return {};
-          }
-
-          // Create stream concat to convert queue to bits
-          // Use same direction as the unpack operation
-          bool srcIsRightToLeft = streamExpr->getSliceSize() != 0;
-          rhs = moore::StreamConcatOp::create(builder, loc, resultType, rhs,
-                                              srcIsRightToLeft);
-        }
-
         // Determine streaming direction from slice size:
         // getSliceSize() == 0 means right-to-left ({>>{}}), otherwise
         // left-to-right ({<<{}}).
@@ -1431,6 +1401,8 @@ struct RvalueExprVisitor : public ExprVisitor {
         }
 
         if (isMixed) {
+          // For mixed streaming, keep the RHS as-is (queue or dynamic array)
+          // and let the runtime handle the bit distribution
           // Mixed static/dynamic streaming lvalue
           // Collect static prefix and suffix lvalue references
           SmallVector<Value> staticPrefixRefs;
@@ -1476,6 +1448,33 @@ struct RvalueExprVisitor : public ExprVisitor {
                                              rhs, sliceSize, isRightToLeft);
         } else {
           // Single dynamic array operand
+          // For single array, convert queue to bits first
+          if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(
+                  rhs.getType())) {
+            // Determine the element type of the source queue/array
+            Type elementType;
+            if (auto queueType = dyn_cast<moore::QueueType>(rhs.getType()))
+              elementType = queueType.getElementType();
+            else if (auto arrayType =
+                         dyn_cast<moore::OpenUnpackedArrayType>(rhs.getType()))
+              elementType = arrayType.getElementType();
+
+            // Determine result type for stream concat - use element size
+            Type resultType;
+            auto unpackedElem = cast<moore::UnpackedType>(elementType);
+            if (auto bitSize = unpackedElem.getBitSize()) {
+              resultType = moore::IntType::get(context.getContext(), *bitSize,
+                                               unpackedElem.getDomain());
+            } else {
+              mlir::emitError(loc) << "cannot determine bit size of queue "
+                                      "element for streaming unpack";
+              return {};
+            }
+
+            // Create stream concat to convert queue to bits
+            rhs = moore::StreamConcatOp::create(builder, loc, resultType, rhs,
+                                                isRightToLeft);
+          }
           auto lhs = context.convertLvalueExpression(expr.left());
           if (!lhs)
             return {};
