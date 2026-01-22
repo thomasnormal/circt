@@ -13,7 +13,7 @@ moore.class.classdecl @SimpleClass {
 
 // CHECK-LABEL: func.func @test_simple_property_ref
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32>
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
 // CHECK:   [[CAST:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CAST]] : !llhd.ref<i32>
 func.func @test_simple_property_ref(%obj: !moore.class<@SimpleClass>) -> !moore.ref<i32> {
@@ -23,7 +23,7 @@ func.func @test_simple_property_ref(%obj: !moore.class<@SimpleClass>) -> !moore.
 
 // CHECK-LABEL: func.func @test_second_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<!hw.struct<value: i64, unknown: i64>>
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[3] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
 // CHECK:   [[CAST:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<!hw.struct<value: i64, unknown: i64>>
 // CHECK:   return [[CAST]] : !llhd.ref<!hw.struct<value: i64, unknown: i64>>
 func.func @test_second_property(%obj: !moore.class<@SimpleClass>) -> !moore.ref<l64> {
