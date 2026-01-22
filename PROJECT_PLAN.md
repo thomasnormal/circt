@@ -91,6 +91,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 11. ✅ **$fflush, $printtimescale** - Buffer flush and timescale printing
 12. ✅ **BMC LLHD lowering** - Inline llhd.combinational, replace llhd.sig with SSA values
 13. ✅ **MooreToCore vtable fix** - Fixed build errors in vtable infrastructure code
+14. ✅ **Hierarchical sibling extnets** - Fixed instance ordering for cross-module hierarchical refs
+15. ✅ **System call unit tests** - Added MooreToCore lowering tests for all new system calls
 
 **Virtual Method Dispatch Research (Track A)**:
 Agent A completed research and identified the key gap for UVM polymorphism:
