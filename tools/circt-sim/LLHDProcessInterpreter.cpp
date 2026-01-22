@@ -2512,9 +2512,22 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (it == processStates.end())
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
-  // Handle probe operations BEFORE checking the cache.
-  // Probes must always re-read the current signal value because
-  // signals can change between evaluations (e.g., after delays/waits).
+  // Check the cache first. If a value has been explicitly set (e.g., by
+  // interpretProbe when the probe operation was executed), use that cached
+  // value. This is important for patterns like posedge detection where we
+  // need to compare old vs new signal values:
+  //   %old = llhd.prb %sig   // executed before wait, cached
+  //   llhd.wait ...
+  //   %new = llhd.prb %sig   // executed after wait, gets fresh value
+  //   %edge = comb.and %new, (not %old)  // needs OLD cached value for %old
+  auto &valueMap = it->second.valueMap;
+  auto valIt = valueMap.find(value);
+  if (valIt != valueMap.end())
+    return valIt->second;
+
+  // For probe operations that are NOT in the cache, do a live re-read.
+  // This handles the case where a probe result is used but the probe
+  // operation itself was defined outside the process (e.g., at module level).
   if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
     SignalId sigId = getSignalId(probeOp.getSignal());
     if (sigId != 0) {
@@ -2524,14 +2537,11 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
                               << (sv.isUnknown() ? "X"
                                                   : std::to_string(sv.getValue()))
                               << "\n");
+      // Cache the value for consistency within this execution
+      valueMap[value] = iv;
       return iv;
     }
   }
-
-  auto &valueMap = it->second.valueMap;
-  auto valIt = valueMap.find(value);
-  if (valIt != valueMap.end())
-    return valIt->second;
 
   // Check if this is a constant defined outside the process
   if (auto constOp = value.getDefiningOp<hw::ConstantOp>()) {
