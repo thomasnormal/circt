@@ -6,7 +6,7 @@
 // CHECK-NOT: moore.vtable
 // CHECK-NOT: moore.vtable_entry
 
-// CHECK: llvm.mlir.global internal @"testClass::__vtable__"(#llvm.zero) {addr_space = 0 : i32} : !llvm.array<2 x ptr>
+// CHECK: llvm.mlir.global internal @"testClass::__vtable__"(#llvm.zero) {addr_space = 0 : i32, circt.vtable_entries = {{.*}}} : !llvm.array<2 x ptr>
 
 moore.class.classdecl @virtualFunctionClass {
   moore.class.methoddecl @subroutine : (!moore.class<@virtualFunctionClass>) -> ()

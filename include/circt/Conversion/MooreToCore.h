@@ -20,10 +20,15 @@
 namespace circt {
 
 #define GEN_PASS_DECL_CONVERTMOORETOCORE
+#define GEN_PASS_DECL_INITVTABLES
 #include "circt/Conversion/Passes.h.inc"
 
 /// Create an Moore to Comb/HW/LLHD conversion pass.
 std::unique_ptr<OperationPass<ModuleOp>> createConvertMooreToCorePass();
+
+/// Create a pass to initialize vtable globals with function pointers.
+/// This should run after func-to-llvm conversion.
+std::unique_ptr<OperationPass<ModuleOp>> createInitVtablesPass();
 
 } // namespace circt
 
