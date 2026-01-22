@@ -613,9 +613,16 @@ Block *GlobalVariableOp::getInitBlock() {
 
 LogicalResult
 GetGlobalVariableOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  // Resolve the target symbol.
-  auto *symbol =
-      symbolTable.lookupNearestSymbolFrom(*this, getGlobalNameAttr());
+  // Global variables are declared at the module level. However,
+  // GetGlobalVariableOp may be inside a ClassDeclOp (e.g., in a constraint
+  // block), and ClassDeclOp is also a SymbolTable. In this case,
+  // lookupNearestSymbolFrom would stop at the ClassDeclOp and miss the
+  // global variable at module level. So we look up directly in the root module.
+  auto moduleOp = (*this)->getParentOfType<mlir::ModuleOp>();
+  if (!moduleOp)
+    return emitOpError() << "must be inside an mlir::ModuleOp";
+
+  auto *symbol = symbolTable.lookupSymbolIn(moduleOp, getGlobalNameAttr());
   if (!symbol)
     return emitOpError() << "references unknown symbol " << getGlobalNameAttr();
 

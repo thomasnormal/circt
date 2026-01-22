@@ -199,7 +199,13 @@ public:
       target.addIllegalOp<arith::ShLIOp>();
       target.addIllegalOp<arith::ShRSIOp>();
       target.addIllegalOp<arith::ShRUIOp>();
-      target.addIllegalOp<arith::SelectOp>();
+      // arith.select is only illegal if its operands are HW types.
+      // When operands are Moore types (from control flow simplification on
+      // Moore IR), we keep it legal and let it be handled later during
+      // MooreToCore conversion.
+      target.addDynamicallyLegalOp<arith::SelectOp>([](arith::SelectOp op) {
+        return !hw::isHWValueType(op.getTrueValue().getType());
+      });
       target.addIllegalOp<arith::ExtSIOp>();
       target.addIllegalOp<arith::ExtUIOp>();
       target.addIllegalOp<arith::TruncIOp>();
