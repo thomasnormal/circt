@@ -12,6 +12,7 @@
 #include "slang/ast/SystemSubroutine.h"
 #include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
 
@@ -1003,6 +1004,34 @@ struct RvalueExprVisitor : public ExprVisitor {
 
   // Handle named values, such as references to declared variables.
   Value visit(const slang::ast::NamedValueExpression &expr) {
+    if (context.inAssertionExpr) {
+      if (auto *local =
+              expr.symbol.as_if<slang::ast::LocalAssertionVarSymbol>()) {
+        auto *binding = context.lookupAssertionLocalVarBinding(local);
+        if (!binding) {
+          mlir::emitError(loc, "local assertion variable referenced before "
+                               "assignment");
+          return {};
+        }
+        auto offset = context.getAssertionSequenceOffset();
+        if (offset < binding->offset) {
+          mlir::emitError(loc, "local assertion variable referenced before "
+                               "assignment time");
+          return {};
+        }
+        if (offset == binding->offset)
+          return binding->value;
+        if (!isa<moore::UnpackedType>(binding->value.getType())) {
+          mlir::emitError(loc, "unsupported local assertion variable type");
+          return {};
+        }
+        return moore::PastOp::create(builder, loc, binding->value,
+                                     static_cast<int64_t>(offset -
+                                                          binding->offset))
+            .getResult();
+      }
+    }
+
     // Handle local variables.
     if (auto value = context.valueSymbols.lookup(&expr.symbol)) {
       if (isa<moore::RefType>(value.getType())) {

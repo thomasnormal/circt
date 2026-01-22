@@ -1797,7 +1797,8 @@ struct StmtVisitor {
       // Convert filename to string type if needed
       if (!isa<moore::StringType>(filename.getType())) {
         if (isa<moore::IntType>(filename.getType())) {
-          filename = moore::IntToStringOp::create(builder, loc, filename);
+          filename =
+              moore::IntToStringOp::create(builder, loc, filename).getResult();
         } else {
           mlir::emitError(loc) << "$readmemb filename must be a string";
           return failure();
@@ -1822,7 +1823,8 @@ struct StmtVisitor {
       // Convert filename to string type if needed
       if (!isa<moore::StringType>(filename.getType())) {
         if (isa<moore::IntType>(filename.getType())) {
-          filename = moore::IntToStringOp::create(builder, loc, filename);
+          filename =
+              moore::IntToStringOp::create(builder, loc, filename).getResult();
         } else {
           mlir::emitError(loc) << "$readmemh filename must be a string";
           return failure();

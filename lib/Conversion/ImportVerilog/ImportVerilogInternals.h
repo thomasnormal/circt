@@ -26,6 +26,12 @@
 
 #define DEBUG_TYPE "import-verilog"
 
+namespace slang {
+namespace ast {
+class LocalAssertionVarSymbol;
+} // namespace ast
+} // namespace slang
+
 namespace circt {
 namespace ImportVerilog {
 
@@ -91,6 +97,11 @@ struct HierPathInfo {
   std::optional<unsigned int> idx;
   slang::ast::ArgumentDirection direction;
   const slang::ast::ValueSymbol *valueSym;
+};
+
+struct AssertionLocalVarBinding {
+  Value value;
+  uint64_t offset = 0;
 };
 
 /// A helper class to facilitate the conversion from a Slang AST to MLIR
@@ -181,6 +192,50 @@ struct Context {
   Value convertAssertionCallExpression(
       const slang::ast::CallExpression &expr,
       const slang::ast::CallExpression::SystemCallInfo &info, Location loc);
+
+  void pushAssertionLocalVarScope() { assertionLocalVarScopes.emplace_back(); }
+  void popAssertionLocalVarScope() { assertionLocalVarScopes.pop_back(); }
+  AssertionLocalVarBinding *
+  lookupAssertionLocalVarBinding(const slang::ast::LocalAssertionVarSymbol *sym) {
+    for (auto it = assertionLocalVarScopes.rbegin();
+         it != assertionLocalVarScopes.rend(); ++it) {
+      auto entry = it->find(sym);
+      if (entry != it->end())
+        return &entry->second;
+    }
+    return nullptr;
+  }
+  const AssertionLocalVarBinding *lookupAssertionLocalVarBinding(
+      const slang::ast::LocalAssertionVarSymbol *sym) const {
+    for (auto it = assertionLocalVarScopes.rbegin();
+         it != assertionLocalVarScopes.rend(); ++it) {
+      auto entry = it->find(sym);
+      if (entry != it->end())
+        return &entry->second;
+    }
+    return nullptr;
+  }
+  void setAssertionLocalVarBinding(
+      const slang::ast::LocalAssertionVarSymbol *sym, Value value,
+      uint64_t offset) {
+    if (assertionLocalVarScopes.empty())
+      return;
+    assertionLocalVarScopes.back()[sym] = {value, offset};
+  }
+  void pushAssertionSequenceOffset(uint64_t offset) {
+    assertionSequenceOffsetStack.push_back(offset);
+  }
+  void popAssertionSequenceOffset() { assertionSequenceOffsetStack.pop_back(); }
+  uint64_t getAssertionSequenceOffset() const {
+    if (assertionSequenceOffsetStack.empty())
+      return 0;
+    return assertionSequenceOffsetStack.back();
+  }
+  void setAssertionSequenceOffset(uint64_t offset) {
+    if (assertionSequenceOffsetStack.empty())
+      return;
+    assertionSequenceOffsetStack.back() = offset;
+  }
 
   // Traverse the whole AST to collect hierarchical names.
   LogicalResult
@@ -379,6 +434,11 @@ struct Context {
   /// type conversion triggers conversion of classes whose methods reference
   /// the property.
   DenseSet<const slang::ast::ValueSymbol *> staticPropertyInProgress;
+  SmallVector<DenseMap<const slang::ast::LocalAssertionVarSymbol *,
+                       AssertionLocalVarBinding>,
+              2>
+      assertionLocalVarScopes;
+  SmallVector<uint64_t, 4> assertionSequenceOffsetStack;
   /// A list of global variables that still need their initializers to be
   /// converted.
   SmallVector<const slang::ast::ValueSymbol *> globalVariableWorklist;

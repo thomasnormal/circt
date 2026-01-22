@@ -202,7 +202,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
 
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
-  pm.addPass(sim::createStripSim());
+  // TODO: Re-enable when createStripSim is implemented
+  // pm.addPass(sim::createStripSim());
   pm.addPass(verif::createLowerTestsPass());
 
   bool hasLLHD = false;
