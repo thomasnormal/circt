@@ -59,13 +59,18 @@ static bool isConstantInt(Value value, bool wantAllOnes) {
   return false;
 }
 
-static bool traceClockRoot(Value value, BlockArgument &root) {
+static bool traceClockRoot(Value value, Value &root) {
   if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
     return traceClockRoot(toClock.getInput(), root);
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     if (!root)
       root = arg;
     return arg == root;
+  }
+  if (auto proc = value.getDefiningOp<llhd::ProcessOp>()) {
+    if (!root)
+      root = value;
+    return value == root;
   }
   if (isConstantInt(value, true) || isConstantInt(value, false))
     return true;
@@ -278,10 +283,10 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   // Look through ToClockOp and simple combinational logic to find the clock
   // root. If the clock cannot be traced to a block argument or constant, we
   // currently bail out.
-  BlockArgument root;
+  Value root;
   if (!traceClockRoot(clock, root)) {
-    op->emitError("only clocks derived from block arguments or constants "
-                  "are supported");
+    op->emitError("only clocks derived from block arguments, constants, or "
+                  "process results are supported");
     return failure();
   }
 
