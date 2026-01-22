@@ -1450,6 +1450,9 @@ struct StmtVisitor {
       case slang::ast::AssertionKind::CoverProperty:
         moore::CoverOp::create(builder, loc, defer, cond, StringAttr{});
         return success();
+      case slang::ast::AssertionKind::Expect:
+        moore::AssertOp::create(builder, loc, defer, cond, StringAttr{});
+        return success();
       default:
         break;
       }
@@ -1548,6 +1551,10 @@ struct StmtVisitor {
         verif::ClockedCoverOp::create(builder, loc, property, edge, clockVal,
                                       enable, StringAttr{});
         return success();
+      case slang::ast::AssertionKind::Expect:
+        verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,
+                                       enable, StringAttr{});
+        return success();
       default:
         break;
       }
@@ -1566,6 +1573,9 @@ struct StmtVisitor {
       return success();
     case slang::ast::AssertionKind::CoverProperty:
       verif::CoverOp::create(builder, loc, property, Value(), StringAttr{});
+      return success();
+    case slang::ast::AssertionKind::Expect:
+      verif::AssertOp::create(builder, loc, property, Value(), StringAttr{});
       return success();
     default:
       break;
