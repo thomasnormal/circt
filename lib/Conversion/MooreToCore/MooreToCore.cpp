@@ -42,6 +42,7 @@
 
 namespace circt {
 #define GEN_PASS_DEF_CONVERTMOORETOCORE
+#define GEN_PASS_DEF_INITVTABLES
 #include "circt/Conversion/Passes.h.inc"
 } // namespace circt
 
@@ -2217,7 +2218,13 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
     // For a class hierarchy A -> B -> C, the layout is:
     //   C: { B: { A: { i32 typeId, ptr vtablePtr, ...A fields }, ...B fields }, ...C fields }
     // So we GEP through indices [0, 0, ...0, 1] to reach the vtablePtr.
+    // The first 0 is the pointer dereference, subsequent 0s navigate through
+    // the base class chain, and the final index accesses the vtable pointer.
     SmallVector<Value> vtableGepIndices;
+    // First index is always 0 (pointer dereference)
+    vtableGepIndices.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+    // Navigate through base class chain
     for (int32_t i = 0; i < structInfo->inheritanceDepth; ++i) {
       vtableGepIndices.push_back(LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
@@ -3637,7 +3644,7 @@ struct VTableOpConversion : public OpConversionPattern<VTableOp> {
 
     // Create a zero-initialized vtable global.
     // The vtable will be populated with actual function pointers during a
-    // later lowering pass (e.g., InitVtablesPass) when functions are converted
+    // later lowering pass (InitVtablesPass) when functions are converted
     // to LLVM and we can use AddressOfOp properly.
     //
     // For now, the vtable structure is:
@@ -3648,12 +3655,29 @@ struct VTableOpConversion : public OpConversionPattern<VTableOp> {
     // array) is fully functional. Once the vtable is populated, polymorphism
     // will work correctly.
     auto zeroAttr = LLVM::ZeroAttr::get(ctx);
-    LLVM::GlobalOp::create(rewriter, loc, vtableArrayTy, /*isConstant=*/false,
-                           LLVM::Linkage::Internal, globalName, zeroAttr);
+    auto vtableGlobal = LLVM::GlobalOp::create(rewriter, loc, vtableArrayTy,
+                                               /*isConstant=*/false,
+                                               LLVM::Linkage::Internal,
+                                               globalName, zeroAttr);
 
-    // Store vtable metadata for later vtable initialization pass.
-    // This saves the method-to-index mapping and method-to-target mapping
-    // that will be needed to populate the vtable with function addresses.
+    // Store vtable metadata as an attribute for InitVtablesPass.
+    // Create an array of [index, funcSymbol] pairs for each vtable entry.
+    SmallVector<Attribute> vtableEntries;
+    for (const auto &[methodName, targetSym] : methodToTarget) {
+      auto indexIt = methodToIndex.find(methodName);
+      if (indexIt == methodToIndex.end())
+        continue;
+      unsigned index = indexIt->second;
+      // Store as [index, funcSymbol] tuple
+      SmallVector<Attribute> entry;
+      entry.push_back(rewriter.getI64IntegerAttr(index));
+      entry.push_back(targetSym);
+      vtableEntries.push_back(rewriter.getArrayAttr(entry));
+    }
+    if (!vtableEntries.empty()) {
+      vtableGlobal->setAttr("circt.vtable_entries",
+                            rewriter.getArrayAttr(vtableEntries));
+    }
 
     // Erase the original vtable op
     rewriter.setInsertionPoint(op);
@@ -9943,6 +9967,47 @@ struct QueueShuffleOpConversion
   }
 };
 
+/// Conversion for moore.queue.reverse -> runtime function call.
+struct QueueReverseOpConversion
+    : public RuntimeCallConversionBase<QueueReverseOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueReverseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_reverse", fnTy);
+
+    auto refType = cast<moore::RefType>(op.getQueue().getType());
+    auto nestedType = refType.getNestedType();
+    Type elementType;
+    if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
+      elementType = queueType.getElementType();
+    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+      elementType = dynArrayType.getElementType();
+    else
+      return failure();
+
+    auto elemType = typeConverter->convertType(elementType);
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{adaptor.getQueue(), elemSize});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.queue.concat -> runtime function call.
 /// Concatenates multiple queues into a single queue.
 struct QueueConcatOpConversion
@@ -15374,6 +15439,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueRSortWithOpConversion,
     QueueSortKeyYieldOpConversion,
     QueueShuffleOpConversion,
+    QueueReverseOpConversion,
     QueueConcatOpConversion,
     QueueSliceOpConversion,
     QueueDeleteOpConversion,
@@ -15527,4 +15593,126 @@ void MooreToCorePass::runOnOperation() {
   cleanupPatterns.add<UnrealizedCastToBoolRewrite>(&context);
   if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns))))
     signalPassFailure();
+}
+
+//===----------------------------------------------------------------------===//
+// Init Vtables Pass
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct InitVtablesPass : public circt::impl::InitVtablesBase<InitVtablesPass> {
+  void runOnOperation() override;
+};
+} // namespace
+
+/// Create a pass to initialize vtable globals with function pointers.
+std::unique_ptr<OperationPass<ModuleOp>> circt::createInitVtablesPass() {
+  return std::make_unique<InitVtablesPass>();
+}
+
+/// Initialize vtable globals with function pointer addresses.
+void InitVtablesPass::runOnOperation() {
+  ModuleOp module = getOperation();
+  MLIRContext *ctx = &getContext();
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+  // Find all LLVM globals with vtable metadata.
+  SmallVector<LLVM::GlobalOp> vtableGlobals;
+  module.walk([&](LLVM::GlobalOp global) {
+    if (global->hasAttr("circt.vtable_entries"))
+      vtableGlobals.push_back(global);
+  });
+
+  for (auto global : vtableGlobals) {
+    auto entriesAttr = dyn_cast_or_null<ArrayAttr>(
+        global->getAttr("circt.vtable_entries"));
+    if (!entriesAttr)
+      continue;
+
+    // Get the vtable array type.
+    auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(global.getType());
+    if (!arrayTy)
+      continue;
+
+    unsigned vtableSize = arrayTy.getNumElements();
+    if (vtableSize == 0)
+      continue;
+
+    // Build a map from index to function symbol.
+    DenseMap<unsigned, SymbolRefAttr> indexToFunc;
+    for (auto entry : entriesAttr) {
+      auto entryArray = dyn_cast<ArrayAttr>(entry);
+      if (!entryArray || entryArray.size() != 2)
+        continue;
+
+      auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+      auto funcSym = dyn_cast<SymbolRefAttr>(entryArray[1]);
+      if (!indexAttr || !funcSym)
+        continue;
+
+      unsigned index = indexAttr.getInt();
+      indexToFunc[index] = funcSym;
+    }
+
+    // Check if all referenced functions exist as llvm.func.
+    bool allFuncsExist = true;
+    for (auto &[index, funcSym] : indexToFunc) {
+      auto func = module.lookupSymbol<LLVM::LLVMFuncOp>(funcSym);
+      if (!func) {
+        // Also check for func.func (not yet converted).
+        auto funcFunc = module.lookupSymbol<func::FuncOp>(funcSym);
+        if (!funcFunc) {
+          allFuncsExist = false;
+          break;
+        }
+        // func.func exists but not llvm.func - skip this vtable for now.
+        // It will be populated when InitVtablesPass runs after func-to-llvm.
+        allFuncsExist = false;
+        break;
+      }
+    }
+
+    if (!allFuncsExist)
+      continue;
+
+    // All functions exist as llvm.func. Create the initializer region.
+    // Clear existing initializer (zero attr) and add initializer region.
+    global.removeValueAttr();
+    global->removeAttr("value");
+
+    // Create initializer region.
+    Region &initRegion = global.getInitializerRegion();
+    Block *block = new Block();
+    initRegion.push_back(block);
+
+    OpBuilder builder(ctx);
+    builder.setInsertionPointToStart(block);
+
+    // Build the vtable array value.
+    // Start with an undef array, then insert function pointers at each index.
+    Value vtableArray =
+        LLVM::UndefOp::create(builder, global.getLoc(), arrayTy);
+
+    for (unsigned i = 0; i < vtableSize; ++i) {
+      Value funcPtr;
+      auto it = indexToFunc.find(i);
+      if (it != indexToFunc.end()) {
+        // Get address of the function. Convert SymbolRefAttr to StringRef.
+        StringRef funcName = it->second.getRootReference();
+        funcPtr = LLVM::AddressOfOp::create(builder, global.getLoc(), ptrTy,
+                                            funcName);
+      } else {
+        // Null pointer for unused slots.
+        funcPtr = LLVM::ZeroOp::create(builder, global.getLoc(), ptrTy);
+      }
+
+      vtableArray = LLVM::InsertValueOp::create(builder, global.getLoc(),
+                                                 vtableArray, funcPtr, i);
+    }
+
+    LLVM::ReturnOp::create(builder, global.getLoc(), vtableArray);
+
+    // Remove the vtable metadata attribute (no longer needed).
+    global->removeAttr("circt.vtable_entries");
+  }
 }

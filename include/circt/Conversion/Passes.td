@@ -513,6 +513,22 @@ def ConvertMooreToCore : Pass<"convert-moore-to-core", "mlir::ModuleOp"> {
   ];
 }
 
+def InitVtables : Pass<"init-vtables", "mlir::ModuleOp"> {
+  let summary = "Initialize vtable globals with function pointers";
+  let description = [{
+    This pass populates vtable globals with function pointer addresses.
+    It should run after func-to-llvm conversion so that llvm.mlir.addressof
+    can reference llvm.func functions.
+
+    The pass looks for LLVM globals with the "circt.vtable_entries" attribute
+    and replaces their zero initializers with proper function pointer arrays.
+  }];
+  let constructor = "circt::createInitVtablesPass()";
+  let dependentDialects = [
+    "mlir::LLVM::LLVMDialect",
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // HWToLLVM
 //===----------------------------------------------------------------------===//
