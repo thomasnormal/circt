@@ -2,7 +2,8 @@
 
 ## Goal
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
-Run `~/uvm-core` and `~/mbit/*avip` testbenches using only CIRCT tools.
+Run `~/mbit/*_avip` testbenches using only CIRCT tools and the library ~/uvm-core.
+Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ test suites.
 
 ---
 
@@ -66,35 +67,34 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 96 - Complete)
+### Track Status & Next Tasks (Iteration 97 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-20: **45/47 passing** (95%) ✅
-- sv-tests Chapter-7: **100/103 passing** (97%) ✅ +3 tests
-- sv-tests Chapter-11: **81/88 passing** (92%) ✅
-- sv-tests Chapter-18: **55/134 passing** (41%) ✅ +5 tests
+- sv-tests Chapter-7: **100/103 passing** (97%) ✅
+- sv-tests Chapter-11: **83/88 passing** (94%) ✅ +2 tests
+- sv-tests Chapter-18: **55/134 passing** (41%) ✅
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- circt-sim Tests: **26/29 passing** (90%) ✅
-- UVM AVIP: **APB compiles to Moore IR** (231K lines) ✅ MAJOR MILESTONE
+- verilator circt-sim: **13/15 passing** (87%) ✅ +6 tests
+- UVM AVIP: **APB compiles to LLHD IR** (27K lines) ✅
 
-**VTable Blocker ✅ RESOLVED**:
-- Fixed GEP indices for derived class vtable pointer access
-- Created `InitVtablesPass` for two-phase vtable population
-- Usage: `--convert-moore-to-core --convert-func-to-llvm --init-vtables`
+**Array Locator ✅ RESOLVED**:
+- Extended UnrealizedConversionCastOp for hw/llvm array casts
+- Added region type conversion for predicate regions
 
 **Remaining Limitations**:
-1. **Array Locator Lowering** - `moore.array.locator` (find with predicate) blocks HW lowering
-2. **Sibling Hierarchical Refs** - extnets.sv still fails (cross-module refs)
-3. **Chapter-18 UVM Tests** - 63 tests require UVM library
-4. **Full Simulation** - Need to test APB AVIP with circt-sim
+1. **`bit` Type Clock Bug** - Simulation hangs with bit clocks (use `reg` workaround)
+2. **String Array Types** - `string mode[64]` blocks full UVM library
+3. **Sibling Hierarchical Refs** - extnets.sv (cross-module refs)
+4. **Dynamic Array Streaming** - 3 chapter-11 tests with mixed static/dynamic
 
 **Active Workstreams (Next)**:
-1. **Track A: Array Locator Lowering** - Implement find() with predicate for HW dialect
-2. **Track B: UVM Simulation Testing** - Run APB AVIP testbench with circt-sim
-3. **Track C: Chapter-11 Improvements** - Get to 95%+ pass rate
-4. **Track D: Yosys/verilator Analysis** - Continue BMC and simulation testing
+1. **Track A: `bit` Clock Bug** - Fix simulation with bit type clocks
+2. **Track B: String Array Support** - Enable full UVM library compilation
+3. **Track C: Chapter-7 Remaining** - Fix last 3 array tests
+4. **Track D: Other AVIP Testing** - Test SPI, I2C, AXI AVIPs
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
