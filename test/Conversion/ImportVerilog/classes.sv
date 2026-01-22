@@ -680,6 +680,21 @@ class StaticConstraintClass;
     static constraint static_bound { y >= 0; }
 endclass
 
+/// Check implicit constraint block (no body)
+// These are forward declarations for constraints that can be defined externally.
+
+// CHECK-LABEL: moore.class.classdecl @ImplicitConstraintClass {
+// CHECK:         moore.class.propertydecl @z : !moore.i32 rand_mode rand
+// CHECK:         moore.constraint.block @implicit_c {
+// CHECK-NOT:       moore.constraint.expr
+// CHECK:         }
+// CHECK: }
+
+class ImplicitConstraintClass;
+    rand int z;
+    constraint implicit_c;
+endclass
+
 /// Check constraint with if-else and soft constraints
 
 // CHECK-LABEL: moore.class.classdecl @AdvancedConstraints {
