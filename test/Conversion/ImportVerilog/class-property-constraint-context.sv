@@ -19,16 +19,16 @@ class InitBugTest;
 endclass
 
 // Test 2: Constraint that references a property
-// During constraint conversion, there's no implicit 'this', so property
-// references should create symbolic placeholder variables (not static).
+// Constraint blocks have an implicit 'this' argument that is used to access
+// class properties through moore.class.property_ref.
 
 // CHECK-LABEL: moore.class.classdecl @ConstraintBugTest
 // CHECK:   moore.class.propertydecl @x : !moore.i32 rand_mode rand
 // CHECK:   moore.class.propertydecl @y : !moore.i32 rand_mode rand
 // CHECK:   moore.constraint.block @c {
-// Properties are referenced as placeholder variables in constraints
-// CHECK:     %y = moore.variable : <i32>
-// CHECK:     %x = moore.variable : <i32>
+// CHECK:   ^bb0(%arg0: !moore.class<@ConstraintBugTest>):
+// CHECK:     moore.class.property_ref %arg0[@y]
+// CHECK:     moore.class.property_ref %arg0[@x]
 // CHECK:   }
 // CHECK: }
 

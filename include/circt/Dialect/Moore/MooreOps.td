@@ -3545,7 +3545,7 @@ def ClassMethodDeclOp
 }
 
 def ClassDeclOp
-    : MooreOp<"class.classdecl", [Symbol, SymbolTable, IsolatedFromAbove,
+    : MooreOp<"class.classdecl", [Symbol, SymbolTable,
     NoTerminator, SingleBlock]> {
   let summary = "Class declaration";
   let arguments = (ins SymbolNameAttr:$sym_name,
@@ -4278,6 +4278,38 @@ def ConstraintUniqueOp
   let results = (outs);
   let assemblyFormat = [{
     $variables `:` type($variables) attr-dict
+  }];
+}
+
+def ConstraintMethodCallOp
+    : MooreOp<"constraint.method_call", [Pure]> {
+  let summary = "Method call inside a constraint expression";
+  let description = [{
+    Represents a method call within a constraint expression. Unlike func.call,
+    this operation uses a qualified method symbol that can be resolved across
+    class boundaries. The method is specified by a symbol reference to the
+    containing class and the method name.
+
+    The object argument is the class instance on which the method is called.
+    Arguments are the method's input parameters.
+
+    Example:
+    ```mlir
+    // Call method F on class instance with one argument
+    %result = moore.constraint.method_call @"a::F"(%this, %arg0) :
+              (!moore.class<@a>, !moore.i32) -> !moore.i32
+    ```
+
+    See IEEE 1800-2017 Section 18.5.12 "Functions in constraints".
+  }];
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$method,
+    Variadic<AnyType>:$operands
+  );
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $method `(` $operands `)` `:` functional-type($operands, $result) attr-dict
   }];
 }
 

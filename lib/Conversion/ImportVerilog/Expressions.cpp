@@ -3276,6 +3276,40 @@ struct RvalueExprVisitor : public ExprVisitor {
         lowering->op.getFunctionType().getResults().begin(),
         lowering->op.getFunctionType().getResults().end());
 
+    // Inside constraint blocks, use ConstraintMethodCallOp for method calls
+    // to avoid symbol lookup issues with func.call across symbol table
+    // boundaries (ClassDeclOp is a SymbolTable that doesn't contain func.func).
+    if (context.inConstraintExpr && isMethod) {
+      auto calleeSym = lowering->op.getSymName();
+      auto methodRef =
+          mlir::FlatSymbolRefAttr::get(context.getContext(), calleeSym);
+      Type resultType = resultTypes.empty()
+                            ? moore::VoidType::get(context.getContext())
+                            : resultTypes[0];
+
+      // Get the expected receiver type and upcast as necessary.
+      auto funcTy = lowering->op.getFunctionType();
+      auto expectedHdlTy =
+          cast<moore::ClassHandleType>(funcTy.getInput(0));
+      auto implicitThisRef = context.materializeConversion(
+          expectedHdlTy, methodReceiver, false, methodReceiver.getLoc());
+
+      // Build argument list with this reference first.
+      SmallVector<Value> explicitArguments;
+      explicitArguments.reserve(arguments.size() + 1);
+      explicitArguments.push_back(implicitThisRef);
+      explicitArguments.append(arguments.begin(), arguments.end());
+
+      auto callOp = moore::ConstraintMethodCallOp::create(
+          builder, loc, resultType, methodRef, explicitArguments);
+      if (resultTypes.empty())
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, moore::VoidType::get(context.getContext()),
+                   ValueRange{})
+            .getResult(0);
+      return callOp.getResult();
+    }
+
     mlir::CallOpInterface callOp;
     if (isMethod) {
       // Class functions -> build func.call / func.indirect_call with implicit
