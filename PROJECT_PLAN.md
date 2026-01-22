@@ -66,17 +66,24 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 93 - Starting)
+### Track Status & Next Tasks (Iteration 93 - In Progress)
 
-**Iteration 92 Complete!** Now starting Iteration 93.
+**Iteration 92 Complete!** Iteration 93 in progress with 4 parallel agents.
 
 **Test Results (Iteration 93 Progress)**:
 - sv-tests: **18/26 pass rate** (69%) for SVA BMC tests - +5 from expect assertions
-- sv-tests Chapter-21: 23/29 passing (79%)
-- verilator-verification: 62% parse-only, 95% MooreToCore
+- sv-tests Chapter-21: **23/29 passing** (79%) - $strobe/$monitor improvements
+- verilator-verification: Asserts parse OK, BMC blocked by `llhd.process` parent constraint
 - Yosys SVA BMC: **85.7%** (12/14 passing)
-- AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
+- APB/SPI AVIP: Full pipeline to Moore IR works; LLVM lowering blocked by vtable
 - I2S AVIP: Assertions verified working end-to-end
+
+**Key Blocker Identified (Iteration 93)**:
+Virtual method dispatch vtable lowering fails with:
+```
+error: 'llvm.mlir.addressof' op must reference a global defined by 'llvm.mlir.global', 'llvm.mlir.alias' or 'llvm.func' or 'llvm.mlir.ifunc'
+```
+Root cause: VTableOpConversion creates `llvm.mlir.addressof` referencing function names like `@"uvm_pkg::uvm_object::do_unpack"`, but these functions haven't been converted to LLVM functions yet. Need to ensure func.func → llvm.func conversion runs before vtable conversion.
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling

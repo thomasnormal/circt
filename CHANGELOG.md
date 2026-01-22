@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 93 (Continued) - January 22, 2026
+
+### Key Blocker: Virtual Method Dispatch (VTable) ⚠️ IDENTIFIED
+
+**Problem**: UVM testbenches fail during LLVM lowering with:
+```
+error: 'llvm.mlir.addressof' op must reference a global defined by 'llvm.mlir.global', 'llvm.mlir.alias' or 'llvm.func' or 'llvm.mlir.ifunc'
+```
+
+**Root Cause Analysis**:
+- VTableOpConversion creates `llvm.mlir.addressof` ops referencing function symbols
+- These functions (e.g., `@"uvm_pkg::uvm_object::do_unpack"`) are still `func.func`, not `llvm.func`
+- LLVM's `addressof` op requires the target to already be an LLVM function
+
+**Impact**:
+- All AVIP testbenches compile successfully to Moore IR
+- MooreToCore lowering fails when processing UVM class vtables
+- Critical blocker for UVM polymorphism (factory pattern, callbacks)
+
+**Fix Direction**:
+1. Order VTableOpConversion after func-to-LLVM conversion
+2. Or use a two-phase approach: generate vtable structure first, populate addresses later
+
+### sv-tests Chapter-21 Progress ✅ UPDATE
+
+**Result**: 23/29 tests now passing (79%, up from ~45%)
+
+**Failures remaining**:
+- `21.3--fscanf.sv` - Complex scanf format parsing
+- `21.4--readmemb.sv`, `21.4--readmemh.sv` - Memory file loading edge cases
+- `21.6--value.sv` - $value$plusargs not implemented
+- `21.7--dumpfile.sv`, `21.7--dumpports.sv` - VCD dump not implemented
+
+### Verilator-Verification BMC Analysis ✅ UPDATE
+
+**Result**: All 10 assert tests parse successfully to HW IR
+
+**BMC Failure Pattern**:
+- `llhd.process` ops end up inside `verif.bmc` region
+- `llhd.process` has `HasParent<"hw.module">` trait
+- Inside BMC region, parent is `verif.bmc`, not `hw.module`
+
+**Files affected**: All tests in `tests/asserts/` directory
+
+**Fix Direction**: Need LLHD process elimination before LowerToBMC, or relax parent constraint.
+
+---
+
 ## Iteration 94 - January 22, 2026
 
 ### Procedural $sampled Support ✅ NEW
