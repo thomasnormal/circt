@@ -611,6 +611,12 @@ def AnyDynamicArrayType : MooreType<
   "dynamic array, associative array, or queue type",
   "moore::UnpackedType">;
 
+/// An associative array type (typed or wildcard index).
+def AnyAssocArrayType : MooreType<
+  Or<[AssocArrayType.predicate, WildcardAssocArrayType.predicate]>,
+  "associative array type",
+  "moore::UnpackedType">;
+
 /// A packed or unpacked struct type.
 def AnyStructType : MooreType<
   Or<[StructType.predicate, UnpackedStructType.predicate]>,

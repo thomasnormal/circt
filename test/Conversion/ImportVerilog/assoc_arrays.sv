@@ -378,3 +378,36 @@ module UVMVerbositiesPatternTest;
         level = verbosities["UVM_HIGH"];
     end
 endmodule
+
+//===----------------------------------------------------------------------===//
+// Associative Array Assignment Pattern Tests
+//===----------------------------------------------------------------------===//
+
+/// Test associative array with default value assignment pattern
+/// IEEE 1800-2017 Section 7.9.11
+// CHECK-LABEL: moore.module @AssocArrayDefaultValueTest() {
+module AssocArrayDefaultValueTest;
+    // CHECK: moore.assoc.create : assoc_array<string, i32>
+    // CHECK: moore.variable {{%[0-9]+}} : <assoc_array<string, i32>>
+    // Note: The default value "hello" is currently ignored during lowering
+    string aa[int] = '{default: "hello"};
+
+    initial begin
+        // Access a non-existent key - will return type default (empty string)
+        // CHECK: moore.dyn_extract
+        $display("%s", aa[1]);
+    end
+endmodule
+
+/// Test associative array with default 0 pattern
+// CHECK-LABEL: moore.module @AssocArrayDefaultZeroTest() {
+module AssocArrayDefaultZeroTest;
+    // CHECK: moore.assoc.create : assoc_array<i32, i32>
+    // CHECK: moore.variable {{%[0-9]+}} : <assoc_array<i32, i32>>
+    int aa_int[int] = '{default: 0};
+
+    initial begin
+        // CHECK: moore.dyn_extract
+        $display("%d", aa_int[42]);
+    end
+endmodule
