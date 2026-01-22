@@ -90,6 +90,14 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 10. ✅ **Memory loading** - $readmemb, $readmemh for memory initialization
 11. ✅ **$fflush, $printtimescale** - Buffer flush and timescale printing
 12. ✅ **BMC LLHD lowering** - Inline llhd.combinational, replace llhd.sig with SSA values
+13. ✅ **MooreToCore vtable fix** - Fixed build errors in vtable infrastructure code
+
+**Virtual Method Dispatch Research (Track A)**:
+Agent A completed research and identified the key gap for UVM polymorphism:
+- **Current**: VTableLoadMethodOpConversion does STATIC dispatch at compile time
+- **Needed**: Runtime DYNAMIC dispatch through vtable pointer in objects
+- **Plan**: 5-step implementation involving vtable pointer in structs, global vtable arrays,
+  vtable initialization in `new`, and dynamic dispatch in VTableLoadMethodOp
 
 **Iteration 92 Accomplishments**:
 1. ✅ **llvm.store/load hw.struct** - Fixed struct storage/load via llvm.struct conversion
