@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 100 - January 22, 2026
+
+### Chapter-7 100% Complete
+
+Verified that sv-tests chapter-7 is at 103/103 (100%) when properly accounting for expected failures (XFAIL):
+
+- **101 PASS**: Tests that should compile and do compile
+- **2 XFAIL**: Tests with `:should_fail_because:` tags that correctly produce errors
+  - `variable-slice-zero.sv` - Tests zero-width part select rejection (error: "value must be positive")
+  - `default-value.sv` - Tests packed struct member initializer rejection (error: "packed members can not have initializers")
+
+The 2 XFAIL tests verify that CIRCT correctly rejects invalid SystemVerilog per IEEE 1800-2017 Section 7.
+
+---
+
 ## Iteration 99 - January 22, 2026
 
 ### Chapter-20 100% Complete ✅
@@ -80,7 +95,7 @@ Added support for associative array literals `'{default: value}`:
 - AssocArrayCreateOp for empty array creation
 - MooreToCore conversion to runtime call
 
-sv-tests chapter-7: 101/103 (98%)
+sv-tests chapter-7: 103/103 (100%) - includes 2 XFAIL tests with correct error rejection
 
 ### All 9 AVIPs Compile ✅ VERIFIED
 
