@@ -33,6 +33,15 @@
 1. **Clock Tracing**: Extended `traceClockRoot` to handle `llhd.process` results
 2. **Register Type Consistency**: Fixed `smt.ite` type mismatch in ExternalizeRegisters
 3. **Interface Instance Ordering**: Process interface instances before other members for virtual interface access
+4. **LLHD Process Stripping**: Replace `llhd.process` results with module inputs before BMC lowering to avoid `verif.bmc` parent verifier failures
+5. **Sequence Delay Alignment**: Adjusted `##N` delays in concatenated sequences to align with `ltl.concat` step semantics
+
+### sv-tests BMC Local-Var Status ✅ UPDATE
+
+**Result**: TEST_FILTER=local-var total=4 pass=1 fail=1 xfail=2 skip=1032
+
+**Remaining Failure**:
+- `16.10--sequence-local-var` still fails (sequence timing alignment)
 
 ### Commits (12 total)
 - `fb567fbd1` [ImportVerilog] Fix interface instance ordering for virtual interfaces
@@ -45,9 +54,42 @@
 
 ---
 
+### VTable Fix ✅ CRITICAL UVM BLOCKER RESOLVED
+
+**Commits**:
+- `d5c4cfee6` [MooreToCore] Fix VTable GEP indices and add InitVtablesPass
+- `37fd276e2` [Moore] Add array reverse() method and extend reduction methods
+
+**Changes**:
+1. Fixed GEP indices for vtable pointer in derived classes:
+   - Base class: `[0, 1]` (pointer deref → vtablePtr field)
+   - Derived class: `[0, 0, 1]` (pointer deref → base class → vtablePtr)
+
+2. Created `InitVtablesPass` for two-phase vtable population:
+   - VTableOpConversion stores metadata as `circt.vtable_entries` attribute
+   - InitVtablesPass runs after func-to-llvm to create initializer regions
+   - Uses `llvm.mlir.addressof` to reference converted `llvm.func` ops
+
+**Usage**: `--convert-moore-to-core --convert-func-to-llvm --init-vtables`
+
+### Array Method Improvements
+
+- Added `QueueReverseOp` for SystemVerilog `reverse()` array method
+- Extended reduction methods (sum, product, and, or, xor) to fixed-size arrays
+- sv-tests chapter-7: 97/103 (94%)
+- sv-tests chapter-11: 81/88 (92%)
+
+### LLHD Simulation Infrastructure ✅ VERIFIED
+
+- `circt-sim` works for event-driven simulation of testbenches
+- Verilator-verification tests need circt-sim, NOT BMC
+- Struct type port handling bug identified (workaround: self-contained testbenches)
+
+---
+
 ## Iteration 93-94 - January 22, 2026
 
-### Key Blocker: Virtual Method Dispatch (VTable) ⚠️ IDENTIFIED
+### Key Blocker: Virtual Method Dispatch (VTable) ⚠️ RESOLVED IN ITERATION 95
 
 **Problem**: UVM testbenches fail during LLVM lowering with:
 ```

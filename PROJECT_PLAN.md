@@ -66,28 +66,34 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 95 - In Progress)
+### Track Status & Next Tasks (Iteration 95 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-20: **45/47 passing** (96%) ✅
+- sv-tests Chapter-20: **45/47 passing** (95%) ✅
+- sv-tests Chapter-7: **97/103 passing** (94%) ✅
+- sv-tests Chapter-11: **81/88 passing** (92%) ✅
+- sv-tests Chapter-18: **50/134 passing** (37%) - needs constraints work
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator-verification: 0/17 - Tests need LLHD simulation, NOT BMC (testbenches with always blocks)
-- APB/SPI AVIP: Full pipeline to Moore IR works; LLVM lowering blocked by vtable
+- verilator-verification: Use circt-sim (event simulation), NOT BMC
 
-**Active Workstreams**:
-1. **Track A: VTable Runtime Population** - Fix virtual method dispatch for UVM polymorphism
-2. **Track B: AVIP Testing** - Continue testing ~/mbit/*avip testbenches
-3. **Track C: sv-tests Expansion** - Improve other chapters (7, 11, 18)
-4. **Track D: LLHD Simulation** - verilator tests need simulation, not BMC
+**VTable Blocker ✅ RESOLVED**:
+- Fixed GEP indices for derived class vtable pointer access
+- Created `InitVtablesPass` for two-phase vtable population
+- Usage: `--convert-moore-to-core --convert-func-to-llvm --init-vtables`
 
-**Key Blocker (VTable)**:
-Virtual method dispatch vtable lowering fails with:
-```
-error: 'llvm.mlir.addressof' op must reference a global defined by 'llvm.mlir.global', 'llvm.mlir.alias' or 'llvm.func' or 'llvm.mlir.ifunc'
-```
-Root cause: VTableOpConversion creates `llvm.mlir.addressof` referencing function names like `@"uvm_pkg::uvm_object::do_unpack"`, but these functions haven't been converted to LLVM functions yet. Need to ensure func.func → llvm.func conversion runs before vtable conversion.
+**Remaining Limitations**:
+1. **Chapter-18 (Random/Constraints)** - 37% pass rate, needs constraint solver work
+2. **Sibling Hierarchical Refs** - extnets.sv still fails (cross-module refs)
+3. **circt-sim Struct Ports** - Bug with struct type input ports (workaround exists)
+4. **UVM Full Integration** - Test AVIP testbenches with vtable fix
+
+**Active Workstreams (Next)**:
+1. **Track A: UVM AVIP Testing** - Test full UVM testbenches with vtable fix
+2. **Track B: Chapter-18 Constraints** - Improve random/constraint support
+3. **Track C: circt-sim Improvements** - Fix struct port handling
+4. **Track D: sv-tests Expansion** - Continue coverage improvements
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
