@@ -130,6 +130,11 @@ void __moore_queue_rsort(MooreQueue *queue, int64_t elem_size);
 /// @param elem_size Size of each element in bytes
 void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size);
 
+/// Reverse a queue in place.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param elem_size Size of each element in bytes
+void __moore_queue_reverse(MooreQueue *queue, int64_t elem_size);
+
 /// Slice a queue with an inclusive range [start, end].
 /// @param queue Pointer to the queue structure
 /// @param start Start index (inclusive)

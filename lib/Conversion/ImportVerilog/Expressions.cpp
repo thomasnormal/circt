@@ -3913,14 +3913,15 @@ struct RvalueExprVisitor : public ExprVisitor {
     // Handle queue methods that need special treatment (lvalue for queue).
     // push_back, push_front need queue as lvalue + element as rvalue.
     // pop_back, pop_front need queue as lvalue, no additional args.
-    // delete, sort, rsort, shuffle need queue as lvalue, no additional args, return void.
+    // delete, sort, rsort, shuffle, reverse need queue as lvalue, no additional args, return void.
     bool isQueuePushMethod =
         (subroutine.name == "push_back" || subroutine.name == "push_front");
     bool isQueuePopMethod =
         (subroutine.name == "pop_back" || subroutine.name == "pop_front");
     bool isQueueVoidMethod =
         (subroutine.name == "delete" || subroutine.name == "sort" ||
-         subroutine.name == "rsort" || subroutine.name == "shuffle");
+         subroutine.name == "rsort" || subroutine.name == "shuffle" ||
+         subroutine.name == "reverse");
     bool isQueueInsertMethod = (subroutine.name == "insert");
 
     if (isQueuePushMethod && args.size() == 2) {
@@ -6809,13 +6810,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("sum",
                 [&]() -> Value {
                   auto type = value.getType();
-                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
                     Type elementType;
                     if (auto queueType = dyn_cast<moore::QueueType>(type))
                       elementType = queueType.getElementType();
                     else if (auto dynArrayType =
                                  dyn_cast<moore::OpenUnpackedArrayType>(type))
                       elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
                     if (!isa<moore::IntType>(elementType)) {
                       mlir::emitError(loc)
                           << "sum() only supports integer element types, got "
@@ -6833,13 +6838,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("product",
                 [&]() -> Value {
                   auto type = value.getType();
-                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
                     Type elementType;
                     if (auto queueType = dyn_cast<moore::QueueType>(type))
                       elementType = queueType.getElementType();
                     else if (auto dynArrayType =
                                  dyn_cast<moore::OpenUnpackedArrayType>(type))
                       elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
                     if (!isa<moore::IntType>(elementType)) {
                       mlir::emitError(loc)
                           << "product() only supports integer element types, got "
@@ -6857,13 +6866,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("and",
                 [&]() -> Value {
                   auto type = value.getType();
-                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
                     Type elementType;
                     if (auto queueType = dyn_cast<moore::QueueType>(type))
                       elementType = queueType.getElementType();
                     else if (auto dynArrayType =
                                  dyn_cast<moore::OpenUnpackedArrayType>(type))
                       elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
                     if (!isa<moore::IntType>(elementType)) {
                       mlir::emitError(loc)
                           << "and() only supports integer element types, got "
@@ -6881,13 +6894,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("or",
                 [&]() -> Value {
                   auto type = value.getType();
-                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
                     Type elementType;
                     if (auto queueType = dyn_cast<moore::QueueType>(type))
                       elementType = queueType.getElementType();
                     else if (auto dynArrayType =
                                  dyn_cast<moore::OpenUnpackedArrayType>(type))
                       elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
                     if (!isa<moore::IntType>(elementType)) {
                       mlir::emitError(loc)
                           << "or() only supports integer element types, got "
@@ -6905,13 +6922,17 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("xor",
                 [&]() -> Value {
                   auto type = value.getType();
-                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(type)) {
+                  if (isa<moore::OpenUnpackedArrayType, moore::QueueType,
+                          moore::UnpackedArrayType>(type)) {
                     Type elementType;
                     if (auto queueType = dyn_cast<moore::QueueType>(type))
                       elementType = queueType.getElementType();
                     else if (auto dynArrayType =
                                  dyn_cast<moore::OpenUnpackedArrayType>(type))
                       elementType = dynArrayType.getElementType();
+                    else if (auto arrayType =
+                                 dyn_cast<moore::UnpackedArrayType>(type))
+                      elementType = arrayType.getElementType();
                     if (!isa<moore::IntType>(elementType)) {
                       mlir::emitError(loc)
                           << "xor() only supports integer element types, got "
@@ -7255,6 +7276,12 @@ Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subrouti
           .Case("shuffle",
                 [&]() -> FailureOr<Value> {
                   moore::QueueShuffleOp::create(builder, loc, arrayRef);
+                  auto intTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("reverse",
+                [&]() -> FailureOr<Value> {
+                  moore::QueueReverseOp::create(builder, loc, arrayRef);
                   auto intTy = moore::IntType::getInt(getContext(), 1);
                   return (Value)moore::ConstantOp::create(builder, loc, intTy, 0);
                 })

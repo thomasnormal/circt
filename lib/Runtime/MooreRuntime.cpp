@@ -441,6 +441,27 @@ extern "C" void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size) {
   }
 }
 
+extern "C" void __moore_queue_reverse(MooreQueue *queue, int64_t elem_size) {
+  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0)
+    return;
+
+  auto *data = static_cast<char *>(queue->data);
+  std::vector<char> temp(static_cast<size_t>(elem_size));
+  int64_t left = 0;
+  int64_t right = queue->len - 1;
+  while (left < right) {
+    // Swap elements at left and right
+    std::memcpy(temp.data(), data + left * elem_size,
+                static_cast<size_t>(elem_size));
+    std::memcpy(data + left * elem_size, data + right * elem_size,
+                static_cast<size_t>(elem_size));
+    std::memcpy(data + right * elem_size, temp.data(),
+                static_cast<size_t>(elem_size));
+    ++left;
+    --right;
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations
 //===----------------------------------------------------------------------===//
