@@ -1372,6 +1372,37 @@ struct RvalueExprVisitor : public ExprVisitor {
           if (!rhs)
             return {};
 
+          // If the RHS is a queue or dynamic array, we need to first stream-concat
+          // it to get bits, then stream-unpack those bits into the LHS.
+          if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(
+                  rhs.getType())) {
+            // Determine the element type of the source queue/array
+            Type elementType;
+            if (auto queueType = dyn_cast<moore::QueueType>(rhs.getType()))
+              elementType = queueType.getElementType();
+            else if (auto arrayType =
+                         dyn_cast<moore::OpenUnpackedArrayType>(rhs.getType()))
+              elementType = arrayType.getElementType();
+
+            // Determine result type for stream concat - use element size as base
+            Type resultType;
+            auto unpackedElem = cast<moore::UnpackedType>(elementType);
+            if (auto bitSize = unpackedElem.getBitSize()) {
+              resultType = moore::IntType::get(context.getContext(), *bitSize,
+                                               unpackedElem.getDomain());
+            } else {
+              mlir::emitError(loc) << "cannot determine bit size of queue "
+                                      "element for streaming unpack";
+              return {};
+            }
+
+            // Create stream concat to convert queue to bits
+            // Use same direction as the unpack operation
+            bool srcIsRightToLeft = streamExpr->getSliceSize() != 0;
+            rhs = moore::StreamConcatOp::create(builder, loc, resultType, rhs,
+                                                srcIsRightToLeft);
+          }
+
           // Determine streaming direction from slice size:
           // getSliceSize() == 0 means right-to-left ({>>{}}), otherwise
           // left-to-right ({<<{}}).
@@ -4842,6 +4873,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       // Handle dynamic array or queue types using runtime streaming operation.
       // These cannot be converted to simple bit vectors at compile time.
       if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(value.getType())) {
+        // If there are multiple operands in the streaming concatenation and one
+        // is a dynamic array, this is not yet supported - we would need to
+        // handle mixed static/dynamic streaming which requires complex runtime
+        // support.
+        if (expr.streams().size() > 1) {
+          mlir::emitError(loc) << "streaming concatenation with mixed static "
+                                  "and dynamic array operands not yet supported";
+          return {};
+        }
+
         // Determine the result type based on the element type of the
         // queue/dynamic array. String queues produce strings, other types
         // produce integers based on element bit size.
@@ -5350,6 +5391,15 @@ struct RvalueExprVisitor : public ExprVisitor {
     return {};
   }
 
+  /// Handle min:typ:max expressions.
+  /// These represent timing expressions with minimum, typical, and maximum
+  /// values. We convert the selected value based on compilation options.
+  Value visit(const slang::ast::MinTypMaxExpression &expr) {
+    // The selected() method returns the appropriate value based on which
+    // timing mode is selected in compilation options (min, typ, or max).
+    return context.convertRvalueExpression(expr.selected());
+  }
+
   /// Emit an error for all other expressions.
   template <typename T>
   Value visit(T &&node) {
@@ -5674,6 +5724,17 @@ struct LvalueExprVisitor : public ExprVisitor {
         // convertToSimpleBitVector for rvalues.
         if (value) {
           if (auto refType = dyn_cast<moore::RefType>(value.getType())) {
+            // Check if this is a dynamic array or queue
+            if (isa<moore::OpenUnpackedArrayType, moore::QueueType>(
+                    refType.getNestedType())) {
+              // If there are multiple operands, we cannot mix static and dynamic
+              if (expr.streams().size() > 1) {
+                mlir::emitError(loc)
+                    << "streaming concatenation lvalue with mixed static "
+                       "and dynamic array operands not yet supported";
+                return {};
+              }
+            }
             if (auto packed =
                     dyn_cast<moore::PackedType>(refType.getNestedType())) {
               if (!isa<moore::IntType>(packed)) {

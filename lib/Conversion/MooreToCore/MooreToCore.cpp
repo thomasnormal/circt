@@ -9954,6 +9954,22 @@ struct QueueSortKeyYieldOpConversion
   }
 };
 
+/// Conversion for moore.array.locator.yield -> no-op (handled by parent).
+/// This operation is just a terminator and is handled by ArrayLocatorOpConversion.
+struct ArrayLocatorYieldOpConversion
+    : public OpConversionPattern<ArrayLocatorYieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ArrayLocatorYieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // This operation is handled by the parent ArrayLocatorOp conversion.
+    // The original operation is erased when the parent is converted.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.queue.shuffle -> runtime function call.
 struct QueueShuffleOpConversion
     : public RuntimeCallConversionBase<QueueShuffleOp> {
@@ -10343,6 +10359,12 @@ struct StreamUnpackOpConversion
         } else if (srcWidth > 64) {
           srcValue = arith::TruncIOp::create(rewriter, loc, i64Ty, srcValue);
         }
+      } else {
+        // Source is not an integer type (e.g., a queue struct).
+        // Stream unpacking from queue to dynamic array is not yet supported.
+        return rewriter.notifyMatchFailure(
+            op, "streaming unpack from queue/dynamic array source not yet "
+                "supported - source must be converted to bits first");
       }
     }
 
@@ -10407,7 +10429,7 @@ struct StreamUnpackOpConversion
 struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
   ArrayLocatorOpConversion(TypeConverter &tc, MLIRContext *ctx,
                            ClassTypeCache &cache)
-      : OpConversionPattern(tc, ctx), classCache(cache) {}
+      : OpConversionPattern(tc, ctx, /*benefit=*/10), classCache(cache) {}
 
   using OpAdaptor = typename ArrayLocatorOp::Adaptor;
 
@@ -10591,6 +10613,130 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     return 8;
   }
 
+  /// Lower array.locator for fixed-size arrays with a simple predicate.
+  /// This wraps the fixed-size array as a queue and calls the runtime function.
+  /// This is simpler than generating inline loops and avoids issues with
+  /// block manipulation in the dialect conversion framework.
+  LogicalResult
+  lowerFixedArrayWithSimplePredicate(ArrayLocatorOp op, OpAdaptor adaptor,
+                                     ConversionPatternRewriter &rewriter,
+                                     Location loc, MLIRContext *ctx,
+                                     ModuleOp mod, CmpMode cmpMode,
+                                     Value constValue) const {
+    // Convert the region types so the framework doesn't complain about
+    // unconverted operations in the region.
+    if (failed(rewriter.convertRegionTypes(&op.getBody(), *typeConverter)))
+      return rewriter.notifyMatchFailure(op, "failed to convert region types");
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i1Ty = IntegerType::get(ctx, 1);
+
+    // Get array info
+    auto arrayType = dyn_cast<UnpackedArrayType>(op.getArray().getType());
+    if (!arrayType)
+      return rewriter.notifyMatchFailure(op, "expected UnpackedArrayType");
+
+    Type mooreElemType = arrayType.getElementType();
+    int64_t arraySize = arrayType.getSize();
+
+    Type elemType = typeConverter->convertType(mooreElemType);
+    if (!elemType)
+      return rewriter.notifyMatchFailure(op, "failed to convert element type");
+
+    int64_t elemSizeBytes = getTypeSize(elemType);
+
+    // Convert hw::ArrayType to LLVM array and store to memory
+    auto hwArrayTy = dyn_cast<hw::ArrayType>(adaptor.getArray().getType());
+    if (!hwArrayTy)
+      return rewriter.notifyMatchFailure(op, "expected hw::ArrayType");
+
+    Type llvmArrayType = convertToLLVMType(hwArrayTy);
+    Type llvmElemType = convertToLLVMType(elemType);
+
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+
+    // Allocate stack space for the array
+    auto arrayAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+
+    // Cast the hw.array value to llvm.array for storage
+    auto castOp = UnrealizedConversionCastOp::create(rewriter, loc, llvmArrayType,
+                                           adaptor.getArray());
+    Value llvmArrayValue = castOp.getResult(0);
+    LLVM::StoreOp::create(rewriter, loc, llvmArrayValue, arrayAlloca);
+
+    // Create a temporary queue struct {ptr, len} pointing to the array
+    Value arrayLen = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(arraySize));
+    Value tempQueue = LLVM::UndefOp::create(rewriter, loc, queueTy);
+    tempQueue = LLVM::InsertValueOp::create(rewriter, loc, tempQueue, arrayAlloca,
+                                            ArrayRef<int64_t>{0});
+    tempQueue = LLVM::InsertValueOp::create(rewriter, loc, tempQueue, arrayLen,
+                                            ArrayRef<int64_t>{1});
+
+    // Allocate stack space for the temp queue (runtime function takes ptr)
+    auto tempQueueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, tempQueue, tempQueueAlloca);
+
+    // Allocate stack space for the comparison value
+    auto cmpValueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElemType, one);
+
+    // Get the comparison value (convert constant to LLVM type)
+    Value llvmCmpValue;
+    if (auto constOp = constValue.getDefiningOp<ConstantOp>()) {
+      APInt constAPInt = constOp.getValue().toAPInt(false);
+      llvmCmpValue = LLVM::ConstantOp::create(rewriter, loc, llvmElemType,
+                                              constAPInt.getSExtValue());
+    } else {
+      Value remapped = rewriter.getRemappedValue(constValue);
+      if (remapped) {
+        if (remapped.getType() != llvmElemType) {
+          llvmCmpValue =
+              UnrealizedConversionCastOp::create(rewriter, loc, llvmElemType,
+                                                 remapped)
+                  .getResult(0);
+        } else {
+          llvmCmpValue = remapped;
+        }
+      } else {
+        return rewriter.notifyMatchFailure(
+            op, "comparison value must be a constant or already converted");
+      }
+    }
+    LLVM::StoreOp::create(rewriter, loc, llvmCmpValue, cmpValueAlloca);
+
+    // Prepare runtime function arguments
+    Value elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(elemSizeBytes));
+    Value cmpModeVal = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(static_cast<int>(cmpMode)));
+    Value locatorMode = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(static_cast<int>(op.getMode())));
+    Value returnIndices = LLVM::ConstantOp::create(
+        rewriter, loc, i1Ty, rewriter.getBoolAttr(op.getIndexed()));
+
+    // Call __moore_array_find_cmp(queue*, elemSize, value*, cmpMode, locatorMode, returnIndices)
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        queueTy, {ptrTy, i64Ty, ptrTy, i32Ty, i32Ty, i1Ty});
+    auto findFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_find_cmp", fnTy);
+
+    auto callOp = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(findFn),
+        ValueRange{tempQueueAlloca, elemSize, cmpValueAlloca, cmpModeVal,
+                   locatorMode, returnIndices});
+    Value result = callOp.getResult();
+
+    // Replace the op with the result.
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
   /// Lower array.locator with an inline loop for complex predicates.
   /// This works for arbitrary predicate expressions because the predicate
   /// region is cloned into the loop body and converted by existing patterns.
@@ -10612,11 +10758,13 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
     // Get element type from the input array
     Type mooreElemType;
+    int64_t fixedArraySize = -1; // -1 indicates dynamic array
     if (auto queueType = dyn_cast<QueueType>(op.getArray().getType())) {
       mooreElemType = queueType.getElementType();
     } else if (auto arrayType =
                    dyn_cast<UnpackedArrayType>(op.getArray().getType())) {
       mooreElemType = arrayType.getElementType();
+      fixedArraySize = arrayType.getSize();
     } else if (auto dynArrayType =
                    dyn_cast<OpenUnpackedArrayType>(op.getArray().getType())) {
       mooreElemType = dynArrayType.getElementType();
@@ -10648,11 +10796,43 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
                                     ArrayRef<int64_t>{1});
     LLVM::StoreOp::create(rewriter, loc, emptyQueue, resultAlloca);
 
-    // Extract array length and data pointer
-    Value arrayLen = LLVM::ExtractValueOp::create(
-        rewriter, loc, i64Ty, adaptor.getArray(), ArrayRef<int64_t>{1});
-    Value dataPtr = LLVM::ExtractValueOp::create(
-        rewriter, loc, ptrTy, adaptor.getArray(), ArrayRef<int64_t>{0});
+    // Handle array length and data pointer differently for fixed-size arrays
+    // vs dynamic arrays/queues
+    Value arrayLen;
+    Value dataPtr;
+
+    Type convertedArrayType = adaptor.getArray().getType();
+    if (auto hwArrayTy = dyn_cast<hw::ArrayType>(convertedArrayType)) {
+      // Fixed-size array: hw::ArrayType needs to be stored to memory first
+      // Convert hw::ArrayType to LLVM array type for storage
+      Type llvmArrayType = convertToLLVMType(hwArrayTy);
+      Type llvmElemType = convertToLLVMType(elemType);
+
+      // Allocate stack space for the array
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+
+      // Cast the hw.array value to llvm.array for storage
+      Value llvmArrayValue =
+          UnrealizedConversionCastOp::create(rewriter, loc, llvmArrayType,
+                                             adaptor.getArray())
+              .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, llvmArrayValue, arrayAlloca);
+
+      // Use the alloca as the data pointer and fixed size as length
+      dataPtr = arrayAlloca;
+      arrayLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(fixedArraySize));
+
+      // Update elemType to use LLVM element type for GEP operations
+      elemType = llvmElemType;
+    } else {
+      // Dynamic array/queue: already an LLVM struct {ptr, i64}
+      arrayLen = LLVM::ExtractValueOp::create(
+          rewriter, loc, i64Ty, adaptor.getArray(), ArrayRef<int64_t>{1});
+      dataPtr = LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrTy, adaptor.getArray(), ArrayRef<int64_t>{0});
+    }
 
     Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
                                          rewriter.getI64IntegerAttr(0));
@@ -10980,9 +11160,8 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
     // If simple pattern matching failed, use inline loop approach for complex
     // predicates (string comparisons, class handle comparisons, AND/OR, etc.)
-    if (!foundComparison) {
+    if (!foundComparison)
       return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
-    }
 
     // Handle field access predicates
     if (isFieldAccess) {
@@ -11109,6 +11288,16 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     auto constOp = constValue.getDefiningOp<ConstantOp>();
     if (!constOp)
       return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
+
+    // For fixed-size arrays (UnpackedArrayType), use direct lowering
+    // because the runtime functions expect a queue-like {ptr, i64} structure,
+    // but fixed-size arrays are converted to hw::ArrayType.
+    // We use CF dialect (basic blocks with branches) instead of SCF because
+    // SCF ops are illegal inside llhd::ProcessOp.
+    if (isa<UnpackedArrayType>(op.getArray().getType())) {
+      return lowerFixedArrayWithSimplePredicate(op, adaptor, rewriter, loc, ctx,
+                                                mod, cmpMode, constValue);
+    }
 
     // Get element type and size
     Type elementType;
@@ -14763,6 +14952,11 @@ static void populateLegality(ConversionTarget &target,
                              const TypeConverter &converter) {
   target.addIllegalDialect<MooreDialect>();
 
+  // Array locator operations must be explicitly illegal because they have
+  // regions that need special handling during conversion.
+  target.addIllegalOp<ArrayLocatorOp>();
+  target.addIllegalOp<ArrayLocatorYieldOp>();
+
   // WaitEventOp and DetectEventOp need special handling: they can only be
   // converted to llhd.wait when inside an llhd.process. When they appear in
   // func.func (e.g., class tasks with timing controls), they must remain
@@ -14789,6 +14983,7 @@ static void populateLegality(ConversionTarget &target,
   target.addLegalDialect<mlir::LLVM::LLVMDialect>();
   target.addLegalDialect<verif::VerifDialect>();
   target.addLegalDialect<arith::ArithDialect>();
+  target.addLegalDialect<cf::ControlFlowDialect>();
 
   // arith.select on Moore types needs to be converted to comb.mux.
   // This handles cases where MLIR canonicalizers introduce arith.select
@@ -14811,6 +15006,18 @@ static void populateLegality(ConversionTarget &target,
             op.getResult(0).getType().isInteger(1) &&
             isFourStateStructType(op.getOperand(0).getType()))
           return false;
+        // Allow casts between hw.array and llvm.array types.
+        // These are used when lowering fixed-size arrays that need to be
+        // passed to runtime functions.
+        if (op.getNumOperands() == 1 && op.getNumResults() == 1) {
+          Type inputType = op.getOperand(0).getType();
+          Type outputType = op.getResult(0).getType();
+          if ((isa<hw::ArrayType>(inputType) &&
+               isa<LLVM::LLVMArrayType>(outputType)) ||
+              (isa<LLVM::LLVMArrayType>(inputType) &&
+               isa<hw::ArrayType>(outputType)))
+            return true;
+        }
         return converter.isLegal(op);
       });
 
@@ -15491,6 +15698,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueSortWithOpConversion,
     QueueRSortWithOpConversion,
     QueueSortKeyYieldOpConversion,
+    ArrayLocatorYieldOpConversion,
     QueueShuffleOpConversion,
     QueueReverseOpConversion,
     QueueConcatOpConversion,

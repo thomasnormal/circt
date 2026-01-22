@@ -100,6 +100,10 @@ struct BaseVisitor {
     return success();
   }
 
+  // Skip let declarations. These define expression macros that Slang expands
+  // inline when they are used.
+  LogicalResult visit(const slang::ast::LetDeclSymbol &) { return success(); }
+
   // Handle parameters.
   LogicalResult visit(const slang::ast::ParameterSymbol &param) {
     visitParameter(param);
