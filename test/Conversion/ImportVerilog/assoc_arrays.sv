@@ -28,6 +28,31 @@ module WildcardAssocArrayTest;
     int aa_wildcard[*];
 endmodule
 
+/// Test wildcard associative array element access
+/// This tests the fix for "unsupported expression: element select into int$[*]"
+// CHECK-LABEL: moore.module @WildcardAssocArrayAccessTest() {
+module WildcardAssocArrayAccessTest;
+    // CHECK: moore.variable {{%.+}} : <wildcard_assoc_array<i32>>
+    int aa[*] = '{default:255};
+    int val;
+
+    initial begin
+        // Write to wildcard associative array
+        // CHECK: moore.dyn_extract_ref
+        // CHECK: moore.blocking_assign
+        aa[1] = 100;
+
+        // Read from wildcard associative array
+        // CHECK: moore.dyn_extract
+        val = aa[1];
+
+        // Increment value in wildcard associative array
+        // CHECK: moore.dyn_extract_ref
+        // CHECK: moore.add
+        aa[1] = aa[1] + 1;
+    end
+endmodule
+
 /// Test associative array exists() method
 /// exists() returns 1 if the key exists, 0 otherwise
 // CHECK-LABEL: moore.module @AssocArrayExistsTest() {
