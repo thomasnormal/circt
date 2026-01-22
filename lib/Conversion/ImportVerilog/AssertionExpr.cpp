@@ -416,8 +416,21 @@ struct AssertionExprVisitor {
 
     for (auto it = expr.elements.begin(); it != expr.elements.end(); ++it) {
       const auto &concatElement = *it;
-      currentOffset += concatElement.delay.min;
+
+      // Adjust inter-element delays to account for concat's cycle alignment.
+      // For ##N between elements, concat already advances one cycle, so
+      // subtract one when possible to align with SVA timing. The first element
+      // delay is relative to the sequence start and should not be adjusted.
+      uint32_t minDelay = concatElement.delay.min;
+      std::optional<uint32_t> maxDelay = concatElement.delay.max;
+      if (it != expr.elements.begin() && minDelay > 0) {
+        --minDelay;
+        if (maxDelay.has_value() && maxDelay.value() > 0)
+          --maxDelay.value();
+      }
+      currentOffset += minDelay;
       context.setAssertionSequenceOffset(currentOffset);
+
       Value sequenceValue =
           context.convertAssertionExpression(*concatElement.sequence, loc,
                                              /*applyDefaults=*/false);
@@ -435,17 +448,6 @@ struct AssertionExprVisitor {
         return {};
       }
 
-      // Adjust inter-element delays to account for concat's cycle alignment.
-      // For ##N between elements, concat already advances one cycle, so
-      // subtract one when possible to align with SVA timing. The first element
-      // delay is relative to the sequence start and should not be adjusted.
-      uint32_t minDelay = concatElement.delay.min;
-      std::optional<uint32_t> maxDelay = concatElement.delay.max;
-      if (it != expr.elements.begin() && minDelay > 0) {
-        --minDelay;
-        if (maxDelay.has_value() && maxDelay.value() > 0)
-          --maxDelay.value();
-      }
       auto [delayMin, delayRange] = convertRangeToAttrs(minDelay, maxDelay);
       auto delayedSequence = ltl::DelayOp::create(builder, loc, sequenceValue,
                                                   delayMin, delayRange);

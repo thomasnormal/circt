@@ -1929,17 +1929,34 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       valueSymbols.insert(hierPath.valueSym,
                           lowering.op.getBody()->getArgument(*hierPath.idx));
 
-  // Convert non-instance members first to populate value symbols used in
-  // instance connections, then lower instances once their hierarchical inputs
-  // are ready.
+  // First pass: collect instance members and process interface instances early.
+  // Interface instances need to be registered before procedural blocks that
+  // might reference them (e.g., in virtual interface assignments).
   SmallVector<const slang::ast::Symbol *> instanceMembers;
+  SmallVector<const slang::ast::Symbol *> otherMembers;
   for (auto &member : module->members()) {
     if (member.kind == slang::ast::SymbolKind::Instance) {
-      instanceMembers.push_back(&member);
+      auto &instNode = member.as<slang::ast::InstanceSymbol>();
+      auto kind = instNode.body.getDefinition().definitionKind;
+      if (kind == slang::ast::DefinitionKind::Interface) {
+        // Process interface instances immediately so they're available
+        // for virtual interface assignments in procedural blocks.
+        auto loc = convertLocation(member.location);
+        if (failed(member.visit(ModuleVisitor(*this, loc))))
+          return failure();
+      } else {
+        instanceMembers.push_back(&member);
+      }
       continue;
     }
-    auto memberLoc = convertLocation(member.location);
-    if (failed(member.visit(ModuleVisitor(*this, memberLoc))))
+    otherMembers.push_back(&member);
+  }
+
+  // Second pass: convert non-instance members to populate value symbols used
+  // in instance connections.
+  for (auto *member : otherMembers) {
+    auto memberLoc = convertLocation(member->location);
+    if (failed(member->visit(ModuleVisitor(*this, memberLoc))))
       return failure();
   }
 
