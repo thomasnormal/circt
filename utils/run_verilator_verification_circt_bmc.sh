@@ -60,6 +60,43 @@ is_xfail() {
   grep -Fxq "$name" "$XFAILS"
 }
 
+detect_top() {
+  local file="$1"
+  local requested="$2"
+  local modules=()
+  while IFS= read -r name; do
+    modules+=("$name")
+  done < <(awk '
+    /^[[:space:]]*module[[:space:]]+/ {
+      name=$2
+      sub(/[^A-Za-z0-9_$].*/, "", name)
+      if (name != "") print name
+    }' "$file")
+
+  if [[ -n "$requested" ]]; then
+    for m in "${modules[@]}"; do
+      if [[ "$m" == "$requested" ]]; then
+        echo "$requested"
+        return
+      fi
+    done
+  fi
+
+  if [[ ${#modules[@]} -eq 1 ]]; then
+    echo "${modules[0]}"
+    return
+  fi
+
+  if [[ -z "$requested" || "$requested" == "top" ]]; then
+    if [[ ${#modules[@]} -gt 0 ]]; then
+      echo "${modules[0]}"
+      return
+    fi
+  fi
+
+  echo "$requested"
+}
+
 for suite in "${suites[@]}"; do
   if [[ ! -d "$suite" ]]; then
     echo "suite not found: $suite" >&2
@@ -77,6 +114,7 @@ for suite in "${suites[@]}"; do
     mlir="$tmpdir/${base}.mlir"
     verilog_log="$tmpdir/${base}.circt-verilog.log"
     bmc_log="$tmpdir/${base}.circt-bmc.log"
+    top_for_file="$(detect_top "$sv" "$TOP")"
 
     cmd=("$CIRCT_VERILOG" --ir-hw --timescale=1ns/1ns --single-unit \
       -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
@@ -88,7 +126,9 @@ for suite in "${suites[@]}"; do
       cmd+=("${extra_args[@]}")
     fi
     cmd+=("-I" "$(dirname "$sv")")
-    cmd+=("--top=$TOP")
+    if [[ -n "$top_for_file" ]]; then
+      cmd+=("--top=$top_for_file")
+    fi
     cmd+=("$sv")
 
     if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
@@ -104,7 +144,7 @@ for suite in "${suites[@]}"; do
     fi
 
     out="$("$CIRCT_BMC" -b "$BOUND" --ignore-asserts-until="$IGNORE_ASSERTS_UNTIL" \
-      --module "$TOP" --shared-libs="$Z3_LIB" "$mlir" 2> "$bmc_log" || true)"
+      --module "$top_for_file" --shared-libs="$Z3_LIB" "$mlir" 2> "$bmc_log" || true)"
 
     if grep -q "Bound reached with no violations!" <<<"$out"; then
       result="PASS"

@@ -1930,9 +1930,63 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
                           lowering.op.getBody()->getArgument(*hierPath.idx));
 
   // Convert the body of the module.
+  SmallVector<const slang::ast::Symbol *> instanceMembers;
+  SmallVector<const slang::ast::Symbol *> otherMembers;
   for (auto &member : module->members()) {
-    auto loc = convertLocation(member.location);
-    if (failed(member.visit(ModuleVisitor(*this, loc))))
+    if (member.kind == slang::ast::SymbolKind::Instance)
+      instanceMembers.push_back(&member);
+    else
+      otherMembers.push_back(&member);
+  }
+
+  auto canConvertInstance = [&](const slang::ast::InstanceSymbol &instNode) {
+    for (const auto &hierPath : hierPaths[&instNode.body]) {
+      if (hierPath.direction != slang::ast::ArgumentDirection::In)
+        continue;
+      if (!valueSymbols.lookup(hierPath.valueSym))
+        return false;
+    }
+    return true;
+  };
+
+  SmallVector<const slang::ast::Symbol *> pending = instanceMembers;
+  bool progress = true;
+  while (progress && !pending.empty()) {
+    progress = false;
+    for (size_t i = 0; i < pending.size();) {
+      auto *member = pending[i];
+      auto &instNode = member->as<slang::ast::InstanceSymbol>();
+      if (!canConvertInstance(instNode)) {
+        ++i;
+        continue;
+      }
+      auto loc = convertLocation(member->location);
+      if (failed(member->visit(ModuleVisitor(*this, loc))))
+        return failure();
+      pending.erase(pending.begin() + i);
+      progress = true;
+    }
+  }
+
+  if (!pending.empty()) {
+    auto loc = convertLocation(pending.front()->location);
+    auto &instNode = pending.front()->as<slang::ast::InstanceSymbol>();
+    for (const auto &hierPath : hierPaths[&instNode.body]) {
+      if (hierPath.direction != slang::ast::ArgumentDirection::In)
+        continue;
+      if (!valueSymbols.lookup(hierPath.valueSym)) {
+        mlir::emitError(loc)
+            << "missing hierarchical value for `"
+            << hierPath.hierName.getValue() << "`";
+        break;
+      }
+    }
+    return failure();
+  }
+
+  for (auto *member : otherMembers) {
+    auto loc = convertLocation(member->location);
+    if (failed(member->visit(ModuleVisitor(*this, loc))))
       return failure();
   }
 
