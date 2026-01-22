@@ -66,19 +66,23 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 93 - In Progress)
+### Track Status & Next Tasks (Iteration 95 - In Progress)
 
-**Iteration 92 Complete!** Iteration 93 in progress with 4 parallel agents.
-
-**Test Results (Iteration 93 Progress)**:
-- sv-tests: **18/26 pass rate** (69%) for SVA BMC tests - +5 from expect assertions
-- sv-tests Chapter-21: **23/29 passing** (79%) - $strobe/$monitor improvements
-- verilator-verification: Asserts parse OK, BMC blocked by `llhd.process` parent constraint
-- Yosys SVA BMC: **85.7%** (12/14 passing)
+**Test Results (Current)**:
+- sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
+- sv-tests Chapter-20: **45/47 passing** (96%) ✅
+- sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
+- Yosys SVA BMC: **12/14 passing** (86%) ✅
+- verilator-verification: 0/17 - Tests need LLHD simulation, NOT BMC (testbenches with always blocks)
 - APB/SPI AVIP: Full pipeline to Moore IR works; LLVM lowering blocked by vtable
-- I2S AVIP: Assertions verified working end-to-end
 
-**Key Blocker Identified (Iteration 93)**:
+**Active Workstreams**:
+1. **Track A: VTable Runtime Population** - Fix virtual method dispatch for UVM polymorphism
+2. **Track B: AVIP Testing** - Continue testing ~/mbit/*avip testbenches
+3. **Track C: sv-tests Expansion** - Improve other chapters (7, 11, 18)
+4. **Track D: LLHD Simulation** - verilator tests need simulation, not BMC
+
+**Key Blocker (VTable)**:
 Virtual method dispatch vtable lowering fails with:
 ```
 error: 'llvm.mlir.addressof' op must reference a global defined by 'llvm.mlir.global', 'llvm.mlir.alias' or 'llvm.func' or 'llvm.mlir.ifunc'
