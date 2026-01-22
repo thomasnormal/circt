@@ -1102,15 +1102,25 @@ struct RvalueExprVisitor : public ExprVisitor {
     // where the symbol is the interface member but accessed via a virtual
     // interface variable. We detect this by checking if the symbol's parent
     // scope is an interface body and the syntax is a scoped name.
-    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
-      auto parentKind = var->getParentScope()->asSymbol().kind;
-      if (parentKind == slang::ast::SymbolKind::InstanceBody) {
-        // Check if this is accessed through a virtual interface by looking at
-        // the syntax.
-        if (expr.syntax) {
-          if (auto result =
-                  visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
-            return result;
+    // This applies to both VariableSymbol (output/inout ports) and NetSymbol
+    // (input ports which are nets in SystemVerilog).
+    {
+      const slang::ast::Scope *symbolScope = nullptr;
+      if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
+        symbolScope = var->getParentScope();
+      else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
+        symbolScope = net->getParentScope();
+
+      if (symbolScope) {
+        auto parentKind = symbolScope->asSymbol().kind;
+        if (parentKind == slang::ast::SymbolKind::InstanceBody) {
+          // Check if this is accessed through a virtual interface by looking at
+          // the syntax.
+          if (expr.syntax) {
+            if (auto result =
+                    visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
+              return result;
+          }
         }
       }
     }
@@ -1183,55 +1193,58 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Handle direct interface member access (e.g., intf.clk where intf is a
     // direct interface instance, not a virtual interface). Check if the
-    // symbol's parent is an interface body.
-    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
-      auto *parentScope = var->getParentScope();
-      if (parentScope) {
-        if (auto *instBody =
-                parentScope->asSymbol()
-                    .as_if<slang::ast::InstanceBodySymbol>()) {
-          if (instBody->getDefinition().definitionKind ==
-              slang::ast::DefinitionKind::Interface) {
-            // This is a variable inside an interface. Find the interface
-            // instance from the hierarchical path.
-            for (const auto &elem : expr.ref.path) {
-              Value instRef;
-              if (auto *instSym =
-                      elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-                if (auto it = context.interfaceInstances.find(instSym);
-                    it != context.interfaceInstances.end())
-                  instRef = it->second;
-              } else if (auto *ifacePort =
-                             elem.symbol
-                                 ->as_if<slang::ast::InterfacePortSymbol>()) {
-                if (auto it = context.interfacePortValues.find(ifacePort);
-                    it != context.interfacePortValues.end())
-                  instRef = it->second;
-              }
+    // symbol's parent is an interface body. This applies to both VariableSymbol
+    // (for output/inout ports and internal variables) and NetSymbol (for input
+    // ports which are nets).
+    const slang::ast::Scope *parentScope = nullptr;
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
+      parentScope = var->getParentScope();
+    else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
+      parentScope = net->getParentScope();
 
-              if (!instRef)
-                continue;
-
-              // Found the interface instance. The instance is stored as a
-              // RefType<VirtualInterfaceType>, so we need to read it first.
-              Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-              // Create a signal reference.
-              auto type = context.convertType(*expr.type);
-              if (!type)
-                return {};
-              auto signalSym = mlir::FlatSymbolRefAttr::get(
-                  builder.getContext(), expr.symbol.name);
-              auto refTy =
-                  moore::RefType::get(cast<moore::UnpackedType>(type));
-              Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
-                  builder, loc, refTy, vifValue, signalSym);
-              // For rvalue, read from the reference
-              auto readOp = moore::ReadOp::create(builder, loc, signalRef);
-              if (context.rvalueReadCallback)
-                context.rvalueReadCallback(readOp);
-              return readOp.getResult();
+    if (parentScope) {
+      if (auto *instBody =
+              parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+        if (instBody->getDefinition().definitionKind ==
+            slang::ast::DefinitionKind::Interface) {
+          // This is a variable/net inside an interface. Find the interface
+          // instance from the hierarchical path.
+          for (const auto &elem : expr.ref.path) {
+            Value instRef;
+            if (auto *instSym =
+                    elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+              if (auto it = context.interfaceInstances.find(instSym);
+                  it != context.interfaceInstances.end())
+                instRef = it->second;
+            } else if (auto *ifacePort =
+                           elem.symbol
+                               ->as_if<slang::ast::InterfacePortSymbol>()) {
+              if (auto it = context.interfacePortValues.find(ifacePort);
+                  it != context.interfacePortValues.end())
+                instRef = it->second;
             }
+
+            if (!instRef)
+              continue;
+
+            // Found the interface instance. The instance is stored as a
+            // RefType<VirtualInterfaceType>, so we need to read it first.
+            Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+            // Create a signal reference.
+            auto type = context.convertType(*expr.type);
+            if (!type)
+              return {};
+            auto signalSym = mlir::FlatSymbolRefAttr::get(
+                builder.getContext(), expr.symbol.name);
+            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+            Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+                builder, loc, refTy, vifValue, signalSym);
+            // For rvalue, read from the reference
+            auto readOp = moore::ReadOp::create(builder, loc, signalRef);
+            if (context.rvalueReadCallback)
+              context.rvalueReadCallback(readOp);
+            return readOp.getResult();
           }
         }
       }
@@ -4406,6 +4419,25 @@ struct RvalueExprVisitor : public ExprVisitor {
                                            loc);
     }
 
+    // Handle $dist_* distribution functions (IEEE 1800-2017 Section 20.15).
+    // These have an inout seed as the first argument (bound as lvalue).
+    // Currently stubbed to return 0 without updating the seed.
+    if (subroutine.name == "$dist_chi_square" ||
+        subroutine.name == "$dist_exponential" ||
+        subroutine.name == "$dist_t" ||
+        subroutine.name == "$dist_poisson" ||
+        subroutine.name == "$dist_uniform" ||
+        subroutine.name == "$dist_normal" ||
+        subroutine.name == "$dist_erlang") {
+      // The seed argument is an lvalue that would be updated, but we
+      // ignore it in the stub. Just return 0.
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, result, expr.type->isSigned(),
+                                           loc);
+    }
+
     // Helper to check if an argument is an EmptyArgumentExpression.
     auto isEmptyArg = [](const slang::ast::Expression *arg) {
       return arg->kind == slang::ast::ExpressionKind::EmptyArgument;
@@ -4461,6 +4493,28 @@ struct RvalueExprVisitor : public ExprVisitor {
       value = nonEmptyValues[0];
       value2 = nonEmptyValues[1];
       result = context.convertSystemCallArity2(subroutine, loc, value, value2);
+      break;
+    }
+
+    case (3): {
+      // Find the first three non-empty arguments.
+      SmallVector<Value, 3> nonEmptyValues;
+      for (auto *arg : args) {
+        if (!isEmptyArg(arg)) {
+          Value v = context.convertRvalueExpression(*arg);
+          if (!v)
+            return {};
+          nonEmptyValues.push_back(v);
+          if (nonEmptyValues.size() == 3)
+            break;
+        }
+      }
+      if (nonEmptyValues.size() < 3)
+        return {};
+      result = context.convertSystemCallArity3(subroutine, loc,
+                                               nonEmptyValues[0],
+                                               nonEmptyValues[1],
+                                               nonEmptyValues[2]);
       break;
     }
 
@@ -5371,14 +5425,23 @@ struct LvalueExprVisitor : public ExprVisitor {
     // Handle virtual interface member access. When accessing a member through
     // a virtual interface (e.g., vif.data), slang gives us a NamedValueExpression
     // where the symbol is the interface member but accessed via a virtual
-    // interface variable.
-    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
-      auto parentKind = var->getParentScope()->asSymbol().kind;
-      if (parentKind == slang::ast::SymbolKind::InstanceBody) {
-        if (expr.syntax) {
-          if (auto result =
-                  visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
-            return result;
+    // interface variable. This applies to both VariableSymbol (output/inout)
+    // and NetSymbol (input ports which are nets).
+    {
+      const slang::ast::Scope *symbolScope = nullptr;
+      if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
+        symbolScope = var->getParentScope();
+      else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
+        symbolScope = net->getParentScope();
+
+      if (symbolScope) {
+        auto parentKind = symbolScope->asSymbol().kind;
+        if (parentKind == slang::ast::SymbolKind::InstanceBody) {
+          if (expr.syntax) {
+            if (auto result =
+                    visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
+              return result;
+          }
         }
       }
     }
@@ -5450,51 +5513,53 @@ struct LvalueExprVisitor : public ExprVisitor {
 
     // Handle direct interface member access (e.g., intf.clk = 1 where intf is a
     // direct interface instance, not a virtual interface). Check if the
-    // symbol's parent is an interface body.
-    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>()) {
-      auto *parentScope = var->getParentScope();
-      if (parentScope) {
-        if (auto *instBody =
-                parentScope->asSymbol()
-                    .as_if<slang::ast::InstanceBodySymbol>()) {
-          if (instBody->getDefinition().definitionKind ==
-              slang::ast::DefinitionKind::Interface) {
-            // This is a variable inside an interface. Find the interface
-            // instance from the hierarchical path.
-            for (const auto &elem : expr.ref.path) {
-              Value instRef;
-              if (auto *instSym =
-                      elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-                if (auto it = context.interfaceInstances.find(instSym);
-                    it != context.interfaceInstances.end())
-                  instRef = it->second;
-              } else if (auto *ifacePort =
-                             elem.symbol
-                                 ->as_if<slang::ast::InterfacePortSymbol>()) {
-                if (auto it = context.interfacePortValues.find(ifacePort);
-                    it != context.interfacePortValues.end())
-                  instRef = it->second;
-              }
+    // symbol's parent is an interface body. This applies to both VariableSymbol
+    // (for output/inout ports) and NetSymbol (for input ports which are nets).
+    const slang::ast::Scope *parentScope = nullptr;
+    if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
+      parentScope = var->getParentScope();
+    else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
+      parentScope = net->getParentScope();
 
-              if (!instRef)
-                continue;
-
-              // Found the interface instance. The instance is stored as a
-              // RefType<VirtualInterfaceType>, so we need to read it first.
-              Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-              // Create a signal reference.
-              auto type = context.convertType(*expr.type);
-              if (!type)
-                return {};
-              auto signalSym = mlir::FlatSymbolRefAttr::get(
-                  builder.getContext(), expr.symbol.name);
-              auto refTy =
-                  moore::RefType::get(cast<moore::UnpackedType>(type));
-              // For lvalue, return the reference directly
-              return moore::VirtualInterfaceSignalRefOp::create(
-                  builder, loc, refTy, vifValue, signalSym);
+    if (parentScope) {
+      if (auto *instBody =
+              parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+        if (instBody->getDefinition().definitionKind ==
+            slang::ast::DefinitionKind::Interface) {
+          // This is a variable/net inside an interface. Find the interface
+          // instance from the hierarchical path.
+          for (const auto &elem : expr.ref.path) {
+            Value instRef;
+            if (auto *instSym =
+                    elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+              if (auto it = context.interfaceInstances.find(instSym);
+                  it != context.interfaceInstances.end())
+                instRef = it->second;
+            } else if (auto *ifacePort =
+                           elem.symbol
+                               ->as_if<slang::ast::InterfacePortSymbol>()) {
+              if (auto it = context.interfacePortValues.find(ifacePort);
+                  it != context.interfacePortValues.end())
+                instRef = it->second;
             }
+
+            if (!instRef)
+              continue;
+
+            // Found the interface instance. The instance is stored as a
+            // RefType<VirtualInterfaceType>, so we need to read it first.
+            Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+            // Create a signal reference.
+            auto type = context.convertType(*expr.type);
+            if (!type)
+              return {};
+            auto signalSym = mlir::FlatSymbolRefAttr::get(
+                builder.getContext(), expr.symbol.name);
+            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+            // For lvalue, return the reference directly
+            return moore::VirtualInterfaceSignalRefOp::create(
+                builder, loc, refTy, vifValue, signalSym);
           }
         }
       }
@@ -7011,6 +7076,40 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   return moore::UngetCBIOp::create(builder, loc, intTy, value1,
                                                    value2);
                 })
+          // Distribution functions (IEEE 1800-2017 Section 20.15)
+          // These are stubs that return 0 for now.
+          .Case("$dist_chi_square",
+                [&]() -> Value {
+                  // $dist_chi_square(seed, df) - chi-square distribution
+                  (void)value1;
+                  (void)value2;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$dist_exponential",
+                [&]() -> Value {
+                  // $dist_exponential(seed, mean) - exponential distribution
+                  (void)value1;
+                  (void)value2;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$dist_t",
+                [&]() -> Value {
+                  // $dist_t(seed, df) - Student's t-distribution
+                  (void)value1;
+                  (void)value2;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$dist_poisson",
+                [&]() -> Value {
+                  // $dist_poisson(seed, mean) - Poisson distribution
+                  (void)value1;
+                  (void)value2;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {
@@ -7018,6 +7117,49 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
               auto intTy = moore::IntType::getInt(getContext(), 32);
               return (Value)moore::ConstantOp::create(builder, loc, intTy, 1);
             }
+            mlir::emitError(loc) << "unsupported system call `"
+                                 << subroutine.name << "`";
+            return failure();
+          });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertSystemCallArity3(const slang::ast::SystemSubroutine &subroutine,
+                                 Location loc, Value value1, Value value2,
+                                 Value value3) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          // Distribution functions (IEEE 1800-2017 Section 20.15)
+          // These are stubs that return 0 for now.
+          .Case("$dist_uniform",
+                [&]() -> Value {
+                  // $dist_uniform(seed, start, end) - uniform distribution
+                  (void)value1;
+                  (void)value2;
+                  (void)value3;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$dist_normal",
+                [&]() -> Value {
+                  // $dist_normal(seed, mean, std_dev) - normal distribution
+                  (void)value1;
+                  (void)value2;
+                  (void)value3;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Case("$dist_erlang",
+                [&]() -> Value {
+                  // $dist_erlang(seed, k, mean) - Erlang distribution
+                  (void)value1;
+                  (void)value2;
+                  (void)value3;
+                  auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+                  return moore::ConstantOp::create(builder, loc, intTy, 0);
+                })
+          .Default([&]() -> FailureOr<Value> {
             mlir::emitError(loc) << "unsupported system call `"
                                  << subroutine.name << "`";
             return failure();

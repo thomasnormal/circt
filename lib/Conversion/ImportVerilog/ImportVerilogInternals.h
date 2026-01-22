@@ -328,6 +328,12 @@ struct Context {
   convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                           Location loc, Value value1, Value value2);
 
+  /// Convert system function calls with arity-3.
+  FailureOr<Value>
+  convertSystemCallArity3(const slang::ast::SystemSubroutine &subroutine,
+                          Location loc, Value value1, Value value2,
+                          Value value3);
+
   /// Convert queue method calls with one argument (e.g., push_back, push_front).
   FailureOr<Value>
   convertQueueMethodCall(const slang::ast::SystemSubroutine &subroutine,
