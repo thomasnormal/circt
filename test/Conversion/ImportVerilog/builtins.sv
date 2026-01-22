@@ -300,6 +300,10 @@ function void BitVectorBuiltins(int x, logic [41:0] y);
   dummyA($countbits(y, 0));
   // CHECK: [[CNTBITS_BOTH_X:%.+]] = moore.builtin.countbits [[X]], 3 : i32
   dummyA($countbits(x, 0, 1));
+  // CHECK: [[CNTBITS_XZ_Y:%.+]] = moore.builtin.countbits [[Y]], 12 : l42
+  dummyA($countbits(y, 'x, 'z));
+  // CHECK: [[CNTBITS_ALL_X:%.+]] = moore.builtin.countbits [[X]], 15 : i32
+  dummyA($countbits(x, '0, '1, 'x, 'z));
 endfunction
 
 // CHECK-LABEL: func.func private @RandomBuiltins(
@@ -538,4 +542,29 @@ function void ClassFormatBuiltin(FormatTestClass obj);
   // CHECK: moore.fmt.concat
   // CHECK: moore.builtin.display
   $display("%p", obj);
+endfunction
+
+// IEEE 1800-2017 Section 20.14 "Coverage control system functions"
+// Test coverage control system functions (stubbed implementations)
+// CHECK-LABEL: func.func private @CoverageBuiltins(
+function void CoverageBuiltins();
+  int unsigned i;
+  real r;
+  // Coverage control functions return 0 (stubbed)
+  // CHECK: [[CC1:%.+]] = moore.constant 0 : i32
+  i = $coverage_control(0, 0, 0, "");
+  // CHECK: [[CGM:%.+]] = moore.constant 0 : i32
+  i = $coverage_get_max(0, 0, "");
+  // CHECK: [[CM:%.+]] = moore.constant 0 : i32
+  i = $coverage_merge(0, "");
+  // CHECK: [[CS:%.+]] = moore.constant 0 : i32
+  i = $coverage_save(0, "");
+  // Coverage get functions return 0.0 (stubbed)
+  // CHECK: [[CG:%.+]] = moore.constant_real 0.0{{.*}}
+  r = $coverage_get(0, 0, "");
+  // CHECK: [[GC:%.+]] = moore.constant_real 0.0{{.*}}
+  r = $get_coverage();
+  // Coverage database tasks are no-ops
+  $set_coverage_db_name("coverage.db");
+  $load_coverage_db("coverage.db");
 endfunction
