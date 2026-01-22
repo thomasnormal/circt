@@ -9,6 +9,7 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
+#include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
@@ -16,6 +17,7 @@
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -43,6 +45,116 @@ struct LowerToBMCPass : public circt::impl::LowerToBMCBase<LowerToBMCPass> {
   void runOnOperation() override;
 };
 } // namespace
+
+static void inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
+  SmallVector<llhd::CombinationalOp> combinationalOps;
+  bmcOp.getCircuit().walk([&](llhd::CombinationalOp op) {
+    combinationalOps.push_back(op);
+  });
+
+  for (auto op : combinationalOps) {
+    if (!op.getBody().hasOneBlock()) {
+      op.emitError("llhd.combinational with control flow must be flattened "
+                   "before lower-to-bmc");
+      return;
+    }
+    auto *parentBlock = op->getBlock();
+    auto &bodyBlock = op.getBody().front();
+    auto yieldOp = dyn_cast<llhd::YieldOp>(bodyBlock.getTerminator());
+    if (!yieldOp) {
+      op.emitError("llhd.combinational missing llhd.yield terminator");
+      return;
+    }
+
+    SmallVector<Value> yieldedValues(yieldOp.getYieldOperands().begin(),
+                                     yieldOp.getYieldOperands().end());
+    yieldOp.erase();
+
+    // Move the body ops into the parent block before the combinational op.
+    parentBlock->getOperations().splice(op->getIterator(),
+                                        bodyBlock.getOperations());
+
+    // Replace results with the yielded values.
+    for (auto [result, value] : llvm::zip(op.getResults(), yieldedValues))
+      result.replaceAllUsesWith(value);
+
+    op.erase();
+  }
+}
+
+static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp) {
+  // Convert llhd.constant_time to zero-value i1 so downstream passes don't
+  // have to deal with LLHD time types.
+  bmcOp.getCircuit().walk([&](llhd::ConstantTimeOp op) {
+    OpBuilder builder(op);
+    auto zero = hw::ConstantOp::create(builder, op.getLoc(),
+                                       builder.getI1Type(), 0);
+    op.replaceAllUsesWith(zero.getResult());
+    op.erase();
+  });
+
+  // Replace llhd.sig with a plain SSA value from its init. Probes are replaced
+  // with that SSA value, and drives update the SSA through a mux on the enable.
+  DenseMap<Value, Value> signalValue;
+  DenseMap<Value, Value> signalEnable;
+
+  bmcOp.getCircuit().walk([&](llhd::SignalOp op) {
+    signalValue[op.getResult()] = op.getInit();
+    signalEnable[op.getResult()] = nullptr;
+  });
+
+  auto updateSignal = [&](llhd::SignalOp op, Value newVal, Value enable) {
+    Value curVal = signalValue.lookup(op.getResult());
+    if (!curVal)
+      return;
+    if (auto probe = newVal.getDefiningOp<llhd::ProbeOp>()) {
+      if (probe.getSignal() == op.getResult())
+        newVal = curVal;
+    }
+    OpBuilder builder(op);
+    Value mergedVal = newVal;
+    if (enable) {
+      mergedVal = comb::MuxOp::create(builder, op.getLoc(), enable, newVal,
+                                      curVal);
+    }
+    signalValue[op.getResult()] = mergedVal;
+    signalEnable[op.getResult()] = enable;
+  };
+
+  bmcOp.getCircuit().walk([&](llhd::DriveOp op) {
+    auto sigOp = op.getSignal().getDefiningOp<llhd::SignalOp>();
+    if (!sigOp)
+      return;
+    Value enable = op.getEnable();
+    updateSignal(sigOp, op.getValue(), enable);
+    op.erase();
+  });
+
+  bmcOp.getCircuit().walk([&](llhd::ProbeOp op) {
+    auto sigOp = op.getSignal().getDefiningOp<llhd::SignalOp>();
+    if (!sigOp)
+      return;
+    Value curVal = signalValue.lookup(sigOp.getResult());
+    if (!curVal)
+      return;
+    if (curVal == op.getResult()) {
+      if (op.use_empty()) {
+        op.erase();
+      }
+      return;
+    }
+    op.replaceAllUsesWith(curVal);
+    op.erase();
+  });
+
+  bmcOp.getCircuit().walk([&](llhd::SignalOp op) {
+    if (!op.use_empty())
+      return;
+    op.erase();
+  });
+
+  return success();
+}
 
 void LowerToBMCPass::runOnOperation() {
   Namespace names;
@@ -243,6 +355,9 @@ void LowerToBMCPass::runOnOperation() {
   }
   bmcOp.getCircuit().takeBody(hwModule.getBody());
   hwModule->erase();
+  if (failed(lowerLlhdForBMC(bmcOp)))
+    return signalPassFailure();
+  inlineLlhdCombinationalOps(bmcOp);
 
   // Define global string constants to print on success/failure
   auto createUniqueStringGlobal = [&](StringRef str) -> FailureOr<Value> {

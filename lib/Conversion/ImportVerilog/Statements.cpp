@@ -1748,6 +1748,182 @@ struct StmtVisitor {
       return true;
     }
 
+    // $fflush - flush file buffer
+    if (subroutine.name == "$fflush") {
+      Value fd;
+      if (args.empty()) {
+        auto intTy = moore::IntType::getInt(builder.getContext(), 32);
+        fd = moore::ConstantOp::create(builder, loc, intTy, 0);
+      } else {
+        fd = context.convertRvalueExpression(*args[0]);
+        if (!fd) return failure();
+      }
+      moore::FFlushBIOp::create(builder, loc, fd);
+      return true;
+    }
+
+    // $rewind - reset file position to beginning
+    if (subroutine.name == "$rewind") {
+      if (args.size() != 1) {
+        mlir::emitError(loc) << "$rewind expects exactly one argument";
+        return failure();
+      }
+      auto fd = context.convertRvalueExpression(*args[0]);
+      if (!fd)
+        return failure();
+      moore::RewindBIOp::create(builder, loc, fd);
+      return true;
+    }
+
+    // $readmemb - load memory from binary file
+    if (subroutine.name == "$readmemb") {
+      if (args.size() < 2) {
+        mlir::emitError(loc) << "$readmemb expects at least two arguments";
+        return failure();
+      }
+      auto filename = context.convertRvalueExpression(*args[0]);
+      if (!filename)
+        return failure();
+      // Convert filename to string type if needed
+      if (!isa<moore::StringType>(filename.getType())) {
+        if (isa<moore::IntType>(filename.getType())) {
+          filename = moore::IntToStringOp::create(builder, loc, filename);
+        } else {
+          mlir::emitError(loc) << "$readmemb filename must be a string";
+          return failure();
+        }
+      }
+      auto mem = context.convertLvalueExpression(*args[1]);
+      if (!mem)
+        return failure();
+      moore::ReadMemBBIOp::create(builder, loc, filename, mem);
+      return true;
+    }
+
+    // $readmemh - load memory from hexadecimal file
+    if (subroutine.name == "$readmemh") {
+      if (args.size() < 2) {
+        mlir::emitError(loc) << "$readmemh expects at least two arguments";
+        return failure();
+      }
+      auto filename = context.convertRvalueExpression(*args[0]);
+      if (!filename)
+        return failure();
+      // Convert filename to string type if needed
+      if (!isa<moore::StringType>(filename.getType())) {
+        if (isa<moore::IntType>(filename.getType())) {
+          filename = moore::IntToStringOp::create(builder, loc, filename);
+        } else {
+          mlir::emitError(loc) << "$readmemh filename must be a string";
+          return failure();
+        }
+      }
+      auto mem = context.convertLvalueExpression(*args[1]);
+      if (!mem)
+        return failure();
+      moore::ReadMemHBIOp::create(builder, loc, filename, mem);
+      return true;
+    }
+
+    // $strobe variants
+    bool isStrobe = false;
+    StringRef remainingStrobe = subroutine.name;
+    if (remainingStrobe.consume_front("$strobe")) isStrobe = true;
+    IntFormat fmtStrobe = IntFormat::Decimal;
+    if (isStrobe && !remainingStrobe.empty()) {
+      if (remainingStrobe == "b") fmtStrobe = IntFormat::Binary;
+      else if (remainingStrobe == "o") fmtStrobe = IntFormat::Octal;
+      else if (remainingStrobe == "h") fmtStrobe = IntFormat::HexLower;
+      else isStrobe = false;
+    }
+    if (isStrobe) {
+      auto msg = context.convertFormatString(args, loc, fmtStrobe, true);
+      if (failed(msg)) return failure();
+      if (*msg == Value{}) return true;
+      moore::StrobeBIOp::create(builder, loc, *msg);
+      return true;
+    }
+
+    // $fstrobe variants
+    bool isFStrobe = false;
+    StringRef remainingFS = subroutine.name;
+    if (remainingFS.consume_front("$fstrobe")) isFStrobe = true;
+    IntFormat fmtFS = IntFormat::Decimal;
+    if (isFStrobe && !remainingFS.empty()) {
+      if (remainingFS == "b") fmtFS = IntFormat::Binary;
+      else if (remainingFS == "o") fmtFS = IntFormat::Octal;
+      else if (remainingFS == "h") fmtFS = IntFormat::HexLower;
+      else isFStrobe = false;
+    }
+    if (isFStrobe) {
+      if (args.empty()) return mlir::emitError(loc, "$fstrobe requires fd");
+      auto fd = context.convertRvalueExpression(*args[0]);
+      if (!fd) return failure();
+      auto msg = context.convertFormatString(args.subspan(1), loc, fmtFS, true);
+      if (failed(msg)) return failure();
+      if (*msg == Value{}) return true;
+      moore::FStrobeBIOp::create(builder, loc, fd, *msg);
+      return true;
+    }
+
+    // $monitor variants
+    bool isMon = false;
+    StringRef remainingM = subroutine.name;
+    if (remainingM.consume_front("$monitor")) isMon = true;
+    IntFormat fmtM = IntFormat::Decimal;
+    if (isMon && !remainingM.empty()) {
+      if (remainingM == "b") fmtM = IntFormat::Binary;
+      else if (remainingM == "o") fmtM = IntFormat::Octal;
+      else if (remainingM == "h") fmtM = IntFormat::HexLower;
+      else if (remainingM == "on" || remainingM == "off") isMon = false;
+      else isMon = false;
+    }
+    if (isMon) {
+      auto msg = context.convertFormatString(args, loc, fmtM, true);
+      if (failed(msg)) return failure();
+      if (*msg == Value{}) return true;
+      moore::MonitorBIOp::create(builder, loc, *msg);
+      return true;
+    }
+
+    // $fmonitor variants
+    bool isFMon = false;
+    StringRef remainingFM = subroutine.name;
+    if (remainingFM.consume_front("$fmonitor")) isFMon = true;
+    IntFormat fmtFM = IntFormat::Decimal;
+    if (isFMon && !remainingFM.empty()) {
+      if (remainingFM == "b") fmtFM = IntFormat::Binary;
+      else if (remainingFM == "o") fmtFM = IntFormat::Octal;
+      else if (remainingFM == "h") fmtFM = IntFormat::HexLower;
+      else isFMon = false;
+    }
+    if (isFMon) {
+      if (args.empty()) return mlir::emitError(loc, "$fmonitor requires fd");
+      auto fd = context.convertRvalueExpression(*args[0]);
+      if (!fd) return failure();
+      auto msg = context.convertFormatString(args.subspan(1), loc, fmtFM, true);
+      if (failed(msg)) return failure();
+      if (*msg == Value{}) return true;
+      moore::FMonitorBIOp::create(builder, loc, fd, *msg);
+      return true;
+    }
+
+    // $monitoron/$monitoroff
+    if (subroutine.name == "$monitoron") {
+      moore::MonitorOnBIOp::create(builder, loc);
+      return true;
+    }
+    if (subroutine.name == "$monitoroff") {
+      moore::MonitorOffBIOp::create(builder, loc);
+      return true;
+    }
+
+    // $printtimescale
+    if (subroutine.name == "$printtimescale") {
+      moore::PrintTimescaleBIOp::create(builder, loc);
+      return true;
+    }
+
     // Severity Tasks
     using moore::Severity;
     std::optional<Severity> severity;

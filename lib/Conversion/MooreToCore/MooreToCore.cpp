@@ -142,7 +142,17 @@ struct ClassTypeCache {
     // Inheritance depth (0 for root classes, 1 for direct derived, etc.)
     int32_t inheritanceDepth = 0;
 
-    // TODO: Add classVTable in here.
+    // Vtable pointer field index (1 for root classes - after typeId).
+    // The vtable pointer is stored right after the type ID in root classes.
+    // Derived classes access it through their base class prefix at [0, 1].
+    static constexpr unsigned vtablePtrFieldIndex = 1;
+
+    // Method name to vtable index mapping for this class.
+    // This maps virtual method names to their index in the vtable array.
+    DenseMap<StringRef, unsigned> methodToVtableIndex;
+
+    // Name of the global vtable symbol for this class (e.g., "@MyClass::vtable")
+    std::string vtableGlobalName;
     /// Record/overwrite the field path to a single property for a class.
     void setFieldPath(StringRef propertyName, ArrayRef<unsigned> path) {
       this->propertyPath[propertyName] =
@@ -354,12 +364,14 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
     // Derived class inherits from base, so increment depth
     structBody.inheritanceDepth = baseClassStruct->inheritanceDepth + 1;
   } else {
-    // Root class: add type ID field as the first member.
+    // Root class: add type ID field and vtable pointer as the first members.
     // This field stores the runtime type ID for RTTI support ($cast).
-    // Layout: { i32 typeId, ... properties ... }
+    // Layout: { i32 typeId, ptr vtablePtr, ... properties ... }
     auto i32Ty = IntegerType::get(ctx, 32);
-    structBodyMembers.push_back(i32Ty);
-    derivedStartIdx = 1; // Properties start after typeId field
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    structBodyMembers.push_back(i32Ty);   // typeId at index 0
+    structBodyMembers.push_back(ptrTy);   // vtablePtr at index 1
+    derivedStartIdx = 2; // Properties start after typeId and vtablePtr fields
 
     // Root class has inheritance depth 0
     structBody.inheritanceDepth = 0;
@@ -368,9 +380,41 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
   // Assign a unique type ID to this class
   structBody.typeId = cache.allocateTypeId();
 
+  // Set the vtable global name for this class
+  structBody.vtableGlobalName =
+      (classSym.getRootReference().str() + "::__vtable__").str();
+
+  // Collect virtual method indices for the vtable.
+  // The vtable contains function pointers for all virtual methods,
+  // indexed by method name. We need to establish consistent indices
+  // across the inheritance hierarchy.
+  unsigned vtableIdx = 0;
+  auto &block = op.getBody().front();
+
+  // If this class has a base, inherit its method indices
+  if (hasBase) {
+    auto baseClassStruct = cache.getStructInfo(baseClass);
+    for (const auto &kv : baseClassStruct->methodToVtableIndex) {
+      structBody.methodToVtableIndex[kv.first] = kv.second;
+      if (kv.second >= vtableIdx)
+        vtableIdx = kv.second + 1;
+    }
+  }
+
+  // Add new virtual methods defined in this class
+  for (Operation &child : block) {
+    if (auto methodDecl = dyn_cast<ClassMethodDeclOp>(child)) {
+      StringRef methodName = methodDecl.getSymName();
+      // Only add if not already inherited from base
+      if (structBody.methodToVtableIndex.find(methodName) ==
+          structBody.methodToVtableIndex.end()) {
+        structBody.methodToVtableIndex[methodName] = vtableIdx++;
+      }
+    }
+  }
+
   // Properties in source order.
   unsigned iterator = derivedStartIdx;
-  auto &block = op.getBody().front();
   for (Operation &child : block) {
     if (auto prop = dyn_cast<ClassPropertyDeclOp>(child)) {
       Type mooreTy = prop.getPropertyType();
@@ -2160,6 +2204,30 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
     auto typeIdConst = LLVM::ConstantOp::create(
         rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(structInfo->typeId));
     LLVM::StoreOp::create(rewriter, loc, typeIdConst, typeIdPtr);
+
+    // Initialize the vtable pointer field for virtual method dispatch.
+    // The vtable pointer is at index 1 in the root class (after typeId).
+    // For a class hierarchy A -> B -> C, the layout is:
+    //   C: { B: { A: { i32 typeId, ptr vtablePtr, ...A fields }, ...B fields }, ...C fields }
+    // So we GEP through indices [0, 0, ...0, 1] to reach the vtablePtr.
+    SmallVector<Value> vtableGepIndices;
+    for (int32_t i = 0; i < structInfo->inheritanceDepth; ++i) {
+      vtableGepIndices.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+    }
+    // Index into the vtable pointer field (index 1 in root class)
+    vtableGepIndices.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty,
+        rewriter.getI32IntegerAttr(ClassTypeCache::ClassStructInfo::vtablePtrFieldIndex)));
+
+    // GEP to the vtable pointer field
+    auto vtablePtrPtr =
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy, objPtr, vtableGepIndices);
+
+    // Get the address of the class's vtable global and store it
+    auto vtableGlobalAddr =
+        LLVM::AddressOfOp::create(rewriter, loc, ptrTy, structInfo->vtableGlobalName);
+    LLVM::StoreOp::create(rewriter, loc, vtableGlobalAddr, vtablePtrPtr);
 
     // Replace the new op with the malloc pointer
     rewriter.replaceOp(op, objPtr);
@@ -6243,15 +6311,38 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       return success();
     }
 
-    // Handle integer to queue conversion (bit unpacking).
-    // This converts an N-bit integer to a queue of M-bit elements.
-    // Used in streaming concatenation for unpacking bits into queue elements.
-    if (isa<moore::IntType, moore::UnpackedStructType>(op.getInput().getType()) &&
+    // Handle queue to queue conversions with different bounds.
+    // Both convert to the same LLVM struct {ptr, i64}, so this is a no-op.
+    // This is used when slicing queues (bounded to unbounded, or different bounds).
+    if (isa<QueueType>(op.getInput().getType()) &&
         isa<QueueType>(op.getResult().getType())) {
+      // Both types lower to the same struct, so just pass through
+      rewriter.replaceOp(op, adaptor.getInput());
+      return success();
+    }
+
+    // Handle open_uarray to open_uarray conversions (different element types
+    // but same representation). Both convert to the same LLVM struct {ptr, i64}.
+    if (isa<OpenUnpackedArrayType>(op.getInput().getType()) &&
+        isa<OpenUnpackedArrayType>(op.getResult().getType())) {
+      // Both types lower to the same struct, so just pass through
+      rewriter.replaceOp(op, adaptor.getInput());
+      return success();
+    }
+
+    // Handle integer to queue/open_uarray conversion (bit unpacking).
+    // This converts an N-bit integer to a queue or dynamic array of M-bit elements.
+    // Used in streaming concatenation for unpacking bits into queue/array elements.
+    if (isa<moore::IntType, moore::UnpackedStructType>(op.getInput().getType()) &&
+        isa<QueueType, OpenUnpackedArrayType>(op.getResult().getType())) {
       auto *ctx = rewriter.getContext();
       ModuleOp mod = op->getParentOfType<ModuleOp>();
-      auto queueType = cast<QueueType>(op.getResult().getType());
-      auto elemType = queueType.getElementType();
+      Type elemType;
+      if (auto queueType = dyn_cast<QueueType>(op.getResult().getType()))
+        elemType = queueType.getElementType();
+      else
+        elemType = cast<OpenUnpackedArrayType>(op.getResult().getType())
+                       .getElementType();
 
       // Get the bit widths
       int64_t inputBitWidth = -1;

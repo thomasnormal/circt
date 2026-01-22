@@ -4315,6 +4315,51 @@ struct RvalueExprVisitor : public ExprVisitor {
       return context.materializeConversion(ty, charCount, expr.type->isSigned(), loc);
     }
 
+    // Handle $fseek separately since it has 3 arguments.
+    // $fseek(fd, offset, operation) sets file position.
+    // IEEE 1800-2017 Section 21.3.3 "File positioning functions"
+    if (subroutine.name == "$fseek" && args.size() == 3) {
+      auto fd = context.convertRvalueExpression(*args[0]);
+      if (!fd)
+        return {};
+      auto offset = context.convertRvalueExpression(*args[1]);
+      if (!offset)
+        return {};
+      auto operation = context.convertRvalueExpression(*args[2]);
+      if (!operation)
+        return {};
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto result = moore::FSeekBIOp::create(builder, loc, intTy, fd, offset, operation);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, result, expr.type->isSigned(), loc);
+    }
+
+    // Handle $fread separately since it has an output argument.
+    // $fread(dest, fd) reads binary data from file into dest.
+    // IEEE 1800-2017 Section 21.3.3 "File input functions"
+    if (subroutine.name == "$fread" && args.size() >= 2) {
+      // First argument: destination variable - wrapped as AssignmentExpression
+      Value destLhs;
+      if (auto *assignExpr =
+              args[0]->as_if<slang::ast::AssignmentExpression>()) {
+        destLhs = context.convertLvalueExpression(assignExpr->left());
+        if (!destLhs)
+          return {};
+      } else {
+        mlir::emitError(loc) << "$fread first argument must be an output variable";
+        return {};
+      }
+      // Second argument: file descriptor (input)
+      value = context.convertRvalueExpression(*args[1]);
+      if (!value)
+        return {};
+      // Create the fread operation
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      auto bytesRead = moore::FReadBIOp::create(builder, loc, intTy, destLhs, value);
+      auto ty = context.convertType(*expr.type);
+      return context.materializeConversion(ty, bytesRead, expr.type->isSigned(), loc);
+    }
+
     // Helper to check if an argument is an EmptyArgumentExpression.
     auto isEmptyArg = [](const slang::ast::Expression *arg) {
       return arg->kind == slang::ast::ExpressionKind::EmptyArgument;
@@ -6814,6 +6859,12 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   // $fgetc(fd) - read a single character from file
                   // IEEE 1800-2017 Section 21.3.3
                   return moore::FGetCBIOp::create(builder, loc, value);
+                })
+          .Case("$ftell",
+                [&]() -> Value {
+                  // $ftell(fd) - get current file position
+                  // IEEE 1800-2017 Section 21.3.3
+                  return moore::FTellBIOp::create(builder, loc, value);
                 })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||

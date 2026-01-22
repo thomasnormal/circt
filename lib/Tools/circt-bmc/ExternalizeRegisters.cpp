@@ -102,13 +102,6 @@ static bool traceClockRoot(Value value, BlockArgument &root) {
   return false;
 }
 
-static Value stripClockToBlockArg(Value clock) {
-  BlockArgument root;
-  if (traceClockRoot(clock, root))
-    return root;
-  return {};
-}
-
 struct ExternalizeRegistersPass
     : public circt::impl::ExternalizeRegistersBase<ExternalizeRegistersPass> {
   using ExternalizeRegistersBase::ExternalizeRegistersBase;
@@ -282,10 +275,12 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
     HWModuleOp module, Operation *op, Twine regName, Value clock,
     Attribute initState, Value reset, bool isAsync, Value resetValue,
     Value next) {
-  // Look through ToClockOp to find the original i1 clock signal.
-  Value originalClock = stripClockToBlockArg(clock);
-  if (!originalClock || !isa<BlockArgument>(originalClock)) {
-    op->emitError("only clocks directly given as block arguments "
+  // Look through ToClockOp and simple combinational logic to find the clock
+  // root. If the clock cannot be traced to a block argument or constant, we
+  // currently bail out.
+  BlockArgument root;
+  if (!traceClockRoot(clock, root)) {
+    op->emitError("only clocks derived from block arguments or constants "
                   "are supported");
     return failure();
   }

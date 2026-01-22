@@ -29,6 +29,8 @@
 #include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
+#include "circt/Dialect/Sim/SimDialect.h"
+#include "circt/Dialect/Sim/SimPasses.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Dialect/Verif/VerifPasses.h"
@@ -200,6 +202,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
 
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
+  pm.addPass(sim::createStripSim());
   pm.addPass(verif::createLowerTestsPass());
 
   bool hasLLHD = false;
@@ -376,6 +379,7 @@ int main(int argc, char **argv) {
     circt::ltl::LTLDialect,
     circt::moore::MooreDialect,
     circt::om::OMDialect,
+    circt::sim::SimDialect,
     circt::seq::SeqDialect,
     mlir::smt::SMTDialect,
     circt::verif::VerifDialect,

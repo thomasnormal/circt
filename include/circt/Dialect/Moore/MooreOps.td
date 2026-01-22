@@ -3316,6 +3316,80 @@ def UngetCBIOp : Builtin<"ungetc"> {
   let assemblyFormat = "$c `,` $fd attr-dict";
 }
 
+def FSeekBIOp : Builtin<"fseek"> {
+  let summary = "Set file position";
+  let description = [{
+    Corresponds to the `$fseek` system function. Sets the file position for
+    the file specified by the file descriptor. The offset is relative to
+    the position specified by the whence argument:
+      0 = SEEK_SET (beginning of file)
+      1 = SEEK_CUR (current position)
+      2 = SEEK_END (end of file)
+
+    Returns 0 on success, or -1 on error.
+
+    See IEEE 1800-2017 Section 21.3.3 "File positioning functions".
+  }];
+  let arguments = (ins TwoValuedI32:$fd, TwoValuedI32:$offset, TwoValuedI32:$whence);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$fd `,` $offset `,` $whence attr-dict";
+}
+
+def RewindBIOp : Builtin<"rewind"> {
+  let summary = "Reset file position to beginning";
+  let description = [{
+    Corresponds to the `$rewind` system task. Sets the file position for
+    the file specified by the file descriptor to the beginning of the file.
+
+    Equivalent to `$fseek(fd, 0, 0)`.
+
+    See IEEE 1800-2017 Section 21.3.3 "File positioning functions".
+  }];
+  let arguments = (ins TwoValuedI32:$fd);
+  let assemblyFormat = "$fd attr-dict";
+}
+
+def FReadBIOp : Builtin<"fread"> {
+  let summary = "Read binary data from a file";
+  let description = [{
+    Corresponds to the `$fread` system function. Reads binary data from the
+    file specified by the file descriptor into the destination variable.
+
+    Returns the number of bytes read, or 0 if end-of-file or error.
+
+    See IEEE 1800-2017 Section 21.3.3 "File input functions".
+  }];
+  let arguments = (ins RefType:$dest, TwoValuedI32:$fd);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$dest `,` $fd attr-dict `:` type($dest)";
+}
+
+def ReadMemBBIOp : Builtin<"readmemb"> {
+  let summary = "Load memory from file in binary format";
+  let description = [{
+    Corresponds to the `$readmemb` system task. Reads binary data from the
+    specified file and loads it into the memory array. The file contains
+    whitespace-separated binary values (0, 1, x, z).
+
+    See IEEE 1800-2017 Section 21.4 "Loading memory array data from a file".
+  }];
+  let arguments = (ins StringType:$filename, RefType:$mem);
+  let assemblyFormat = "$filename `,` $mem attr-dict `:` type($mem)";
+}
+
+def ReadMemHBIOp : Builtin<"readmemh"> {
+  let summary = "Load memory from file in hexadecimal format";
+  let description = [{
+    Corresponds to the `$readmemh` system task. Reads hexadecimal data from
+    the specified file and loads it into the memory array. The file contains
+    whitespace-separated hexadecimal values.
+
+    See IEEE 1800-2017 Section 21.4 "Loading memory array data from a file".
+  }];
+  let arguments = (ins StringType:$filename, RefType:$mem);
+  let assemblyFormat = "$filename `,` $mem attr-dict `:` type($mem)";
+}
+
 //===----------------------------------------------------------------------===//
 // Classes
 //===----------------------------------------------------------------------===//

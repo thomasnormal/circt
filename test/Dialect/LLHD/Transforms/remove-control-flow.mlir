@@ -93,6 +93,23 @@ hw.module @MultipleYields(in %a: i42, in %b: i42, in %c: i1) {
   }
 }
 
+// CHECK-LABEL: @AllowProbeOps
+hw.module @AllowProbeOps(in %a: i1) {
+  %sig = llhd.sig %a : i1
+  // CHECK: llhd.combinational -> i1
+  llhd.combinational -> i1 {
+    // CHECK-NEXT: [[PRB:%.+]] = llhd.prb %sig
+    // CHECK-NEXT: [[MUX:%.+]] = comb.mux [[PRB]], [[PRB]], %a
+    // CHECK-NEXT: llhd.yield [[MUX]]
+    %0 = llhd.prb %sig : i1
+    cf.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    llhd.yield %0 : i1
+  ^bb2:
+    llhd.yield %a : i1
+  }
+}
+
 // CHECK-LABEL: @HandleCondBranchToSameBlock
 hw.module @HandleCondBranchToSameBlock(in %a: i42, in %b: i42, in %c: i1) {
   // CHECK-NEXT: llhd.combinational
