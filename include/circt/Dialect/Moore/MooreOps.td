@@ -5987,6 +5987,22 @@ def QueueShuffleOp : QueueBuiltin<"shuffle"> {
   let assemblyFormat = "$queue `:` type($queue) attr-dict";
 }
 
+def QueueReverseOp : QueueBuiltin<"reverse"> {
+  let summary = "Reverse the elements of a queue";
+  let description = [{
+    Reverses the order of elements in a queue in-place. This corresponds to the
+    SystemVerilog `.reverse()` built-in method on queues and dynamic arrays
+    (IEEE 1800-2017 Section 7.12.2).
+
+    Example:
+    ```mlir
+    moore.queue.reverse %queue : !moore.ref<!moore.queue<i32, 0>>
+    ```
+  }];
+  let arguments = (ins RefType:$queue);
+  let assemblyFormat = "$queue `:` type($queue) attr-dict";
+}
+
 def QueueMaxOp : QueueBuiltin<"max"> {
   let summary = "Find the maximum element(s) in a queue or array";
   let description = [{
