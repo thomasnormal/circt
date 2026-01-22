@@ -6357,6 +6357,29 @@ def AssocArrayDeleteKeyOp : AssocArrayBuiltin<"delete_key"> {
   let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }
 
+def AssocArrayCreateOp : AssocArrayBuiltin<"create", [Pure]> {
+  let summary = "Create an empty associative array";
+  let description = [{
+    Creates an empty associative array. This operation is used to implement
+    assignment patterns with default values for associative arrays, such as
+    `'{default: value}` in SystemVerilog.
+
+    Note: The default value is currently ignored during lowering. Accessing
+    non-existent keys will return the type's default value (zero or empty
+    string) rather than the specified default.
+
+    Example:
+    ```mlir
+    %aa = moore.assoc.create : !moore.assoc_array<string, i32>
+    ```
+
+    See IEEE 1800-2017 Section 7.9.11 "Associative array assignment patterns".
+  }];
+  let arguments = (ins);
+  let results = (outs AnyAssocArrayType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 //===----------------------------------------------------------------------===//
 // String Builtins
 //===----------------------------------------------------------------------===//

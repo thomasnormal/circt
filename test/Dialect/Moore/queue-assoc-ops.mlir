@@ -99,6 +99,23 @@ func.func @AssocArrayWithIntKey(%array: !moore.ref<assoc_array<string, i64>>, %k
 }
 
 //===----------------------------------------------------------------------===//
+// Associative Array Create Operation
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @AssocArrayCreate
+func.func @AssocArrayCreate() {
+  // CHECK: moore.assoc.create : assoc_array<string, i32>
+  %aa1 = moore.assoc.create : !moore.assoc_array<string, i32>
+  // CHECK: moore.assoc.create : assoc_array<i32, i32>
+  %aa2 = moore.assoc.create : !moore.assoc_array<i32, i32>
+  // CHECK: moore.assoc.create : assoc_array<i64, string>
+  %aa3 = moore.assoc.create : !moore.assoc_array<i64, string>
+  // CHECK: moore.assoc.create : wildcard_assoc_array<i32>
+  %aa4 = moore.assoc.create : !moore.wildcard_assoc_array<i32>
+  return
+}
+
+//===----------------------------------------------------------------------===//
 // Associative Array Exists Operation
 //===----------------------------------------------------------------------===//
 

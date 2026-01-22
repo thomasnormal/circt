@@ -4829,6 +4829,22 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ReadOp::create(builder, loc, tmpVar);
     }
 
+    // Handle associative arrays. Assignment patterns like '{default: value}
+    // create an empty associative array. The default value is currently
+    // ignored - accessing non-existent keys returns the type's default value.
+    // See IEEE 1800-2017 Section 7.9.11.
+    if (auto assocType = dyn_cast<moore::AssocArrayType>(type)) {
+      // Note: We ignore the default value from the assignment pattern.
+      // Full support for associative array default values would require
+      // runtime changes to store and return the specified default.
+      return moore::AssocArrayCreateOp::create(builder, loc, assocType);
+    }
+
+    // Handle wildcard associative arrays similarly.
+    if (auto assocType = dyn_cast<moore::WildcardAssocArrayType>(type)) {
+      return moore::AssocArrayCreateOp::create(builder, loc, assocType);
+    }
+
     mlir::emitError(loc) << "unsupported assignment pattern with type " << type;
     return {};
   }
