@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 101 - January 22, 2026
+
+### APB & SPI AVIPs FULL PIPELINE WORKS! 🎉
+
+**MAJOR MILESTONE**: Both APB and SPI AVIPs now compile through the full MooreToCore pipeline with **zero errors**.
+- APB AVIP: 216K lines Moore IR → 302K lines Core IR
+- SPI AVIP: → 325K lines Core IR
+
+### MooreToCore hw.struct/hw.array Fixes ✅
+
+Fixed 9 categories of type issues when hw.struct/hw.array types were used with LLVM operations:
+
+1. **DynExtractOp struct key/result types** - Convert to llvm.struct
+2. **DynExtractRefOp struct key types** - Convert to llvm.struct
+3. **AssocArrayIteratorOp struct keys** - Convert key types for first/next/last/prev
+4. **AssocArrayDeleteKeyOp struct keys** - Convert for delete key
+5. **QueuePushBack/FrontOp struct elements** - Convert for push operations
+6. **QueueMax/MinOp fixed array inputs** - Handle hw::ArrayType inputs
+7. **QueueSortWithOp class handle comparison** - Extract pointer field for arith.cmpi
+8. **UnreachableOp context-aware lowering** - Use llvm.unreachable in functions
+9. **ConversionOp narrow-to-wide** - Zero-extend when converting to larger types
+
+### 64-bit Streaming Limit Removed ✅
+
+Changed streaming operators from i64 packing to byte arrays:
+- Static prefix/suffix can now be **arbitrary width** (96-bit, 128-bit, etc.)
+- New runtime functions: `__moore_stream_concat_mixed`, `__moore_stream_unpack_mixed_extract`
+- Chapter-11 now at **78/78 (100%)** with large prefix tests passing
+
+### Constraint Method Calls ✅
+
+Added support for method calls inside class constraint blocks:
+- New `ConstraintMethodCallOp` for method calls in constraints
+- Added `this` block argument to non-static constraint blocks
+- Chapter-18 improved to **56/134 (42%)**
+
+### circt-sim Continuous Assignments ✅
+
+Fixed signal propagation in flattened module port connections:
+- `registerContinuousAssignments()` creates combinational processes
+- Continuous assignments now re-evaluate when source signals change
+- Module instantiation tests now pass
+
+### Commits
+- `aaef95033` [MooreToCore] Fix hw.struct/hw.array type issues in LLVM operations
+- `0b7338914` [ImportVerilog] Support method calls in class constraint blocks
+- `ec0d86018` [circt-sim] Add continuous assignment support for module port connections
+- `a821647fc` [Streaming] Remove 64-bit static prefix/suffix limit for mixed streaming
+
+---
+
 ## Iteration 100 - January 22, 2026
 
 ### MooreToCore Queue Pop with Complex Types ✅ FIXED
