@@ -2,16 +2,47 @@
 
 ## Iteration 100 - January 22, 2026
 
-### Chapter-7 100% Complete
+### MooreToCore Queue Pop with Complex Types ✅ FIXED
 
-Verified that sv-tests chapter-7 is at 103/103 (100%) when properly accounting for expected failures (XFAIL):
+Fixed queue pop operations (`moore.queue.pop_front`, `moore.queue.pop_back`) for class, struct, and string element types:
 
-- **101 PASS**: Tests that should compile and do compile
-- **2 XFAIL**: Tests with `:should_fail_because:` tags that correctly produce errors
-  - `variable-slice-zero.sv` - Tests zero-width part select rejection (error: "value must be positive")
-  - `default-value.sv` - Tests packed struct member initializer rejection (error: "packed members can not have initializers")
+**Problem**: Queue pop operations generated incorrect `llvm.bitcast` from i64 to pointer/struct types.
 
-The 2 XFAIL tests verify that CIRCT correctly rejects invalid SystemVerilog per IEEE 1800-2017 Section 7.
+**Solution**: Implemented output pointer approach for complex types:
+- New runtime functions `__moore_queue_pop_back_ptr` and `__moore_queue_pop_front_ptr`
+- Allocate space on stack, call runtime with output pointer, load result
+- Simple integer types continue using existing i64 return path
+
+### MooreToCore Time Type Conversion ✅ FIXED
+
+Changed `moore::TimeType` to convert to `i64` (femtoseconds) instead of `!llhd.time`:
+
+- `ConstantTimeOp` → `hw.constant` with i64 value
+- `TimeBIOp` → `llhd.current_time` + `llhd.time_to_int`
+- `WaitDelayOpConversion` → converts i64 to `llhd.time` via `llhd.int_to_time`
+- Added 4-state struct handling for `sbv_to_packed` / `packed_to_sbv` with time types
+
+This fixes: `'hw.bitcast' op result #0 must be Type wherein bitwidth is known, but got '!llhd.time'`
+
+### Wildcard Associative Array Element Select ✅ FIXED
+
+Added `WildcardAssocArrayType` support in ImportVerilog:
+- Added to allowed types for element select operations
+- Added to dynamic type check for 0-based indexing
+- Added to associative array check for non-integral keys
+
+verilator-verification now at 15/21 (71%) - 100% of non-SVA tests pass.
+
+### Chapter-7 100% Complete ✅
+
+Verified that sv-tests chapter-7 is at 103/103 (100%) with XFAIL accounting:
+- 101 PASS + 2 XFAIL (expected failures with `:should_fail_because:` tags)
+
+### Commits
+- `7734654f8` [ImportVerilog] Add WildcardAssocArrayType support for element select
+- `3ef1c3c53` [MooreToCore] Fix time type conversion to use i64 instead of llhd.time
+- `56434b567` [MooreToCore] Fix queue pop operations with complex types
+- `5d03c732c` [Docs] Verify Chapter-7 at 100% with XFAIL accounting
 
 ---
 
