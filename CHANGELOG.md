@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 102 - January 22, 2026
+
+### APB & SPI AVIPs Run Through circt-sim! 🎉🎉
+
+**MAJOR MILESTONE**: Both APB and SPI AVIPs successfully simulate through circt-sim:
+- APB: 100,006 process executions, 100,003 delta cycles
+- SPI: 100,009 process executions, printed "SpiHdlTop" via $display
+
+HDL-side logic (clocks, resets, interface signals) works correctly. UVM HVL-side requires UVM runtime implementation.
+
+### LLVM Dialect Support in circt-sim ✅
+
+Added comprehensive LLVM dialect support to the interpreter (~700 lines):
+- **Memory**: alloca, load, store, getelementptr
+- **Functions**: call, return, undef, zero (null)
+- **Conversions**: inttoptr, ptrtoint, bitcast, trunc, zext, sext
+- **Arithmetic**: add, sub, mul, icmp
+- **Bitwise**: and, or, xor, shl, lshr, ashr
+
+Includes per-process memory model with address tracking.
+
+### Chapter-18 at 89% (119/134) ✅
+
+Major improvement with `randomize()` mode support:
+- `randomize(null)` - In-line constraint checker mode
+- `randomize(v, w)` - In-line random variable control
+- 15 remaining tests are all XFAIL (testing error detection)
+
+### 17+ UVM Patterns Verified Working ✅
+
+Comprehensive UVM pattern testing confirms these work:
+- Virtual interfaces with modports
+- Class inheritance and polymorphism
+- Queues, dynamic arrays, associative arrays
+- Randomization with constraints
+- Factory patterns, callbacks, config_db
+- TLM-style ports, mailbox, semaphore
+- Process control, inline constraints
+
+### Commits
+- `50d292f36` [ImportVerilog] Add virtual interface modport access test
+- `0663ea7b2` [circt-sim] Add LLVM dialect support to interpreter
+- `be84a3593` [ImportVerilog] Add support for randomize(null) and randomize(v, w)
+
+---
+
 ## Iteration 101 - January 22, 2026
 
 ### APB & SPI AVIPs FULL PIPELINE WORKS! 🎉
