@@ -3296,10 +3296,15 @@ struct RvalueExprVisitor : public ExprVisitor {
       auto locatorOp = moore::ArrayLocatorOp::create(
           builder, loc, queueType, mode, indexed, arrayVal);
 
-      // Create the body region with a block argument for the iterator variable
+      // Create the body region with block arguments for the iterator variable
+      // and the index
       Block *bodyBlock = &locatorOp.getBody().emplaceBlock();
       bodyBlock->addArgument(iterVarType, loc);
+      // Add index argument as i32 (SystemVerilog array indices are int)
+      auto indexType = moore::IntType::getInt(context.getContext(), 32);
+      bodyBlock->addArgument(indexType, loc);
       Value iterArg = bodyBlock->getArgument(0);
+      Value indexArg = bodyBlock->getArgument(1);
 
       // Set up the value symbol for the iterator variable within the region
       OpBuilder::InsertionGuard guard(builder);
@@ -3309,8 +3314,20 @@ struct RvalueExprVisitor : public ExprVisitor {
       Context::ValueSymbolScope scope(context.valueSymbols);
       context.valueSymbols.insert(iterVar, iterArg);
 
+      // Bind the iterator variable's index for use with item.index
+      Context::IteratorIndexSymbolScope indexScope(context.iteratorIndexSymbols);
+      context.iteratorIndexSymbols.insert(iterVar, indexArg);
+
+      // Also set the current iterator index for use by convertSystemCallArity0
+      Value savedIteratorIndex = context.currentIteratorIndex;
+      context.currentIteratorIndex = indexArg;
+
       // Convert the predicate expression inside the region
       Value predResult = context.convertRvalueExpression(*iterExpr);
+
+      // Restore the previous iterator index
+      context.currentIteratorIndex = savedIteratorIndex;
+
       if (!predResult)
         return {};
 
@@ -6434,6 +6451,18 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                   return (Value)moore::ConstantOp::create(builder, loc, intTy,
                                                           1);
                 })
+          .Case("index",
+                [&]() -> FailureOr<Value> {
+                  // Handle item.index for array locator methods.
+                  // IEEE 1800-2017 Section 7.12.1: item.index returns the
+                  // index of the current iterator element.
+                  if (currentIteratorIndex) {
+                    return currentIteratorIndex;
+                  }
+                  mlir::emitError(loc) << "item.index is only valid within an "
+                                       << "array locator method's 'with' clause";
+                  return failure();
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {
@@ -6997,6 +7026,19 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   // $ftell(fd) - get current file position
                   // IEEE 1800-2017 Section 21.3.3
                   return moore::FTellBIOp::create(builder, loc, value);
+                })
+          .Case("index",
+                [&]() -> FailureOr<Value> {
+                  // Handle item.index for array locator methods.
+                  // IEEE 1800-2017 Section 7.12.1: item.index returns the
+                  // index of the current iterator element.
+                  // The iterator variable is passed as the first argument.
+                  if (currentIteratorIndex) {
+                    return currentIteratorIndex;
+                  }
+                  mlir::emitError(loc) << "item.index is only valid within an "
+                                       << "array locator method's 'with' clause";
+                  return failure();
                 })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||

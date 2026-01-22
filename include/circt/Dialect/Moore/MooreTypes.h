@@ -43,6 +43,7 @@ class UnpackedArrayType;
 class UnpackedStructType;
 class UnpackedUnionType;
 class VoidType;
+class WildcardAssocArrayType;
 class ClassHandleType;
 class CovergroupHandleType;
 class VirtualInterfaceType;
@@ -105,8 +106,8 @@ public:
   static bool classof(Type type) {
     return llvm::isa<PackedType, StringType, ChandleType, EventType, RealType,
                      UnpackedArrayType, OpenUnpackedArrayType, AssocArrayType,
-                     QueueType, UnpackedStructType, UnpackedUnionType,
-                     ClassHandleType, CovergroupHandleType,
+                     WildcardAssocArrayType, QueueType, UnpackedStructType,
+                     UnpackedUnionType, ClassHandleType, CovergroupHandleType,
                      VirtualInterfaceType>(type);
   }
 

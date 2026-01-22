@@ -10676,6 +10676,21 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
             .getResult(0);
     mapper.map(blockArg, currentElemMoore);
 
+    // Map the index block argument (if present) to the loop induction variable
+    // for item.index support.
+    if (body.getNumArguments() >= 2) {
+      Value indexArg = body.getArgument(1);
+      // The induction variable is i64, but the index block arg is typically i32
+      // Cast to the expected Moore type
+      auto i32Ty = IntegerType::get(ctx, 32);
+      Value ivTrunc = arith::TruncIOp::create(rewriter, loc, i32Ty, iv);
+      Value indexMoore =
+          UnrealizedConversionCastOp::create(rewriter, loc, indexArg.getType(),
+                                             ivTrunc)
+              .getResult(0);
+      mapper.map(indexArg, indexMoore);
+    }
+
     // Map external values (values defined outside the predicate block) to
     // their converted versions. This is necessary because the cloned Moore
     // operations will reference these external values, but they need to be
@@ -10847,10 +10862,12 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     //     %cond = moore.<cmpop> %fieldVal, %cmpVal
     //     moore.array.locator.yield %cond
     Block &body = op.getBody().front();
-    if (body.getNumArguments() != 1)
-      return rewriter.notifyMatchFailure(op, "expected single block argument");
+    // Body has 1 or 2 block arguments: the element and optionally the index
+    if (body.getNumArguments() < 1 || body.getNumArguments() > 2)
+      return rewriter.notifyMatchFailure(op, "expected 1 or 2 block arguments");
 
     Value blockArg = body.getArgument(0);
+    // indexArg is body.getArgument(1) if present (for item.index support)
 
     // Find the yield op
     auto yieldOp = dyn_cast<ArrayLocatorYieldOp>(body.getTerminator());
