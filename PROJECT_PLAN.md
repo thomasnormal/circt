@@ -67,34 +67,37 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 97 - Complete)
+### Track Status & Next Tasks (Iteration 98 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-20: **45/47 passing** (95%) ✅
-- sv-tests Chapter-7: **100/103 passing** (97%) ✅
-- sv-tests Chapter-11: **83/88 passing** (94%) ✅ +2 tests
+- sv-tests Chapter-7: **101/103 passing** (98%) ✅ +1 test
+- sv-tests Chapter-11: **83/88 passing** (94%) ✅
 - sv-tests Chapter-18: **55/134 passing** (41%) ✅
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator circt-sim: **13/15 passing** (87%) ✅ +6 tests
-- UVM AVIP: **APB compiles to LLHD IR** (27K lines) ✅
+- verilator circt-sim: **13/15 passing** (87%) ✅
+- UVM AVIP: **All 9 AVIPs compile** ✅ MAJOR MILESTONE
+- Full UVM Library: **String arrays now supported** ✅
 
-**Array Locator ✅ RESOLVED**:
-- Extended UnrealizedConversionCastOp for hw/llvm array casts
-- Added region type conversion for predicate regions
+**Key Blockers RESOLVED**:
+1. ✅ VTable polymorphism (Iteration 96)
+2. ✅ Array locator lowering (Iteration 97)
+3. ✅ `bit` clock simulation bug (Iteration 98)
+4. ✅ String array types (Iteration 98)
 
 **Remaining Limitations**:
-1. **`bit` Type Clock Bug** - Simulation hangs with bit clocks (use `reg` workaround)
-2. **String Array Types** - `string mode[64]` blocks full UVM library
-3. **Sibling Hierarchical Refs** - extnets.sv (cross-module refs)
-4. **Dynamic Array Streaming** - 3 chapter-11 tests with mixed static/dynamic
+1. **Sibling Hierarchical Refs** - extnets.sv (cross-module wire refs)
+2. **Dynamic Array Streaming** - 3 chapter-11 tests with mixed static/dynamic
+3. **Full UVM Simulation** - End-to-end UVM testbench execution
+4. **Chapter-7 Last 2 Tests** - Require additional features
 
 **Active Workstreams (Next)**:
-1. **Track A: `bit` Clock Bug** - Fix simulation with bit type clocks
-2. **Track B: String Array Support** - Enable full UVM library compilation
-3. **Track C: Chapter-7 Remaining** - Fix last 3 array tests
-4. **Track D: Other AVIP Testing** - Test SPI, I2C, AXI AVIPs
+1. **Track A: Full UVM Simulation** - Run complete UVM testbench with circt-sim
+2. **Track B: Dynamic Array Streaming** - Fix remaining chapter-11 tests
+3. **Track C: Chapter-20 Remaining** - Get to 100%
+4. **Track D: End-to-End AVIP Testing** - Run APB/SPI testbenches through simulation
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
