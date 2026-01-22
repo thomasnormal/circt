@@ -7775,6 +7775,34 @@ struct YieldOpConversion : public OpConversionPattern<YieldOp> {
   }
 };
 
+/// Convert arith.select on Moore types to comb.mux.
+/// This handles the case where MLIR canonicalizers simplify control flow
+/// and introduce arith.select operations on Moore types.
+struct ArithSelectOpConversion : public OpConversionPattern<arith::SelectOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto type = typeConverter->convertType(op.getType());
+    if (!type)
+      return failure();
+
+    // Convert the operands with type conversion.
+    Value trueVal = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), type, adaptor.getTrueValue());
+    Value falseVal = typeConverter->materializeTargetConversion(
+        rewriter, op.getLoc(), type, adaptor.getFalseValue());
+
+    if (!trueVal || !falseVal)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<comb::MuxOp>(op, adaptor.getCondition(),
+                                             trueVal, falseVal);
+    return success();
+  }
+};
+
 template <typename SourceOp>
 struct InPlaceOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -14745,6 +14773,13 @@ static void populateLegality(ConversionTarget &target,
   target.addLegalDialect<verif::VerifDialect>();
   target.addLegalDialect<arith::ArithDialect>();
 
+  // arith.select on Moore types needs to be converted to comb.mux.
+  // This handles cases where MLIR canonicalizers introduce arith.select
+  // on Moore types during control flow simplification.
+  target.addDynamicallyLegalOp<arith::SelectOp>([&](arith::SelectOp op) {
+    return converter.isLegal(op.getTrueValue().getType());
+  });
+
   target.addLegalOp<debug::ScopeOp>();
 
   target.addDynamicallyLegalOp<scf::YieldOp, func::CallOp, func::CallIndirectOp,
@@ -15381,6 +15416,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     CallOpConversion,
     CallIndirectOpConversion,
     UnrealizedConversionCastConversion,
+    ArithSelectOpConversion,
     InPlaceOpConversion<debug::ArrayOp>,
     InPlaceOpConversion<debug::StructOp>,
     InPlaceOpConversion<debug::VariableOp>,

@@ -3076,18 +3076,34 @@ struct ClassDeclVisitor {
     OpBuilder::InsertionGuard ig(builder);
     builder.setInsertionPointToEnd(&body);
 
-    // Two-pass conversion: properties first, then methods.
-    // This ensures properties are declared before method bodies are converted,
-    // since method bodies may reference properties.
+    // Three-pass conversion:
+    // 1. Properties first (so constraints can reference them)
+    // 2. Constraints (may reference properties and call methods)
+    // 3. Methods (may reference properties)
 
-    // Pass 1: Convert properties, parameters, type aliases, and constraints
-    LLVM_DEBUG(llvm::dbgs() << "  Pass 1: Properties, parameters, aliases, constraints\n");
+    // Pass 1a: Convert properties, parameters, and type aliases
+    LLVM_DEBUG(llvm::dbgs() << "  Pass 1a: Properties, parameters, aliases\n");
     for (const auto &mem : classAST.members()) {
       if (mem.kind == slang::ast::SymbolKind::ClassProperty ||
           mem.kind == slang::ast::SymbolKind::Parameter ||
           mem.kind == slang::ast::SymbolKind::TypeAlias ||
-          mem.kind == slang::ast::SymbolKind::TypeParameter ||
-          mem.kind == slang::ast::SymbolKind::ConstraintBlock) {
+          mem.kind == slang::ast::SymbolKind::TypeParameter) {
+        LLVM_DEBUG(llvm::dbgs() << "    Processing member: " << mem.name
+                                << " (kind: " << slang::ast::toString(mem.kind)
+                                << ")\n");
+        if (failed(mem.visit(*this))) {
+          LLVM_DEBUG(llvm::dbgs() << "    FAILED at member: " << mem.name
+                                  << " (kind: "
+                                  << slang::ast::toString(mem.kind) << ")\n");
+          return failure();
+        }
+      }
+    }
+
+    // Pass 1b: Convert constraints (after properties are declared)
+    LLVM_DEBUG(llvm::dbgs() << "  Pass 1b: Constraints\n");
+    for (const auto &mem : classAST.members()) {
+      if (mem.kind == slang::ast::SymbolKind::ConstraintBlock) {
         LLVM_DEBUG(llvm::dbgs() << "    Processing member: " << mem.name
                                 << " (kind: " << slang::ast::toString(mem.kind)
                                 << ")\n");
