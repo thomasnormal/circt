@@ -428,6 +428,18 @@ struct Context {
   using ValueSymbolScope = ValueSymbols::ScopeTy;
   ValueSymbols valueSymbols;
 
+  /// A table mapping iterator variables to their index values for use with
+  /// the `item.index` property in array locator methods.
+  /// This is populated when converting array locator predicates.
+  using IteratorIndexSymbols =
+      llvm::ScopedHashTable<const slang::ast::ValueSymbol *, Value>;
+  using IteratorIndexSymbolScope = IteratorIndexSymbols::ScopeTy;
+  IteratorIndexSymbols iteratorIndexSymbols;
+
+  /// The current iterator index value for use with item.index in array
+  /// locator predicates. This is set when entering an array locator region.
+  Value currentIteratorIndex;
+
   /// A table of defined global variables that may be referred to by name in
   /// expressions.
   DenseMap<const slang::ast::ValueSymbol *, moore::GlobalVariableOp>

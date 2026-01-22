@@ -6186,9 +6186,11 @@ def ArrayLocatorOp : MooreOp<"array.locator", [
     a user-defined predicate.
 
     The operation takes an array input and contains a single-block region that
-    defines the predicate. The region has a block argument representing the
-    current element being evaluated. The predicate region must terminate with
-    an `moore.array.locator.yield` operation that yields a boolean value.
+    defines the predicate. The region has two block arguments: the current element
+    being evaluated, and the current index (as a 32-bit integer). The index
+    argument enables use of `item.index` in the predicate expression. The
+    predicate region must terminate with an `moore.array.locator.yield` operation
+    that yields a boolean value.
 
     The `mode` attribute specifies the search behavior:
     - `all`: Return all matching elements/indices (find/find_index)
@@ -6203,17 +6205,16 @@ def ArrayLocatorOp : MooreOp<"array.locator", [
     ```mlir
     // arr.find(x) with (x > 5) - returns queue of elements > 5
     %result = moore.array.locator all, elements %arr : !moore.queue<i32, 0> -> !moore.queue<i32, 0> {
-    ^bb0(%item: !moore.i32):
+    ^bb0(%item: !moore.i32, %index: !moore.i32):
       %five = moore.constant 5 : i32
       %cond = moore.sgt %item, %five : i32
       moore.array.locator.yield %cond : i1
     }
 
-    // arr.find_first_index(x) with (x == 0) - returns queue with first index where element == 0
-    %idx = moore.array.locator first, indices %arr : !moore.queue<i32, 0> -> !moore.queue<i32, 0> {
-    ^bb0(%item: !moore.i32):
-      %zero = moore.constant 0 : i32
-      %cond = moore.eq %item, %zero : i32
+    // arr.find(x) with (x == x.index) - returns elements matching their index
+    %result = moore.array.locator all, elements %arr : !moore.queue<i32, 0> -> !moore.queue<i32, 0> {
+    ^bb0(%item: !moore.i32, %index: !moore.i32):
+      %cond = moore.eq %item, %index : i32
       moore.array.locator.yield %cond : i1
     }
     ```

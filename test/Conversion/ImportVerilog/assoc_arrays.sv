@@ -20,6 +20,14 @@ module AssocArrayDeclarationTest;
     logic [7:0] aa_logic[int];
 endmodule
 
+/// Test wildcard associative array declaration
+/// IEEE 1800-2017 Section 7.8.1 "Wildcard index type"
+// CHECK-LABEL: moore.module @WildcardAssocArrayTest() {
+module WildcardAssocArrayTest;
+    // CHECK: [[AA_WILDCARD:%.+]] = moore.variable : <wildcard_assoc_array<i32>>
+    int aa_wildcard[*];
+endmodule
+
 /// Test associative array exists() method
 /// exists() returns 1 if the key exists, 0 otherwise
 // CHECK-LABEL: moore.module @AssocArrayExistsTest() {

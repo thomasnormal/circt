@@ -76,10 +76,10 @@ struct TypeVisitor {
     auto innerType = type.elementType.visit(*this);
     if (!innerType)
       return {};
+    // Handle wildcard associative arrays [*]
     if (!type.indexType) {
-      mlir::emitError(
-          loc, "unsupported type: associative arrays with wildcard index");
-      return {};
+      return moore::WildcardAssocArrayType::get(
+          cast<moore::UnpackedType>(innerType));
     }
     auto indexType = type.indexType->visit(*this);
     if (!indexType)

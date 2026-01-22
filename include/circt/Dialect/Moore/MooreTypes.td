@@ -324,6 +324,33 @@ def AssocArrayType : MooreTypeDef<"AssocArray", [], "moore::UnpackedType"> {
   ];
 }
 
+def WildcardAssocArrayType : MooreTypeDef<"WildcardAssocArray", [],
+    "moore::UnpackedType"> {
+  let mnemonic = "wildcard_assoc_array";
+  let summary = "a wildcard associative array type";
+  let description = [{
+    An associative array with a wildcard index type. This type represents
+    associative arrays declared with `[*]` in SystemVerilog, which can use
+    any data type as a key.
+
+    | Verilog       | Moore Dialect                      |
+    |---------------|------------------------------------|
+    | `T foo [*]`   | `!moore.wildcard_assoc_array<T>`   |
+
+    See IEEE 1800-2017 Section 7.8.1 "Wildcard index type".
+  }];
+  let parameters = (ins "UnpackedType":$elementType);
+  let assemblyFormat = [{
+    `<` $elementType `>`
+  }];
+  let builders = [
+    AttrBuilderWithInferredContext<
+      (ins "UnpackedType":$elementType), [{
+        return $_get(elementType.getContext(), elementType);
+      }]>
+  ];
+}
+
 def QueueType : MooreTypeDef<"Queue", [], "moore::UnpackedType"> {
   let mnemonic = "queue";
   let summary = "a queue type";
