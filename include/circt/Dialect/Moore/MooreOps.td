@@ -1497,6 +1497,87 @@ def StreamUnpackOp : MooreOp<"stream_unpack", []> {
   }];
 }
 
+def StreamConcatMixedOp : MooreOp<"stream_concat_mixed", [
+    Pure, AttrSizedOperandSegments]> {
+  let summary = "Mixed static/dynamic streaming concatenation";
+  let description = [{
+    Performs streaming concatenation with a mix of static bit vectors and a
+    single dynamic array or queue. This is used when streaming operators like
+    `{<<{a, b, dyn_arr, c}}` mix static and dynamic operands.
+
+    The operation takes:
+    - `staticPrefix`: Static bit vectors that appear before the dynamic array
+    - `dynamicArray`: A dynamic array or queue
+    - `staticSuffix`: Static bit vectors that appear after the dynamic array
+
+    The result is a queue containing all the bits, with the streaming direction
+    applied.
+
+    Example:
+    ```mlir
+    // Mixed streaming: {<< 8 {header, data[], crc}}
+    %result = moore.stream_concat_mixed [%header] %data [%crc] right_to_left slice 8
+        : (!moore.i32, !moore.open_uarray<i8>, !moore.i32) -> !moore.queue<i8, 0>
+    ```
+
+    See IEEE 1800-2017 Section 11.4.14 "Streaming operators (pack/unpack)".
+  }];
+  let arguments = (ins
+    Variadic<UnpackedType>:$staticPrefix,
+    UnpackedType:$dynamicArray,
+    Variadic<UnpackedType>:$staticSuffix,
+    I32Attr:$sliceSize,
+    DefaultValuedAttr<BoolAttr, "false">:$isRightToLeft
+  );
+  let results = (outs UnpackedType:$result);
+  let assemblyFormat = [{
+    `[` $staticPrefix `]` $dynamicArray `[` $staticSuffix `]`
+    (`right_to_left` $isRightToLeft^)? `slice` $sliceSize
+    attr-dict `:` functional-type(operands, $result)
+  }];
+}
+
+def StreamUnpackMixedOp : MooreOp<"stream_unpack_mixed", [AttrSizedOperandSegments]> {
+  let summary = "Mixed static/dynamic streaming unpack";
+  let description = [{
+    Performs streaming unpacking into a mix of static lvalue references and a
+    single dynamic array or queue reference. This is used when streaming lvalue
+    operators like `{<<{a, b, dyn_arr, c}} = src` mix static and dynamic targets.
+
+    The operation takes:
+    - `staticPrefixRefs`: References to static lvalues before the dynamic array
+    - `dynamicArrayRef`: Reference to a dynamic array or queue
+    - `staticSuffixRefs`: References to static lvalues after the dynamic array
+    - `src`: The source value to unpack from
+
+    The bits from src are distributed to the static prefix, then remaining bits
+    go to the dynamic array (resized as needed), then the static suffix gets
+    the trailing bits.
+
+    Example:
+    ```mlir
+    // Mixed streaming unpack: {<< 8 {header, data[], crc}} = pkt
+    moore.stream_unpack_mixed [%header_ref] %data_ref [%crc_ref] %pkt right_to_left slice 8
+        : (!moore.ref<i32>, !moore.ref<open_uarray<i8>>, !moore.ref<i32>, !moore.queue<i8, 0>)
+    ```
+
+    See IEEE 1800-2017 Section 11.4.14 "Streaming operators (pack/unpack)".
+  }];
+  let arguments = (ins
+    Variadic<RefType>:$staticPrefixRefs,
+    RefType:$dynamicArrayRef,
+    Variadic<RefType>:$staticSuffixRefs,
+    UnpackedType:$src,
+    I32Attr:$sliceSize,
+    DefaultValuedAttr<BoolAttr, "false">:$isRightToLeft
+  );
+  let assemblyFormat = [{
+    `[` $staticPrefixRefs `]` $dynamicArrayRef `[` $staticSuffixRefs `]` $src
+    (`right_to_left` $isRightToLeft^)? `slice` $sliceSize
+    attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 class LogicalEqOpBase<string mnemonic> : MooreOp<mnemonic, [
   Pure,
   Commutative,
