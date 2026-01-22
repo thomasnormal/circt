@@ -15,6 +15,19 @@ procedure entry and reusing the sampled value throughout the time step.
 **Tests Added**:
 - `test/Conversion/ImportVerilog/sampled-procedural.sv`
 
+### Hierarchical Sibling Extnets ✅ NEW
+
+**Feature**: Added support for cross-module hierarchical references between
+sibling instances (extnets) by exposing referenced nets on the target module
+and threading an input port into the referencing module.
+
+**Tests Added**:
+- `test/Conversion/ImportVerilog/hierarchical-sibling-extnet.sv`
+
+**Additional Fix**: Instance lowering now defers instantiations until required
+hierarchical inputs are available, avoiding forward-reference ordering issues
+in modules with sibling extnets.
+
 **Notes**: Not run locally (circt-verilog binary missing in `build/bin`).
 
 ## Iteration 93 - January 22, 2026
@@ -121,8 +134,18 @@ in combinational regions and enabling control-flow removal through `llhd.prb`.
 **Impact**: `circt-bmc` now accepts LLHD-heavy testbenches and the
 verilator-verification assert suite is largely unblocked.
 
+### MooreToCore VTable Build Fix ✅ FIX
+
+**Bug Fix**: Fixed build errors in vtable infrastructure code.
+
+**Details**:
+- Removed redundant `.str()` call on std::string in vtable global name generation
+- Fixed undefined `hasBase`/`baseClass` variables by using `op.getBaseAttr()` properly
+- Added null check for baseClassStruct when inheriting method indices
+
 ### Test Results (Iteration 93 Progress)
 
+- **sv-tests Chapter-21**: 23/29 passing (up from ~13 before fix)
 - **yosys SVA BMC**: 14 tests, failures=4, skipped=2 (unchanged)
 - **sv-tests SVA BMC**: total=26 pass=17 fail=2 xfail=3 error=4 skip=1010
 - **verilator-verification BMC**: total=17 pass=9 error=8
