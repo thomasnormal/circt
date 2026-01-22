@@ -4366,15 +4366,19 @@ struct ConstantRealOpConv : public OpConversionPattern<ConstantRealOp> {
   }
 };
 
+// moore.constant_time -> i64 (femtoseconds)
+// Creates an llhd.constant_time and converts it to i64 using an unrealized cast.
+// The conversion pass will materialize this properly.
 struct ConstantTimeOpConv : public OpConversionPattern<ConstantTimeOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(ConstantTimeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<llhd::ConstantTimeOp>(
-        op, llhd::TimeAttr::get(op->getContext(), op.getValue(),
-                                StringRef("fs"), 0, 0));
+    // Create the time constant value directly as i64 (femtoseconds).
+    auto i64Ty = rewriter.getIntegerType(64);
+    auto valueAttr = rewriter.getIntegerAttr(i64Ty, op.getValue());
+    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, valueAttr);
     return success();
   }
 };
@@ -13437,9 +13441,14 @@ static LogicalResult convert(FinishMessageBIOp op,
 //===----------------------------------------------------------------------===//
 
 // moore.builtin.time
+// Returns the current simulation time as i64 (femtoseconds).
 static LogicalResult convert(TimeBIOp op, TimeBIOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<llhd::CurrentTimeOp>(op);
+  Location loc = op.getLoc();
+  // Get current time as llhd.time, then convert to i64.
+  auto llhdTime = llhd::CurrentTimeOp::create(rewriter, loc);
+  auto i64Ty = rewriter.getIntegerType(64);
+  rewriter.replaceOpWithNewOp<llhd::TimeToIntOp>(op, i64Ty, llhdTime);
   return success();
 }
 
