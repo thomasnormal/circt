@@ -3201,6 +3201,23 @@ def FTellBIOp : Builtin<"ftell"> {
   let assemblyFormat = "$fd attr-dict";
 }
 
+def FErrorBIOp : Builtin<"ferror"> {
+  let summary = "Get file error status and message";
+  let description = [{
+    Corresponds to the `$ferror` system function. Returns the error code
+    for the specified file descriptor and writes the error message to
+    the output string reference.
+
+    The function returns 0 if no error occurred, or a non-zero error code
+    otherwise.
+
+    See IEEE 1800-2017 Section 21.3.1 "Opening and closing files".
+  }];
+  let arguments = (ins TwoValuedI32:$fd, RefType:$strRef);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$fd `,` $strRef attr-dict `:` type($strRef)";
+}
+
 def StrobeBIOp : Builtin<"strobe"> {
   let summary = "Display values at the end of the current time step";
   let description = [{
@@ -3256,6 +3273,47 @@ def FMonitorBIOp : Builtin<"fmonitor"> {
   }];
   let arguments = (ins TwoValuedI32:$fd, FormatStringType:$message);
   let assemblyFormat = "$fd `,` $message attr-dict";
+}
+
+def MonitorOnBIOp : Builtin<"monitoron"> {
+  let summary = "Enable monitoring";
+  let description = [{
+    Corresponds to the `$monitoron` system task. Re-enables monitoring.
+    See IEEE 1800-2017 Section 21.2.3 "Monitoring".
+  }];
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def MonitorOffBIOp : Builtin<"monitoroff"> {
+  let summary = "Disable monitoring";
+  let description = [{
+    Corresponds to the `$monitoroff` system task. Disables monitoring.
+    See IEEE 1800-2017 Section 21.2.3 "Monitoring".
+  }];
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def PrintTimescaleBIOp : Builtin<"printtimescale"> {
+  let summary = "Print the timescale of a module";
+  let description = [{
+    Corresponds to the `$printtimescale` system task.
+    See IEEE 1800-2017 Section 20.3 "Timescale system tasks".
+  }];
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def UngetCBIOp : Builtin<"ungetc"> {
+  let summary = "Push a character back into the file stream";
+  let description = [{
+    Corresponds to the `$ungetc` system task.
+    See IEEE 1800-2017 Section 21.3.4 "File positioning functions".
+  }];
+  let arguments = (ins TwoValuedI32:$c, TwoValuedI32:$fd);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$c `,` $fd attr-dict";
 }
 
 //===----------------------------------------------------------------------===//

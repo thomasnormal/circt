@@ -70,12 +70,20 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **Iteration 92 Complete!** Now starting Iteration 93.
 
-**Test Results (Iteration 92 Final)**:
-- sv-tests: **81.8% pass rate** (840/1027 tests) - **+22.9% improvement from Iteration 87!**
-- verilator-verification: 62% parse-only, 95% MooreToCore (2% improvement)
-- Yosys SVA BMC: **82%** (up from 75% in Iteration 91)
+**Test Results (Iteration 93 Progress)**:
+- sv-tests: **75.3% pass rate** (781/1037 tests) - +3 tests from file I/O system calls
+- verilator-verification: 62% parse-only, 95% MooreToCore
+- Yosys SVA BMC: **82%** (stable)
 - AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
 - I2S AVIP: Assertions verified working end-to-end
+
+**Iteration 93 Accomplishments (In Progress)**:
+1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
+2. ✅ **$fgets system call** - Connected existing FGetSBIOp to ImportVerilog
+3. ✅ **$ungetc system call** - Connected existing UngetCBIOp
+4. ✅ **Dynamic array string init** - Fixed hw.bitcast for concatenation patterns
+5. ✅ **BMC Sim stripping** - Added sim-strip pass for formal flows
+6. ✅ **LLHD halt handling** - Fixed halt→yield for combinational regions
 
 **Iteration 92 Accomplishments**:
 1. ✅ **llvm.store/load hw.struct** - Fixed struct storage/load via llvm.struct conversion
@@ -156,11 +164,19 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ⚠️ **Virtual method dispatch** | **NEXT**: Base/derived class method resolution |
 | ⚠️ Method overloading | Edge cases in class hierarchy |
 
-**Iteration 93 Priorities**:
-1. **Virtual method dispatch** - Enable UVM polymorphism (factory, callbacks)
-2. **sv-tests moore.conversion** - Fix 19 tests with type conversion legalization
-3. **Hierarchical interface task calls** - Unblock AHB AVIP
-4. **System call stubs** - $strobe, $fmonitor, $fflush, etc. (9+ tests)
+**Iteration 93 Priorities** (Updated):
+1. **Virtual method dispatch** - Enable UVM polymorphism (factory, callbacks) [Track A]
+2. **sv-tests moore.conversion** - Fix remaining type conversion tests [Track C]
+3. **Hierarchical interface task calls** - Unblock AHB AVIP [Track A]
+4. ✅ **System call stubs** - $ferror, $fgets, $ungetc done; remaining: $fread, $fscanf, $fpos
+5. **BMC sequence patterns** - Complete value-change X/Z semantics [Track B]
+6. **Runtime DPI stubs** - Complete UVM runtime function stubs [Track D]
+
+**Remaining Limitations**:
+- Virtual method dispatch not implemented (critical for UVM factory/callbacks)
+- Some file I/O system calls still missing ($fread, $fscanf, $fpos, $readmemb/h)
+- VCD dump functions ($dumpfile, $dumpvars, $dumpports) not implemented
+- Hierarchical interface task calls need work for AHB AVIP
 
 **Track B: BMC/Formal (Codex Agent Handling) - Iteration 92 Progress**
 | Status | Progress |

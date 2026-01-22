@@ -1,5 +1,104 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 93 - January 22, 2026
+
+### File I/O System Calls ✅ NEW
+
+**Feature**: Implemented missing file I/O system calls for IEEE 1800-2017 compliance.
+
+**Details**:
+- `$ferror(fd, str)` - Get file error status and message. Added `FErrorBIOp` to Moore dialect.
+- `$fgets(str, fd)` - Read line from file. Connected existing `FGetSBIOp` to ImportVerilog.
+- `$ungetc(c, fd)` - Push character back to stream. Connected existing `UngetCBIOp`.
+
+These system calls have output arguments that Slang wraps in AssignmentExpression with
+EmptyArgument RHS. Special handling was added to extract the LHS for proper conversion.
+
+**Tests Unblocked**: 3 sv-tests
+- `tests/chapter-21/21.3--ferror.sv`
+- `tests/chapter-21/21.3--fgets.sv`
+- `tests/chapter-21/21.3--ungetc.sv`
+
+**Impact**: sv-tests pass rate improved from 778/1037 (75.0%) to 781/1037 (75.3%)
+
+### Dynamic Array String Initialization ✅ NEW
+
+**Bug Fix**: Fixed hw.bitcast error when initializing dynamic arrays with concatenation patterns.
+
+**Problem**: When initializing a dynamic array like `string s[] = {"hello", "world"}`, Slang
+reports the expression as a ConcatenationExpression (kind 15) rather than an assignment pattern.
+This caused hw.bitcast to fail when trying to convert from packed integer to open_uarray<string>.
+
+**Solution**: Added special handling in Structure.cpp's `visit(VariableSymbol)` to:
+1. Detect OpenUnpackedArrayType target with ConcatenationExpression initializer
+2. Convert each element individually to the element type
+3. Build via queue operations (QueueConcatOp, QueuePushBackOp) then convert to dynamic array
+
+**Test Unblocked**: `tests/chapter-7/arrays/associative/locator-methods/find-first.sv`
+
+### BMC Sim Op Stripping ✅ NEW
+
+**Feature**: Added a Sim dialect stripping pass and enabled it in the `circt-bmc` pipeline.
+
+**Details**:
+- New `sim-strip` pass erases Sim dialect operations when they are only used
+  for simulation-side effects (e.g. `$display`, `$finish`).
+- `circt-bmc` now registers the Sim dialect and runs `sim-strip` early to avoid
+  parse/verification failures on sim ops in formal flows.
+- This unblocks BMC ingestion of designs that include simulation tasks, with
+  follow-up work still needed for LLHD-side `$stop/$finish` lowering.
+
+**Test**: `test/Dialect/Sim/strip-sim.mlir`
+
+**Impact**: Verilator-verification and sv-tests no longer fail immediately on
+sim dialect ops, exposing the next LLHD-related blockers in BMC.
+
+### LLHD Halt + Combinational Handling for BMC ✅ NEW
+
+**Feature**: Stabilized LLHD lowering for BMC by eliminating invalid `llhd.halt`
+in combinational regions and enabling control-flow removal through `llhd.prb`.
+
+**Details**:
+- `llhd.halt` is now converted to `llhd.yield` when processes are lowered to
+  combinational regions (LowerProcesses + Deseq specialization).
+- LLHD remove-control-flow now treats `llhd.prb` as safe, allowing CFG
+  flattening for combinational regions that read signals.
+- LowerToBMC inlines single-block `llhd.combinational` bodies into the BMC
+  circuit region, avoiding parent constraint violations.
+
+**Tests**:
+- `test/Dialect/LLHD/Transforms/lower-processes.mlir` (new halt→yield case)
+- `test/Dialect/LLHD/Transforms/remove-control-flow.mlir` (prb allowed)
+- `test/Tools/circt-bmc/lower-to-bmc-llhd-combinational.mlir` (inline)
+
+**Remaining**: BMC still fails on LLHD time/drive legalization
+(`llhd.constant_time`, `llhd.drv`), which will need a dedicated lowering.
+
+### LLHD Time/Signal Lowering for BMC ✅ NEW
+
+**Feature**: Added a BMC-specific lowering for LLHD time/signal ops.
+
+**Details**:
+- `llhd.constant_time` is erased and replaced with a zero i1 constant.
+- `llhd.sig`/`llhd.prb` are collapsed to SSA values.
+- `llhd.drv` updates the SSA value via `comb.mux` when enabled, ignoring delay.
+- Single-block `llhd.combinational` bodies are inlined into the BMC circuit.
+
+**Tests**:
+- `test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir`
+- `test/Tools/circt-bmc/lower-to-bmc-llhd-combinational.mlir`
+
+**Impact**: `circt-bmc` now accepts LLHD-heavy testbenches and the
+verilator-verification assert suite is largely unblocked.
+
+### Test Results (Iteration 93 Progress)
+
+- **yosys SVA BMC**: 14 tests, failures=4, skipped=2 (unchanged)
+- **sv-tests SVA BMC**: total=26 pass=17 fail=2 xfail=3 error=4 skip=1010
+- **verilator-verification BMC**: total=17 pass=9 error=8
+
+---
+
 ## Iteration 92 - January 21, 2026
 
 ### TaggedUnion Expressions ✅ NEW
