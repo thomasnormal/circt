@@ -27,6 +27,49 @@ using namespace ImportVerilog;
 
 // NOLINTBEGIN(misc-no-recursion)
 namespace {
+
+/// Helper to ensure both operands have the same type before creating a binary
+/// operation. If one operand is two-valued (bit) and the other is four-valued
+/// (logic), promotes both to four-valued to ensure type compatibility.
+static std::pair<Value, Value> unifyBoolTypes(OpBuilder &builder, Location loc,
+                                              Value lhs, Value rhs) {
+  if (!lhs || !rhs)
+    return {lhs, rhs};
+  if (lhs.getType() == rhs.getType())
+    return {lhs, rhs};
+
+  auto lhsInt = dyn_cast<moore::IntType>(lhs.getType());
+  auto rhsInt = dyn_cast<moore::IntType>(rhs.getType());
+  if (!lhsInt || !rhsInt)
+    return {lhs, rhs};
+
+  // Use four-valued if either operand is four-valued.
+  auto targetDomain = (lhsInt.getDomain() == moore::Domain::FourValued ||
+                       rhsInt.getDomain() == moore::Domain::FourValued)
+                          ? moore::Domain::FourValued
+                          : moore::Domain::TwoValued;
+  auto targetType = moore::IntType::get(builder.getContext(), 1, targetDomain);
+  if (lhs.getType() != targetType)
+    lhs = moore::ConversionOp::create(builder, loc, targetType, lhs);
+  if (rhs.getType() != targetType)
+    rhs = moore::ConversionOp::create(builder, loc, targetType, rhs);
+  return {lhs, rhs};
+}
+
+/// Create an AndOp with type-unified operands.
+static Value createUnifiedAndOp(OpBuilder &builder, Location loc, Value lhs,
+                                Value rhs) {
+  auto [unifiedLhs, unifiedRhs] = unifyBoolTypes(builder, loc, lhs, rhs);
+  return moore::AndOp::create(builder, loc, unifiedLhs, unifiedRhs);
+}
+
+/// Create an OrOp with type-unified operands.
+static Value createUnifiedOrOp(OpBuilder &builder, Location loc, Value lhs,
+                               Value rhs) {
+  auto [unifiedLhs, unifiedRhs] = unifyBoolTypes(builder, loc, lhs, rhs);
+  return moore::OrOp::create(builder, loc, unifiedLhs, unifiedRhs);
+}
+
 static verif::ClockEdge
 convertEdgeKindVerif(const slang::ast::EdgeKind edge) {
   switch (edge) {
@@ -85,8 +128,8 @@ static Value cloneAssertionValueIntoBlock(Value value, OpBuilder &builder,
       if (!cloned)
         return {};
       if (merged)
-        merged = moore::OrOp::create(builder, builder.getUnknownLoc(), merged,
-                                     cloned);
+        merged = createUnifiedOrOp(builder, builder.getUnknownLoc(), merged,
+                                   cloned);
       else
         merged = cloned;
     }
@@ -561,11 +604,12 @@ struct StmtVisitor {
       if (!cond)
         return failure();
       if (allConds)
-        allConds = moore::AndOp::create(builder, loc, allConds, cond);
+        allConds = createUnifiedAndOp(builder, loc, allConds, cond);
       else
         allConds = cond;
     }
     assert(allConds && "slang guarantees at least one condition");
+    Value allCondsLogic = allConds;
     allConds = moore::ToBuiltinBoolOp::create(builder, loc, allConds);
 
     // Create the blocks for the true and false branches, and the exit block.
@@ -575,18 +619,32 @@ struct StmtVisitor {
     cf::CondBranchOp::create(builder, loc, allConds, &trueBlock,
                              falseBlock ? falseBlock : &exitBlock);
 
+    Value savedAssertionGuard = context.currentAssertionGuard;
+
     // Generate the true branch.
     builder.setInsertionPointToEnd(&trueBlock);
+    Value trueGuard = allCondsLogic;
+    if (savedAssertionGuard)
+      trueGuard = createUnifiedAndOp(builder, loc, savedAssertionGuard,
+                                     trueGuard);
+    context.currentAssertionGuard = trueGuard;
     if (failed(context.convertStatement(stmt.ifTrue)))
       return failure();
+    context.currentAssertionGuard = savedAssertionGuard;
     if (!isTerminated())
       cf::BranchOp::create(builder, loc, &exitBlock);
 
     // Generate the false branch if present.
     if (stmt.ifFalse) {
       builder.setInsertionPointToEnd(falseBlock);
+      Value falseGuard = moore::NotOp::create(builder, loc, allCondsLogic);
+      if (savedAssertionGuard)
+        falseGuard = createUnifiedAndOp(builder, loc, savedAssertionGuard,
+                                        falseGuard);
+      context.currentAssertionGuard = falseGuard;
       if (failed(context.convertStatement(*stmt.ifFalse)))
         return failure();
+      context.currentAssertionGuard = savedAssertionGuard;
       if (!isTerminated())
         cf::BranchOp::create(builder, loc, &exitBlock);
     }
@@ -632,12 +690,12 @@ struct StmtVisitor {
         filter = context.convertToBool(filter);
         if (!filter)
           return failure();
-        cond = moore::AndOp::create(builder, loc, cond, filter);
+        cond = createUnifiedAndOp(builder, loc, cond, filter);
       }
 
       Value condLogic = cond;
       if (anyMatch)
-        anyMatch = moore::OrOp::create(builder, loc, anyMatch, condLogic);
+        anyMatch = createUnifiedOrOp(builder, loc, anyMatch, condLogic);
       else
         anyMatch = condLogic;
       cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
@@ -650,8 +708,8 @@ struct StmtVisitor {
       builder.setInsertionPointToEnd(&matchBlock);
       Value matchGuard = condLogic;
       if (savedAssertionGuard)
-        matchGuard = moore::AndOp::create(builder, loc, savedAssertionGuard,
-                                          matchGuard);
+        matchGuard = createUnifiedAndOp(builder, loc, savedAssertionGuard,
+                                        matchGuard);
       context.currentAssertionGuard = matchGuard;
       if (failed(context.convertStatement(*item.stmt)))
         return failure();
@@ -670,8 +728,8 @@ struct StmtVisitor {
       if (anyMatch) {
         Value noMatch = moore::NotOp::create(builder, loc, anyMatch);
         defaultGuard = defaultGuard
-                           ? moore::AndOp::create(builder, loc, defaultGuard,
-                                                  noMatch)
+                           ? createUnifiedAndOp(builder, loc, defaultGuard,
+                                                noMatch)
                            : noMatch;
       }
       context.currentAssertionGuard = defaultGuard;
@@ -783,8 +841,8 @@ struct StmtVisitor {
         if (anyMatchBeforeItem) {
           Value noPrevMatch =
               moore::NotOp::create(builder, itemLoc, anyMatchBeforeItem);
-          branchGuard = moore::AndOp::create(builder, itemLoc, noPrevMatch,
-                                             branchGuard);
+          branchGuard = createUnifiedAndOp(builder, itemLoc, noPrevMatch,
+                                           branchGuard);
         }
 
         if (!hasMatchGuardArg) {
@@ -794,7 +852,7 @@ struct StmtVisitor {
         }
         if (itemMatch)
           itemMatch =
-              moore::OrOp::create(builder, itemLoc, itemMatch, branchGuard);
+              createUnifiedOrOp(builder, itemLoc, itemMatch, branchGuard);
         else
           itemMatch = branchGuard;
 
@@ -808,7 +866,7 @@ struct StmtVisitor {
       }
 
       if (anyMatch)
-        anyMatch = moore::OrOp::create(builder, loc, anyMatch, itemMatch);
+        anyMatch = createUnifiedOrOp(builder, loc, anyMatch, itemMatch);
       else
         anyMatch = itemMatch;
 
@@ -823,8 +881,8 @@ struct StmtVisitor {
       Value matchGuard = hasMatchGuardArg ? matchGuardArg : Value{};
       if (savedAssertionGuard)
         matchGuard = matchGuard
-                         ? moore::AndOp::create(builder, loc,
-                                                savedAssertionGuard, matchGuard)
+                         ? createUnifiedAndOp(builder, loc,
+                                              savedAssertionGuard, matchGuard)
                          : savedAssertionGuard;
       context.currentAssertionGuard = matchGuard;
       if (failed(context.convertStatement(*item.stmt)))
@@ -900,8 +958,8 @@ struct StmtVisitor {
       if (anyMatch) {
         Value noMatch = moore::NotOp::create(builder, loc, anyMatch);
         defaultGuard = defaultGuard
-                           ? moore::AndOp::create(builder, loc, defaultGuard,
-                                                  noMatch)
+                           ? createUnifiedAndOp(builder, loc, defaultGuard,
+                                                noMatch)
                            : noMatch;
       }
       context.currentAssertionGuard = defaultGuard;
@@ -1106,8 +1164,7 @@ struct StmtVisitor {
     if (failed(valueMatch))
       return failure();
 
-    auto combined =
-        moore::AndOp::create(builder, loc, *tagMatch, *valueMatch);
+    auto combined = createUnifiedAndOp(builder, loc, *tagMatch, *valueMatch);
     return context.convertToBool(combined);
   }
 
@@ -1652,6 +1709,16 @@ struct StmtVisitor {
     // This is purely a display formatting function, stub as no-op.
     if (subroutine.name == "$timeformat") {
       mlir::emitRemark(loc) << "ignoring system task `" << subroutine.name
+                            << "`";
+      return true;
+    }
+
+    // Coverage database tasks (IEEE 1800-2017 Section 20.14)
+    // $set_coverage_db_name and $load_coverage_db are simulator-specific;
+    // stub as no-ops.
+    if (subroutine.name == "$set_coverage_db_name" ||
+        subroutine.name == "$load_coverage_db") {
+      mlir::emitRemark(loc) << "ignoring coverage task `" << subroutine.name
                             << "`";
       return true;
     }
