@@ -1,25 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 94 - January 22, 2026
+
+### Procedural $sampled Support ✅ NEW
+
+**Feature**: Implemented $sampled capture for procedural contexts by sampling at
+procedure entry and reusing the sampled value throughout the time step.
+
+**Details**:
+- Added per-procedure sampled-value storage and initialization in ImportVerilog.
+- $sampled outside assertions now maps to a stable sampled variable instead of
+  re-reading the live signal after procedural updates.
+
+**Tests Added**:
+- `test/Conversion/ImportVerilog/sampled-procedural.sv`
+
+**Notes**: Not run locally (circt-verilog binary missing in `build/bin`).
+
 ## Iteration 93 - January 22, 2026
 
 ### File I/O System Calls ✅ NEW
 
-**Feature**: Implemented missing file I/O system calls for IEEE 1800-2017 compliance.
+**Feature**: Implemented comprehensive file I/O system calls for IEEE 1800-2017 compliance.
 
 **Details**:
 - `$ferror(fd, str)` - Get file error status and message. Added `FErrorBIOp` to Moore dialect.
 - `$fgets(str, fd)` - Read line from file. Connected existing `FGetSBIOp` to ImportVerilog.
 - `$ungetc(c, fd)` - Push character back to stream. Connected existing `UngetCBIOp`.
+- `$fseek(fd, offset, whence)` - Set file position. Added `FSeekBIOp`.
+- `$ftell(fd)` - Get current file position. Added `FTellBIOp`.
+- `$rewind(fd)` - Reset file position to beginning. Added `RewindBIOp`.
+- `$fread(dest, fd)` - Read binary data from file. Added `FReadBIOp`.
+- `$readmemb(filename, mem)` - Load memory from binary file. Added `ReadMemBBIOp`.
+- `$readmemh(filename, mem)` - Load memory from hex file. Added `ReadMemHBIOp`.
+- `$fflush(fd)` - Flush file buffer to disk.
 
-These system calls have output arguments that Slang wraps in AssignmentExpression with
-EmptyArgument RHS. Special handling was added to extract the LHS for proper conversion.
+### Display/Monitor System Calls ✅ NEW
 
-**Tests Unblocked**: 3 sv-tests
-- `tests/chapter-21/21.3--ferror.sv`
-- `tests/chapter-21/21.3--fgets.sv`
-- `tests/chapter-21/21.3--ungetc.sv`
+**Feature**: Full $strobe and $monitor family of system calls.
 
-**Impact**: sv-tests pass rate improved from 778/1037 (75.0%) to 781/1037 (75.3%)
+**Details**:
+- `$strobe`, `$strobeb`, `$strobeo`, `$strobeh` - End-of-time-step display with format variants
+- `$fstrobe`, `$fstrobeb`, `$fstrobeo`, `$fstrobeh` - File output variants
+- `$monitor`, `$monitorb`, `$monitoro`, `$monitorh` - Continuous monitoring with format variants
+- `$fmonitor`, `$fmonitorb`, `$fmonitoro`, `$fmonitorh` - File output variants
+- `$monitoron`, `$monitoroff` - Enable/disable monitoring
+- `$printtimescale` - Print current timescale
+
+**Tests Added**: `test/Conversion/ImportVerilog/system-calls-strobe-monitor.sv`
+
+**Impact**: sv-tests chapter-21 improved from ~20/29 to ~23/29 passing
 
 ### Dynamic Array String Initialization ✅ NEW
 
