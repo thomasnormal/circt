@@ -847,11 +847,12 @@ struct LTLPropertyLowerer {
       auto neg = comb::XorOp::create(builder, loc, inner.safety,
                                      hw::ConstantOp::create(
                                          builder, loc, builder.getI1Type(), 1));
-      // For sequences, the negation is a safety property: the sequence should
-      // never complete. The finalCheck should remain true (no liveness
-      // requirement). For properties, we also negate finalCheck.
+      // For sequences (i1 or !ltl.sequence), the negation is a safety property:
+      // the sequence should never complete. The finalCheck should remain true
+      // (no liveness requirement). For properties, we also negate finalCheck.
       Value finalCheck;
-      if (isa<ltl::SequenceType>(notOp.getInput().getType())) {
+      auto inputType = notOp.getInput().getType();
+      if (isa<ltl::SequenceType>(inputType) || inputType.isInteger(1)) {
         // Negating a sequence is purely a safety property
         finalCheck =
             hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
