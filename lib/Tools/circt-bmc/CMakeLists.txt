@@ -1,6 +1,7 @@
 add_circt_library(CIRCTBMCTransforms
   ExternalizeRegisters.cpp
   LowerToBMC.cpp
+  StripLLHDProcesses.cpp
 
   DEPENDS
   CIRCTBMCTransformsIncGen

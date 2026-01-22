@@ -216,6 +216,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
   if (hasLLHD) {
     LlhdToCorePipelineOptions llhdOptions;
     populateLlhdToCorePipeline(pm, llhdOptions);
+    // Strip LLHD processes after lowering - their results become symbolic inputs
+    pm.addPass(createStripLLHDProcesses());
   }
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());

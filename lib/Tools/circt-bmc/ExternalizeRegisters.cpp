@@ -303,7 +303,10 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
       newOutputName(builder.getStringAttr(regName + "_next"));
   addedInputs[module.getSymNameAttr()].push_back(regType);
   addedInputNames[module.getSymNameAttr()].push_back(newInputName);
-  addedOutputs[module.getSymNameAttr()].push_back(next.getType());
+  // Use regType for output as well to ensure type consistency between register
+  // state input and next-state output. This is critical for BMC's IteOp which
+  // requires matching types for then-value (regInput) and else-value (regState).
+  addedOutputs[module.getSymNameAttr()].push_back(regType);
   addedOutputNames[module.getSymNameAttr()].push_back(newOutputName);
 
   // Replace the register with newInput and newOutput
