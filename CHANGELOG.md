@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 98 - January 22, 2026
+
+### `bit` Type Clock Simulation Bug ✅ FIXED
+
+Fixed probe value caching in LLHDProcessInterpreter::getValue(). Probe
+results were being re-read instead of using cached values, breaking
+posedge detection. Simulations with `bit` type clocks now work correctly.
+
+### String Array Types ✅ FIXED
+
+Added support for `string arr[N]` types enabling full UVM library compilation:
+- UnpackedArrayType converter for LLVM element types
+- VariableOpConversion for stack allocation
+- Extract/DynExtract conversions for array access
+
+This unblocks UVM's `string mode[64]` in uvm_reg_bit_bash_seq.svh.
+
+### AssocArrayCreateOp ✅ NEW
+
+Added support for associative array literals `'{default: value}`:
+- AnyAssocArrayType constraint
+- AssocArrayCreateOp for empty array creation
+- MooreToCore conversion to runtime call
+
+sv-tests chapter-7: 101/103 (98%)
+
+### All 9 AVIPs Compile ✅ VERIFIED
+
+All MBIT AVIPs compile successfully with circt-verilog:
+- SPI, I2S, AXI4, AXI4Lite, AHB, APB, I3C, JTAG, UART
+
+### Commits
+- `f7112407d` [Moore] Add AssocArrayCreateOp for associative array literals
+- `05222262e` [MooreToCore] Add support for string array types
+- `12f6b7489` [circt-sim] Fix bit type clock simulation bug
+
+---
+
 ## Iteration 97 - January 22, 2026
 
 ### Array Locator Lowering ✅ FIXED
