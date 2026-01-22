@@ -28,6 +28,12 @@ and threading an input port into the referencing module.
 hierarchical inputs are available, avoiding forward-reference ordering issues
 in modules with sibling extnets.
 
+### Verilator Verification Runner ✅ NEW
+
+**Fix**: Auto-detect top module per file in the verilator-verification BMC
+runner when the default `TOP=top` isn't present, to avoid false errors on tests
+like `assert_sampled.sv` where the top module is named differently.
+
 **Notes**: Not run locally (circt-verilog binary missing in `build/bin`).
 
 ## Iteration 93 - January 22, 2026
