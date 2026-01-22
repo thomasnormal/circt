@@ -18,7 +18,7 @@ moore.class.classdecl @TestClass {
 
 // CHECK-LABEL: func.func @"TestClass::run_phase"
 // CHECK-SAME: (%arg0: !llvm.ptr)
-// CHECK: %[[DELAY:.*]] = llvm.mlir.constant(10000000 : i64) : i64
+// CHECK: %[[DELAY:.*]] = hw.constant 10000000 : i64
 // CHECK: llvm.call @__moore_delay(%[[DELAY]]) : (i64) -> ()
 // CHECK: return
 func.func @"TestClass::run_phase"(%this: !moore.class<@TestClass>) {
@@ -32,8 +32,8 @@ func.func @"TestClass::run_phase"(%this: !moore.class<@TestClass>) {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @"TestClass::multiple_delays"
-// CHECK-DAG: %[[DELAY1:.*]] = llvm.mlir.constant(5000000 : i64) : i64
-// CHECK-DAG: %[[DELAY2:.*]] = llvm.mlir.constant(15000000 : i64) : i64
+// CHECK-DAG: %[[DELAY1:.*]] = hw.constant 5000000 : i64
+// CHECK-DAG: %[[DELAY2:.*]] = hw.constant 15000000 : i64
 // CHECK: llvm.call @__moore_delay(%[[DELAY1]]) : (i64) -> ()
 // CHECK: llvm.call @__moore_delay(%[[DELAY2]]) : (i64) -> ()
 // CHECK: return
@@ -47,13 +47,12 @@ func.func @"TestClass::multiple_delays"(%this: !moore.class<@TestClass>) {
 
 //===----------------------------------------------------------------------===//
 // Test 3: Delay with dynamic time value (passed as argument)
-// Uses unrealized_conversion_cast for llhd.time -> i64
+// TimeType now converts to i64 directly, no unrealized_conversion_cast needed.
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @"TestClass::dynamic_delay"
-// CHECK-SAME: (%arg0: !llvm.ptr, %arg1: !llhd.time)
-// CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %arg1 : !llhd.time to i64
-// CHECK: llvm.call @__moore_delay(%[[CAST]]) : (i64) -> ()
+// CHECK-SAME: (%arg0: !llvm.ptr, %arg1: i64)
+// CHECK: llvm.call @__moore_delay(%arg1) : (i64) -> ()
 // CHECK: return
 func.func @"TestClass::dynamic_delay"(%this: !moore.class<@TestClass>, %delay: !moore.time) {
   moore.wait_delay %delay

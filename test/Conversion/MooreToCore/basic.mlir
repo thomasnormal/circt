@@ -932,11 +932,11 @@ moore.module @blockArgAsObservedValue(in %in0: !moore.i32, in %in1: !moore.i32) 
 }
 
 // CHECK-LABEL: @Time
-// CHECK-SAME: (%arg0: !llhd.time) -> (!llhd.time, !llhd.time)
+// CHECK-SAME: (%arg0: i64) -> (i64, i64)
 func.func @Time(%arg0: !moore.time) -> (!moore.time, !moore.time) {
-  // CHECK-NEXT: [[TMP:%.+]] = llhd.constant_time <1234000fs, 0d, 0e>
+  // CHECK-NEXT: [[TMP:%.+]] = hw.constant 1234000 : i64
   %0 = moore.constant_time 1234000 fs
-  // CHECK-NEXT: return %arg0, [[TMP]] : !llhd.time, !llhd.time
+  // CHECK-NEXT: return %arg0, [[TMP]] : i64, i64
   return %arg0, %0 : !moore.time, !moore.time
 }
 
@@ -998,24 +998,26 @@ moore.module @MultiDimensionalSlice(in %in : !moore.array<2 x array<2 x l2>>, ou
 // CHECK-LABEL: hw.module @ContinuousAssignment
 // CHECK-SAME: in %a : !llhd.ref<i42>
 // CHECK-SAME: in %b : i42
-// CHECK-SAME: in %c : !llhd.time
+// CHECK-SAME: in %c : i64
 moore.module @ContinuousAssignment(in %a: !moore.ref<i42>, in %b: !moore.i42, in %c: !moore.time) {
   // CHECK-NEXT: [[DELTA:%.+]] = llhd.constant_time <0ns, 0d, 1e>
   // CHECK-NEXT: llhd.drv %a, %b after [[DELTA]]
   moore.assign %a, %b : i42
-  // CHECK-NEXT: llhd.drv %a, %b after %c
+  // CHECK-NEXT: [[TIME:%.+]] = llhd.int_to_time %c
+  // CHECK-NEXT: llhd.drv %a, %b after [[TIME]]
   moore.delayed_assign %a, %b, %c : i42
 }
 
 // CHECK-LABEL: func.func @NonBlockingAssignment
 // CHECK-SAME: %arg0: !llhd.ref<i42>
 // CHECK-SAME: %arg1: i42
-// CHECK-SAME: %arg2: !llhd.time
+// CHECK-SAME: %arg2: i64
 func.func @NonBlockingAssignment(%arg0: !moore.ref<i42>, %arg1: !moore.i42, %arg2: !moore.time) {
   // CHECK-NEXT: [[DELTA:%.+]] = llhd.constant_time <0ns, 1d, 0e>
   // CHECK-NEXT: llhd.drv %arg0, %arg1 after [[DELTA]]
   moore.nonblocking_assign %arg0, %arg1 : i42
-  // CHECK-NEXT: llhd.drv %arg0, %arg1 after %arg2
+  // CHECK-NEXT: [[TIME:%.+]] = llhd.int_to_time %arg2
+  // CHECK-NEXT: llhd.drv %arg0, %arg1 after [[TIME]]
   moore.delayed_nonblocking_assign %arg0, %arg1, %arg2 : i42
   return
 }
@@ -1056,19 +1058,23 @@ func.func @BitsToRealLowering(%arg0: !moore.i64, %arg1: !moore.i32) {
 }
 
 // CHECK-LABEL: func.func @CurrentTime
+// CHECK-SAME: () -> i64
 func.func @CurrentTime() -> !moore.time {
   // CHECK-NEXT: [[TMP:%.+]] = llhd.current_time
+  // CHECK-NEXT: [[TMP2:%.+]] = llhd.time_to_int [[TMP]]
   %0 = moore.builtin.time
-  // CHECK-NEXT: return [[TMP]] : !llhd.time
+  // CHECK-NEXT: return [[TMP2]] : i64
   return %0 : !moore.time
 }
 
 // CHECK-LABEL: func.func @TimeConversion
+// CHECK-SAME: (%arg0: !hw.struct<value: i64, unknown: i64>, %arg1: i64) -> (i64, !hw.struct<value: i64, unknown: i64>)
 func.func @TimeConversion(%arg0: !moore.l64, %arg1: !moore.time) -> (!moore.time, !moore.l64) {
-  // CHECK: llhd.int_to_time
+  // Note: The hw.constant 0 is hoisted before the struct_extract due to CSE.
+  // CHECK-DAG: hw.struct_extract
   %0 = moore.logic_to_time %arg0
-  // CHECK: llhd.time_to_int
-  // CHECK: hw.struct_create
+  // CHECK-DAG: hw.constant 0 : i64
+  // CHECK-DAG: hw.struct_create
   %1 = moore.time_to_logic %arg1
   // CHECK: return
   return %0, %1 : !moore.time, !moore.l64
