@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 97 - January 22, 2026
+
+### Array Locator Lowering ✅ FIXED
+
+The `moore.array.locator` (find with predicate) now lowers to HW dialect:
+- Added explicit illegality for ArrayLocatorOp/YieldOp
+- Extended UnrealizedConversionCastOp to allow hw.array ↔ llvm.array casts
+- Added region type conversion for predicate regions
+
+### sv-tests Chapter-11 ✅ 94% (83/88)
+
+**Fixes Implemented**:
+- MinTypMax expression support (min:typ:max timing)
+- Let construct support (LetDeclSymbol handling)
+
+### circt-sim LTL Dialect ✅
+
+- Registered LTL dialect for assertion support
+- verilator-verification: 13/15 passing with circt-sim (+6 tests)
+
+### UVM Simulation Testing
+
+- APB AVIP compiles to LLHD IR (27K lines)
+- Found `bit` type clock simulation bug (workaround: use `reg`)
+- Full UVM blocked by string array types (`string mode[64]`)
+
+### Commits
+- `a48904e91` [circt-sim] Register LTL dialect for assertion support
+- `b9c80df3e` [ImportVerilog] Add MinTypMax expression and let construct support
+
+---
+
 ## Iteration 96 - January 22, 2026
 
 ### Full UVM AVIP Compilation ✅ MAJOR MILESTONE
@@ -11,7 +43,28 @@ The vtable polymorphism fix enables complete UVM testbench compilation:
 - Deep class hierarchies with proper vtable inheritance
 - Virtual method dispatch through `func.call_indirect`
 
-**Remaining blocker for HW lowering**: `moore.array.locator` (find with predicate) not yet lowered
+**Array Locator Blocker**: ✅ RESOLVED in Iteration 97
+
+### BMC Sequence Semantics (Work In Progress)
+
+- Include `ltl.delay`/`ltl.past` on i1 values in sequence length bounds for fixed-length shifts
+- Gate fixed-length sequence properties with a warmup window to avoid early-cycle false negatives
+- Stop delaying sequence match signals; assert on completion-time matches with warmup gating
+- `16.10--sequence-local-var` now passes (sv-tests local-var: pass=2 xfail=2)
+
+### BMC LLHD Process Handling ✅
+
+- Strip `llhd.process` ops after LLHD-to-core lowering, replacing their results with module inputs
+- Add regression coverage for `strip-llhd-processes` (standalone and with `externalize-registers`)
+
+### Yosys SVA BMC ✅ 86% (12/14)
+
+**Fixes Implemented**:
+- Guard concurrent assertions inside procedural `if`/`else` with the branch condition
+- Negated sequence properties now apply warmup gating to avoid early false negatives
+
+**Remaining Failures**:
+- `extnets.sv`: cross-module hierarchical net assignment (unknown hierarchical name)
 
 ### sv-tests Chapter-7 ✅ 97% (100/103)
 
