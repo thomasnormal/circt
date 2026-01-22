@@ -181,10 +181,10 @@ moore.class.classdecl @ClassWithStruct {
 }
 
 /// Check that class with time property computes size correctly
-/// (regression test for llhd.time DataLayout crash - time is 16 bytes)
+/// (regression test for llhd.time DataLayout crash - time is i64)
 
 // CHECK-LABEL: func.func private @test_class_with_time
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(32 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -206,7 +206,7 @@ moore.class.classdecl @ClassWithTime {
 /// Check that class with multiple time properties computes size correctly
 
 // CHECK-LABEL: func.func private @test_class_with_multiple_times
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(48 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(32 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -217,7 +217,7 @@ func.func private @test_class_with_multiple_times() {
   %h = moore.class.new : <@ClassWithMultipleTimes>
   return
 }
-// Class with multiple time properties: type_id(4) + vtablePtr(8) + start(16) + end(16) + count(4) = 48 bytes
+// Class with multiple time properties: type_id(4) + vtablePtr(8) + start(i64=8) + end(i64=8) + count(4) = 32 bytes
 moore.class.classdecl @ClassWithMultipleTimes {
   moore.class.propertydecl @start_time : !moore.time
   moore.class.propertydecl @end_time : !moore.time
@@ -227,7 +227,7 @@ moore.class.classdecl @ClassWithMultipleTimes {
 /// Check that class with nested struct containing time computes size correctly
 
 // CHECK-LABEL: func.func private @test_class_with_time_struct
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(36 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(28 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -239,7 +239,7 @@ func.func private @test_class_with_time_struct() {
   return
 }
 // Class with a struct property containing time:
-// type_id(4) + vtablePtr(8) + id(4) + access_record{timestamp(16) + count(4)} = 36 bytes
+// type_id(4) + vtablePtr(8) + id(4) + access_record{timestamp(i64=8) + count(4)} = 28 bytes
 moore.class.classdecl @ClassWithTimeStruct {
   moore.class.propertydecl @id : !moore.i32
   moore.class.propertydecl @access_record : !moore.ustruct<{timestamp: time, count: i32}>

@@ -70,12 +70,12 @@ moore.class.classdecl @ClassB {
 }
 
 /// Test creating multiple class instances of different types
-/// ClassA: type_id(4) + valA(4) = 8 bytes
-/// ClassB: type_id(4) + valB(8) = 12 bytes
+/// ClassA: type_id(4) + vtable_ptr(8) + valA(4) = 16 bytes, aligned to 20 bytes
+/// ClassB: type_id(4) + vtable_ptr(8) + valB(8) = 20 bytes, aligned to 16 bytes
 
 // CHECK-LABEL: func.func private @test_multiple_new
-// CHECK-DAG:   [[SIZE_A:%.*]] = llvm.mlir.constant(8 : i64) : i64
-// CHECK-DAG:   [[SIZE_B:%.*]] = llvm.mlir.constant(12 : i64) : i64
+// CHECK-DAG:   [[SIZE_A:%.*]] = llvm.mlir.constant(20 : i64) : i64
+// CHECK-DAG:   [[SIZE_B:%.*]] = llvm.mlir.constant(16 : i64) : i64
 // CHECK:   llvm.call @malloc
 // CHECK:   llvm.call @malloc
 // CHECK:   return
@@ -133,7 +133,7 @@ func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moo
 
 // CHECK-LABEL: func.func private @test_upcast_then_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Base", (i32, i32)>
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Base", (i32, ptr, i32)>
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 // CHECK-NOT: moore.class.property_ref
@@ -234,17 +234,17 @@ func.func private @test_full_workflow() -> !moore.i1 {
 /// Test that Level3 allocation includes all inherited properties
 
 // CHECK-LABEL: func.func private @test_level3_size
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(19 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(27 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 // CHECK-NOT: moore.class.new
 
 func.func private @test_level3_size() {
-  // Level3 struct is nested: Level3(Level2(Level1(Base(i32, i32), i64), i16), i8)
-  // Base: i32 + i32 = 8 bytes
-  // Level1: Base(8) + i64 = 16 bytes
-  // Level2: Level1(16) + i16 = 18 bytes
-  // Level3: Level2(18) + i8 = 19 bytes (packed size)
+  // Level3 struct is nested: Level3(Level2(Level1(Base(i32, ptr, i32), i64), i16), i8)
+  // Base: i32 + ptr(8) + i32 = 16 bytes
+  // Level1: Base(16) + i64 = 24 bytes
+  // Level2: Level1(24) + i16 = 26 bytes
+  // Level3: Level2(26) + i8 = 27 bytes (packed size)
   %obj = moore.class.new : <@Level3>
   return
 }

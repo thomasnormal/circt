@@ -13,7 +13,7 @@ moore.class.classdecl @RandCClass {
 func.func @test_randc_randomize(%obj: !moore.class<@RandCClass>) -> i1 {
   // CHECK: llvm.call @__moore_randomize_basic
   // CHECK: llvm.call @__moore_is_rand_enabled
-  // CHECK: %[[FIELD_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+  // CHECK: %[[FIELD_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 2]
   // CHECK: llvm.call @__moore_randc_next(%[[FIELD_PTR]]
   // CHECK: llvm.store
   %success = moore.randomize %obj : !moore.class<@RandCClass>

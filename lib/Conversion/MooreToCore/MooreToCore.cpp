@@ -4945,9 +4945,14 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
                                           rewriter.getI64IntegerAttr(1));
       auto keyAlloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmKeyType, one);
-      // If key type differs, we need to bitcast - but for now just store
-      // directly as LLVM operations accept compatible types
-      LLVM::StoreOp::create(rewriter, loc, adaptor.getLowBit(), keyAlloca);
+      // Cast the key value to LLVM type if needed (hw.struct -> llvm.struct)
+      Value keyToStore = adaptor.getLowBit();
+      if (llvmKeyType != keyType) {
+        keyToStore = UnrealizedConversionCastOp::create(
+                         rewriter, loc, llvmKeyType, ValueRange{keyToStore})
+                         .getResult(0);
+      }
+      LLVM::StoreOp::create(rewriter, loc, keyToStore, keyAlloca);
 
       auto valueSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
@@ -5259,11 +5264,20 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
 
       // Store the key to an alloca and pass its pointer
       auto keyType = adaptor.getLowBit().getType();
+      // Convert key type to pure LLVM type for LLVM operations
+      Type llvmKeyType = convertToLLVMType(keyType);
       auto one = LLVM::ConstantOp::create(rewriter, loc,
                                           rewriter.getI64IntegerAttr(1));
       auto keyAlloca =
-          LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, one);
-      LLVM::StoreOp::create(rewriter, loc, adaptor.getLowBit(), keyAlloca);
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmKeyType, one);
+      // Cast the key value to LLVM type if needed (hw.struct -> llvm.struct)
+      Value keyToStore = adaptor.getLowBit();
+      if (llvmKeyType != keyType) {
+        keyToStore = UnrealizedConversionCastOp::create(
+                         rewriter, loc, llvmKeyType, ValueRange{keyToStore})
+                         .getResult(0);
+      }
+      LLVM::StoreOp::create(rewriter, loc, keyToStore, keyAlloca);
 
       auto valueSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
@@ -9379,13 +9393,22 @@ struct QueuePushBackOpConversion
 
     // Store element to alloca and pass pointer
     auto elemType = typeConverter->convertType(op.getElement().getType());
+    // Convert element type to pure LLVM type for LLVM operations
+    Type llvmElemType = convertToLLVMType(elemType);
     auto elemAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getElement(), elemAlloca);
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElemType, one);
+    // Cast element to LLVM type if needed (hw.struct -> llvm.struct)
+    Value elemToStore = adaptor.getElement();
+    if (llvmElemType != elemType) {
+      elemToStore = UnrealizedConversionCastOp::create(
+                        rewriter, loc, llvmElemType, ValueRange{elemToStore})
+                        .getResult(0);
+    }
+    LLVM::StoreOp::create(rewriter, loc, elemToStore, elemAlloca);
 
-    // Calculate element size
+    // Calculate element size (use LLVM type for accurate size)
     auto elemSize = LLVM::ConstantOp::create(
-        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(llvmElemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{queueAlloca, elemAlloca, elemSize});
@@ -9426,13 +9449,22 @@ struct QueuePushFrontOpConversion
 
     // Store element to alloca and pass pointer
     auto elemType = typeConverter->convertType(op.getElement().getType());
+    // Convert element type to pure LLVM type for LLVM operations
+    Type llvmElemType = convertToLLVMType(elemType);
     auto elemAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, elemType, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getElement(), elemAlloca);
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElemType, one);
+    // Cast element to LLVM type if needed (hw.struct -> llvm.struct)
+    Value elemToStore = adaptor.getElement();
+    if (llvmElemType != elemType) {
+      elemToStore = UnrealizedConversionCastOp::create(
+                        rewriter, loc, llvmElemType, ValueRange{elemToStore})
+                        .getResult(0);
+    }
+    LLVM::StoreOp::create(rewriter, loc, elemToStore, elemAlloca);
 
-    // Calculate element size
+    // Calculate element size (use LLVM type for accurate size)
     auto elemSize = LLVM::ConstantOp::create(
-        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(llvmElemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{queueAlloca, elemAlloca, elemSize});
@@ -12482,10 +12514,19 @@ struct AssocArrayDeleteKeyOpConversion
 
     // Store key to alloca and pass pointer.
     auto keyType = adaptor.getKey().getType();
+    // Convert key type to pure LLVM type for LLVM operations
+    Type llvmKeyType = convertToLLVMType(keyType);
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto keyAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getKey(), keyAlloca);
+    auto keyAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmKeyType, one);
+    // Cast the key value to LLVM type if needed (hw.struct -> llvm.struct)
+    Value keyToStore = adaptor.getKey();
+    if (llvmKeyType != keyType) {
+      keyToStore = UnrealizedConversionCastOp::create(
+                       rewriter, loc, llvmKeyType, ValueRange{keyToStore})
+                       .getResult(0);
+    }
+    LLVM::StoreOp::create(rewriter, loc, keyToStore, keyAlloca);
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{adaptor.getArray(), keyAlloca});
@@ -12598,10 +12639,10 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
       // Read current key value and store to alloca
       auto currentKey = llhd::ProbeOp::create(rewriter, loc, keyArg);
       // If types differ, cast the probed value to LLVM type
-      Value keyToStore = currentKey;
+      Value keyToStore = currentKey.getResult();
       if (llvmKeyValueType != keyValueType) {
         keyToStore = UnrealizedConversionCastOp::create(
-                         rewriter, loc, llvmKeyValueType, currentKey)
+                         rewriter, loc, llvmKeyValueType, ValueRange{keyToStore})
                          .getResult(0);
       }
       LLVM::StoreOp::create(rewriter, loc, keyToStore, keyAlloca);
@@ -12618,10 +12659,10 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
       auto updatedKey =
           LLVM::LoadOp::create(rewriter, loc, llvmKeyValueType, keyAlloca);
       // If types differ, cast the loaded value back to hw type for drive
-      Value keyToDrive = updatedKey;
+      Value keyToDrive = updatedKey.getResult();
       if (llvmKeyValueType != keyValueType) {
         keyToDrive = UnrealizedConversionCastOp::create(rewriter, loc,
-                                                        keyValueType, updatedKey)
+                                                        keyValueType, ValueRange{keyToDrive})
                          .getResult(0);
       }
       auto delay = llhd::ConstantTimeOp::create(
