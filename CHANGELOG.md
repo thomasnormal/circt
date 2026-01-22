@@ -34,6 +34,14 @@ in modules with sibling extnets.
 runner when the default `TOP=top` isn't present, to avoid false errors on tests
 like `assert_sampled.sv` where the top module is named differently.
 
+### Expect Assertions ✅ NEW
+
+**Feature**: Lower `expect` statements to verif assertions so BMC can process
+SV 16.17 tests (treated as asserts in formal flows).
+
+**Tests Added**:
+- `test/Conversion/ImportVerilog/expect.sv`
+
 **Notes**: Not run locally (circt-verilog binary missing in `build/bin`).
 
 ## Iteration 93 - January 22, 2026

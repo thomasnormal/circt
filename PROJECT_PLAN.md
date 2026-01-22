@@ -71,9 +71,10 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 **Iteration 92 Complete!** Now starting Iteration 93.
 
 **Test Results (Iteration 93 Progress)**:
-- sv-tests: **75.3% pass rate** (781/1037 tests) - +3 tests from file I/O system calls
+- sv-tests: **18/26 pass rate** (69%) for SVA BMC tests - +5 from expect assertions
+- sv-tests Chapter-21: 23/29 passing (79%)
 - verilator-verification: 62% parse-only, 95% MooreToCore
-- Yosys SVA BMC: **82%** (stable)
+- Yosys SVA BMC: **85.7%** (12/14 passing)
 - AHB AVIP: Core features work (interfaces, structs, tasks, enums, bind)
 - I2S AVIP: Assertions verified working end-to-end
 
@@ -93,6 +94,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 13. ✅ **MooreToCore vtable fix** - Fixed build errors in vtable infrastructure code
 14. ✅ **Hierarchical sibling extnets** - Fixed instance ordering for cross-module hierarchical refs
 15. ✅ **System call unit tests** - Added MooreToCore lowering tests for all new system calls
+16. ✅ **Expect assertions** - Map AssertionKind::Expect to moore::AssertOp/verif::AssertOp (+5 sv-tests)
 
 **Virtual Method Dispatch Research (Track A)**:
 Agent A completed research and identified the key gap for UVM polymorphism:
