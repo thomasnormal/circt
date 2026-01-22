@@ -456,7 +456,12 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
 static LogicalResult resolveClassStructBody(ModuleOp mod, SymbolRefAttr op,
                                             TypeConverter const &typeConverter,
                                             ClassTypeCache &cache) {
-  auto classDeclOp = cast<ClassDeclOp>(*mod.lookupSymbol(op));
+  auto *symbol = mod.lookupSymbol(op);
+  if (!symbol)
+    return failure();
+  auto classDeclOp = dyn_cast<ClassDeclOp>(*symbol);
+  if (!classDeclOp)
+    return failure();
   return resolveClassStructBody(classDeclOp, typeConverter, cache);
 }
 
@@ -2226,9 +2231,31 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
     auto vtablePtrPtr =
         LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy, objPtr, vtableGepIndices);
 
+    // Ensure the vtable global exists before referencing it.
+    // VTableOpConversion creates the actual vtable content, but it may run
+    // after ClassNewOpConversion. Create a placeholder global if needed.
+    std::string vtableGlobalName = structInfo->vtableGlobalName;
+    if (!mod.lookupSymbol<LLVM::GlobalOp>(vtableGlobalName)) {
+      // Determine vtable size from methodToVtableIndex
+      unsigned vtableSize = 0;
+      for (const auto &kv : structInfo->methodToVtableIndex) {
+        if (kv.second >= vtableSize)
+          vtableSize = kv.second + 1;
+      }
+      // Create at least a single-element array (min size 1)
+      if (vtableSize == 0)
+        vtableSize = 1;
+      auto vtableArrayTy = LLVM::LLVMArrayType::get(ptrTy, vtableSize);
+      auto zeroAttr = LLVM::ZeroAttr::get(ctx);
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(mod.getBody());
+      LLVM::GlobalOp::create(rewriter, loc, vtableArrayTy, /*isConstant=*/false,
+                             LLVM::Linkage::Internal, vtableGlobalName, zeroAttr);
+    }
+
     // Get the address of the class's vtable global and store it
     auto vtableGlobalAddr =
-        LLVM::AddressOfOp::create(rewriter, loc, ptrTy, structInfo->vtableGlobalName);
+        LLVM::AddressOfOp::create(rewriter, loc, ptrTy, vtableGlobalName);
     LLVM::StoreOp::create(rewriter, loc, vtableGlobalAddr, vtablePtrPtr);
 
     // Replace the new op with the malloc pointer
@@ -3514,22 +3541,128 @@ struct ConstraintUniqueOpConversion
   }
 };
 
-/// moore.vtable lowering: erase the vtable declaration.
-/// The vtable entries are resolved at load time via symbol lookup.
+/// moore.vtable lowering: generate LLVM global array of function pointers.
+/// For dynamic dispatch, each class has a vtable global containing function
+/// pointers indexed by the method's vtable index.
 /// Note: This pattern has a lower benefit than VTableLoadMethodOpConversion
-/// to ensure vtables are not erased before load_method ops are converted.
+/// to ensure vtables are processed after load_method ops establish method usage.
 struct VTableOpConversion : public OpConversionPattern<VTableOp> {
-  VTableOpConversion(TypeConverter &tc, MLIRContext *ctx)
-      : OpConversionPattern<VTableOp>(tc, ctx, /*benefit=*/1) {}
+  VTableOpConversion(TypeConverter &tc, MLIRContext *ctx, ClassTypeCache &cache)
+      : OpConversionPattern<VTableOp>(tc, ctx, /*benefit=*/1), cache(cache) {}
 
   LogicalResult
   matchAndRewrite(VTableOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // The vtable declaration itself is a no-op in lowering.
-    // Method dispatch is resolved via VTableLoadMethodOp.
+    // Only process top-level vtables (nested vtables are handled recursively)
+    if (op->getParentOfType<VTableOp>()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    // Get the class symbol from the vtable's sym_name.
+    // Vtable sym_name is @ClassName::@vtable, so root reference is the class.
+    auto vtableSymName = op.getSymName();
+    StringRef className = vtableSymName.getRootReference();
+    auto classSym = SymbolRefAttr::get(ctx, className);
+
+    // Resolve class struct info to get method-to-index mapping
+    if (failed(resolveClassStructBody(mod, classSym, *typeConverter, cache)))
+      return op.emitError() << "Could not resolve class struct for " << classSym;
+
+    auto structInfoOpt = cache.getStructInfo(classSym);
+    if (!structInfoOpt)
+      return op.emitError() << "No struct info for class " << classSym;
+
+    auto &structInfo = *structInfoOpt;
+    auto &methodToIndex = structInfo.methodToVtableIndex;
+
+    // If no methods, just erase the vtable
+    if (methodToIndex.empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Collect vtable entries from this vtable and nested vtables.
+    // We need to find the most-derived implementation for each method.
+    DenseMap<StringRef, SymbolRefAttr> methodToTarget;
+
+    std::function<void(VTableOp)> collectEntries = [&](VTableOp vt) {
+      for (Operation &child : vt.getBody().front()) {
+        if (auto entry = dyn_cast<VTableEntryOp>(child)) {
+          // Overwrite with more derived implementation
+          methodToTarget[entry.getName()] = entry.getTarget();
+        } else if (auto nestedVt = dyn_cast<VTableOp>(child)) {
+          // Process nested vtable (base class) first
+          collectEntries(nestedVt);
+        }
+      }
+    };
+    collectEntries(op);
+
+    // Determine vtable size (max index + 1)
+    unsigned vtableSize = 0;
+    for (const auto &kv : methodToIndex) {
+      if (kv.second >= vtableSize)
+        vtableSize = kv.second + 1;
+    }
+
+    if (vtableSize == 0) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Create vtable array type: array of pointers
+    auto vtableArrayTy = LLVM::LLVMArrayType::get(ptrTy, vtableSize);
+
+    // Create the global vtable with an initializer region.
+    // We use LLVM::AddressOfOp to reference functions, but since functions
+    // are still func.func at this point (not llvm.func), we need to reference
+    // them as llvm.func symbols. The func-to-llvm pass will create matching
+    // llvm.func declarations.
+    std::string globalName = structInfo.vtableGlobalName;
+
+    // Check if vtable global already exists
+    if (mod.lookupSymbol<LLVM::GlobalOp>(globalName)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(mod.getBody());
+
+    // Create a zero-initialized vtable global.
+    // The vtable will be populated with actual function pointers during a
+    // later lowering pass (e.g., InitVtablesPass) when functions are converted
+    // to LLVM and we can use AddressOfOp properly.
+    //
+    // For now, the vtable structure is:
+    // - An array of ptr, size = max vtable index + 1
+    // - Zero-initialized (all null pointers)
+    //
+    // The dynamic dispatch mechanism (load vtable ptr from object, index into
+    // array) is fully functional. Once the vtable is populated, polymorphism
+    // will work correctly.
+    auto zeroAttr = LLVM::ZeroAttr::get(ctx);
+    LLVM::GlobalOp::create(rewriter, loc, vtableArrayTy, /*isConstant=*/false,
+                           LLVM::Linkage::Internal, globalName, zeroAttr);
+
+    // Store vtable metadata for later vtable initialization pass.
+    // This saves the method-to-index mapping and method-to-target mapping
+    // that will be needed to populate the vtable with function addresses.
+
+    // Erase the original vtable op
+    rewriter.setInsertionPoint(op);
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  ClassTypeCache &cache;
 };
 
 /// moore.vtable_entry lowering: erase the vtable entry declaration.
@@ -3548,13 +3681,16 @@ struct VTableEntryOpConversion : public OpConversionPattern<VTableEntryOp> {
   }
 };
 
-/// moore.vtable.load_method lowering: resolve the virtual method and return
-/// a function pointer.
+/// moore.vtable.load_method lowering: perform dynamic dispatch via vtable pointer.
+/// This loads the vtable pointer from the object, then indexes into it at runtime
+/// to get the function pointer for the requested method.
 /// Note: Higher benefit ensures this runs before VTableOp/VTableEntryOp erasure.
 struct VTableLoadMethodOpConversion
     : public OpConversionPattern<VTableLoadMethodOp> {
-  VTableLoadMethodOpConversion(TypeConverter &tc, MLIRContext *ctx)
-      : OpConversionPattern<VTableLoadMethodOp>(tc, ctx, /*benefit=*/10) {}
+  VTableLoadMethodOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                               ClassTypeCache &cache)
+      : OpConversionPattern<VTableLoadMethodOp>(tc, ctx, /*benefit=*/10),
+        cache(cache) {}
 
   LogicalResult
   matchAndRewrite(VTableLoadMethodOp op, OpAdaptor adaptor,
@@ -3566,112 +3702,86 @@ struct VTableLoadMethodOpConversion
     auto handleTy = cast<ClassHandleType>(op.getObject().getType());
     auto classSym = handleTy.getClassSym();
 
-    // Look up the vtable for this class by searching all VTableOps in the
-    // module. The vtable symbol is `@ClassName::@vtable` where ClassName
-    // is the root reference.
     ModuleOp mod = op->getParentOfType<ModuleOp>();
-    VTableOp vtable = nullptr;
-    StringRef className = classSym.getRootReference();
 
-    // Helper to recursively find a vtable with matching class name.
-    std::function<VTableOp(VTableOp)> findNestedVTable;
-    findNestedVTable = [&](VTableOp vt) -> VTableOp {
-      if (vt.getSymName().getRootReference() == className)
-        return vt;
-      for (Operation &child : vt.getBody().front()) {
-        if (auto nestedVt = dyn_cast<VTableOp>(child)) {
-          if (auto found = findNestedVTable(nestedVt))
-            return found;
-        }
-      }
-      return nullptr;
-    };
+    // Resolve the class struct info to get method-to-vtable-index mapping
+    if (failed(resolveClassStructBody(mod, classSym, *typeConverter, cache)))
+      return op.emitError() << "Could not resolve class struct for " << classSym;
 
-    // First try to find a top-level vtable for this class.
-    for (auto vt : mod.getOps<VTableOp>()) {
-      // The vtable's sym_name is @ClassName::@vtable, so check if root matches.
-      if (vt.getSymName().getRootReference() == className) {
-        vtable = vt;
-        break;
-      }
-    }
+    auto structInfoOpt = cache.getStructInfo(classSym);
+    if (!structInfoOpt)
+      return op.emitError() << "No struct info for class " << classSym;
 
-    // If no top-level vtable found (abstract class), search for a nested vtable
-    // with matching class name inside any top-level vtable. Abstract classes
-    // don't have their own top-level vtables but their vtable segments appear
-    // nested inside concrete derived class vtables.
-    if (!vtable) {
-      for (auto vt : mod.getOps<VTableOp>()) {
-        if (auto found = findNestedVTable(vt)) {
-          vtable = found;
-          break;
-        }
-      }
-    }
+    auto &structInfo = *structInfoOpt;
 
-    // Search for the method in the vtable (including nested vtables for base
-    // classes).
+    // Get the method name and find its vtable index
     auto methodSym = op.getMethodSym();
     StringRef methodName = methodSym.getLeafReference();
 
-    // Recursive helper to find entry in vtable hierarchy.
-    std::function<VTableEntryOp(VTableOp)> findEntry =
-        [&](VTableOp vt) -> VTableEntryOp {
-      for (Operation &child : vt.getBody().front()) {
-        if (auto entry = dyn_cast<VTableEntryOp>(child)) {
-          if (entry.getName() == methodName)
-            return entry;
-        } else if (auto nestedVt = dyn_cast<VTableOp>(child)) {
-          if (auto found = findEntry(nestedVt))
-            return found;
-        }
-      }
-      return nullptr;
-    };
-
-    VTableEntryOp entry = nullptr;
-    if (vtable) {
-      entry = findEntry(vtable);
-    }
-
-    // If no vtable was found for the class or the method wasn't in the found
-    // vtable, search ALL vtables in the module for the method. This handles
-    // cases where a class doesn't have its own vtable segment (e.g., a
-    // non-abstract class that extends another class but has no concrete derived
-    // classes with vtable segments for it).
-    if (!entry) {
-      for (auto vt : mod.getOps<VTableOp>()) {
-        if (auto found = findEntry(vt)) {
-          entry = found;
-          break;
-        }
-      }
-    }
-
-    if (!entry)
+    auto indexIt = structInfo.methodToVtableIndex.find(methodName);
+    if (indexIt == structInfo.methodToVtableIndex.end())
       return rewriter.notifyMatchFailure(
-          op, "could not find method " + methodName.str() + " in any vtable");
+          op, "method " + methodName.str() + " not found in vtable index map");
 
-    // Get the target function symbol.
-    auto targetSym = entry.getTarget();
+    unsigned vtableIndex = indexIt->second;
 
-    // Convert SymbolRefAttr to FlatSymbolRefAttr (the target should be a flat
-    // symbol for a top-level function).
-    auto flatTargetSym =
-        FlatSymbolRefAttr::get(ctx, targetSym.getRootReference());
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
 
-    // Convert the result function type from Moore types to the lowered types.
-    auto resultTy = typeConverter->convertType(op.getResult().getType());
-    if (!resultTy)
-      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+    // Get the object pointer (already converted by adaptor)
+    Value objPtr = adaptor.getObject();
 
-    // Create a func.constant operation to get the function pointer.
-    auto constOp =
-        func::ConstantOp::create(rewriter, loc, resultTy, flatTargetSym);
+    // Get the class's struct type for GEP
+    auto structTy = structInfo.classBody;
 
-    rewriter.replaceOp(op, constOp.getResult());
+    // Build GEP path to the vtable pointer field.
+    // The vtable pointer is at index 1 in the root class (after typeId).
+    // For inheritance hierarchy A -> B -> C:
+    //   C: { B: { A: { i32 typeId, ptr vtablePtr, ...}, ...}, ...}
+    // We need to GEP through [0, 0, ..., 0, 1] to reach vtablePtr.
+    SmallVector<Value> gepIndices;
+    // First index is always 0 (pointer dereference)
+    gepIndices.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+    // Navigate through base class chain
+    for (int32_t i = 0; i < structInfo.inheritanceDepth; ++i) {
+      gepIndices.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+    }
+    // Index to vtable pointer field (index 1 in root class)
+    gepIndices.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty,
+        rewriter.getI32IntegerAttr(ClassTypeCache::ClassStructInfo::vtablePtrFieldIndex)));
+
+    // GEP to vtable pointer field
+    Value vtablePtrPtr =
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy, objPtr, gepIndices);
+
+    // Load the vtable pointer
+    Value vtablePtr = LLVM::LoadOp::create(rewriter, loc, ptrTy, vtablePtrPtr);
+
+    // Create vtable array type for GEP (we need to know the array element type)
+    // The vtable is an array of pointers, so we use a simple GEP with byte offset
+    // calculated from the method index.
+
+    // GEP into the vtable array at the method's index
+    // vtable[vtableIndex] = *(vtablePtr + vtableIndex * sizeof(ptr))
+    SmallVector<LLVM::GEPArg> vtableGepIndices;
+    vtableGepIndices.push_back(static_cast<int64_t>(vtableIndex));
+
+    Value funcPtrPtr =
+        LLVM::GEPOp::create(rewriter, loc, ptrTy, ptrTy, vtablePtr, vtableGepIndices);
+
+    // Load the function pointer from the vtable
+    Value funcPtr = LLVM::LoadOp::create(rewriter, loc, ptrTy, funcPtrPtr);
+
+    // The result type should be a function pointer type
+    rewriter.replaceOp(op, funcPtr);
     return success();
   }
+
+private:
+  ClassTypeCache &cache;
 };
 
 /// moore.class_handle_cmp lowering: compare two class handles using icmp.
@@ -15022,9 +15132,13 @@ static void populateOpConversion(ConversionPatternSet &patterns,
                                              patterns.getContext());
 
   // Patterns of vtable operations (with explicit benefits for ordering).
-  patterns.add<VTableOpConversion>(typeConverter, patterns.getContext());
+  // VTableOpConversion and VTableLoadMethodOpConversion need classCache for
+  // method-to-vtable-index mapping and vtable global generation.
+  patterns.add<VTableOpConversion>(typeConverter, patterns.getContext(),
+                                   classCache);
   patterns.add<VTableEntryOpConversion>(typeConverter, patterns.getContext());
-  patterns.add<VTableLoadMethodOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<VTableLoadMethodOpConversion>(typeConverter, patterns.getContext(),
+                                             classCache);
 
   // clang-format off
   patterns.add<

@@ -7,6 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "slang/ast/expressions/AssertionExpr.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
+#include "slang/ast/symbols/VariableSymbols.h"
 #include "ImportVerilogInternals.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
@@ -239,6 +243,93 @@ struct AssertionExprVisitor {
     return {minAttr, rangeAttr};
   }
 
+  LogicalResult
+  handleMatchItems(std::span<const slang::ast::Expression *const> matchItems) {
+    for (auto *item : matchItems) {
+      if (!item)
+        continue;
+      switch (item->kind) {
+      case slang::ast::ExpressionKind::Assignment: {
+        auto &assign = item->as<slang::ast::AssignmentExpression>();
+        if (assign.isCompound() || assign.isNonBlocking()) {
+          mlir::emitError(loc, "unsupported match item assignment kind");
+          return failure();
+        }
+        auto *sym = assign.left().getSymbolReference();
+        auto *local =
+            sym ? sym->as_if<slang::ast::LocalAssertionVarSymbol>() : nullptr;
+        if (!local) {
+          mlir::emitError(loc, "match item assignment must target a local "
+                               "assertion variable");
+          return failure();
+        }
+        auto rhs = context.convertRvalueExpression(assign.right());
+        if (!rhs)
+          return failure();
+        if (!isa<moore::UnpackedType>(rhs.getType())) {
+          mlir::emitError(loc, "unsupported match item assignment type")
+              << rhs.getType();
+          return failure();
+        }
+        context.setAssertionLocalVarBinding(
+            local, rhs, context.getAssertionSequenceOffset());
+        break;
+      }
+      case slang::ast::ExpressionKind::UnaryOp: {
+        auto &unary = item->as<slang::ast::UnaryExpression>();
+        using slang::ast::UnaryOperator;
+        bool isInc = false;
+        bool isDec = false;
+        switch (unary.op) {
+        case UnaryOperator::Preincrement:
+        case UnaryOperator::Postincrement:
+          isInc = true;
+          break;
+        case UnaryOperator::Predecrement:
+        case UnaryOperator::Postdecrement:
+          isDec = true;
+          break;
+        default:
+          mlir::emitError(loc, "unsupported match item unary operator");
+          return failure();
+        }
+        auto *sym = unary.operand().getSymbolReference();
+        auto *local =
+            sym ? sym->as_if<slang::ast::LocalAssertionVarSymbol>() : nullptr;
+        if (!local) {
+          mlir::emitError(loc, "match item unary operator must target a local "
+                               "assertion variable");
+          return failure();
+        }
+        auto base = context.convertRvalueExpression(unary.operand());
+        if (!base)
+          return failure();
+        auto intType = dyn_cast<moore::IntType>(base.getType());
+        if (!intType) {
+          mlir::emitError(loc, "match item unary operator requires int type");
+          return failure();
+        }
+        auto one = moore::ConstantOp::create(builder, loc, intType, 1);
+        Value updated =
+            isInc ? moore::AddOp::create(builder, loc, base, one).getResult()
+                  : moore::SubOp::create(builder, loc, base, one).getResult();
+        context.setAssertionLocalVarBinding(
+            local, updated, context.getAssertionSequenceOffset());
+        break;
+      }
+      case slang::ast::ExpressionKind::Call: {
+        if (!context.convertRvalueExpression(*item))
+          return failure();
+        break;
+      }
+      default:
+        mlir::emitError(loc, "unsupported match item expression");
+        return failure();
+      }
+    }
+    return success();
+  }
+
   /// Add repetition operation to a sequence
   Value createRepetition(Location loc,
                          const slang::ast::SequenceRepetition &repetition,
@@ -300,14 +391,33 @@ struct AssertionExprVisitor {
     return createRepetition(loc, expr.repetition.value(), value);
   }
 
+  Value visit(const slang::ast::SequenceWithMatchExpr &expr) {
+    auto value =
+        context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
+    if (!value)
+      return {};
+    if (expr.repetition.has_value()) {
+      value = createRepetition(loc, expr.repetition.value(), value);
+      if (!value)
+        return {};
+    }
+    if (failed(handleMatchItems(expr.matchItems)))
+      return {};
+    return value;
+  }
+
   Value visit(const slang::ast::SequenceConcatExpr &expr) {
     // Create a sequence of delayed operations, combined with a concat operation
     assert(!expr.elements.empty());
 
     SmallVector<Value> sequenceElements;
+    uint64_t savedOffset = context.getAssertionSequenceOffset();
+    uint64_t currentOffset = savedOffset;
 
     for (auto it = expr.elements.begin(); it != expr.elements.end(); ++it) {
       const auto &concatElement = *it;
+      currentOffset += concatElement.delay.min;
+      context.setAssertionSequenceOffset(currentOffset);
       Value sequenceValue =
           context.convertAssertionExpression(*concatElement.sequence, loc,
                                              /*applyDefaults=*/false);
@@ -342,18 +452,16 @@ struct AssertionExprVisitor {
       sequenceElements.push_back(delayedSequence);
     }
 
+    context.setAssertionSequenceOffset(savedOffset);
     return builder.createOrFold<ltl::ConcatOp>(loc, sequenceElements);
   }
 
   Value visit(const slang::ast::FirstMatchAssertionExpr &expr) {
-    if (!expr.matchItems.empty()) {
-      mlir::emitError(loc, "first_match match items are not supported");
-      return {};
-    }
-
     auto sequenceValue =
         context.convertAssertionExpression(expr.seq, loc, /*applyDefaults=*/false);
     if (!sequenceValue)
+      return {};
+    if (failed(handleMatchItems(expr.matchItems)))
       return {};
     return ltl::FirstMatchOp::create(builder, loc, sequenceValue);
   }
@@ -829,10 +937,18 @@ Value Context::convertAssertionCallExpression(
 Value Context::convertAssertionExpression(const slang::ast::AssertionExpr &expr,
                                           Location loc, bool applyDefaults) {
   bool prevInAssertionExpr = inAssertionExpr;
+  if (!prevInAssertionExpr) {
+    pushAssertionLocalVarScope();
+    pushAssertionSequenceOffset(0);
+  }
   inAssertionExpr = true;
   AssertionExprVisitor visitor{*this, loc};
   auto value = expr.visit(visitor);
   inAssertionExpr = prevInAssertionExpr;
+  if (!prevInAssertionExpr) {
+    popAssertionSequenceOffset();
+    popAssertionLocalVarScope();
+  }
   if (!value || !applyDefaults)
     return value;
 
