@@ -7912,6 +7912,206 @@ struct DisplayBIOpConversion : public OpConversionPattern<DisplayBIOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// System Call Builtin Conversions
+//===----------------------------------------------------------------------===//
+
+/// Conversion for moore.builtin.strobe -> sim.print_formatted_proc
+/// $strobe displays values at end of current time step
+struct StrobeBIOpConversion : public OpConversionPattern<StrobeBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StrobeBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
+        op, adaptor.getMessage());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fstrobe -> sim.print_formatted_proc
+/// $fstrobe writes to file at end of current time step
+struct FStrobeBIOpConversion : public OpConversionPattern<FStrobeBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FStrobeBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For now, just print the message (ignore file descriptor)
+    rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
+        op, adaptor.getMessage());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.monitor -> sim.print_formatted_proc
+/// $monitor enables continuous monitoring
+struct MonitorBIOpConversion : public OpConversionPattern<MonitorBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(MonitorBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
+        op, adaptor.getMessage());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fmonitor -> sim.print_formatted_proc
+/// $fmonitor enables continuous monitoring to file
+struct FMonitorBIOpConversion : public OpConversionPattern<FMonitorBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FMonitorBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For now, just print the message (ignore file descriptor)
+    rewriter.replaceOpWithNewOp<sim::PrintFormattedProcOp>(
+        op, adaptor.getMessage());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.monitoron -> erase (no-op)
+/// $monitoron re-enables monitoring
+struct MonitorOnBIOpConversion : public OpConversionPattern<MonitorOnBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(MonitorOnBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.monitoroff -> erase (no-op)
+/// $monitoroff disables monitoring
+struct MonitorOffBIOpConversion : public OpConversionPattern<MonitorOffBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(MonitorOffBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.printtimescale -> erase (no-op)
+/// $printtimescale prints timescale info (stub)
+struct PrintTimescaleBIOpConversion
+    : public OpConversionPattern<PrintTimescaleBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PrintTimescaleBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.ferror -> constant 0 (stub)
+/// $ferror returns file error status
+struct FErrorBIOpConversion : public OpConversionPattern<FErrorBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FErrorBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Return 0 (no error) as a stub
+    auto i32Ty = rewriter.getI32Type();
+    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, i32Ty, 0);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.ungetc -> return input character
+/// $ungetc pushes character back into stream
+struct UngetCBIOpConversion : public OpConversionPattern<UngetCBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UngetCBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Return the input character (the pushed-back value)
+    rewriter.replaceOp(op, adaptor.getC());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fseek -> constant 0 (success stub)
+/// $fseek sets file position
+struct FSeekBIOpConversion : public OpConversionPattern<FSeekBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FSeekBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Return 0 (success) as a stub
+    auto i32Ty = rewriter.getI32Type();
+    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, i32Ty, 0);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.rewind -> erase (no-op)
+/// $rewind resets file position
+struct RewindBIOpConversion : public OpConversionPattern<RewindBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(RewindBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.fread -> constant 0 (stub)
+/// $fread reads binary data from file
+struct FReadBIOpConversion : public OpConversionPattern<FReadBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FReadBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Return 0 (bytes read) as a stub
+    auto i32Ty = rewriter.getI32Type();
+    rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, i32Ty, 0);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.readmemb -> erase (no-op)
+/// $readmemb loads memory from binary file
+struct ReadMemBBIOpConversion : public OpConversionPattern<ReadMemBBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ReadMemBBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.readmemh -> erase (no-op)
+/// $readmemh loads memory from hex file
+struct ReadMemHBIOpConversion : public OpConversionPattern<ReadMemHBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ReadMemHBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Conversion for moore.fstring_to_string -> runtime evaluation of format
 /// string. This operation converts a format string (FormatStringType) to a
 /// dynamic string (StringType). The conversion handles different cases:
@@ -15012,6 +15212,22 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatStringOpConversion,
     FormatStringToStringOpConversion,
     DisplayBIOpConversion,
+
+    // Patterns for system call builtins.
+    StrobeBIOpConversion,
+    FStrobeBIOpConversion,
+    MonitorBIOpConversion,
+    FMonitorBIOpConversion,
+    MonitorOnBIOpConversion,
+    MonitorOffBIOpConversion,
+    PrintTimescaleBIOpConversion,
+    FErrorBIOpConversion,
+    UngetCBIOpConversion,
+    FSeekBIOpConversion,
+    RewindBIOpConversion,
+    FReadBIOpConversion,
+    ReadMemBBIOpConversion,
+    ReadMemHBIOpConversion,
 
     // Patterns for file I/O operations.
     FOpenBIOpConversion,
