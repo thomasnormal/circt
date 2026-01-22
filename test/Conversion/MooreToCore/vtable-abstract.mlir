@@ -88,12 +88,16 @@ func.func @test_concrete_class_vtable_load(%obj: !moore.class<@ConcreteChild>) {
 
 //===----------------------------------------------------------------------===//
 // Test 3: VTable load and call through abstract class handle
+// With dynamic dispatch, this performs runtime vtable lookup
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_abstract_vtable_load_and_call
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"ConcreteChild::initialize" : (!llvm.ptr) -> ()
-// CHECK:         call_indirect %[[FPTR]](%[[OBJ]]) : (!llvm.ptr) -> ()
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
+// CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 1]
+// CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]
+// CHECK:         call_indirect {{.*}}(%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_abstract_vtable_load_and_call(%obj: !moore.class<@AbstractBase>) {

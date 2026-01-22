@@ -21,10 +21,10 @@ func.func @ClassType(%arg0: !moore.class<@PropertyCombo>) {
 /// Check that new lowers to malloc
 
 // malloc should be declared in the LLVM dialect.
-// Class C struct is: (type_id(i32), a(i32), b(struct<i32,i32>), c(struct<i32,i32>))
-// Size: 4 + 4 + 8 + 8 = 24 bytes
+// Class C struct is: (type_id(i32), vtablePtr(ptr), a(i32), b(struct<i32,i32>), c(struct<i32,i32>))
+// Size: 4 + 8 + 4 + 8 + 8 = 32 bytes
 // CHECK-LABEL: func.func private @test_new2
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(32 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -45,11 +45,11 @@ moore.class.classdecl @C {
 }
 
 /// Check that new lowers to malloc with inheritance without shadowing
-/// D struct is: (C(24), d(struct<i32,i32>), e(struct<i64,i64>), f(i16))
-/// Size: 24 + 8 + 16 + 2 = 50 bytes
+/// D struct is: (C(32), d(struct<i32,i32>), e(struct<i64,i64>), f(i16))
+/// Size: 32 + 8 + 16 + 2 = 58 bytes
 
 // CHECK-LABEL: func.func private @test_new3
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(50 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(58 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -67,11 +67,11 @@ moore.class.classdecl @D extends @C {
 }
 
 /// Check that new lowers to malloc with inheritance & shadowing
-/// E struct is: (C(24), a(i32), b(struct<i32,i32>), c(struct<i32,i32>))
-/// Size: 24 + 4 + 8 + 8 = 44 bytes
+/// E struct is: (C(32), a(i32), b(struct<i32,i32>), c(struct<i32,i32>))
+/// Size: 32 + 4 + 8 + 8 = 52 bytes
 
 // CHECK-LABEL: func.func private @test_new4
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(44 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(52 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -160,7 +160,7 @@ func.func private @test_dyn_cast(%arg0: !moore.class<@BaseClass>) -> (!moore.cla
 /// (regression test for DataLayout crash with hw.struct types)
 
 // CHECK-LABEL: func.func private @test_struct_property
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(16 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -173,6 +173,8 @@ func.func private @test_struct_property() {
 }
 // Class with a struct property - must be converted to pure LLVM types
 // for DataLayout::getTypeSize() to work correctly.
+// Struct is: (type_id(i32), vtablePtr(ptr), x(i32), data(struct<i32,i32>))
+// Size: 4 + 8 + 4 + 8 = 24 bytes
 moore.class.classdecl @ClassWithStruct {
   moore.class.propertydecl @x : !moore.i32
   moore.class.propertydecl @data : !moore.ustruct<{field1: i32, field2: i32}>
@@ -182,7 +184,7 @@ moore.class.classdecl @ClassWithStruct {
 /// (regression test for llhd.time DataLayout crash - time is 16 bytes)
 
 // CHECK-LABEL: func.func private @test_class_with_time
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(24 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(32 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -195,7 +197,7 @@ func.func private @test_class_with_time() {
 }
 // Class with a time property - llhd.time requires special handling because
 // DataLayout doesn't support it. Time is {i64 realTime, i32 delta, i32 epsilon} = 16 bytes.
-// Plus the type ID (i32) and x (i32) = 24 bytes total.
+// Struct is: (type_id(i32), vtablePtr(ptr), x(i32), timestamp(time)) = 4 + 8 + 4 + 16 = 32 bytes total.
 moore.class.classdecl @ClassWithTime {
   moore.class.propertydecl @x : !moore.i32
   moore.class.propertydecl @timestamp : !moore.time
@@ -204,7 +206,7 @@ moore.class.classdecl @ClassWithTime {
 /// Check that class with multiple time properties computes size correctly
 
 // CHECK-LABEL: func.func private @test_class_with_multiple_times
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(40 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(48 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -215,7 +217,7 @@ func.func private @test_class_with_multiple_times() {
   %h = moore.class.new : <@ClassWithMultipleTimes>
   return
 }
-// Class with multiple time properties: type_id(4) + start(16) + end(16) + count(4) = 40 bytes
+// Class with multiple time properties: type_id(4) + vtablePtr(8) + start(16) + end(16) + count(4) = 48 bytes
 moore.class.classdecl @ClassWithMultipleTimes {
   moore.class.propertydecl @start_time : !moore.time
   moore.class.propertydecl @end_time : !moore.time
@@ -225,7 +227,7 @@ moore.class.classdecl @ClassWithMultipleTimes {
 /// Check that class with nested struct containing time computes size correctly
 
 // CHECK-LABEL: func.func private @test_class_with_time_struct
-// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(28 : i64) : i64
+// CHECK:   [[SIZE:%.*]] = llvm.mlir.constant(36 : i64) : i64
 // CHECK:   [[PTR:%.*]] = llvm.call @malloc([[SIZE]]) : (i64) -> !llvm.ptr
 // CHECK:   return
 
@@ -237,7 +239,7 @@ func.func private @test_class_with_time_struct() {
   return
 }
 // Class with a struct property containing time:
-// type_id(4) + id(4) + access_record{timestamp(16) + count(4)} = 28 bytes
+// type_id(4) + vtablePtr(8) + id(4) + access_record{timestamp(16) + count(4)} = 36 bytes
 moore.class.classdecl @ClassWithTimeStruct {
   moore.class.propertydecl @id : !moore.i32
   moore.class.propertydecl @access_record : !moore.ustruct<{timestamp: time, count: i32}>

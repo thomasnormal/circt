@@ -190,12 +190,16 @@ func.func @test_multilevel_inheritance(%obj: !moore.class<@GoldenRetriever>) {
 
 //===----------------------------------------------------------------------===//
 // Test 7: Loading method and calling it via func.call_indirect
+// With dynamic dispatch, this performs runtime vtable lookup
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_load_and_call_method
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK:         %[[FPTR:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK:         call_indirect %[[FPTR]](%[[OBJ]]) : (!llvm.ptr) -> ()
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
+// CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 0]
+// CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]
+// CHECK:         call_indirect {{.*}}(%[[OBJ]]) : (!llvm.ptr) -> ()
 // CHECK:         return
 
 func.func @test_load_and_call_method(%obj: !moore.class<@Dog>) {
@@ -206,12 +210,16 @@ func.func @test_load_and_call_method(%obj: !moore.class<@Dog>) {
 
 //===----------------------------------------------------------------------===//
 // Test 8: Loading method with return value and using the result
+// With dynamic dispatch, this performs runtime vtable lookup
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_load_call_use_result
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr) -> i32
-// CHECK:         %[[FPTR:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
-// CHECK:         %[[RESULT:.*]] = call_indirect %[[FPTR]](%[[OBJ]]) : (!llvm.ptr) -> i32
+// CHECK:         %[[VTABLE_PTR_PTR:.*]] = llvm.getelementptr %[[OBJ]][0, 1]
+// CHECK:         %[[VTABLE_PTR:.*]] = llvm.load %[[VTABLE_PTR_PTR]]
+// CHECK:         %[[FUNC_PTR_PTR:.*]] = llvm.getelementptr %[[VTABLE_PTR]][0, 1]
+// CHECK:         %[[FUNC_PTR:.*]] = llvm.load %[[FUNC_PTR_PTR]]
+// CHECK:         %[[RESULT:.*]] = call_indirect {{.*}}(%[[OBJ]]) : (!llvm.ptr) -> i32
 // CHECK:         return %[[RESULT]] : i32
 
 func.func @test_load_call_use_result(%obj: !moore.class<@Dog>) -> !moore.i32 {
@@ -222,19 +230,25 @@ func.func @test_load_call_use_result(%obj: !moore.class<@Dog>) -> !moore.i32 {
 
 //===----------------------------------------------------------------------===//
 // Test 9: Method dispatch in control flow
+// With dynamic dispatch, vtable loads happen in each branch
 //===----------------------------------------------------------------------===//
 
-// The constants get hoisted to the entry block by the conversion.
 // CHECK-LABEL: func.func @test_method_in_control_flow
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr, %[[COND:.*]]: i1)
-// CHECK-DAG:     %[[FPTR_AGE:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
-// CHECK-DAG:     %[[FPTR_SPEAK:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
 // CHECK:         cf.cond_br %[[COND]], ^[[BB1:.*]], ^[[BB2:.*]]
 // CHECK:       ^[[BB1]]:
-// CHECK:         call_indirect %[[FPTR_SPEAK]](%[[OBJ]]) : (!llvm.ptr) -> ()
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// CHECK:         call_indirect
 // CHECK:         cf.br ^[[BB3:.*]]
 // CHECK:       ^[[BB2]]:
-// CHECK:         %[[AGE:.*]] = call_indirect %[[FPTR_AGE]](%[[OBJ]]) : (!llvm.ptr) -> i32
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// CHECK:         call_indirect
 // CHECK:         cf.br ^[[BB3]]
 // CHECK:       ^[[BB3]]:
 // CHECK:         return
@@ -255,15 +269,25 @@ func.func @test_method_in_control_flow(%obj: !moore.class<@Dog>, %cond: i1) {
 
 //===----------------------------------------------------------------------===//
 // Test 10: Multiple virtual calls in sequence
+// Each call loads from vtable dynamically
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_multiple_virtual_calls
 // CHECK-SAME:    (%[[OBJ:.*]]: !llvm.ptr)
-// CHECK-DAG:     %[[FPTR1:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK-DAG:     %[[FPTR2:.*]] = constant @"Dog::getAge" : (!llvm.ptr) -> i32
-// CHECK:         call_indirect %[[FPTR1]](%[[OBJ]]) : (!llvm.ptr) -> ()
-// CHECK:         %[[AGE:.*]] = call_indirect %[[FPTR2]](%[[OBJ]]) : (!llvm.ptr) -> i32
-// CHECK:         call_indirect %[[FPTR1]](%[[OBJ]]) : (!llvm.ptr) -> ()
+// First vtable load (speak at index 0)
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr{{.*}}[0, 0]
+// CHECK:         llvm.load
+// Second vtable load (getAge at index 1)
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr{{.*}}[0, 1]
+// CHECK:         llvm.load
+// Three indirect calls
+// CHECK:         call_indirect
+// CHECK:         call_indirect
+// CHECK:         call_indirect
 // CHECK:         return
 
 func.func @test_multiple_virtual_calls(%obj: !moore.class<@Dog>) {
@@ -277,16 +301,30 @@ func.func @test_multiple_virtual_calls(%obj: !moore.class<@Dog>) {
 
 //===----------------------------------------------------------------------===//
 // Test 11: Polymorphic virtual calls with different implementations
+// Each object's vtable is accessed independently
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_polymorphic_calls
 // CHECK-SAME:    (%[[DOG:.*]]: !llvm.ptr, %[[CAT:.*]]: !llvm.ptr, %[[GOLDEN:.*]]: !llvm.ptr)
-// CHECK-DAG:     %[[FPTR1:.*]] = constant @"Dog::speak" : (!llvm.ptr) -> ()
-// CHECK-DAG:     %[[FPTR2:.*]] = constant @"Cat::speak" : (!llvm.ptr) -> ()
-// CHECK-DAG:     %[[FPTR3:.*]] = constant @"GoldenRetriever::speak" : (!llvm.ptr) -> ()
-// CHECK:         call_indirect %[[FPTR1]](%[[DOG]]) : (!llvm.ptr) -> ()
-// CHECK:         call_indirect %[[FPTR2]](%[[CAT]]) : (!llvm.ptr) -> ()
-// CHECK:         call_indirect %[[FPTR3]](%[[GOLDEN]]) : (!llvm.ptr) -> ()
+// First vtable load for Dog
+// CHECK:         llvm.getelementptr %[[DOG]]
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// Second vtable load for Cat
+// CHECK:         llvm.getelementptr %[[CAT]]
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// Third vtable load for GoldenRetriever
+// CHECK:         llvm.getelementptr %[[GOLDEN]]
+// CHECK:         llvm.load
+// CHECK:         llvm.getelementptr
+// CHECK:         llvm.load
+// Three indirect calls
+// CHECK:         call_indirect
+// CHECK:         call_indirect
+// CHECK:         call_indirect
 // CHECK:         return
 
 func.func @test_polymorphic_calls(%dog: !moore.class<@Dog>, %cat: !moore.class<@Cat>, %golden: !moore.class<@GoldenRetriever>) {
