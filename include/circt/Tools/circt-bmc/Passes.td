@@ -50,5 +50,13 @@ def ExternalizeRegisters : Pass<"externalize-registers", "::mlir::ModuleOp"> {
   ];
 }
 
+def StripLLHDProcesses : Pass<"strip-llhd-processes", "::mlir::ModuleOp"> {
+  let summary = "Removes LLHD processes and adds corresponding input ports for their results";
+
+  let dependentDialects = [
+    "circt::llhd::LLHDDialect", "circt::hw::HWDialect"
+  ];
+}
+
 #endif // CIRCT_TOOLS_CIRCT_BMC_PASSES_TD
 
