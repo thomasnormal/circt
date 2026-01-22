@@ -3429,8 +3429,12 @@ struct ClassDeclVisitor {
 
     // Get the constraint body from slang
     const auto &constraintBody = constraint.getConstraints();
-    if (failed(context.convertConstraint(constraintBody, loc)))
-      return failure();
+    // Handle implicit constraint blocks with no body (Invalid constraint).
+    // These are valid declarations that just have no constraints defined yet.
+    if (constraintBody.kind != slang::ast::ConstraintKind::Invalid) {
+      if (failed(context.convertConstraint(constraintBody, loc)))
+        return failure();
+    }
 
     return success();
   }
