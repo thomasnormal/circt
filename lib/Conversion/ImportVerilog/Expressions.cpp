@@ -374,7 +374,8 @@ struct ExprVisitor {
 
     if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
              moore::QueueType, moore::AssocArrayType,
-             moore::OpenUnpackedArrayType>(derefType)) {
+             moore::WildcardAssocArrayType, moore::OpenUnpackedArrayType>(
+            derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";
       return {};
@@ -387,6 +388,7 @@ struct ExprVisitor {
     // dynamically-sized types, we use the index directly without translation
     // since they are 0-based or use non-integer keys.
     bool isDynamicType = isa<moore::QueueType, moore::AssocArrayType,
+                            moore::WildcardAssocArrayType,
                             moore::OpenUnpackedArrayType>(derefType);
 
     if (isDynamicType) {
@@ -419,9 +421,10 @@ struct ExprVisitor {
       if (!indexValue)
         return {};
 
-      // Associative arrays can have non-integral keys (string, class handle).
-      // Queues and dynamic arrays require integral indices.
-      if (auto assocArrayTy = dyn_cast<moore::AssocArrayType>(derefType)) {
+      // Associative arrays (including wildcard) can have non-integral keys
+      // (string, class handle). Queues and dynamic arrays require integral
+      // indices.
+      if (isa<moore::AssocArrayType, moore::WildcardAssocArrayType>(derefType)) {
         // For associative arrays, the key type can be anything
         // (int, string, class handle, etc.) - no type check needed.
       } else if (!isa<moore::IntType>(indexValue.getType())) {
