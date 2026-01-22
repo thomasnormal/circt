@@ -4327,6 +4327,14 @@ def RandomizeOp
     specified with a `with` clause. These constraints are combined with
     the class's declared constraints during randomization.
 
+    Optional modes:
+    - `check_only`: When true, only checks if constraints can be satisfied
+      without actually randomizing. Used for `randomize(null)`.
+      See IEEE 1800-2017 Section 18.11.1.
+    - `variable_list`: When specified, only these variables are treated as
+      random for this call. Used for `randomize(v, w)`.
+      See IEEE 1800-2017 Section 18.11.
+
     Example:
     ```mlir
     // Without inline constraints:
@@ -4340,17 +4348,28 @@ def RandomizeOp
       %3 = moore.sgt %1, %2 : i32 -> i1
       moore.constraint.expr %3 : i1
     }
+
+    // Check-only mode (randomize(null)):
+    %success = moore.randomize %obj check_only : !moore.class<@MyClass>
+
+    // With variable list (randomize(v, w)):
+    %success = moore.randomize %obj variable_list([@v, @w]) : !moore.class<@MyClass>
     ```
 
     See IEEE 1800-2017 Section 18.6 "Randomization methods".
     See IEEE 1800-2017 Section 18.7 "In-line constraints".
+    See IEEE 1800-2017 Section 18.11 "In-line random variable control".
   }];
 
-  let arguments = (ins ClassHandleType:$object);
+  let arguments = (ins ClassHandleType:$object,
+                       UnitAttr:$check_only,
+                       OptionalAttr<ArrayAttr>:$variable_list);
   let results = (outs I1:$success);
   let regions = (region AnyRegion:$inline_constraints);
   let assemblyFormat = [{
-    $object `:` type($object) attr-dict-with-keyword ($inline_constraints^)?
+    $object (`check_only` $check_only^)?
+            (`variable_list` `(` $variable_list^ `)`)?
+            `:` type($object) attr-dict-with-keyword ($inline_constraints^)?
   }];
 
 }

@@ -340,8 +340,17 @@ struct ExprVisitor {
     if (!type)
       return {};
 
+    // For modport ports, use the internal symbol's name (the actual signal
+    // name), not the modport port name which might be different.
+    std::string_view signalName = expr.symbol.name;
+    if (auto *modportPort =
+            expr.symbol.as_if<slang::ast::ModportPortSymbol>()) {
+      if (modportPort->internalSymbol)
+        signalName = modportPort->internalSymbol->name;
+    }
+
     auto signalSym =
-        mlir::FlatSymbolRefAttr::get(builder.getContext(), expr.symbol.name);
+        mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
     auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
     Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
         builder, loc, refTy, vifValue, signalSym);
@@ -1106,18 +1115,26 @@ struct RvalueExprVisitor : public ExprVisitor {
     // where the symbol is the interface member but accessed via a virtual
     // interface variable. We detect this by checking if the symbol's parent
     // scope is an interface body and the syntax is a scoped name.
-    // This applies to both VariableSymbol (output/inout ports) and NetSymbol
-    // (input ports which are nets in SystemVerilog).
+    // This applies to VariableSymbol (output/inout ports), NetSymbol
+    // (input ports which are nets in SystemVerilog), and ModportPortSymbol
+    // (when accessing ports through a modport-qualified virtual interface).
     {
       const slang::ast::Scope *symbolScope = nullptr;
       if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
         symbolScope = var->getParentScope();
       else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
         symbolScope = net->getParentScope();
+      else if (auto *modportPort =
+                   expr.symbol.as_if<slang::ast::ModportPortSymbol>())
+        symbolScope = modportPort->getParentScope();
 
       if (symbolScope) {
         auto parentKind = symbolScope->asSymbol().kind;
-        if (parentKind == slang::ast::SymbolKind::InstanceBody) {
+        // For ModportPortSymbol, the parent is a Modport which is inside
+        // an InstanceBody. For VariableSymbol/NetSymbol, parent is directly
+        // InstanceBody.
+        if (parentKind == slang::ast::SymbolKind::InstanceBody ||
+            parentKind == slang::ast::SymbolKind::Modport) {
           // Check if this is accessed through a virtual interface by looking at
           // the syntax.
           if (expr.syntax) {
@@ -3785,63 +3802,126 @@ struct RvalueExprVisitor : public ExprVisitor {
             resultType, stdRandomizeOp.getSuccess(), false, loc);
       }
 
-      // Class randomize: obj.randomize()
-      if (args.size() == 1) {
-        // The first argument is the class object to randomize
-        Value classObj = context.convertRvalueExpression(*args[0]);
-        if (!classObj)
-          return {};
+      // Class randomize: obj.randomize(), obj.randomize(null),
+      // obj.randomize(v, w)
+      // args[0] is always the class object
+      // args[1..] are either:
+      //   - empty: normal randomize
+      //   - null: check-only mode (IEEE 1800-2017 Section 18.11.1)
+      //   - variable names: in-line random variable control (Section 18.11)
 
-        // Verify that the argument is a class handle type
-        auto classHandleTy =
-            dyn_cast<moore::ClassHandleType>(classObj.getType());
-        if (!classHandleTy) {
-          mlir::emitError(loc) << "randomize() requires a class object, got "
-                               << classObj.getType();
-          return {};
-        }
+      // The first argument is the class object to randomize
+      Value classObj = context.convertRvalueExpression(*args[0]);
+      if (!classObj)
+        return {};
 
-        // Call pre_randomize() before randomization
-        // IEEE 1800-2017 Section 18.6.1: pre_randomize is called before
-        // the randomization process begins.
-        moore::CallPreRandomizeOp::create(builder, loc, classObj);
-
-        // Create the randomize operation which returns i1 (success/failure)
-        auto randomizeOp = moore::RandomizeOp::create(builder, loc, classObj);
-
-        // Handle inline constraints if present
-        if (inlineConstraints) {
-          // Create the inline constraint region
-          randomizeOp.getInlineConstraints().emplaceBlock();
-          OpBuilder::InsertionGuard guard(builder);
-          builder.setInsertionPointToStart(
-              &randomizeOp.getInlineConstraints().front());
-
-          auto savedThisRef = context.getInlineConstraintThisRef();
-          context.setInlineConstraintThisRef(classObj);
-          auto restoreThisRef = llvm::make_scope_exit(
-              [&] { context.setInlineConstraintThisRef(savedThisRef); });
-
-          // Convert the inline constraints
-          if (failed(context.convertConstraint(*inlineConstraints, loc)))
-            return {};
-        }
-
-        // Call post_randomize() after successful randomization
-        // IEEE 1800-2017 Section 18.6.1: post_randomize is called after
-        // randomization succeeds. We unconditionally emit it here; the
-        // lowering pass will gate it on the success result if needed.
-        moore::CallPostRandomizeOp::create(builder, loc, classObj);
-
-        // The result is i1, but the expression type from slang is typically
-        // int. Convert to the expected type.
-        auto resultType = context.convertType(*expr.type);
-        if (!resultType)
-          return {};
-
-        return context.materializeConversion(
-            resultType, randomizeOp.getSuccess(), false, loc);
+      // Verify that the argument is a class handle type
+      auto classHandleTy =
+          dyn_cast<moore::ClassHandleType>(classObj.getType());
+      if (!classHandleTy) {
+        mlir::emitError(loc) << "randomize() requires a class object, got "
+                             << classObj.getType();
+        return {};
       }
+
+      // Check for check-only mode (randomize(null)) or variable list
+      bool checkOnly = false;
+      SmallVector<mlir::Attribute> variableList;
+
+      if (args.size() > 1) {
+        // Check if this is randomize(null)
+        if (args.size() == 2) {
+          // slang represents null as a ConversionExpression with null operand
+          // or as an EmptyArgumentExpression
+          if (auto *convExpr =
+                  args[1]->as_if<slang::ast::ConversionExpression>()) {
+            if (convExpr->operand().type->isNull()) {
+              checkOnly = true;
+            }
+          } else if (auto *emptyArg =
+                         args[1]
+                             ->as_if<slang::ast::EmptyArgumentExpression>()) {
+            // Empty argument also represents null in this context
+            checkOnly = true;
+          } else if (args[1]->type->isNull()) {
+            // Direct null type check
+            checkOnly = true;
+          }
+        }
+
+        // If not check-only, collect variable names for variable list mode
+        if (!checkOnly) {
+          for (size_t i = 1; i < args.size(); ++i) {
+            // The variable name references should be NamedValueExpressions
+            if (auto *namedVal =
+                    args[i]->as_if<slang::ast::NamedValueExpression>()) {
+              auto varName = mlir::FlatSymbolRefAttr::get(
+                  builder.getContext(), namedVal->symbol.name);
+              variableList.push_back(varName);
+            } else {
+              // Try to get the name from member access
+              if (auto *memberAccess =
+                      args[i]->as_if<slang::ast::MemberAccessExpression>()) {
+                auto varName = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), memberAccess->member.name);
+                variableList.push_back(varName);
+              }
+            }
+          }
+        }
+      }
+
+      // Call pre_randomize() before randomization
+      // IEEE 1800-2017 Section 18.6.1: pre_randomize is called before
+      // the randomization process begins.
+      // Note: pre_randomize is not called for check-only mode
+      if (!checkOnly) {
+        moore::CallPreRandomizeOp::create(builder, loc, classObj);
+      }
+
+      // Create the randomize operation which returns i1 (success/failure)
+      mlir::ArrayAttr varListAttr = nullptr;
+      if (!variableList.empty()) {
+        varListAttr = builder.getArrayAttr(variableList);
+      }
+      auto randomizeOp = moore::RandomizeOp::create(builder, loc, classObj,
+                                                    checkOnly, varListAttr);
+
+      // Handle inline constraints if present
+      if (inlineConstraints) {
+        // Create the inline constraint region
+        randomizeOp.getInlineConstraints().emplaceBlock();
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(
+            &randomizeOp.getInlineConstraints().front());
+
+        auto savedThisRef = context.getInlineConstraintThisRef();
+        context.setInlineConstraintThisRef(classObj);
+        auto restoreThisRef = llvm::make_scope_exit(
+            [&] { context.setInlineConstraintThisRef(savedThisRef); });
+
+        // Convert the inline constraints
+        if (failed(context.convertConstraint(*inlineConstraints, loc)))
+          return {};
+      }
+
+      // Call post_randomize() after successful randomization
+      // IEEE 1800-2017 Section 18.6.1: post_randomize is called after
+      // randomization succeeds. We unconditionally emit it here; the
+      // lowering pass will gate it on the success result if needed.
+      // Note: post_randomize is not called for check-only mode
+      if (!checkOnly) {
+        moore::CallPostRandomizeOp::create(builder, loc, classObj);
+      }
+
+      // The result is i1, but the expression type from slang is typically
+      // int. Convert to the expected type.
+      auto resultType = context.convertType(*expr.type);
+      if (!resultType)
+        return {};
+
+      return context.materializeConversion(resultType, randomizeOp.getSuccess(),
+                                           false, loc);
     }
 
     // Handle rand_mode() for class-level or property-level queries.
@@ -5740,18 +5820,26 @@ struct LvalueExprVisitor : public ExprVisitor {
     // Handle virtual interface member access. When accessing a member through
     // a virtual interface (e.g., vif.data), slang gives us a NamedValueExpression
     // where the symbol is the interface member but accessed via a virtual
-    // interface variable. This applies to both VariableSymbol (output/inout)
-    // and NetSymbol (input ports which are nets).
+    // interface variable. This applies to VariableSymbol (output/inout),
+    // NetSymbol (input ports which are nets), and ModportPortSymbol
+    // (when accessing ports through a modport-qualified virtual interface).
     {
       const slang::ast::Scope *symbolScope = nullptr;
       if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
         symbolScope = var->getParentScope();
       else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
         symbolScope = net->getParentScope();
+      else if (auto *modportPort =
+                   expr.symbol.as_if<slang::ast::ModportPortSymbol>())
+        symbolScope = modportPort->getParentScope();
 
       if (symbolScope) {
         auto parentKind = symbolScope->asSymbol().kind;
-        if (parentKind == slang::ast::SymbolKind::InstanceBody) {
+        // For ModportPortSymbol, the parent is a Modport which is inside
+        // an InstanceBody. For VariableSymbol/NetSymbol, parent is directly
+        // InstanceBody.
+        if (parentKind == slang::ast::SymbolKind::InstanceBody ||
+            parentKind == slang::ast::SymbolKind::Modport) {
           if (expr.syntax) {
             if (auto result =
                     visitVirtualInterfaceMemberAccess(expr, *expr.syntax))
