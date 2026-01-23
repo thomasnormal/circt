@@ -26,7 +26,9 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/IR/Block.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
@@ -212,8 +214,14 @@ public:
   LLHDProcessInterpreter(ProcessScheduler &scheduler);
 
   /// Initialize the interpreter for a hardware module.
-  /// This walks the module to find all signals and processes.
+  /// This walks the module to find all signals and processes,
+  /// including those in child module instances.
   mlir::LogicalResult initialize(hw::HWModuleOp hwModule);
+
+  /// Initialize child module instances recursively.
+  /// This finds hw.instance operations and registers signals/processes
+  /// from the referenced modules.
+  mlir::LogicalResult initializeChildInstances(hw::HWModuleOp hwModule);
 
   /// Get the signal ID for an MLIR value (signal reference).
   SignalId getSignalId(mlir::Value signalRef) const;
@@ -455,6 +463,13 @@ private:
 
   /// Name of the top module (for hierarchical path construction).
   std::string moduleName;
+
+  /// Root MLIR module (for symbol table lookups).
+  mlir::ModuleOp rootModule;
+
+  /// Set of module names that have already been processed (to avoid
+  /// processing the same module multiple times for different instances).
+  llvm::StringSet<> processedModules;
 
   /// Map from MLIR signal values to signal IDs.
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;
