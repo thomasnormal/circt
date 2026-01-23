@@ -92,16 +92,29 @@ public:
   /// Get the APInt value (only valid if not unknown).
   const llvm::APInt &getAPInt() const { return value; }
 
-  /// Get as uint64_t (only valid for widths <= 64).
+  /// Get as uint64_t. For values wider than 64 bits, returns the lower 64 bits.
   uint64_t getUInt64() const {
-    return isUnknown ? 0 : value.getZExtValue();
+    if (isUnknown)
+      return 0;
+    // For values wider than 64 bits, extract the lower 64 bits
+    if (value.getBitWidth() > 64)
+      return value.trunc(64).getZExtValue();
+    return value.getZExtValue();
   }
 
   /// Convert to SignalValue for use with ProcessScheduler.
+  /// Note: SignalValue only supports up to 64 bits, so wider values are
+  /// truncated to their lower 64 bits.
   SignalValue toSignalValue() const {
     if (isUnknown)
-      return SignalValue::makeX(width);
-    return SignalValue(value.getZExtValue(), width);
+      return SignalValue::makeX(width > 64 ? 64 : width);
+    // For values wider than 64 bits, extract the lower 64 bits
+    uint64_t val64;
+    if (value.getBitWidth() > 64)
+      val64 = value.trunc(64).getZExtValue();
+    else
+      val64 = value.getZExtValue();
+    return SignalValue(val64, width > 64 ? 64 : width);
   }
 
   /// Create from a SignalValue.

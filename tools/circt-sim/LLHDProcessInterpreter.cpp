@@ -321,7 +321,12 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
   // Set the initial value if the init operand is a constant
   if (auto constOp = sigOp.getInit().getDefiningOp<hw::ConstantOp>()) {
     APInt initValue = constOp.getValue();
-    SignalValue sv(initValue.getZExtValue(), width);
+    // SignalValue only supports up to 64 bits, truncate if wider
+    uint64_t val64 = initValue.getBitWidth() > 64
+                         ? initValue.trunc(64).getZExtValue()
+                         : initValue.getZExtValue();
+    unsigned svWidth = width > 64 ? 64 : width;
+    SignalValue sv(val64, svWidth);
     scheduler.updateSignal(sigId, sv);
     LLVM_DEBUG(llvm::dbgs() << "  Set initial value to " << initValue << "\n");
   } else if (auto aggConstOp =
@@ -330,7 +335,12 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
     // For 4-state logic signals, the struct contains {value, unknown} fields
     // We need to flatten the aggregate into a single APInt value
     APInt initValue = flattenAggregateConstant(aggConstOp);
-    SignalValue sv(initValue.getZExtValue(), width);
+    // SignalValue only supports up to 64 bits, truncate if wider
+    uint64_t val64 = initValue.getBitWidth() > 64
+                         ? initValue.trunc(64).getZExtValue()
+                         : initValue.getZExtValue();
+    unsigned svWidth = width > 64 ? 64 : width;
+    SignalValue sv(val64, svWidth);
     scheduler.updateSignal(sigId, sv);
     LLVM_DEBUG(llvm::dbgs() << "  Set aggregate initial value to " << initValue
                             << "\n");
