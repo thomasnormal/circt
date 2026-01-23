@@ -423,12 +423,13 @@ struct AssertionExprVisitor {
       // delay is relative to the sequence start and should not be adjusted.
       uint32_t minDelay = concatElement.delay.min;
       std::optional<uint32_t> maxDelay = concatElement.delay.max;
+      uint32_t offsetDelay = minDelay;
       if (it != expr.elements.begin() && minDelay > 0) {
         --minDelay;
         if (maxDelay.has_value() && maxDelay.value() > 0)
           --maxDelay.value();
       }
-      currentOffset += minDelay;
+      currentOffset += offsetDelay;
       context.setAssertionSequenceOffset(currentOffset);
 
       Value sequenceValue =
