@@ -581,10 +581,12 @@ package uvm_pkg;
     local uvm_phase m_parent;
     local uvm_phase m_predecessors[$];
     local uvm_phase m_successors[$];
+    local uvm_objection m_phase_objection;
 
     function new(string name = "uvm_phase");
       super.new(name);
       m_phase_name = name;
+      m_phase_objection = new({name, "_objection"});
     endfunction
 
     virtual function string get_name();
@@ -599,17 +601,26 @@ package uvm_pkg;
       return "uvm_phase";
     endfunction
 
-    // Objection methods
+    // Objection methods - delegate to internal objection
     virtual function void raise_objection(uvm_object obj = null, string description = "", int count = 1);
-      // Stub implementation
+      if (m_phase_objection != null)
+        m_phase_objection.raise_objection(obj, description, count);
     endfunction
 
     virtual function void drop_objection(uvm_object obj = null, string description = "", int count = 1);
-      // Stub implementation
+      if (m_phase_objection != null)
+        m_phase_objection.drop_objection(obj, description, count);
     endfunction
 
     virtual function uvm_objection get_objection();
-      return null;
+      return m_phase_objection;
+    endfunction
+
+    // Get objection count for this phase
+    virtual function int get_objection_count(uvm_object obj = null);
+      if (m_phase_objection != null)
+        return m_phase_objection.get_objection_count(obj);
+      return 0;
     endfunction
 
     // Phase state
@@ -639,32 +650,74 @@ package uvm_pkg;
   //=========================================================================
   class uvm_objection extends uvm_object;
     protected int m_count;
+    protected int m_total_count;
+    protected time m_drain_time;
 
     function new(string name = "uvm_objection");
       super.new(name);
       m_count = 0;
+      m_total_count = 0;
+      m_drain_time = 0;
     endfunction
 
     virtual function void raise_objection(uvm_object obj = null, string description = "", int count = 1);
       m_count += count;
+      m_total_count += count;
     endfunction
 
     virtual function void drop_objection(uvm_object obj = null, string description = "", int count = 1);
       m_count -= count;
-      if (m_count <= 0) begin
+      if (m_count < 0)
         m_count = 0;
-      end
     endfunction
 
     virtual function void set_drain_time(uvm_object obj = null, time drain);
+      m_drain_time = drain;
+    endfunction
+
+    virtual function time get_drain_time(uvm_object obj = null);
+      return m_drain_time;
     endfunction
 
     virtual function int get_objection_count(uvm_object obj = null);
       return m_count;
     endfunction
 
+    // Get the total count of objections ever raised
+    virtual function int get_objection_total(uvm_object obj = null);
+      return m_total_count;
+    endfunction
+
+    // Clear all objections
+    virtual function void clear(uvm_object obj = null);
+      m_count = 0;
+    endfunction
+
+    // Check if there are any raised objections
+    virtual function bit raised();
+      return m_count > 0;
+    endfunction
+
+    // Wait for a specific objection event
     virtual task wait_for(uvm_objection_event objt_event, uvm_object obj = null);
+      case (objt_event)
+        UVM_ALL_DROPPED: begin
+          while (m_count > 0)
+            #1;
+        end
+        default: begin
+          // Other events are not currently simulated
+        end
+      endcase
     endtask
+
+    // Display objection state
+    virtual function void display_objections(uvm_object obj = null, bit show_header = 1);
+      if (show_header)
+        $display("Objection report for '%s':", get_name());
+      $display("  Count: %0d", m_count);
+      $display("  Total raised: %0d", m_total_count);
+    endfunction
 
   endclass
 
@@ -1134,29 +1187,49 @@ package uvm_pkg;
       return 0;
     endfunction
 
+    // Wait for sequencer to grant permission to send item
     virtual task wait_for_grant(int item_priority = -1, bit lock_request = 0);
-      // Stub - would wait for sequencer grant in real UVM
+      if (m_sequencer != null) begin
+        m_sequencer.wait_for_grant(this, item_priority, lock_request);
+      end
     endtask
 
+    // Send request item to sequencer
     virtual function void send_request(uvm_sequence_item request, bit rerandomize = 0);
-      // Stub
+      if (m_sequencer != null) begin
+        m_sequencer.send_request(this, request, rerandomize);
+      end
     endfunction
 
+    // Wait for driver to signal item processing is done
     virtual task wait_for_item_done(int transaction_id = -1);
+      // Wait a delta cycle to allow driver to process
+      // In real UVM this would wait for item_done() call
+      #0;
     endtask
 
-    // Item execution methods
+    // Item execution methods - the main API for sequences
+    // start_item: Request permission from sequencer, set up item context
     virtual task start_item(uvm_sequence_item item, int set_priority = -1,
                             uvm_sequencer_base sequencer = null);
       if (sequencer == null)
         sequencer = m_sequencer;
+      if (sequencer == null) begin
+        `uvm_error("SEQ", "start_item called with null sequencer")
+        return;
+      end
       item.set_item_context(this, sequencer);
-      wait_for_grant();
+      wait_for_grant(set_priority);
     endtask
 
+    // finish_item: Send the item to driver and wait for completion
     virtual task finish_item(uvm_sequence_item item, int set_priority = -1);
+      if (m_sequencer == null) begin
+        `uvm_error("SEQ", "finish_item called with null sequencer")
+        return;
+      end
       send_request(item);
-      wait_for_item_done();
+      wait_for_item_done(item.get_transaction_id());
     endtask
 
     virtual function int unsigned get_priority();
@@ -1167,28 +1240,59 @@ package uvm_pkg;
       m_priority = value;
     endfunction
 
+    // Check if this sequence is blocked by another sequence
     virtual function bit is_blocked();
+      if (m_sequencer != null)
+        return m_sequencer.is_blocked(this);
       return 0;
     endfunction
 
+    // Check if this sequence holds the lock
     virtual function bit has_lock();
+      if (m_sequencer != null)
+        return m_sequencer.is_locked(this);
       return 0;
     endfunction
 
+    // Lock the sequencer - waits for existing locks to clear
     virtual task lock(uvm_sequencer_base sequencer = null);
+      if (sequencer == null)
+        sequencer = m_sequencer;
+      if (sequencer != null)
+        sequencer.lock(this);
     endtask
 
+    // Unlock the sequencer
     virtual task unlock(uvm_sequencer_base sequencer = null);
+      if (sequencer == null)
+        sequencer = m_sequencer;
+      if (sequencer != null)
+        sequencer.unlock(this);
     endtask
 
+    // Grab the sequencer - immediate exclusive access (preempts lock)
     virtual task grab(uvm_sequencer_base sequencer = null);
+      if (sequencer == null)
+        sequencer = m_sequencer;
+      if (sequencer != null)
+        sequencer.grab(this);
     endtask
 
+    // Ungrab the sequencer
     virtual task ungrab(uvm_sequencer_base sequencer = null);
+      if (sequencer == null)
+        sequencer = m_sequencer;
+      if (sequencer != null)
+        sequencer.ungrab(this);
     endtask
 
-    // Response queue
+    // Response queue management
+    protected bit m_use_response_handler = 0;
+    protected int m_response_queue_depth = -1;
+    protected bit m_response_queue_error_report_disabled = 0;
+
     virtual function void use_response_handler(bit enable);
+      m_use_response_handler = enable;
     endfunction
 
     virtual function uvm_sequence_item get_base_response(int transaction_id = -1);
@@ -1196,17 +1300,19 @@ package uvm_pkg;
     endfunction
 
     virtual function void set_response_queue_error_report_disabled(bit value);
+      m_response_queue_error_report_disabled = value;
     endfunction
 
     virtual function bit get_response_queue_error_report_disabled();
-      return 0;
+      return m_response_queue_error_report_disabled;
     endfunction
 
     virtual function void set_response_queue_depth(int value);
+      m_response_queue_depth = value;
     endfunction
 
     virtual function int get_response_queue_depth();
-      return -1;
+      return m_response_queue_depth;
     endfunction
 
   endclass
@@ -1219,6 +1325,7 @@ package uvm_pkg;
     RSP rsp;
 
     protected RSP response_queue[$];
+    protected event m_response_available;
 
     function new(string name = "uvm_sequence");
       super.new(name);
@@ -1228,12 +1335,48 @@ package uvm_pkg;
       return "uvm_sequence";
     endfunction
 
-    // Get response from response queue
+    // Get response from response queue (blocking)
     virtual task get_response(output RSP response, input int transaction_id = -1);
-      response = null;
+      while (response_queue.size() == 0) begin
+        @(m_response_available);
+      end
+      if (transaction_id >= 0) begin
+        // Find matching transaction_id
+        foreach (response_queue[i]) begin
+          if (response_queue[i].get_transaction_id() == transaction_id) begin
+            response = response_queue[i];
+            response_queue.delete(i);
+            return;
+          end
+        end
+        // Not found - wait for more responses
+        response = null;
+      end else begin
+        // Return first response
+        response = response_queue.pop_front();
+      end
     endtask
 
+    // Put response into queue
     virtual function void put_response(RSP response);
+      // Check queue depth limit
+      if (m_response_queue_depth > 0 && response_queue.size() >= m_response_queue_depth) begin
+        if (!m_response_queue_error_report_disabled)
+          `uvm_warning("RSP_OVERFLOW", "Response queue overflow - dropping oldest response")
+        void'(response_queue.pop_front());
+      end
+      response_queue.push_back(response);
+      -> m_response_available;
+    endfunction
+
+    // Check if response is available
+    virtual function bit response_available();
+      return (response_queue.size() > 0);
+    endfunction
+
+    // Get number of pending responses
+    virtual function int num_responses();
+      return response_queue.size();
     endfunction
 
   endclass
@@ -1246,9 +1389,21 @@ package uvm_pkg;
     protected uvm_sequence_base m_sequences[$];
     protected int m_lock_arb_size;
 
+    // Lock/grab state tracking
+    protected uvm_sequence_base m_lock_list[$];
+    protected uvm_sequence_base m_grab_list[$];
+    protected event m_lock_changed;
+    protected event m_item_available;
+    protected int m_max_zero_time_wait_relevant_count = 10;
+
+    // Grant tracking
+    protected uvm_sequence_base m_grant_queue[$];
+    protected bit m_grant_pending;
+
     function new(string name, uvm_component parent);
       super.new(name, parent);
       m_arbitration = UVM_SEQ_ARB_FIFO;
+      m_grant_pending = 0;
     endfunction
 
     virtual function string get_type_name();
@@ -1263,40 +1418,141 @@ package uvm_pkg;
       return uvm_sequencer_arb_mode'(m_arbitration);
     endfunction
 
+    // Check if sequence is blocked by another sequence with lock/grab
     virtual function int is_blocked(uvm_sequence_base seq);
+      // If there's a grabbing sequence that isn't this one, we're blocked
+      if (m_grab_list.size() > 0 && m_grab_list[0] != seq)
+        return 1;
+      // If there's a locked sequence that isn't this one or an ancestor, we're blocked
+      foreach (m_lock_list[i]) begin
+        if (m_lock_list[i] != seq)
+          return 1;
+      end
       return 0;
     endfunction
 
+    // Check if this sequence currently holds the lock
     virtual function bit is_locked(uvm_sequence_base seq);
+      foreach (m_lock_list[i]) begin
+        if (m_lock_list[i] == seq)
+          return 1;
+      end
+      foreach (m_grab_list[i]) begin
+        if (m_grab_list[i] == seq)
+          return 1;
+      end
       return 0;
     endfunction
 
-    virtual task wait_for_grant(uvm_sequence_base seq, int item_priority = -1, bit lock = 0);
+    // Wait for grant to send item - respects arbitration and lock/grab
+    virtual task wait_for_grant(uvm_sequence_base seq, int item_priority = -1, bit lock_request = 0);
+      // Add to grant queue
+      m_grant_queue.push_back(seq);
+
+      // Wait until we're at front and not blocked
+      while (1) begin
+        // Check if we can proceed
+        if (m_grant_queue.size() > 0 && m_grant_queue[0] == seq && !is_blocked(seq)) begin
+          m_grant_pending = 1;
+          if (lock_request)
+            m_lock_list.push_back(seq);
+          return;
+        end
+        // Wait for state change
+        @(m_lock_changed or m_item_available);
+      end
     endtask
 
+    // Wait for sequences to be available
     virtual task wait_for_sequences();
+      if (m_sequences.size() == 0)
+        @(m_item_available);
     endtask
 
+    // User-overridable arbitration function
     virtual function int user_priority_arbitration(int avail_sequences[$]);
-      return 0;
+      if (avail_sequences.size() > 0)
+        return avail_sequences[0];
+      return -1;
     endfunction
 
+    // Stop all running sequences
     virtual function void stop_sequences();
+      m_sequences.delete();
+      m_grant_queue.delete();
+      m_lock_list.delete();
+      m_grab_list.delete();
+      -> m_lock_changed;
     endfunction
 
+    // Lock sequencer for exclusive access - waits for any locks ahead
     virtual task lock(uvm_sequence_base seq);
+      // Wait for existing locks to clear (cooperative locking)
+      while (m_lock_list.size() > 0 || m_grab_list.size() > 0) begin
+        @(m_lock_changed);
+      end
+      m_lock_list.push_back(seq);
+      -> m_lock_changed;
     endtask
 
+    // Release lock held by sequence
     virtual task unlock(uvm_sequence_base seq);
+      foreach (m_lock_list[i]) begin
+        if (m_lock_list[i] == seq) begin
+          m_lock_list.delete(i);
+          -> m_lock_changed;
+          return;
+        end
+      end
     endtask
 
+    // Grab sequencer - immediate exclusive access (preemptive)
     virtual task grab(uvm_sequence_base seq);
+      // Grab takes priority - goes to front of grab list
+      m_grab_list.push_front(seq);
+      -> m_lock_changed;
     endtask
 
+    // Release grab
     virtual task ungrab(uvm_sequence_base seq);
+      foreach (m_grab_list[i]) begin
+        if (m_grab_list[i] == seq) begin
+          m_grab_list.delete(i);
+          -> m_lock_changed;
+          return;
+        end
+      end
     endtask
 
     virtual function void set_max_zero_time_wait_relevant_count(int value);
+      m_max_zero_time_wait_relevant_count = value;
+    endfunction
+
+    // Signal that an item is available
+    virtual function void m_signal_item_available();
+      -> m_item_available;
+    endfunction
+
+    // Complete grant - remove from queue
+    virtual function void m_complete_grant(uvm_sequence_base seq);
+      if (m_grant_queue.size() > 0 && m_grant_queue[0] == seq) begin
+        void'(m_grant_queue.pop_front());
+        m_grant_pending = 0;
+        -> m_lock_changed;
+      end
+    endfunction
+
+    // Check if there are pending grants
+    virtual function bit has_pending_grant();
+      return m_grant_pending;
+    endfunction
+
+    // Virtual send_request stub - overridden in uvm_sequencer_param_base
+    // This allows uvm_sequence_base to call send_request on m_sequencer
+    // (which is declared as uvm_sequencer_base) without compile-time errors
+    virtual function void send_request(uvm_sequence_base sequence_ptr, uvm_sequence_item t, bit rerandomize = 0);
+      // Default implementation does nothing - subclass must override
+      `uvm_warning("SQRBASE", "send_request called on uvm_sequencer_base - must use parameterized sequencer")
     endfunction
 
   endclass
@@ -1311,50 +1567,178 @@ package uvm_pkg;
 
     protected REQ m_req_fifo[$];
     protected RSP m_rsp_fifo[$];
+    protected event m_req_available;
+    protected event m_rsp_available;
+    protected bit m_item_in_progress;
+    protected REQ m_current_item;
+    protected uvm_sequence_base m_current_sequence;
+
+    // Response queue for sequences
+    protected RSP m_response_queue[$];
+    protected int m_response_queue_depth = -1;  // -1 means unlimited
+    protected bit m_response_queue_error_report_disabled = 0;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
       seq_item_export = new("seq_item_export", this);
+      m_item_in_progress = 0;
+      m_current_item = null;
+      m_current_sequence = null;
     endfunction
 
     virtual function string get_type_name();
       return "uvm_sequencer_param_base";
     endfunction
 
+    // Driver calls this to get next item (blocking)
     virtual task get_next_item(output REQ t);
-      t = null;
+      // Wait for item to be available
+      while (m_req_fifo.size() == 0) begin
+        @(m_req_available);
+      end
+      t = m_req_fifo[0];  // Don't remove yet - wait for item_done
+      m_current_item = t;
+      m_item_in_progress = 1;
     endtask
 
+    // Driver calls this to try to get next item (non-blocking)
     virtual task try_next_item(output REQ t);
-      t = null;
+      if (m_req_fifo.size() > 0 && !m_item_in_progress) begin
+        t = m_req_fifo[0];
+        m_current_item = t;
+        m_item_in_progress = 1;
+      end else begin
+        t = null;
+      end
     endtask
 
+    // Driver calls this when done processing item
     virtual function void item_done(RSP rsp = null);
+      if (m_item_in_progress && m_req_fifo.size() > 0) begin
+        void'(m_req_fifo.pop_front());
+        m_item_in_progress = 0;
+        m_current_item = null;
+
+        // Handle response
+        if (rsp != null) begin
+          put_response(rsp);
+        end
+
+        // Signal completion to sequence
+        if (m_current_sequence != null) begin
+          m_complete_grant(m_current_sequence);
+          m_current_sequence = null;
+        end
+
+        // Signal item available event for next item
+        -> m_req_available;
+      end
     endfunction
 
+    // Put response into response queue
     virtual task put(RSP rsp);
+      put_response(rsp);
     endtask
 
+    // Get response from response queue (blocking)
     virtual task get(output RSP rsp);
-      rsp = null;
+      while (m_rsp_fifo.size() == 0) begin
+        @(m_rsp_available);
+      end
+      rsp = m_rsp_fifo.pop_front();
     endtask
 
+    // Check if there's an item available
     virtual function bit has_do_available();
-      return 0;
+      return (m_req_fifo.size() > 0) && !m_item_in_progress;
     endfunction
 
+    // Peek at next item without removing
     virtual task peek(output REQ t);
-      t = null;
+      while (m_req_fifo.size() == 0) begin
+        @(m_req_available);
+      end
+      t = m_req_fifo[0];
     endtask
 
+    // Sequence calls this to send a request item
     virtual function void send_request(uvm_sequence_base sequence_ptr, uvm_sequence_item t, bit rerandomize = 0);
+      REQ req;
+      if ($cast(req, t)) begin
+        if (rerandomize)
+          void'(req.randomize());
+        m_req_fifo.push_back(req);
+        m_current_sequence = sequence_ptr;
+        -> m_req_available;
+        m_signal_item_available();
+      end
     endfunction
 
+    // Get response from base type
     virtual task get_base_response(output uvm_sequence_item rsp, input int transaction_id = -1);
-      rsp = null;
+      RSP typed_rsp;
+      while (m_rsp_fifo.size() == 0) begin
+        @(m_rsp_available);
+      end
+      // Find response with matching transaction_id if specified
+      if (transaction_id >= 0) begin
+        foreach (m_rsp_fifo[i]) begin
+          if (m_rsp_fifo[i].get_transaction_id() == transaction_id) begin
+            typed_rsp = m_rsp_fifo[i];
+            m_rsp_fifo.delete(i);
+            rsp = typed_rsp;
+            return;
+          end
+        end
+      end
+      // Otherwise return first response
+      typed_rsp = m_rsp_fifo.pop_front();
+      rsp = typed_rsp;
     endtask
 
+    // Put response into response queue
     virtual function void put_response(uvm_sequence_item rsp);
+      RSP typed_rsp;
+      if ($cast(typed_rsp, rsp)) begin
+        // Check queue depth limit
+        if (m_response_queue_depth > 0 && m_rsp_fifo.size() >= m_response_queue_depth) begin
+          if (!m_response_queue_error_report_disabled)
+            `uvm_warning("SEQ_RSP_OVERFLOW", "Response queue overflow - dropping oldest response")
+          void'(m_rsp_fifo.pop_front());
+        end
+        m_rsp_fifo.push_back(typed_rsp);
+        -> m_rsp_available;
+      end
+    endfunction
+
+    // Get number of pending requests
+    virtual function int get_num_reqs();
+      return m_req_fifo.size();
+    endfunction
+
+    // Get number of pending responses
+    virtual function int get_num_rsps();
+      return m_rsp_fifo.size();
+    endfunction
+
+    // Set response queue depth
+    virtual function void set_response_queue_depth(int depth);
+      m_response_queue_depth = depth;
+    endfunction
+
+    // Get response queue depth
+    virtual function int get_response_queue_depth();
+      return m_response_queue_depth;
+    endfunction
+
+    // Set response queue error report disabled
+    virtual function void set_response_queue_error_report_disabled(bit disabled);
+      m_response_queue_error_report_disabled = disabled;
+    endfunction
+
+    // Get response queue error report disabled
+    virtual function bit get_response_queue_error_report_disabled();
+      return m_response_queue_error_report_disabled;
     endfunction
 
   endclass
