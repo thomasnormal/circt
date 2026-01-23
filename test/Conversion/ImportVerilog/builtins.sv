@@ -448,6 +448,27 @@ function void StringBuiltins(string string_in, int int_in);
   dummyA(string_in.atooct());
   // CHECK: [[ATOBIN:%.+]] = moore.string.atobin [[STR]]
   dummyA(string_in.atobin());
+  // String to real conversion method (IEEE 1800-2017 Section 6.16.9)
+  // CHECK: [[ATOREAL:%.+]] = moore.string.atoreal [[STR]]
+  dummyB(string_in.atoreal());
+  // Integer to string conversion methods (IEEE 1800-2017 Section 6.16.9)
+  // CHECK: [[INTCONV:%.+]] = moore.int_to_logic [[INT]] : i32
+  // CHECK: moore.string.hextoa [[STRVAR]], [[INTCONV]] : <string>, l32
+  result.hextoa(int_in);
+  // CHECK: [[INTCONV:%.+]] = moore.int_to_logic [[INT]] : i32
+  // CHECK: moore.string.octtoa [[STRVAR]], [[INTCONV]] : <string>, l32
+  result.octtoa(int_in);
+  // CHECK: [[INTCONV:%.+]] = moore.int_to_logic [[INT]] : i32
+  // CHECK: moore.string.bintoa [[STRVAR]], [[INTCONV]] : <string>, l32
+  result.bintoa(int_in);
+  // Real to string conversion method (IEEE 1800-2017 Section 6.16.9)
+  // CHECK: [[REALVAL:%.+]] = moore.constant_real 3.140000e+00 : f64
+  // CHECK: moore.string.realtoa [[STRVAR]], [[REALVAL]] : <string>, f64
+  result.realtoa(3.14);
+  // putc method (IEEE 1800-2017 Section 6.16.2)
+  // CHECK: [[CHARVAL:%.+]] = moore.constant 66 : i8
+  // CHECK: moore.string.putc [[STRVAR]]{{\[}}[[INT]]], [[CHARVAL]] : <string>
+  result.putc(int_in, 8'd66);
 endfunction
 
 // IEEE 1800-2017 Section 6.19.5.5 "Enum .name() method"

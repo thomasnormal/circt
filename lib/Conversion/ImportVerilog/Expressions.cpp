@@ -3737,6 +3737,75 @@ struct RvalueExprVisitor : public ExprVisitor {
       return moore::ConstantOp::create(builder, loc, intTy, 0);
     }
 
+    // Handle string.hextoa method: str.hextoa(value) converts integer to hex string.
+    // The string is modified in-place, so we need lvalue for string.
+    if (subroutine.name == "hextoa" && args.size() == 2) {
+      Value strRef = context.convertLvalueExpression(*args[0]);
+      Value intVal = context.convertRvalueExpression(*args[1]);
+      if (!strRef || !intVal)
+        return {};
+      moore::StringHexToAOp::create(builder, loc, strRef, intVal);
+      // hextoa returns void, return a dummy value
+      auto intTy = moore::IntType::getInt(context.getContext(), 1);
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    }
+
+    // Handle string.octtoa method: str.octtoa(value) converts integer to octal string.
+    // The string is modified in-place, so we need lvalue for string.
+    if (subroutine.name == "octtoa" && args.size() == 2) {
+      Value strRef = context.convertLvalueExpression(*args[0]);
+      Value intVal = context.convertRvalueExpression(*args[1]);
+      if (!strRef || !intVal)
+        return {};
+      moore::StringOctToAOp::create(builder, loc, strRef, intVal);
+      // octtoa returns void, return a dummy value
+      auto intTy = moore::IntType::getInt(context.getContext(), 1);
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    }
+
+    // Handle string.bintoa method: str.bintoa(value) converts integer to binary string.
+    // The string is modified in-place, so we need lvalue for string.
+    if (subroutine.name == "bintoa" && args.size() == 2) {
+      Value strRef = context.convertLvalueExpression(*args[0]);
+      Value intVal = context.convertRvalueExpression(*args[1]);
+      if (!strRef || !intVal)
+        return {};
+      moore::StringBinToAOp::create(builder, loc, strRef, intVal);
+      // bintoa returns void, return a dummy value
+      auto intTy = moore::IntType::getInt(context.getContext(), 1);
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    }
+
+    // Handle string.realtoa method: str.realtoa(value) converts real to string.
+    // The string is modified in-place, so we need lvalue for string.
+    if (subroutine.name == "realtoa" && args.size() == 2) {
+      Value strRef = context.convertLvalueExpression(*args[0]);
+      Value realVal = context.convertRvalueExpression(*args[1]);
+      if (!strRef || !realVal)
+        return {};
+      moore::StringRealToAOp::create(builder, loc, strRef, realVal);
+      // realtoa returns void, return a dummy value
+      auto intTy = moore::IntType::getInt(context.getContext(), 1);
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    }
+
+    // Handle string.putc method: str.putc(index, char) sets character at index.
+    // The string is modified in-place, so we need lvalue for string.
+    if (subroutine.name == "putc" && args.size() == 3) {
+      Value strRef = context.convertLvalueExpression(*args[0]);
+      Value index = context.convertRvalueExpression(*args[1]);
+      Value charVal = context.convertRvalueExpression(*args[2]);
+      if (!strRef || !index || !charVal)
+        return {};
+      // Ensure charVal is i8
+      auto charType = moore::IntType::getInt(context.getContext(), 8);
+      charVal = context.materializeConversion(charType, charVal, false, loc);
+      moore::StringPutCOp::create(builder, loc, strRef, index, charVal);
+      // putc returns void, return a dummy value
+      auto intTy = moore::IntType::getInt(context.getContext(), 1);
+      return moore::ConstantOp::create(builder, loc, intTy, 0);
+    }
+
     // Handle randomize() - both class method and std::randomize().
     // IEEE 1800-2017 Section 18.6 "Randomization methods" (class method)
     // IEEE 1800-2017 Section 18.12 "Scope randomize function" (std::randomize)
@@ -7135,6 +7204,12 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("atobin",
                 [&]() -> Value {
                   return moore::StringAtoBinOp::create(builder, loc, value);
+                })
+          // String to real conversion method (IEEE 1800-2017 Section 6.16.9)
+          .Case("atoreal",
+                [&]() -> Value {
+                  auto realTy = moore::RealType::get(getContext(), moore::RealWidth::f64);
+                  return moore::StringAtoRealOp::create(builder, loc, realTy, value);
                 })
           // Array/queue built-in methods
           .Case("size",
