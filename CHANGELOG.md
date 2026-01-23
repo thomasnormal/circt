@@ -8,7 +8,7 @@ Re-verified sv-tests baselines after restoring corrupted circt-verilog binary:
 
 | Chapter | Status | Notes |
 |---------|--------|-------|
-| 15 | 2/5 (40%) | Confirmed: hierarchical event refs unsupported |
+| 15 | 5/5 (100%) | **FIXED**: hierarchical event refs now work |
 | 20 | 47/47 (100%) | Confirmed: original baseline correct |
 | 21 | 29/29 (100%) | Confirmed: original baseline correct |
 | 23 | 3/3 (100%) | Confirmed |
@@ -16,7 +16,7 @@ Re-verified sv-tests baselines after restoring corrupted circt-verilog binary:
 
 **Key Findings:**
 
-1. **Chapter-15**: Hierarchical event references (`-> top.e;` from inner module) are not supported. Local events work correctly.
+1. **Chapter-15**: Hierarchical event references (`-> top.e;` from inner module) now work after fix.
 
 2. **Chapter-20 and 21**: All tests pass. Earlier failures were due to corrupted binary (0-byte or permission issues).
 
@@ -27,22 +27,20 @@ Re-verified sv-tests baselines after restoring corrupted circt-verilog binary:
 - Compilation: SUCCESS (17K lines MLIR)
 - Simulation: Started successfully, HDL/BFM initialization messages printed
 
-### Hierarchical Event Reference Investigation
+### Bug Fix: Hierarchical References in Procedural Blocks
 
-Root cause identified for Chapter-15 failures:
+**Problem:** Hierarchical references in procedural blocks (e.g., `-> top.e;` in initial block) failed with "unknown hierarchical name" error.
 
-**Problem:** Hierarchical references in procedural blocks (e.g., `-> top.e;` in initial block) fail with "unknown hierarchical name" error.
+**Root Cause:** `HierarchicalNames.cpp` `InstBodyVisitor` didn't traverse `ProceduralBlockSymbol`.
 
-**Root Cause:** `HierarchicalNames.cpp` `InstBodyVisitor` doesn't traverse `ProceduralBlockSymbol` (initial/always blocks). It handles:
-- VariableSymbol (variable initializers)
-- NetSymbol (net initializers)
-- ContinuousAssignSymbol
+**Fix:** Added to `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+1. `HierPathValueStmtVisitor` - traverses statements to find hierarchical references
+2. `collectHierarchicalValuesFromStatement()` - method implementation
+3. `ProceduralBlockSymbol` handler in `InstBodyVisitor`
 
-But NOT procedural blocks.
+**Test:** `test/Conversion/ImportVerilog/hierarchical-event-trigger.sv`
 
-**Fix Location:** `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`
-1. Add `ProceduralBlockSymbol` handler to `InstBodyVisitor`
-2. Implement `collectHierarchicalValuesFromStatement()` (declared in header but unimplemented)
+**Result:** Chapter-15 tests now **5/5 (100%)** - was 2/5 (40%)
 
 ### verilator-verification Baseline Confirmed
 
@@ -126,10 +124,14 @@ interface instance resolution for nested interface signal accesses (e.g.
 - `test/Conversion/ImportVerilog/nested-interface-port-instance.sv`
 - `test/Conversion/ImportVerilog/nested-interface-signal-access.sv`
 
-**AXI4Lite status:** Master VIP filelists compile under `circt-verilog`.
-Prior nested interface instance errors are gone; the DATA_WIDTH=32 range
-select in `Axi4LiteMasterWriteCoverProperty.sv` was fixed in the AVIP sources
-by guarding the 64-bit declarations (log: `avip-circt-verilog.log`).
+**AXI4Lite status:** Master + slave VIP filelists compile under
+`circt-verilog`, and the full env filelist (`Axi4LiteProject.f`) compiles
+when paired with read/write VIP filelists (avoid duplicating master/slave
+project filelists, which triggers duplicate bind diagnostics). Prior nested
+interface instance errors are gone; the DATA_WIDTH=32 range selects in
+`Axi4LiteMasterWriteCoverProperty.sv` and
+`Axi4LiteSlaveWriteCoverProperty.sv` were fixed in the AVIP sources by
+guarding the 64-bit declarations (log: `avip-circt-verilog.log`).
 
 ### UVM Test Coverage Expansion
 
@@ -147,6 +149,12 @@ Added comprehensive UVM test files:
 - **check-circt-sim:** 39/39 (100%)
 - **check-circt-dialect-sim:** 11/11 (100%)
 - Some pre-existing Moore dialect test failures unrelated to our changes
+- **sv-tests (SVA):** `16.7--sequence` passes under circt-bmc (see
+  `sv-tests-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_past` passes under circt-bmc (see
+  `verilator-verification-bmc-results.txt`)
+- **yosys/tests (SVA):** `extnets` marked SKIP for pass/fail due to missing
+  properties (see script output)
 
 ## Iterations 138-139 - January 23, 2026
 

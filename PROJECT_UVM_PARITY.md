@@ -20,7 +20,7 @@
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 15/15 (100%) | Complete |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
-| 15 | Inter-Process Sync | 2/5 (40%) | Hierarchical events unsupported |
+| 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | - | Codex agent scope |
 | 18 | Random Constraints | 56/134 (42%) | 66 need UVM, 12 negative |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
@@ -53,11 +53,10 @@
 
 ### CIRCT Bugs (To Fix)
 
-1. **Hierarchical event references** (Priority: Medium)
-   - Affects: Chapter-15 tests (15.5.1-*, 15.5.2-*)
-   - Pattern: `-> top.e;` from module `inner` referencing event in `top`
-   - Error: "no lvalue generated for Variable" in procedural blocks
-   - Note: Local event references (`-> e;`) work correctly
+1. ~~**Hierarchical event references**~~ **FIXED** (Iteration 145)
+   - Was: Chapter-15 tests failing with "unknown hierarchical name"
+   - Fixed: Added ProceduralBlockSymbol handler in HierarchicalNames.cpp
+   - All Chapter-15 tests now pass (5/5)
 
 2. **Include-via-macro path resolution** (Priority: Low)
    - Affects: Chapter-22 test (22.4--include_via_define.sv)
