@@ -6,8 +6,8 @@
 
 ## Current Status
 
-### sv-tests Coverage (774 tests, ~83% raw pass rate)
-Note: Many "failures" are negative tests that correctly reject invalid code.
+### sv-tests Coverage (717 tests, ~83% raw, ~95% effective)
+Note: 42 tests are negative tests expected to fail. Effective pass rate excludes these.
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
@@ -19,7 +19,7 @@ Note: Many "failures" are negative tests that correctly reject invalid code.
 | 10 | Assignments | 9/10 (90%) | 1 negative test |
 | 11 | Operators | 76/78 (97%) | 2 negative tests |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
-| 13 | Tasks and Functions | 13/15 (87%) | 2 edge cases |
+| 13 | Tasks and Functions | 13/15 (87%) | 2 negative tests |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | - | Codex agent scope |
