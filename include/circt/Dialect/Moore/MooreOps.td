@@ -3668,6 +3668,10 @@ def CoverpointDeclOp
     of values or expressions. It may optionally contain bins that specify
     how values should be grouped for coverage tracking.
 
+    The optional `iff` attribute specifies a condition that must be true for
+    coverage to be recorded at a sample point. This implements the
+    "coverpoint expr iff (condition)" syntax from IEEE 1800-2017 Section 19.5.
+
     Coverage options (IEEE 1800-2017 Section 19.7):
     - `weight`: Relative importance for coverage calculation (default: 1)
     - `goal`: Target coverage percentage (default: 100)
@@ -3687,6 +3691,11 @@ def CoverpointDeclOp
     moore.coverpoint.decl @data_cp : !moore.l8 auto_bin_max<16> {}
     ```
 
+    Example with iff condition:
+    ```mlir
+    moore.coverpoint.decl @data_cp : !moore.l8 iff<"enable"> {}
+    ```
+
     Example with options:
     ```mlir
     moore.coverpoint.decl @data_cp : !moore.l8
@@ -3700,6 +3709,7 @@ def CoverpointDeclOp
   }];
   let arguments = (ins SymbolNameAttr:$sym_name,
                        TypeAttr:$type,
+                       OptionalAttr<StrAttr>:$iff,
                        OptionalAttr<I64Attr>:$weight,
                        OptionalAttr<I64Attr>:$goal,
                        OptionalAttr<StrAttr>:$comment,
@@ -3710,6 +3720,7 @@ def CoverpointDeclOp
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
     $sym_name `:` $type
+    (`iff` `<` $iff^ `>`)?
     (`weight` `<` $weight^ `>`)?
     (`goal` `<` $goal^ `>`)?
     (`comment` `<` $comment^ `>`)?
