@@ -311,6 +311,13 @@ struct TypeVisitor {
     return moore::ClassHandleType::get(context.getContext(), nullSym);
   }
 
+  Type visit(const slang::ast::UntypedType &type) {
+    // UntypedType is used for 'interconnect' nets. According to IEEE 1800-2017
+    // Section 6.6.8, interconnect nets are used for connecting signals with
+    // potentially different types. We lower this to a 1-bit 4-state logic type.
+    return moore::IntType::get(context.getContext(), 1, Domain::FourValued);
+  }
+
   /// Emit an error for all other types.
   template <typename T>
   Type visit(T &&node) {

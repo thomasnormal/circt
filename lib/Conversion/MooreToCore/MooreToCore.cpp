@@ -4185,8 +4185,11 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
   matchAndRewrite(NetOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    if (op.getKind() != NetKind::Wire)
-      return rewriter.notifyMatchFailure(loc, "only wire nets supported");
+    // Support wire and interconnect nets. Interconnect nets are used for
+    // connecting signals with potentially different types but can be treated
+    // as wires for lowering purposes.
+    if (op.getKind() != NetKind::Wire && op.getKind() != NetKind::Interconnect)
+      return rewriter.notifyMatchFailure(loc, "only wire/interconnect nets supported");
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
     if (!resultType)

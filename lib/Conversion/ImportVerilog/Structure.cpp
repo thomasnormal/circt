@@ -744,8 +744,7 @@ struct ModuleVisitor : public BaseVisitor {
     }
 
     auto netkind = convertNetKind(netNode.netType.netKind);
-    if (netkind == moore::NetKind::Interconnect ||
-        netkind == moore::NetKind::UserDefined ||
+    if (netkind == moore::NetKind::UserDefined ||
         netkind == moore::NetKind::Unknown)
       return mlir::emitError(loc, "unsupported net kind `")
              << netNode.netType.name << "`";
