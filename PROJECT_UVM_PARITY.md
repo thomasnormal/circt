@@ -16,8 +16,8 @@ Note: Many "failures" are negative tests that correctly reject invalid code.
 | 7 | Aggregate Data Types | 101/103 (98%) | 2 known limitations |
 | 8 | Classes | 44/53 (83%) | 9 interface class issues |
 | 9 | Processes | 44/46 (96%) | 1 known limitation (@seq) |
-| 10 | Assignments | 10/10 (100%) | Complete |
-| 11 | Operators | 88/88 (100%) | Complete |
+| 10 | Assignments | 9/10 (90%) | 1 negative test |
+| 11 | Operators | 76/78 (97%) | 2 negative tests |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 15/15 (100%) | Complete |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
