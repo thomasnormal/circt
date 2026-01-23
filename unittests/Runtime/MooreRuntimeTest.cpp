@@ -9189,16 +9189,19 @@ TEST(MooreRuntimeUvmPhaseTest, RunTestWithEmptyName) {
 }
 
 TEST(MooreRuntimeUvmPhaseTest, RunTestWarningForUninstantiatedTest) {
+  __moore_uvm_factory_clear();
   testing::internal::CaptureStdout();
 
   __uvm_run_test("unimplemented_test", 18);
 
   std::string output = testing::internal::GetCapturedStdout();
 
-  // Verify warning about stub
+  // Verify warning about unregistered test type
   EXPECT_NE(output.find("UVM_WARNING"), std::string::npos);
-  EXPECT_NE(output.find("UVM_STUB"), std::string::npos);
+  EXPECT_NE(output.find("NOTYPE"), std::string::npos);
   EXPECT_NE(output.find("unimplemented_test"), std::string::npos);
+
+  __moore_uvm_factory_clear();
 }
 
 TEST(MooreRuntimeUvmPhaseTest, PhaseStartWithPartialLength) {
@@ -9718,6 +9721,354 @@ TEST(MooreRuntimeUvmComponentCallbackTest, AllPhasesExecuteInOrder) {
 
   __moore_uvm_set_global_phase_start_callback(nullptr, nullptr);
   __moore_uvm_clear_components();
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Factory Tests
+//===----------------------------------------------------------------------===//
+
+// Test data structures for factory tests
+namespace {
+
+struct TestComponentData {
+  std::string name;
+  void *parent;
+  int creationCount;
+};
+
+static std::map<std::string, TestComponentData> createdComponents;
+
+// Mock component creator
+void *testComponentCreator(const char *name, int64_t nameLen, void *parent,
+                           void *userData) {
+  std::string compName(name, static_cast<size_t>(nameLen));
+  TestComponentData data;
+  data.name = compName;
+  data.parent = parent;
+  data.creationCount = 1;
+  createdComponents[compName] = data;
+  // Return a non-null pointer (use userData as the "instance")
+  return userData ? userData : const_cast<char *>("mock_component");
+}
+
+// Mock object creator
+void *testObjectCreator(const char *name, int64_t nameLen, void *userData) {
+  (void)userData;
+  std::string objName(name, static_cast<size_t>(nameLen));
+  // Return a mock object pointer
+  return const_cast<char *>("mock_object");
+}
+
+} // namespace
+
+TEST(MooreRuntimeUvmFactoryTest, FactoryInitiallyEmpty) {
+  __moore_uvm_factory_clear();
+  EXPECT_EQ(__moore_uvm_factory_get_type_count(), 0);
+}
+
+TEST(MooreRuntimeUvmFactoryTest, RegisterComponentType) {
+  __moore_uvm_factory_clear();
+
+  const char *typeName = "my_test";
+  int32_t result = __moore_uvm_factory_register_component(
+      typeName, static_cast<int64_t>(std::strlen(typeName)), testComponentCreator,
+      nullptr);
+
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(__moore_uvm_factory_get_type_count(), 1);
+  EXPECT_EQ(__moore_uvm_factory_is_type_registered(
+                typeName, static_cast<int64_t>(std::strlen(typeName))),
+            1);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, RegisterObjectType) {
+  __moore_uvm_factory_clear();
+
+  const char *typeName = "my_sequence";
+  int32_t result = __moore_uvm_factory_register_object(
+      typeName, static_cast<int64_t>(std::strlen(typeName)), testObjectCreator,
+      nullptr);
+
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(__moore_uvm_factory_get_type_count(), 1);
+  EXPECT_EQ(__moore_uvm_factory_is_type_registered(
+                typeName, static_cast<int64_t>(std::strlen(typeName))),
+            1);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, PreventDuplicateRegistration) {
+  __moore_uvm_factory_clear();
+
+  const char *typeName = "my_test";
+  int64_t len = static_cast<int64_t>(std::strlen(typeName));
+
+  // First registration should succeed
+  int32_t result1 =
+      __moore_uvm_factory_register_component(typeName, len, testComponentCreator, nullptr);
+  EXPECT_EQ(result1, 1);
+
+  // Second registration with same name should fail
+  int32_t result2 =
+      __moore_uvm_factory_register_component(typeName, len, testComponentCreator, nullptr);
+  EXPECT_EQ(result2, 0);
+
+  // Should still only have one type
+  EXPECT_EQ(__moore_uvm_factory_get_type_count(), 1);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, CreateComponentByName) {
+  __moore_uvm_factory_clear();
+  createdComponents.clear();
+
+  const char *typeName = "my_test";
+  int64_t typeLen = static_cast<int64_t>(std::strlen(typeName));
+  __moore_uvm_factory_register_component(typeName, typeLen, testComponentCreator,
+                                         nullptr);
+
+  const char *instName = "uvm_test_top";
+  int64_t instLen = static_cast<int64_t>(std::strlen(instName));
+
+  testing::internal::CaptureStdout();
+  void *component = __moore_uvm_factory_create_component_by_name(
+      typeName, typeLen, instName, instLen, nullptr);
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(component, nullptr);
+  EXPECT_EQ(createdComponents.count(instName), 1u);
+  EXPECT_EQ(createdComponents[instName].name, instName);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, CreateComponentUnregisteredType) {
+  __moore_uvm_factory_clear();
+
+  const char *typeName = "nonexistent_test";
+  int64_t typeLen = static_cast<int64_t>(std::strlen(typeName));
+  const char *instName = "uvm_test_top";
+  int64_t instLen = static_cast<int64_t>(std::strlen(instName));
+
+  testing::internal::CaptureStdout();
+  void *component = __moore_uvm_factory_create_component_by_name(
+      typeName, typeLen, instName, instLen, nullptr);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(component, nullptr);
+  EXPECT_NE(output.find("NOTYPE"), std::string::npos);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, TypeOverride) {
+  __moore_uvm_factory_clear();
+  createdComponents.clear();
+
+  // Register base type
+  const char *baseType = "base_test";
+  int64_t baseLen = static_cast<int64_t>(std::strlen(baseType));
+  __moore_uvm_factory_register_component(baseType, baseLen, testComponentCreator,
+                                         const_cast<char *>("base_instance"));
+
+  // Register override type
+  const char *overrideType = "extended_test";
+  int64_t overrideLen = static_cast<int64_t>(std::strlen(overrideType));
+  __moore_uvm_factory_register_component(overrideType, overrideLen,
+                                         testComponentCreator,
+                                         const_cast<char *>("override_instance"));
+
+  // Set type override
+  int32_t overrideResult = __moore_uvm_factory_set_type_override(
+      baseType, baseLen, overrideType, overrideLen, 1);
+  EXPECT_EQ(overrideResult, 1);
+
+  // Create component using base type name - should get override type
+  const char *instName = "test_top";
+  int64_t instLen = static_cast<int64_t>(std::strlen(instName));
+
+  testing::internal::CaptureStdout();
+  void *component = __moore_uvm_factory_create_component_by_name(
+      baseType, baseLen, instName, instLen, nullptr);
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(component, nullptr);
+  // The component should have been created using the override's userData
+  EXPECT_EQ(component, const_cast<char *>("override_instance"));
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, TypeOverrideChain) {
+  __moore_uvm_factory_clear();
+
+  // Register types A -> B -> C
+  const char *typeA = "type_a";
+  const char *typeB = "type_b";
+  const char *typeC = "type_c";
+  int64_t lenA = static_cast<int64_t>(std::strlen(typeA));
+  int64_t lenB = static_cast<int64_t>(std::strlen(typeB));
+  int64_t lenC = static_cast<int64_t>(std::strlen(typeC));
+
+  __moore_uvm_factory_register_component(typeA, lenA, testComponentCreator,
+                                         const_cast<char *>("instance_a"));
+  __moore_uvm_factory_register_component(typeB, lenB, testComponentCreator,
+                                         const_cast<char *>("instance_b"));
+  __moore_uvm_factory_register_component(typeC, lenC, testComponentCreator,
+                                         const_cast<char *>("instance_c"));
+
+  // Set up override chain: A -> B -> C
+  __moore_uvm_factory_set_type_override(typeA, lenA, typeB, lenB, 1);
+  __moore_uvm_factory_set_type_override(typeB, lenB, typeC, lenC, 1);
+
+  // Create component using type A - should get type C
+  const char *instName = "test";
+  int64_t instLen = static_cast<int64_t>(std::strlen(instName));
+
+  testing::internal::CaptureStdout();
+  void *component = __moore_uvm_factory_create_component_by_name(
+      typeA, lenA, instName, instLen, nullptr);
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(component, nullptr);
+  EXPECT_EQ(component, const_cast<char *>("instance_c"));
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, TypeNotRegisteredCheck) {
+  __moore_uvm_factory_clear();
+
+  const char *typeName = "unregistered_type";
+  int64_t len = static_cast<int64_t>(std::strlen(typeName));
+
+  EXPECT_EQ(__moore_uvm_factory_is_type_registered(typeName, len), 0);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, FactoryClear) {
+  __moore_uvm_factory_clear();
+
+  // Register some types
+  const char *type1 = "test1";
+  const char *type2 = "test2";
+  __moore_uvm_factory_register_component(
+      type1, static_cast<int64_t>(std::strlen(type1)), testComponentCreator, nullptr);
+  __moore_uvm_factory_register_object(type2, static_cast<int64_t>(std::strlen(type2)),
+                                      testObjectCreator, nullptr);
+
+  EXPECT_EQ(__moore_uvm_factory_get_type_count(), 2);
+
+  // Clear and verify
+  __moore_uvm_factory_clear();
+  EXPECT_EQ(__moore_uvm_factory_get_type_count(), 0);
+}
+
+TEST(MooreRuntimeUvmFactoryTest, InvalidInputsHandled) {
+  __moore_uvm_factory_clear();
+
+  // Null type name
+  EXPECT_EQ(__moore_uvm_factory_register_component(nullptr, 5, testComponentCreator,
+                                                   nullptr),
+            0);
+
+  // Zero length
+  EXPECT_EQ(__moore_uvm_factory_register_component("test", 0, testComponentCreator,
+                                                   nullptr),
+            0);
+
+  // Null creator
+  EXPECT_EQ(__moore_uvm_factory_register_component("test", 4, nullptr, nullptr), 0);
+
+  // Is registered with null
+  EXPECT_EQ(__moore_uvm_factory_is_type_registered(nullptr, 5), 0);
+
+  // Create with null type name
+  EXPECT_EQ(__moore_uvm_factory_create_component_by_name(nullptr, 5, "inst", 4, nullptr),
+            nullptr);
+
+  __moore_uvm_factory_clear();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, RunTestWithRegisteredType) {
+  __moore_uvm_factory_clear();
+  createdComponents.clear();
+  __moore_uvm_clear_components();
+
+  // Register a test type
+  const char *testType = "registered_test";
+  int64_t typeLen = static_cast<int64_t>(std::strlen(testType));
+  __moore_uvm_factory_register_component(testType, typeLen, testComponentCreator,
+                                         nullptr);
+
+  // Run test
+  testing::internal::CaptureStdout();
+  __uvm_run_test(testType, typeLen);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify test was created
+  EXPECT_NE(output.find("created successfully"), std::string::npos);
+  EXPECT_EQ(createdComponents.count("uvm_test_top"), 1u);
+
+  __moore_uvm_factory_clear();
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, RunTestWithUnregisteredType) {
+  __moore_uvm_factory_clear();
+  __moore_uvm_clear_components();
+
+  const char *testType = "unregistered_test";
+  int64_t typeLen = static_cast<int64_t>(std::strlen(testType));
+
+  // Run test - should warn about unregistered type
+  testing::internal::CaptureStdout();
+  __uvm_run_test(testType, typeLen);
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify warning about unregistered type
+  EXPECT_NE(output.find("NOTYPE"), std::string::npos);
+
+  __moore_uvm_factory_clear();
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmFactoryTest, FactoryPrint) {
+  __moore_uvm_factory_clear();
+
+  // Register some types
+  const char *comp1 = "test_component";
+  const char *obj1 = "test_object";
+  __moore_uvm_factory_register_component(
+      comp1, static_cast<int64_t>(std::strlen(comp1)), testComponentCreator, nullptr);
+  __moore_uvm_factory_register_object(obj1, static_cast<int64_t>(std::strlen(obj1)),
+                                      testObjectCreator, nullptr);
+
+  // Add an override
+  const char *override = "override_comp";
+  __moore_uvm_factory_register_component(
+      override, static_cast<int64_t>(std::strlen(override)), testComponentCreator, nullptr);
+  __moore_uvm_factory_set_type_override(
+      comp1, static_cast<int64_t>(std::strlen(comp1)), override,
+      static_cast<int64_t>(std::strlen(override)), 1);
+
+  // Print factory state
+  testing::internal::CaptureStdout();
+  __moore_uvm_factory_print();
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify output contains expected sections
+  EXPECT_NE(output.find("UVM Factory State"), std::string::npos);
+  EXPECT_NE(output.find("test_component"), std::string::npos);
+  EXPECT_NE(output.find("test_object"), std::string::npos);
+  EXPECT_NE(output.find("Type overrides"), std::string::npos);
+
+  __moore_uvm_factory_clear();
 }
 
 } // namespace
