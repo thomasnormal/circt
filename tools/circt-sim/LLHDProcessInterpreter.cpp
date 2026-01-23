@@ -3625,6 +3625,23 @@ unsigned LLHDProcessInterpreter::getTypeWidth(Type type) {
     return totalWidth;
   }
 
+  // Handle LLVM pointer types (64 bits)
+  if (isa<LLVM::LLVMPointerType>(type))
+    return 64;
+
+  // Handle LLVM struct types
+  if (auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    unsigned totalWidth = 0;
+    for (Type elemType : llvmStructType.getBody())
+      totalWidth += getTypeWidth(elemType);
+    return totalWidth;
+  }
+
+  // Handle LLVM array types
+  if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(type))
+    return getTypeWidth(llvmArrayType.getElementType()) *
+           llvmArrayType.getNumElements();
+
   // Default to 1 bit for unknown types
   return 1;
 }
@@ -3945,16 +3962,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   }
 
   // Read bytes from memory and construct the value (little-endian)
-  uint64_t value = 0;
-  for (unsigned i = 0; i < loadSize && i < 8; ++i) {
-    value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
-  }
-
   unsigned bitWidth = getTypeWidth(resultType);
-  setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
 
-  LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded " << value << " ("
-                          << loadSize << " bytes) from offset " << offset << "\n");
+  // For values larger than 64 bits, use APInt directly
+  if (bitWidth > 64) {
+    APInt apValue(bitWidth, 0);
+    for (unsigned i = 0; i < loadSize; ++i) {
+      APInt byteVal(bitWidth, block->data[offset + i]);
+      apValue |= byteVal.shl(i * 8);
+    }
+    setValue(procId, loadOp.getResult(), InterpretedValue(apValue));
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded wide value ("
+                            << loadSize << " bytes) from offset " << offset << "\n");
+  } else {
+    uint64_t value = 0;
+    for (unsigned i = 0; i < loadSize && i < 8; ++i) {
+      value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+    }
+    setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded " << value << " ("
+                            << loadSize << " bytes) from offset " << offset << "\n");
+  }
 
   return success();
 }
@@ -3991,9 +4019,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
 
   // Write bytes to memory (little-endian)
   if (!storeVal.isX()) {
-    uint64_t value = storeVal.getUInt64();
-    for (unsigned i = 0; i < storeSize && i < 8; ++i) {
-      block->data[offset + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+    const APInt &apValue = storeVal.getAPInt();
+    if (apValue.getBitWidth() > 64) {
+      // Handle wide values using APInt operations
+      for (unsigned i = 0; i < storeSize; ++i) {
+        block->data[offset + i] =
+            static_cast<uint8_t>(apValue.extractBits(8, i * 8).getZExtValue());
+      }
+    } else {
+      uint64_t value = storeVal.getUInt64();
+      for (unsigned i = 0; i < storeSize && i < 8; ++i) {
+        block->data[offset + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+      }
     }
     block->initialized = true;
   }
