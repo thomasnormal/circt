@@ -2641,7 +2641,23 @@ package uvm_pkg;
                                                       string parent_inst_path = "",
                                                       string name = "");
       string override_type = requested_type_name;
-      if (m_type_overrides.exists(requested_type_name))
+      string full_inst_path;
+      string inst_key;
+
+      // Build the full instance path for instance override lookup
+      if (parent_inst_path != "" && name != "")
+        full_inst_path = {parent_inst_path, ".", name};
+      else if (parent_inst_path != "")
+        full_inst_path = parent_inst_path;
+      else
+        full_inst_path = name;
+
+      // Check instance overrides first (higher priority)
+      inst_key = {full_inst_path, ":", requested_type_name};
+      if (m_inst_overrides.exists(inst_key))
+        override_type = m_inst_overrides[inst_key];
+      // Then check type overrides
+      else if (m_type_overrides.exists(requested_type_name))
         override_type = m_type_overrides[requested_type_name];
 
       if (m_type_names.exists(override_type))
@@ -2654,7 +2670,23 @@ package uvm_pkg;
                                                             string name = "",
                                                             uvm_component parent = null);
       string override_type = requested_type_name;
-      if (m_type_overrides.exists(requested_type_name))
+      string full_inst_path;
+      string inst_key;
+
+      // Build the full instance path for instance override lookup
+      if (parent_inst_path != "" && name != "")
+        full_inst_path = {parent_inst_path, ".", name};
+      else if (parent_inst_path != "")
+        full_inst_path = parent_inst_path;
+      else
+        full_inst_path = name;
+
+      // Check instance overrides first (higher priority)
+      inst_key = {full_inst_path, ":", requested_type_name};
+      if (m_inst_overrides.exists(inst_key))
+        override_type = m_inst_overrides[inst_key];
+      // Then check type overrides
+      else if (m_type_overrides.exists(requested_type_name))
         override_type = m_type_overrides[requested_type_name];
 
       if (m_type_names.exists(override_type))
@@ -2665,13 +2697,30 @@ package uvm_pkg;
     virtual function void set_type_override_by_name(string original_type_name,
                                                     string override_type_name,
                                                     bit replace = 1);
-      m_type_overrides[original_type_name] = override_type_name;
+      if (replace || !m_type_overrides.exists(original_type_name))
+        m_type_overrides[original_type_name] = override_type_name;
     endfunction
 
     virtual function void set_inst_override_by_name(string original_type_name,
                                                     string override_type_name,
                                                     string full_inst_path);
       m_inst_overrides[{full_inst_path, ":", original_type_name}] = override_type_name;
+    endfunction
+
+    virtual function void set_type_override_by_type(uvm_object_wrapper original_type,
+                                                    uvm_object_wrapper override_type,
+                                                    bit replace = 1);
+      set_type_override_by_name(original_type.get_type_name(),
+                                override_type.get_type_name(),
+                                replace);
+    endfunction
+
+    virtual function void set_inst_override_by_type(uvm_object_wrapper original_type,
+                                                    uvm_object_wrapper override_type,
+                                                    string full_inst_path);
+      set_inst_override_by_name(original_type.get_type_name(),
+                                override_type.get_type_name(),
+                                full_inst_path);
     endfunction
 
     virtual function void print(int all_types = 1);
