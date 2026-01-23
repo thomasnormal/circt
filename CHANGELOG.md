@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 114 - January 23, 2026
+
+### Fix Recursive Function Calls in UVM Initialization
+
+Fixed the recursive function call issue that was blocking AHB AVIP compilation.
+
+**Problem:**
+UVM's initialization code has a recursive call pattern:
+- `uvm_get_report_object()` -> `uvm_coreservice_t::get()` -> `uvm_init()` -> (via error path) -> `uvm_get_report_object()`
+
+This caused the error: "recursive function call cannot be inlined (unsupported in --ir-hw)"
+
+**Solution:**
+- Added detection for UVM initialization functions with guarded recursion
+- Skip inlining for these functions, leaving them as runtime function calls
+- The recursion is safe at runtime due to state guards in the UVM code
+
+**Functions detected:**
+- `uvm_pkg::uvm_init`, `uvm_pkg::uvm_coreservice_t::get`, `uvm_pkg::uvm_get_report_object`
+- Related report functions: `uvm_report_fatal`, `uvm_report_error`, etc.
+- Factory/Registry functions: `create_by_type`, `m_rh_init`, `type_id::create`
+
+**AHB AVIP Status:** Compiles successfully (no errors, produces MLIR output)
+
+**Commit:** `74faf4126 [LLHD] Skip inlining UVM initialization functions with guarded recursion`
+
+### APB AVIP End-to-End circt-sim Test ✅
+
+Successfully tested APB AVIP through complete circt-sim pipeline:
+
+- Compiled with `--ir-llhd` flag (21MB MLIR output)
+- Ran through circt-sim: 4 LLHD processes, 56 process executions, 53 delta cycles
+- Clock and reset sequences execute correctly
+
+**Commit:** `c8f2dfe72 [circt-sim] Add APB-style clock and reset sequence test`
+
+### HoistSignals Crash Fix for Class Types ✅
+
+Fixed crash when processing class types in drive hoisting:
+
+**Problem:** `hw::getBitWidth(type)` returns -1 for class types, causing assertion failure.
+
+**Solution:** Added check to skip slots with non-fixed-width types before hoisting.
+
+**Commit:** `9bf13f2ac [HoistSignals] Fix crash for class types in drive hoisting`
+
+### moore.class.copy Legalization ✅
+
+Implemented shallow copy for SystemVerilog class instances:
+
+**Implementation:** Allocates new memory with `malloc`, copies bytes with `memcpy`.
+
+Per IEEE 1800-2017 Section 8.12: shallow copy creates new object with same property values; nested class handles are copied as-is (both point to same nested objects).
+
+**Commit:** `27220818e [MooreToCore] Add moore.class.copy legalization`
+
+---
+
 ## Iteration 113 - January 23, 2026
 
 ### UVM Register Abstraction Layer (RAL) Runtime ✅

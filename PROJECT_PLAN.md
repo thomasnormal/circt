@@ -67,7 +67,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 113 Complete)
+### Track Status & Next Tasks (Iteration 114 Complete)
 
 **17+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
@@ -96,10 +96,11 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
+- **AHB AVIP:** Compiles successfully (recursive call fix, Iter 114) ✅ **NEW**
+- **APB AVIP:** E2E circt-sim test (clock/reset sequences work, Iter 114) ✅ **NEW**
 - **4 AVIPs run in circt-sim:** APB, SPI, UART, I3C (clock/reset/UVM_INFO working) ✅
-- **AHB AVIP compiles** with `--single-unit --ignore-unknown-modules` ✅
 
-### Remaining Limitations (Updated Iteration 113)
+### Remaining Limitations (Updated Iteration 114)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
@@ -111,6 +112,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 7. ~~**UVM Scoreboard**~~: ✅ IMPLEMENTED (Iter 112) - Scoreboard utility functions
 8. ~~**UVM RAL**~~: ✅ IMPLEMENTED (Iter 113) - Register abstraction layer runtime
 9. ~~**Array locator external calls**~~: ✅ FIXED (Iter 111, 112, 113) - Pre-scan + vtable dispatch
+10. ~~**UVM recursive init calls**~~: ✅ FIXED (Iter 114) - Skip inlining guarded recursion
+11. ~~**Class shallow copy**~~: ✅ FIXED (Iter 114) - moore.class.copy legalization
 
 **For sv-tests Completion:**
 1. **Chapter-9 (97%)**:
@@ -125,12 +128,12 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Next Tasks for Tracks (Iteration 114)
+### Next Tasks for Tracks (Iteration 115)
 
-**Track A**: AHB AVIP recursive function call blocker
-**Track B**: UVM RAL-to-driver adapter integration
-**Track C**: HoistSignals.cpp crash fix for class types
-**Track D**: Tagged union pattern matching research
+**Track A**: Run AHB AVIP through circt-sim E2E
+**Track B**: UVM message infrastructure (UVM_INFO, UVM_ERROR output)
+**Track C**: sv-tests Chapter-8 remaining failures
+**Track D**: sv-tests Chapter-12 pattern matching research
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops supported** ✅
@@ -140,7 +143,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - UVM Objections: **Raise/drop/drain with threading** ✅
 - UVM Sequences: **Sequencer arbitration + driver handshake** ✅
 - UVM Scoreboard: **Transaction comparison with TLM integration** ✅
-- UVM RAL: **Register model with fields, blocks, maps** ✅ **NEW (Iter 113)**
+- UVM RAL: **Register model with fields, blocks, maps** ✅
+- UVM Init: **Recursive call handling for guarded recursion** ✅ **NEW (Iter 114)**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
