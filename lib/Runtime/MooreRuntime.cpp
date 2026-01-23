@@ -1016,6 +1016,43 @@ extern "C" MooreString __moore_int_to_string(int64_t value) {
   return result;
 }
 
+extern "C" MooreString __moore_packed_string_to_string(int64_t value) {
+  // SystemVerilog semantics: integers used as strings have their bytes unpacked
+  // from most significant to least significant (big-endian byte order).
+  // E.g., 0x48444C5F544F50 ("HDL_TOP" packed) -> "HDL_TOP"
+  //
+  // The value is stored in native endianness but represents a big-endian
+  // packed string where the first character is in the MSB position.
+
+  if (value == 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  // Extract bytes from the value (big-endian packed string)
+  // First, find the actual length by counting non-zero bytes from MSB
+  char buffer[8];
+  int len = 0;
+  uint64_t uval = static_cast<uint64_t>(value);
+
+  // Extract bytes from MSB to LSB
+  for (int i = 7; i >= 0; --i) {
+    char c = static_cast<char>((uval >> (i * 8)) & 0xFF);
+    if (c != 0 || len > 0) {
+      buffer[len++] = c;
+    }
+  }
+
+  if (len == 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  MooreString result = allocateString(len);
+  std::memcpy(result.data, buffer, len);
+  return result;
+}
+
 extern "C" int64_t __moore_string_to_int(MooreString *str) {
   if (!str || !str->data || str->len <= 0)
     return 0;
@@ -12134,14 +12171,67 @@ namespace {
 /// Entry structure for config_db storage.
 /// Stores a copy of the value and its type ID for type checking.
 struct ConfigDbEntry {
+  std::string instName;        // Original instance name (may contain wildcards)
+  std::string fieldName;       // Field name
   std::vector<uint8_t> value;  // Deep copy of the stored value
   int32_t typeId;
+  uint64_t setTime;            // Monotonic counter for last-set-wins ordering
+  bool hasWildcard;            // True if instName contains wildcard characters
 };
 
 /// Global config_db storage, keyed by "{inst_name}.{field_name}".
 /// Thread-safe via mutex protection.
 std::unordered_map<std::string, ConfigDbEntry> __moore_config_db_storage;
 std::mutex __moore_config_db_mutex;
+std::atomic<uint64_t> __moore_config_db_set_counter{0};
+
+/// Check if a string contains wildcard characters (* or ?).
+bool containsWildcard(const std::string &str) {
+  return str.find('*') != std::string::npos ||
+         str.find('?') != std::string::npos;
+}
+
+/// Check if a glob pattern matches a path.
+/// Supports * (match any characters) and ? (match single character).
+bool matchesGlobPattern(const std::string &pattern, const std::string &path) {
+  // Empty pattern matches empty path
+  if (pattern.empty())
+    return path.empty();
+
+  // Pattern "*" matches everything
+  if (pattern == "*")
+    return true;
+
+  // Convert glob to regex and match
+  std::string regexPattern = "^" + convertGlobToRegex(pattern, false) + "$";
+  std::regex re(regexPattern, std::regex::nosubs | std::regex::optimize);
+  return std::regex_match(path, re);
+}
+
+/// Check if setPath (from config_db_set) can provide a value for lookupPath (from get).
+/// This implements hierarchical matching where parent paths match child paths.
+/// For example: set("top.*", ...) should match get("top.env.agent", ...).
+bool pathMatches(const std::string &setPath, const std::string &lookupPath) {
+  // Exact match
+  if (setPath == lookupPath)
+    return true;
+
+  // If setPath contains wildcards, use glob matching
+  if (containsWildcard(setPath)) {
+    return matchesGlobPattern(setPath, lookupPath);
+  }
+
+  // Hierarchical matching: setPath is a prefix of lookupPath
+  // e.g., setPath="top.env" should match lookupPath="top.env.agent"
+  if (!setPath.empty() && lookupPath.size() > setPath.size()) {
+    if (lookupPath.compare(0, setPath.size(), setPath) == 0 &&
+        lookupPath[setPath.size()] == '.') {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /// Build the config_db key from instance name and field name.
 std::string buildConfigDbKey(const char *instName, int64_t instLen,
@@ -12155,6 +12245,20 @@ std::string buildConfigDbKey(const char *instName, int64_t instLen,
     key.append(fieldName, static_cast<size_t>(fieldLen));
   }
   return key;
+}
+
+/// Convert instance name and field name to strings.
+std::pair<std::string, std::string> extractNames(const char *instName,
+                                                  int64_t instLen,
+                                                  const char *fieldName,
+                                                  int64_t fieldLen) {
+  std::string inst = (instName && instLen > 0)
+                         ? std::string(instName, static_cast<size_t>(instLen))
+                         : "";
+  std::string field = (fieldName && fieldLen > 0)
+                          ? std::string(fieldName, static_cast<size_t>(fieldLen))
+                          : "";
+  return {inst, field};
 }
 
 } // anonymous namespace
@@ -12174,10 +12278,15 @@ extern "C" void __moore_config_db_set(void *context, const char *instName,
                                       int64_t valueSize, int32_t typeId) {
   (void)context;  // Reserved for future use (UVM hierarchy context)
 
+  auto [inst, field] = extractNames(instName, instLen, fieldName, fieldLen);
   std::string key = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
 
   ConfigDbEntry entry;
+  entry.instName = inst;
+  entry.fieldName = field;
   entry.typeId = typeId;
+  entry.setTime = __moore_config_db_set_counter.fetch_add(1);
+  entry.hasWildcard = containsWildcard(inst);
   if (value && valueSize > 0) {
     entry.value.resize(static_cast<size_t>(valueSize));
     std::memcpy(entry.value.data(), value, static_cast<size_t>(valueSize));
@@ -12203,46 +12312,111 @@ extern "C" int32_t __moore_config_db_get(void *context, const char *instName,
                                          void *outValue, int64_t valueSize) {
   (void)context;  // Reserved for future use (UVM hierarchy context)
 
-  std::string key = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
+  auto [lookupInst, lookupField] = extractNames(instName, instLen, fieldName, fieldLen);
+  std::string exactKey = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
 
   std::lock_guard<std::mutex> lock(__moore_config_db_mutex);
-  auto it = __moore_config_db_storage.find(key);
-  if (it == __moore_config_db_storage.end()) {
-    // Key not found
-    return 0;
+
+  // 1. Try exact match first (most common case)
+  auto exactIt = __moore_config_db_storage.find(exactKey);
+  if (exactIt != __moore_config_db_storage.end()) {
+    const ConfigDbEntry &entry = exactIt->second;
+    // Copy the value to the output buffer
+    if (outValue && valueSize > 0 && !entry.value.empty()) {
+      size_t copySize = std::min(static_cast<size_t>(valueSize), entry.value.size());
+      std::memcpy(outValue, entry.value.data(), copySize);
+    }
+    return 1;
   }
 
-  const ConfigDbEntry &entry = it->second;
+  // 2. Try wildcard and hierarchical matching
+  // Collect all matching entries and select the best one based on:
+  //   - Specificity (more specific patterns win)
+  //   - Set time (last-set-wins for equal specificity)
+  const ConfigDbEntry *bestMatch = nullptr;
+  uint64_t bestSetTime = 0;
+  size_t bestSpecificity = 0;  // Length of non-wildcard prefix
 
-  // Type ID mismatch - in strict mode we could fail here,
-  // but UVM config_db is flexible, so we just warn conceptually
-  // and proceed if the type ID matches
-  if (entry.typeId != typeId) {
-    // Type mismatch - could add runtime warning here
-    // For now, we still return the value but the caller should be aware
+  for (const auto &[key, entry] : __moore_config_db_storage) {
+    // Field name must match exactly
+    if (entry.fieldName != lookupField)
+      continue;
+
+    // Check if this entry's instance path can match our lookup path
+    if (!pathMatches(entry.instName, lookupInst))
+      continue;
+
+    // Calculate specificity: entries without wildcards are more specific
+    // Among wildcard entries, longer non-wildcard prefixes are more specific
+    size_t specificity = 0;
+    if (!entry.hasWildcard) {
+      // Exact prefix match (hierarchical) - very specific
+      specificity = entry.instName.size() + 1000;  // Boost for non-wildcard
+    } else {
+      // Count characters before first wildcard
+      size_t wildcardPos = entry.instName.find_first_of("*?");
+      specificity = (wildcardPos != std::string::npos) ? wildcardPos : entry.instName.size();
+    }
+
+    // Select best match based on specificity, then set time
+    if (bestMatch == nullptr ||
+        specificity > bestSpecificity ||
+        (specificity == bestSpecificity && entry.setTime > bestSetTime)) {
+      bestMatch = &entry;
+      bestSpecificity = specificity;
+      bestSetTime = entry.setTime;
+    }
   }
 
-  // Copy the value to the output buffer
-  if (outValue && valueSize > 0 && !entry.value.empty()) {
-    size_t copySize = std::min(static_cast<size_t>(valueSize), entry.value.size());
-    std::memcpy(outValue, entry.value.data(), copySize);
+  if (bestMatch) {
+    // Copy the value to the output buffer
+    if (outValue && valueSize > 0 && !bestMatch->value.empty()) {
+      size_t copySize = std::min(static_cast<size_t>(valueSize), bestMatch->value.size());
+      std::memcpy(outValue, bestMatch->value.data(), copySize);
+    }
+    return 1;
   }
 
-  return 1;
+  // No match found
+  return 0;
 }
 
 /// Check if a key exists in the configuration database.
+/// This uses the same matching logic as __moore_config_db_get, so it returns
+/// true if a get() would succeed (including wildcard/hierarchical matches).
 /// @param instName Pointer to the instance name string data
 /// @param instLen Length of the instance name string
 /// @param fieldName Pointer to the field name string data
 /// @param fieldLen Length of the field name string
-/// @return 1 if the key exists, 0 otherwise
+/// @return 1 if the key exists (exact or via pattern), 0 otherwise
 extern "C" int32_t __moore_config_db_exists(const char *instName, int64_t instLen,
                                             const char *fieldName, int64_t fieldLen) {
-  std::string key = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
+  auto [lookupInst, lookupField] = extractNames(instName, instLen, fieldName, fieldLen);
+  std::string exactKey = buildConfigDbKey(instName, instLen, fieldName, fieldLen);
 
   std::lock_guard<std::mutex> lock(__moore_config_db_mutex);
-  return __moore_config_db_storage.find(key) != __moore_config_db_storage.end() ? 1 : 0;
+
+  // Check exact match first
+  if (__moore_config_db_storage.find(exactKey) != __moore_config_db_storage.end()) {
+    return 1;
+  }
+
+  // Check for wildcard/hierarchical matches
+  for (const auto &[key, entry] : __moore_config_db_storage) {
+    if (entry.fieldName == lookupField && pathMatches(entry.instName, lookupInst)) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+/// Clear all entries from the configuration database.
+/// This is useful for test cleanup between test cases.
+extern "C" void __moore_config_db_clear(void) {
+  std::lock_guard<std::mutex> lock(__moore_config_db_mutex);
+  __moore_config_db_storage.clear();
+  __moore_config_db_set_counter.store(0);
 }
 
 //===----------------------------------------------------------------------===//

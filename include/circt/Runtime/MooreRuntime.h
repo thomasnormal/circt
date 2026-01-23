@@ -275,6 +275,13 @@ int32_t __moore_string_cmp(MooreString *lhs, MooreString *rhs);
 /// @return A new string containing the representation
 MooreString __moore_int_to_string(int64_t value);
 
+/// Convert a packed string (integer with ASCII bytes) to a runtime string.
+/// SystemVerilog string literals are packed as integers with characters in
+/// big-endian order (first char in MSB). This function unpacks them.
+/// @param value The packed string value (up to 8 characters in 64-bit)
+/// @return A new string with the unpacked characters
+MooreString __moore_packed_string_to_string(int64_t value);
+
 /// Convert a string to an integer.
 /// Parses a decimal integer from the string.
 /// @param str Pointer to the string to parse
@@ -3316,13 +3323,19 @@ int32_t __moore_config_db_get(void *context, const char *instName,
                               int64_t valueSize);
 
 /// Check if a key exists in the configuration database.
+/// This uses the same matching logic as __moore_config_db_get, so it returns
+/// true if a get() would succeed (including wildcard/hierarchical matches).
 /// @param instName Pointer to the instance name string data
 /// @param instLen Length of the instance name string
 /// @param fieldName Pointer to the field name string data
 /// @param fieldLen Length of the field name string
-/// @return 1 if the key exists, 0 otherwise
+/// @return 1 if the key exists (exact or via pattern), 0 otherwise
 int32_t __moore_config_db_exists(const char *instName, int64_t instLen,
                                  const char *fieldName, int64_t fieldLen);
+
+/// Clear all entries from the configuration database.
+/// This is useful for test cleanup between test cases.
+void __moore_config_db_clear(void);
 
 //===----------------------------------------------------------------------===//
 // UVM Component Hierarchy Support
