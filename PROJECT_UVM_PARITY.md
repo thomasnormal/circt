@@ -19,7 +19,7 @@ Note: Many "failures" are negative tests that correctly reject invalid code.
 | 10 | Assignments | 9/10 (90%) | 1 negative test |
 | 11 | Operators | 76/78 (97%) | 2 negative tests |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
-| 13 | Tasks and Functions | 15/15 (100%) | Complete |
+| 13 | Tasks and Functions | 13/15 (87%) | 2 edge cases |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | - | Codex agent scope |
