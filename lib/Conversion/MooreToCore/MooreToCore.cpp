@@ -9817,15 +9817,19 @@ struct QueuePopBackOpConversion
       auto fn = getOrCreateRuntimeFunc(mod, rewriter,
                                        "__moore_queue_pop_back_ptr", fnTy);
 
+      // Convert resultType to LLVM type for alloca/load operations
+      Type llvmResultType = convertToLLVMType(resultType);
+
       // Allocate space for the result
       auto resultAlloca =
-          LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultType, one);
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmResultType, one);
 
       LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                            ValueRange{queueAlloca, resultAlloca, elemSize});
 
       // Load the result from the alloca
-      Value result = LLVM::LoadOp::create(rewriter, loc, resultType, resultAlloca);
+      Value result =
+          LLVM::LoadOp::create(rewriter, loc, llvmResultType, resultAlloca);
       rewriter.replaceOp(op, result);
     } else {
       // Function signature: i64 pop_back(queue_ptr, element_size)
@@ -9897,15 +9901,19 @@ struct QueuePopFrontOpConversion
       auto fn = getOrCreateRuntimeFunc(mod, rewriter,
                                        "__moore_queue_pop_front_ptr", fnTy);
 
+      // Convert resultType to LLVM type for alloca/load operations
+      Type llvmResultType = convertToLLVMType(resultType);
+
       // Allocate space for the result
       auto resultAlloca =
-          LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultType, one);
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmResultType, one);
 
       LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                            ValueRange{queueAlloca, resultAlloca, elemSize});
 
       // Load the result from the alloca
-      Value result = LLVM::LoadOp::create(rewriter, loc, resultType, resultAlloca);
+      Value result =
+          LLVM::LoadOp::create(rewriter, loc, llvmResultType, resultAlloca);
       rewriter.replaceOp(op, result);
     } else {
       // Function signature: i64 pop_front(queue_ptr, element_size)
