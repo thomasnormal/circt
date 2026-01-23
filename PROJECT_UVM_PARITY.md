@@ -35,12 +35,12 @@
 
 | AVIP | Compilation | Simulation | Notes |
 |------|-------------|------------|-------|
-| AHB | SUCCESS | Tested | Full UVM testbench |
-| APB | SUCCESS | Tested | Full UVM testbench |
+| AHB | SUCCESS | Tested | 294K lines MLIR, 10K cycles, 0 errors |
+| APB | SUCCESS | Tested | 293K lines MLIR, 10K cycles, 0 errors |
 | UART | SUCCESS | Tested | 1.4M MLIR, 1M cycles, 0 errors |
 | SPI | SUCCESS | Tested | 149K lines MLIR, 107 cycles, 0 errors |
 | I2S | SUCCESS | Tested | 17K lines MLIR, 130K cycles, 0 errors |
-| I3C | SUCCESS | Not tested | 264K lines MLIR |
+| I3C | SUCCESS | Tested | 145K lines MLIR, 100K cycles, 0 errors |
 | JTAG | Partial | - | AVIP code issues (not CIRCT) |
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
