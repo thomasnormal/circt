@@ -67,13 +67,14 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 106 Complete)
+### Track Status & Next Tasks (Iteration 108 Complete)
 
-**16+ Chapters at 100% effective:**
+**17+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
 - sv-tests Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-7: **103/103** (100%) ✅
 - sv-tests Chapter-8: **100% effective** (all 9 failures are negative tests)
+- sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅ **NEW**
 - sv-tests Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-12: **27/27** (100%) ✅
 - sv-tests Chapter-13: **15/15** (100%) ✅
@@ -88,7 +89,6 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **Other Chapters:**
 - sv-tests Chapter-9: **97.8%** (1 SVA test - handled by Codex)
-- sv-tests Chapter-10: **90%** (1 hierarchical ref feature gap)
 
 **External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
@@ -99,33 +99,33 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - **4 AVIPs run in circt-sim:** APB, SPI, UART, I3C (clock/reset/UVM_INFO working) ✅
 - **AHB AVIP compiles** with `--single-unit --ignore-unknown-modules` ✅
 
-### Remaining Limitations (Updated Iteration 106)
+### Remaining Limitations (Updated Iteration 108)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
-2. **UVM config_db**: Configuration database for UVM components
-3. **TLM Ports/Exports**: Agent-driver-sequencer communication
-4. **+UVM_TESTNAME parsing**: Command-line test name support
+2. ~~**+UVM_TESTNAME parsing**~~: ✅ IMPLEMENTED (Iter 107) - Command-line test name support
+3. ~~**UVM config_db**~~: ✅ IMPLEMENTED (Iter 108) - Hierarchical/wildcard path matching
+4. **TLM Ports/Exports**: Design doc complete (Iter 108), implementation pending
 
 **For sv-tests Completion:**
 1. **Chapter-9 (97.8%)**: 1 test uses SVA sequence events (Codex agent)
-2. **Chapter-10 (90%)**: 1 test needs hierarchical reference resolution
 
 **For verilator-verification (70.2%):**
 - Most failures are test file syntax bugs, not CIRCT bugs
 - 6 SVA tests (Codex agent)
 - 13 UVM-dependent tests (skip)
 
-### Next Tasks for Tracks
+### Next Tasks for Tracks (Iteration 109)
 
-**Track A**: Run AHB AVIP through circt-sim
-**Track B**: Implement +UVM_TESTNAME command-line parsing
-**Track C**: Investigate UVM config_db implementation
-**Track D**: Test more complex AVIP interactions
+**Track A**: Implement TLM port/export runtime (based on design doc)
+**Track B**: Continue AHB AVIP circt-sim integration (array.locator conversions)
+**Track C**: Chapter-9 SVA sequence event investigation
+**Track D**: Improve verilator-verification pass rate
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops supported** ✅
 - UVM Phase System: **All 9 phases + component callbacks** ✅
+- UVM config_db: **Hierarchical/wildcard matching** ✅ **NEW**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
