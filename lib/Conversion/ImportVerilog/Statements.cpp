@@ -757,6 +757,44 @@ struct StmtVisitor {
   LogicalResult visit(const slang::ast::CaseStatement &caseStmt) {
     using slang::ast::AttributeSymbol;
     using slang::ast::CaseStatementCondition;
+    using slang::ast::ExpressionKind;
+    using slang::ast::TypeReferenceExpression;
+
+    // Handle type reference case statements specially. These are compile-time
+    // constructs where the case expression is a type() operator, and the items
+    // are also type() expressions. We compare types at compile time and emit
+    // only the matching branch.
+    if (caseStmt.expr.kind == ExpressionKind::TypeReference) {
+      const auto &condType =
+          caseStmt.expr.as<TypeReferenceExpression>().targetType;
+
+      // Find the matching branch by comparing types.
+      const slang::ast::Statement *matchedStmt = nullptr;
+      for (const auto &item : caseStmt.items) {
+        for (const auto *expr : item.expressions) {
+          if (expr->kind == ExpressionKind::TypeReference) {
+            const auto &itemType =
+                expr->as<TypeReferenceExpression>().targetType;
+            if (condType.isMatching(itemType)) {
+              matchedStmt = item.stmt;
+              break;
+            }
+          }
+        }
+        if (matchedStmt)
+          break;
+      }
+
+      // If no match found, use the default case.
+      if (!matchedStmt && caseStmt.defaultCase)
+        matchedStmt = caseStmt.defaultCase;
+
+      // Emit the matched statement (or nothing if no match and no default).
+      if (matchedStmt)
+        return context.convertStatement(*matchedStmt);
+      return success();
+    }
+
     auto caseExpr = context.convertRvalueExpression(caseStmt.expr);
     if (!caseExpr)
       return failure();
