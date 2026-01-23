@@ -4242,25 +4242,31 @@ def ConstraintSolveBeforeOp
   }];
 }
 
-def ConstraintDisableOp
-    : MooreOp<"constraint.disable", []> {
-  let summary = "Disable soft constraint";
+def ConstraintDisableSoftOp
+    : MooreOp<"constraint.disable_soft", []> {
+  let summary = "Disable soft constraints on a variable";
   let description = [{
-    Disables a soft constraint by name. This allows overriding soft constraints
-    defined in base classes or earlier in the constraint block.
+    Disables all soft constraints on the specified random variable within the
+    current constraint block. This allows derived classes or later constraints
+    to override soft constraints defined earlier or in base classes.
+
+    The target operand should be a reference to a random variable (rand/randc).
 
     Example:
     ```mlir
-    moore.constraint.disable @soft_limit
+    // disable soft b;
+    %b_ref = moore.class.property_ref %this[@b] : <@MyClass> -> <i32>
+    %b_val = moore.read %b_ref : <i32>
+    moore.constraint.disable_soft %b_val : i32
     ```
 
-    See IEEE 1800-2017 Section 18.5.13 "Soft constraints".
+    See IEEE 1800-2017 Section 18.5.14.2 "Discarding soft constraints".
   }];
 
-  let arguments = (ins SymbolRefAttr:$constraint_name);
+  let arguments = (ins AnyType:$target);
   let results = (outs);
   let assemblyFormat = [{
-    $constraint_name attr-dict
+    $target attr-dict `:` type($target)
   }];
 }
 

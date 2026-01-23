@@ -4777,9 +4777,12 @@ LogicalResult Context::convertConstraint(const slang::ast::Constraint &constrain
     return success();
   }
   case slang::ast::ConstraintKind::DisableSoft: {
-    // Disable-soft constraints require symbol references
-    // For now, emit a warning and skip
-    mlir::emitWarning(loc) << "disable-soft constraint not yet fully supported";
+    const auto &disableSoft =
+        constraint.as<slang::ast::DisableSoftConstraint>();
+    auto targetValue = convertRvalueExpression(disableSoft.target);
+    if (!targetValue)
+      return failure();
+    moore::ConstraintDisableSoftOp::create(builder, loc, targetValue);
     return success();
   }
   case slang::ast::ConstraintKind::Invalid:
