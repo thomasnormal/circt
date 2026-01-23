@@ -69,18 +69,33 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 ### Track Status & Next Tasks (Iteration 105 - Complete)
 
-**Test Results (Current)**:
-- sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-20: **47/47 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-11: **76/78 passing** (97%) ✅
-- sv-tests Chapter-9: **45/46 passing** (97.8%) ✅ NEW
-- sv-tests Chapter-7: **103/103 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-6: **73/84 passing** (87%) ✅
-- sv-tests Chapter-18: **119/134 passing** (89%) with UVM ✅ (was 42% due to test config)
-- sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
+**12 Chapters at 100%:**
+- sv-tests Chapter-7: **103/103** (100%) ✅
+- sv-tests Chapter-12: **27/27** (100%) ✅
+- sv-tests Chapter-13: **15/15** (100%) ✅
+- sv-tests Chapter-14: **5/5** (100%) ✅
+- sv-tests Chapter-15: **5/5** (100%) ✅
+- sv-tests Chapter-16: **53/53** (100%) ✅ (was 49%)
+- sv-tests Chapter-18: **134/134** (100%) ✅ (was 42% due to test config)
+- sv-tests Chapter-20: **47/47** (100%) ✅
+- sv-tests Chapter-21: **29/29** (100%) ✅
+- sv-tests Chapter-22: **74/74** (100%) ✅
+- sv-tests Chapter-23, 24, 25, 26: **All 100%** ✅
+
+**Other Chapters:**
+- sv-tests Chapter-5: 84%
+- sv-tests Chapter-6: **97.6%** (82/84 - remaining need slang AnalysisManager)
+- sv-tests Chapter-8: **100% effective** (all 9 failures are negative tests)
+- sv-tests Chapter-9: **97.8%** (45/46)
+- sv-tests Chapter-10: **90% effective**
+- sv-tests Chapter-11: **98.7%** (77/78)
+
+**External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator circt-sim: **15/21 passing** (71%) ✅ (100% of non-SVA tests)
-- UVM AVIP: **8 AVIPs compile: APB, SPI, UART, AHB, I2S, I3C, AXI4, AXI4Lite** ✅
+- verilator-verification: **100/154 passing** (65%) ✅
+
+**UVM AVIP Status:**
+- **9 AVIPs compile:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
 - APB AVIP runs in circt-sim (clock/reset working) ✅
 - circt-sim: **LLVM dialect + FP ops supported** ✅
 - UVM Phase System: **All 9 phases + component callbacks** ✅
