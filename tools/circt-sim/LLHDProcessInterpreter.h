@@ -480,6 +480,10 @@ private:
 
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;
+
+  /// Map of dynamic string pointers to their content (for runtime string
+  /// handling). Key is the pointer value, value is {data, len}.
+  llvm::DenseMap<int64_t, std::pair<const char *, int64_t>> dynamicStrings;
 };
 
 } // namespace sim

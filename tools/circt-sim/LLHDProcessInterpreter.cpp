@@ -3602,8 +3602,37 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
   // Handle sim.fmt.dyn_string - dynamic string
   if (auto dynStrOp = dyn_cast<sim::FormatDynStringOp>(defOp)) {
     // The dynamic string value is a struct {ptr, len}
-    // For now, we can't directly interpret LLVM struct values
-    // Just return a placeholder
+    // Get the packed value (128-bit: ptr in lower 64, len in upper 64)
+    InterpretedValue structVal = getValue(procId, dynStrOp.getValue());
+
+    // Extract pointer and length from the packed 128-bit value
+    APInt packedVal = structVal.getAPInt();
+    int64_t ptrVal = 0;
+    int64_t lenVal = 0;
+
+    if (packedVal.getBitWidth() >= 128) {
+      ptrVal = packedVal.extractBits(64, 0).getSExtValue();
+      lenVal = packedVal.extractBits(64, 64).getSExtValue();
+    } else if (packedVal.getBitWidth() >= 64) {
+      // Might be a simpler representation
+      ptrVal = packedVal.getSExtValue();
+    }
+
+    // Look up in our dynamic strings registry
+    auto it = dynamicStrings.find(ptrVal);
+    if (it != dynamicStrings.end() && it->second.first && it->second.second > 0) {
+      return std::string(it->second.first, it->second.second);
+    }
+
+    // Fallback: try to interpret as direct pointer
+    if (ptrVal != 0 && lenVal > 0 && lenVal < 1024) {
+      const char *ptr = reinterpret_cast<const char *>(ptrVal);
+      // Safety check - only dereference if it looks valid
+      if (ptr) {
+        return std::string(ptr, lenVal);
+      }
+    }
+
     return "<dynamic string>";
   }
 
@@ -3966,6 +3995,49 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
   // Check if function has a body
   if (funcOp.isExternal()) {
+    // Handle known runtime library functions
+    if (calleeName == "__moore_packed_string_to_string") {
+      // Get the integer argument (packed string value)
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue arg = getValue(procId, callOp.getOperand(0));
+        int64_t value = static_cast<int64_t>(arg.getUInt64());
+
+        // Call the actual runtime function
+        MooreString result = __moore_packed_string_to_string(value);
+
+        // Store the result as a struct {ptr, len}
+        // For the interpreter, we need to track this specially
+        // The result type is !llvm.struct<(ptr, i64)>
+        // We'll store the string content directly and return a special marker
+        if (callOp.getNumResults() >= 1) {
+          // Create a unique ID for this dynamic string
+          // We use the pointer value as the ID
+          auto ptrVal = reinterpret_cast<int64_t>(result.data);
+          auto lenVal = result.len;
+
+          // Store in the dynamic string registry for later retrieval
+          dynamicStrings[ptrVal] = {result.data, result.len};
+
+          // For struct result, we pack ptr (lower 64 bits) and len (upper 64)
+          // But since struct interpretation is complex, we use a simpler approach:
+          // Store the packed value and handle it specially in FormatDynStringOp
+          APInt packedResult(128, 0);
+          packedResult.insertBits(APInt(64, ptrVal), 0);
+          packedResult.insertBits(APInt(64, lenVal), 64);
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(packedResult));
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_packed_string_to_string("
+                     << value << ") = \"";
+                     if (result.data && result.len > 0)
+                       llvm::dbgs().write(result.data, result.len);
+                     llvm::dbgs() << "\"\n");
+        }
+      }
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' is external (no body)\n");
     for (Value result : callOp.getResults()) {
