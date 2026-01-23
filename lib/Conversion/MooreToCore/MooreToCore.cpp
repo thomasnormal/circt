@@ -11930,7 +11930,9 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         // Check if this is a Moore operation that we can convert inline
         if (isa<ClassPropertyRefOp, ReadOp, ConstantOp, DynExtractOp,
                 ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp,
-                ConversionOp, StructExtractOp, StringCmpOp>(definingOp) ||
+                ConversionOp, StructExtractOp, StringCmpOp,
+                ClassHandleCmpOp, WildcardEqOp, WildcardNeOp,
+                IntToLogicOp, ClassNullOp>(definingOp) ||
             isa<func::CallOp>(definingOp)) {
           // Recursively convert the defining operation
           // First, ensure all operands of the defining op are converted
@@ -12294,6 +12296,19 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       Value rhs = getConvertedOperand(andOp.getRhs());
       if (!lhs || !rhs)
         return nullptr;
+
+      // Handle 4-state struct: extract value parts and combine
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value result = comb::AndOp::create(rewriter, loc, lhsVal, rhsVal, false);
+        // Return as 4-state struct with unknown = lhsUnk | rhsUnk
+        Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+        Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+        Value unk = comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+        return createFourStateStruct(rewriter, loc, result, unk);
+      }
+
       return comb::AndOp::create(rewriter, loc, lhs, rhs, false);
     }
 
@@ -12303,6 +12318,19 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       Value rhs = getConvertedOperand(orOp.getRhs());
       if (!lhs || !rhs)
         return nullptr;
+
+      // Handle 4-state struct: extract value parts and combine
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value result = comb::OrOp::create(rewriter, loc, lhsVal, rhsVal, false);
+        // Return as 4-state struct with unknown = lhsUnk | rhsUnk
+        Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+        Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+        Value unk = comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+        return createFourStateStruct(rewriter, loc, result, unk);
+      }
+
       return comb::OrOp::create(rewriter, loc, lhs, rhs, false);
     }
 
@@ -12479,6 +12507,123 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
       // For void calls, return a dummy value (shouldn't be used)
       return nullptr;
+    }
+
+    // Handle moore.class.null - create a null pointer
+    if (auto nullOp = dyn_cast<ClassNullOp>(mooreOp)) {
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      return LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    }
+
+    // Handle moore.class_handle_cmp - compare two class handles
+    if (auto cmpOp = dyn_cast<ClassHandleCmpOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(cmpOp.getLhs());
+      Value rhs = getConvertedOperand(cmpOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      // Map the moore predicate to LLVM icmp predicate
+      LLVM::ICmpPredicate pred;
+      switch (cmpOp.getPredicate()) {
+      case ClassHandleCmpPredicate::eq:
+        pred = LLVM::ICmpPredicate::eq;
+        break;
+      case ClassHandleCmpPredicate::ne:
+        pred = LLVM::ICmpPredicate::ne;
+        break;
+      }
+
+      // Class handles are pointers, use LLVM icmp
+      return LLVM::ICmpOp::create(rewriter, loc, pred, lhs, rhs);
+    }
+
+    // Handle moore.wildcard_eq - wildcard equality comparison
+    if (auto wildcardEqOp = dyn_cast<WildcardEqOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(wildcardEqOp.getLhs());
+      Value rhs = getConvertedOperand(wildcardEqOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      Type resultType =
+          typeConverter->convertType(wildcardEqOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Handle 4-state struct: extract value parts and compare
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value cmpResult = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::eq, lhsVal, rhsVal);
+        // Result is i1, return as 4-state struct {i1, i1}
+        Value zeroI1 =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+        return createFourStateStruct(rewriter, loc, cmpResult, zeroI1);
+      }
+
+      // For plain integers, use icmp
+      return comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq, lhs,
+                                  rhs);
+    }
+
+    // Handle moore.wildcard_ne - wildcard inequality comparison
+    if (auto wildcardNeOp = dyn_cast<WildcardNeOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(wildcardNeOp.getLhs());
+      Value rhs = getConvertedOperand(wildcardNeOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      Type resultType =
+          typeConverter->convertType(wildcardNeOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Handle 4-state struct: extract value parts and compare
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value cmpResult = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, lhsVal, rhsVal);
+        // Result is i1, return as 4-state struct {i1, i1}
+        Value zeroI1 =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+        return createFourStateStruct(rewriter, loc, cmpResult, zeroI1);
+      }
+
+      // For plain integers, use icmp
+      return comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ne, lhs,
+                                  rhs);
+    }
+
+    // Handle moore.int_to_logic - convert integer to logic type
+    if (auto intToLogicOp = dyn_cast<IntToLogicOp>(mooreOp)) {
+      Value input = getConvertedOperand(intToLogicOp.getInput());
+      if (!input)
+        return nullptr;
+
+      Type resultType =
+          typeConverter->convertType(intToLogicOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Convert to 4-state representation: {value, unknown=0}
+      if (isFourStateStructType(resultType)) {
+        auto structType = cast<hw::StructType>(resultType);
+        auto valueType = structType.getElements()[0].type;
+        // Ensure input is the right integer type for the struct
+        if (input.getType() != valueType) {
+          input = hw::BitcastOp::create(rewriter, loc, valueType, input);
+        }
+        // Create struct with unknown=0 (2-state values have no X/Z)
+        Value zero = hw::ConstantOp::create(rewriter, loc, valueType, 0);
+        return createFourStateStruct(rewriter, loc, input, zero);
+      }
+
+      // If same type, just return input
+      if (input.getType() == resultType)
+        return input;
+
+      return hw::BitcastOp::create(rewriter, loc, resultType, input);
     }
 
     // Unsupported operation
