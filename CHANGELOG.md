@@ -27,6 +27,28 @@ Re-verified sv-tests baselines after restoring corrupted circt-verilog binary:
 - Compilation: SUCCESS (17K lines MLIR)
 - Simulation: Started successfully, HDL/BFM initialization messages printed
 
+### Hierarchical Event Reference Investigation
+
+Root cause identified for Chapter-15 failures:
+
+**Problem:** Hierarchical references in procedural blocks (e.g., `-> top.e;` in initial block) fail with "unknown hierarchical name" error.
+
+**Root Cause:** `HierarchicalNames.cpp` `InstBodyVisitor` doesn't traverse `ProceduralBlockSymbol` (initial/always blocks). It handles:
+- VariableSymbol (variable initializers)
+- NetSymbol (net initializers)
+- ContinuousAssignSymbol
+
+But NOT procedural blocks.
+
+**Fix Location:** `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`
+1. Add `ProceduralBlockSymbol` handler to `InstBodyVisitor`
+2. Implement `collectHierarchicalValuesFromStatement()` (declared in header but unimplemented)
+
+### verilator-verification Baseline Confirmed
+
+- 122/154 (79%) - matches expected baseline
+- Failures: signal strengths (13), UVM testbenches (11), random (5), misc (3)
+
 ## Iteration 144 - January 23, 2026
 
 ### AXI4 AVIP Simulation Verified
@@ -95,15 +117,19 @@ base was an interface port; slang represents these as an
 
 **Fix:** Resolve interface instances from hierarchical references (interface
 port → nested interface instance), scope interface instance references per
-module body to avoid cross-region reuse, and add a type-based fallback for
-interface port connections when nested paths are elided.
+module body to avoid cross-region reuse, add a type-based fallback for
+interface port connections when nested paths are elided, and use hierarchical
+interface instance resolution for nested interface signal accesses (e.g.
+`p.child.data`).
 
-**Regression test:** `test/Conversion/ImportVerilog/nested-interface-port-instance.sv`
+**Regression tests:**
+- `test/Conversion/ImportVerilog/nested-interface-port-instance.sv`
+- `test/Conversion/ImportVerilog/nested-interface-signal-access.sv`
 
-**AXI4Lite status:** Re-tested master VIP filelists; prior nested interface
-instance error is gone. New AVIP blocker is a range select in
-`Axi4LiteMasterWriteCoverProperty.sv` when DATA_WIDTH=32 (range [63:24]),
-which appears to be an AVIP source issue (log: `avip-circt-verilog.log`).
+**AXI4Lite status:** Master VIP filelists compile under `circt-verilog`.
+Prior nested interface instance errors are gone; the DATA_WIDTH=32 range
+select in `Axi4LiteMasterWriteCoverProperty.sv` was fixed in the AVIP sources
+by guarding the 64-bit declarations (log: `avip-circt-verilog.log`).
 
 ### UVM Test Coverage Expansion
 
