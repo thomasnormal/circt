@@ -17827,7 +17827,10 @@ static void populateLegality(ConversionTarget &target,
   target.addLegalDialect<mlir::LLVM::LLVMDialect>();
   target.addLegalDialect<verif::VerifDialect>();
   target.addLegalDialect<arith::ArithDialect>();
-  target.addLegalDialect<cf::ControlFlowDialect>();
+  // Note: cf::ControlFlowDialect is NOT added as fully legal here because
+  // cf ops with block arguments need type conversion. The legality for cf
+  // ops is instead handled by populateCFStructuralTypeConversionsAndLegality
+  // which adds dynamic legality based on whether the types are converted.
 
   // arith.select on Moore types needs to be converted to comb.mux.
   // This handles cases where MLIR canonicalizers introduce arith.select
@@ -17944,6 +17947,15 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
   typeConverter.addConversion([&](FormatStringType type) {
     return sim::FormatStringType::get(type.getContext());
   });
+
+  // Add identity conversions for sim types that may appear in CF block arguments
+  // after canonicalization. The CF structural type conversion patterns check
+  // if types are legal using converter.isLegal(type), which requires an identity
+  // conversion for types that are already in their final form.
+  typeConverter.addConversion(
+      [&](sim::FormatStringType type) { return type; });
+  typeConverter.addConversion(
+      [&](sim::DynamicStringType type) { return type; });
 
   typeConverter.addConversion([&](ArrayType type) -> std::optional<Type> {
     if (auto elementType = typeConverter.convertType(type.getElementType()))
