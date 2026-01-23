@@ -2,27 +2,43 @@
 
 ## Iteration 113 - January 23, 2026
 
-### Virtual Method Dispatch in Array Locator Predicates
+### UVM Register Abstraction Layer (RAL) Runtime ✅
 
-Fixed support for virtual method calls on array elements within array locator predicates.
+Implemented comprehensive RAL infrastructure for register verification:
 
-**Pattern from UVM (uvm_sequencer_base.svh:1176):**
-```systemverilog
-q = lock_list.find_first_index(item) with (item.get_inst_id() == seqid);
-```
+**New Runtime Functions:**
+- Register: `__moore_reg_create()`, `read()`, `write()`, `get_value()`, `set_value()`, `mirror()`, `update()`, `predict()`, `reset()`
+- Fields: `__moore_reg_add_field()`, `get_field_value()`, `set_field_value()`
+- Blocks: `__moore_reg_block_create()`, `add_reg()`, `add_block()`, `lock()`, `reset()`
+- Maps: `__moore_reg_map_create()`, `add_reg()`, `add_submap()`, `get_reg_by_addr()`
 
-**Technical Changes:**
-- Implemented proper VTableLoadMethodOp handling in convertMooreOpInline:
-  - Resolves class struct info to get method-to-vtable-index mapping
-  - Generates GEP to vtable pointer field considering inheritance depth
-  - Loads vtable pointer and indexes into vtable array
-  - Loads function pointer for dynamic dispatch
-- Enhanced CallIndirectOp handling for LLVM pointer callees:
-  - Uses LLVM::CallOp for indirect calls through vtable function pointers
-  - Function pointer passed as first operand per LLVM calling convention
-- Added VTableLoadMethodOp and func::CallIndirectOp to recursive conversion list
+**Features:** Mirror/desired tracking, 25 access policies (RO, RW, W1C, etc.), hierarchical blocks, address maps
 
-**Test:** test/Conversion/MooreToCore/array-locator-virtual-method-test.sv
+**Unit Tests:** 22 new tests (590 total runtime tests pass)
+
+**Commit:** `20a238596 [UVM] Add register abstraction layer (RAL) runtime infrastructure`
+
+### Virtual Method Dispatch in Array Locator Predicates ✅
+
+Fixed virtual method calls on array elements within array locator predicates:
+
+**Pattern:** `q = lock_list.find_first_index(item) with (item.get_inst_id() == seqid)`
+
+**Solution:**
+- Enhanced `VTableLoadMethodOp` handler for proper vtable lookup
+- Enhanced `CallIndirectOp` handler for LLVM pointer callees
+
+**AHB AVIP Status:** Virtual method dispatch pattern passes. Next blocker: recursive function calls.
+
+**Commit:** `99b23d25c [MooreToCore] Support virtual method dispatch in array locator predicates`
+
+### verilator-verification Pass Rate: 80.8% ✅
+
+Corrected test count: 141 tests (not 154). Actual pass rate: 80.8% (114/141).
+
+**Key Finding:** 21 of 27 failures are test file syntax issues, not CIRCT bugs.
+
+**Commit:** `5c7714ca9 [Docs] Update verilator-verification results to 80.8% (114/141)`
 
 ---
 
