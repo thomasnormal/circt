@@ -10258,4 +10258,371 @@ TEST(MooreRuntimeUvmTestnameTest, CaseSensitivity) {
   EXPECT_EQ(result.len, 0);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM config_db Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeConfigDbTest, BasicSetAndGet) {
+  __moore_config_db_clear();
+
+  // Set an integer value
+  int64_t setValue = 42;
+  __moore_config_db_set(nullptr, "top.env", 7, "myconfig", 8, &setValue,
+                        sizeof(setValue), 1);
+
+  // Get the value back
+  int64_t getValue = 0;
+  int32_t result = __moore_config_db_get(nullptr, "top.env", 7, "myconfig", 8, 1,
+                                         &getValue, sizeof(getValue));
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(getValue, 42);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, GetNonexistent) {
+  __moore_config_db_clear();
+
+  int64_t getValue = 99;
+  int32_t result = __moore_config_db_get(nullptr, "nonexistent", 11, "field", 5,
+                                         1, &getValue, sizeof(getValue));
+  EXPECT_EQ(result, 0);
+  EXPECT_EQ(getValue, 99);  // Value should be unchanged
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, ExistsExactMatch) {
+  __moore_config_db_clear();
+
+  int64_t value = 100;
+  __moore_config_db_set(nullptr, "top.env", 7, "cfg", 3, &value, sizeof(value), 1);
+
+  EXPECT_EQ(__moore_config_db_exists("top.env", 7, "cfg", 3), 1);
+  EXPECT_EQ(__moore_config_db_exists("top.env", 7, "other", 5), 0);
+  EXPECT_EQ(__moore_config_db_exists("different", 9, "cfg", 3), 0);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, WildcardStarMatchesAll) {
+  __moore_config_db_clear();
+
+  // Set with wildcard "*" (matches all instance paths)
+  int64_t value = 123;
+  __moore_config_db_set(nullptr, "*", 1, "global_cfg", 10, &value,
+                        sizeof(value), 1);
+
+  // Should be retrievable from any path
+  int64_t result1 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top", 3, "global_cfg", 10, 1,
+                                  &result1, sizeof(result1)),
+            1);
+  EXPECT_EQ(result1, 123);
+
+  int64_t result2 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env.agent", 13, "global_cfg", 10,
+                                  1, &result2, sizeof(result2)),
+            1);
+  EXPECT_EQ(result2, 123);
+
+  // Also test exists
+  EXPECT_EQ(__moore_config_db_exists("deep.path.here", 14, "global_cfg", 10), 1);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, WildcardPatternMatching) {
+  __moore_config_db_clear();
+
+  // Set with pattern "*agent*"
+  int64_t value = 456;
+  __moore_config_db_set(nullptr, "*agent*", 7, "agentcfg", 8, &value,
+                        sizeof(value), 1);
+
+  // Should match paths containing "agent"
+  int64_t result1 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.agent", 9, "agentcfg", 8, 1,
+                                  &result1, sizeof(result1)),
+            1);
+  EXPECT_EQ(result1, 456);
+
+  int64_t result2 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env.my_agent.sub", 20, "agentcfg",
+                                  8, 1, &result2, sizeof(result2)),
+            1);
+  EXPECT_EQ(result2, 456);
+
+  // Should NOT match paths without "agent"
+  int64_t result3 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env", 7, "agentcfg", 8, 1,
+                                  &result3, sizeof(result3)),
+            0);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, HierarchicalPrefixMatching) {
+  __moore_config_db_clear();
+
+  // Set at parent path
+  int64_t parentValue = 100;
+  __moore_config_db_set(nullptr, "top.env", 7, "cfg", 3, &parentValue,
+                        sizeof(parentValue), 1);
+
+  // Should be retrievable from child paths (hierarchical matching)
+  int64_t result1 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env.agent", 13, "cfg", 3, 1,
+                                  &result1, sizeof(result1)),
+            1);
+  EXPECT_EQ(result1, 100);
+
+  int64_t result2 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env.agent.driver", 20, "cfg", 3,
+                                  1, &result2, sizeof(result2)),
+            1);
+  EXPECT_EQ(result2, 100);
+
+  // Should NOT match unrelated paths
+  int64_t result3 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.other", 9, "cfg", 3, 1, &result3,
+                                  sizeof(result3)),
+            0);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, SpecificPathTakesPrecedence) {
+  __moore_config_db_clear();
+
+  // Set with wildcard first
+  int64_t wildcardValue = 1;
+  __moore_config_db_set(nullptr, "*", 1, "cfg", 3, &wildcardValue,
+                        sizeof(wildcardValue), 1);
+
+  // Set at specific path (more specific)
+  int64_t specificValue = 2;
+  __moore_config_db_set(nullptr, "top.env", 7, "cfg", 3, &specificValue,
+                        sizeof(specificValue), 1);
+
+  // Exact match should return specific value
+  int64_t result1 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env", 7, "cfg", 3, 1, &result1,
+                                  sizeof(result1)),
+            1);
+  EXPECT_EQ(result1, 2);
+
+  // Child of specific path should also get specific value (hierarchical)
+  int64_t result2 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env.agent", 13, "cfg", 3, 1,
+                                  &result2, sizeof(result2)),
+            1);
+  EXPECT_EQ(result2, 2);
+
+  // Unrelated path should get wildcard value
+  int64_t result3 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "other.path", 10, "cfg", 3, 1,
+                                  &result3, sizeof(result3)),
+            1);
+  EXPECT_EQ(result3, 1);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, LastSetWinsForSamePath) {
+  __moore_config_db_clear();
+
+  // Set same key twice
+  int64_t value1 = 100;
+  __moore_config_db_set(nullptr, "top.env", 7, "cfg", 3, &value1, sizeof(value1),
+                        1);
+
+  int64_t value2 = 200;
+  __moore_config_db_set(nullptr, "top.env", 7, "cfg", 3, &value2, sizeof(value2),
+                        1);
+
+  // Should get the last set value
+  int64_t result = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.env", 7, "cfg", 3, 1, &result,
+                                  sizeof(result)),
+            1);
+  EXPECT_EQ(result, 200);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, StringValueStorage) {
+  __moore_config_db_clear();
+
+  // Set a string value (as raw bytes)
+  char str[] = "hello world";
+  int64_t strLen = 11;
+  __moore_config_db_set(nullptr, "top", 3, "message", 7, str, strLen, 2);
+
+  // Get it back
+  char buffer[32] = {0};
+  int32_t result = __moore_config_db_get(nullptr, "top", 3, "message", 7, 2,
+                                         buffer, sizeof(buffer));
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(std::string(buffer, strLen), "hello world");
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, EmptyInstName) {
+  __moore_config_db_clear();
+
+  // Set with empty instance name
+  int64_t value = 999;
+  __moore_config_db_set(nullptr, "", 0, "root_cfg", 8, &value, sizeof(value), 1);
+
+  // Should be retrievable with empty instance name
+  int64_t result = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "", 0, "root_cfg", 8, 1, &result,
+                                  sizeof(result)),
+            1);
+  EXPECT_EQ(result, 999);
+
+  __moore_config_db_clear();
+}
+
+TEST(MooreRuntimeConfigDbTest, ClearRemovesAllEntries) {
+  __moore_config_db_clear();
+
+  // Add multiple entries
+  int64_t v1 = 1, v2 = 2, v3 = 3;
+  __moore_config_db_set(nullptr, "a", 1, "f1", 2, &v1, sizeof(v1), 1);
+  __moore_config_db_set(nullptr, "b", 1, "f2", 2, &v2, sizeof(v2), 1);
+  __moore_config_db_set(nullptr, "*", 1, "f3", 2, &v3, sizeof(v3), 1);
+
+  // Verify they exist
+  EXPECT_EQ(__moore_config_db_exists("a", 1, "f1", 2), 1);
+  EXPECT_EQ(__moore_config_db_exists("b", 1, "f2", 2), 1);
+  EXPECT_EQ(__moore_config_db_exists("c", 1, "f3", 2), 1);  // via wildcard
+
+  // Clear
+  __moore_config_db_clear();
+
+  // Verify they're gone
+  EXPECT_EQ(__moore_config_db_exists("a", 1, "f1", 2), 0);
+  EXPECT_EQ(__moore_config_db_exists("b", 1, "f2", 2), 0);
+  EXPECT_EQ(__moore_config_db_exists("c", 1, "f3", 2), 0);
+}
+
+TEST(MooreRuntimeConfigDbTest, WildcardQuestionMark) {
+  __moore_config_db_clear();
+
+  // Set with pattern "top.agent?" (matches "top.agent0", "top.agentX", etc.)
+  int64_t value = 777;
+  __moore_config_db_set(nullptr, "top.agent?", 10, "cfg", 3, &value,
+                        sizeof(value), 1);
+
+  // Should match single character after "agent"
+  int64_t result1 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.agent0", 10, "cfg", 3, 1,
+                                  &result1, sizeof(result1)),
+            1);
+  EXPECT_EQ(result1, 777);
+
+  int64_t result2 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.agentX", 10, "cfg", 3, 1,
+                                  &result2, sizeof(result2)),
+            1);
+  EXPECT_EQ(result2, 777);
+
+  // Should NOT match without the extra character
+  int64_t result3 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.agent", 9, "cfg", 3, 1, &result3,
+                                  sizeof(result3)),
+            0);
+
+  // Should NOT match with multiple extra characters
+  int64_t result4 = 0;
+  EXPECT_EQ(__moore_config_db_get(nullptr, "top.agent123", 12, "cfg", 3, 1,
+                                  &result4, sizeof(result4)),
+            0);
+
+  __moore_config_db_clear();
+}
+
+//===----------------------------------------------------------------------===//
+// Packed String to String Conversion Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeStringTest, PackedStringToString) {
+  // "HDL_TOP" packed into 56 bits (7 chars * 8 bits)
+  // Big-endian: first char in MSB
+  // 'H'=0x48, 'D'=0x44, 'L'=0x4C, '_'=0x5F, 'T'=0x54, 'O'=0x4F, 'P'=0x50
+  // Packed: 0x48444C5F544F50
+  int64_t packedHdlTop = 0x48444C5F544F50LL;
+  MooreString result = __moore_packed_string_to_string(packedHdlTop);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 7);
+  EXPECT_EQ(std::string(result.data, result.len), "HDL_TOP");
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeStringTest, PackedStringToStringShort) {
+  // Test "ABC" (3 chars)
+  int64_t packedAbc = 0x414243LL; // 'A'=0x41, 'B'=0x42, 'C'=0x43
+  MooreString result = __moore_packed_string_to_string(packedAbc);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 3);
+  EXPECT_EQ(std::string(result.data, result.len), "ABC");
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeStringTest, PackedStringToStringSingleChar) {
+  // Test single character "X" (1 char)
+  int64_t packedX = 0x58LL; // 'X'=0x58
+  MooreString result = __moore_packed_string_to_string(packedX);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 1);
+  EXPECT_EQ(result.data[0], 'X');
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeStringTest, PackedStringToStringEmpty) {
+  // Test empty/zero value
+  MooreString result = __moore_packed_string_to_string(0);
+  EXPECT_TRUE(result.data == nullptr || result.len == 0);
+}
+
+TEST(MooreRuntimeStringTest, PackedStringToStringMaxLength) {
+  // Test max length (8 characters)
+  // "ABCDEFGH" packed
+  int64_t packed8 = 0x4142434445464748LL;
+  MooreString result = __moore_packed_string_to_string(packed8);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 8);
+  EXPECT_EQ(std::string(result.data, result.len), "ABCDEFGH");
+  __moore_free(result.data);
+}
+
+//===----------------------------------------------------------------------===//
+// Int to String (Decimal) Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeStringTest, IntToStringPositive) {
+  MooreString result = __moore_int_to_string(123);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "123");
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeStringTest, IntToStringZero) {
+  MooreString result = __moore_int_to_string(0);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "0");
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeStringTest, IntToStringLargeValue) {
+  // Max 32-bit unsigned
+  MooreString result = __moore_int_to_string(4294967295ULL);
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "4294967295");
+  __moore_free(result.data);
+}
+
 } // namespace
