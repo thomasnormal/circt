@@ -1,5 +1,71 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 110 - January 23, 2026
+
+### UVM Objection System Runtime ✅
+
+Implemented comprehensive UVM objection system for phase control:
+
+**New Runtime Functions (include/circt/Runtime/MooreRuntime.h):**
+- `__moore_objection_create()` - Create an objection pool for a phase
+- `__moore_objection_destroy()` - Destroy an objection pool
+- `__moore_objection_raise()` - Raise objection with context and description
+- `__moore_objection_drop()` - Drop objection with context
+- `__moore_objection_get_count()` - Get total objection count
+- `__moore_objection_get_count_by_context()` - Get per-context count
+- `__moore_objection_set_drain_time()` / `get_drain_time()` - Drain time configuration
+- `__moore_objection_wait_for_zero()` - Blocking wait for zero objections
+- `__moore_objection_is_zero()` - Non-blocking check
+- `__moore_objection_set_trace_enabled()` - Debug tracing
+
+**Features:**
+- Thread-safe with mutex and condition variable synchronization
+- Per-context objection tracking with descriptions
+- Hierarchical context support matching UVM component paths
+- Drain time support for phase transition delays
+
+**Unit Tests:** 12 new objection tests (537 total runtime tests pass)
+
+**Commit:** `bab89cfa0 [UVM] Add objection system runtime for phase control`
+
+### Enable --allow-nonprocedural-dynamic by Default ✅
+
+Changed the default for `--allow-nonprocedural-dynamic` flag to `true`:
+
+**Problem:** 16 verilator-verification tests failed with "cannot refer to an element or member of a dynamic type outside of a procedural context" when using patterns like `assign o = obj.val;`.
+
+**Solution:** Enable automatic conversion of such assignments to `always_comb` blocks by default. Strict mode still available with `--allow-nonprocedural-dynamic=false`.
+
+**Result:** verilator-verification pass rate improved from 62.3% to **72.1%** (+15 tests)
+
+**Commit:** `f71203f2d [ImportVerilog] Enable --allow-nonprocedural-dynamic by default`
+
+### AHB AVIP Investigation (Blocker Documented)
+
+Found blocker when compiling AHB AVIP through circt-verilog:
+
+**Issue:** Array locator method with function call containing external values
+```systemverilog
+lock_req_indices = arb_sequence_q.find_first_index(item) with
+  (item.request==SEQ_TYPE_LOCK && is_blocked(item.sequence_ptr) == 0);
+```
+
+**Root Cause:** When converting `func.call` inside array locator predicates, values from outer scope (like `this` pointer) become invalid SSA values after function signature conversion.
+
+**Location:** `MooreToCore.cpp` ArrayLocatorOpConversion pattern
+
+### sv-tests Chapter-9 Analysis
+
+**Results:**
+- Pass rate: 89.1% effective (41/46)
+- 40 direct passes, 1 correctly rejected negative test
+- 4 failures: `process` class tests (fundamental limitation with multi-block functions)
+- 1 failure: SVA sequence event test (Codex agent)
+
+**Process Class Blocker:** Tasks with control flow (`foreach`, `fork-join_none`) create multi-block MLIR functions that cannot be inlined into `seq.initial` single-block regions.
+
+---
+
 ## Iteration 109 - January 23, 2026
 
 ### TLM Port/Export Runtime Infrastructure ✅
