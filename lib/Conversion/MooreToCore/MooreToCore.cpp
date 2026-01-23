@@ -4227,11 +4227,16 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
   matchAndRewrite(NetOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    // Support wire and interconnect nets. Interconnect nets are used for
-    // connecting signals with potentially different types but can be treated
-    // as wires for lowering purposes.
-    if (op.getKind() != NetKind::Wire && op.getKind() != NetKind::Interconnect)
-      return rewriter.notifyMatchFailure(loc, "only wire/interconnect nets supported");
+    auto kind = op.getKind();
+
+    // Support wire, interconnect, supply0, and supply1 nets.
+    // Interconnect nets are used for connecting signals with potentially
+    // different types but can be treated as wires for lowering purposes.
+    // Supply0/supply1 are constant-driven nets (ground/power).
+    if (kind != NetKind::Wire && kind != NetKind::Interconnect &&
+        kind != NetKind::Supply0 && kind != NetKind::Supply1)
+      return rewriter.notifyMatchFailure(
+          loc, "only wire/interconnect/supply0/supply1 nets supported");
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
     if (!resultType)
@@ -4247,9 +4252,21 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     int64_t width = hw::getBitWidth(elementType);
     if (width == -1)
       return failure();
-    auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
-    auto init =
-        rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+
+    // For supply0/supply1 nets, initialize to the appropriate constant value.
+    // supply0 = always 0 (ground), supply1 = always 1 (all ones).
+    Value init;
+    if (kind == NetKind::Supply0) {
+      auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
+      init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+    } else if (kind == NetKind::Supply1) {
+      auto constOne =
+          hw::ConstantOp::create(rewriter, loc, APInt::getAllOnes(width));
+      init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constOne);
+    } else {
+      auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
+      init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+    }
 
     auto signal = rewriter.replaceOpWithNewOp<llhd::SignalOp>(
         op, resultType, op.getNameAttr(), init);
@@ -12887,6 +12904,31 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         if (converted) {
           valueMap[operand] = converted;
           continue;
+        }
+
+        // Special handling for block arguments from enclosing functions.
+        // When a function's signature is converted, the old block arguments are
+        // replaced with new ones. Operations in nested regions (like this
+        // predicate body) still reference the old arguments, but those have
+        // been invalidated. We need to find the new block argument at the
+        // corresponding position in the converted function.
+        //
+        // Since the operand might be an invalidated block argument (after
+        // signature conversion), we can't safely call methods on it. Instead,
+        // we look at the parent function and get its current block arguments.
+        if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+          // Get the enclosing function's entry block
+          auto funcOp = op->getParentOfType<func::FuncOp>();
+          if (funcOp) {
+            Block &entryBlock = funcOp.getBody().front();
+            unsigned argIndex = blockArg.getArgNumber();
+            // The entry block should have the converted arguments
+            if (argIndex < entryBlock.getNumArguments()) {
+              Value newBlockArg = entryBlock.getArgument(argIndex);
+              valueMap[operand] = newBlockArg;
+              continue;
+            }
+          }
         }
 
         // For external values defined by operations, try to convert the type

@@ -2,8 +2,8 @@
 
 ## Summary
 
-### Pass Rate: 72.7% (112/154 tests) - Default
-Previously: 72.1% (111/154 tests)
+### Pass Rate: 73.4% (113/154 tests) - Default
+Previously: 72.7% (112/154 tests)
 Originally: 62.3% (96/154 tests) without --allow-nonprocedural-dynamic flag
 
 **IMPROVEMENT**: The `--allow-nonprocedural-dynamic` flag is now **enabled by default**,
@@ -32,7 +32,7 @@ assignments that access class members to `always_comb` blocks.
 | random-variables/ | 2 | 5 | 3 fail (pre/post_randomize, randsequence) |
 | rand-types/ | 4 | 4 | All passing |
 | sequences/ | 0 | 6 | All fail (SVA syntax - out of scope) |
-| signal-strengths/ | 15 | 18 | 3 fail (param initializers) |
+| signal-strengths/ | 16 | 18 | 2 fail (param initializers), supply1 now works |
 | signal-strengths-should-fail/ | 0 | 4 | Expected failures |
 | test-plusargs-variable/ | 1 | 1 | All passing |
 | unpacked-structs/ | 2 | 2 | All passing |
@@ -146,7 +146,22 @@ Both forms:
 
 ## Files Changed in This Update
 
-### Latest Update (Iteration 111): String Methods in Array Locator Predicates
+### Latest Update (Iteration 94): Supply Net Support
+
+1. `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+   - Extended `NetOpConversion` to support `supply0` and `supply1` net types
+   - `supply0` nets are initialized to all zeros (ground)
+   - `supply1` nets are initialized to all ones (power)
+
+2. `test/Conversion/ImportVerilog/supply-nets.sv`:
+   - Added test for supply0 and supply1 net lowering
+
+3. `test/Conversion/MooreToCore/basic.mlir`:
+   - Added tests for supply0 and supply1 net conversion
+
+**Newly Passing Test**: `tests/signal-strengths/supply1_net.sv`
+
+### Previous Update (Iteration 111): String Methods in Array Locator Predicates
 
 1. `lib/Conversion/MooreToCore/MooreToCore.cpp`:
    - Added `StringToLowerOp` and `StringToUpperOp` to the list of operations that can be
