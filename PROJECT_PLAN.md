@@ -67,7 +67,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 109 Complete)
+### Track Status & Next Tasks (Iteration 110 Complete)
 
 **17+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
@@ -88,46 +88,51 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - sv-tests Chapter-23, 24, 25, 26: **All 100%** ✅
 
 **Other Chapters:**
-- sv-tests Chapter-9: **97.8%** (1 SVA test - handled by Codex)
+- sv-tests Chapter-9: **89.1% effective** (4 process class tests + 1 SVA test)
 
 **External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator-verification: **65.6%** standard, **75.3%** with --allow-nonprocedural-dynamic ✅
+- verilator-verification: **72.1%** (111/154 passing) ✅ **IMPROVED (Iter 110)**
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
 - **4 AVIPs run in circt-sim:** APB, SPI, UART, I3C (clock/reset/UVM_INFO working) ✅
 - **AHB AVIP compiles** with `--single-unit --ignore-unknown-modules` ✅
 
-### Remaining Limitations (Updated Iteration 109)
+### Remaining Limitations (Updated Iteration 110)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
 2. ~~**+UVM_TESTNAME parsing**~~: ✅ IMPLEMENTED (Iter 107) - Command-line test name support
 3. ~~**UVM config_db**~~: ✅ IMPLEMENTED (Iter 108) - Hierarchical/wildcard path matching
 4. ~~**TLM Ports/Exports**~~: ✅ IMPLEMENTED (Iter 109) - Runtime infrastructure for analysis ports/FIFOs
+5. ~~**UVM Objections**~~: ✅ IMPLEMENTED (Iter 110) - Objection system for phase control
+6. **Array locator with external function calls**: Values from outer scope become invalid SSA values during conversion (blocker for AHB AVIP)
 
 **For sv-tests Completion:**
-1. **Chapter-9 (97.8%)**: 1 test uses SVA sequence events (Codex agent)
+1. **Chapter-9 (89.1%)**:
+   - 4 process class tests (multi-block function inline limitation)
+   - 1 SVA sequence event test (Codex agent)
 
-**For verilator-verification (75.3% with flag):**
-- Non-procedural dynamic constructs: 15 tests (requires --allow-nonprocedural-dynamic)
+**For verilator-verification (72.1%):**
 - UVM-dependent tests: 13 tests (skip)
 - SVA tests: 6 tests (Codex agent)
 - Non-LRM-compliant syntax: Various tests
+- Non-procedural dynamic: ✅ FIXED (Iter 110) - Now enabled by default
 
-### Next Tasks for Tracks (Iteration 110)
+### Next Tasks for Tracks (Iteration 111)
 
-**Track A**: UVM objection system runtime (raise/drop/drain objections)
-**Track B**: AHB AVIP end-to-end circt-sim execution
-**Track C**: sv-tests Chapter-9 remaining failures
-**Track D**: verilator-verification non-procedural dynamic support
+**Track A**: Fix array locator with external function calls (AHB AVIP blocker)
+**Track B**: UVM sequence/sequencer runtime infrastructure
+**Track C**: Multi-block function inlining for process class tests
+**Track D**: Additional verilator-verification improvements
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops supported** ✅
 - UVM Phase System: **All 9 phases + component callbacks** ✅
 - UVM config_db: **Hierarchical/wildcard matching** ✅
-- UVM TLM Ports: **Analysis port/FIFO runtime** ✅ **NEW (Iter 109)**
+- UVM TLM Ports: **Analysis port/FIFO runtime** ✅
+- UVM Objections: **Raise/drop/drain with threading** ✅ **NEW (Iter 110)**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
