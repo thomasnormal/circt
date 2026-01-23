@@ -11930,7 +11930,8 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         // Check if this is a Moore operation that we can convert inline
         if (isa<ClassPropertyRefOp, ReadOp, ConstantOp, DynExtractOp,
                 ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp,
-                ConversionOp>(definingOp)) {
+                ConversionOp, StructExtractOp, StringCmpOp>(definingOp) ||
+            isa<func::CallOp>(definingOp)) {
           // Recursively convert the defining operation
           // First, ensure all operands of the defining op are converted
           for (Value operand : definingOp->getOperands()) {
@@ -12409,6 +12410,75 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         break;
       }
       return arith::CmpIOp::create(rewriter, loc, arithPred, cmpResult, zero);
+    }
+
+    // Handle moore.struct_extract
+    if (auto structExtractOp = dyn_cast<StructExtractOp>(mooreOp)) {
+      Value input = getConvertedOperand(structExtractOp.getInput());
+      if (!input)
+        return nullptr;
+
+      Type resultType =
+          typeConverter->convertType(structExtractOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      auto fieldName = structExtractOp.getFieldName();
+
+      // Handle LLVM struct type
+      if (auto llvmStructTy =
+              dyn_cast<LLVM::LLVMStructType>(input.getType())) {
+        // LLVM struct needs ExtractValueOp with index
+        // Look up field index from Moore struct type
+        auto mooreStructTy =
+            cast<UnpackedStructType>(structExtractOp.getInput().getType());
+        unsigned fieldIdx = 0;
+        for (const auto &member : mooreStructTy.getMembers()) {
+          if (member.name == fieldName)
+            break;
+          ++fieldIdx;
+        }
+        return LLVM::ExtractValueOp::create(rewriter, loc, input,
+                                            ArrayRef<int64_t>{fieldIdx});
+      }
+
+      // Handle hw::StructType
+      if (auto hwStructTy = dyn_cast<hw::StructType>(input.getType())) {
+        return hw::StructExtractOp::create(rewriter, loc, input, fieldName);
+      }
+
+      return nullptr;
+    }
+
+    // Handle func::CallOp - pass through to LLVM call
+    if (auto callOp = dyn_cast<func::CallOp>(mooreOp)) {
+      // Convert all operands
+      SmallVector<Value> convertedOperands;
+      for (Value operand : callOp.getOperands()) {
+        Value converted = getConvertedOperand(operand);
+        if (!converted)
+          return nullptr;
+        convertedOperands.push_back(converted);
+      }
+
+      // Convert result type (if any)
+      SmallVector<Type> convertedResultTypes;
+      for (Type resultType : callOp.getResultTypes()) {
+        Type converted = typeConverter->convertType(resultType);
+        if (!converted)
+          return nullptr;
+        convertedResultTypes.push_back(converted);
+      }
+
+      // Create the call operation
+      auto newCallOp = func::CallOp::create(rewriter, loc, callOp.getCallee(),
+                                            convertedResultTypes,
+                                            convertedOperands);
+      if (newCallOp.getNumResults() > 0)
+        return newCallOp.getResult(0);
+
+      // For void calls, return a dummy value (shouldn't be used)
+      return nullptr;
     }
 
     // Unsupported operation
@@ -14269,7 +14339,10 @@ struct StringICompareOpConversion
   }
 };
 
-// moore.int_to_string -> call to __moore_int_to_string runtime function
+// moore.int_to_string -> call to __moore_packed_string_to_string runtime
+// function. This operation is used to convert packed string literals (where
+// ASCII characters are stored in an integer) to runtime string values.
+// See IEEE 1800-2017 section 5.9 "String literals".
 struct IntToStringOpConversion : public OpConversionPattern<IntToStringOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -14298,8 +14371,9 @@ struct IntToStringOpConversion : public OpConversionPattern<IntToStringOp> {
     }
 
     auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
-    auto runtimeFn =
-        getOrCreateRuntimeFunc(mod, rewriter, "__moore_int_to_string", fnTy);
+    // Use packed_string_to_string to decode ASCII bytes from the integer
+    auto runtimeFn = getOrCreateRuntimeFunc(
+        mod, rewriter, "__moore_packed_string_to_string", fnTy);
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
                                      SymbolRefAttr::get(runtimeFn),
