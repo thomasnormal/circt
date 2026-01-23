@@ -67,7 +67,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 103 - Complete)
+### Track Status & Next Tasks (Iteration 104 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
@@ -75,12 +75,13 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - sv-tests Chapter-7: **103/103 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-11: **78/78 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-18: **119/134 passing** (89%) ✅ (15 XFAIL remaining)
-- sv-tests Chapter-6: **69/84 passing** (82%) ✅ +6 tests (string methods)
+- sv-tests Chapter-6: **72/84 passing** (85%) ✅ +3 tests (TypeRef, nettype)
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
 - verilator circt-sim: **15/21 passing** (71%) ✅ (100% of non-SVA tests)
-- UVM AVIP: **APB, SPI, UART, AHB compile to LLHD** ✅
+- UVM AVIP: **APB, SPI, UART, AHB, I2S compile to LLHD** ✅ (+I2S)
 - circt-sim: **LLVM dialect + FP ops supported** ✅
+- UVM Phase System: **All 9 phases implemented** ✅
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
@@ -103,17 +104,21 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 18. ✅ UVM run_test() runtime stub (Iteration 103)
 19. ✅ LLVM float ops in interpreter (Iteration 103)
 20. ✅ String conversion methods (Iteration 103)
+21. ✅ UVM phase system (Iteration 104)
+22. ✅ UVM recursive function stubs (Iteration 104)
+23. ✅ Fixed-to-dynamic array conversion (Iteration 104)
+24. ✅ TypeReference handling (Iteration 104)
 
 **Remaining Limitations**:
 1. **Sibling Hierarchical Refs** - extnets.sv (cross-module wire refs)
-2. **UVM Recursive Functions** - UVM inlining limitation for --ir-hw
-3. **SVA Sequence Tests** - 6 verilator-verification tests (Codex handling SVA)
+2. **SVA Sequence Tests** - 6 verilator-verification tests (Codex handling SVA)
+3. **Class Method Inlining** - Virtual method dispatch for complex UVM patterns
 
-**Active Workstreams (Next)**:
-1. **Track A: UVM Phase System** - Implement build/run phases
-2. **Track B: Chapter-6 Progress** - Fix remaining string tests
-3. **Track C: Recursive Function Inlining** - Fix UVM recursion issue
-4. **Track D: More AVIP Testing** - Test AXI4Lite, I3C, etc.
+**Active Workstreams (Iteration 105)**:
+1. **Track A: UVM Component Callbacks** - Hook phase methods to actual component code
+2. **Track B: Chapter-6 to 90%** - Continue fixing remaining tests
+3. **Track C: Chapter-18 Progress** - Address 15 remaining XFAIL tests
+4. **Track D: More AVIP Testing** - Test AXI4Lite, I3C, GPIO AVIPs
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
