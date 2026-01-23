@@ -56,6 +56,8 @@ package uvm_pkg;
   typedef class uvm_component_registry;
   typedef class uvm_tr_database;
   typedef class uvm_report_server;
+  typedef class uvm_report_handler;
+  typedef class uvm_report_message;
   typedef class uvm_resource_base;
   typedef class uvm_resource_pool;
   typedef class uvm_default_coreservice_t;
@@ -140,6 +142,12 @@ package uvm_pkg;
     UVM_STOP           = 'h20,
     UVM_RM_RECORD      = 'h40
   } uvm_action_type;
+
+  // uvm_action is a bitfield of action flags (can combine multiple actions)
+  typedef int uvm_action;
+
+  // UVM_FILE is a file handle type
+  typedef int UVM_FILE;
 
   // Active/passive enum for agents
   typedef enum bit {
@@ -746,34 +754,69 @@ package uvm_pkg;
   //=========================================================================
   class uvm_report_object extends uvm_object;
     protected int m_verbosity = UVM_MEDIUM;
+    protected uvm_report_handler m_rh;
 
     function new(string name = "");
       super.new(name);
     endfunction
 
+    // Get the report handler for this object
+    virtual function uvm_report_handler get_report_handler();
+      if (m_rh == null)
+        m_rh = new("report_handler");
+      return m_rh;
+    endfunction
+
+    // Set a custom report handler
+    virtual function void set_report_handler(uvm_report_handler handler);
+      m_rh = handler;
+    endfunction
+
     virtual function void uvm_report_info(string id, string message,
                                           int verbosity = UVM_MEDIUM,
                                           string filename = "", int line = 0);
-      if (verbosity <= m_verbosity)
-        $display("[%0t] UVM_INFO %s (%s) %s", $time, get_full_name(), id, message);
+      uvm_report_server server = uvm_report_server::get_server();
+      if (verbosity <= m_verbosity) begin
+        if (report_hook(id, message, verbosity, filename, line)) begin
+          $display("[%0t] UVM_INFO %s (%s) %s", $time, get_full_name(), id, message);
+          server.incr_severity_count(UVM_INFO);
+          server.incr_id_count(id);
+        end
+      end
     endfunction
 
     virtual function void uvm_report_warning(string id, string message,
                                              int verbosity = UVM_MEDIUM,
                                              string filename = "", int line = 0);
-      $display("[%0t] UVM_WARNING %s (%s) %s", $time, get_full_name(), id, message);
+      uvm_report_server server = uvm_report_server::get_server();
+      if (report_hook(id, message, verbosity, filename, line)) begin
+        $display("[%0t] UVM_WARNING %s (%s) %s", $time, get_full_name(), id, message);
+        server.incr_severity_count(UVM_WARNING);
+        server.incr_id_count(id);
+      end
     endfunction
 
     virtual function void uvm_report_error(string id, string message,
                                            int verbosity = UVM_LOW,
                                            string filename = "", int line = 0);
-      $display("[%0t] UVM_ERROR %s (%s) %s", $time, get_full_name(), id, message);
+      uvm_report_server server = uvm_report_server::get_server();
+      if (report_hook(id, message, verbosity, filename, line)) begin
+        $display("[%0t] UVM_ERROR %s (%s) %s", $time, get_full_name(), id, message);
+        server.incr_severity_count(UVM_ERROR);
+        server.incr_id_count(id);
+        server.incr_quit_count();
+      end
     endfunction
 
     virtual function void uvm_report_fatal(string id, string message,
                                            int verbosity = UVM_NONE,
                                            string filename = "", int line = 0);
-      $display("[%0t] UVM_FATAL %s (%s) %s", $time, get_full_name(), id, message);
+      uvm_report_server server = uvm_report_server::get_server();
+      if (report_hook(id, message, verbosity, filename, line)) begin
+        $display("[%0t] UVM_FATAL %s (%s) %s", $time, get_full_name(), id, message);
+        server.incr_severity_count(UVM_FATAL);
+        server.incr_id_count(id);
+      end
     endfunction
 
     virtual function void set_report_verbosity_level(int verbosity);
@@ -782,6 +825,79 @@ package uvm_pkg;
 
     virtual function int get_report_verbosity_level();
       return m_verbosity;
+    endfunction
+
+    // Report hook - override to customize report handling
+    // Return 1 to allow message, 0 to suppress
+    virtual function bit report_hook(
+      string id,
+      string message,
+      int verbosity,
+      string filename,
+      int line
+    );
+      // Default: allow all messages
+      return 1;
+    endfunction
+
+    // Set max quit count on the report server
+    virtual function void set_report_max_quit_count(int count);
+      uvm_report_server server = uvm_report_server::get_server();
+      server.set_max_quit_count(count);
+    endfunction
+
+    // Get max quit count from the report server
+    virtual function int get_report_max_quit_count();
+      uvm_report_server server = uvm_report_server::get_server();
+      return server.get_max_quit_count();
+    endfunction
+
+    // Action configuration methods
+    virtual function void set_report_severity_action(uvm_severity severity, uvm_action action);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_severity_action(severity, action);
+    endfunction
+
+    virtual function void set_report_id_action(string id, uvm_action action);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_id_action(id, action);
+    endfunction
+
+    virtual function void set_report_severity_id_action(uvm_severity severity, string id, uvm_action action);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_severity_id_action(severity, id, action);
+    endfunction
+
+    // Verbosity configuration methods
+    virtual function void set_report_id_verbosity(string id, int verbosity);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_id_verbosity(id, verbosity);
+    endfunction
+
+    virtual function void set_report_severity_id_verbosity(uvm_severity severity, string id, int verbosity);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_severity_id_verbosity(severity, id, verbosity);
+    endfunction
+
+    // File handle configuration methods
+    virtual function void set_report_default_file(UVM_FILE file);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_default_file(file);
+    endfunction
+
+    virtual function void set_report_severity_file(uvm_severity severity, UVM_FILE file);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_severity_file(severity, file);
+    endfunction
+
+    virtual function void set_report_id_file(string id, UVM_FILE file);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_id_file(id, file);
+    endfunction
+
+    virtual function void set_report_severity_id_file(uvm_severity severity, string id, UVM_FILE file);
+      uvm_report_handler rh = get_report_handler();
+      rh.set_severity_id_file(severity, id, file);
     endfunction
 
     // Returns this object as a report object (compatibility with real UVM)
@@ -5152,6 +5268,261 @@ package uvm_pkg;
   endclass
 
   //=========================================================================
+  // uvm_report_message - Encapsulates report message data
+  //=========================================================================
+  // The uvm_report_message class holds all the information about a single
+  // report message including severity, id, message text, verbosity, etc.
+  //=========================================================================
+  class uvm_report_message extends uvm_object;
+    protected uvm_severity m_severity;
+    protected string m_id;
+    protected string m_message;
+    protected int m_verbosity;
+    protected string m_filename;
+    protected int m_line;
+    protected string m_context_name;
+    protected uvm_action m_action;
+    protected UVM_FILE m_file;
+    protected uvm_report_object m_report_object;
+    protected uvm_report_handler m_report_handler;
+    protected uvm_report_server m_report_server;
+
+    function new(string name = "uvm_report_message");
+      super.new(name);
+      m_severity = UVM_INFO;
+      m_verbosity = UVM_MEDIUM;
+      m_action = UVM_NO_ACTION;
+      m_file = 0;
+      m_line = 0;
+    endfunction
+
+    // Static factory method
+    static function uvm_report_message new_report_message(string name = "uvm_report_message");
+      uvm_report_message msg = new(name);
+      return msg;
+    endfunction
+
+    // Severity
+    virtual function uvm_severity get_severity();
+      return m_severity;
+    endfunction
+
+    virtual function void set_severity(uvm_severity severity);
+      m_severity = severity;
+    endfunction
+
+    // ID
+    virtual function string get_id();
+      return m_id;
+    endfunction
+
+    virtual function void set_id(string id);
+      m_id = id;
+    endfunction
+
+    // Message
+    virtual function string get_message();
+      return m_message;
+    endfunction
+
+    virtual function void set_message(string message);
+      m_message = message;
+    endfunction
+
+    // Verbosity
+    virtual function int get_verbosity();
+      return m_verbosity;
+    endfunction
+
+    virtual function void set_verbosity(int verbosity);
+      m_verbosity = verbosity;
+    endfunction
+
+    // Filename
+    virtual function string get_filename();
+      return m_filename;
+    endfunction
+
+    virtual function void set_filename(string filename);
+      m_filename = filename;
+    endfunction
+
+    // Line number
+    virtual function int get_line();
+      return m_line;
+    endfunction
+
+    virtual function void set_line(int line);
+      m_line = line;
+    endfunction
+
+    // Context name
+    virtual function string get_context();
+      return m_context_name;
+    endfunction
+
+    virtual function void set_context(string context_name);
+      m_context_name = context_name;
+    endfunction
+
+    // Action
+    virtual function uvm_action get_action();
+      return m_action;
+    endfunction
+
+    virtual function void set_action(uvm_action action);
+      m_action = action;
+    endfunction
+
+    // File handle
+    virtual function UVM_FILE get_file();
+      return m_file;
+    endfunction
+
+    virtual function void set_file(UVM_FILE file);
+      m_file = file;
+    endfunction
+
+    // Report object
+    virtual function uvm_report_object get_report_object();
+      return m_report_object;
+    endfunction
+
+    virtual function void set_report_object(uvm_report_object obj);
+      m_report_object = obj;
+    endfunction
+
+    // Report handler
+    virtual function uvm_report_handler get_report_handler();
+      return m_report_handler;
+    endfunction
+
+    virtual function void set_report_handler(uvm_report_handler handler);
+      m_report_handler = handler;
+    endfunction
+
+    // Report server
+    virtual function uvm_report_server get_report_server();
+      return m_report_server;
+    endfunction
+
+    virtual function void set_report_server(uvm_report_server server);
+      m_report_server = server;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_report_handler - Report message configuration handler
+  //=========================================================================
+  // The uvm_report_handler class manages report actions, verbosity levels,
+  // and file handles for reporting. Each uvm_report_object has a handler.
+  //=========================================================================
+  class uvm_report_handler extends uvm_object;
+    protected int m_max_verbosity_level = UVM_MEDIUM;
+    protected uvm_action severity_actions[uvm_severity];
+    protected uvm_action id_actions[string];
+    protected int id_verbosities[string];
+    protected UVM_FILE severity_file_handles[uvm_severity];
+    protected UVM_FILE id_file_handles[string];
+    protected UVM_FILE default_file_handle = 0;
+
+    function new(string name = "uvm_report_handler");
+      super.new(name);
+      initialize();
+    endfunction
+
+    virtual function void initialize();
+      // Set default actions for each severity
+      severity_actions[UVM_INFO] = UVM_DISPLAY;
+      severity_actions[UVM_WARNING] = UVM_DISPLAY;
+      severity_actions[UVM_ERROR] = UVM_DISPLAY | UVM_COUNT;
+      severity_actions[UVM_FATAL] = UVM_DISPLAY | UVM_EXIT;
+    endfunction
+
+    // Verbosity level management
+    virtual function int get_verbosity_level();
+      return m_max_verbosity_level;
+    endfunction
+
+    virtual function void set_verbosity_level(int verbosity_level);
+      m_max_verbosity_level = verbosity_level;
+    endfunction
+
+    // Action management for severities
+    virtual function uvm_action get_action(uvm_severity severity, string id);
+      if (id_actions.exists(id))
+        return id_actions[id];
+      if (severity_actions.exists(severity))
+        return severity_actions[severity];
+      return UVM_NO_ACTION;
+    endfunction
+
+    virtual function void set_severity_action(uvm_severity severity, uvm_action action);
+      severity_actions[severity] = action;
+    endfunction
+
+    virtual function void set_id_action(string id, uvm_action action);
+      id_actions[id] = action;
+    endfunction
+
+    virtual function void set_severity_id_action(uvm_severity severity, string id, uvm_action action);
+      // Simplified: just set the id action
+      id_actions[id] = action;
+    endfunction
+
+    // Verbosity management for IDs
+    virtual function int get_id_verbosity(string id);
+      if (id_verbosities.exists(id))
+        return id_verbosities[id];
+      return m_max_verbosity_level;
+    endfunction
+
+    virtual function void set_id_verbosity(string id, int verbosity);
+      id_verbosities[id] = verbosity;
+    endfunction
+
+    virtual function void set_severity_id_verbosity(uvm_severity severity, string id, int verbosity);
+      id_verbosities[id] = verbosity;
+    endfunction
+
+    // File handle management
+    virtual function UVM_FILE get_file_handle(uvm_severity severity, string id);
+      if (id_file_handles.exists(id))
+        return id_file_handles[id];
+      if (severity_file_handles.exists(severity))
+        return severity_file_handles[severity];
+      return default_file_handle;
+    endfunction
+
+    virtual function void set_severity_file(uvm_severity severity, UVM_FILE file);
+      severity_file_handles[severity] = file;
+    endfunction
+
+    virtual function void set_id_file(string id, UVM_FILE file);
+      id_file_handles[id] = file;
+    endfunction
+
+    virtual function void set_severity_id_file(uvm_severity severity, string id, UVM_FILE file);
+      id_file_handles[id] = file;
+    endfunction
+
+    virtual function void set_default_file(UVM_FILE file);
+      default_file_handle = file;
+    endfunction
+
+    // Report handler summary
+    virtual function void dump_state();
+      $display("UVM Report Handler State:");
+      $display("  Max verbosity level: %0d", m_max_verbosity_level);
+      $display("  Severity actions configured: %0d", severity_actions.num());
+      $display("  ID actions configured: %0d", id_actions.num());
+      $display("  ID verbosities configured: %0d", id_verbosities.num());
+    endfunction
+
+  endclass
+
+  //=========================================================================
   // uvm_report_server - Report server singleton
   //=========================================================================
   class uvm_report_server extends uvm_object;
@@ -5229,6 +5600,80 @@ package uvm_pkg;
 
     virtual function void reset_severity_counts();
       severity_count.delete();
+    endfunction
+
+    // Convenience methods for getting counts by specific severity
+    virtual function int get_info_count();
+      return get_severity_count(UVM_INFO);
+    endfunction
+
+    virtual function int get_warning_count();
+      return get_severity_count(UVM_WARNING);
+    endfunction
+
+    virtual function int get_error_count();
+      return get_severity_count(UVM_ERROR);
+    endfunction
+
+    virtual function int get_fatal_count();
+      return get_severity_count(UVM_FATAL);
+    endfunction
+
+    // Check if quit threshold reached
+    virtual function bit is_quit_count_reached();
+      return (max_quit_count > 0) && (quit_count >= max_quit_count);
+    endfunction
+
+    // Dump the server state for debugging
+    virtual function void dump_server_state();
+      $display("=== UVM Report Server State ===");
+      $display("Max quit count: %0d", max_quit_count);
+      $display("Current quit count: %0d", quit_count);
+      $display("Severity counts:");
+      $display("  UVM_INFO: %0d", get_severity_count(UVM_INFO));
+      $display("  UVM_WARNING: %0d", get_severity_count(UVM_WARNING));
+      $display("  UVM_ERROR: %0d", get_severity_count(UVM_ERROR));
+      $display("  UVM_FATAL: %0d", get_severity_count(UVM_FATAL));
+      $display("ID counts tracked: %0d", id_count.num());
+      $display("===============================");
+    endfunction
+
+    // Summarize report statistics (typically called at end of test)
+    virtual function void report_summarize(UVM_FILE file = 0);
+      string summary;
+      int total_errors;
+      total_errors = get_severity_count(UVM_ERROR) + get_severity_count(UVM_FATAL);
+
+      $display("--- UVM Report Summary ---");
+      $display("");
+      $display("** Report counts by severity");
+      $display("UVM_INFO: %0d", get_severity_count(UVM_INFO));
+      $display("UVM_WARNING: %0d", get_severity_count(UVM_WARNING));
+      $display("UVM_ERROR: %0d", get_severity_count(UVM_ERROR));
+      $display("UVM_FATAL: %0d", get_severity_count(UVM_FATAL));
+      $display("");
+      if (total_errors == 0)
+        $display("** Test passed with no errors");
+      else
+        $display("** Test failed with %0d error(s)", total_errors);
+      $display("--------------------------");
+    endfunction
+
+    // Compose the message (for custom report formatting)
+    virtual function string compose_report_message(
+      uvm_report_message report_message,
+      string report_object_name = ""
+    );
+      // Simplified composition - just return the message
+      if (report_message != null)
+        return report_message.get_message();
+      return "";
+    endfunction
+
+    // Process the report message through catchers
+    virtual function bit process_report_message(uvm_report_message report_message);
+      // Default: return 1 to indicate message should be issued
+      return 1;
     endfunction
 
   endclass
@@ -5312,6 +5757,81 @@ package uvm_pkg;
 
     virtual function void set_verbosity(int verbosity);
       m_verbosity = verbosity;
+    endfunction
+
+    // Set the action for the caught message
+    virtual function void set_action(uvm_action action);
+      // Store action to be applied
+    endfunction
+
+    // Get number of registered catchers
+    static function int get_catcher_count();
+      return catchers.size();
+    endfunction
+
+    // Clear all registered catchers
+    static function void clear_catchers();
+      catchers.delete();
+    endfunction
+
+    // Process a message through all registered catchers
+    // Returns THROW if message should proceed, CAUGHT if suppressed
+    static function uvm_action_type_e process_all_report_catchers(
+      uvm_severity severity,
+      string id,
+      string message,
+      int verbosity,
+      string filename,
+      int line
+    );
+      uvm_action_type_e result;
+
+      foreach (catchers[i]) begin
+        // Set up the catcher with current message info
+        catchers[i].m_severity = severity;
+        catchers[i].m_id = id;
+        catchers[i].m_message = message;
+        catchers[i].m_verbosity = verbosity;
+        catchers[i].m_filename = filename;
+        catchers[i].m_line = line;
+
+        // Call the catcher's catch_action
+        result = catchers[i].catch_action();
+
+        // If caught, stop processing and suppress message
+        if (result == CAUGHT)
+          return CAUGHT;
+      end
+
+      // All catchers passed, allow message
+      return THROW;
+    endfunction
+
+    // Check if message should be issued (called by report methods)
+    static function bit do_report(
+      uvm_severity severity,
+      string id,
+      ref string message,
+      int verbosity,
+      string filename,
+      int line
+    );
+      uvm_action_type_e result;
+
+      // Process through all catchers
+      result = process_all_report_catchers(severity, id, message, verbosity, filename, line);
+
+      // Return 1 if message should be issued, 0 if caught
+      return (result == THROW);
+    endfunction
+
+    // Summarize catcher state (for debugging)
+    static function void summarize_catchers();
+      $display("UVM Report Catcher Summary:");
+      $display("  Registered catchers: %0d", catchers.size());
+      foreach (catchers[i]) begin
+        $display("    [%0d] %s", i, catchers[i].get_name());
+      end
     endfunction
 
   endclass
