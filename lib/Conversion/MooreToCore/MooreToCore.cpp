@@ -6677,6 +6677,107 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       return success();
     }
 
+    // Handle fixed-size array to open_uarray conversion.
+    // This converts a fixed-size unpacked array (uarray<N x T>) to a dynamic
+    // array (open_uarray<T>). This is a legal SystemVerilog conversion.
+    if (isa<UnpackedArrayType>(op.getInput().getType()) &&
+        isa<OpenUnpackedArrayType>(op.getResult().getType())) {
+      auto *ctx = rewriter.getContext();
+      auto inputArrayType = cast<UnpackedArrayType>(op.getInput().getType());
+      auto resultDynArrayType =
+          cast<OpenUnpackedArrayType>(op.getResult().getType());
+
+      // Get array size and element types
+      int64_t numElements = inputArrayType.getSize();
+      Type mooreElemType = resultDynArrayType.getElementType();
+      Type llvmElemType = typeConverter->convertType(mooreElemType);
+      if (!llvmElemType)
+        return failure();
+
+      // Setup LLVM types
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto dynArrayTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+      // Calculate element size in bytes
+      int64_t elemBitWidth = 1;
+      if (auto elemIntType = dyn_cast<moore::IntType>(mooreElemType))
+        elemBitWidth = elemIntType.getWidth();
+      else
+        elemBitWidth = hw::getBitWidth(llvmElemType);
+      if (elemBitWidth <= 0)
+        elemBitWidth = 8; // Default to 1 byte
+      int64_t elemByteSize = (elemBitWidth + 7) / 8;
+      if (elemByteSize < 1)
+        elemByteSize = 1;
+
+      // Allocate memory for the array elements
+      auto totalSize = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements * elemByteSize));
+      auto mallocFnTy = LLVM::LLVMFunctionType::get(ptrTy, {i64Ty});
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+      auto mallocFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "malloc", mallocFnTy);
+      auto mallocCall = LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
+                                             SymbolRefAttr::get(mallocFn),
+                                             ValueRange{totalSize});
+      Value arrayPtr = mallocCall.getResult();
+
+      // Copy elements from the fixed-size array to the allocated memory
+      Value inputArray = adaptor.getInput();
+
+      // Check if the input is valid (operand may not be remapped yet)
+      if (!inputArray)
+        return failure();
+
+      // Get the input array type (could be hw::ArrayType or LLVM::LLVMArrayType)
+      Type inputLLVMType = inputArray.getType();
+
+      // Determine the index width needed for hw::ArrayGetOp
+      unsigned idxWidth = llvm::Log2_64_Ceil(numElements);
+      if (idxWidth == 0)
+        idxWidth = 1;
+
+      for (int64_t i = 0; i < numElements; ++i) {
+        // Extract element from fixed-size array
+        Value elemValue;
+        if (isa<hw::ArrayType>(inputLLVMType)) {
+          // Create index value for hw::ArrayGetOp
+          Value idxValue = hw::ConstantOp::create(
+              rewriter, loc, rewriter.getIntegerType(idxWidth), i);
+          elemValue =
+              hw::ArrayGetOp::create(rewriter, loc, inputArray, idxValue);
+        } else if (isa<LLVM::LLVMArrayType>(inputLLVMType)) {
+          elemValue = LLVM::ExtractValueOp::create(rewriter, loc, inputArray,
+                                                   ArrayRef<int64_t>{i});
+        } else {
+          return failure();
+        }
+
+        // Compute pointer to destination element
+        auto idxConst = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(i));
+        Value destPtr =
+            LLVM::GEPOp::create(rewriter, loc, ptrTy, llvmElemType, arrayPtr,
+                                ValueRange{idxConst});
+
+        // Store element
+        LLVM::StoreOp::create(rewriter, loc, elemValue, destPtr);
+      }
+
+      // Create the result struct {ptr, i64}
+      auto sizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      Value result = LLVM::UndefOp::create(rewriter, loc, dynArrayTy);
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, arrayPtr,
+                                           ArrayRef<int64_t>{0});
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, sizeConst,
+                                           ArrayRef<int64_t>{1});
+
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     // Handle integer to queue/open_uarray conversion (bit unpacking).
     // This converts an N-bit integer to a queue or dynamic array of M-bit elements.
     // Used in streaming concatenation for unpacking bits into queue/array elements.
