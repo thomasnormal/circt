@@ -5407,7 +5407,10 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
+      // Note: We don't set m_if here because uvm_blocking_put_imp doesn't
+      // extend uvm_tlm_if_base. Instead, the put/get/peek methods are
+      // implemented directly and port connections should use the provided_by
+      // mechanism or direct method calls.
     endfunction
 
     virtual function string get_type_name();
@@ -5428,7 +5431,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5453,7 +5455,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5474,7 +5475,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5499,7 +5499,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5520,7 +5519,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5545,7 +5543,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5574,7 +5571,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
@@ -5599,7 +5595,6 @@ package uvm_pkg;
     function new(string name, IMP imp);
       super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
       m_imp = imp;
-      m_if = this;
     endfunction
 
     virtual function string get_type_name();
