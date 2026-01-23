@@ -6640,6 +6640,66 @@ def StringAtoBinOp : StringBuiltin<"atobin"> {
   let assemblyFormat = "$str attr-dict";
 }
 
+def StringAtoRealOp : StringBuiltin<"atoreal"> {
+  let summary = "Convert a string to a real number";
+  let description = [{
+    Interprets the string as a real number and returns the result.
+    This corresponds to the SystemVerilog `str.atoreal()` method
+    (IEEE 1800-2017 Section 6.16.9).
+  }];
+  let arguments = (ins StringType:$str);
+  let results = (outs RealF64:$result);
+  let assemblyFormat = "$str attr-dict";
+}
+
+def StringHexToAOp : StringBuiltin<"hextoa"> {
+  let summary = "Convert an integer to a hexadecimal string";
+  let description = [{
+    Converts the given integer value to its hexadecimal string representation
+    and stores the result in the destination string reference.
+    This corresponds to the SystemVerilog `str.hextoa(i)` method
+    (IEEE 1800-2017 Section 6.16.9).
+  }];
+  let arguments = (ins RefType:$dest, IntType:$value);
+  let assemblyFormat = "$dest `,` $value `:` type($dest) `,` type($value) attr-dict";
+}
+
+def StringOctToAOp : StringBuiltin<"octtoa"> {
+  let summary = "Convert an integer to an octal string";
+  let description = [{
+    Converts the given integer value to its octal string representation
+    and stores the result in the destination string reference.
+    This corresponds to the SystemVerilog `str.octtoa(i)` method
+    (IEEE 1800-2017 Section 6.16.9).
+  }];
+  let arguments = (ins RefType:$dest, IntType:$value);
+  let assemblyFormat = "$dest `,` $value `:` type($dest) `,` type($value) attr-dict";
+}
+
+def StringBinToAOp : StringBuiltin<"bintoa"> {
+  let summary = "Convert an integer to a binary string";
+  let description = [{
+    Converts the given integer value to its binary string representation
+    and stores the result in the destination string reference.
+    This corresponds to the SystemVerilog `str.bintoa(i)` method
+    (IEEE 1800-2017 Section 6.16.9).
+  }];
+  let arguments = (ins RefType:$dest, IntType:$value);
+  let assemblyFormat = "$dest `,` $value `:` type($dest) `,` type($value) attr-dict";
+}
+
+def StringRealToAOp : StringBuiltin<"realtoa"> {
+  let summary = "Convert a real number to a string";
+  let description = [{
+    Converts the given real value to its string representation
+    and stores the result in the destination string reference.
+    This corresponds to the SystemVerilog `str.realtoa(r)` method
+    (IEEE 1800-2017 Section 6.16.9).
+  }];
+  let arguments = (ins RefType:$dest, RealType:$value);
+  let assemblyFormat = "$dest `,` $value `:` type($dest) `,` type($value) attr-dict";
+}
+
 def StringCompareOp : StringBuiltin<"compare", [Pure]> {
   let summary = "Lexicographically compare two strings";
   let description = [{
