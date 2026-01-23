@@ -88,48 +88,64 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 4. **Local Event Triggering** (Commit cdaed5b93)
    - Added BlockArgument detection in ProcedureOpConversion
    - Fixed local event references (`-> e;` in same module)
-   - Note: Hierarchical event references still unsupported
 
-5. **UVM Callbacks Implementation** (Commit f39093a90)
+5. **Hierarchical Event References** (Iteration 145, Commit a9f00c204)
+   - Added HierPathValueStmtVisitor for statement traversal
+   - Implemented collectHierarchicalValuesFromStatement()
+   - Added ProceduralBlockSymbol handler to InstBodyVisitor
+   - Chapter-15 now 5/5 (100%)
+
+6. **UVM Callbacks Implementation** (Commit f39093a90)
    - Implemented callback storage with associative arrays
    - Enabled proper callback iteration and filtering
 
-6. **I2S AVIP Simulation Verified** (Iteration 143)
+7. **I2S AVIP Simulation Verified** (Iteration 143)
    - Full end-to-end simulation with circt-sim
    - 130,000 clock cycles, 0 errors
    - Validates UVM testbench compilation and simulation flow
 
-7. **CIRCT vs xrun Comparison** (Iteration 143)
+8. **CIRCT vs xrun Comparison** (Iteration 143)
    - CIRCT stricter on type safety (string/bit conversions)
    - xrun stricter on IEEE timescale compliance
    - APB AVIP design code compiles cleanly with both
 
-8. **Covergroup Feature Testing** (Iteration 143)
+9. **Covergroup Feature Testing** (Iteration 143)
    - Most covergroup features compile and simulate correctly
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps
+## Next Steps (Iteration 146)
 
-### Track A: Simulation Runtime
-- Improve circt-sim for complex UVM patterns
-- Address UVM class instantiation overhead
-- Test more AVIPs with simulation
+### Track A: Interface Class Support (Chapter-8)
+- 9 tests fail due to interface class issues
+- Investigate `8.26.*` tests for interface class implements
+- Fix type access and parameter handling for interface classes
+- Add unit tests for each fix
 
-### Track B: UVM Feature Gaps
-- Implement missing uvm_callbacks features (wildcards)
-- Add missing TLM 2.0 features if needed
-- Enhance config_db pattern matching
+### Track B: Macro Expansion Edge Cases (Chapter-5, Chapter-22)
+- 2 macro tests fail in Chapter-5 (5.6.4--compiler-directives-preprocessor-macro)
+- 8 define-expansion tests fail in Chapter-22
+- Investigate slang preprocessor handling
+- Add regression tests
 
-### Track C: Real-world Testing
-- Continue AVIP testing with circt-sim
-- Compare with xrun for behavioral verification
-- Test complex sequence patterns
+### Track C: AVIP Extended Simulation
+- Run longer simulations with circt-sim
+- Test UART AVIP with actual transactions
+- Compare simulation output with xrun
+- Profile simulation performance
 
-### Track D: Edge Cases
-- Find and fix UVM stub edge cases
-- Test less common UVM patterns
-- Verify randomization stub behavior
+### Track D: Signal Strength Support (verilator-verification)
+- 13 tests fail due to signal strengths (highz, strong, etc.)
+- Investigate Verilog strength modeling in ImportVerilog
+- Add strength support or document limitations
+
+### Remaining Limitations
+
+1. **Interface classes** - 9 Chapter-8 tests fail
+2. **Macro expansion** - Some edge cases not handled
+3. **Signal strengths** - Not fully supported
+4. **@seq event controls** - SVA feature (Codex agent scope)
+5. **Covergroup get_coverage()** - Runtime not implemented
 
 ## Test Commands
 

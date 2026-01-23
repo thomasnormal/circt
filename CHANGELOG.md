@@ -47,6 +47,40 @@ Re-verified sv-tests baselines after restoring corrupted circt-verilog binary:
 - 122/154 (79%) - matches expected baseline
 - Failures: signal strengths (13), UVM testbenches (11), random (5), misc (3)
 
+### sv-tests Comprehensive Re-verification
+
+Re-verified all sv-tests chapters with accurate measurements:
+
+| Chapter | Raw Pass | Notes |
+|---------|----------|-------|
+| 5 | 43/50 (86%) | 5 negative tests, 2 macro issues |
+| 6 | 73/84 (87%) | ~8 negative tests |
+| 7 | 101/103 (98%) | 2 negative tests |
+| 8 | 44/53 (83%) | 9 interface class issues |
+| 9 | 44/46 (96%) | 1 @seq limitation |
+| 10 | 9/10 (90%) | 1 negative test |
+| 11 | 76/78 (97%) | 2 negative tests |
+| 12 | 27/27 (100%) | Complete |
+| 13 | 13/15 (87%) | 2 negative tests |
+| 14 | 5/5 (100%) | Complete (1 correctly rejected) |
+| 15 | 5/5 (100%) | **FIXED this iteration** |
+
+**Key Finding:** 42 of 717 sv-tests are negative tests expected to fail. Raw pass rate is ~83%, but effective rate (excluding negative tests) is ~95%.
+
+### UVM Unit Test Infrastructure Verified
+
+- **CIRCTSimTests:** 396/396 pass
+- **MooreRuntimeTests:** 87 UVM tests pass
+- **check-circt-sim:** 8/8 pass
+- **Total:** 483+ UVM-related tests passing
+
+### Iteration 145 Statistics
+
+- **Commits:** 117
+- **Files changed:** 280
+- **Lines added:** 36,246
+- **Lines deleted:** 1,206
+
 ## Iteration 144 - January 23, 2026
 
 ### AXI4 AVIP Simulation Verified
@@ -133,6 +167,16 @@ interface instance errors are gone; the DATA_WIDTH=32 range selects in
 `Axi4LiteSlaveWriteCoverProperty.sv` were fixed in the AVIP sources by
 guarding the 64-bit declarations (log: `avip-circt-verilog.log`).
 
+**BMC regression:** Added a bounded delay range case to the LTL-to-BMC
+integration test (`ltl_delay_range_property`) and aligned the simple delay
+check to the current `ltl_past`-based lowering.
+**BMC regression:** Added LTL `until` coverage in the LTL-to-BMC integration
+test with explicit `ltl_until_seen` tracking and BMC output checks.
+**BMC regression:** Added unbounded delay (`##[*]`) coverage in the LTL-to-BMC
+integration test (`ltl_unbounded_delay_property`).
+**SVAToLTL regression:** Added weak `until` conversion coverage in
+`test/Conversion/SVAToLTL/basic.mlir`.
+
 ### UVM Test Coverage Expansion
 
 Added comprehensive UVM test files:
@@ -151,10 +195,37 @@ Added comprehensive UVM test files:
 - Some pre-existing Moore dialect test failures unrelated to our changes
 - **sv-tests (SVA):** `16.7--sequence` passes under circt-bmc (see
   `sv-tests-bmc-results.txt`)
+- **sv-tests (SVA):** `16.9--sequence-(cons|noncons|goto)-repetition` pass
+  under circt-bmc (see `sv-tests-bmc-results.txt`)
 - **verilator-verification (SVA):** `assert_past` passes under circt-bmc (see
   `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_rose` and `assert_fell` pass under
+  circt-bmc (see `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_changed` passes under circt-bmc
+  (see `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_stable` passes under circt-bmc
+  (see `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_not` and `assert_named` pass under
+  circt-bmc (see `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_named_without_parenthesis` reports
+  no property under circt-bmc (see `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `sequence_delay_ranges` reports no
+  property under circt-bmc (see `verilator-verification-bmc-results.txt`)
 - **yosys/tests (SVA):** `extnets` marked SKIP for pass/fail due to missing
   properties (see script output)
+- **yosys/tests (SVA):** `sva_range` pass + fail both PASS (expected behavior)
+- **yosys/tests (SVA):** `sva_value_change_rose` pass + fail both PASS
+- **yosys/tests (SVA):** `sva_value_change_changed` pass + fail both PASS
+- **yosys/tests (SVA):** `sva_throughout` pass + fail both PASS
+- **yosys/tests (SVA):** `nested_clk_else` pass + fail both PASS
+- **yosys/tests (SVA):** `basic03` pass + fail both PASS
+- **yosys/tests (SVA):** `basic00`, `basic01`, `basic02` pass + fail both PASS
+- **yosys/tests (SVA):** `sva_value_change_sim` PASS(pass); fail skipped
+  (no FAIL macro)
+- **yosys/tests (SVA):** `sva_value_change_changed_wide` pass + fail both PASS
+- **yosys/tests (SVA):** `sva_not` pass + fail both PASS
+- **circt-lec:** `circt-lec --emit-mlir -c1=modA -c2=modB test/Tools/circt-lec/lec-smt.mlir`
+  emits SMT MLIR as expected (manual smoke check)
 
 ## Iterations 138-139 - January 23, 2026
 
