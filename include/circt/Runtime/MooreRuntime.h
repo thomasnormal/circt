@@ -3247,6 +3247,23 @@ MooreString uvm_dpi_get_tool_name_c(void);
 /// @return String containing the tool version (stub: returns "1.0")
 MooreString uvm_dpi_get_tool_version_c(void);
 
+/// Parse +UVM_TESTNAME from command-line arguments.
+/// This function searches through all command-line arguments (from environment
+/// variables CIRCT_UVM_ARGS or UVM_ARGS) for a +UVM_TESTNAME=<name> argument.
+///
+/// The format is: +UVM_TESTNAME=<test_class_name>
+/// For example: +UVM_TESTNAME=my_test
+///
+/// @return A newly allocated MooreString containing the test name if found,
+///         or an empty MooreString (data=NULL, len=0) if not found.
+///         The caller is responsible for freeing the returned string's data
+///         using __moore_free().
+MooreString __moore_uvm_get_testname_from_cmdline(void);
+
+/// Check if +UVM_TESTNAME was specified on the command line.
+/// @return 1 if +UVM_TESTNAME was found, 0 otherwise
+int32_t __moore_uvm_has_cmdline_testname(void);
+
 //===----------------------------------------------------------------------===//
 // VPI Stub Support
 //===----------------------------------------------------------------------===//
