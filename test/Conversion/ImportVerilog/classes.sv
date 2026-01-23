@@ -1215,3 +1215,46 @@ class UvmSequenceBase;
         m_mutex = new(1);
     endfunction
 endclass
+
+/// Check interface class upcast (IEEE 1800-2017 Section 8.26.5)
+/// A class that implements an interface class can be assigned to a variable
+/// of that interface class type.
+
+// CHECK-LABEL: moore.class.classdecl @ihello {
+// CHECK: }
+interface class ihello;
+    pure virtual function void hello();
+endclass
+
+// CHECK-LABEL: moore.class.classdecl @Hello implements [@ihello] {
+// CHECK:   moore.class.methoddecl @hello -> @"Hello::hello"
+// CHECK: }
+class Hello implements ihello;
+    virtual function void hello();
+        $display("hello world");
+    endfunction
+endclass
+
+// CHECK: func.func private @"Hello::hello"
+
+// CHECK-LABEL: moore.module @testInterfaceClassUpcast() {
+// CHECK: [[OBJ:%.*]] = moore.variable : <class<@Hello>>
+// CHECK: [[IOBJ:%.*]] = moore.variable : <class<@ihello>>
+// CHECK: moore.procedure initial {
+// CHECK:    [[NEW:%.*]] = moore.class.new : <@Hello>
+// CHECK:    moore.blocking_assign [[OBJ]], [[NEW]] : class<@Hello>
+// CHECK:    [[OBJREAD:%.+]] = moore.read [[OBJ]] : <class<@Hello>>
+// CHECK:    [[UPCAST:%.+]] = moore.class.upcast [[OBJREAD]] : <@Hello> to <@ihello>
+// CHECK:    moore.blocking_assign [[IOBJ]], [[UPCAST]] : class<@ihello>
+// CHECK:    moore.return
+// CHECK: }
+// CHECK: moore.output
+// CHECK: }
+module testInterfaceClassUpcast;
+    Hello obj;
+    ihello iobj;
+    initial begin
+        obj = new;
+        iobj = obj;
+    end
+endmodule
