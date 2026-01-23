@@ -42,7 +42,7 @@
 | I2S | SUCCESS | Tested | 17K lines MLIR, 130K cycles, 0 errors |
 | I3C | SUCCESS | Not tested | 264K lines MLIR |
 | JTAG | Partial | - | AVIP code issues (not CIRCT) |
-| AXI4 | SUCCESS | Not tested | Full compilation |
+| AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
 
 ### verilator-verification

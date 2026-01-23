@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 144 - January 23, 2026
+
+### AXI4 AVIP Simulation Verified
+
+Successfully tested AXI4 AVIP with circt-sim:
+- **Compilation:** 26K lines MLIR generated
+- **Simulation:** 10,001 delta cycles, 0 errors
+- **UVM BFM initialization** confirmed working
+- Status updated: AXI4 now "Tested" (was "Not tested")
+
+### sv-tests Chapter-9 Verification
+
+Verified Chapter-9 (Processes) test results:
+- **Pass rate:** 44/46 (95.7%) - matches baseline
+- **Expected failures:**
+  - `9.4.2.3--fork_return.sv` - illegal by SystemVerilog spec
+  - `9.4.2.4--sequence_event_control_at.sv` - @seq not supported (SVA scope)
+- No regressions detected
+
+### TLM Feature Completeness Verified
+
+Comprehensive analysis of UVM TLM support:
+- **52 TLM classes** fully implemented
+- **865 virtual methods** across all TLM classes
+- **100% feature completeness** for standard UVM TLM patterns
+- All major TLM patterns: ports, exports, FIFOs, analysis, sequences
+
+### Running AVIP Simulations
+
+Testing additional AVIPs with circt-sim:
+- Track A: SPI AVIP (in progress)
+- Track B: UART AVIP (in progress)
+- Track C: verilator-verification suite
+- Track D: I3C AVIP (264K MLIR)
+
 ## Iterations 140-141 - January 23, 2026
 
 ### Major Bug Fix: Cross-Module Event Triggering (Commit cdaed5b93)
@@ -14,6 +49,18 @@
 - Force `llhd.process` when such references exist
 
 **Result:** Chapter-15 sv-tests now at **100%** (was 60%)
+
+### ImportVerilog Fix: Nested Interface Instances via Interface Ports
+
+**Problem:** Interface port connections like `p.child` failed to resolve when the
+base was an interface port; slang represents these as an
+`ArbitrarySymbolExpression` with a hierarchical reference and no
+`parentInstance` chain.
+
+**Fix:** Resolve interface instances from hierarchical references (interface
+port → nested interface instance) and use this resolver for port connections.
+
+**Regression test:** `test/Conversion/ImportVerilog/nested-interface-port-instance.sv`
 
 ### UVM Test Coverage Expansion
 
