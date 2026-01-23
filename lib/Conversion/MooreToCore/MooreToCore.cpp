@@ -12441,6 +12441,118 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       return comb::AddOp::create(rewriter, loc, lhs, rhs, false);
     }
 
+    // Handle moore.zext (zero extension)
+    if (auto zextOp = dyn_cast<ZExtOp>(mooreOp)) {
+      Value input = getConvertedOperand(zextOp.getInput());
+      if (!input)
+        return nullptr;
+      Type resultType = typeConverter->convertType(zextOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // If types match, just return input
+      if (input.getType() == resultType)
+        return input;
+
+      // Handle 4-state struct
+      if (isFourStateStructType(input.getType())) {
+        Value val = extractFourStateValue(rewriter, loc, input);
+        Value unk = extractFourStateUnknown(rewriter, loc, input);
+        if (auto dstIntTy = dyn_cast<IntegerType>(resultType)) {
+          // Zero extend to target width
+          auto srcIntTy = cast<IntegerType>(val.getType());
+          if (srcIntTy.getWidth() < dstIntTy.getWidth()) {
+            val = arith::ExtUIOp::create(rewriter, loc, resultType, val);
+            unk = arith::ExtUIOp::create(rewriter, loc, resultType, unk);
+          } else if (srcIntTy.getWidth() > dstIntTy.getWidth()) {
+            val = arith::TruncIOp::create(rewriter, loc, resultType, val);
+            unk = arith::TruncIOp::create(rewriter, loc, resultType, unk);
+          }
+          return createFourStateStruct(rewriter, loc, val, unk);
+        }
+      }
+
+      // Standard integer extension
+      auto srcIntTy = dyn_cast<IntegerType>(input.getType());
+      auto dstIntTy = dyn_cast<IntegerType>(resultType);
+      if (srcIntTy && dstIntTy) {
+        if (srcIntTy.getWidth() < dstIntTy.getWidth())
+          return arith::ExtUIOp::create(rewriter, loc, resultType, input);
+        else if (srcIntTy.getWidth() > dstIntTy.getWidth())
+          return arith::TruncIOp::create(rewriter, loc, resultType, input);
+        return input;
+      }
+
+      // Use unrealized conversion cast as fallback
+      return UnrealizedConversionCastOp::create(rewriter, loc, resultType, input)
+                 .getResult(0);
+    }
+
+    // Handle moore.class.upcast (type casting in inheritance hierarchy)
+    if (auto upcastOp = dyn_cast<ClassUpcastOp>(mooreOp)) {
+      Value input = getConvertedOperand(upcastOp.getInstance());
+      if (!input)
+        return nullptr;
+      Type resultType = typeConverter->convertType(upcastOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // If types match (opaque pointer mode), just return input
+      if (input.getType() == resultType)
+        return input;
+
+      // Use unrealized conversion cast as fallback
+      return UnrealizedConversionCastOp::create(rewriter, loc, resultType, input)
+                 .getResult(0);
+    }
+
+    // Handle func.call_indirect (virtual method calls)
+    if (auto callOp = dyn_cast<func::CallIndirectOp>(mooreOp)) {
+      // Get the callee (function pointer)
+      Value callee = getConvertedOperand(callOp.getCallee());
+      if (!callee)
+        return nullptr;
+
+      // Convert all operands
+      SmallVector<Value> convertedOperands;
+      for (Value operand : callOp.getArgOperands()) {
+        Value converted = getConvertedOperand(operand);
+        if (!converted)
+          return nullptr;
+        convertedOperands.push_back(converted);
+      }
+
+      // Create the call indirect operation
+      auto newCallOp = func::CallIndirectOp::create(rewriter, loc, callee,
+                                                     convertedOperands);
+      if (newCallOp.getNumResults() > 0)
+        return newCallOp.getResult(0);
+
+      // For void calls, return a dummy value
+      return nullptr;
+    }
+
+    // Handle moore.vtable.load_method (virtual method dispatch)
+    // This operation loads a function pointer from the vtable for dynamic dispatch.
+    // For inline conversion, we need to handle it specially.
+    if (auto vtableLoadOp = dyn_cast<VTableLoadMethodOp>(mooreOp)) {
+      Value obj = getConvertedOperand(vtableLoadOp.getObject());
+      if (!obj)
+        return nullptr;
+
+      // Get the result function type
+      Type resultType = typeConverter->convertType(vtableLoadOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // For vtable.load_method, we need to actually compute the vtable lookup.
+      // This is complex because it requires class struct info.
+      // As a fallback, use unrealized conversion cast which will be resolved later.
+      // The actual conversion pattern will handle this properly.
+      return UnrealizedConversionCastOp::create(rewriter, loc, resultType, obj)
+                 .getResult(0);
+    }
+
     // Handle moore.string_cmp
     if (auto stringCmpOp = dyn_cast<StringCmpOp>(mooreOp)) {
       Value lhs = getConvertedOperand(stringCmpOp.getLhs());
@@ -12883,6 +12995,18 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     // inside nested regions (like this predicate) still reference the old
     // block arguments, which have been invalidated. We need to find the remapped
     // values through the rewriter.
+    //
+    // First, get the parent function's entry block arguments so we can map
+    // any references to old function arguments to the new converted ones.
+    auto funcOp = op->getParentOfType<func::FuncOp>();
+    Block *funcEntryBlock = funcOp ? &funcOp.getBody().front() : nullptr;
+
+    // First pass: collect all external values that need remapping.
+    // We need to be careful because some operands may reference invalidated
+    // block arguments that can crash if we try to access their properties.
+    SmallVector<std::pair<Operation *, unsigned>> operandsToRemap;
+    SmallVector<Value> operandValues;
+
     for (Operation &innerOp : body.without_terminator()) {
       for (unsigned i = 0; i < innerOp.getNumOperands(); ++i) {
         Value operand = innerOp.getOperand(i);
@@ -12913,20 +13037,27 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         // been invalidated. We need to find the new block argument at the
         // corresponding position in the converted function.
         //
-        // Since the operand might be an invalidated block argument (after
-        // signature conversion), we can't safely call methods on it. Instead,
-        // we look at the parent function and get its current block arguments.
+        // Check if this is a block argument. Note: we can't simply check
+        // getDefiningOp() == nullptr because the operand might be an
+        // invalidated block argument.
         if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
-          // Get the enclosing function's entry block
-          auto funcOp = op->getParentOfType<func::FuncOp>();
-          if (funcOp) {
-            Block &entryBlock = funcOp.getBody().front();
-            unsigned argIndex = blockArg.getArgNumber();
-            // The entry block should have the converted arguments
-            if (argIndex < entryBlock.getNumArguments()) {
-              Value newBlockArg = entryBlock.getArgument(argIndex);
-              valueMap[operand] = newBlockArg;
-              continue;
+          // Check if this block argument belongs to a block outside the
+          // predicate (i.e., from the enclosing function)
+          Block *ownerBlock = blockArg.getOwner();
+          if (ownerBlock != &body) {
+            // This is a block argument from an enclosing scope.
+            // Try to find the corresponding argument in the current function.
+            if (funcEntryBlock) {
+              unsigned argIndex = blockArg.getArgNumber();
+              // The entry block should have the converted arguments
+              if (argIndex < funcEntryBlock->getNumArguments()) {
+                Value newBlockArg = funcEntryBlock->getArgument(argIndex);
+                valueMap[operand] = newBlockArg;
+                // Also update the operation's operand directly to fix the
+                // invalid reference
+                innerOp.setOperand(i, newBlockArg);
+                continue;
+              }
             }
           }
         }
@@ -18234,7 +18365,13 @@ void MooreToCorePass::runOnOperation() {
   mlir::cf::populateCFStructuralTypeConversionsAndLegality(typeConverter,
                                                            patterns, target);
 
-  if (failed(applyFullConversion(module, target, std::move(patterns))))
+  // Use a conversion config that allows pattern rollback, which preserves
+  // value mappings longer and helps with handling nested regions that reference
+  // converted block arguments.
+  ConversionConfig config;
+  config.allowPatternRollback = true;
+
+  if (failed(applyFullConversion(module, target, std::move(patterns), config)))
     signalPassFailure();
 
   RewritePatternSet cleanupPatterns(&context);
