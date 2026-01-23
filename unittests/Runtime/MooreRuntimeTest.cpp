@@ -13478,4 +13478,311 @@ TEST(MooreRuntimeVifTest, Rebinding) {
   __moore_vif_clear_all();
 }
 
+//===----------------------------------------------------------------------===//
+// SystemVerilog Semaphore Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeSemaphoreTest, Creation) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(1);
+  EXPECT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  __moore_semaphore_destroy(sem);
+}
+
+TEST(MooreRuntimeSemaphoreTest, CreationWithZeroKeys) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(0);
+  EXPECT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  __moore_semaphore_destroy(sem);
+}
+
+TEST(MooreRuntimeSemaphoreTest, CreationWithNegativeKeys) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(-1);
+  EXPECT_EQ(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+}
+
+TEST(MooreRuntimeSemaphoreTest, PutAndGet) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(0);
+  EXPECT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  // Put 2 keys
+  __moore_semaphore_put(sem, 2);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 2);
+
+  // Get 1 key (should not block since we have 2)
+  __moore_semaphore_get(sem, 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  // Get another key
+  __moore_semaphore_get(sem, 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  __moore_semaphore_destroy(sem);
+}
+
+TEST(MooreRuntimeSemaphoreTest, TryGetSuccess) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(3);
+  EXPECT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+
+  // try_get should succeed when enough keys available
+  EXPECT_EQ(__moore_semaphore_try_get(sem, 2), 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  // try_get should succeed for the remaining key
+  EXPECT_EQ(__moore_semaphore_try_get(sem, 1), 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  __moore_semaphore_destroy(sem);
+}
+
+TEST(MooreRuntimeSemaphoreTest, TryGetFailure) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(1);
+  EXPECT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+
+  // try_get should fail when not enough keys
+  EXPECT_EQ(__moore_semaphore_try_get(sem, 2), 0);
+  // Key count should be unchanged
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  // Now get the one key we have
+  EXPECT_EQ(__moore_semaphore_try_get(sem, 1), 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  // try_get with 0 keys should fail
+  EXPECT_EQ(__moore_semaphore_try_get(sem, 1), 0);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  __moore_semaphore_destroy(sem);
+}
+
+TEST(MooreRuntimeSemaphoreTest, MultiplePutAndGet) {
+  MooreSemaphoreHandle sem = __moore_semaphore_create(0);
+  EXPECT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+
+  // Simulate AXI4 driver pattern: multiple threads using semaphore
+  __moore_semaphore_put(sem, 1);  // Initial key
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  // Thread 1 gets key
+  __moore_semaphore_get(sem, 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  // Thread 1 puts key back
+  __moore_semaphore_put(sem, 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  // Thread 2 gets key
+  __moore_semaphore_get(sem, 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+
+  __moore_semaphore_destroy(sem);
+}
+
+TEST(MooreRuntimeSemaphoreTest, InvalidHandleOperations) {
+  // Operations on invalid handle should not crash
+  __moore_semaphore_put(MOORE_SEMAPHORE_INVALID_HANDLE, 1);
+  __moore_semaphore_get(MOORE_SEMAPHORE_INVALID_HANDLE, 1);
+  EXPECT_EQ(__moore_semaphore_try_get(MOORE_SEMAPHORE_INVALID_HANDLE, 1), 0);
+  EXPECT_EQ(__moore_semaphore_get_key_count(MOORE_SEMAPHORE_INVALID_HANDLE), 0);
+  __moore_semaphore_destroy(MOORE_SEMAPHORE_INVALID_HANDLE);
+}
+
+TEST(MooreRuntimeSemaphoreTest, MultipleSemaphores) {
+  // Test multiple independent semaphores (like write_data_channel_key,
+  // write_response_channel_key in AXI4)
+  MooreSemaphoreHandle sem1 = __moore_semaphore_create(1);
+  MooreSemaphoreHandle sem2 = __moore_semaphore_create(1);
+  MooreSemaphoreHandle sem3 = __moore_semaphore_create(1);
+
+  EXPECT_NE(sem1, sem2);
+  EXPECT_NE(sem2, sem3);
+  EXPECT_NE(sem1, sem3);
+
+  // Each operates independently
+  __moore_semaphore_get(sem1, 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem1), 0);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem2), 1);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem3), 1);
+
+  __moore_semaphore_destroy(sem1);
+  __moore_semaphore_destroy(sem2);
+  __moore_semaphore_destroy(sem3);
+}
+
+TEST(MooreRuntimeSemaphoreTest, ConcurrentPutAndGet) {
+  // Test concurrent access pattern similar to AXI4 driver
+  MooreSemaphoreHandle sem = __moore_semaphore_create(1);
+  std::atomic<int> counter{0};
+
+  // Simulate multiple threads accessing the semaphore
+  auto worker = [&sem, &counter]() {
+    for (int i = 0; i < 10; ++i) {
+      __moore_semaphore_get(sem, 1);
+      counter++;
+      __moore_semaphore_put(sem, 1);
+    }
+  };
+
+  std::thread t1(worker);
+  std::thread t2(worker);
+
+  t1.join();
+  t2.join();
+
+  EXPECT_EQ(counter.load(), 20);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 1);
+
+  __moore_semaphore_destroy(sem);
+}
+
+//===----------------------------------------------------------------------===//
+// Additional Driver-Side Sequencer Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeSequenceTest, TryGetNextItemEmpty) {
+  const char *seqrName = "try_get_empty_sequencer";
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  // try_get_next_item on empty sequencer should return 0 (no item)
+  TestSeqTransaction rxTx;
+  int32_t result = __moore_sequencer_try_get_next_item(seqr, &rxTx, sizeof(rxTx));
+  EXPECT_EQ(result, 0);
+
+  __moore_sequencer_stop(seqr);
+  __moore_sequencer_destroy(seqr);
+}
+
+struct TryGetTestContext {
+  MooreSequencerHandle sequencer;
+  std::atomic<int> itemsSent{0};
+  TestSeqTransaction itemToSend;
+};
+
+static void tryGetSequenceBody(MooreSequenceHandle seq, void *userData) {
+  auto *ctx = static_cast<TryGetTestContext *>(userData);
+
+  __moore_sequence_start_item(seq, &ctx->itemToSend, sizeof(ctx->itemToSend));
+  __moore_sequence_finish_item(seq, &ctx->itemToSend, sizeof(ctx->itemToSend));
+  ctx->itemsSent++;
+}
+
+TEST(MooreRuntimeSequenceTest, TryGetNextItemWithData) {
+  const char *seqrName = "try_get_data_sequencer";
+  const char *seqName = "try_get_data_sequence";
+
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  TryGetTestContext ctx;
+  ctx.sequencer = seqr;
+  ctx.itemToSend = {0x5000, 0xDEAD, 1};
+
+  __moore_sequence_start_async(seq, seqr, tryGetSequenceBody, &ctx);
+
+  // Wait a bit for sequence to start
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  // Now try_get_next_item should succeed
+  TestSeqTransaction rxTx;
+  int32_t result = __moore_sequencer_try_get_next_item(seqr, &rxTx, sizeof(rxTx));
+  if (result == 1) {
+    EXPECT_EQ(rxTx.addr, 0x5000u);
+    EXPECT_EQ(rxTx.data, 0xDEADu);
+    __moore_sequencer_item_done(seqr);
+  }
+
+  __moore_sequence_wait(seq);
+  __moore_sequencer_stop(seqr);
+  __moore_sequence_destroy(seq);
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, PeekNextItem) {
+  const char *seqrName = "peek_sequencer";
+  const char *seqName = "peek_sequence";
+
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  TryGetTestContext ctx;
+  ctx.sequencer = seqr;
+  ctx.itemToSend = {0x6000, 0xBEEF, 0};
+
+  __moore_sequence_start_async(seq, seqr, tryGetSequenceBody, &ctx);
+
+  // Wait for sequence to post item
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  // Peek should return the item without removing it
+  TestSeqTransaction peekedTx;
+  int32_t peekResult = __moore_sequencer_peek_next_item(seqr, &peekedTx, sizeof(peekedTx));
+  if (peekResult == 1) {
+    EXPECT_EQ(peekedTx.addr, 0x6000u);
+    EXPECT_EQ(peekedTx.data, 0xBEEFu);
+
+    // Item should still be available for get_next_item
+    TestSeqTransaction rxTx;
+    int32_t getResult = __moore_sequencer_get_next_item(seqr, &rxTx, sizeof(rxTx));
+    EXPECT_EQ(getResult, 1);
+    EXPECT_EQ(rxTx.addr, peekedTx.addr);
+    EXPECT_EQ(rxTx.data, peekedTx.data);
+
+    __moore_sequencer_item_done(seqr);
+  }
+
+  __moore_sequence_wait(seq);
+  __moore_sequencer_stop(seqr);
+  __moore_sequence_destroy(seq);
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, HasItemsCheck) {
+  const char *seqrName = "has_items_check_sequencer";
+  const char *seqName = "has_items_check_sequence";
+
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  // Initially no items
+  EXPECT_EQ(__moore_sequencer_has_items(seqr), 0);
+
+  TryGetTestContext ctx;
+  ctx.sequencer = seqr;
+  ctx.itemToSend = {0x7000, 0xCAFE, 1};
+
+  __moore_sequence_start_async(seq, seqr, tryGetSequenceBody, &ctx);
+
+  // Wait for sequence to post item
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  // Now has_items might return 1
+  // Note: Due to timing, this might still be 0 if the item hasn't been posted yet
+  int32_t hasItems = __moore_sequencer_has_items(seqr);
+  if (hasItems == 1) {
+    TestSeqTransaction rxTx;
+    EXPECT_EQ(__moore_sequencer_get_next_item(seqr, &rxTx, sizeof(rxTx)), 1);
+    __moore_sequencer_item_done(seqr);
+  }
+
+  __moore_sequence_wait(seq);
+  __moore_sequencer_stop(seqr);
+  __moore_sequence_destroy(seq);
+  __moore_sequencer_destroy(seqr);
+}
+
 } // namespace

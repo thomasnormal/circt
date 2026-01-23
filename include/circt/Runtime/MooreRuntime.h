@@ -4544,6 +4544,74 @@ void __moore_seq_get_statistics(int64_t *totalSequences, int64_t *totalItems,
                                  int64_t *totalArbitrations);
 
 //===----------------------------------------------------------------------===//
+// SystemVerilog Semaphore Support
+//===----------------------------------------------------------------------===//
+//
+// Semaphores are synchronization primitives in SystemVerilog used for
+// controlling access to shared resources. They are commonly used in UVM drivers
+// to coordinate multiple threads accessing shared bus channels.
+//
+// In the AVIPs, semaphores are heavily used in complex drivers like AXI4 to
+// coordinate write data, write response, and read data channel threads:
+//
+//   semaphore write_data_channel_key;
+//   write_data_channel_key = new(1);  // One key initially
+//   write_data_channel_key.get(1);    // Block until key available
+//   // ... do work ...
+//   write_data_channel_key.put(1);    // Release key
+//
+// Key methods:
+// - new(int keyCount): Create semaphore with initial keys
+// - put(int keyCount): Add keys to semaphore
+// - get(int keyCount): Block and acquire keys (blocking)
+// - try_get(int keyCount): Try to acquire keys (non-blocking)
+//
+//===----------------------------------------------------------------------===//
+
+/// Handle type for semaphores.
+typedef int64_t MooreSemaphoreHandle;
+
+/// Invalid semaphore handle value.
+#define MOORE_SEMAPHORE_INVALID_HANDLE (-1)
+
+/// Create a new semaphore with an initial key count.
+/// @param keyCount Initial number of keys in the semaphore
+/// @return Handle to the created semaphore, or MOORE_SEMAPHORE_INVALID_HANDLE
+MooreSemaphoreHandle __moore_semaphore_create(int32_t keyCount);
+
+/// Destroy a semaphore and free its resources.
+/// @param sem Handle to the semaphore to destroy
+void __moore_semaphore_destroy(MooreSemaphoreHandle sem);
+
+/// Put (release) keys into the semaphore.
+/// This increments the key count and may unblock waiting threads.
+/// @param sem Handle to the semaphore
+/// @param keyCount Number of keys to add (must be positive)
+void __moore_semaphore_put(MooreSemaphoreHandle sem, int32_t keyCount);
+
+/// Get (acquire) keys from the semaphore (blocking).
+/// This blocks until the requested number of keys are available.
+/// The key count is decremented atomically once acquired.
+/// @param sem Handle to the semaphore
+/// @param keyCount Number of keys to acquire (must be positive)
+void __moore_semaphore_get(MooreSemaphoreHandle sem, int32_t keyCount);
+
+/// Try to get keys from the semaphore (non-blocking).
+/// If the requested number of keys are available, acquires them and returns 1.
+/// Otherwise, returns 0 immediately without blocking.
+/// @param sem Handle to the semaphore
+/// @param keyCount Number of keys to try to acquire (must be positive)
+/// @return 1 if keys were acquired, 0 if not enough keys available
+int32_t __moore_semaphore_try_get(MooreSemaphoreHandle sem, int32_t keyCount);
+
+/// Get the current key count in the semaphore.
+/// Note: This is mainly for debugging; the value may change immediately
+/// after reading if other threads are using the semaphore.
+/// @param sem Handle to the semaphore
+/// @return Current number of available keys
+int32_t __moore_semaphore_get_key_count(MooreSemaphoreHandle sem);
+
+//===----------------------------------------------------------------------===//
 // UVM Scoreboard Utilities
 //===----------------------------------------------------------------------===//
 //
