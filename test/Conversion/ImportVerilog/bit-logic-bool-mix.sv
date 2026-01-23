@@ -1,30 +1,53 @@
-// RUN: circt-verilog --parse-only %s
-// Test that mixing bit (two-valued) and logic (four-valued) types in conditional
-// expressions works correctly by promoting operands to the same type.
-// This test reproduces the bug where moore.and was created with mismatched types.
+// RUN: circt-verilog --ir-moore %s | FileCheck %s
 
-// This should compile without the error:
-// "moore.and op requires the same type for all operands and results"
+// Test that logical AND/OR operations correctly handle mixed bit/logic types.
+// When one operand is 2-state (bit) and another is 4-state (logic), both should
+// be promoted to 4-state for the logical operation.
 
-module test;
-  // Variables with different domains
-  bit b_cond;           // two-valued (i1)
-  time t_val;           // four-valued 64-bit (like UVM's phase_timeout)
-  int result;
+// CHECK-LABEL: @BitLogicMix
+module BitLogicMix;
+  bit a;       // 2-state
+  logic b;     // 4-state
+  logic result;
 
-  initial begin
-    // The combination of:
-    // 1. A bit comparison (b_cond == 1) returning i1
-    // 2. A time comparison (t_val == 0) returning l1
-    // Used to cause "moore.and op requires same type for all operands"
-    if ((b_cond == 1) && (t_val == 0)) begin
-      result = 1;
-    end
+  // Logical AND with mixed types should convert i1 to l1
+  // CHECK: moore.int_to_logic %{{.*}} : i1
+  // CHECK-NEXT: moore.and %{{.*}}, %{{.*}} : l1
+  initial result = a && b;
+endmodule
 
-    // Test with multiple conditions using &&& operator pattern in if statements
-    // This is similar to what UVM does with phase_timeout checking
-    if (b_cond &&& (t_val == 0)) begin
-      result = 2;
-    end
-  end
+// CHECK-LABEL: @BitBoolMix
+module BitBoolMix;
+  bit a;
+  bit b;
+  bit result;
+
+  // Both 2-state should remain i1
+  // CHECK: moore.and %{{.*}}, %{{.*}} : i1
+  initial result = a && b;
+endmodule
+
+// CHECK-LABEL: @LogicLogicMix
+module LogicLogicMix;
+  logic a;
+  logic b;
+  logic result;
+
+  // Both 4-state should remain l1
+  // CHECK: moore.and %{{.*}}, %{{.*}} : l1
+  initial result = a && b;
+endmodule
+
+// CHECK-LABEL: @ComplexMix
+module ComplexMix;
+  bit a;
+  logic b;
+  logic c;
+  logic d;
+
+  // Complex expression with mixed types
+  // The comparison (a == 1) produces i1 (2-state)
+  // The b && c produces l1 (4-state)
+  // The outer && should convert i1 to l1
+  initial d = (a == 1'b1) && (b && c);
 endmodule
