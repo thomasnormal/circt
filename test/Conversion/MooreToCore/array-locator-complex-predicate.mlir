@@ -197,3 +197,4 @@ moore.module @test_queue_ref_in_body() {
   moore.blocking_assign %result_var, %result : queue<i32, 0>
   moore.output
 }
+

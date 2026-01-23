@@ -2,8 +2,9 @@
 
 ## Summary
 
-### Pass Rate: 72.1% (111/154 tests) - Default
-Previously: 62.3% (96/154 tests) without --allow-nonprocedural-dynamic flag
+### Pass Rate: 72.7% (112/154 tests) - Default
+Previously: 72.1% (111/154 tests)
+Originally: 62.3% (96/154 tests) without --allow-nonprocedural-dynamic flag
 
 **IMPROVEMENT**: The `--allow-nonprocedural-dynamic` flag is now **enabled by default**,
 increasing the pass rate from 62.3% to 72.1% (+15 tests) without requiring any flag.
@@ -24,7 +25,7 @@ assignments that access class members to `always_comb` blocks.
 | class/ | 5 | 5 | All passing |
 | class-params/ | 13 | 13 | All passing |
 | event-control-expression/ | 1 | 1 | All passing |
-| extra-uvm-features/ | 10 | 13 | 3 fail (member_call/member_select/pkg_scope) |
+| extra-uvm-features/ | 11 | 13 | 2 fail (member_select/pkg_scope) |
 | functional-coverage/ | 13 | 14 | 1 fails (iff syntax) |
 | randomize/ | 2 | 2 | All passing |
 | randomize-constraints/ | 5 | 18 | Most pass with default flag |
@@ -101,12 +102,15 @@ that returns void and takes no parameters"
 **Root Cause**: Test files use `function pre_randomize();` instead of
 `function void pre_randomize();` - missing explicit void return type.
 
-### 8. Member Method/Select in With Clause (2 tests)
-Error: Method calls and member selects in with clauses
+### 8. Member Select in With Clause (1 test)
+Error: Member selects with struct field access in with clauses
 
-**Root Cause**: Complex with clause patterns not yet fully supported.
+**Root Cause**: Complex struct field access patterns in with clauses not yet fully supported.
+The simpler string method calls (e.g., `s.tolower()`) now work after adding inline conversion
+support for `StringToLowerOp` and `StringToUpperOp` in `ArrayLocatorOpConversion`.
 
-**Affected Tests**: member_call_in_with_clause.sv, member_select_in_with_clause.sv
+**Affected Tests**: member_select_in_with_clause.sv (struct field access like `item.p.x`)
+**Now Passing**: member_call_in_with_clause.sv (string method calls like `s.tolower()`)
 
 ### 9. Package Compilation Unit Reference (1 test)
 Error: "cannot reference compilation unit item from within a package"
@@ -141,6 +145,25 @@ Both forms:
 - Produce identical simulation results
 
 ## Files Changed in This Update
+
+### Latest Update (Iteration 111): String Methods in Array Locator Predicates
+
+1. `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+   - Added `StringToLowerOp` and `StringToUpperOp` to the list of operations that can be
+     converted inline within array locator predicates (line ~11977)
+   - Added inline handling for `StringToLowerOp` that calls `__moore_string_tolower` runtime
+     function (line ~12672)
+   - Added inline handling for `StringToUpperOp` that calls `__moore_string_toupper` runtime
+     function (line ~12698)
+
+This enables array locator predicates like:
+```systemverilog
+string_qv = string_q.find_last(s) with (s.tolower() == "a");
+```
+
+The `s.tolower()` call is now converted inline within the loop rather than failing.
+
+### Previous Update (Iteration 110): Non-procedural Dynamic Default
 
 1. `tools/circt-verilog/circt-verilog.cpp`:
    - Changed `allowNonProceduralDynamic` default from `false` to `true`
