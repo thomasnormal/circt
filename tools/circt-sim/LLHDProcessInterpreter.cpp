@@ -25,6 +25,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cmath>
 
 #define DEBUG_TYPE "llhd-interpreter"
 
@@ -2443,6 +2444,291 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       setValue(procId, ashrOp.getResult(),
                InterpretedValue(lhs.getAPInt().ashr(shift)));
     }
+    return success();
+  }
+
+  // LLVM select - conditional value selection
+  if (auto selectOp = dyn_cast<LLVM::SelectOp>(op)) {
+    InterpretedValue cond = getValue(procId, selectOp.getCondition());
+    unsigned width = getTypeWidth(selectOp.getType());
+    if (cond.isX()) {
+      // X condition propagates to X result
+      setValue(procId, selectOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      bool condVal = cond.getUInt64() != 0;
+      InterpretedValue selected =
+          condVal ? getValue(procId, selectOp.getTrueValue())
+                  : getValue(procId, selectOp.getFalseValue());
+      setValue(procId, selectOp.getResult(), selected);
+    }
+    return success();
+  }
+
+  // LLVM freeze - freeze undefined values to a deterministic value
+  if (auto freezeOp = dyn_cast<LLVM::FreezeOp>(op)) {
+    InterpretedValue input = getValue(procId, freezeOp.getVal());
+    unsigned width = getTypeWidth(freezeOp.getType());
+    if (input.isX()) {
+      // Freeze X to 0 (a deterministic but arbitrary value)
+      setValue(procId, freezeOp.getResult(), InterpretedValue(0, width));
+    } else {
+      // Pass through known values
+      setValue(procId, freezeOp.getResult(), input);
+    }
+    return success();
+  }
+
+  // LLVM sdiv - signed integer division
+  if (auto sdivOp = dyn_cast<LLVM::SDivOp>(op)) {
+    InterpretedValue lhs = getValue(procId, sdivOp.getLhs());
+    InterpretedValue rhs = getValue(procId, sdivOp.getRhs());
+    unsigned width = getTypeWidth(sdivOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, sdivOp.getResult(), InterpretedValue::makeX(width));
+    } else if (rhs.getAPInt().isZero()) {
+      // Division by zero returns X
+      setValue(procId, sdivOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, sdivOp.getResult(),
+               InterpretedValue(lhs.getAPInt().sdiv(rhs.getAPInt())));
+    }
+    return success();
+  }
+
+  // LLVM udiv - unsigned integer division
+  if (auto udivOp = dyn_cast<LLVM::UDivOp>(op)) {
+    InterpretedValue lhs = getValue(procId, udivOp.getLhs());
+    InterpretedValue rhs = getValue(procId, udivOp.getRhs());
+    unsigned width = getTypeWidth(udivOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, udivOp.getResult(), InterpretedValue::makeX(width));
+    } else if (rhs.getAPInt().isZero()) {
+      // Division by zero returns X
+      setValue(procId, udivOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, udivOp.getResult(),
+               InterpretedValue(lhs.getAPInt().udiv(rhs.getAPInt())));
+    }
+    return success();
+  }
+
+  // LLVM srem - signed integer remainder
+  if (auto sremOp = dyn_cast<LLVM::SRemOp>(op)) {
+    InterpretedValue lhs = getValue(procId, sremOp.getLhs());
+    InterpretedValue rhs = getValue(procId, sremOp.getRhs());
+    unsigned width = getTypeWidth(sremOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, sremOp.getResult(), InterpretedValue::makeX(width));
+    } else if (rhs.getAPInt().isZero()) {
+      // Remainder by zero returns X
+      setValue(procId, sremOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, sremOp.getResult(),
+               InterpretedValue(lhs.getAPInt().srem(rhs.getAPInt())));
+    }
+    return success();
+  }
+
+  // LLVM urem - unsigned integer remainder
+  if (auto uremOp = dyn_cast<LLVM::URemOp>(op)) {
+    InterpretedValue lhs = getValue(procId, uremOp.getLhs());
+    InterpretedValue rhs = getValue(procId, uremOp.getRhs());
+    unsigned width = getTypeWidth(uremOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, uremOp.getResult(), InterpretedValue::makeX(width));
+    } else if (rhs.getAPInt().isZero()) {
+      // Remainder by zero returns X
+      setValue(procId, uremOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      setValue(procId, uremOp.getResult(),
+               InterpretedValue(lhs.getAPInt().urem(rhs.getAPInt())));
+    }
+    return success();
+  }
+
+  // LLVM fadd - floating point addition
+  if (auto faddOp = dyn_cast<LLVM::FAddOp>(op)) {
+    InterpretedValue lhs = getValue(procId, faddOp.getLhs());
+    InterpretedValue rhs = getValue(procId, faddOp.getRhs());
+    unsigned width = getTypeWidth(faddOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, faddOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      // Convert APInt to floating point, perform operation, convert back
+      APInt lhsInt = lhs.getAPInt();
+      APInt rhsInt = rhs.getAPInt();
+      if (width == 32) {
+        uint32_t lhsBits = static_cast<uint32_t>(lhsInt.getZExtValue());
+        uint32_t rhsBits = static_cast<uint32_t>(rhsInt.getZExtValue());
+        float lhsFloat = llvm::bit_cast<float>(lhsBits);
+        float rhsFloat = llvm::bit_cast<float>(rhsBits);
+        float result = lhsFloat + rhsFloat;
+        setValue(procId, faddOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint32_t>(result), 32));
+      } else if (width == 64) {
+        double lhsDouble = llvm::bit_cast<double>(lhsInt.getZExtValue());
+        double rhsDouble = llvm::bit_cast<double>(rhsInt.getZExtValue());
+        double result = lhsDouble + rhsDouble;
+        setValue(procId, faddOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint64_t>(result), 64));
+      } else {
+        setValue(procId, faddOp.getResult(), InterpretedValue::makeX(width));
+      }
+    }
+    return success();
+  }
+
+  // LLVM fsub - floating point subtraction
+  if (auto fsubOp = dyn_cast<LLVM::FSubOp>(op)) {
+    InterpretedValue lhs = getValue(procId, fsubOp.getLhs());
+    InterpretedValue rhs = getValue(procId, fsubOp.getRhs());
+    unsigned width = getTypeWidth(fsubOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, fsubOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      APInt lhsInt = lhs.getAPInt();
+      APInt rhsInt = rhs.getAPInt();
+      if (width == 32) {
+        uint32_t lhsBits = static_cast<uint32_t>(lhsInt.getZExtValue());
+        uint32_t rhsBits = static_cast<uint32_t>(rhsInt.getZExtValue());
+        float lhsFloat = llvm::bit_cast<float>(lhsBits);
+        float rhsFloat = llvm::bit_cast<float>(rhsBits);
+        float result = lhsFloat - rhsFloat;
+        setValue(procId, fsubOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint32_t>(result), 32));
+      } else if (width == 64) {
+        double lhsDouble = llvm::bit_cast<double>(lhsInt.getZExtValue());
+        double rhsDouble = llvm::bit_cast<double>(rhsInt.getZExtValue());
+        double result = lhsDouble - rhsDouble;
+        setValue(procId, fsubOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint64_t>(result), 64));
+      } else {
+        setValue(procId, fsubOp.getResult(), InterpretedValue::makeX(width));
+      }
+    }
+    return success();
+  }
+
+  // LLVM fmul - floating point multiplication
+  if (auto fmulOp = dyn_cast<LLVM::FMulOp>(op)) {
+    InterpretedValue lhs = getValue(procId, fmulOp.getLhs());
+    InterpretedValue rhs = getValue(procId, fmulOp.getRhs());
+    unsigned width = getTypeWidth(fmulOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, fmulOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      APInt lhsInt = lhs.getAPInt();
+      APInt rhsInt = rhs.getAPInt();
+      if (width == 32) {
+        uint32_t lhsBits = static_cast<uint32_t>(lhsInt.getZExtValue());
+        uint32_t rhsBits = static_cast<uint32_t>(rhsInt.getZExtValue());
+        float lhsFloat = llvm::bit_cast<float>(lhsBits);
+        float rhsFloat = llvm::bit_cast<float>(rhsBits);
+        float result = lhsFloat * rhsFloat;
+        setValue(procId, fmulOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint32_t>(result), 32));
+      } else if (width == 64) {
+        double lhsDouble = llvm::bit_cast<double>(lhsInt.getZExtValue());
+        double rhsDouble = llvm::bit_cast<double>(rhsInt.getZExtValue());
+        double result = lhsDouble * rhsDouble;
+        setValue(procId, fmulOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint64_t>(result), 64));
+      } else {
+        setValue(procId, fmulOp.getResult(), InterpretedValue::makeX(width));
+      }
+    }
+    return success();
+  }
+
+  // LLVM fdiv - floating point division
+  if (auto fdivOp = dyn_cast<LLVM::FDivOp>(op)) {
+    InterpretedValue lhs = getValue(procId, fdivOp.getLhs());
+    InterpretedValue rhs = getValue(procId, fdivOp.getRhs());
+    unsigned width = getTypeWidth(fdivOp.getType());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, fdivOp.getResult(), InterpretedValue::makeX(width));
+    } else {
+      APInt lhsInt = lhs.getAPInt();
+      APInt rhsInt = rhs.getAPInt();
+      if (width == 32) {
+        uint32_t lhsBits = static_cast<uint32_t>(lhsInt.getZExtValue());
+        uint32_t rhsBits = static_cast<uint32_t>(rhsInt.getZExtValue());
+        float lhsFloat = llvm::bit_cast<float>(lhsBits);
+        float rhsFloat = llvm::bit_cast<float>(rhsBits);
+        float result = lhsFloat / rhsFloat;
+        setValue(procId, fdivOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint32_t>(result), 32));
+      } else if (width == 64) {
+        double lhsDouble = llvm::bit_cast<double>(lhsInt.getZExtValue());
+        double rhsDouble = llvm::bit_cast<double>(rhsInt.getZExtValue());
+        double result = lhsDouble / rhsDouble;
+        setValue(procId, fdivOp.getResult(),
+                 InterpretedValue(llvm::bit_cast<uint64_t>(result), 64));
+      } else {
+        setValue(procId, fdivOp.getResult(), InterpretedValue::makeX(width));
+      }
+    }
+    return success();
+  }
+
+  // LLVM fcmp - floating point comparison
+  if (auto fcmpOp = dyn_cast<LLVM::FCmpOp>(op)) {
+    InterpretedValue lhs = getValue(procId, fcmpOp.getLhs());
+    InterpretedValue rhs = getValue(procId, fcmpOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, fcmpOp.getResult(), InterpretedValue::makeX(1));
+      return success();
+    }
+    unsigned width = getTypeWidth(fcmpOp.getLhs().getType());
+    bool result = false;
+
+    // Convert to appropriate floating point type and compare
+    if (width == 32) {
+      uint32_t lhsBits = static_cast<uint32_t>(lhs.getAPInt().getZExtValue());
+      uint32_t rhsBits = static_cast<uint32_t>(rhs.getAPInt().getZExtValue());
+      float lhsFloat = llvm::bit_cast<float>(lhsBits);
+      float rhsFloat = llvm::bit_cast<float>(rhsBits);
+      switch (fcmpOp.getPredicate()) {
+      case LLVM::FCmpPredicate::_false: result = false; break;
+      case LLVM::FCmpPredicate::oeq: result = lhsFloat == rhsFloat; break;
+      case LLVM::FCmpPredicate::ogt: result = lhsFloat > rhsFloat; break;
+      case LLVM::FCmpPredicate::oge: result = lhsFloat >= rhsFloat; break;
+      case LLVM::FCmpPredicate::olt: result = lhsFloat < rhsFloat; break;
+      case LLVM::FCmpPredicate::ole: result = lhsFloat <= rhsFloat; break;
+      case LLVM::FCmpPredicate::one: result = lhsFloat != rhsFloat && !std::isnan(lhsFloat) && !std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::ord: result = !std::isnan(lhsFloat) && !std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::ueq: result = lhsFloat == rhsFloat || std::isnan(lhsFloat) || std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::ugt: result = lhsFloat > rhsFloat || std::isnan(lhsFloat) || std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::uge: result = lhsFloat >= rhsFloat || std::isnan(lhsFloat) || std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::ult: result = lhsFloat < rhsFloat || std::isnan(lhsFloat) || std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::ule: result = lhsFloat <= rhsFloat || std::isnan(lhsFloat) || std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::une: result = lhsFloat != rhsFloat; break;
+      case LLVM::FCmpPredicate::uno: result = std::isnan(lhsFloat) || std::isnan(rhsFloat); break;
+      case LLVM::FCmpPredicate::_true: result = true; break;
+      }
+    } else if (width == 64) {
+      double lhsDouble = llvm::bit_cast<double>(lhs.getAPInt().getZExtValue());
+      double rhsDouble = llvm::bit_cast<double>(rhs.getAPInt().getZExtValue());
+      switch (fcmpOp.getPredicate()) {
+      case LLVM::FCmpPredicate::_false: result = false; break;
+      case LLVM::FCmpPredicate::oeq: result = lhsDouble == rhsDouble; break;
+      case LLVM::FCmpPredicate::ogt: result = lhsDouble > rhsDouble; break;
+      case LLVM::FCmpPredicate::oge: result = lhsDouble >= rhsDouble; break;
+      case LLVM::FCmpPredicate::olt: result = lhsDouble < rhsDouble; break;
+      case LLVM::FCmpPredicate::ole: result = lhsDouble <= rhsDouble; break;
+      case LLVM::FCmpPredicate::one: result = lhsDouble != rhsDouble && !std::isnan(lhsDouble) && !std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::ord: result = !std::isnan(lhsDouble) && !std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::ueq: result = lhsDouble == rhsDouble || std::isnan(lhsDouble) || std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::ugt: result = lhsDouble > rhsDouble || std::isnan(lhsDouble) || std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::uge: result = lhsDouble >= rhsDouble || std::isnan(lhsDouble) || std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::ult: result = lhsDouble < rhsDouble || std::isnan(lhsDouble) || std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::ule: result = lhsDouble <= rhsDouble || std::isnan(lhsDouble) || std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::une: result = lhsDouble != rhsDouble; break;
+      case LLVM::FCmpPredicate::uno: result = std::isnan(lhsDouble) || std::isnan(rhsDouble); break;
+      case LLVM::FCmpPredicate::_true: result = true; break;
+      }
+    }
+    setValue(procId, fcmpOp.getResult(), InterpretedValue(result ? 1 : 0, 1));
     return success();
   }
 
