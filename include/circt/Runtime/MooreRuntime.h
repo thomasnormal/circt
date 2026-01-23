@@ -3929,6 +3929,129 @@ void __moore_tlm_print_topology(void);
 void __moore_tlm_get_statistics(int64_t *totalConnections, int64_t *totalWrites,
                                 int64_t *totalGets);
 
+//===----------------------------------------------------------------------===//
+// UVM Objection System
+//===----------------------------------------------------------------------===//
+//
+// The UVM objection system controls phase transitions in testbenches.
+// Components raise objections to prevent a phase from ending, and drop them
+// when their work is complete. The phase controller waits until all objections
+// are dropped (and an optional drain time has elapsed) before advancing.
+//
+// Key concepts:
+// - Objection pool: A named collection of objections for a specific phase
+// - Raise/drop: Increment/decrement the objection count (with optional context)
+// - Drain time: Time to wait after count reaches zero before ending phase
+// - Hierarchical context: Objections can be associated with component paths
+//
+//===----------------------------------------------------------------------===//
+
+/// Handle type for objection pools.
+typedef int64_t MooreObjectionHandle;
+
+/// Invalid objection handle value.
+#define MOORE_OBJECTION_INVALID_HANDLE (-1)
+
+/// Create a new objection pool for a phase.
+/// Each phase should have its own objection pool to track when the phase
+/// can complete.
+/// @param phaseName Name of the phase (e.g., "run", "main", "shutdown")
+/// @param phaseNameLen Length of the phase name string
+/// @return Handle to the created objection pool, or MOORE_OBJECTION_INVALID_HANDLE on failure
+MooreObjectionHandle __moore_objection_create(const char *phaseName,
+                                               int64_t phaseNameLen);
+
+/// Destroy an objection pool.
+/// @param objection Handle to the objection pool to destroy
+void __moore_objection_destroy(MooreObjectionHandle objection);
+
+/// Raise an objection to prevent a phase from ending.
+/// This increments the objection count. The phase will not end until all
+/// raised objections are dropped.
+/// @param objection Handle to the objection pool
+/// @param context Component path or context string (may be NULL)
+/// @param contextLen Length of the context string (0 if NULL)
+/// @param description Optional description of why objection is raised (may be NULL)
+/// @param descriptionLen Length of the description (0 if NULL)
+/// @param count Number of objections to raise (typically 1)
+void __moore_objection_raise(MooreObjectionHandle objection,
+                             const char *context, int64_t contextLen,
+                             const char *description, int64_t descriptionLen,
+                             int64_t count);
+
+/// Drop an objection, potentially allowing the phase to end.
+/// This decrements the objection count. When all objections are dropped
+/// (count reaches zero), the phase may end after the drain time.
+/// @param objection Handle to the objection pool
+/// @param context Component path or context string (may be NULL)
+/// @param contextLen Length of the context string (0 if NULL)
+/// @param description Optional description of why objection is dropped (may be NULL)
+/// @param descriptionLen Length of the description (0 if NULL)
+/// @param count Number of objections to drop (typically 1)
+void __moore_objection_drop(MooreObjectionHandle objection,
+                            const char *context, int64_t contextLen,
+                            const char *description, int64_t descriptionLen,
+                            int64_t count);
+
+/// Get the total objection count for a phase.
+/// @param objection Handle to the objection pool
+/// @return Current total count of raised objections
+int64_t __moore_objection_get_count(MooreObjectionHandle objection);
+
+/// Get the objection count for a specific context.
+/// @param objection Handle to the objection pool
+/// @param context Component path or context string
+/// @param contextLen Length of the context string
+/// @return Count of objections raised by the specified context
+int64_t __moore_objection_get_count_by_context(MooreObjectionHandle objection,
+                                                const char *context,
+                                                int64_t contextLen);
+
+/// Set the drain time for an objection pool.
+/// The drain time is the amount of time to wait after all objections are
+/// dropped before signaling that the phase can end. This allows for any
+/// final cleanup or propagation delays.
+/// @param objection Handle to the objection pool
+/// @param drainTime Drain time in simulation time units (0 for immediate)
+void __moore_objection_set_drain_time(MooreObjectionHandle objection,
+                                       int64_t drainTime);
+
+/// Get the drain time for an objection pool.
+/// @param objection Handle to the objection pool
+/// @return Current drain time setting
+int64_t __moore_objection_get_drain_time(MooreObjectionHandle objection);
+
+/// Wait until all objections are dropped and drain time has elapsed.
+/// This is a blocking call used by the phase controller to wait for
+/// the phase to complete. In a simulation environment, this would
+/// integrate with the simulation scheduler.
+/// @param objection Handle to the objection pool
+/// @return 1 when complete (all objections dropped + drain time elapsed), 0 on error
+int32_t __moore_objection_wait_for_zero(MooreObjectionHandle objection);
+
+/// Check if all objections have been dropped (non-blocking).
+/// @param objection Handle to the objection pool
+/// @return 1 if count is zero, 0 if objections are still raised
+int32_t __moore_objection_is_zero(MooreObjectionHandle objection);
+
+/// Get the name of the phase associated with an objection pool.
+/// @param objection Handle to the objection pool
+/// @return The phase name as a MooreString
+MooreString __moore_objection_get_phase_name(MooreObjectionHandle objection);
+
+/// Enable or disable objection tracing for debugging.
+/// When enabled, all objection operations are logged.
+/// @param enable 1 to enable, 0 to disable
+void __moore_objection_set_trace_enabled(int32_t enable);
+
+/// Check if objection tracing is enabled.
+/// @return 1 if enabled, 0 otherwise
+int32_t __moore_objection_is_trace_enabled(void);
+
+/// Print a summary of all objection pools and their current state.
+/// Useful for debugging phase hang issues.
+void __moore_objection_print_summary(void);
+
 #ifdef __cplusplus
 }
 #endif

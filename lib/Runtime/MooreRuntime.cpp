@@ -35,6 +35,7 @@
 #include <random>
 #include <regex>
 #include <set>
+#include <thread>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -13663,4 +13664,327 @@ extern "C" void __moore_tlm_get_statistics(int64_t *totalConnections,
     *totalWrites = tlmTotalWrites;
   if (totalGets)
     *totalGets = tlmTotalGets;
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Objection System Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Global flag to control objection tracing
+static bool objectionTraceEnabled = false;
+
+/// Objection entry tracking a single context's objections
+struct ObjectionEntry {
+  std::string context;      // Component path or context
+  std::string description;  // Last description provided
+  int64_t count;            // Number of objections from this context
+
+  ObjectionEntry(const std::string &ctx, const std::string &desc, int64_t cnt)
+      : context(ctx), description(desc), count(cnt) {}
+};
+
+/// Objection pool for a phase
+struct ObjectionPool {
+  std::string phaseName;                         // Name of the phase
+  std::map<std::string, ObjectionEntry> entries; // Context -> entry map
+  int64_t totalCount;                            // Total objections across all contexts
+  int64_t drainTime;                             // Time to wait after zero
+  std::mutex mutex;                              // For thread-safe operations
+  std::condition_variable zeroCondition;         // Condition variable for wait_for_zero
+
+  ObjectionPool(const std::string &name)
+      : phaseName(name), totalCount(0), drainTime(0) {}
+};
+
+/// Global objection registry
+struct ObjectionRegistry {
+  std::vector<std::unique_ptr<ObjectionPool>> pools;
+  std::mutex mutex;
+
+  ObjectionPool *getPool(MooreObjectionHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= pools.size())
+      return nullptr;
+    return pools[handle].get();
+  }
+
+  MooreObjectionHandle addPool(std::unique_ptr<ObjectionPool> pool) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreObjectionHandle handle = static_cast<MooreObjectionHandle>(pools.size());
+    pools.push_back(std::move(pool));
+    return handle;
+  }
+};
+
+ObjectionRegistry &getObjectionRegistry() {
+  static ObjectionRegistry registry;
+  return registry;
+}
+
+void objectionTrace(const char *fmt, ...) {
+  if (!objectionTraceEnabled)
+    return;
+  va_list args;
+  va_start(args, fmt);
+  std::printf("[OBJECTION] ");
+  std::vprintf(fmt, args);
+  std::printf("\n");
+  va_end(args);
+}
+
+} // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Objection System Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreObjectionHandle __moore_objection_create(const char *phaseName,
+                                                          int64_t phaseNameLen) {
+  std::string name(phaseName, phaseNameLen);
+  auto pool = std::make_unique<ObjectionPool>(name);
+
+  objectionTrace("Created objection pool for phase '%s'", name.c_str());
+
+  return getObjectionRegistry().addPool(std::move(pool));
+}
+
+extern "C" void __moore_objection_destroy(MooreObjectionHandle objection) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (pool) {
+    objectionTrace("Destroyed objection pool for phase '%s'",
+                   pool->phaseName.c_str());
+    // Note: We don't actually remove from the vector to preserve handles
+  }
+}
+
+extern "C" void __moore_objection_raise(MooreObjectionHandle objection,
+                                         const char *context, int64_t contextLen,
+                                         const char *description,
+                                         int64_t descriptionLen, int64_t count) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool) {
+    std::fprintf(stderr,
+                 "[OBJECTION] Error: Invalid handle in raise_objection()\n");
+    return;
+  }
+
+  std::string ctx = context ? std::string(context, contextLen) : "";
+  std::string desc = description ? std::string(description, descriptionLen) : "";
+
+  std::lock_guard<std::mutex> lock(pool->mutex);
+
+  auto it = pool->entries.find(ctx);
+  if (it != pool->entries.end()) {
+    it->second.count += count;
+    if (!desc.empty())
+      it->second.description = desc;
+  } else {
+    pool->entries.emplace(ctx, ObjectionEntry(ctx, desc, count));
+  }
+
+  pool->totalCount += count;
+
+  objectionTrace("raise_objection(phase='%s', context='%s', count=%lld) -> total=%lld",
+                 pool->phaseName.c_str(), ctx.c_str(), (long long)count,
+                 (long long)pool->totalCount);
+}
+
+extern "C" void __moore_objection_drop(MooreObjectionHandle objection,
+                                        const char *context, int64_t contextLen,
+                                        const char *description,
+                                        int64_t descriptionLen, int64_t count) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool) {
+    std::fprintf(stderr,
+                 "[OBJECTION] Error: Invalid handle in drop_objection()\n");
+    return;
+  }
+
+  std::string ctx = context ? std::string(context, contextLen) : "";
+  std::string desc = description ? std::string(description, descriptionLen) : "";
+
+  std::unique_lock<std::mutex> lock(pool->mutex);
+
+  auto it = pool->entries.find(ctx);
+  if (it != pool->entries.end()) {
+    it->second.count -= count;
+    if (!desc.empty())
+      it->second.description = desc;
+
+    // Remove entry if count drops to zero or below
+    if (it->second.count <= 0) {
+      pool->entries.erase(it);
+    }
+  }
+
+  pool->totalCount -= count;
+  if (pool->totalCount < 0)
+    pool->totalCount = 0;
+
+  objectionTrace("drop_objection(phase='%s', context='%s', count=%lld) -> total=%lld",
+                 pool->phaseName.c_str(), ctx.c_str(), (long long)count,
+                 (long long)pool->totalCount);
+
+  // Notify waiting threads if count reached zero
+  if (pool->totalCount == 0) {
+    lock.unlock();
+    pool->zeroCondition.notify_all();
+  }
+}
+
+extern "C" int64_t __moore_objection_get_count(MooreObjectionHandle objection) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(pool->mutex);
+  return pool->totalCount;
+}
+
+extern "C" int64_t
+__moore_objection_get_count_by_context(MooreObjectionHandle objection,
+                                        const char *context, int64_t contextLen) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool)
+    return 0;
+
+  std::string ctx(context, contextLen);
+
+  std::lock_guard<std::mutex> lock(pool->mutex);
+  auto it = pool->entries.find(ctx);
+  if (it != pool->entries.end())
+    return it->second.count;
+  return 0;
+}
+
+extern "C" void __moore_objection_set_drain_time(MooreObjectionHandle objection,
+                                                  int64_t drainTime) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool)
+    return;
+
+  std::lock_guard<std::mutex> lock(pool->mutex);
+  pool->drainTime = drainTime;
+
+  objectionTrace("set_drain_time(phase='%s', drainTime=%lld)",
+                 pool->phaseName.c_str(), (long long)drainTime);
+}
+
+extern "C" int64_t
+__moore_objection_get_drain_time(MooreObjectionHandle objection) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(pool->mutex);
+  return pool->drainTime;
+}
+
+extern "C" int32_t
+__moore_objection_wait_for_zero(MooreObjectionHandle objection) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool)
+    return 0;
+
+  std::unique_lock<std::mutex> lock(pool->mutex);
+
+  // Wait until total count reaches zero
+  pool->zeroCondition.wait(lock, [pool]() { return pool->totalCount == 0; });
+
+  // Apply drain time if set
+  // Note: In a real simulation environment, this would integrate with the
+  // simulation scheduler. For now, we use std::this_thread::sleep_for
+  // as a simple approximation.
+  if (pool->drainTime > 0) {
+    int64_t drainMs = pool->drainTime;
+    lock.unlock();
+
+    objectionTrace("wait_for_zero(phase='%s') - starting drain time: %lldms",
+                   pool->phaseName.c_str(), (long long)drainMs);
+
+    // Sleep for drain time (interpreting drainTime as milliseconds for testing)
+    std::this_thread::sleep_for(std::chrono::milliseconds(drainMs));
+
+    objectionTrace("wait_for_zero(phase='%s') - drain time complete",
+                   pool->phaseName.c_str());
+  } else {
+    objectionTrace("wait_for_zero(phase='%s') - completed (no drain time)",
+                   pool->phaseName.c_str());
+  }
+
+  return 1;
+}
+
+extern "C" int32_t __moore_objection_is_zero(MooreObjectionHandle objection) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool)
+    return 1; // Treat invalid handle as "zero" to avoid deadlocks
+
+  std::lock_guard<std::mutex> lock(pool->mutex);
+  return pool->totalCount == 0 ? 1 : 0;
+}
+
+extern "C" MooreString
+__moore_objection_get_phase_name(MooreObjectionHandle objection) {
+  auto *pool = getObjectionRegistry().getPool(objection);
+  if (!pool) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  MooreString result;
+  result.len = pool->phaseName.size();
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, pool->phaseName.c_str(), result.len);
+  }
+  return result;
+}
+
+extern "C" void __moore_objection_set_trace_enabled(int32_t enable) {
+  objectionTraceEnabled = (enable != 0);
+  if (objectionTraceEnabled) {
+    std::printf("[OBJECTION] Tracing enabled\n");
+  }
+}
+
+extern "C" int32_t __moore_objection_is_trace_enabled(void) {
+  return objectionTraceEnabled ? 1 : 0;
+}
+
+extern "C" void __moore_objection_print_summary(void) {
+  auto &registry = getObjectionRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+
+  std::printf("\n=== UVM Objection Summary ===\n");
+
+  if (registry.pools.empty()) {
+    std::printf("No objection pools registered.\n");
+  } else {
+    for (size_t i = 0; i < registry.pools.size(); ++i) {
+      auto &pool = registry.pools[i];
+      if (pool) {
+        std::lock_guard<std::mutex> poolLock(pool->mutex);
+        std::printf("\n[%zu] Phase: %s\n", i, pool->phaseName.c_str());
+        std::printf("     Total Count: %lld\n", (long long)pool->totalCount);
+        std::printf("     Drain Time: %lld\n", (long long)pool->drainTime);
+
+        if (!pool->entries.empty()) {
+          std::printf("     Objections by context:\n");
+          for (const auto &entry : pool->entries) {
+            std::printf("       '%s': %lld", entry.first.c_str(),
+                        (long long)entry.second.count);
+            if (!entry.second.description.empty()) {
+              std::printf(" (%s)", entry.second.description.c_str());
+            }
+            std::printf("\n");
+          }
+        }
+      }
+    }
+  }
+
+  std::printf("\n=============================\n");
 }

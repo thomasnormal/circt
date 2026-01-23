@@ -17,9 +17,11 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <ctime>
 #include <map>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -10932,6 +10934,290 @@ TEST(MooreRuntimeTlmTest, Statistics) {
   EXPECT_GE(conns, 0);
   EXPECT_GE(writes, 0);
   EXPECT_GE(gets, 0);
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Objection System Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeObjectionTest, CreateAndDestroy) {
+  const char *phaseName = "run_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+  EXPECT_NE(objection, MOORE_OBJECTION_INVALID_HANDLE);
+
+  MooreString name = __moore_objection_get_phase_name(objection);
+  ASSERT_NE(name.data, nullptr);
+  EXPECT_EQ(std::string(name.data, name.len), phaseName);
+  __moore_free(name.data);
+
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+  EXPECT_EQ(__moore_objection_is_zero(objection), 1);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, RaiseAndDrop) {
+  const char *phaseName = "main_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  // Initially zero
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+  EXPECT_EQ(__moore_objection_is_zero(objection), 1);
+
+  // Raise single objection
+  const char *ctx1 = "uvm_test_top.env.agent1";
+  __moore_objection_raise(objection, ctx1, strlen(ctx1), nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 1);
+  EXPECT_EQ(__moore_objection_is_zero(objection), 0);
+
+  // Raise another from different context
+  const char *ctx2 = "uvm_test_top.env.agent2";
+  __moore_objection_raise(objection, ctx2, strlen(ctx2), nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 2);
+
+  // Check per-context counts
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx1, strlen(ctx1)), 1);
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx2, strlen(ctx2)), 1);
+
+  // Drop one
+  __moore_objection_drop(objection, ctx1, strlen(ctx1), nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 1);
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx1, strlen(ctx1)), 0);
+
+  // Drop the other
+  __moore_objection_drop(objection, ctx2, strlen(ctx2), nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+  EXPECT_EQ(__moore_objection_is_zero(objection), 1);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, RaiseMultiple) {
+  const char *phaseName = "test_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  // Raise multiple objections at once
+  const char *ctx = "uvm_test_top.driver";
+  __moore_objection_raise(objection, ctx, strlen(ctx), nullptr, 0, 5);
+  EXPECT_EQ(__moore_objection_get_count(objection), 5);
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx, strlen(ctx)), 5);
+
+  // Raise more from same context
+  __moore_objection_raise(objection, ctx, strlen(ctx), nullptr, 0, 3);
+  EXPECT_EQ(__moore_objection_get_count(objection), 8);
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx, strlen(ctx)), 8);
+
+  // Drop some
+  __moore_objection_drop(objection, ctx, strlen(ctx), nullptr, 0, 4);
+  EXPECT_EQ(__moore_objection_get_count(objection), 4);
+
+  // Drop all remaining
+  __moore_objection_drop(objection, ctx, strlen(ctx), nullptr, 0, 4);
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+  EXPECT_EQ(__moore_objection_is_zero(objection), 1);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, DrainTime) {
+  const char *phaseName = "shutdown_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  // Initially zero drain time
+  EXPECT_EQ(__moore_objection_get_drain_time(objection), 0);
+
+  // Set drain time
+  __moore_objection_set_drain_time(objection, 100);
+  EXPECT_EQ(__moore_objection_get_drain_time(objection), 100);
+
+  // Update drain time
+  __moore_objection_set_drain_time(objection, 50);
+  EXPECT_EQ(__moore_objection_get_drain_time(objection), 50);
+
+  // Reset to zero
+  __moore_objection_set_drain_time(objection, 0);
+  EXPECT_EQ(__moore_objection_get_drain_time(objection), 0);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, WithDescriptions) {
+  const char *phaseName = "run_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  const char *ctx = "uvm_test_top.env.sequencer";
+  const char *desc1 = "Sequence in progress";
+  const char *desc2 = "Cleanup complete";
+
+  // Raise with description
+  __moore_objection_raise(objection, ctx, strlen(ctx), desc1, strlen(desc1), 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 1);
+
+  // Drop with description
+  __moore_objection_drop(objection, ctx, strlen(ctx), desc2, strlen(desc2), 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, NullContext) {
+  const char *phaseName = "run_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  // Raise with null context (anonymous objection)
+  __moore_objection_raise(objection, nullptr, 0, nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 1);
+
+  // Drop with null context
+  __moore_objection_drop(objection, nullptr, 0, nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, WaitForZeroImmediate) {
+  const char *phaseName = "test_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  // Already zero, should return immediately
+  int32_t result = __moore_objection_wait_for_zero(objection);
+  EXPECT_EQ(result, 1);
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, WaitForZeroWithThread) {
+  const char *phaseName = "concurrent_test";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  const char *ctx = "test_component";
+  __moore_objection_raise(objection, ctx, strlen(ctx), nullptr, 0, 1);
+
+  std::atomic<bool> waitCompleted{false};
+
+  // Start a thread that waits for zero
+  std::thread waiter([&]() {
+    __moore_objection_wait_for_zero(objection);
+    waitCompleted = true;
+  });
+
+  // Small delay to ensure waiter is waiting
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_FALSE(waitCompleted.load());
+
+  // Drop the objection
+  __moore_objection_drop(objection, ctx, strlen(ctx), nullptr, 0, 1);
+
+  // Wait for the thread to complete
+  waiter.join();
+  EXPECT_TRUE(waitCompleted.load());
+
+  __moore_objection_destroy(objection);
+}
+
+TEST(MooreRuntimeObjectionTest, MultiplePhases) {
+  const char *runPhase = "run";
+  const char *mainPhase = "main";
+  const char *shutdownPhase = "shutdown";
+
+  MooreObjectionHandle runObj = __moore_objection_create(runPhase, strlen(runPhase));
+  MooreObjectionHandle mainObj = __moore_objection_create(mainPhase, strlen(mainPhase));
+  MooreObjectionHandle shutdownObj = __moore_objection_create(shutdownPhase, strlen(shutdownPhase));
+
+  EXPECT_NE(runObj, mainObj);
+  EXPECT_NE(mainObj, shutdownObj);
+
+  // Raise on different phases
+  __moore_objection_raise(runObj, nullptr, 0, nullptr, 0, 1);
+  __moore_objection_raise(mainObj, nullptr, 0, nullptr, 0, 2);
+  __moore_objection_raise(shutdownObj, nullptr, 0, nullptr, 0, 3);
+
+  EXPECT_EQ(__moore_objection_get_count(runObj), 1);
+  EXPECT_EQ(__moore_objection_get_count(mainObj), 2);
+  EXPECT_EQ(__moore_objection_get_count(shutdownObj), 3);
+
+  // Drop independently
+  __moore_objection_drop(runObj, nullptr, 0, nullptr, 0, 1);
+  EXPECT_EQ(__moore_objection_get_count(runObj), 0);
+  EXPECT_EQ(__moore_objection_get_count(mainObj), 2);
+  EXPECT_EQ(__moore_objection_get_count(shutdownObj), 3);
+
+  __moore_objection_destroy(runObj);
+  __moore_objection_destroy(mainObj);
+  __moore_objection_destroy(shutdownObj);
+}
+
+TEST(MooreRuntimeObjectionTest, TracingEnableDisable) {
+  EXPECT_EQ(__moore_objection_is_trace_enabled(), 0);
+
+  __moore_objection_set_trace_enabled(1);
+  EXPECT_EQ(__moore_objection_is_trace_enabled(), 1);
+
+  __moore_objection_set_trace_enabled(0);
+  EXPECT_EQ(__moore_objection_is_trace_enabled(), 0);
+}
+
+TEST(MooreRuntimeObjectionTest, InvalidHandle) {
+  // These should not crash - just return default values
+  EXPECT_EQ(__moore_objection_get_count(MOORE_OBJECTION_INVALID_HANDLE), 0);
+  EXPECT_EQ(__moore_objection_get_drain_time(MOORE_OBJECTION_INVALID_HANDLE), 0);
+  EXPECT_EQ(__moore_objection_is_zero(MOORE_OBJECTION_INVALID_HANDLE), 1);
+
+  MooreString name = __moore_objection_get_phase_name(MOORE_OBJECTION_INVALID_HANDLE);
+  EXPECT_EQ(name.data, nullptr);
+  EXPECT_EQ(name.len, 0);
+
+  // These should silently fail without crash
+  __moore_objection_raise(MOORE_OBJECTION_INVALID_HANDLE, nullptr, 0, nullptr, 0, 1);
+  __moore_objection_drop(MOORE_OBJECTION_INVALID_HANDLE, nullptr, 0, nullptr, 0, 1);
+  __moore_objection_set_drain_time(MOORE_OBJECTION_INVALID_HANDLE, 100);
+  __moore_objection_destroy(MOORE_OBJECTION_INVALID_HANDLE);
+}
+
+TEST(MooreRuntimeObjectionTest, HierarchicalContexts) {
+  const char *phaseName = "run_phase";
+  MooreObjectionHandle objection = __moore_objection_create(
+      phaseName, strlen(phaseName));
+
+  // Simulate UVM component hierarchy
+  const char *ctx1 = "uvm_test_top";
+  const char *ctx2 = "uvm_test_top.env";
+  const char *ctx3 = "uvm_test_top.env.agent";
+  const char *ctx4 = "uvm_test_top.env.agent.driver";
+  const char *ctx5 = "uvm_test_top.env.agent.monitor";
+
+  __moore_objection_raise(objection, ctx1, strlen(ctx1), nullptr, 0, 1);
+  __moore_objection_raise(objection, ctx2, strlen(ctx2), nullptr, 0, 1);
+  __moore_objection_raise(objection, ctx3, strlen(ctx3), nullptr, 0, 1);
+  __moore_objection_raise(objection, ctx4, strlen(ctx4), nullptr, 0, 1);
+  __moore_objection_raise(objection, ctx5, strlen(ctx5), nullptr, 0, 1);
+
+  EXPECT_EQ(__moore_objection_get_count(objection), 5);
+
+  // Each context tracked separately
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx1, strlen(ctx1)), 1);
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx4, strlen(ctx4)), 1);
+  EXPECT_EQ(__moore_objection_get_count_by_context(objection, ctx5, strlen(ctx5)), 1);
+
+  // Drop in reverse hierarchy order (typical shutdown)
+  __moore_objection_drop(objection, ctx5, strlen(ctx5), nullptr, 0, 1);
+  __moore_objection_drop(objection, ctx4, strlen(ctx4), nullptr, 0, 1);
+  __moore_objection_drop(objection, ctx3, strlen(ctx3), nullptr, 0, 1);
+  __moore_objection_drop(objection, ctx2, strlen(ctx2), nullptr, 0, 1);
+  __moore_objection_drop(objection, ctx1, strlen(ctx1), nullptr, 0, 1);
+
+  EXPECT_EQ(__moore_objection_get_count(objection), 0);
+  EXPECT_EQ(__moore_objection_is_zero(objection), 1);
+
+  __moore_objection_destroy(objection);
 }
 
 } // namespace
