@@ -2200,6 +2200,49 @@ struct StmtVisitor {
     return success();
   }
 
+  // Handle procedural assign/force statements (IEEE 1800-2017 Section 10.6).
+  // These are deprecated simulation constructs. We convert them to blocking
+  // assignments which provides approximate behavior.
+  LogicalResult visit(const slang::ast::ProceduralAssignStatement &stmt) {
+    // The assignment expression contains the target and value
+    const auto *assignExpr =
+        stmt.assignment.as_if<slang::ast::AssignmentExpression>();
+    if (!assignExpr) {
+      mlir::emitError(loc) << "expected assignment expression in procedural "
+                           << (stmt.isForce ? "force" : "assign");
+      return failure();
+    }
+
+    auto dst = context.convertLvalueExpression(assignExpr->left());
+    if (!dst)
+      return failure();
+
+    auto src = context.convertRvalueExpression(assignExpr->right());
+    if (!src)
+      return failure();
+
+    // Emit a remark about the simplified handling
+    mlir::emitRemark(loc) << (stmt.isForce ? "force" : "procedural assign")
+                          << " statement converted to blocking assignment "
+                          << "(simplified simulation semantics)";
+
+    moore::BlockingAssignOp::create(builder, loc, dst, src);
+    return success();
+  }
+
+  // Handle procedural deassign/release statements (IEEE 1800-2017 Section 10.6).
+  // These are deprecated simulation constructs. Since we convert assign/force
+  // to blocking assignments, deassign/release become no-ops.
+  LogicalResult visit(const slang::ast::ProceduralDeassignStatement &stmt) {
+    // Emit a remark about the simplified handling
+    mlir::emitRemark(loc) << (stmt.isRelease ? "release" : "deassign")
+                          << " statement ignored (simplified simulation "
+                          << "semantics)";
+    // No-op: since we converted assign/force to blocking assignments,
+    // there's nothing to release/deassign
+    return success();
+  }
+
   // Handle randsequence statements.
   LogicalResult visit(const slang::ast::RandSequenceStatement &stmt) {
     if (!stmt.firstProduction)
