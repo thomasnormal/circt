@@ -4052,6 +4052,308 @@ int32_t __moore_objection_is_trace_enabled(void);
 /// Useful for debugging phase hang issues.
 void __moore_objection_print_summary(void);
 
+//===----------------------------------------------------------------------===//
+// UVM Sequence/Sequencer Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// The UVM sequence/sequencer mechanism provides a layered stimulus generation
+// framework. Sequences generate transactions (sequence items) that are sent
+// to drivers through sequencers.
+//
+// Key concepts:
+// - Sequencer: Manages sequence execution and arbitration between sequences
+// - Sequence: Generates a stream of transactions (sequence items)
+// - start_item/finish_item: Handshake protocol between sequence and driver
+// - Arbitration: Determines which sequence gets access to the driver
+//
+// Flow:
+// 1. Sequence calls start_item() to request driver access
+// 2. Sequencer arbitrates if multiple sequences are waiting
+// 3. Driver calls get_next_item() to receive the item
+// 4. Driver processes the item
+// 5. Driver calls item_done() to signal completion
+// 6. Sequence's finish_item() returns
+//
+//===----------------------------------------------------------------------===//
+
+/// Handle type for sequencers.
+typedef int64_t MooreSequencerHandle;
+
+/// Handle type for sequences.
+typedef int64_t MooreSequenceHandle;
+
+/// Invalid handle values.
+#define MOORE_SEQUENCER_INVALID_HANDLE (-1)
+#define MOORE_SEQUENCE_INVALID_HANDLE (-1)
+
+/// Sequencer arbitration modes.
+/// These determine how the sequencer selects between competing sequences.
+typedef enum {
+  /// First-in, first-out - sequences get access in the order they requested
+  MOORE_SEQ_ARB_FIFO = 0,
+  /// Random selection among waiting sequences
+  MOORE_SEQ_ARB_RANDOM = 1,
+  /// Weighted random based on sequence priority
+  MOORE_SEQ_ARB_WEIGHTED = 2,
+  /// Strict priority - highest priority sequence always wins
+  MOORE_SEQ_ARB_STRICT_FIFO = 3,
+  /// Strict random among highest priority sequences
+  MOORE_SEQ_ARB_STRICT_RANDOM = 4,
+  /// User-defined arbitration (via callback)
+  MOORE_SEQ_ARB_USER = 5
+} MooreSeqArbMode;
+
+/// Sequence state.
+typedef enum {
+  MOORE_SEQ_STATE_IDLE = 0,        ///< Sequence not started
+  MOORE_SEQ_STATE_RUNNING = 1,     ///< Sequence body is executing
+  MOORE_SEQ_STATE_WAITING = 2,     ///< Waiting for driver (start_item)
+  MOORE_SEQ_STATE_FINISHED = 3,    ///< Sequence completed
+  MOORE_SEQ_STATE_STOPPED = 4      ///< Sequence stopped externally
+} MooreSeqState;
+
+/// Callback type for sequence body execution.
+/// The sequence body generates transactions by calling start_item/finish_item.
+/// @param sequence Handle to the sequence being executed
+/// @param userData User-provided context data
+typedef void (*MooreSequenceBodyCallback)(MooreSequenceHandle sequence,
+                                          void *userData);
+
+/// Callback type for user-defined arbitration.
+/// @param sequencer Handle to the sequencer
+/// @param waitingSequences Array of sequence handles waiting for access
+/// @param numWaiting Number of sequences in the array
+/// @param userData User-provided context data
+/// @return Index of the selected sequence (0 to numWaiting-1)
+typedef int32_t (*MooreSeqArbCallback)(MooreSequencerHandle sequencer,
+                                       MooreSequenceHandle *waitingSequences,
+                                       int32_t numWaiting, void *userData);
+
+//===----------------------------------------------------------------------===//
+// Sequencer Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new sequencer.
+/// @param name Sequencer name (for debugging/tracing)
+/// @param nameLen Length of the name string
+/// @param parent Parent component handle (0 for top-level)
+/// @return Handle to the created sequencer, or MOORE_SEQUENCER_INVALID_HANDLE
+MooreSequencerHandle __moore_sequencer_create(const char *name, int64_t nameLen,
+                                               int64_t parent);
+
+/// Destroy a sequencer.
+/// Stops all running sequences and releases resources.
+/// @param sequencer Handle to the sequencer to destroy
+void __moore_sequencer_destroy(MooreSequencerHandle sequencer);
+
+/// Start the sequencer, enabling it to process sequences.
+/// @param sequencer Handle to the sequencer
+void __moore_sequencer_start(MooreSequencerHandle sequencer);
+
+/// Stop the sequencer, preventing new sequences from starting.
+/// Running sequences may complete or be forcibly stopped.
+/// @param sequencer Handle to the sequencer
+void __moore_sequencer_stop(MooreSequencerHandle sequencer);
+
+/// Check if the sequencer is running.
+/// @param sequencer Handle to the sequencer
+/// @return 1 if running, 0 otherwise
+int32_t __moore_sequencer_is_running(MooreSequencerHandle sequencer);
+
+/// Set the arbitration mode for a sequencer.
+/// @param sequencer Handle to the sequencer
+/// @param mode Arbitration mode (MOORE_SEQ_ARB_*)
+void __moore_sequencer_set_arbitration(MooreSequencerHandle sequencer,
+                                        MooreSeqArbMode mode);
+
+/// Get the current arbitration mode.
+/// @param sequencer Handle to the sequencer
+/// @return Current arbitration mode
+MooreSeqArbMode __moore_sequencer_get_arbitration(MooreSequencerHandle sequencer);
+
+/// Set user-defined arbitration callback.
+/// Only used when arbitration mode is MOORE_SEQ_ARB_USER.
+/// @param sequencer Handle to the sequencer
+/// @param callback Arbitration callback function
+/// @param userData User data to pass to the callback
+void __moore_sequencer_set_arb_callback(MooreSequencerHandle sequencer,
+                                         MooreSeqArbCallback callback,
+                                         void *userData);
+
+/// Get the name of a sequencer.
+/// @param sequencer Handle to the sequencer
+/// @return The sequencer name as a MooreString
+MooreString __moore_sequencer_get_name(MooreSequencerHandle sequencer);
+
+/// Get the number of sequences currently waiting for access.
+/// @param sequencer Handle to the sequencer
+/// @return Number of waiting sequences
+int32_t __moore_sequencer_get_num_waiting(MooreSequencerHandle sequencer);
+
+//===----------------------------------------------------------------------===//
+// Sequence Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new sequence.
+/// @param name Sequence name (for debugging/tracing)
+/// @param nameLen Length of the name string
+/// @param priority Sequence priority (higher = more likely to be selected)
+/// @return Handle to the created sequence, or MOORE_SEQUENCE_INVALID_HANDLE
+MooreSequenceHandle __moore_sequence_create(const char *name, int64_t nameLen,
+                                             int32_t priority);
+
+/// Destroy a sequence.
+/// The sequence must be stopped or finished before destruction.
+/// @param sequence Handle to the sequence to destroy
+void __moore_sequence_destroy(MooreSequenceHandle sequence);
+
+/// Start a sequence on a sequencer.
+/// This begins execution of the sequence body on the specified sequencer.
+/// The call blocks until the sequence completes (in synchronous mode).
+/// @param sequence Handle to the sequence
+/// @param sequencer Handle to the target sequencer
+/// @param body Callback function containing the sequence body
+/// @param userData User data to pass to the body callback
+/// @return 1 on successful completion, 0 on failure or if stopped
+int32_t __moore_sequence_start(MooreSequenceHandle sequence,
+                                MooreSequencerHandle sequencer,
+                                MooreSequenceBodyCallback body,
+                                void *userData);
+
+/// Start a sequence asynchronously (non-blocking).
+/// The sequence runs in the background. Use __moore_sequence_wait() to wait.
+/// @param sequence Handle to the sequence
+/// @param sequencer Handle to the target sequencer
+/// @param body Callback function containing the sequence body
+/// @param userData User data to pass to the body callback
+/// @return 1 if started successfully, 0 on failure
+int32_t __moore_sequence_start_async(MooreSequenceHandle sequence,
+                                      MooreSequencerHandle sequencer,
+                                      MooreSequenceBodyCallback body,
+                                      void *userData);
+
+/// Wait for an async sequence to complete.
+/// @param sequence Handle to the sequence
+/// @return 1 on successful completion, 0 on failure
+int32_t __moore_sequence_wait(MooreSequenceHandle sequence);
+
+/// Stop a running sequence.
+/// @param sequence Handle to the sequence
+void __moore_sequence_stop(MooreSequenceHandle sequence);
+
+/// Get the current state of a sequence.
+/// @param sequence Handle to the sequence
+/// @return Current sequence state (MOORE_SEQ_STATE_*)
+MooreSeqState __moore_sequence_get_state(MooreSequenceHandle sequence);
+
+/// Get the name of a sequence.
+/// @param sequence Handle to the sequence
+/// @return The sequence name as a MooreString
+MooreString __moore_sequence_get_name(MooreSequenceHandle sequence);
+
+/// Get the priority of a sequence.
+/// @param sequence Handle to the sequence
+/// @return Sequence priority
+int32_t __moore_sequence_get_priority(MooreSequenceHandle sequence);
+
+/// Set the priority of a sequence.
+/// @param sequence Handle to the sequence
+/// @param priority New priority value
+void __moore_sequence_set_priority(MooreSequenceHandle sequence,
+                                    int32_t priority);
+
+//===----------------------------------------------------------------------===//
+// Sequence-Driver Handshake (start_item/finish_item)
+//===----------------------------------------------------------------------===//
+
+/// Begin a sequence item transfer (sequence side).
+/// Called by the sequence to request access to the driver.
+/// This function blocks until the driver is ready to receive the item.
+/// @param sequence Handle to the sequence
+/// @param item Pointer to the sequence item (transaction)
+/// @param itemSize Size of the sequence item in bytes
+/// @return 1 if access granted, 0 on failure (e.g., sequence stopped)
+int32_t __moore_sequence_start_item(MooreSequenceHandle sequence,
+                                     void *item, int64_t itemSize);
+
+/// Complete a sequence item transfer (sequence side).
+/// Called by the sequence after the item has been prepared.
+/// This function blocks until the driver signals item_done().
+/// @param sequence Handle to the sequence
+/// @param item Pointer to the sequence item (may have been modified)
+/// @param itemSize Size of the sequence item in bytes
+/// @return 1 on success, 0 on failure
+int32_t __moore_sequence_finish_item(MooreSequenceHandle sequence,
+                                      void *item, int64_t itemSize);
+
+/// Get the next item from a sequencer (driver side).
+/// Called by the driver to receive a transaction from a sequence.
+/// This function blocks until an item is available.
+/// @param sequencer Handle to the sequencer
+/// @param item Pointer where the item will be copied
+/// @param itemSize Size of the item buffer in bytes
+/// @return 1 if item received, 0 on failure
+int32_t __moore_sequencer_get_next_item(MooreSequencerHandle sequencer,
+                                         void *item, int64_t itemSize);
+
+/// Try to get the next item without blocking (driver side).
+/// @param sequencer Handle to the sequencer
+/// @param item Pointer where the item will be copied
+/// @param itemSize Size of the item buffer in bytes
+/// @return 1 if item received, 0 if no item available
+int32_t __moore_sequencer_try_get_next_item(MooreSequencerHandle sequencer,
+                                             void *item, int64_t itemSize);
+
+/// Signal that the current item has been processed (driver side).
+/// This unblocks the sequence's finish_item() call.
+/// @param sequencer Handle to the sequencer
+void __moore_sequencer_item_done(MooreSequencerHandle sequencer);
+
+/// Signal item done with a response (driver side).
+/// Used when the driver needs to send response data back to the sequence.
+/// @param sequencer Handle to the sequencer
+/// @param response Pointer to the response data
+/// @param responseSize Size of the response in bytes
+void __moore_sequencer_item_done_with_response(MooreSequencerHandle sequencer,
+                                                void *response,
+                                                int64_t responseSize);
+
+/// Peek at the next item without removing it (driver side).
+/// @param sequencer Handle to the sequencer
+/// @param item Pointer where the item will be copied
+/// @param itemSize Size of the item buffer in bytes
+/// @return 1 if item available, 0 otherwise
+int32_t __moore_sequencer_peek_next_item(MooreSequencerHandle sequencer,
+                                          void *item, int64_t itemSize);
+
+/// Check if items are available in the sequencer.
+/// @param sequencer Handle to the sequencer
+/// @return 1 if items are available, 0 otherwise
+int32_t __moore_sequencer_has_items(MooreSequencerHandle sequencer);
+
+//===----------------------------------------------------------------------===//
+// Sequence/Sequencer Debugging
+//===----------------------------------------------------------------------===//
+
+/// Enable or disable sequence/sequencer tracing.
+/// When enabled, all sequence operations are logged for debugging.
+/// @param enable 1 to enable, 0 to disable
+void __moore_seq_set_trace_enabled(int32_t enable);
+
+/// Check if sequence tracing is enabled.
+/// @return 1 if enabled, 0 otherwise
+int32_t __moore_seq_is_trace_enabled(void);
+
+/// Print a summary of all sequencers and their state.
+void __moore_seq_print_summary(void);
+
+/// Get statistics about sequence operations.
+/// @param totalSequences Output: total number of sequences created
+/// @param totalItems Output: total number of items transferred
+/// @param totalArbitrations Output: total number of arbitration decisions
+void __moore_seq_get_statistics(int64_t *totalSequences, int64_t *totalItems,
+                                 int64_t *totalArbitrations);
+
 #ifdef __cplusplus
 }
 #endif

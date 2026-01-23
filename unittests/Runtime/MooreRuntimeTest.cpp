@@ -11220,4 +11220,363 @@ TEST(MooreRuntimeObjectionTest, HierarchicalContexts) {
   __moore_objection_destroy(objection);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Sequence/Sequencer Tests
+//===----------------------------------------------------------------------===//
+
+// Test transaction type for sequence tests
+struct TestSeqTransaction {
+  uint32_t addr;
+  uint32_t data;
+  uint8_t kind;  // 0=read, 1=write
+
+  bool operator==(const TestSeqTransaction &other) const {
+    return addr == other.addr && data == other.data && kind == other.kind;
+  }
+};
+
+TEST(MooreRuntimeSequenceTest, SequencerCreation) {
+  const char *seqrName = "test_sequencer";
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  EXPECT_NE(seqr, MOORE_SEQUENCER_INVALID_HANDLE);
+
+  MooreString name = __moore_sequencer_get_name(seqr);
+  ASSERT_NE(name.data, nullptr);
+  EXPECT_EQ(std::string(name.data, name.len), seqrName);
+  __moore_free(name.data);
+
+  EXPECT_EQ(__moore_sequencer_is_running(seqr), 0);
+  EXPECT_EQ(__moore_sequencer_get_num_waiting(seqr), 0);
+
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, SequencerStartStop) {
+  const char *seqrName = "start_stop_sequencer";
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+
+  EXPECT_EQ(__moore_sequencer_is_running(seqr), 0);
+
+  __moore_sequencer_start(seqr);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr), 1);
+
+  __moore_sequencer_stop(seqr);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr), 0);
+
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, SequenceCreation) {
+  const char *seqName = "test_sequence";
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 10);
+  EXPECT_NE(seq, MOORE_SEQUENCE_INVALID_HANDLE);
+
+  MooreString name = __moore_sequence_get_name(seq);
+  ASSERT_NE(name.data, nullptr);
+  EXPECT_EQ(std::string(name.data, name.len), seqName);
+  __moore_free(name.data);
+
+  EXPECT_EQ(__moore_sequence_get_priority(seq), 10);
+  EXPECT_EQ(__moore_sequence_get_state(seq), MOORE_SEQ_STATE_IDLE);
+
+  __moore_sequence_destroy(seq);
+}
+
+TEST(MooreRuntimeSequenceTest, SequencePriority) {
+  const char *seqName = "priority_seq";
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 5);
+
+  EXPECT_EQ(__moore_sequence_get_priority(seq), 5);
+
+  __moore_sequence_set_priority(seq, 100);
+  EXPECT_EQ(__moore_sequence_get_priority(seq), 100);
+
+  __moore_sequence_set_priority(seq, 0);
+  EXPECT_EQ(__moore_sequence_get_priority(seq), 0);
+
+  __moore_sequence_destroy(seq);
+}
+
+TEST(MooreRuntimeSequenceTest, ArbitrationModes) {
+  const char *seqrName = "arb_sequencer";
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+
+  // Default is FIFO
+  EXPECT_EQ(__moore_sequencer_get_arbitration(seqr), MOORE_SEQ_ARB_FIFO);
+
+  __moore_sequencer_set_arbitration(seqr, MOORE_SEQ_ARB_RANDOM);
+  EXPECT_EQ(__moore_sequencer_get_arbitration(seqr), MOORE_SEQ_ARB_RANDOM);
+
+  __moore_sequencer_set_arbitration(seqr, MOORE_SEQ_ARB_WEIGHTED);
+  EXPECT_EQ(__moore_sequencer_get_arbitration(seqr), MOORE_SEQ_ARB_WEIGHTED);
+
+  __moore_sequencer_set_arbitration(seqr, MOORE_SEQ_ARB_STRICT_FIFO);
+  EXPECT_EQ(__moore_sequencer_get_arbitration(seqr), MOORE_SEQ_ARB_STRICT_FIFO);
+
+  __moore_sequencer_set_arbitration(seqr, MOORE_SEQ_ARB_STRICT_RANDOM);
+  EXPECT_EQ(__moore_sequencer_get_arbitration(seqr), MOORE_SEQ_ARB_STRICT_RANDOM);
+
+  __moore_sequencer_set_arbitration(seqr, MOORE_SEQ_ARB_USER);
+  EXPECT_EQ(__moore_sequencer_get_arbitration(seqr), MOORE_SEQ_ARB_USER);
+
+  __moore_sequencer_destroy(seqr);
+}
+
+// Simple sequence body for testing
+static std::atomic<int> simpleSeqBodyCalled{0};
+static void simpleSequenceBody(MooreSequenceHandle sequence, void *userData) {
+  (void)sequence;
+  (void)userData;
+  simpleSeqBodyCalled++;
+}
+
+TEST(MooreRuntimeSequenceTest, SimpleSequenceStart) {
+  const char *seqrName = "simple_sequencer";
+  const char *seqName = "simple_sequence";
+
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  simpleSeqBodyCalled = 0;
+  int32_t result = __moore_sequence_start(seq, seqr, simpleSequenceBody, nullptr);
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(simpleSeqBodyCalled.load(), 1);
+
+  EXPECT_EQ(__moore_sequence_get_state(seq), MOORE_SEQ_STATE_FINISHED);
+
+  __moore_sequencer_stop(seqr);
+  __moore_sequence_destroy(seq);
+  __moore_sequencer_destroy(seqr);
+}
+
+// Sequence body that generates multiple items
+struct SeqItemTestContext {
+  MooreSequencerHandle sequencer;
+  std::vector<TestSeqTransaction> itemsToSend;
+  std::atomic<int> itemsSent{0};
+};
+
+static void multiItemSequenceBody(MooreSequenceHandle sequence, void *userData) {
+  auto *ctx = static_cast<SeqItemTestContext *>(userData);
+
+  for (auto &tx : ctx->itemsToSend) {
+    if (__moore_sequence_start_item(sequence, &tx, sizeof(tx))) {
+      // Item ready to be sent
+      if (__moore_sequence_finish_item(sequence, &tx, sizeof(tx))) {
+        ctx->itemsSent++;
+      }
+    }
+  }
+}
+
+TEST(MooreRuntimeSequenceTest, SequenceDriverHandshake) {
+  const char *seqrName = "handshake_sequencer";
+  const char *seqName = "handshake_sequence";
+
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  // Set up context
+  SeqItemTestContext ctx;
+  ctx.sequencer = seqr;
+  ctx.itemsToSend = {{0x1000, 0xAABB, 1}, {0x2000, 0xCCDD, 0}};
+  ctx.itemsSent = 0;
+
+  // Start sequence in async mode
+  int32_t started = __moore_sequence_start_async(seq, seqr,
+                                                  multiItemSequenceBody, &ctx);
+  EXPECT_EQ(started, 1);
+
+  // Driver side: get items
+  TestSeqTransaction rxTx;
+  for (size_t i = 0; i < ctx.itemsToSend.size(); ++i) {
+    int32_t got = __moore_sequencer_get_next_item(seqr, &rxTx, sizeof(rxTx));
+    EXPECT_EQ(got, 1);
+    EXPECT_TRUE(rxTx == ctx.itemsToSend[i]);
+
+    // Signal item done
+    __moore_sequencer_item_done(seqr);
+  }
+
+  // Wait for sequence to complete
+  int32_t completed = __moore_sequence_wait(seq);
+  EXPECT_EQ(completed, 1);
+  EXPECT_EQ(ctx.itemsSent.load(), 2);
+
+  __moore_sequencer_stop(seqr);
+  __moore_sequence_destroy(seq);
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, ItemDoneWithResponse) {
+  const char *seqrName = "response_sequencer";
+  const char *seqName = "response_sequence";
+
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  // Sequence sends a read request
+  SeqItemTestContext ctx;
+  ctx.sequencer = seqr;
+  ctx.itemsToSend = {{0x3000, 0x0000, 0}};  // Read request
+  ctx.itemsSent = 0;
+
+  __moore_sequence_start_async(seq, seqr, multiItemSequenceBody, &ctx);
+
+  // Driver receives and sends response with data
+  TestSeqTransaction rxTx;
+  EXPECT_EQ(__moore_sequencer_get_next_item(seqr, &rxTx, sizeof(rxTx)), 1);
+  EXPECT_EQ(rxTx.addr, 0x3000u);
+  EXPECT_EQ(rxTx.kind, 0);  // Read
+
+  // Respond with data
+  TestSeqTransaction response = {0x3000, 0xDEADBEEF, 0};
+  __moore_sequencer_item_done_with_response(seqr, &response, sizeof(response));
+
+  __moore_sequence_wait(seq);
+  EXPECT_EQ(ctx.itemsSent.load(), 1);
+
+  __moore_sequencer_stop(seqr);
+  __moore_sequence_destroy(seq);
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, SequencerHasItems) {
+  const char *seqrName = "has_items_sequencer";
+  MooreSequencerHandle seqr = __moore_sequencer_create(
+      seqrName, strlen(seqrName), 0);
+
+  __moore_sequencer_start(seqr);
+
+  // Initially no items
+  EXPECT_EQ(__moore_sequencer_has_items(seqr), 0);
+
+  __moore_sequencer_stop(seqr);
+  __moore_sequencer_destroy(seqr);
+}
+
+TEST(MooreRuntimeSequenceTest, SequenceStop) {
+  const char *seqName = "stoppable_sequence";
+  MooreSequenceHandle seq = __moore_sequence_create(seqName, strlen(seqName), 0);
+
+  EXPECT_EQ(__moore_sequence_get_state(seq), MOORE_SEQ_STATE_IDLE);
+
+  __moore_sequence_stop(seq);
+  EXPECT_EQ(__moore_sequence_get_state(seq), MOORE_SEQ_STATE_STOPPED);
+
+  __moore_sequence_destroy(seq);
+}
+
+TEST(MooreRuntimeSequenceTest, TracingEnableDisable) {
+  EXPECT_EQ(__moore_seq_is_trace_enabled(), 0);
+
+  __moore_seq_set_trace_enabled(1);
+  EXPECT_EQ(__moore_seq_is_trace_enabled(), 1);
+
+  __moore_seq_set_trace_enabled(0);
+  EXPECT_EQ(__moore_seq_is_trace_enabled(), 0);
+}
+
+TEST(MooreRuntimeSequenceTest, Statistics) {
+  int64_t seqs, items, arbs;
+  __moore_seq_get_statistics(&seqs, &items, &arbs);
+
+  // After running the tests above, these should be non-zero
+  EXPECT_GE(seqs, 0);
+  EXPECT_GE(items, 0);
+  EXPECT_GE(arbs, 0);
+}
+
+TEST(MooreRuntimeSequenceTest, InvalidHandles) {
+  // These should not crash - just return default values
+  EXPECT_EQ(__moore_sequencer_is_running(MOORE_SEQUENCER_INVALID_HANDLE), 0);
+  EXPECT_EQ(__moore_sequencer_get_arbitration(MOORE_SEQUENCER_INVALID_HANDLE),
+            MOORE_SEQ_ARB_FIFO);
+  EXPECT_EQ(__moore_sequencer_get_num_waiting(MOORE_SEQUENCER_INVALID_HANDLE), 0);
+  EXPECT_EQ(__moore_sequencer_has_items(MOORE_SEQUENCER_INVALID_HANDLE), 0);
+
+  MooreString seqrName = __moore_sequencer_get_name(MOORE_SEQUENCER_INVALID_HANDLE);
+  EXPECT_EQ(seqrName.data, nullptr);
+  EXPECT_EQ(seqrName.len, 0);
+
+  EXPECT_EQ(__moore_sequence_get_state(MOORE_SEQUENCE_INVALID_HANDLE),
+            MOORE_SEQ_STATE_IDLE);
+  EXPECT_EQ(__moore_sequence_get_priority(MOORE_SEQUENCE_INVALID_HANDLE), 0);
+
+  MooreString seqName = __moore_sequence_get_name(MOORE_SEQUENCE_INVALID_HANDLE);
+  EXPECT_EQ(seqName.data, nullptr);
+  EXPECT_EQ(seqName.len, 0);
+
+  // These should silently fail without crash
+  __moore_sequencer_start(MOORE_SEQUENCER_INVALID_HANDLE);
+  __moore_sequencer_stop(MOORE_SEQUENCER_INVALID_HANDLE);
+  __moore_sequencer_set_arbitration(MOORE_SEQUENCER_INVALID_HANDLE,
+                                     MOORE_SEQ_ARB_RANDOM);
+  __moore_sequencer_destroy(MOORE_SEQUENCER_INVALID_HANDLE);
+
+  __moore_sequence_stop(MOORE_SEQUENCE_INVALID_HANDLE);
+  __moore_sequence_set_priority(MOORE_SEQUENCE_INVALID_HANDLE, 100);
+  __moore_sequence_destroy(MOORE_SEQUENCE_INVALID_HANDLE);
+}
+
+TEST(MooreRuntimeSequenceTest, MultipleSequencers) {
+  const char *name1 = "sequencer_1";
+  const char *name2 = "sequencer_2";
+  const char *name3 = "sequencer_3";
+
+  MooreSequencerHandle seqr1 = __moore_sequencer_create(name1, strlen(name1), 0);
+  MooreSequencerHandle seqr2 = __moore_sequencer_create(name2, strlen(name2), 0);
+  MooreSequencerHandle seqr3 = __moore_sequencer_create(name3, strlen(name3), 0);
+
+  EXPECT_NE(seqr1, seqr2);
+  EXPECT_NE(seqr2, seqr3);
+  EXPECT_NE(seqr1, seqr3);
+
+  // Each sequencer operates independently
+  __moore_sequencer_start(seqr1);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr1), 1);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr2), 0);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr3), 0);
+
+  __moore_sequencer_start(seqr2);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr1), 1);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr2), 1);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr3), 0);
+
+  __moore_sequencer_stop(seqr1);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr1), 0);
+  EXPECT_EQ(__moore_sequencer_is_running(seqr2), 1);
+
+  __moore_sequencer_destroy(seqr1);
+  __moore_sequencer_destroy(seqr2);
+  __moore_sequencer_destroy(seqr3);
+}
+
+TEST(MooreRuntimeSequenceTest, MultipleSequences) {
+  const char *name1 = "sequence_a";
+  const char *name2 = "sequence_b";
+
+  MooreSequenceHandle seq1 = __moore_sequence_create(name1, strlen(name1), 10);
+  MooreSequenceHandle seq2 = __moore_sequence_create(name2, strlen(name2), 20);
+
+  EXPECT_NE(seq1, seq2);
+  EXPECT_EQ(__moore_sequence_get_priority(seq1), 10);
+  EXPECT_EQ(__moore_sequence_get_priority(seq2), 20);
+
+  __moore_sequence_destroy(seq1);
+  __moore_sequence_destroy(seq2);
+}
+
 } // namespace

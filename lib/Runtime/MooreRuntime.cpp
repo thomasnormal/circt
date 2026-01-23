@@ -13988,3 +13988,1092 @@ extern "C" void __moore_objection_print_summary(void) {
 
   std::printf("\n=============================\n");
 }
+
+//===----------------------------------------------------------------------===//
+// UVM Sequence/Sequencer Infrastructure Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Forward declarations
+struct Sequence;
+struct Sequencer;
+
+/// Pending item waiting to be transferred to the driver
+struct PendingItem {
+  MooreSequenceHandle sequence;  ///< Sequence that owns the item
+  std::vector<uint8_t> data;     ///< Item data
+  bool itemReady;                ///< True when item is ready for driver
+  bool itemDone;                 ///< True when driver has processed item
+  std::vector<uint8_t> response; ///< Response data from driver
+
+  PendingItem(MooreSequenceHandle seq, void *item, int64_t size)
+      : sequence(seq), itemReady(false), itemDone(false) {
+    if (item && size > 0) {
+      data.resize(size);
+      std::memcpy(data.data(), item, size);
+    }
+  }
+};
+
+/// Sequence state
+struct Sequence {
+  std::string name;
+  int32_t priority;
+  MooreSeqState state;
+  MooreSequencerHandle parentSequencer;
+
+  // Synchronization for start_item/finish_item
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool stopRequested;
+  bool waitingForDriver;    ///< Waiting in start_item for driver
+  bool waitingForItemDone;  ///< Waiting in finish_item for item_done
+  bool driverReady;         ///< Driver is ready to accept item
+  bool itemDoneSignaled;    ///< item_done has been called
+
+  // Current item being transferred
+  std::shared_ptr<PendingItem> currentItem;
+
+  // For async execution
+  std::thread executionThread;
+  std::atomic<bool> asyncRunning{false};
+
+  Sequence(const std::string &n, int32_t prio)
+      : name(n), priority(prio), state(MOORE_SEQ_STATE_IDLE),
+        parentSequencer(MOORE_SEQUENCER_INVALID_HANDLE), stopRequested(false),
+        waitingForDriver(false), waitingForItemDone(false),
+        driverReady(false), itemDoneSignaled(false) {}
+
+  ~Sequence() {
+    // Ensure thread is joined if running async
+    if (executionThread.joinable()) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        stopRequested = true;
+      }
+      cv.notify_all();
+      executionThread.join();
+    }
+  }
+};
+
+/// Sequencer state
+struct Sequencer {
+  std::string name;
+  int64_t parent;
+  bool running;
+  MooreSeqArbMode arbMode;
+
+  // User-defined arbitration
+  MooreSeqArbCallback arbCallback;
+  void *arbUserData;
+
+  // Synchronization
+  std::mutex mutex;
+  std::condition_variable cv;
+
+  // Sequences waiting for driver access
+  std::vector<MooreSequenceHandle> waitingSequences;
+
+  // Current active sequence (the one whose item is being processed)
+  MooreSequenceHandle activeSequence;
+  bool hasActiveItem;
+  std::shared_ptr<PendingItem> activeItem;
+
+  Sequencer(const std::string &n, int64_t p)
+      : name(n), parent(p), running(false), arbMode(MOORE_SEQ_ARB_FIFO),
+        arbCallback(nullptr), arbUserData(nullptr),
+        activeSequence(MOORE_SEQUENCE_INVALID_HANDLE), hasActiveItem(false) {}
+};
+
+/// Registry for all sequencers and sequences
+struct SeqRegistry {
+  std::vector<std::unique_ptr<Sequencer>> sequencers;
+  std::vector<std::unique_ptr<Sequence>> sequences;
+  std::mutex mutex;
+
+  // Statistics
+  std::atomic<int64_t> totalSequencesCreated{0};
+  std::atomic<int64_t> totalItemsTransferred{0};
+  std::atomic<int64_t> totalArbitrations{0};
+
+  Sequencer *getSequencer(MooreSequencerHandle handle) {
+    if (handle < 0 || static_cast<size_t>(handle) >= sequencers.size())
+      return nullptr;
+    return sequencers[handle].get();
+  }
+
+  Sequence *getSequence(MooreSequenceHandle handle) {
+    if (handle < 0 || static_cast<size_t>(handle) >= sequences.size())
+      return nullptr;
+    return sequences[handle].get();
+  }
+
+  MooreSequencerHandle addSequencer(std::unique_ptr<Sequencer> sequencer) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreSequencerHandle handle = static_cast<MooreSequencerHandle>(sequencers.size());
+    sequencers.push_back(std::move(sequencer));
+    return handle;
+  }
+
+  MooreSequenceHandle addSequence(std::unique_ptr<Sequence> sequence) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreSequenceHandle handle = static_cast<MooreSequenceHandle>(sequences.size());
+    sequences.push_back(std::move(sequence));
+    totalSequencesCreated++;
+    return handle;
+  }
+};
+
+SeqRegistry &getSeqRegistry() {
+  static SeqRegistry registry;
+  return registry;
+}
+
+// Tracing flag
+static std::atomic<bool> seqTraceEnabled{false};
+
+/// Perform arbitration to select the next sequence
+MooreSequenceHandle arbitrateSequence(Sequencer *sequencer) {
+  if (sequencer->waitingSequences.empty())
+    return MOORE_SEQUENCE_INVALID_HANDLE;
+
+  auto &registry = getSeqRegistry();
+  registry.totalArbitrations++;
+
+  switch (sequencer->arbMode) {
+    case MOORE_SEQ_ARB_FIFO:
+    default: {
+      // First-in, first-out
+      return sequencer->waitingSequences.front();
+    }
+
+    case MOORE_SEQ_ARB_RANDOM: {
+      // Random selection
+      size_t idx = std::rand() % sequencer->waitingSequences.size();
+      return sequencer->waitingSequences[idx];
+    }
+
+    case MOORE_SEQ_ARB_WEIGHTED: {
+      // Weighted by priority
+      std::vector<std::pair<MooreSequenceHandle, int32_t>> weighted;
+      int32_t totalWeight = 0;
+      for (auto h : sequencer->waitingSequences) {
+        auto *seq = registry.getSequence(h);
+        if (seq) {
+          int32_t w = seq->priority > 0 ? seq->priority : 1;
+          weighted.push_back({h, w});
+          totalWeight += w;
+        }
+      }
+      if (totalWeight <= 0 || weighted.empty())
+        return sequencer->waitingSequences.front();
+
+      int32_t r = std::rand() % totalWeight;
+      int32_t cumulative = 0;
+      for (auto &p : weighted) {
+        cumulative += p.second;
+        if (r < cumulative)
+          return p.first;
+      }
+      return weighted.back().first;
+    }
+
+    case MOORE_SEQ_ARB_STRICT_FIFO: {
+      // Highest priority first, FIFO among equals
+      int32_t maxPriority = INT_MIN;
+      MooreSequenceHandle result = MOORE_SEQUENCE_INVALID_HANDLE;
+      for (auto h : sequencer->waitingSequences) {
+        auto *seq = registry.getSequence(h);
+        if (seq && seq->priority > maxPriority) {
+          maxPriority = seq->priority;
+          result = h;
+        }
+      }
+      return result;
+    }
+
+    case MOORE_SEQ_ARB_STRICT_RANDOM: {
+      // Random among highest priority sequences
+      int32_t maxPriority = INT_MIN;
+      for (auto h : sequencer->waitingSequences) {
+        auto *seq = registry.getSequence(h);
+        if (seq && seq->priority > maxPriority)
+          maxPriority = seq->priority;
+      }
+
+      std::vector<MooreSequenceHandle> candidates;
+      for (auto h : sequencer->waitingSequences) {
+        auto *seq = registry.getSequence(h);
+        if (seq && seq->priority == maxPriority)
+          candidates.push_back(h);
+      }
+
+      if (candidates.empty())
+        return MOORE_SEQUENCE_INVALID_HANDLE;
+      return candidates[std::rand() % candidates.size()];
+    }
+
+    case MOORE_SEQ_ARB_USER: {
+      // User-defined arbitration
+      if (sequencer->arbCallback) {
+        // Find the sequencer handle by searching the registry
+        MooreSequencerHandle seqrHandle = MOORE_SEQUENCER_INVALID_HANDLE;
+        auto &seqrs = registry.sequencers;
+        for (size_t i = 0; i < seqrs.size(); ++i) {
+          if (seqrs[i].get() == sequencer) {
+            seqrHandle = static_cast<MooreSequencerHandle>(i);
+            break;
+          }
+        }
+        int32_t idx = sequencer->arbCallback(
+            seqrHandle,
+            sequencer->waitingSequences.data(),
+            static_cast<int32_t>(sequencer->waitingSequences.size()),
+            sequencer->arbUserData);
+        if (idx >= 0 && static_cast<size_t>(idx) < sequencer->waitingSequences.size())
+          return sequencer->waitingSequences[idx];
+      }
+      return sequencer->waitingSequences.front();
+    }
+  }
+}
+
+} // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Sequencer Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreSequencerHandle __moore_sequencer_create(const char *name,
+                                                          int64_t nameLen,
+                                                          int64_t parent) {
+  std::string seqrName(name, nameLen);
+  auto sequencer = std::make_unique<Sequencer>(seqrName, parent);
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Created sequencer '%s'\n", seqrName.c_str());
+  }
+
+  return getSeqRegistry().addSequencer(std::move(sequencer));
+}
+
+extern "C" void __moore_sequencer_destroy(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Destroying sequencer '%s'\n", seqr->name.c_str());
+  }
+
+  // Stop the sequencer
+  __moore_sequencer_stop(sequencer);
+
+  // Note: We don't actually delete from vector to keep handles valid
+  // In a production system, we'd use a more sophisticated handle system
+}
+
+extern "C" void __moore_sequencer_start(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  seqr->running = true;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Started sequencer '%s'\n", seqr->name.c_str());
+  }
+}
+
+extern "C" void __moore_sequencer_stop(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  {
+    std::lock_guard<std::mutex> lock(seqr->mutex);
+    seqr->running = false;
+  }
+  seqr->cv.notify_all();
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Stopped sequencer '%s'\n", seqr->name.c_str());
+  }
+}
+
+extern "C" int32_t __moore_sequencer_is_running(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  return seqr->running ? 1 : 0;
+}
+
+extern "C" void __moore_sequencer_set_arbitration(MooreSequencerHandle sequencer,
+                                                   MooreSeqArbMode mode) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  seqr->arbMode = mode;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Sequencer '%s' arbitration set to %d\n",
+                seqr->name.c_str(), mode);
+  }
+}
+
+extern "C" MooreSeqArbMode
+__moore_sequencer_get_arbitration(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return MOORE_SEQ_ARB_FIFO;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  return seqr->arbMode;
+}
+
+extern "C" void __moore_sequencer_set_arb_callback(MooreSequencerHandle sequencer,
+                                                    MooreSeqArbCallback callback,
+                                                    void *userData) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  seqr->arbCallback = callback;
+  seqr->arbUserData = userData;
+}
+
+extern "C" MooreString __moore_sequencer_get_name(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr) {
+    MooreString result = {nullptr, 0};
+    return result;
+  }
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  MooreString result;
+  result.len = static_cast<int64_t>(seqr->name.size());
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, seqr->name.data(), result.len);
+  }
+  return result;
+}
+
+extern "C" int32_t
+__moore_sequencer_get_num_waiting(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  return static_cast<int32_t>(seqr->waitingSequences.size());
+}
+
+//===----------------------------------------------------------------------===//
+// Sequence Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreSequenceHandle __moore_sequence_create(const char *name,
+                                                        int64_t nameLen,
+                                                        int32_t priority) {
+  std::string seqName(name, nameLen);
+  auto sequence = std::make_unique<Sequence>(seqName, priority);
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Created sequence '%s' (priority=%d)\n",
+                seqName.c_str(), priority);
+  }
+
+  return getSeqRegistry().addSequence(std::move(sequence));
+}
+
+extern "C" void __moore_sequence_destroy(MooreSequenceHandle sequence) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq)
+    return;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Destroying sequence '%s'\n", seq->name.c_str());
+  }
+
+  // Stop the sequence if running
+  __moore_sequence_stop(sequence);
+}
+
+extern "C" int32_t __moore_sequence_start(MooreSequenceHandle sequence,
+                                           MooreSequencerHandle sequencer,
+                                           MooreSequenceBodyCallback body,
+                                           void *userData) {
+  auto &registry = getSeqRegistry();
+  auto *seq = registry.getSequence(sequence);
+  auto *seqr = registry.getSequencer(sequencer);
+
+  if (!seq || !seqr || !body)
+    return 0;
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    if (seq->state != MOORE_SEQ_STATE_IDLE &&
+        seq->state != MOORE_SEQ_STATE_FINISHED &&
+        seq->state != MOORE_SEQ_STATE_STOPPED)
+      return 0;
+
+    seq->state = MOORE_SEQ_STATE_RUNNING;
+    seq->parentSequencer = sequencer;
+    seq->stopRequested = false;
+  }
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Starting sequence '%s' on sequencer '%s'\n",
+                seq->name.c_str(), seqr->name.c_str());
+  }
+
+  // Execute the sequence body
+  body(sequence, userData);
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    if (seq->stopRequested) {
+      seq->state = MOORE_SEQ_STATE_STOPPED;
+    } else {
+      seq->state = MOORE_SEQ_STATE_FINISHED;
+    }
+  }
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Sequence '%s' completed\n", seq->name.c_str());
+  }
+
+  return seq->state == MOORE_SEQ_STATE_FINISHED ? 1 : 0;
+}
+
+extern "C" int32_t __moore_sequence_start_async(MooreSequenceHandle sequence,
+                                                 MooreSequencerHandle sequencer,
+                                                 MooreSequenceBodyCallback body,
+                                                 void *userData) {
+  auto &registry = getSeqRegistry();
+  auto *seq = registry.getSequence(sequence);
+  auto *seqr = registry.getSequencer(sequencer);
+
+  if (!seq || !seqr || !body)
+    return 0;
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    if (seq->asyncRunning.load())
+      return 0;
+
+    seq->state = MOORE_SEQ_STATE_RUNNING;
+    seq->parentSequencer = sequencer;
+    seq->stopRequested = false;
+    seq->asyncRunning = true;
+  }
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Starting async sequence '%s' on sequencer '%s'\n",
+                seq->name.c_str(), seqr->name.c_str());
+  }
+
+  // Start the sequence in a background thread
+  seq->executionThread = std::thread([sequence, body, userData]() {
+    auto *seq = getSeqRegistry().getSequence(sequence);
+    if (!seq)
+      return;
+
+    body(sequence, userData);
+
+    {
+      std::lock_guard<std::mutex> seqLock(seq->mutex);
+      if (seq->stopRequested) {
+        seq->state = MOORE_SEQ_STATE_STOPPED;
+      } else {
+        seq->state = MOORE_SEQ_STATE_FINISHED;
+      }
+      seq->asyncRunning = false;
+    }
+    seq->cv.notify_all();
+  });
+
+  return 1;
+}
+
+extern "C" int32_t __moore_sequence_wait(MooreSequenceHandle sequence) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq)
+    return 0;
+
+  if (seq->executionThread.joinable()) {
+    seq->executionThread.join();
+  }
+
+  return seq->state == MOORE_SEQ_STATE_FINISHED ? 1 : 0;
+}
+
+extern "C" void __moore_sequence_stop(MooreSequenceHandle sequence) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq)
+    return;
+
+  {
+    std::lock_guard<std::mutex> lock(seq->mutex);
+    seq->stopRequested = true;
+    seq->state = MOORE_SEQ_STATE_STOPPED;
+  }
+  seq->cv.notify_all();
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Stopping sequence '%s'\n", seq->name.c_str());
+  }
+}
+
+extern "C" MooreSeqState __moore_sequence_get_state(MooreSequenceHandle sequence) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq)
+    return MOORE_SEQ_STATE_IDLE;
+
+  std::lock_guard<std::mutex> lock(seq->mutex);
+  return seq->state;
+}
+
+extern "C" MooreString __moore_sequence_get_name(MooreSequenceHandle sequence) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq) {
+    MooreString result = {nullptr, 0};
+    return result;
+  }
+
+  std::lock_guard<std::mutex> lock(seq->mutex);
+  MooreString result;
+  result.len = static_cast<int64_t>(seq->name.size());
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, seq->name.data(), result.len);
+  }
+  return result;
+}
+
+extern "C" int32_t __moore_sequence_get_priority(MooreSequenceHandle sequence) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(seq->mutex);
+  return seq->priority;
+}
+
+extern "C" void __moore_sequence_set_priority(MooreSequenceHandle sequence,
+                                               int32_t priority) {
+  auto *seq = getSeqRegistry().getSequence(sequence);
+  if (!seq)
+    return;
+
+  std::lock_guard<std::mutex> lock(seq->mutex);
+  seq->priority = priority;
+}
+
+//===----------------------------------------------------------------------===//
+// Sequence-Driver Handshake
+//===----------------------------------------------------------------------===//
+
+extern "C" int32_t __moore_sequence_start_item(MooreSequenceHandle sequence,
+                                                void *item, int64_t itemSize) {
+  auto &registry = getSeqRegistry();
+  auto *seq = registry.getSequence(sequence);
+  if (!seq || !item || itemSize <= 0)
+    return 0;
+
+  MooreSequencerHandle seqrHandle;
+  {
+    std::lock_guard<std::mutex> lock(seq->mutex);
+    if (seq->stopRequested)
+      return 0;
+    seqrHandle = seq->parentSequencer;
+  }
+
+  auto *seqr = registry.getSequencer(seqrHandle);
+  if (!seqr)
+    return 0;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Sequence '%s' calling start_item\n",
+                seq->name.c_str());
+  }
+
+  // Create the pending item
+  auto pendingItem = std::make_shared<PendingItem>(sequence, item, itemSize);
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    seq->currentItem = pendingItem;
+    seq->waitingForDriver = true;
+    seq->driverReady = false;
+    seq->state = MOORE_SEQ_STATE_WAITING;
+  }
+
+  // Add to sequencer's waiting queue
+  {
+    std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+    seqr->waitingSequences.push_back(sequence);
+  }
+  seqr->cv.notify_all();
+
+  // Wait for driver to be ready (driver calls get_next_item)
+  {
+    std::unique_lock<std::mutex> lock(seq->mutex);
+    seq->cv.wait(lock, [&seq]() {
+      return seq->driverReady || seq->stopRequested;
+    });
+
+    if (seq->stopRequested) {
+      seq->waitingForDriver = false;
+      return 0;
+    }
+
+    seq->waitingForDriver = false;
+    seq->state = MOORE_SEQ_STATE_RUNNING;
+  }
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Sequence '%s' start_item granted\n",
+                seq->name.c_str());
+  }
+
+  return 1;
+}
+
+extern "C" int32_t __moore_sequence_finish_item(MooreSequenceHandle sequence,
+                                                 void *item, int64_t itemSize) {
+  auto &registry = getSeqRegistry();
+  auto *seq = registry.getSequence(sequence);
+  if (!seq || !item || itemSize <= 0)
+    return 0;
+
+  MooreSequencerHandle seqrHandle;
+  std::shared_ptr<PendingItem> pendingItem;
+  {
+    std::lock_guard<std::mutex> lock(seq->mutex);
+    if (seq->stopRequested)
+      return 0;
+    seqrHandle = seq->parentSequencer;
+    pendingItem = seq->currentItem;
+  }
+
+  if (!pendingItem)
+    return 0;
+
+  auto *seqr = registry.getSequencer(seqrHandle);
+  if (!seqr)
+    return 0;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Sequence '%s' calling finish_item\n",
+                seq->name.c_str());
+  }
+
+  // Update the item data in case it was modified
+  if (item && itemSize > 0 && static_cast<size_t>(itemSize) == pendingItem->data.size()) {
+    std::memcpy(pendingItem->data.data(), item, itemSize);
+  }
+
+  // Mark item as ready for the driver
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    pendingItem->itemReady = true;
+    seq->waitingForItemDone = true;
+    seq->itemDoneSignaled = false;
+  }
+
+  // Notify driver that item is ready (driver waits on seq->cv)
+  seq->cv.notify_all();
+
+  // Wait for item_done
+  {
+    std::unique_lock<std::mutex> lock(seq->mutex);
+    seq->cv.wait(lock, [&seq]() {
+      return seq->itemDoneSignaled || seq->stopRequested;
+    });
+
+    seq->waitingForItemDone = false;
+
+    if (seq->stopRequested) {
+      return 0;
+    }
+
+    // Copy response if available
+    if (!pendingItem->response.empty() && item &&
+        pendingItem->response.size() <= static_cast<size_t>(itemSize)) {
+      std::memcpy(item, pendingItem->response.data(), pendingItem->response.size());
+    }
+  }
+
+  registry.totalItemsTransferred++;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Sequence '%s' finish_item complete\n",
+                seq->name.c_str());
+  }
+
+  return 1;
+}
+
+extern "C" int32_t __moore_sequencer_get_next_item(MooreSequencerHandle sequencer,
+                                                    void *item, int64_t itemSize) {
+  auto &registry = getSeqRegistry();
+  auto *seqr = registry.getSequencer(sequencer);
+  if (!seqr || !item || itemSize <= 0)
+    return 0;
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Driver calling get_next_item on '%s'\n",
+                seqr->name.c_str());
+  }
+
+  std::unique_lock<std::mutex> seqrLock(seqr->mutex);
+
+  // Wait for a sequence to be waiting
+  seqr->cv.wait(seqrLock, [&seqr]() {
+    return !seqr->waitingSequences.empty() || !seqr->running;
+  });
+
+  if (!seqr->running || seqr->waitingSequences.empty())
+    return 0;
+
+  // Arbitrate to select which sequence gets access
+  MooreSequenceHandle selectedSeq = arbitrateSequence(seqr);
+  if (selectedSeq == MOORE_SEQUENCE_INVALID_HANDLE)
+    return 0;
+
+  // Remove from waiting list
+  auto it = std::find(seqr->waitingSequences.begin(),
+                      seqr->waitingSequences.end(), selectedSeq);
+  if (it != seqr->waitingSequences.end()) {
+    seqr->waitingSequences.erase(it);
+  }
+
+  seqr->activeSequence = selectedSeq;
+  seqrLock.unlock();
+
+  // Get the sequence and signal driver ready
+  auto *seq = registry.getSequence(selectedSeq);
+  if (!seq)
+    return 0;
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    seq->driverReady = true;
+  }
+  seq->cv.notify_all();
+
+  // Wait for item to be ready (after finish_item is called)
+  std::shared_ptr<PendingItem> pendingItem;
+  {
+    std::unique_lock<std::mutex> seqLock(seq->mutex);
+    seq->cv.wait(seqLock, [&seq]() {
+      return (seq->currentItem && seq->currentItem->itemReady) ||
+             seq->stopRequested;
+    });
+
+    if (seq->stopRequested)
+      return 0;
+
+    pendingItem = seq->currentItem;
+  }
+
+  if (!pendingItem)
+    return 0;
+
+  // Copy item to driver's buffer
+  if (pendingItem->data.size() <= static_cast<size_t>(itemSize)) {
+    std::memcpy(item, pendingItem->data.data(), pendingItem->data.size());
+  } else {
+    std::memcpy(item, pendingItem->data.data(), itemSize);
+  }
+
+  // Store active item for item_done
+  {
+    std::lock_guard<std::mutex> seqrLock2(seqr->mutex);
+    seqr->activeItem = pendingItem;
+    seqr->hasActiveItem = true;
+  }
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] Driver received item from sequence '%s'\n",
+                seq->name.c_str());
+  }
+
+  return 1;
+}
+
+extern "C" int32_t
+__moore_sequencer_try_get_next_item(MooreSequencerHandle sequencer, void *item,
+                                     int64_t itemSize) {
+  auto &registry = getSeqRegistry();
+  auto *seqr = registry.getSequencer(sequencer);
+  if (!seqr || !item || itemSize <= 0)
+    return 0;
+
+  std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+
+  if (seqr->waitingSequences.empty())
+    return 0;
+
+  // Check if any sequence has an item ready
+  for (auto seqHandle : seqr->waitingSequences) {
+    auto *seq = registry.getSequence(seqHandle);
+    if (!seq)
+      continue;
+
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    if (seq->currentItem && seq->currentItem->itemReady) {
+      // Found a ready item
+      auto pendingItem = seq->currentItem;
+
+      // Remove from waiting list
+      auto it = std::find(seqr->waitingSequences.begin(),
+                          seqr->waitingSequences.end(), seqHandle);
+      if (it != seqr->waitingSequences.end()) {
+        seqr->waitingSequences.erase(it);
+      }
+
+      seqr->activeSequence = seqHandle;
+      seqr->activeItem = pendingItem;
+      seqr->hasActiveItem = true;
+
+      // Copy item
+      if (pendingItem->data.size() <= static_cast<size_t>(itemSize)) {
+        std::memcpy(item, pendingItem->data.data(), pendingItem->data.size());
+      } else {
+        std::memcpy(item, pendingItem->data.data(), itemSize);
+      }
+
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+extern "C" void __moore_sequencer_item_done(MooreSequencerHandle sequencer) {
+  auto &registry = getSeqRegistry();
+  auto *seqr = registry.getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  MooreSequenceHandle activeSeq;
+  std::shared_ptr<PendingItem> activeItem;
+
+  {
+    std::lock_guard<std::mutex> lock(seqr->mutex);
+    if (!seqr->hasActiveItem)
+      return;
+
+    activeSeq = seqr->activeSequence;
+    activeItem = seqr->activeItem;
+    seqr->hasActiveItem = false;
+    seqr->activeItem = nullptr;
+    seqr->activeSequence = MOORE_SEQUENCE_INVALID_HANDLE;
+  }
+
+  auto *seq = registry.getSequence(activeSeq);
+  if (!seq)
+    return;
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    seq->itemDoneSignaled = true;
+    activeItem->itemDone = true;
+    seq->currentItem = nullptr;
+  }
+  seq->cv.notify_all();
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] item_done signaled for sequence '%s'\n",
+                seq->name.c_str());
+  }
+}
+
+extern "C" void
+__moore_sequencer_item_done_with_response(MooreSequencerHandle sequencer,
+                                           void *response, int64_t responseSize) {
+  auto &registry = getSeqRegistry();
+  auto *seqr = registry.getSequencer(sequencer);
+  if (!seqr)
+    return;
+
+  MooreSequenceHandle activeSeq;
+  std::shared_ptr<PendingItem> activeItem;
+
+  {
+    std::lock_guard<std::mutex> lock(seqr->mutex);
+    if (!seqr->hasActiveItem)
+      return;
+
+    activeSeq = seqr->activeSequence;
+    activeItem = seqr->activeItem;
+    seqr->hasActiveItem = false;
+    seqr->activeItem = nullptr;
+    seqr->activeSequence = MOORE_SEQUENCE_INVALID_HANDLE;
+  }
+
+  auto *seq = registry.getSequence(activeSeq);
+  if (!seq)
+    return;
+
+  // Copy response data
+  if (response && responseSize > 0) {
+    activeItem->response.resize(responseSize);
+    std::memcpy(activeItem->response.data(), response, responseSize);
+  }
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    seq->itemDoneSignaled = true;
+    activeItem->itemDone = true;
+    seq->currentItem = nullptr;
+  }
+  seq->cv.notify_all();
+
+  if (seqTraceEnabled) {
+    std::printf("[SEQ TRACE] item_done_with_response signaled for sequence '%s'\n",
+                seq->name.c_str());
+  }
+}
+
+extern "C" int32_t
+__moore_sequencer_peek_next_item(MooreSequencerHandle sequencer, void *item,
+                                  int64_t itemSize) {
+  auto &registry = getSeqRegistry();
+  auto *seqr = registry.getSequencer(sequencer);
+  if (!seqr || !item || itemSize <= 0)
+    return 0;
+
+  std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+
+  // Check active item first
+  if (seqr->hasActiveItem && seqr->activeItem) {
+    auto &data = seqr->activeItem->data;
+    if (data.size() <= static_cast<size_t>(itemSize)) {
+      std::memcpy(item, data.data(), data.size());
+    } else {
+      std::memcpy(item, data.data(), itemSize);
+    }
+    return 1;
+  }
+
+  // Check waiting sequences for ready items
+  for (auto seqHandle : seqr->waitingSequences) {
+    auto *seq = registry.getSequence(seqHandle);
+    if (!seq)
+      continue;
+
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    if (seq->currentItem && seq->currentItem->itemReady) {
+      auto &data = seq->currentItem->data;
+      if (data.size() <= static_cast<size_t>(itemSize)) {
+        std::memcpy(item, data.data(), data.size());
+      } else {
+        std::memcpy(item, data.data(), itemSize);
+      }
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+extern "C" int32_t __moore_sequencer_has_items(MooreSequencerHandle sequencer) {
+  auto *seqr = getSeqRegistry().getSequencer(sequencer);
+  if (!seqr)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(seqr->mutex);
+  return (seqr->hasActiveItem || !seqr->waitingSequences.empty()) ? 1 : 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Sequence/Sequencer Debugging
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_seq_set_trace_enabled(int32_t enable) {
+  seqTraceEnabled = (enable != 0);
+}
+
+extern "C" int32_t __moore_seq_is_trace_enabled(void) {
+  return seqTraceEnabled ? 1 : 0;
+}
+
+extern "C" void __moore_seq_print_summary(void) {
+  auto &registry = getSeqRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+
+  std::printf("\n=== UVM Sequence/Sequencer Summary ===\n");
+
+  std::printf("\nSequencers:\n");
+  if (registry.sequencers.empty()) {
+    std::printf("  No sequencers registered.\n");
+  } else {
+    for (size_t i = 0; i < registry.sequencers.size(); ++i) {
+      auto &seqr = registry.sequencers[i];
+      if (seqr) {
+        std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+        std::printf("  [%zu] '%s': %s, arb=%d, waiting=%zu\n",
+                    i, seqr->name.c_str(),
+                    seqr->running ? "running" : "stopped",
+                    seqr->arbMode,
+                    seqr->waitingSequences.size());
+      }
+    }
+  }
+
+  std::printf("\nSequences:\n");
+  if (registry.sequences.empty()) {
+    std::printf("  No sequences registered.\n");
+  } else {
+    for (size_t i = 0; i < registry.sequences.size(); ++i) {
+      auto &seq = registry.sequences[i];
+      if (seq) {
+        std::lock_guard<std::mutex> seqLock(seq->mutex);
+        const char *stateStr = "unknown";
+        switch (seq->state) {
+          case MOORE_SEQ_STATE_IDLE: stateStr = "idle"; break;
+          case MOORE_SEQ_STATE_RUNNING: stateStr = "running"; break;
+          case MOORE_SEQ_STATE_WAITING: stateStr = "waiting"; break;
+          case MOORE_SEQ_STATE_FINISHED: stateStr = "finished"; break;
+          case MOORE_SEQ_STATE_STOPPED: stateStr = "stopped"; break;
+        }
+        std::printf("  [%zu] '%s': state=%s, priority=%d\n",
+                    i, seq->name.c_str(), stateStr, seq->priority);
+      }
+    }
+  }
+
+  std::printf("\nStatistics:\n");
+  std::printf("  Total sequences created: %lld\n",
+              (long long)registry.totalSequencesCreated.load());
+  std::printf("  Total items transferred: %lld\n",
+              (long long)registry.totalItemsTransferred.load());
+  std::printf("  Total arbitrations: %lld\n",
+              (long long)registry.totalArbitrations.load());
+
+  std::printf("\n======================================\n");
+}
+
+extern "C" void __moore_seq_get_statistics(int64_t *totalSequences,
+                                            int64_t *totalItems,
+                                            int64_t *totalArbitrations) {
+  auto &registry = getSeqRegistry();
+  if (totalSequences)
+    *totalSequences = registry.totalSequencesCreated.load();
+  if (totalItems)
+    *totalItems = registry.totalItemsTransferred.load();
+  if (totalArbitrations)
+    *totalArbitrations = registry.totalArbitrations.load();
+}
