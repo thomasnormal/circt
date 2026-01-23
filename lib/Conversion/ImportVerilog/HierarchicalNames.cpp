@@ -1,4 +1,4 @@
-//===- HierarchicalNames.cpp - Hierarchical name collection ---------------===//
+//===- Expressions.cpp - Slang expression conversion ----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "ImportVerilogInternals.h"
-#include "slang/ast/symbols/BlockSymbols.h"
 
 using namespace circt;
 using namespace ImportVerilog;
@@ -155,46 +154,6 @@ Context::collectHierarchicalValues(const slang::ast::Expression &expr,
   return visitor.result;
 }
 
-/// A visitor that traverses statements to collect hierarchical expressions.
-/// This visitor inherits from ASTVisitor with:
-/// - VisitStatements=true to recursively traverse the statement tree
-/// - VisitExpressions=true to find hierarchical references in expressions
-struct HierPathStmtVisitor
-    : public slang::ast::ASTVisitor<HierPathStmtVisitor, true, true> {
-  Context &context;
-  Location loc;
-  LogicalResult result = success();
-  const slang::ast::Symbol &outermostModule;
-
-  HierPathStmtVisitor(Context &context, Location loc,
-                      const slang::ast::Symbol &outermostModule)
-      : context(context), loc(loc), outermostModule(outermostModule) {}
-
-  // Handle hierarchical values within statements
-  void handle(const slang::ast::HierarchicalValueExpression &expr) {
-    if (failed(result))
-      return;
-    // Delegate to the existing expression-based collector
-    if (failed(context.collectHierarchicalValues(expr, outermostModule)))
-      result = failure();
-  }
-
-  void handle(const slang::ast::InvalidExpression &) {
-    // Ignore invalid expressions during traversal - they'll be reported
-    // during actual conversion
-  }
-};
-
-LogicalResult
-Context::collectHierarchicalValuesFromStatement(
-    const slang::ast::Statement &stmt,
-    const slang::ast::Symbol &outermostModule) {
-  auto loc = convertLocation(stmt.sourceRange);
-  HierPathStmtVisitor visitor(*this, loc, outermostModule);
-  stmt.visit(visitor);
-  return visitor.result;
-}
-
 /// Traverse the instance body.
 namespace {
 struct InstBodyVisitor {
@@ -254,14 +213,6 @@ struct InstBodyVisitor {
       return failure();
 
     return success();
-  }
-
-  // Handle procedural blocks (always, initial, etc.) to collect hierarchical
-  // references from statements like force/release.
-  LogicalResult visit(const slang::ast::ProceduralBlockSymbol &procNode) {
-    auto &outermostModule = procNode.getParentScope()->asSymbol();
-    return context.collectHierarchicalValuesFromStatement(procNode.getBody(),
-                                                          outermostModule);
   }
 
   /// TODO:Skip all others.
