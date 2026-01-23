@@ -10936,6 +10936,116 @@ TEST(MooreRuntimeTlmTest, Statistics) {
   EXPECT_GE(gets, 0);
 }
 
+TEST(MooreRuntimeTlmTest, FifoCanPutAndCanGet) {
+  const char *fifoName = "can_put_get_fifo";
+  // Create bounded FIFO with max size 2
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 2, sizeof(TestTlmTransaction));
+
+  // Empty FIFO: can_put should be true, can_get should be false
+  EXPECT_EQ(__moore_tlm_fifo_can_put(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_can_get(fifo), 0);
+
+  // Add one item
+  TestTlmTransaction tx1 = {0x100, 0x11, 0};
+  __moore_tlm_fifo_put(fifo, &tx1, sizeof(tx1));
+
+  // One item: can_put should be true, can_get should be true
+  EXPECT_EQ(__moore_tlm_fifo_can_put(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_can_get(fifo), 1);
+
+  // Add second item (now full)
+  TestTlmTransaction tx2 = {0x200, 0x22, 1};
+  __moore_tlm_fifo_put(fifo, &tx2, sizeof(tx2));
+
+  // Full FIFO: can_put should be false, can_get should be true
+  EXPECT_EQ(__moore_tlm_fifo_can_put(fifo), 0);
+  EXPECT_EQ(__moore_tlm_fifo_can_get(fifo), 1);
+
+  // Remove one item
+  TestTlmTransaction rxTx;
+  __moore_tlm_fifo_try_get(fifo, &rxTx, sizeof(rxTx));
+
+  // After removal: can_put should be true again
+  EXPECT_EQ(__moore_tlm_fifo_can_put(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_can_get(fifo), 1);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, FifoUsedAndFree) {
+  const char *fifoName = "used_free_fifo";
+  // Create bounded FIFO with max size 5
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 5, sizeof(TestTlmTransaction));
+
+  // Empty FIFO: used=0, free=5
+  EXPECT_EQ(__moore_tlm_fifo_used(fifo), 0);
+  EXPECT_EQ(__moore_tlm_fifo_free(fifo), 5);
+  EXPECT_EQ(__moore_tlm_fifo_capacity(fifo), 5);
+
+  // Add three items
+  TestTlmTransaction tx = {0x100, 0x11, 0};
+  __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+  __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+  __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+
+  // After adding 3: used=3, free=2
+  EXPECT_EQ(__moore_tlm_fifo_used(fifo), 3);
+  EXPECT_EQ(__moore_tlm_fifo_free(fifo), 2);
+
+  // Fill completely
+  __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+  __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+
+  // Full FIFO: used=5, free=0
+  EXPECT_EQ(__moore_tlm_fifo_used(fifo), 5);
+  EXPECT_EQ(__moore_tlm_fifo_free(fifo), 0);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, UnboundedFifoCanPutAndFree) {
+  const char *fifoName = "unbounded_fifo";
+  // Create unbounded FIFO (maxSize=0)
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 0, sizeof(TestTlmTransaction));
+
+  // Unbounded FIFO: can_put should always be true
+  EXPECT_EQ(__moore_tlm_fifo_can_put(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_capacity(fifo), 0);  // 0 indicates unbounded
+  EXPECT_EQ(__moore_tlm_fifo_free(fifo), INT64_MAX);  // Unlimited free space
+
+  // Add several items
+  TestTlmTransaction tx = {0x100, 0x11, 0};
+  for (int i = 0; i < 100; i++) {
+    __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+  }
+
+  // Still can put (unbounded)
+  EXPECT_EQ(__moore_tlm_fifo_can_put(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_used(fifo), 100);
+  EXPECT_EQ(__moore_tlm_fifo_free(fifo), INT64_MAX);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, FifoCapacity) {
+  // Test bounded FIFO capacity
+  const char *boundedName = "bounded_cap_fifo";
+  MooreTlmFifoHandle boundedFifo = __moore_tlm_fifo_create(
+      boundedName, strlen(boundedName), 0, 10, sizeof(TestTlmTransaction));
+  EXPECT_EQ(__moore_tlm_fifo_capacity(boundedFifo), 10);
+  __moore_tlm_fifo_destroy(boundedFifo);
+
+  // Test unbounded FIFO capacity
+  const char *unboundedName = "unbounded_cap_fifo";
+  MooreTlmFifoHandle unboundedFifo = __moore_tlm_fifo_create(
+      unboundedName, strlen(unboundedName), 0, 0, sizeof(TestTlmTransaction));
+  EXPECT_EQ(__moore_tlm_fifo_capacity(unboundedFifo), 0);
+  __moore_tlm_fifo_destroy(unboundedFifo);
+}
+
 //===----------------------------------------------------------------------===//
 // UVM Objection System Tests
 //===----------------------------------------------------------------------===//

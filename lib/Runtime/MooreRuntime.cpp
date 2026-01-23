@@ -13905,6 +13905,58 @@ extern "C" void __moore_tlm_fifo_flush(MooreTlmFifoHandle fifo) {
   tlmTrace("flush() on FIFO '%s'", f->name.c_str());
 }
 
+extern "C" int32_t __moore_tlm_fifo_can_put(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+
+  // Unbounded FIFOs can always accept puts
+  if (f->maxSize == 0)
+    return 1;
+
+  // Check if there is free space
+  return static_cast<int64_t>(f->data.size()) < f->maxSize ? 1 : 0;
+}
+
+extern "C" int32_t __moore_tlm_fifo_can_get(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+  return f->data.empty() ? 0 : 1;
+}
+
+extern "C" int64_t __moore_tlm_fifo_used(MooreTlmFifoHandle fifo) {
+  // Alias for size()
+  return __moore_tlm_fifo_size(fifo);
+}
+
+extern "C" int64_t __moore_tlm_fifo_free(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+
+  // Unbounded FIFOs have unlimited free space
+  if (f->maxSize == 0)
+    return INT64_MAX;
+
+  // Return free slots
+  return f->maxSize - static_cast<int64_t>(f->data.size());
+}
+
+extern "C" int64_t __moore_tlm_fifo_capacity(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  return f->maxSize;
+}
+
 //===----------------------------------------------------------------------===//
 // TLM Subscriber Operations
 //===----------------------------------------------------------------------===//
