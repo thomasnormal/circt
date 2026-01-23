@@ -47,6 +47,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Store the module name for hierarchical path construction
   moduleName = hwModule.getName().str();
 
+  // Store the root module for symbol lookup
+  rootModule = hwModule->getParentOfType<ModuleOp>();
+
   // Register all signals first
   if (failed(registerSignals(hwModule)))
     return failure();
@@ -62,9 +65,119 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // (continuous assignments like port connections)
   registerContinuousAssignments(hwModule);
 
+  // Recursively process child module instances
+  if (failed(initializeChildInstances(hwModule)))
+    return failure();
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
                           << getNumSignals() << " signals and "
                           << getNumProcesses() << " processes\n");
+
+  return success();
+}
+
+LogicalResult
+LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
+  // Find all hw.instance operations in this module
+  hwModule.walk([&](hw::InstanceOp instOp) {
+    // Get the referenced module name
+    StringRef childModuleName = instOp.getReferencedModuleName();
+
+    LLVM_DEBUG(llvm::dbgs() << "  Found instance '" << instOp.getInstanceName()
+                            << "' of module '" << childModuleName << "'\n");
+
+    // Look up the child module in the symbol table
+    if (!rootModule) {
+      LLVM_DEBUG(llvm::dbgs() << "    Warning: No root module for symbol lookup\n");
+      return;
+    }
+
+    auto childModule =
+        rootModule.lookupSymbol<hw::HWModuleOp>(childModuleName);
+    if (!childModule) {
+      LLVM_DEBUG(llvm::dbgs() << "    Warning: Could not find module '"
+                              << childModuleName << "'\n");
+      return;
+    }
+
+    // Skip if we've already processed this module (to handle multiple instances)
+    if (processedModules.contains(childModuleName)) {
+      LLVM_DEBUG(llvm::dbgs() << "    Skipping already processed module\n");
+      return;
+    }
+    processedModules.insert(childModuleName);
+
+    // Register signals and processes from the child module
+    // Note: We don't recursively call initialize() to avoid re-exporting signals
+    // and to maintain the current hierarchical context
+
+    // Register signals from child module
+    childModule.walk([&](llhd::SignalOp sigOp) {
+      // Use hierarchical name for child signals
+      std::string name = sigOp.getName().value_or("").str();
+      if (name.empty()) {
+        name = "sig_" + std::to_string(valueToSignal.size());
+      }
+      std::string hierName = instOp.getInstanceName().str() + "." + name;
+
+      Type innerType = sigOp.getInit().getType();
+      unsigned width = getTypeWidth(innerType);
+
+      SignalId sigId = scheduler.registerSignal(hierName, width);
+      valueToSignal[sigOp.getResult()] = sigId;
+      signalIdToName[sigId] = hierName;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child signal '" << hierName
+                              << "' with ID " << sigId << "\n");
+    });
+
+    // Register processes from child module
+    childModule.walk([&](llhd::ProcessOp processOp) {
+      std::string procName = instOp.getInstanceName().str() + ".llhd_process_" +
+                             std::to_string(processStates.size());
+
+      ProcessExecutionState state(processOp);
+      ProcessId procId = scheduler.registerProcess(
+          procName, [this, procId = processStates.size() + 1]() {
+            executeProcess(procId);
+          });
+
+      state.currentBlock = &processOp.getBody().front();
+      state.currentOp = state.currentBlock->begin();
+      processStates[procId] = std::move(state);
+      opToProcessId[processOp.getOperation()] = procId;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child process '" << procName
+                              << "' with ID " << procId << "\n");
+
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    });
+
+    // Register seq.initial blocks from child module
+    childModule.walk([&](seq::InitialOp initialOp) {
+      std::string initName = instOp.getInstanceName().str() + ".seq_initial_" +
+                             std::to_string(processStates.size());
+
+      ProcessExecutionState state(initialOp);
+      ProcessId procId = scheduler.registerProcess(
+          initName, [this, procId = processStates.size() + 1]() {
+            executeProcess(procId);
+          });
+
+      state.currentBlock = initialOp.getBodyBlock();
+      state.currentOp = state.currentBlock->begin();
+      processStates[procId] = std::move(state);
+      opToProcessId[initialOp.getOperation()] = procId;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child initial block '" << initName
+                              << "' with ID " << procId << "\n");
+
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    });
+
+    // Recursively process child module's instances
+    (void)initializeChildInstances(childModule);
+  });
 
   return success();
 }
