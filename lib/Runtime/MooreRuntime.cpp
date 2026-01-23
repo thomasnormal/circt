@@ -11589,6 +11589,70 @@ extern "C" MooreString uvm_dpi_get_tool_version_c(void) {
   return result;
 }
 
+/// Parse +UVM_TESTNAME from command-line arguments.
+/// This function searches through all command-line arguments for a
+/// +UVM_TESTNAME=<name> argument. The argument format follows the standard
+/// UVM command-line processing format.
+///
+/// @return A MooreString containing the test name if found, or an empty
+///         MooreString if not found.
+extern "C" MooreString __moore_uvm_get_testname_from_cmdline(void) {
+  // Initialize command line args from environment
+  initCommandLineArgs();
+
+  MooreString result = {nullptr, 0};
+
+  // The prefix we're looking for
+  const char *prefix = "+UVM_TESTNAME=";
+  size_t prefixLen = std::strlen(prefix);
+
+  // Search through all command line arguments
+  for (const std::string &arg : cmdLineArgs) {
+    // Check if the argument starts with +UVM_TESTNAME=
+    if (arg.size() > prefixLen &&
+        arg.compare(0, prefixLen, prefix) == 0) {
+      // Extract the test name (everything after the '=')
+      std::string testName = arg.substr(prefixLen);
+
+      // Return the test name
+      result.len = static_cast<int64_t>(testName.size());
+      if (result.len > 0) {
+        result.data = static_cast<char *>(std::malloc(result.len));
+        if (result.data) {
+          std::memcpy(result.data, testName.data(), result.len);
+        } else {
+          result.len = 0;
+        }
+      }
+      return result;
+    }
+  }
+
+  // Not found - return empty string
+  return result;
+}
+
+/// Check if +UVM_TESTNAME was specified on the command line.
+/// @return 1 if found, 0 otherwise
+extern "C" int32_t __moore_uvm_has_cmdline_testname(void) {
+  // Initialize command line args from environment
+  initCommandLineArgs();
+
+  // The prefix we're looking for
+  const char *prefix = "+UVM_TESTNAME=";
+  size_t prefixLen = std::strlen(prefix);
+
+  // Search through all command line arguments
+  for (const std::string &arg : cmdLineArgs) {
+    if (arg.size() > prefixLen &&
+        arg.compare(0, prefixLen, prefix) == 0) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 //===----------------------------------------------------------------------===//
 // UVM Coverage Model API
 //===----------------------------------------------------------------------===//

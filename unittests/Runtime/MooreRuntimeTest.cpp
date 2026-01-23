@@ -10071,4 +10071,191 @@ TEST(MooreRuntimeUvmFactoryTest, FactoryPrint) {
   __moore_uvm_factory_clear();
 }
 
+//===----------------------------------------------------------------------===//
+// +UVM_TESTNAME Command-Line Argument Parsing Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeUvmTestnameTest, ParseTestnameFromCmdline) {
+  // Set up environment with +UVM_TESTNAME argument
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=my_test_class", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(result.len, 13);
+  EXPECT_EQ(std::string(result.data, result.len), "my_test_class");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, ParseTestnameWithOtherArgs) {
+  // Set up environment with +UVM_TESTNAME mixed with other arguments
+  setenv("CIRCT_UVM_ARGS", "+verbosity=high +UVM_TESTNAME=complex_test_name +timeout=1000", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "complex_test_name");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, NoTestnameInCmdline) {
+  // Set up environment without +UVM_TESTNAME
+  setenv("CIRCT_UVM_ARGS", "+verbosity=high +timeout=1000", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, EmptyTestname) {
+  // Set up environment with empty +UVM_TESTNAME= (just the prefix)
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  // Empty value after = should return empty string
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, HasCmdlineTestnameTrue) {
+  // Set up environment with +UVM_TESTNAME
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=test_class", 1);
+  unsetenv("UVM_ARGS");
+
+  EXPECT_EQ(__moore_uvm_has_cmdline_testname(), 1);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, HasCmdlineTestnameFalse) {
+  // Set up environment without +UVM_TESTNAME
+  setenv("CIRCT_UVM_ARGS", "+other_arg=value", 1);
+  unsetenv("UVM_ARGS");
+
+  EXPECT_EQ(__moore_uvm_has_cmdline_testname(), 0);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameWithUnderscores) {
+  // Test with underscores in the test name (common pattern)
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=my_test_with_underscores", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "my_test_with_underscores");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameWithNumbers) {
+  // Test with numbers in the test name
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=test123_v2", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "test123_v2");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameFromUvmArgsFallback) {
+  // Test that UVM_ARGS is used as fallback when CIRCT_UVM_ARGS is not set
+  unsetenv("CIRCT_UVM_ARGS");
+  setenv("UVM_ARGS", "+UVM_TESTNAME=fallback_test", 1);
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "fallback_test");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameFirstOccurrence) {
+  // If multiple +UVM_TESTNAME arguments exist, the first one should be used
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=first_test +UVM_TESTNAME=second_test", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "first_test");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameWithScopedName) {
+  // Test with package-scoped test name (pkg::class)
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME=my_pkg::my_test", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "my_pkg::my_test");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameNoEnvVars) {
+  // Test when neither CIRCT_UVM_ARGS nor UVM_ARGS is set
+  unsetenv("CIRCT_UVM_ARGS");
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+
+  EXPECT_EQ(__moore_uvm_has_cmdline_testname(), 0);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameSimilarPrefixNotMatched) {
+  // Test that similar prefixes like +UVM_TESTNAME_EXTRA are not matched
+  setenv("CIRCT_UVM_ARGS", "+UVM_TESTNAME_EXTRA=wrong", 1);
+  unsetenv("UVM_ARGS");
+
+  // This should NOT match because it's not exactly +UVM_TESTNAME=
+  EXPECT_EQ(__moore_uvm_has_cmdline_testname(), 0);
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, TestnameWithQuotedValue) {
+  // Test with quoted test name (quotes should be handled by the parser)
+  setenv("CIRCT_UVM_ARGS", "\"+UVM_TESTNAME=quoted_test\"", 1);
+  unsetenv("UVM_ARGS");
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+
+  ASSERT_NE(result.data, nullptr);
+  EXPECT_EQ(std::string(result.data, result.len), "quoted_test");
+
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeUvmTestnameTest, CaseSensitivity) {
+  // Test that +UVM_TESTNAME is case-sensitive (lowercase should not match)
+  setenv("CIRCT_UVM_ARGS", "+uvm_testname=lowercase_test", 1);
+  unsetenv("UVM_ARGS");
+
+  // Lowercase should NOT match (UVM standard is uppercase)
+  EXPECT_EQ(__moore_uvm_has_cmdline_testname(), 0);
+
+  MooreString result = __moore_uvm_get_testname_from_cmdline();
+  EXPECT_EQ(result.data, nullptr);
+  EXPECT_EQ(result.len, 0);
+}
+
 } // namespace
