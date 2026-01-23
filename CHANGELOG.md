@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 145 - January 23, 2026
+
+### sv-tests Baseline Corrections
+
+Re-verified sv-tests baselines with careful analysis of test metadata:
+
+| Chapter | Old Baseline | Corrected | Notes |
+|---------|--------------|-----------|-------|
+| 15 | 5/5 (100%) | 2/5 (40%) | Hierarchical event refs never worked |
+| 20 | 47/47 (100%) | 35/47 (74%) | $dist_*, $printtimescale unsupported |
+| 21 | 29/29 (100%) | 12/29 (41%) | Many I/O syscalls unsupported |
+
+**Key Findings:**
+
+1. **Chapter-15**: Tests use `--top=top` which excludes `inner` module containing hierarchical event references (`-> top.e;`). These never worked.
+
+2. **Chapter-20 failures (12 tests):**
+   - Probabilistic distribution functions: `$dist_chi_square`, `$dist_erlang`, etc. have EmptyArgument issues
+   - `$printtimescale`, `$timeformat` not implemented
+   - `$countbits` with `'x`/`'z` control bits out of range
+
+3. **Chapter-21 failures (17 tests):**
+   - Unsupported syscalls: `$monitoron`, `$strobe`, `$feof`, `$fflush`, `$fgetc`, `$fmonitor`, `$ftell`, `$fstrobe`, `$ungetc`, `$dumplimit`
+   - Functions with output arguments: `$ferror`, `$fgets`, `$fread`, `$readmemb`, `$readmemh`
+
+4. **verilator-verification**: Baseline 122/154 was compilation-only; BMC results differ due to `llhd.final` handling and no-property SKIPs. Not a regression.
+
+### Updated Known Limitations
+
+Added to unsupported features:
+- I/O system calls (10+ functions)
+- Probability distribution functions
+- Timescale tasks
+
 ## Iteration 144 - January 23, 2026
 
 ### AXI4 AVIP Simulation Verified
@@ -57,7 +91,7 @@ All compilable AVIPs now have extended simulation testing:
 - Check if BlockArgument with null parent region or owner outside procedure
 - Force `llhd.process` when such references exist
 
-**Result:** Chapter-15 sv-tests now at **100%** (was 60%)
+**Result:** Local event triggering now works; hierarchical event references still unsupported
 
 ### ImportVerilog Fix: Nested Interface Instances via Interface Ports
 

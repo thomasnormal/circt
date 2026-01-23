@@ -2,11 +2,11 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 23, 2026 (Iteration 144)
+**Last Updated**: January 23, 2026 (Iteration 145)
 
 ## Current Status
 
-### sv-tests Coverage (736+ tests, ~95% pass rate)
+### sv-tests Coverage (774 tests, ~91% pass rate)
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
@@ -20,11 +20,11 @@
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 15/15 (100%) | Complete |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
-| 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 140 |
+| 15 | Inter-Process Sync | 2/5 (40%) | Hierarchical events unsupported |
 | 16 | Assertions | - | Codex agent scope |
 | 18 | Random Constraints | 119/134 (89%) | Complete |
-| 20 | Utility System Tasks | 47/47 (100%) | Complete |
-| 21 | I/O System Tasks | 29/29 (100%) | Complete |
+| 20 | Utility System Tasks | 35/47 (74%) | $dist_*, $printtimescale unsupported |
+| 21 | I/O System Tasks | 12/29 (41%) | Many I/O syscalls unsupported |
 | 22 | Compiler Directives | 55/74 (74%) | 1 bug: include-via-macro |
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
@@ -53,9 +53,11 @@
 
 ### CIRCT Bugs (To Fix)
 
-1. ~~**Cross-module event triggering**~~ **FIXED** (Commit cdaed5b93)
-   - Was: Chapter-15 tests failing with region isolation error
-   - Fixed: Block argument detection in ProcedureOpConversion
+1. **Hierarchical event references** (Priority: Medium)
+   - Affects: Chapter-15 tests (15.5.1-*, 15.5.2-*)
+   - Pattern: `-> top.e;` from module `inner` referencing event in `top`
+   - Error: "no lvalue generated for Variable" in procedural blocks
+   - Note: Local event references (`-> e;`) work correctly
 
 2. **Include-via-macro path resolution** (Priority: Low)
    - Affects: Chapter-22 test (22.4--include_via_define.sv)
@@ -67,6 +69,11 @@
 2. **Class builtin functions** - Randomization/constraints partially supported
 3. **Some VCD dump tasks** - Stubbed for compilation
 4. **Covergroup get_coverage()** - Compiles but returns unsupported format at runtime (Iteration 143)
+5. **I/O system calls** - Many file I/O functions not yet implemented:
+   - `$monitoron`, `$strobe`, `$feof`, `$fflush`, `$fgetc`, `$fmonitor`, `$ftell`, `$fstrobe`, `$ungetc`, `$dumplimit`
+   - Functions with output arguments: `$ferror`, `$fgets`, `$fread`, `$readmemb`, `$readmemh`
+6. **Probability distribution functions** - `$dist_*` functions have EmptyArgument issues
+7. **Timescale tasks** - `$printtimescale`, `$timeformat` not fully supported
 
 ## Recent Fixes (Iterations 132-143)
 
@@ -83,9 +90,10 @@
    - Fixed parameterization from `#(REQ, RSP)` to `#(RSP, REQ)`
    - Corrected put/get type direction for sequences
 
-4. **Cross-module Event Triggering** (Commit cdaed5b93)
+4. **Local Event Triggering** (Commit cdaed5b93)
    - Added BlockArgument detection in ProcedureOpConversion
-   - Chapter-15 tests now 100% (was 60%)
+   - Fixed local event references (`-> e;` in same module)
+   - Note: Hierarchical event references still unsupported
 
 5. **UVM Callbacks Implementation** (Commit f39093a90)
    - Implemented callback storage with associative arrays
