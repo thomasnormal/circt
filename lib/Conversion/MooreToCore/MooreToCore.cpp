@@ -716,6 +716,42 @@ static void getValuesToObserve(Region *region,
       });
 }
 
+/// Check if any function called from within the given region (transitively)
+/// has multiple basic blocks. This is used to determine if we can lower an
+/// initial block to seq.initial (single-block only) or need llhd.process
+/// (supports multiple blocks for inlined control flow).
+static bool hasMultiBlockFunctionCalls(Region &region, ModuleOp moduleOp) {
+  llvm::SmallDenseSet<StringRef> visited;
+  llvm::SmallVector<StringRef> worklist;
+
+  // Collect initial function calls from the region
+  region.walk([&](func::CallOp callOp) {
+    worklist.push_back(callOp.getCallee());
+  });
+
+  while (!worklist.empty()) {
+    StringRef callee = worklist.pop_back_val();
+    if (!visited.insert(callee).second)
+      continue;
+
+    // Look up the function in the module
+    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(callee);
+    if (!funcOp || funcOp.empty())
+      continue;
+
+    // If this function has multiple blocks, we need llhd.process
+    if (!funcOp.getBody().hasOneBlock())
+      return true;
+
+    // Check for transitive calls
+    funcOp.getBody().walk([&](func::CallOp nestedCall) {
+      worklist.push_back(nestedCall.getCallee());
+    });
+  }
+
+  return false;
+}
+
 struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -763,9 +799,15 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
       // Simple initial blocks can use seq.initial for arcilator support.
       // This includes blocks with $finish (unreachable ops) which get
       // converted to sim.terminate.
+      // We also need to check if any called functions have multiple blocks,
+      // because seq.initial only supports single-block regions and the
+      // InlineCallsPass cannot inline multi-block functions into it.
       bool hasSingleBlock = op.getBody().hasOneBlock();
+      auto moduleOp = op->getParentOfType<ModuleOp>();
+      bool hasMultiBlockCalls = moduleOp &&
+          hasMultiBlockFunctionCalls(op.getBody(), moduleOp);
       if (!hasWaitEvent && !hasWaitDelay && allCapturesConstant &&
-          hasSingleBlock) {
+          hasSingleBlock && !hasMultiBlockCalls) {
         auto initialOp =
             seq::InitialOp::create(rewriter, loc, TypeRange{}, std::function<void()>{});
         auto &body = initialOp.getBody();
@@ -11932,7 +11974,8 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
                 ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp,
                 ConversionOp, StructExtractOp, StringCmpOp,
                 ClassHandleCmpOp, WildcardEqOp, WildcardNeOp,
-                IntToLogicOp, ClassNullOp>(definingOp) ||
+                IntToLogicOp, ClassNullOp, StringToLowerOp, StringToUpperOp>(
+                definingOp) ||
             isa<func::CallOp>(definingOp)) {
           // Recursively convert the defining operation
           // First, ensure all operands of the defining op are converted
@@ -12626,6 +12669,58 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       return hw::BitcastOp::create(rewriter, loc, resultType, input);
     }
 
+    // Handle moore.string.tolower - convert string to lowercase
+    if (auto toLowerOp = dyn_cast<StringToLowerOp>(mooreOp)) {
+      Value input = getConvertedOperand(toLowerOp.getStr());
+      if (!input)
+        return nullptr;
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_tolower", fnTy);
+
+      auto one =
+          LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+      auto strAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+      LLVM::StoreOp::create(rewriter, loc, input, strAlloca);
+
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{strAlloca});
+      return call.getResult();
+    }
+
+    // Handle moore.string.toupper - convert string to uppercase
+    if (auto toUpperOp = dyn_cast<StringToUpperOp>(mooreOp)) {
+      Value input = getConvertedOperand(toUpperOp.getStr());
+      if (!input)
+        return nullptr;
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+      auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_toupper", fnTy);
+
+      auto one =
+          LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+      auto strAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+      LLVM::StoreOp::create(rewriter, loc, input, strAlloca);
+
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                       SymbolRefAttr::get(runtimeFn),
+                                       ValueRange{strAlloca});
+      return call.getResult();
+    }
+
     // Unsupported operation
     return nullptr;
   }
@@ -12759,6 +12854,55 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     // Map the input array to its converted value so that operations inside the
     // predicate body that reference the array can find the converted value.
     valueMap[op.getArray()] = adaptor.getArray();
+
+    // Pre-scan all operations in the predicate body for external values
+    // (values defined outside the predicate region). These need to be converted
+    // before processing the operations. This is critical for handling function
+    // calls that reference outer scope values like block arguments from the
+    // enclosing function (e.g., 'this' pointer in class methods).
+    //
+    // When the enclosing function's signature is converted, its block arguments
+    // are replaced with new arguments of the converted types. The operations
+    // inside nested regions (like this predicate) still reference the old
+    // block arguments, which have been invalidated. We need to find the remapped
+    // values through the rewriter.
+    for (Operation &innerOp : body.without_terminator()) {
+      for (unsigned i = 0; i < innerOp.getNumOperands(); ++i) {
+        Value operand = innerOp.getOperand(i);
+
+        // Skip if already in valueMap
+        if (valueMap.count(operand))
+          continue;
+
+        // Skip if defined inside the predicate body
+        if (Operation *defOp = operand.getDefiningOp()) {
+          if (defOp->getBlock() == &body)
+            continue;
+        }
+
+        // This is an external value - try to get the remapped version
+        // The rewriter maintains a mapping from old values to new values
+        // after type conversion.
+        Value converted = rewriter.getRemappedValue(operand);
+        if (converted) {
+          valueMap[operand] = converted;
+          continue;
+        }
+
+        // For external values defined by operations, try to convert the type
+        Type targetType = typeConverter->convertType(operand.getType());
+        if (targetType && targetType != operand.getType()) {
+          // Create an unrealized conversion cast for the external value
+          converted = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                          targetType, operand)
+                          .getResult(0);
+          valueMap[operand] = converted;
+        } else if (targetType) {
+          // Same type, just use the operand directly
+          valueMap[operand] = operand;
+        }
+      }
+    }
 
     // Convert each Moore operation in the predicate block inline to LLVM/arith.
     // Process operations in order to ensure operand dependencies are resolved.
