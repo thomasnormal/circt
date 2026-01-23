@@ -870,6 +870,23 @@ struct ExprVisitor {
         return {};
       auto targetTy = cast<moore::ClassHandleType>(valTy);
 
+      // Check if this is a class parameter access (e.g., obj.a where a is a
+      // class parameter). Class parameters are compile-time constants and
+      // can be accessed like properties but are evaluated at elaboration time.
+      // IEEE 1800-2017 Section 8.25
+      if (auto *paramSym =
+              expr.member.as_if<slang::ast::ParameterSymbol>()) {
+        // Get the constant value from slang - it has already been elaborated
+        const auto &constVal = paramSym->getValue();
+        if (!constVal) {
+          mlir::emitError(loc)
+              << "failed to evaluate class parameter '" << expr.member.name
+              << "'";
+          return {};
+        }
+        return context.materializeConstant(constVal, *expr.type, loc);
+      }
+
       // Check if this is a static property accessed through an instance.
       // In SystemVerilog, you can write `obj.static_prop` to access a static
       // property, but static properties are stored as global variables, not
