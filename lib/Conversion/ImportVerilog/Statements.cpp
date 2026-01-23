@@ -10,6 +10,7 @@
 #include "slang/ast/Compilation.h"
 #include <cmath>
 #include "slang/ast/Statement.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/ast/SystemSubroutine.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/statements/MiscStatements.h"
@@ -824,53 +825,105 @@ struct StmtVisitor {
       // specified by the user, and for the evaluation to stop as soon as the
       // first matching expression is encountered.
       for (const auto *expr : item.expressions) {
-        auto value = context.convertRvalueExpression(*expr);
-        if (!value)
-          return failure();
-        auto itemLoc = value.getLoc();
-
-        // Take note if the expression is a constant.
-        auto maybeConst = value;
-        while (isa_and_nonnull<moore::ConversionOp, moore::IntToLogicOp,
-                               moore::LogicToIntOp>(maybeConst.getDefiningOp()))
-          maybeConst = maybeConst.getDefiningOp()->getOperand(0);
-        if (auto defOp = maybeConst.getDefiningOp<moore::ConstantOp>())
-          itemConsts.push_back(defOp.getValueAttr());
+        auto itemLoc = context.convertLocation(expr->sourceRange);
 
         // Generate the appropriate equality operator based on type.
         Value cond;
         Value condLogic;
-        if (isa<moore::StringType>(caseExpr.getType())) {
-          // String case statement - use string comparison.
-          cond = moore::StringCmpOp::create(
-              builder, itemLoc, moore::StringCmpPredicate::eq, caseExpr, value);
-          condLogic = context.convertToBool(cond);
-          if (!condLogic)
-            return failure();
-        } else {
-          // Integer/enum case statement - convert to simple bit vector.
+
+        // For case inside, handle range expressions specially before
+        // converting to rvalue.
+        if (caseStmt.condition == CaseStatementCondition::Inside) {
           auto caseExprSBV = context.convertToSimpleBitVector(caseExpr);
-          auto valueSBV = context.convertToSimpleBitVector(value);
-          if (!caseExprSBV || !valueSBV)
+          if (!caseExprSBV)
             return failure();
-          switch (caseStmt.condition) {
-          case CaseStatementCondition::Normal:
-            cond = moore::CaseEqOp::create(builder, itemLoc, caseExprSBV,
-                                           valueSBV);
-            break;
-          case CaseStatementCondition::WildcardXOrZ:
-            cond = moore::CaseXZEqOp::create(builder, itemLoc, caseExprSBV,
-                                             valueSBV);
-            break;
-          case CaseStatementCondition::WildcardJustZ:
-            cond = moore::CaseZEqOp::create(builder, itemLoc, caseExprSBV,
-                                            valueSBV);
-            break;
-          case CaseStatementCondition::Inside:
-            mlir::emitError(loc, "unsupported set membership case statement");
-            return failure();
+
+          if (const auto *openRange =
+                  expr->as_if<slang::ast::ValueRangeExpression>()) {
+            // Handle ranges: check if caseExpr is within [low, high].
+            auto lowBound = context.convertToSimpleBitVector(
+                context.convertRvalueExpression(openRange->left()));
+            auto highBound = context.convertToSimpleBitVector(
+                context.convertRvalueExpression(openRange->right()));
+            if (!lowBound || !highBound)
+              return failure();
+            Value leftCmp, rightCmp;
+            // Determine signedness for comparison.
+            if (openRange->left().type->isSigned() ||
+                caseStmt.expr.type->isSigned()) {
+              leftCmp =
+                  moore::SgeOp::create(builder, itemLoc, caseExprSBV, lowBound);
+            } else {
+              leftCmp =
+                  moore::UgeOp::create(builder, itemLoc, caseExprSBV, lowBound);
+            }
+            if (openRange->right().type->isSigned() ||
+                caseStmt.expr.type->isSigned()) {
+              rightCmp =
+                  moore::SleOp::create(builder, itemLoc, caseExprSBV, highBound);
+            } else {
+              rightCmp =
+                  moore::UleOp::create(builder, itemLoc, caseExprSBV, highBound);
+            }
+            cond = moore::AndOp::create(builder, itemLoc, leftCmp, rightCmp);
+          } else {
+            // For non-range values, use wildcard equality (handles ?, X, Z).
+            auto value = context.convertRvalueExpression(*expr);
+            if (!value)
+              return failure();
+            auto valueSBV = context.convertToSimpleBitVector(value);
+            if (!valueSBV)
+              return failure();
+            cond = moore::WildcardEqOp::create(builder, itemLoc, caseExprSBV,
+                                               valueSBV);
           }
           condLogic = cond;
+        } else {
+          // Non-inside case statements.
+          auto value = context.convertRvalueExpression(*expr);
+          if (!value)
+            return failure();
+          itemLoc = value.getLoc();
+
+          // Take note if the expression is a constant.
+          auto maybeConst = value;
+          while (isa_and_nonnull<moore::ConversionOp, moore::IntToLogicOp,
+                                 moore::LogicToIntOp>(maybeConst.getDefiningOp()))
+            maybeConst = maybeConst.getDefiningOp()->getOperand(0);
+          if (auto defOp = maybeConst.getDefiningOp<moore::ConstantOp>())
+            itemConsts.push_back(defOp.getValueAttr());
+
+          if (isa<moore::StringType>(caseExpr.getType())) {
+            // String case statement - use string comparison.
+            cond = moore::StringCmpOp::create(
+                builder, itemLoc, moore::StringCmpPredicate::eq, caseExpr, value);
+            condLogic = context.convertToBool(cond);
+            if (!condLogic)
+              return failure();
+          } else {
+            // Integer/enum case statement - convert to simple bit vector.
+            auto caseExprSBV = context.convertToSimpleBitVector(caseExpr);
+            auto valueSBV = context.convertToSimpleBitVector(value);
+            if (!caseExprSBV || !valueSBV)
+              return failure();
+            switch (caseStmt.condition) {
+            case CaseStatementCondition::Normal:
+              cond = moore::CaseEqOp::create(builder, itemLoc, caseExprSBV,
+                                             valueSBV);
+              break;
+            case CaseStatementCondition::WildcardXOrZ:
+              cond = moore::CaseXZEqOp::create(builder, itemLoc, caseExprSBV,
+                                               valueSBV);
+              break;
+            case CaseStatementCondition::WildcardJustZ:
+              cond = moore::CaseZEqOp::create(builder, itemLoc, caseExprSBV,
+                                              valueSBV);
+              break;
+            case CaseStatementCondition::Inside:
+              llvm_unreachable("Inside handled above");
+            }
+            condLogic = cond;
+          }
         }
 
         cond = moore::ToBuiltinBoolOp::create(builder, itemLoc, condLogic);
