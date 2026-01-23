@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 113 - January 23, 2026
+
+### Virtual Method Dispatch in Array Locator Predicates
+
+Fixed support for virtual method calls on array elements within array locator predicates.
+
+**Pattern from UVM (uvm_sequencer_base.svh:1176):**
+```systemverilog
+q = lock_list.find_first_index(item) with (item.get_inst_id() == seqid);
+```
+
+**Technical Changes:**
+- Implemented proper VTableLoadMethodOp handling in convertMooreOpInline:
+  - Resolves class struct info to get method-to-vtable-index mapping
+  - Generates GEP to vtable pointer field considering inheritance depth
+  - Loads vtable pointer and indexes into vtable array
+  - Loads function pointer for dynamic dispatch
+- Enhanced CallIndirectOp handling for LLVM pointer callees:
+  - Uses LLVM::CallOp for indirect calls through vtable function pointers
+  - Function pointer passed as first operand per LLVM calling convention
+- Added VTableLoadMethodOp and func::CallIndirectOp to recursive conversion list
+
+**Test:** test/Conversion/MooreToCore/array-locator-virtual-method-test.sv
+
+---
+
 ## Iteration 112 - January 23, 2026
 
 ### UVM Scoreboard Utility Functions ✅
