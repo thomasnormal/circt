@@ -17470,3 +17470,138 @@ extern "C" uint64_t __moore_uvm_get_time(void) {
 extern "C" void __moore_uvm_set_time(uint64_t time) {
   getUvmReportState().simTime.store(time);
 }
+
+//===----------------------------------------------------------------------===//
+// SystemVerilog Semaphore Support
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Internal semaphore structure.
+struct Semaphore {
+  std::mutex mutex;
+  std::condition_variable cv;
+  int32_t keyCount;
+
+  explicit Semaphore(int32_t initialKeys) : keyCount(initialKeys) {}
+};
+
+/// Registry for semaphores.
+struct SemaphoreRegistry {
+  std::mutex mutex;
+  std::unordered_map<MooreSemaphoreHandle, std::unique_ptr<Semaphore>> semaphores;
+  MooreSemaphoreHandle nextHandle = 1;
+
+  MooreSemaphoreHandle create(int32_t keyCount) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreSemaphoreHandle handle = nextHandle++;
+    semaphores[handle] = std::make_unique<Semaphore>(keyCount);
+    return handle;
+  }
+
+  void destroy(MooreSemaphoreHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    semaphores.erase(handle);
+  }
+
+  Semaphore *get(MooreSemaphoreHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = semaphores.find(handle);
+    if (it != semaphores.end()) {
+      return it->second.get();
+    }
+    return nullptr;
+  }
+};
+
+SemaphoreRegistry &getSemaphoreRegistry() {
+  static SemaphoreRegistry registry;
+  return registry;
+}
+
+} // namespace
+
+extern "C" MooreSemaphoreHandle __moore_semaphore_create(int32_t keyCount) {
+  if (keyCount < 0) {
+    return MOORE_SEMAPHORE_INVALID_HANDLE;
+  }
+  return getSemaphoreRegistry().create(keyCount);
+}
+
+extern "C" void __moore_semaphore_destroy(MooreSemaphoreHandle sem) {
+  if (sem == MOORE_SEMAPHORE_INVALID_HANDLE) {
+    return;
+  }
+  getSemaphoreRegistry().destroy(sem);
+}
+
+extern "C" void __moore_semaphore_put(MooreSemaphoreHandle sem,
+                                      int32_t keyCount) {
+  if (sem == MOORE_SEMAPHORE_INVALID_HANDLE || keyCount <= 0) {
+    return;
+  }
+
+  auto *semaphore = getSemaphoreRegistry().get(sem);
+  if (!semaphore) {
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(semaphore->mutex);
+    semaphore->keyCount += keyCount;
+  }
+  // Notify all waiting threads so they can check if enough keys are available
+  semaphore->cv.notify_all();
+}
+
+extern "C" void __moore_semaphore_get(MooreSemaphoreHandle sem,
+                                      int32_t keyCount) {
+  if (sem == MOORE_SEMAPHORE_INVALID_HANDLE || keyCount <= 0) {
+    return;
+  }
+
+  auto *semaphore = getSemaphoreRegistry().get(sem);
+  if (!semaphore) {
+    return;
+  }
+
+  std::unique_lock<std::mutex> lock(semaphore->mutex);
+  semaphore->cv.wait(lock,
+                     [&semaphore, keyCount]() {
+                       return semaphore->keyCount >= keyCount;
+                     });
+  semaphore->keyCount -= keyCount;
+}
+
+extern "C" int32_t __moore_semaphore_try_get(MooreSemaphoreHandle sem,
+                                             int32_t keyCount) {
+  if (sem == MOORE_SEMAPHORE_INVALID_HANDLE || keyCount <= 0) {
+    return 0;
+  }
+
+  auto *semaphore = getSemaphoreRegistry().get(sem);
+  if (!semaphore) {
+    return 0;
+  }
+
+  std::lock_guard<std::mutex> lock(semaphore->mutex);
+  if (semaphore->keyCount >= keyCount) {
+    semaphore->keyCount -= keyCount;
+    return 1;
+  }
+  return 0;
+}
+
+extern "C" int32_t __moore_semaphore_get_key_count(MooreSemaphoreHandle sem) {
+  if (sem == MOORE_SEMAPHORE_INVALID_HANDLE) {
+    return 0;
+  }
+
+  auto *semaphore = getSemaphoreRegistry().get(sem);
+  if (!semaphore) {
+    return 0;
+  }
+
+  std::lock_guard<std::mutex> lock(semaphore->mutex);
+  return semaphore->keyCount;
+}
