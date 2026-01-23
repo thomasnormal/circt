@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 103 - January 22, 2026
+
+### More AVIPs Tested ✅
+
+UART and AHB AVIPs now compile to LLHD IR (joining APB and SPI).
+- **4 AVIPs compile**: APB, SPI, UART, AHB
+- **Remaining AVIPs**: Blocked by UVM recursive function inlining or code issues
+
+Primary blocker: `recursive function call cannot be inlined (unsupported in --ir-hw)` for `uvm_get_report_object()`.
+
+### UVM run_test() Runtime Support ✅
+
+Implemented basic UVM runtime infrastructure:
+- `__uvm_run_test(const char *testName, int64_t len)` runtime function
+- Intercepts `uvm_pkg::run_test` calls and converts to runtime calls
+- Stub prints UVM-style messages (future: factory, phases)
+
+Also fixed `StringAtoRealOp` and `StringRealToAOp` assembly format bugs.
+
+### More LLVM Interpreter Operations ✅
+
+Added comprehensive LLVM operations:
+- **Control**: llvm.select, llvm.freeze
+- **Division**: sdiv, udiv, srem, urem (X on div by zero)
+- **Float**: fadd, fsub, fmul, fdiv, fcmp (all 16 predicates, f32/f64)
+
+### String Conversion Methods ✅
+
+IEEE 1800-2017 Section 6.16.9 string methods:
+- `atoreal`, `hextoa`, `octtoa`, `bintoa`, `realtoa`
+- `putc` method support
+
+Chapter-6 improved from 63/84 (75%) to **69/84 (82%)** - +6 tests.
+
+### Commits
+- `b38a75767` [ImportVerilog] Add string conversion methods
+- `cbda10976` [MooreToCore] Add UVM run_test() runtime support
+- `e0609f540` [circt-sim] Add more LLVM dialect operations to interpreter
+
+---
+
 ## Iteration 102 - January 22, 2026
 
 ### APB & SPI AVIPs Run Through circt-sim! 🎉🎉
