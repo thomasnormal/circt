@@ -67,16 +67,16 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 116 Complete)
+### Track Status & Next Tasks (Iteration 117 Complete)
 
-**18+ Chapters at 100% effective:**
+**19+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
 - sv-tests Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-7: **103/103** (100%) ✅
 - sv-tests Chapter-8: **100%** (44 pass + 9 negative tests) ✅ **VERIFIED (Iter 115)**
 - sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅
 - sv-tests Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
-- sv-tests Chapter-12: **22/27** (81.5%) - case inside ✅ (Iter 116), 5 remaining pattern matching tests
+- sv-tests Chapter-12: **27/27** (100%) ✅ **COMPLETE (Iter 117)** - case inside + structure/variable patterns
 - sv-tests Chapter-13: **15/15** (100%) ✅ Fixed arith.select legalization
 - sv-tests Chapter-14: **5/5** (100%) ✅
 - sv-tests Chapter-15: **5/5** (100%) ✅
@@ -96,12 +96,14 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
-- **SPI AVIP:** E2E circt-sim (111 executions, 107 cycles, no fixes needed, Iter 116) ✅ **NEW**
+- **I3C AVIP:** E2E circt-sim (112 executions, 107 cycles, array.contains fix, Iter 117) ✅ **NEW**
+- **UART AVIP:** E2E circt-sim (20K+ executions, 500MHz clock, Iter 117) ✅ **NEW**
+- **SPI AVIP:** E2E circt-sim (111 executions, 107 cycles, no fixes needed, Iter 116) ✅
 - **AHB AVIP:** E2E circt-sim (clock/reset work, 107 process executions, Iter 115) ✅
 - **APB AVIP:** E2E circt-sim (clock/reset work, 56 process executions, Iter 114) ✅
-- **5+ AVIPs run in circt-sim:** APB, AHB, SPI, UART, I3C (clock/reset working) ✅
+- **6 AVIPs run in circt-sim:** APB, AHB, SPI, UART, I3C, I2S ✅
 
-### Remaining Limitations (Updated Iteration 116)
+### Remaining Limitations (Updated Iteration 117)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
@@ -120,6 +122,9 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 14. ~~**Virtual Interface Binding**~~: ✅ IMPLEMENTED (Iter 116) - Thread-safe vif registries with modport support
 15. ~~**case inside**~~: ✅ IMPLEMENTED (Iter 116) - Set membership with ranges and wildcards
 16. ~~**Wildcard associative arrays**~~: ✅ FIXED (Iter 116) - [*] array key type lowering
+17. ~~**TLM FIFO Query Methods**~~: ✅ IMPLEMENTED (Iter 117) - can_put, can_get, used, free, capacity
+18. ~~**Unpacked arrays in inside**~~: ✅ FIXED (Iter 117) - moore.array.contains operation
+19. ~~**Structure/variable patterns**~~: ✅ IMPLEMENTED (Iter 117) - Pattern matching for matches operator
 
 **For sv-tests Completion:**
 1. **Chapter-9 (97%)**:
@@ -134,18 +139,18 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Next Tasks for Tracks (Iteration 117)
+### Next Tasks for Tracks (Iteration 118)
 
-**Track A**: Test I2C AVIP through circt-sim E2E
-**Track B**: UVM TLM connection improvements
-**Track C**: sv-tests Chapter-12 remaining pattern matching (case matches, if matches)
-**Track D**: UART AVIP E2E circt-sim testing
+**Track A**: Test AXI4 AVIP through circt-sim E2E
+**Track B**: UVM agent/driver infrastructure improvements
+**Track C**: sv-tests Chapter-9 remaining tests
+**Track D**: AXI4Lite AVIP E2E circt-sim testing
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**
 - UVM Phase System: **All 9 phases + component callbacks** ✅
 - UVM config_db: **Hierarchical/wildcard matching** ✅
-- UVM TLM Ports: **Analysis port/FIFO runtime** ✅
+- UVM TLM Ports: **Analysis port/FIFO with can_put/can_get/used/free/capacity** ✅ **IMPROVED (Iter 117)**
 - UVM Objections: **Raise/drop/drain with threading** ✅
 - UVM Sequences: **Sequencer arbitration + driver handshake** ✅
 - UVM Scoreboard: **Transaction comparison with TLM integration** ✅
