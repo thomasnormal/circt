@@ -5072,6 +5072,240 @@ void __moore_reg_get_statistics(int64_t *totalRegs, int64_t *totalReads,
 /// Clear all RAL components and reset statistics.
 void __moore_reg_clear_all(void);
 
+//===----------------------------------------------------------------------===//
+// UVM Message Reporting Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// These functions implement UVM-compatible message reporting with verbosity
+// filtering, severity tracking, and formatted output. They provide the runtime
+// support for UVM_INFO, UVM_WARNING, UVM_ERROR, and UVM_FATAL macros.
+//
+// UVM Severity Levels:
+// - UVM_INFO: Informational message (filtered by verbosity)
+// - UVM_WARNING: Warning condition (always displayed, tracked)
+// - UVM_ERROR: Error condition (always displayed, tracked, may terminate)
+// - UVM_FATAL: Fatal error (always displayed, terminates simulation)
+//
+// UVM Verbosity Levels (from IEEE 1800.2):
+// - UVM_NONE (0): Always display
+// - UVM_LOW (100): Low verbosity
+// - UVM_MEDIUM (200): Medium verbosity (default)
+// - UVM_HIGH (300): High verbosity
+// - UVM_FULL (400): Full verbosity
+// - UVM_DEBUG (500): Debug verbosity
+//
+// Messages are displayed if: message_verbosity <= report_verbosity_threshold
+//
+
+/// UVM severity levels (matches uvm_severity enum).
+typedef enum {
+  MOORE_UVM_INFO = 0,
+  MOORE_UVM_WARNING = 1,
+  MOORE_UVM_ERROR = 2,
+  MOORE_UVM_FATAL = 3
+} MooreUvmSeverity;
+
+/// UVM verbosity levels (matches uvm_verbosity enum values).
+typedef enum {
+  MOORE_UVM_NONE = 0,
+  MOORE_UVM_LOW = 100,
+  MOORE_UVM_MEDIUM = 200,
+  MOORE_UVM_HIGH = 300,
+  MOORE_UVM_FULL = 400,
+  MOORE_UVM_DEBUG = 500
+} MooreUvmVerbosity;
+
+/// UVM action types (matches uvm_action enum).
+/// Actions can be combined using bitwise OR.
+typedef enum {
+  MOORE_UVM_NO_ACTION = 0,
+  MOORE_UVM_DISPLAY = (1 << 0),
+  MOORE_UVM_LOG = (1 << 1),
+  MOORE_UVM_COUNT = (1 << 2),
+  MOORE_UVM_EXIT = (1 << 3),
+  MOORE_UVM_CALL_HOOK = (1 << 4),
+  MOORE_UVM_STOP = (1 << 5),
+  MOORE_UVM_RM_RECORD = (1 << 6)
+} MooreUvmAction;
+
+/// Set the global verbosity threshold for UVM reporting.
+/// Messages with verbosity level above this threshold are suppressed.
+/// Default is MOORE_UVM_MEDIUM (200).
+///
+/// @param verbosity The verbosity threshold to set
+void __moore_uvm_set_report_verbosity(int32_t verbosity);
+
+/// Get the current global verbosity threshold.
+///
+/// @return The current verbosity threshold
+int32_t __moore_uvm_get_report_verbosity(void);
+
+/// Report a UVM informational message.
+/// The message is displayed if its verbosity level is <= the current threshold.
+/// UVM_INFO messages are printed to stdout with format:
+///   UVM_INFO <filename>(<line>) @ <time>: <id> [<context>] <message>
+///
+/// @param id The message ID (e.g., "MYTEST", "DRIVER")
+/// @param idLen Length of the id string
+/// @param message The message text
+/// @param messageLen Length of the message string
+/// @param verbosity The verbosity level of this message
+/// @param filename Source filename (may be NULL)
+/// @param filenameLen Length of filename string
+/// @param line Source line number
+/// @param context Hierarchical context (may be NULL)
+/// @param contextLen Length of context string
+void __moore_uvm_report_info(const char *id, int64_t idLen, const char *message,
+                             int64_t messageLen, int32_t verbosity,
+                             const char *filename, int64_t filenameLen,
+                             int32_t line, const char *context,
+                             int64_t contextLen);
+
+/// Report a UVM warning message.
+/// Warnings are always displayed (not filtered by verbosity).
+/// UVM_WARNING messages are printed to stderr with format:
+///   UVM_WARNING <filename>(<line>) @ <time>: <id> [<context>] <message>
+/// Increments the warning count.
+///
+/// @param id The message ID
+/// @param idLen Length of the id string
+/// @param message The message text
+/// @param messageLen Length of the message string
+/// @param verbosity The verbosity level (usually UVM_NONE)
+/// @param filename Source filename (may be NULL)
+/// @param filenameLen Length of filename string
+/// @param line Source line number
+/// @param context Hierarchical context (may be NULL)
+/// @param contextLen Length of context string
+void __moore_uvm_report_warning(const char *id, int64_t idLen,
+                                const char *message, int64_t messageLen,
+                                int32_t verbosity, const char *filename,
+                                int64_t filenameLen, int32_t line,
+                                const char *context, int64_t contextLen);
+
+/// Report a UVM error message.
+/// Errors are always displayed (not filtered by verbosity).
+/// UVM_ERROR messages are printed to stderr with format:
+///   UVM_ERROR <filename>(<line>) @ <time>: <id> [<context>] <message>
+/// Increments the error count. May terminate simulation if max_quit_count
+/// is exceeded.
+///
+/// @param id The message ID
+/// @param idLen Length of the id string
+/// @param message The message text
+/// @param messageLen Length of the message string
+/// @param verbosity The verbosity level (usually UVM_NONE)
+/// @param filename Source filename (may be NULL)
+/// @param filenameLen Length of filename string
+/// @param line Source line number
+/// @param context Hierarchical context (may be NULL)
+/// @param contextLen Length of context string
+void __moore_uvm_report_error(const char *id, int64_t idLen,
+                              const char *message, int64_t messageLen,
+                              int32_t verbosity, const char *filename,
+                              int64_t filenameLen, int32_t line,
+                              const char *context, int64_t contextLen);
+
+/// Report a UVM fatal error message and terminate simulation.
+/// UVM_FATAL messages are printed to stderr with format:
+///   UVM_FATAL <filename>(<line>) @ <time>: <id> [<context>] <message>
+/// Always terminates simulation with exit code 1.
+///
+/// @param id The message ID
+/// @param idLen Length of the id string
+/// @param message The message text
+/// @param messageLen Length of the message string
+/// @param verbosity The verbosity level (usually UVM_NONE)
+/// @param filename Source filename (may be NULL)
+/// @param filenameLen Length of filename string
+/// @param line Source line number
+/// @param context Hierarchical context (may be NULL)
+/// @param contextLen Length of context string
+void __moore_uvm_report_fatal(const char *id, int64_t idLen,
+                              const char *message, int64_t messageLen,
+                              int32_t verbosity, const char *filename,
+                              int64_t filenameLen, int32_t line,
+                              const char *context, int64_t contextLen);
+
+/// Check if a message with given severity, verbosity, and ID should be reported.
+/// This implements UVM's uvm_report_enabled() functionality.
+///
+/// @param verbosity The verbosity level of the message
+/// @param severity The severity level of the message
+/// @param id The message ID (for ID-specific verbosity settings)
+/// @param idLen Length of the id string
+/// @return 1 if the message should be reported, 0 otherwise
+int32_t __moore_uvm_report_enabled(int32_t verbosity, int32_t severity,
+                                   const char *id, int64_t idLen);
+
+/// Set the verbosity threshold for a specific message ID.
+/// This allows fine-grained control over which messages are displayed.
+///
+/// @param id The message ID to configure
+/// @param idLen Length of the id string
+/// @param verbosity The verbosity threshold for this ID
+void __moore_uvm_set_report_id_verbosity(const char *id, int64_t idLen,
+                                         int32_t verbosity);
+
+/// Get the UVM message count for a specific severity.
+///
+/// @param severity The severity level to query
+/// @return Number of messages reported at that severity
+int32_t __moore_uvm_get_report_count(int32_t severity);
+
+/// Reset all UVM message counts to zero.
+void __moore_uvm_reset_report_counts(void);
+
+/// Set the maximum number of errors before simulation terminates.
+/// When the error count reaches this value, simulation exits.
+/// Default is 0 (unlimited errors).
+///
+/// @param count Maximum error count (0 = unlimited)
+void __moore_uvm_set_max_quit_count(int32_t count);
+
+/// Get the maximum quit count setting.
+///
+/// @return Current maximum quit count (0 = unlimited)
+int32_t __moore_uvm_get_max_quit_count(void);
+
+/// Set the default action for a severity level.
+/// The default actions are:
+/// - UVM_INFO: DISPLAY
+/// - UVM_WARNING: DISPLAY | COUNT
+/// - UVM_ERROR: DISPLAY | COUNT
+/// - UVM_FATAL: DISPLAY | EXIT
+///
+/// @param severity The severity level to configure
+/// @param action Bitmask of MooreUvmAction values
+void __moore_uvm_set_report_severity_action(int32_t severity, int32_t action);
+
+/// Get the current action for a severity level.
+///
+/// @param severity The severity level to query
+/// @return Bitmask of current actions
+int32_t __moore_uvm_get_report_severity_action(int32_t severity);
+
+/// Print a summary of UVM messages reported during simulation.
+/// Output includes counts for each severity level and overall status.
+void __moore_uvm_report_summarize(void);
+
+/// Set whether UVM_FATAL should actually exit or just set a flag.
+/// This is useful for testing the runtime functions.
+///
+/// @param should_exit true to exit on fatal, false to just set flag
+void __moore_uvm_set_fatal_exits(bool should_exit);
+
+/// Get the current simulation time for message timestamps.
+/// This interfaces with the simulation time tracking infrastructure.
+///
+/// @return Current simulation time in simulation units
+uint64_t __moore_uvm_get_time(void);
+
+/// Set the simulation time (for use by the simulation infrastructure).
+///
+/// @param time Current simulation time
+void __moore_uvm_set_time(uint64_t time);
+
 #ifdef __cplusplus
 }
 #endif
