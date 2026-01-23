@@ -243,6 +243,9 @@ struct Context {
   LogicalResult
   collectHierarchicalValues(const slang::ast::Expression &expr,
                             const slang::ast::Symbol &outermostModule);
+  LogicalResult
+  collectHierarchicalValuesFromStatement(const slang::ast::Statement &stmt,
+                                         const slang::ast::Symbol &outermostModule);
   LogicalResult traverseInstanceBody(const slang::ast::Symbol &symbol);
 
   // Convert timing controls into a corresponding set of ops that delay
