@@ -469,6 +469,12 @@ function void StringBuiltins(string string_in, int int_in);
   // CHECK: [[CHARVAL:%.+]] = moore.constant 66 : i8
   // CHECK: moore.string.putc [[STRVAR]]{{\[}}[[INT]]], [[CHARVAL]] : <string>
   result.putc(int_in, 8'd66);
+  // substr method (IEEE 1800-2017 Section 6.16.7)
+  // CHECK: [[START:%.+]] = moore.constant 1 : i32
+  // CHECK: [[LEN2:%.+]] = moore.constant 3 : i32
+  // CHECK: [[SUBSTR:%.+]] = moore.string.substr [[STR]]{{\[}}[[START]], [[LEN2]]]
+  // CHECK: call @dummyD([[SUBSTR]]) : (!moore.string) -> ()
+  dummyD(string_in.substr(1, 3));
 endfunction
 
 // IEEE 1800-2017 Section 6.19.5.5 "Enum .name() method"
