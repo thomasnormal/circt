@@ -1563,6 +1563,42 @@ void ClassNewOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get());
 }
 
+LogicalResult ClassCopyOp::verify() {
+  // The source and result should both be ClassHandleType.
+  auto srcTy = cast<ClassHandleType>(getSource().getType());
+  auto dstTy = cast<ClassHandleType>(getResult().getType());
+
+  // The source and result class types must match for shallow copy.
+  if (srcTy.getClassSym() != dstTy.getClassSym())
+    return emitOpError("source and result class types must match, got ")
+           << srcTy << " and " << dstTy;
+
+  // Resolve the referenced symbol from the module symbol table.
+  auto module = getOperation()->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return emitOpError("must be contained in a module to resolve class symbol");
+
+  mlir::SymbolRefAttr classSym = dstTy.getClassSym();
+  mlir::Operation *sym = mlir::SymbolTable::lookupSymbolIn(module, classSym);
+  if (!sym)
+    return emitOpError("referenced class symbol `")
+           << classSym << "` was not found";
+
+  if (!llvm::isa<ClassDeclOp>(sym))
+    return emitOpError("symbol `")
+           << classSym << "` does not name a `moore.class.classdecl`";
+
+  return mlir::success();
+}
+
+void ClassCopyOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // Allocates heap memory for the new copy and reads from the source.
+  effects.emplace_back(MemoryEffects::Allocate::get());
+  effects.emplace_back(MemoryEffects::Read::get());
+}
+
 void DynArrayNewOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {

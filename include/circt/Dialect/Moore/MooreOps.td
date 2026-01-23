@@ -4569,6 +4569,35 @@ def ClassNewOp
   let hasVerifier = 1;
 }
 
+def ClassCopyOp
+    : MooreOp<
+          "class.copy", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+          TypesMatchWith<"source and result have the same type",
+                        "result", "source", "$_self">]> {
+  let summary = "Create a shallow copy of a class instance";
+  let description = [{
+    Creates a new instance of a class by shallow copying an existing instance.
+    This implements the SystemVerilog `new <source>` syntax for class shallow
+    copy (IEEE 1800-2017 Section 8.12).
+
+    The new object has the same values for all class properties as the source
+    object at the time of the copy. Nested class objects are not deep-copied;
+    both the original and the copy will reference the same nested objects.
+
+    Example:
+    ```mlir
+    %copy = moore.class.copy %source : <@MyClass>
+    ```
+  }];
+
+  let arguments = (ins ClassHandleType:$source);
+  let results = (outs ClassHandleType:$result);
+
+  let assemblyFormat = [{
+     $source `:` type($result) attr-dict
+  }];
+  let hasVerifier = 1;
+}
 
 def ClassPropertyRefOp
     : MooreOp<"class.property_ref", [Pure,

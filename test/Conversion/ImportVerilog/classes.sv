@@ -1258,3 +1258,39 @@ module testInterfaceClassUpcast;
         iobj = obj;
     end
 endmodule
+
+/// Check shallow copy (IEEE 1800-2017 Section 8.12)
+/// The `new <source>` syntax creates a shallow copy of a class instance.
+
+// CHECK-LABEL: moore.class.classdecl @CopyableClass {
+// CHECK:   moore.class.propertydecl @value : !moore.i32
+// CHECK: }
+class CopyableClass;
+    int value;
+    task set_value(int v);
+        value = v;
+    endtask
+endclass
+
+// CHECK-LABEL: moore.module @testShallowCopy() {
+// CHECK: [[OBJ0:%.*]] = moore.variable : <class<@CopyableClass>>
+// CHECK: [[OBJ1:%.*]] = moore.variable : <class<@CopyableClass>>
+// CHECK: moore.procedure initial {
+// CHECK:    [[NEW:%.*]] = moore.class.new : <@CopyableClass>
+// CHECK:    moore.blocking_assign [[OBJ0]], [[NEW]] : class<@CopyableClass>
+// CHECK:    [[OBJ0_READ:%.+]] = moore.read [[OBJ0]] : <class<@CopyableClass>>
+// CHECK:    [[COPY:%.*]] = moore.class.copy [[OBJ0_READ]] : <@CopyableClass>
+// CHECK:    moore.blocking_assign [[OBJ1]], [[COPY]] : class<@CopyableClass>
+// CHECK:    moore.return
+// CHECK: }
+// CHECK: moore.output
+// CHECK: }
+module testShallowCopy;
+    CopyableClass obj0;
+    CopyableClass obj1;
+    initial begin
+        obj0 = new;
+        obj0.value = 42;
+        obj1 = new obj0;
+    end
+endmodule
