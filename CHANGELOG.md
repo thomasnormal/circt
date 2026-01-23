@@ -1,5 +1,132 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 108 - January 23, 2026
+
+### UVM config_db Hierarchical/Wildcard Matching ✅
+
+Implemented full hierarchical path and glob wildcard matching for config_db:
+
+**New Runtime Functions:**
+- `__moore_config_db_clear()` - Clear all entries (for test cleanup)
+
+**Enhanced Features:**
+- Hierarchical path prefix matching (e.g., `uvm_test_top.env.agent` matches queries for `uvm_test_top.env.agent.driver`)
+- Glob wildcard patterns: `*` matches any sequence, `?` matches single char
+- Last-set-wins ordering when multiple entries match
+- Specific paths take precedence over wildcard patterns
+
+**Unit Tests:** 12 new config_db tests covering all matching scenarios
+
+**Commit:** `25c2d9b28 [Runtime] Implement UVM config_db hierarchical and wildcard matching`
+
+### UVM TLM Port/Export Infrastructure ✅
+
+Created comprehensive TLM infrastructure design and test coverage:
+
+**Design Document:** `docs/design/UVM_TLM_DESIGN.md`
+- Analysis port/export/imp types
+- uvm_tlm_analysis_fifo for scoreboard buffering
+- uvm_subscriber for coverage collection
+- Implementation recommendations for CIRCT runtime
+
+**New Test Files:**
+- `test/Conversion/ImportVerilog/uvm-tlm-analysis-port.sv` - TLM analysis port patterns
+- `test/Conversion/ImportVerilog/uvm-tlm-fifo.sv` - TLM FIFO and scoreboard patterns
+
+**Commit:** `dabd68286 [Docs/Test] Add TLM port/export infrastructure design and tests`
+
+### Chapter-10 Hierarchical Reference Resolution ✅
+
+Fixed hierarchical references in procedural blocks (always, initial):
+
+**Root Cause:** `HierPathStmtVisitor` was not traversing statement trees to find hierarchical references like `u_flop.q` in force/release statements.
+
+**Fix:**
+- Added `HierPathStmtVisitor` with `VisitStatements=true` to traverse statement trees
+- Added `ProceduralBlockSymbol` handler to `InstBodyVisitor`
+- Added `collectHierarchicalValuesFromStatement` method to Context
+
+**Result:** Chapter-10 now at 100% (the only "failure" is an expected negative test)
+
+**Commit:** `a6bade5ce [ImportVerilog] Support hierarchical references in procedural blocks`
+
+### circt-sim String Literal Handling ✅
+
+Fixed packed string literal handling for UVM_INFO messages:
+
+**Commit:** `e8b1e6620 [circt-sim] Fix packed string literal handling for UVM_INFO messages`
+
+### Test Results (Updated)
+
+**Chapters at 100%:** 17+ chapters now at 100% (Chapter-10 added!)
+
+**UVM Runtime:**
+- UVM Factory: ✅
+- UVM Phase System: ✅
+- +UVM_TESTNAME: ✅
+- UVM config_db: ✅ Hierarchical/wildcard matching implemented
+
+---
+
+## Iteration 107 - January 23, 2026
+
+### +UVM_TESTNAME Command-Line Parsing ✅
+
+Implemented command-line argument parsing for +UVM_TESTNAME:
+
+**New Runtime Functions:**
+- `__moore_uvm_get_testname_from_cmdline()` - Parse +UVM_TESTNAME= value
+- `__moore_uvm_has_cmdline_testname()` - Check if +UVM_TESTNAME was specified
+
+**Features:**
+- Supports both `+UVM_TESTNAME=name` and `+UVM_ARGS=+UVM_TESTNAME=name`
+- First occurrence wins when multiple values specified
+- Handles scoped test names (e.g., `my_pkg::my_test`)
+- Case-sensitive matching
+
+**Unit Tests:** 15 comprehensive tests
+
+**Commit:** `0a49fddaa [Runtime] Add +UVM_TESTNAME command-line argument parsing`
+
+### UVM config_db Design Document ✅
+
+Created comprehensive design document for UVM config_db implementation:
+- API requirements (set, get, exists, wait_modified)
+- Data type analysis (85% config objects, 12% virtual interfaces)
+- Hierarchical path lookup and wildcard matching
+- Implementation recommendations and phased approach
+
+**Location:** `docs/design/UVM_CONFIG_DB_DESIGN.md`
+
+### Multi-Agent Test Patterns ✅
+
+Added tests for complex UVM verification patterns:
+
+**New Test Files:**
+- `uvm-multi-agent-virtual-sequence.sv` - Virtual sequences with multiple agent sequencer handles
+- `uvm-scoreboard-pattern.sv` - Scoreboard patterns with uvm_tlm_analysis_fifo and semaphores
+
+**Commit:** `621d1a780 [ImportVerilog] Add multi-agent virtual sequence and scoreboard pattern tests`
+
+### Chapter-18 Regression Analysis ✅
+
+Verified no regression in Chapter-18 tests:
+- Pass rate: 89% (119/134) with UVM enabled
+- All 15 failures are expected (negative tests with `should_fail_because`)
+- Test config issue identified: `--no-uvm-auto-include` flag disables UVM package loading
+
+### Test Results (Updated)
+
+**Chapters at 100%:** All 16+ chapters remain at 100%
+
+**UVM Runtime:**
+- UVM Factory: ✅
+- UVM Phase System: ✅
+- +UVM_TESTNAME: ✅ (NEW)
+- UVM config_db: Design document complete, implementation pending
+
+---
+
 ## Iteration 106 - January 23, 2026
 
 ### UVM Factory Implementation ✅
