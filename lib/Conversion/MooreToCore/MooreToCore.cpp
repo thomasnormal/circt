@@ -3213,7 +3213,7 @@ struct CovergroupGetCoverageOpConversion
 // - ConstraintDistOp: Distribution constraint (erased, processed by solver)
 // - ConstraintForeachOp: Loop constraint (erased, processed by solver)
 // - ConstraintSolveBeforeOp: Ordering hint (erased, processed by solver)
-// - ConstraintDisableOp: Disable soft constraint (erased, processed by solver)
+// - ConstraintDisableSoftOp: Disable soft constraint on variable (erased, processed by solver)
 //
 //===----------------------------------------------------------------------===//
 
@@ -3393,14 +3393,14 @@ struct ConstraintSolveBeforeOpConversion
   }
 };
 
-/// Lowering for ConstraintDisableOp.
-/// Disables a soft constraint by name. Currently erased.
-struct ConstraintDisableOpConversion
-    : public OpConversionPattern<ConstraintDisableOp> {
+/// Lowering for ConstraintDisableSoftOp.
+/// Disables soft constraints on a variable. Currently erased.
+struct ConstraintDisableSoftOpConversion
+    : public OpConversionPattern<ConstraintDisableSoftOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(ConstraintDisableOp op, OpAdaptor,
+  matchAndRewrite(ConstraintDisableSoftOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Soft constraint disabling is handled during constraint extraction.
     rewriter.eraseOp(op);
@@ -12966,14 +12966,23 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       if (auto llvmStructTy =
               dyn_cast<LLVM::LLVMStructType>(input.getType())) {
         // LLVM struct needs ExtractValueOp with index
-        // Look up field index from Moore struct type
-        auto mooreStructTy =
-            cast<UnpackedStructType>(structExtractOp.getInput().getType());
+        // Look up field index from Moore struct type (can be packed or unpacked)
+        auto inputType = structExtractOp.getInput().getType();
         unsigned fieldIdx = 0;
-        for (const auto &member : mooreStructTy.getMembers()) {
-          if (member.name == fieldName)
-            break;
-          ++fieldIdx;
+        if (auto unpackedStructTy = dyn_cast<UnpackedStructType>(inputType)) {
+          for (const auto &member : unpackedStructTy.getMembers()) {
+            if (member.name == fieldName)
+              break;
+            ++fieldIdx;
+          }
+        } else if (auto packedStructTy = dyn_cast<moore::StructType>(inputType)) {
+          for (const auto &member : packedStructTy.getMembers()) {
+            if (member.name == fieldName)
+              break;
+            ++fieldIdx;
+          }
+        } else {
+          return nullptr; // Unknown struct type
         }
         return LLVM::ExtractValueOp::create(rewriter, loc, input,
                                             ArrayRef<int64_t>{fieldIdx});
@@ -13286,6 +13295,10 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
           rewriter, loc, i64Ty, adaptor.getArray(), ArrayRef<int64_t>{1});
       dataPtr = LLVM::ExtractValueOp::create(
           rewriter, loc, ptrTy, adaptor.getArray(), ArrayRef<int64_t>{0});
+      // Convert elemType to LLVM type for GEP and Load operations.
+      // The type converter may produce hw::StructType for packed structs,
+      // which is not valid for LLVM operations.
+      elemType = convertToLLVMType(elemType);
     }
 
     Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
@@ -18323,8 +18336,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
                                              patterns.getContext());
   patterns.add<ConstraintSolveBeforeOpConversion>(typeConverter,
                                                   patterns.getContext());
-  patterns.add<ConstraintDisableOpConversion>(typeConverter,
-                                              patterns.getContext());
+  patterns.add<ConstraintDisableSoftOpConversion>(typeConverter,
+                                                  patterns.getContext());
   patterns.add<ConstraintUniqueOpConversion>(typeConverter,
                                              patterns.getContext());
 
