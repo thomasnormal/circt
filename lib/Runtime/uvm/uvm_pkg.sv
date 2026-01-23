@@ -241,6 +241,74 @@ package uvm_pkg;
   endfunction
 
   //=========================================================================
+  // uvm_is_match - Glob pattern matching for config_db
+  //=========================================================================
+  // Matches a glob-style pattern against a string.
+  // Supports:
+  //   * - matches any sequence of characters (including empty)
+  //   ? - matches any single character
+  // Returns 1 if match succeeds, 0 otherwise.
+  function automatic bit uvm_is_match(string expr, string str);
+    int e, es, s, ss;
+    e  = 0; s  = 0;
+    es = 0; ss = 0;
+
+    // Empty pattern matches everything
+    if (expr.len() == 0)
+      return 1;
+
+    // Strip leading ^ if present (legacy behavior)
+    if (expr[0] == "^")
+      expr = expr.substr(1, expr.len()-1);
+
+    // Match non-wildcard prefix
+    while (s != str.len() && e < expr.len() && expr.getc(e) != "*") begin
+      if ((expr.getc(e) != str.getc(s)) && (expr.getc(e) != "?"))
+        return 0;
+      e++; s++;
+    end
+
+    // If we've consumed the entire pattern
+    if (e == expr.len())
+      return (s == str.len());
+
+    // Process remaining with wildcard matching
+    while (s != str.len()) begin
+      if (e < expr.len() && expr.getc(e) == "*") begin
+        e++;
+        if (e == expr.len())
+          return 1;  // Trailing * matches everything
+        es = e;
+        ss = s + 1;
+      end
+      else if (e < expr.len() && (expr.getc(e) == str.getc(s) || expr.getc(e) == "?")) begin
+        e++;
+        s++;
+      end
+      else begin
+        e = es;
+        s = ss++;
+      end
+    end
+
+    // Skip trailing wildcards
+    while (e < expr.len() && expr.getc(e) == "*")
+      e++;
+
+    return (e == expr.len());
+  endfunction
+
+  // uvm_re_match - Returns 0 on match, 1 on no-match (like C strcmp convention)
+  function automatic int uvm_re_match(string re, string str);
+    return uvm_is_match(re, str) ? 0 : 1;
+  endfunction
+
+  // uvm_glob_to_re - Converts glob to regex (stub - just returns glob)
+  function automatic string uvm_glob_to_re(string glob);
+    return glob;
+  endfunction
+
+  //=========================================================================
   // uvm_void - Root class
   //=========================================================================
   virtual class uvm_void;
@@ -1929,61 +1997,177 @@ package uvm_pkg;
   endclass
 
   //=========================================================================
-  // uvm_config_db - Configuration database
+  // uvm_config_db - Configuration database with wildcard support
+  //=========================================================================
+  // This implementation supports:
+  //   - Hierarchical path construction from component context
+  //   - Wildcard patterns (* and ?) in inst_name during set()
+  //   - Wildcard pattern matching during get()
+  //   - Proper key construction per IEEE 1800.2-2017
   //=========================================================================
   class uvm_config_db #(type T = int);
 
+    // Storage for exact values
     static local T m_db[string];
 
-    static function void set(uvm_component cntxt, string inst_name,
-                             string field_name, T value);
-      string key;
-      if (cntxt != null)
-        key = {cntxt.get_full_name(), ".", inst_name, ".", field_name};
-      else
-        key = {inst_name, ".", field_name};
-      m_db[key] = value;
+    // Storage for pattern-based values (wildcards)
+    // Key is the full pattern path, field_name is stored separately
+    typedef struct {
+      string inst_pattern;
+      string field_name;
+      T value;
+    } config_entry_t;
+    static local config_entry_t m_pattern_db[$];
+
+    // Construct the lookup path from context and inst_name
+    static function string m_get_lookup_path(uvm_component cntxt, string inst_name);
+      string cntxt_name;
+      if (cntxt == null)
+        return inst_name;
+      cntxt_name = cntxt.get_full_name();
+      if (cntxt_name == "")
+        return inst_name;
+      if (inst_name == "")
+        return cntxt_name;
+      return {cntxt_name, ".", inst_name};
     endfunction
 
-    static function bit get(uvm_component cntxt, string inst_name,
-                            string field_name, ref T value);
-      string key;
-      if (cntxt != null)
-        key = {cntxt.get_full_name(), ".", inst_name, ".", field_name};
-      else
-        key = {inst_name, ".", field_name};
-
-      if (m_db.exists(key)) begin
-        value = m_db[key];
-        return 1;
-      end
-      // Try without context
-      key = {inst_name, ".", field_name};
-      if (m_db.exists(key)) begin
-        value = m_db[key];
-        return 1;
-      end
-      // Try just field name
-      if (m_db.exists(field_name)) begin
-        value = m_db[field_name];
-        return 1;
-      end
+    // Check if a string contains wildcard characters
+    static function bit m_has_wildcards(string s);
+      for (int i = 0; i < s.len(); i++)
+        if (s[i] == "*" || s[i] == "?")
+          return 1;
       return 0;
     endfunction
 
-    static function bit exists(uvm_component cntxt, string inst_name,
-                               string field_name);
+    // Set a configuration value
+    // IEEE 1800.2-2017: inst_name supports wildcards (* and ?)
+    static function void set(uvm_component cntxt, string inst_name,
+                             string field_name, T value);
+      string inst_path;
       string key;
-      if (cntxt != null)
-        key = {cntxt.get_full_name(), ".", inst_name, ".", field_name};
-      else
-        key = {inst_name, ".", field_name};
-      return m_db.exists(key);
+
+      // Construct the instance path
+      inst_path = m_get_lookup_path(cntxt, inst_name);
+
+      // Check if this is a wildcard pattern
+      if (m_has_wildcards(inst_path)) begin
+        // Store in pattern database
+        config_entry_t entry;
+        entry.inst_pattern = inst_path;
+        entry.field_name = field_name;
+        entry.value = value;
+        // Remove any existing entry with same pattern and field
+        foreach (m_pattern_db[i]) begin
+          if (m_pattern_db[i].inst_pattern == inst_path &&
+              m_pattern_db[i].field_name == field_name) begin
+            m_pattern_db.delete(i);
+            break;
+          end
+        end
+        m_pattern_db.push_back(entry);
+      end
+      else begin
+        // Store in exact-match database
+        key = {inst_path, ".", field_name};
+        m_db[key] = value;
+      end
     endfunction
 
-    static function void wait_modified(uvm_component cntxt, string inst_name, string field_name);
-      // Stub - would wait for value to be modified in real UVM
+    // Get a configuration value
+    // Lookup order:
+    //   1. Exact match on full path
+    //   2. Wildcard pattern matches (last matching pattern wins)
+    //   3. Fallback lookups for compatibility
+    static function bit get(uvm_component cntxt, string inst_name,
+                            string field_name, ref T value);
+      string lookup_path;
+      string key;
+      int match_idx;
+
+      lookup_path = m_get_lookup_path(cntxt, inst_name);
+
+      // 1. Try exact match
+      key = {lookup_path, ".", field_name};
+      if (m_db.exists(key)) begin
+        value = m_db[key];
+        return 1;
+      end
+
+      // 2. Try wildcard patterns (last match wins for same precedence)
+      match_idx = -1;
+      foreach (m_pattern_db[i]) begin
+        if (m_pattern_db[i].field_name == field_name &&
+            uvm_is_match(m_pattern_db[i].inst_pattern, lookup_path)) begin
+          match_idx = i;
+        end
+      end
+      if (match_idx >= 0) begin
+        value = m_pattern_db[match_idx].value;
+        return 1;
+      end
+
+      // 3. Fallback: try without context prefix
+      if (cntxt != null && inst_name != "") begin
+        key = {inst_name, ".", field_name};
+        if (m_db.exists(key)) begin
+          value = m_db[key];
+          return 1;
+        end
+        // Check patterns against inst_name alone
+        foreach (m_pattern_db[i]) begin
+          if (m_pattern_db[i].field_name == field_name &&
+              uvm_is_match(m_pattern_db[i].inst_pattern, inst_name)) begin
+            value = m_pattern_db[i].value;
+            return 1;
+          end
+        end
+      end
+
+      // 4. Fallback: try just field name (for "*" patterns)
+      foreach (m_pattern_db[i]) begin
+        if (m_pattern_db[i].field_name == field_name &&
+            m_pattern_db[i].inst_pattern == "*") begin
+          value = m_pattern_db[i].value;
+          return 1;
+        end
+      end
+
+      return 0;
     endfunction
+
+    // Check if a configuration value exists
+    static function bit exists(uvm_component cntxt, string inst_name,
+                               string field_name, bit spell_chk = 0);
+      string lookup_path;
+      string key;
+
+      lookup_path = m_get_lookup_path(cntxt, inst_name);
+
+      // Check exact match
+      key = {lookup_path, ".", field_name};
+      if (m_db.exists(key))
+        return 1;
+
+      // Check wildcard patterns
+      foreach (m_pattern_db[i]) begin
+        if (m_pattern_db[i].field_name == field_name &&
+            uvm_is_match(m_pattern_db[i].inst_pattern, lookup_path))
+          return 1;
+      end
+
+      return 0;
+    endfunction
+
+    // Wait for a configuration value to be modified
+    // Note: This is a stub - full implementation requires event-based notification
+    static task wait_modified(uvm_component cntxt, string inst_name, string field_name);
+      // In a full implementation, this would:
+      // 1. Register a waiter for the given path/field
+      // 2. Block until set() is called for a matching path/field
+      // For now, just return immediately (non-blocking stub)
+      #0; // Zero-delay to make it a valid task
+    endtask
 
   endclass
 
