@@ -37,7 +37,7 @@
 |------|-------------|------------|-------|
 | AHB | SUCCESS | Tested | Full UVM testbench |
 | APB | SUCCESS | Tested | Full UVM testbench |
-| UART | SUCCESS | Not tested | Full compilation |
+| UART | SUCCESS | Tested | 1.4M MLIR, 1M cycles, 0 errors |
 | SPI | SUCCESS | Tested | 149K lines MLIR, 107 cycles, 0 errors |
 | I2S | SUCCESS | Tested | 17K lines MLIR, 130K cycles, 0 errors |
 | I3C | SUCCESS | Not tested | 264K lines MLIR |
