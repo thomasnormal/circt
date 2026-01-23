@@ -3695,6 +3695,240 @@ void __moore_uvm_set_global_phase_end_callback(
     void (*callback)(MooreUvmPhase phase, const char *phaseName, void *userData),
     void *userData);
 
+//===----------------------------------------------------------------------===//
+// TLM Port/Export Runtime Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// These functions implement the UVM TLM (Transaction Level Modeling) port/export
+// infrastructure needed for AVIP monitor -> scoreboard communication.
+//
+// The TLM infrastructure supports:
+// - Analysis ports (1-to-N broadcast communication)
+// - Analysis FIFOs (queue-based transaction storage)
+// - Port-to-export connections
+// - Blocking get operations on FIFOs
+//
+// Key usage patterns:
+// 1. Monitor -> Scoreboard via Analysis FIFO
+//    - Monitor writes transactions via analysis_port.write()
+//    - Scoreboard gets transactions via fifo.get()
+// 2. Monitor -> Coverage via uvm_subscriber
+//    - Subscriber receives transactions via write() callback
+//
+//===----------------------------------------------------------------------===//
+
+/// Handle type for TLM ports.
+typedef int64_t MooreTlmPortHandle;
+
+/// Handle type for TLM FIFOs.
+typedef int64_t MooreTlmFifoHandle;
+
+/// Invalid handle value.
+#define MOORE_TLM_INVALID_HANDLE (-1)
+
+/// TLM port types.
+typedef enum {
+  MOORE_TLM_PORT_ANALYSIS = 0,    // uvm_analysis_port
+  MOORE_TLM_PORT_BLOCKING_GET = 1, // uvm_blocking_get_port
+  MOORE_TLM_PORT_BLOCKING_PUT = 2, // uvm_blocking_put_port
+  MOORE_TLM_PORT_SEQ_ITEM = 3      // uvm_seq_item_pull_port
+} MooreTlmPortType;
+
+/// Write callback function type for subscribers.
+/// Called when a transaction is written to an analysis port.
+/// @param subscriber User data pointer for the subscriber
+/// @param transaction Pointer to the transaction data
+/// @param transactionSize Size of the transaction in bytes
+typedef void (*MooreTlmWriteCallback)(void *subscriber, void *transaction,
+                                      int64_t transactionSize);
+
+//===----------------------------------------------------------------------===//
+// TLM Port Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new TLM port.
+/// @param name Port name (for debugging/tracing)
+/// @param nameLen Length of the name string
+/// @param parent Parent component handle (from __moore_uvm_register_component)
+/// @param portType Type of the port (MOORE_TLM_PORT_*)
+/// @return Handle to the created port, or MOORE_TLM_INVALID_HANDLE on failure
+MooreTlmPortHandle __moore_tlm_port_create(const char *name, int64_t nameLen,
+                                           int64_t parent,
+                                           MooreTlmPortType portType);
+
+/// Destroy a TLM port.
+/// @param port Handle to the port to destroy
+void __moore_tlm_port_destroy(MooreTlmPortHandle port);
+
+/// Connect a TLM port to an export (or another port).
+/// This implements the connect() method from UVM TLM ports.
+///
+/// @param port Handle to the initiating port
+/// @param export_ Handle to the target export/port
+/// @return 1 on success, 0 on failure
+int32_t __moore_tlm_port_connect(MooreTlmPortHandle port,
+                                 MooreTlmPortHandle export_);
+
+/// Write (broadcast) a transaction to all connected subscribers.
+/// This implements the write() method of uvm_analysis_port.
+///
+/// For analysis ports, this broadcasts the transaction to ALL connected
+/// exports/imps (1-to-N communication).
+///
+/// @param port Handle to the analysis port
+/// @param transaction Pointer to the transaction data
+/// @param transactionSize Size of the transaction in bytes
+void __moore_tlm_port_write(MooreTlmPortHandle port, void *transaction,
+                            int64_t transactionSize);
+
+/// Get the name of a TLM port.
+/// @param port Handle to the port
+/// @return The port name as a MooreString
+MooreString __moore_tlm_port_get_name(MooreTlmPortHandle port);
+
+/// Get the number of connections on a port.
+/// @param port Handle to the port
+/// @return Number of connected exports/subscribers
+int64_t __moore_tlm_port_get_num_connections(MooreTlmPortHandle port);
+
+//===----------------------------------------------------------------------===//
+// TLM FIFO Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new TLM FIFO.
+/// This implements uvm_tlm_fifo and uvm_tlm_analysis_fifo.
+///
+/// @param name FIFO name (for debugging)
+/// @param nameLen Length of the name string
+/// @param parent Parent component handle
+/// @param maxSize Maximum FIFO size (0 for unbounded, which is typical for
+///                analysis FIFOs)
+/// @param elementSize Size of each element in bytes
+/// @return Handle to the created FIFO, or MOORE_TLM_INVALID_HANDLE on failure
+MooreTlmFifoHandle __moore_tlm_fifo_create(const char *name, int64_t nameLen,
+                                           int64_t parent, int64_t maxSize,
+                                           int64_t elementSize);
+
+/// Destroy a TLM FIFO.
+/// @param fifo Handle to the FIFO to destroy
+void __moore_tlm_fifo_destroy(MooreTlmFifoHandle fifo);
+
+/// Get the analysis export handle for a TLM analysis FIFO.
+/// This returns the handle that should be connected to analysis ports.
+///
+/// @param fifo Handle to the FIFO
+/// @return Handle to the analysis_export port
+MooreTlmPortHandle __moore_tlm_fifo_get_analysis_export(MooreTlmFifoHandle fifo);
+
+/// Put a transaction into the FIFO (non-blocking).
+/// @param fifo Handle to the FIFO
+/// @param transaction Pointer to the transaction data
+/// @param transactionSize Size of the transaction in bytes
+/// @return 1 if successful, 0 if FIFO is full (bounded FIFO only)
+int32_t __moore_tlm_fifo_try_put(MooreTlmFifoHandle fifo, void *transaction,
+                                 int64_t transactionSize);
+
+/// Put a transaction into the FIFO (blocking).
+/// This blocks until space is available (for bounded FIFOs).
+///
+/// @param fifo Handle to the FIFO
+/// @param transaction Pointer to the transaction data
+/// @param transactionSize Size of the transaction in bytes
+void __moore_tlm_fifo_put(MooreTlmFifoHandle fifo, void *transaction,
+                          int64_t transactionSize);
+
+/// Get a transaction from the FIFO (blocking).
+/// This implements the blocking get() method of uvm_tlm_fifo.
+/// The call blocks until a transaction is available.
+///
+/// @param fifo Handle to the FIFO
+/// @param transaction Pointer where the transaction data will be copied
+/// @param transactionSize Size of the transaction buffer in bytes
+/// @return 1 if a transaction was retrieved, 0 on error
+int32_t __moore_tlm_fifo_get(MooreTlmFifoHandle fifo, void *transaction,
+                             int64_t transactionSize);
+
+/// Try to get a transaction from the FIFO (non-blocking).
+/// @param fifo Handle to the FIFO
+/// @param transaction Pointer where the transaction data will be copied
+/// @param transactionSize Size of the transaction buffer in bytes
+/// @return 1 if a transaction was retrieved, 0 if FIFO is empty
+int32_t __moore_tlm_fifo_try_get(MooreTlmFifoHandle fifo, void *transaction,
+                                 int64_t transactionSize);
+
+/// Peek at the front transaction without removing it (blocking).
+/// @param fifo Handle to the FIFO
+/// @param transaction Pointer where the transaction data will be copied
+/// @param transactionSize Size of the transaction buffer in bytes
+/// @return 1 if a transaction was peeked, 0 on error
+int32_t __moore_tlm_fifo_peek(MooreTlmFifoHandle fifo, void *transaction,
+                              int64_t transactionSize);
+
+/// Try to peek at the front transaction (non-blocking).
+/// @param fifo Handle to the FIFO
+/// @param transaction Pointer where the transaction data will be copied
+/// @param transactionSize Size of the transaction buffer in bytes
+/// @return 1 if a transaction was peeked, 0 if FIFO is empty
+int32_t __moore_tlm_fifo_try_peek(MooreTlmFifoHandle fifo, void *transaction,
+                                  int64_t transactionSize);
+
+/// Get the current number of items in the FIFO.
+/// @param fifo Handle to the FIFO
+/// @return Number of items currently in the FIFO
+int64_t __moore_tlm_fifo_size(MooreTlmFifoHandle fifo);
+
+/// Check if the FIFO is empty.
+/// @param fifo Handle to the FIFO
+/// @return 1 if empty, 0 otherwise
+int32_t __moore_tlm_fifo_is_empty(MooreTlmFifoHandle fifo);
+
+/// Check if the FIFO is full (only relevant for bounded FIFOs).
+/// @param fifo Handle to the FIFO
+/// @return 1 if full, 0 otherwise (always 0 for unbounded FIFOs)
+int32_t __moore_tlm_fifo_is_full(MooreTlmFifoHandle fifo);
+
+/// Flush (clear) all items from the FIFO.
+/// @param fifo Handle to the FIFO
+void __moore_tlm_fifo_flush(MooreTlmFifoHandle fifo);
+
+//===----------------------------------------------------------------------===//
+// TLM Subscriber Operations
+//===----------------------------------------------------------------------===//
+
+/// Register a write callback for a subscriber.
+/// This is used to implement uvm_subscriber pattern where the subscriber's
+/// write() method is called when a transaction is received.
+///
+/// @param port Handle to the analysis imp/export
+/// @param callback The callback function to invoke
+/// @param userData User data to pass to the callback (typically 'this' pointer)
+void __moore_tlm_subscriber_set_write_callback(MooreTlmPortHandle port,
+                                               MooreTlmWriteCallback callback,
+                                               void *userData);
+
+//===----------------------------------------------------------------------===//
+// TLM Debugging/Tracing
+//===----------------------------------------------------------------------===//
+
+/// Enable or disable TLM tracing.
+/// When enabled, all TLM operations are logged for debugging.
+/// @param enable 1 to enable, 0 to disable
+void __moore_tlm_set_trace_enabled(int32_t enable);
+
+/// Check if TLM tracing is enabled.
+/// @return 1 if enabled, 0 otherwise
+int32_t __moore_tlm_is_trace_enabled(void);
+
+/// Print TLM connection topology for debugging.
+void __moore_tlm_print_topology(void);
+
+/// Get statistics about TLM operations.
+/// @param totalConnections Output: total number of connections made
+/// @param totalWrites Output: total number of write() calls
+/// @param totalGets Output: total number of get() calls
+void __moore_tlm_get_statistics(int64_t *totalConnections, int64_t *totalWrites,
+                                int64_t *totalGets);
+
 #ifdef __cplusplus
 }
 #endif

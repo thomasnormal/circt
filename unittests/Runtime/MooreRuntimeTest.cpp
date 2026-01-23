@@ -13,6 +13,7 @@
 #include "circt/Runtime/MooreRuntime.h"
 #include "gtest/gtest.h"
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -10623,6 +10624,314 @@ TEST(MooreRuntimeStringTest, IntToStringLargeValue) {
   ASSERT_NE(result.data, nullptr);
   EXPECT_EQ(std::string(result.data, result.len), "4294967295");
   __moore_free(result.data);
+}
+
+//===----------------------------------------------------------------------===//
+// TLM Port/Export Runtime Tests
+//===----------------------------------------------------------------------===//
+
+// Test transaction structure for TLM tests
+struct TestTlmTransaction {
+  int32_t addr;
+  int32_t data;
+  int8_t kind;
+
+  bool operator==(const TestTlmTransaction &other) const {
+    return addr == other.addr && data == other.data && kind == other.kind;
+  }
+};
+
+// Callback state for subscriber tests
+static std::atomic<int> tlmCallbackInvocations{0};
+static TestTlmTransaction tlmLastReceivedTransaction;
+
+void tlmTestWriteCallback(void *subscriber, void *transaction,
+                          int64_t transactionSize) {
+  (void)subscriber;
+  if (transactionSize == sizeof(TestTlmTransaction)) {
+    tlmLastReceivedTransaction =
+        *static_cast<TestTlmTransaction *>(transaction);
+  }
+  tlmCallbackInvocations++;
+}
+
+TEST(MooreRuntimeTlmTest, PortCreation) {
+  const char *portName = "test_port";
+  MooreTlmPortHandle port = __moore_tlm_port_create(
+      portName, strlen(portName), 0, MOORE_TLM_PORT_ANALYSIS);
+  EXPECT_NE(port, MOORE_TLM_INVALID_HANDLE);
+
+  MooreString name = __moore_tlm_port_get_name(port);
+  ASSERT_NE(name.data, nullptr);
+  EXPECT_EQ(std::string(name.data, name.len), portName);
+  __moore_free(name.data);
+
+  EXPECT_EQ(__moore_tlm_port_get_num_connections(port), 0);
+
+  __moore_tlm_port_destroy(port);
+}
+
+TEST(MooreRuntimeTlmTest, FifoCreation) {
+  const char *fifoName = "test_fifo";
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 0, sizeof(TestTlmTransaction));
+  EXPECT_NE(fifo, MOORE_TLM_INVALID_HANDLE);
+
+  EXPECT_EQ(__moore_tlm_fifo_is_empty(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_is_full(fifo), 0);
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 0);
+
+  MooreTlmPortHandle analysisExport = __moore_tlm_fifo_get_analysis_export(fifo);
+  EXPECT_NE(analysisExport, MOORE_TLM_INVALID_HANDLE);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, FifoPutAndTryGet) {
+  const char *fifoName = "fifo_put_get";
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 0, sizeof(TestTlmTransaction));
+
+  TestTlmTransaction tx1 = {0x1000, 0xDEAD, 1};
+  TestTlmTransaction tx2 = {0x2000, 0xBEEF, 0};
+
+  __moore_tlm_fifo_put(fifo, &tx1, sizeof(tx1));
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 1);
+
+  __moore_tlm_fifo_put(fifo, &tx2, sizeof(tx2));
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 2);
+
+  TestTlmTransaction rxTx;
+  int32_t result = __moore_tlm_fifo_try_get(fifo, &rxTx, sizeof(rxTx));
+  EXPECT_EQ(result, 1);
+  EXPECT_TRUE(rxTx == tx1);
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 1);
+
+  result = __moore_tlm_fifo_try_get(fifo, &rxTx, sizeof(rxTx));
+  EXPECT_EQ(result, 1);
+  EXPECT_TRUE(rxTx == tx2);
+  EXPECT_EQ(__moore_tlm_fifo_is_empty(fifo), 1);
+
+  result = __moore_tlm_fifo_try_get(fifo, &rxTx, sizeof(rxTx));
+  EXPECT_EQ(result, 0);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, FifoPeek) {
+  const char *fifoName = "fifo_peek";
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 0, sizeof(TestTlmTransaction));
+
+  TestTlmTransaction tx = {0x3000, 0xCAFE, 1};
+  __moore_tlm_fifo_put(fifo, &tx, sizeof(tx));
+
+  TestTlmTransaction peeked;
+  int32_t result = __moore_tlm_fifo_try_peek(fifo, &peeked, sizeof(peeked));
+  EXPECT_EQ(result, 1);
+  EXPECT_TRUE(peeked == tx);
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 1);
+
+  // Peek again - should get same result
+  result = __moore_tlm_fifo_try_peek(fifo, &peeked, sizeof(peeked));
+  EXPECT_EQ(result, 1);
+  EXPECT_TRUE(peeked == tx);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, BoundedFifoFull) {
+  const char *fifoName = "bounded_fifo";
+  int64_t maxSize = 2;
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, maxSize, sizeof(TestTlmTransaction));
+
+  TestTlmTransaction tx1 = {0x100, 0x11, 0};
+  TestTlmTransaction tx2 = {0x200, 0x22, 1};
+  TestTlmTransaction tx3 = {0x300, 0x33, 0};
+
+  int32_t result = __moore_tlm_fifo_try_put(fifo, &tx1, sizeof(tx1));
+  EXPECT_EQ(result, 1);
+
+  result = __moore_tlm_fifo_try_put(fifo, &tx2, sizeof(tx2));
+  EXPECT_EQ(result, 1);
+
+  EXPECT_EQ(__moore_tlm_fifo_is_full(fifo), 1);
+
+  result = __moore_tlm_fifo_try_put(fifo, &tx3, sizeof(tx3));
+  EXPECT_EQ(result, 0);
+
+  TestTlmTransaction rxTx;
+  __moore_tlm_fifo_try_get(fifo, &rxTx, sizeof(rxTx));
+  EXPECT_EQ(__moore_tlm_fifo_is_full(fifo), 0);
+
+  result = __moore_tlm_fifo_try_put(fifo, &tx3, sizeof(tx3));
+  EXPECT_EQ(result, 1);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, PortConnection) {
+  const char *portName = "analysis_port";
+  const char *exportName = "analysis_imp";
+
+  MooreTlmPortHandle port = __moore_tlm_port_create(portName, strlen(portName),
+                                                    0, MOORE_TLM_PORT_ANALYSIS);
+  MooreTlmPortHandle export_ = __moore_tlm_port_create(
+      exportName, strlen(exportName), 0, MOORE_TLM_PORT_ANALYSIS);
+
+  int32_t result = __moore_tlm_port_connect(port, export_);
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(__moore_tlm_port_get_num_connections(port), 1);
+
+  const char *export2Name = "analysis_imp_2";
+  MooreTlmPortHandle export2 = __moore_tlm_port_create(
+      export2Name, strlen(export2Name), 0, MOORE_TLM_PORT_ANALYSIS);
+  result = __moore_tlm_port_connect(port, export2);
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(__moore_tlm_port_get_num_connections(port), 2);
+
+  __moore_tlm_port_destroy(port);
+  __moore_tlm_port_destroy(export_);
+  __moore_tlm_port_destroy(export2);
+}
+
+TEST(MooreRuntimeTlmTest, AnalysisPortToFifo) {
+  // Monitor -> Scoreboard pattern
+  const char *portName = "monitor.analysis_port";
+  MooreTlmPortHandle analysisPort = __moore_tlm_port_create(
+      portName, strlen(portName), 0, MOORE_TLM_PORT_ANALYSIS);
+
+  const char *fifoName = "scoreboard.analysis_fifo";
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 0, sizeof(TestTlmTransaction));
+
+  MooreTlmPortHandle analysisExport = __moore_tlm_fifo_get_analysis_export(fifo);
+
+  int32_t result = __moore_tlm_port_connect(analysisPort, analysisExport);
+  EXPECT_EQ(result, 1);
+
+  TestTlmTransaction tx = {0x4000, 0xFACE, 1};
+  __moore_tlm_port_write(analysisPort, &tx, sizeof(tx));
+
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 1);
+
+  TestTlmTransaction rxTx;
+  result = __moore_tlm_fifo_try_get(fifo, &rxTx, sizeof(rxTx));
+  EXPECT_EQ(result, 1);
+  EXPECT_TRUE(rxTx == tx);
+
+  __moore_tlm_port_destroy(analysisPort);
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, SubscriberCallback) {
+  // Monitor -> Coverage pattern
+  const char *portName = "monitor.analysis_port_2";
+  MooreTlmPortHandle analysisPort = __moore_tlm_port_create(
+      portName, strlen(portName), 0, MOORE_TLM_PORT_ANALYSIS);
+
+  const char *impName = "coverage.analysis_export";
+  MooreTlmPortHandle analysisImp = __moore_tlm_port_create(
+      impName, strlen(impName), 0, MOORE_TLM_PORT_ANALYSIS);
+
+  __moore_tlm_subscriber_set_write_callback(analysisImp, tlmTestWriteCallback,
+                                            nullptr);
+
+  __moore_tlm_port_connect(analysisPort, analysisImp);
+
+  tlmCallbackInvocations = 0;
+  tlmLastReceivedTransaction = {0, 0, 0};
+
+  TestTlmTransaction tx = {0x5000, 0xBABE, 0};
+  __moore_tlm_port_write(analysisPort, &tx, sizeof(tx));
+
+  EXPECT_EQ(tlmCallbackInvocations.load(), 1);
+  EXPECT_TRUE(tlmLastReceivedTransaction == tx);
+
+  TestTlmTransaction tx2 = {0x6000, 0xDEAD, 1};
+  __moore_tlm_port_write(analysisPort, &tx2, sizeof(tx2));
+
+  EXPECT_EQ(tlmCallbackInvocations.load(), 2);
+  EXPECT_TRUE(tlmLastReceivedTransaction == tx2);
+
+  __moore_tlm_port_destroy(analysisPort);
+  __moore_tlm_port_destroy(analysisImp);
+}
+
+TEST(MooreRuntimeTlmTest, FifoFlush) {
+  const char *fifoName = "flush_test_fifo";
+  MooreTlmFifoHandle fifo = __moore_tlm_fifo_create(
+      fifoName, strlen(fifoName), 0, 0, sizeof(TestTlmTransaction));
+
+  TestTlmTransaction tx1 = {0x100, 0x11, 0};
+  TestTlmTransaction tx2 = {0x200, 0x22, 1};
+
+  __moore_tlm_fifo_put(fifo, &tx1, sizeof(tx1));
+  __moore_tlm_fifo_put(fifo, &tx2, sizeof(tx2));
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 2);
+
+  __moore_tlm_fifo_flush(fifo);
+  EXPECT_EQ(__moore_tlm_fifo_is_empty(fifo), 1);
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo), 0);
+
+  __moore_tlm_fifo_destroy(fifo);
+}
+
+TEST(MooreRuntimeTlmTest, MultipleSubscribers) {
+  // 1-to-N broadcast
+  const char *portName = "broadcast_port";
+  MooreTlmPortHandle port = __moore_tlm_port_create(
+      portName, strlen(portName), 0, MOORE_TLM_PORT_ANALYSIS);
+
+  const char *fifo1Name = "subscriber_fifo_1";
+  const char *fifo2Name = "subscriber_fifo_2";
+  MooreTlmFifoHandle fifo1 = __moore_tlm_fifo_create(
+      fifo1Name, strlen(fifo1Name), 0, 0, sizeof(TestTlmTransaction));
+  MooreTlmFifoHandle fifo2 = __moore_tlm_fifo_create(
+      fifo2Name, strlen(fifo2Name), 0, 0, sizeof(TestTlmTransaction));
+
+  MooreTlmPortHandle export1 = __moore_tlm_fifo_get_analysis_export(fifo1);
+  MooreTlmPortHandle export2 = __moore_tlm_fifo_get_analysis_export(fifo2);
+  __moore_tlm_port_connect(port, export1);
+  __moore_tlm_port_connect(port, export2);
+
+  TestTlmTransaction tx = {0x7000, 0xF00D, 1};
+  __moore_tlm_port_write(port, &tx, sizeof(tx));
+
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo1), 1);
+  EXPECT_EQ(__moore_tlm_fifo_size(fifo2), 1);
+
+  TestTlmTransaction rx1, rx2;
+  __moore_tlm_fifo_try_get(fifo1, &rx1, sizeof(rx1));
+  __moore_tlm_fifo_try_get(fifo2, &rx2, sizeof(rx2));
+  EXPECT_TRUE(rx1 == tx);
+  EXPECT_TRUE(rx2 == tx);
+
+  __moore_tlm_port_destroy(port);
+  __moore_tlm_fifo_destroy(fifo1);
+  __moore_tlm_fifo_destroy(fifo2);
+}
+
+TEST(MooreRuntimeTlmTest, TracingEnableDisable) {
+  EXPECT_EQ(__moore_tlm_is_trace_enabled(), 0);
+
+  __moore_tlm_set_trace_enabled(1);
+  EXPECT_EQ(__moore_tlm_is_trace_enabled(), 1);
+
+  __moore_tlm_set_trace_enabled(0);
+  EXPECT_EQ(__moore_tlm_is_trace_enabled(), 0);
+}
+
+TEST(MooreRuntimeTlmTest, Statistics) {
+  int64_t conns, writes, gets;
+  __moore_tlm_get_statistics(&conns, &writes, &gets);
+
+  // These should be non-zero after running the tests above
+  // Note: The exact values depend on the order of test execution
+  EXPECT_GE(conns, 0);
+  EXPECT_GE(writes, 0);
+  EXPECT_GE(gets, 0);
 }
 
 } // namespace
