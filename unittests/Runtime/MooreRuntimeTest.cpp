@@ -12920,4 +12920,452 @@ TEST(MooreRuntimeUvmReportTest, NullInputs) {
       1); // Uses global verbosity
 }
 
+//===----------------------------------------------------------------------===//
+// Virtual Interface Binding Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeVifTest, CreateAndRelease) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Create a virtual interface handle
+  MooreVifHandle vif = __moore_vif_create("apb_if", 6, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // Initially not bound
+  EXPECT_EQ(__moore_vif_is_bound(vif), 0);
+  EXPECT_EQ(__moore_vif_get_instance(vif), nullptr);
+
+  // Release the handle
+  __moore_vif_release(vif);
+
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, CreateWithModport) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Create a virtual interface handle with modport
+  MooreVifHandle vif = __moore_vif_create("apb_if", 6, "driver", 6);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // Check type name
+  MooreString typeName = __moore_vif_get_type_name(vif);
+  EXPECT_EQ(std::string(typeName.data, typeName.len), "apb_if");
+  __moore_free(typeName.data);
+
+  // Check modport name
+  MooreString modportName = __moore_vif_get_modport_name(vif);
+  EXPECT_EQ(std::string(modportName.data, modportName.len), "driver");
+  __moore_free(modportName.data);
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, CreateNullInputs) {
+  __moore_vif_clear_all();
+
+  // Null interface type name should fail
+  EXPECT_EQ(__moore_vif_create(nullptr, 0, nullptr, 0), MOORE_VIF_NULL);
+  EXPECT_EQ(__moore_vif_create("", 0, nullptr, 0), MOORE_VIF_NULL);
+  EXPECT_EQ(__moore_vif_create("type", 0, nullptr, 0), MOORE_VIF_NULL);
+
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, BindAndUnbind) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  MooreVifHandle vif = __moore_vif_create("simple_bus", 10, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // Create a mock interface instance
+  struct MockInterface {
+    int32_t data;
+    int32_t valid;
+  };
+  MockInterface interfaceInstance = {0x12345678, 1};
+
+  // Bind the virtual interface
+  EXPECT_EQ(__moore_vif_bind(vif, &interfaceInstance), 1);
+  EXPECT_EQ(__moore_vif_is_bound(vif), 1);
+  EXPECT_EQ(__moore_vif_get_instance(vif), &interfaceInstance);
+
+  // Unbind (bind to nullptr)
+  EXPECT_EQ(__moore_vif_bind(vif, nullptr), 1);
+  EXPECT_EQ(__moore_vif_is_bound(vif), 0);
+  EXPECT_EQ(__moore_vif_get_instance(vif), nullptr);
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, BindNullHandle) {
+  // Binding to a null handle should fail
+  EXPECT_EQ(__moore_vif_bind(MOORE_VIF_NULL, nullptr), 0);
+
+  int32_t dummy = 0;
+  EXPECT_EQ(__moore_vif_bind(MOORE_VIF_NULL, &dummy), 0);
+}
+
+TEST(MooreRuntimeVifTest, SignalAccess) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Register signals for the interface type
+  EXPECT_EQ(__moore_vif_register_signal("test_if", 7, "data", 4, 0, 4), 1);
+  EXPECT_EQ(__moore_vif_register_signal("test_if", 7, "valid", 5, 4, 4), 1);
+  EXPECT_EQ(__moore_vif_register_signal("test_if", 7, "ready", 5, 8, 4), 1);
+
+  // Create virtual interface
+  MooreVifHandle vif = __moore_vif_create("test_if", 7, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // Create and bind a mock interface
+  struct TestInterface {
+    int32_t data;
+    int32_t valid;
+    int32_t ready;
+  };
+  TestInterface iface = {static_cast<int32_t>(0xDEADBEEF), 1, 0};
+
+  EXPECT_EQ(__moore_vif_bind(vif, &iface), 1);
+
+  // Read signal via virtual interface
+  int32_t readData = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vif, "data", 4, &readData, sizeof(readData)),
+            1);
+  EXPECT_EQ(readData, static_cast<int32_t>(0xDEADBEEF));
+
+  int32_t readValid = 0;
+  EXPECT_EQ(
+      __moore_vif_get_signal(vif, "valid", 5, &readValid, sizeof(readValid)),
+      1);
+  EXPECT_EQ(readValid, 1);
+
+  // Write signal via virtual interface
+  int32_t newReady = 1;
+  EXPECT_EQ(
+      __moore_vif_set_signal(vif, "ready", 5, &newReady, sizeof(newReady)), 1);
+  EXPECT_EQ(iface.ready, 1);
+
+  // Write to data
+  int32_t newData = 0xCAFEBABE;
+  EXPECT_EQ(__moore_vif_set_signal(vif, "data", 4, &newData, sizeof(newData)),
+            1);
+  EXPECT_EQ(iface.data, static_cast<int32_t>(0xCAFEBABE));
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_registry();
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, SignalRef) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Register signal
+  EXPECT_EQ(__moore_vif_register_signal("ref_if", 6, "value", 5, 0, 8), 1);
+
+  MooreVifHandle vif = __moore_vif_create("ref_if", 6, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // Create and bind interface
+  int64_t interfaceValue = 12345;
+
+  EXPECT_EQ(__moore_vif_bind(vif, &interfaceValue), 1);
+
+  // Get signal reference
+  void *ref = __moore_vif_get_signal_ref(vif, "value", 5);
+  ASSERT_NE(ref, nullptr);
+  EXPECT_EQ(ref, &interfaceValue);
+
+  // Modify through reference
+  *static_cast<int64_t *>(ref) = 67890;
+  EXPECT_EQ(interfaceValue, 67890);
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_registry();
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, SignalAccessUnbound) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Register signal
+  EXPECT_EQ(__moore_vif_register_signal("unbound_if", 10, "sig", 3, 0, 4), 1);
+
+  MooreVifHandle vif = __moore_vif_create("unbound_if", 10, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // Try to access signal on unbound vif - should fail
+  int32_t value = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vif, "sig", 3, &value, sizeof(value)), 0);
+  EXPECT_EQ(__moore_vif_set_signal(vif, "sig", 3, &value, sizeof(value)), 0);
+  EXPECT_EQ(__moore_vif_get_signal_ref(vif, "sig", 3), nullptr);
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_registry();
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, SignalAccessNonexistent) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Register one signal
+  EXPECT_EQ(__moore_vif_register_signal("partial_if", 10, "exists", 6, 0, 4),
+            1);
+
+  MooreVifHandle vif = __moore_vif_create("partial_if", 10, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  int32_t dummy = 0;
+  EXPECT_EQ(__moore_vif_bind(vif, &dummy), 1);
+
+  // Try to access nonexistent signal
+  int32_t value = 0;
+  EXPECT_EQ(
+      __moore_vif_get_signal(vif, "nonexistent", 11, &value, sizeof(value)), 0);
+  EXPECT_EQ(
+      __moore_vif_set_signal(vif, "nonexistent", 11, &value, sizeof(value)), 0);
+  EXPECT_EQ(__moore_vif_get_signal_ref(vif, "nonexistent", 11), nullptr);
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_registry();
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, Compare) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  MooreVifHandle vif1 = __moore_vif_create("cmp_if", 6, nullptr, 0);
+  MooreVifHandle vif2 = __moore_vif_create("cmp_if", 6, nullptr, 0);
+  ASSERT_NE(vif1, MOORE_VIF_NULL);
+  ASSERT_NE(vif2, MOORE_VIF_NULL);
+
+  // Both unbound - should be equal
+  EXPECT_EQ(__moore_vif_compare(vif1, vif2), 1);
+
+  // Bind vif1 only
+  int32_t instance1 = 100;
+  EXPECT_EQ(__moore_vif_bind(vif1, &instance1), 1);
+
+  // One bound, one not - should be not equal
+  EXPECT_EQ(__moore_vif_compare(vif1, vif2), 0);
+
+  // Bind vif2 to different instance
+  int32_t instance2 = 200;
+  EXPECT_EQ(__moore_vif_bind(vif2, &instance2), 1);
+
+  // Both bound to different instances - not equal
+  EXPECT_EQ(__moore_vif_compare(vif1, vif2), 0);
+
+  // Bind vif2 to same instance as vif1
+  EXPECT_EQ(__moore_vif_bind(vif2, &instance1), 1);
+
+  // Both bound to same instance - equal
+  EXPECT_EQ(__moore_vif_compare(vif1, vif2), 1);
+
+  // Compare with null
+  EXPECT_EQ(__moore_vif_compare(vif1, MOORE_VIF_NULL), 0);
+  EXPECT_EQ(__moore_vif_compare(MOORE_VIF_NULL, vif1), 0);
+  EXPECT_EQ(__moore_vif_compare(MOORE_VIF_NULL, MOORE_VIF_NULL), 1);
+
+  __moore_vif_release(vif1);
+  __moore_vif_release(vif2);
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, ClearAll) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Create multiple handles
+  MooreVifHandle vif1 = __moore_vif_create("clear_if1", 9, nullptr, 0);
+  MooreVifHandle vif2 = __moore_vif_create("clear_if2", 9, nullptr, 0);
+  MooreVifHandle vif3 = __moore_vif_create("clear_if3", 9, nullptr, 0);
+  EXPECT_NE(vif1, MOORE_VIF_NULL);
+  EXPECT_NE(vif2, MOORE_VIF_NULL);
+  EXPECT_NE(vif3, MOORE_VIF_NULL);
+
+  // Clear all - should not crash even though handles are now invalid
+  __moore_vif_clear_all();
+
+  // Create new handles after clear - should work
+  MooreVifHandle newVif = __moore_vif_create("new_if", 6, nullptr, 0);
+  EXPECT_NE(newVif, MOORE_VIF_NULL);
+
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, RegisterSignalInvalidInputs) {
+  __moore_vif_clear_registry();
+
+  // Null type name
+  EXPECT_EQ(__moore_vif_register_signal(nullptr, 0, "sig", 3, 0, 4), 0);
+
+  // Empty type name
+  EXPECT_EQ(__moore_vif_register_signal("", 0, "sig", 3, 0, 4), 0);
+
+  // Null signal name
+  EXPECT_EQ(__moore_vif_register_signal("type", 4, nullptr, 0, 0, 4), 0);
+
+  // Empty signal name
+  EXPECT_EQ(__moore_vif_register_signal("type", 4, "", 0, 0, 4), 0);
+
+  // Zero signal size
+  EXPECT_EQ(__moore_vif_register_signal("type", 4, "sig", 3, 0, 0), 0);
+
+  __moore_vif_clear_registry();
+}
+
+TEST(MooreRuntimeVifTest, TypeNameAndModportName) {
+  __moore_vif_clear_all();
+
+  // Create without modport
+  MooreVifHandle vif1 = __moore_vif_create("my_interface", 12, nullptr, 0);
+  ASSERT_NE(vif1, MOORE_VIF_NULL);
+
+  MooreString type1 = __moore_vif_get_type_name(vif1);
+  EXPECT_EQ(std::string(type1.data, type1.len), "my_interface");
+  __moore_free(type1.data);
+
+  MooreString modport1 = __moore_vif_get_modport_name(vif1);
+  EXPECT_EQ(modport1.len, 0);
+  EXPECT_EQ(modport1.data, nullptr);
+
+  // Create with modport
+  MooreVifHandle vif2 = __moore_vif_create("my_interface", 12, "monitor", 7);
+  ASSERT_NE(vif2, MOORE_VIF_NULL);
+
+  MooreString type2 = __moore_vif_get_type_name(vif2);
+  EXPECT_EQ(std::string(type2.data, type2.len), "my_interface");
+  __moore_free(type2.data);
+
+  MooreString modport2 = __moore_vif_get_modport_name(vif2);
+  EXPECT_EQ(std::string(modport2.data, modport2.len), "monitor");
+  __moore_free(modport2.data);
+
+  // Null handle
+  MooreString nullType = __moore_vif_get_type_name(MOORE_VIF_NULL);
+  EXPECT_EQ(nullType.len, 0);
+  EXPECT_EQ(nullType.data, nullptr);
+
+  MooreString nullModport = __moore_vif_get_modport_name(MOORE_VIF_NULL);
+  EXPECT_EQ(nullModport.len, 0);
+  EXPECT_EQ(nullModport.data, nullptr);
+
+  __moore_vif_release(vif1);
+  __moore_vif_release(vif2);
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, NullHandleOperations) {
+  // These should not crash and return appropriate failure values
+  EXPECT_EQ(__moore_vif_is_bound(MOORE_VIF_NULL), 0);
+  EXPECT_EQ(__moore_vif_get_instance(MOORE_VIF_NULL), nullptr);
+
+  int32_t value = 0;
+  EXPECT_EQ(
+      __moore_vif_get_signal(MOORE_VIF_NULL, "sig", 3, &value, sizeof(value)),
+      0);
+  EXPECT_EQ(
+      __moore_vif_set_signal(MOORE_VIF_NULL, "sig", 3, &value, sizeof(value)),
+      0);
+  EXPECT_EQ(__moore_vif_get_signal_ref(MOORE_VIF_NULL, "sig", 3), nullptr);
+
+  // Release null - should not crash
+  __moore_vif_release(MOORE_VIF_NULL);
+}
+
+TEST(MooreRuntimeVifTest, MultipleInterfaces) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  // Register signals for multiple interface types
+  EXPECT_EQ(__moore_vif_register_signal("if_a", 4, "data_a", 6, 0, 4), 1);
+  EXPECT_EQ(__moore_vif_register_signal("if_b", 4, "data_b", 6, 0, 8), 1);
+
+  // Create virtual interfaces for different types
+  MooreVifHandle vifA = __moore_vif_create("if_a", 4, nullptr, 0);
+  MooreVifHandle vifB = __moore_vif_create("if_b", 4, nullptr, 0);
+  ASSERT_NE(vifA, MOORE_VIF_NULL);
+  ASSERT_NE(vifB, MOORE_VIF_NULL);
+
+  // Create mock interface instances
+  int32_t instanceA = 0xAAAAAAAA;
+  int64_t instanceB = 0xBBBBBBBBBBBBBBBB;
+
+  EXPECT_EQ(__moore_vif_bind(vifA, &instanceA), 1);
+  EXPECT_EQ(__moore_vif_bind(vifB, &instanceB), 1);
+
+  // Read from each
+  int32_t readA = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vifA, "data_a", 6, &readA, sizeof(readA)),
+            1);
+  EXPECT_EQ(readA, static_cast<int32_t>(0xAAAAAAAA));
+
+  int64_t readB = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vifB, "data_b", 6, &readB, sizeof(readB)),
+            1);
+  EXPECT_EQ(readB, static_cast<int64_t>(0xBBBBBBBBBBBBBBBB));
+
+  // Accessing wrong signal type should fail (signal not in that interface)
+  EXPECT_EQ(__moore_vif_get_signal(vifA, "data_b", 6, &readA, sizeof(readA)),
+            0);
+  EXPECT_EQ(__moore_vif_get_signal(vifB, "data_a", 6, &readB, sizeof(readB)),
+            0);
+
+  __moore_vif_release(vifA);
+  __moore_vif_release(vifB);
+  __moore_vif_clear_registry();
+  __moore_vif_clear_all();
+}
+
+TEST(MooreRuntimeVifTest, Rebinding) {
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+
+  EXPECT_EQ(__moore_vif_register_signal("rebind_if", 9, "val", 3, 0, 4), 1);
+
+  MooreVifHandle vif = __moore_vif_create("rebind_if", 9, nullptr, 0);
+  ASSERT_NE(vif, MOORE_VIF_NULL);
+
+  // First instance
+  int32_t instance1 = 111;
+  EXPECT_EQ(__moore_vif_bind(vif, &instance1), 1);
+
+  int32_t readVal = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vif, "val", 3, &readVal, sizeof(readVal)),
+            1);
+  EXPECT_EQ(readVal, 111);
+
+  // Rebind to second instance
+  int32_t instance2 = 222;
+  EXPECT_EQ(__moore_vif_bind(vif, &instance2), 1);
+
+  readVal = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vif, "val", 3, &readVal, sizeof(readVal)),
+            1);
+  EXPECT_EQ(readVal, 222);
+
+  // Rebind back to first
+  EXPECT_EQ(__moore_vif_bind(vif, &instance1), 1);
+
+  readVal = 0;
+  EXPECT_EQ(__moore_vif_get_signal(vif, "val", 3, &readVal, sizeof(readVal)),
+            1);
+  EXPECT_EQ(readVal, 111);
+
+  __moore_vif_release(vif);
+  __moore_vif_clear_registry();
+  __moore_vif_clear_all();
+}
+
 } // namespace

@@ -3338,6 +3338,160 @@ int32_t __moore_config_db_exists(const char *instName, int64_t instLen,
 void __moore_config_db_clear(void);
 
 //===----------------------------------------------------------------------===//
+// UVM Virtual Interface Binding Runtime
+//===----------------------------------------------------------------------===//
+//
+// These functions provide runtime support for virtual interface binding in UVM
+// testbenches. Virtual interfaces connect the HVL (verification) world to the
+// HDL (design) world, allowing UVM drivers and monitors to access DUT signals.
+//
+// Usage pattern in UVM:
+//   1. Create virtual interface handle: vif_handle = __moore_vif_create(...)
+//   2. Bind to interface instance: __moore_vif_bind(vif_handle, interface_ptr)
+//   3. Store in config_db: config_db::set(this, "*", "vif", vif_handle)
+//   4. Retrieve in driver: config_db::get(this, "", "vif", driver.vif)
+//   5. Access signals: __moore_vif_get_signal(vif_handle, "data", ...)
+//
+// Virtual interfaces are identified by:
+//   - Interface type name (e.g., "apb_if")
+//   - Optional modport name (e.g., "driver")
+//
+// The runtime maintains a registry of virtual interface handles and their
+// bindings to actual interface instances.
+//
+
+/// Opaque handle for a virtual interface instance.
+typedef void *MooreVifHandle;
+
+/// Invalid/null virtual interface handle.
+#define MOORE_VIF_NULL ((MooreVifHandle)0)
+
+/// Create a new virtual interface handle.
+/// This creates an unbound virtual interface that can later be bound to an
+/// actual interface instance.
+///
+/// @param interfaceTypeName Name of the interface type (e.g., "apb_if")
+/// @param interfaceTypeNameLen Length of the interface type name string
+/// @param modportName Optional modport name (NULL for full interface access)
+/// @param modportNameLen Length of the modport name string (0 if no modport)
+/// @return A new virtual interface handle, or MOORE_VIF_NULL on failure
+MooreVifHandle __moore_vif_create(const char *interfaceTypeName,
+                                  int64_t interfaceTypeNameLen,
+                                  const char *modportName,
+                                  int64_t modportNameLen);
+
+/// Bind a virtual interface handle to an actual interface instance.
+/// This associates the virtual interface with a concrete interface instance,
+/// enabling signal access through the virtual interface.
+///
+/// @param vif The virtual interface handle to bind
+/// @param interfaceInstance Pointer to the actual interface instance
+/// @return 1 on success, 0 on failure (e.g., null handle or type mismatch)
+int32_t __moore_vif_bind(MooreVifHandle vif, void *interfaceInstance);
+
+/// Check if a virtual interface is bound to an interface instance.
+///
+/// @param vif The virtual interface handle to check
+/// @return 1 if bound, 0 if unbound or null handle
+int32_t __moore_vif_is_bound(MooreVifHandle vif);
+
+/// Get the interface instance pointer from a virtual interface.
+///
+/// @param vif The virtual interface handle
+/// @return Pointer to the bound interface instance, or NULL if unbound
+void *__moore_vif_get_instance(MooreVifHandle vif);
+
+/// Get a signal value from a virtual interface.
+/// Reads the current value of a signal within the bound interface instance.
+///
+/// @param vif The virtual interface handle
+/// @param signalName Name of the signal to read
+/// @param signalNameLen Length of the signal name string
+/// @param outValue Pointer to store the signal value
+/// @param valueSize Size of the output buffer in bytes
+/// @return 1 on success, 0 on failure (e.g., signal not found, vif unbound)
+int32_t __moore_vif_get_signal(MooreVifHandle vif, const char *signalName,
+                               int64_t signalNameLen, void *outValue,
+                               int64_t valueSize);
+
+/// Set a signal value through a virtual interface.
+/// Writes a value to a signal within the bound interface instance.
+///
+/// @param vif The virtual interface handle
+/// @param signalName Name of the signal to write
+/// @param signalNameLen Length of the signal name string
+/// @param value Pointer to the value to write
+/// @param valueSize Size of the value in bytes
+/// @return 1 on success, 0 on failure (e.g., signal not found, vif unbound)
+int32_t __moore_vif_set_signal(MooreVifHandle vif, const char *signalName,
+                               int64_t signalNameLen, const void *value,
+                               int64_t valueSize);
+
+/// Get a reference (pointer) to a signal within the virtual interface.
+/// This allows direct access to the signal storage for efficient repeated access.
+///
+/// @param vif The virtual interface handle
+/// @param signalName Name of the signal
+/// @param signalNameLen Length of the signal name string
+/// @return Pointer to the signal storage, or NULL on failure
+void *__moore_vif_get_signal_ref(MooreVifHandle vif, const char *signalName,
+                                 int64_t signalNameLen);
+
+/// Get the interface type name from a virtual interface handle.
+///
+/// @param vif The virtual interface handle
+/// @return A MooreString containing the interface type name
+MooreString __moore_vif_get_type_name(MooreVifHandle vif);
+
+/// Get the modport name from a virtual interface handle (if any).
+///
+/// @param vif The virtual interface handle
+/// @return A MooreString containing the modport name, or empty if no modport
+MooreString __moore_vif_get_modport_name(MooreVifHandle vif);
+
+/// Compare two virtual interface handles.
+/// Returns true if both handles point to the same interface instance
+/// (or both are null/unbound).
+///
+/// @param vif1 First virtual interface handle
+/// @param vif2 Second virtual interface handle
+/// @return 1 if equal, 0 if not equal
+int32_t __moore_vif_compare(MooreVifHandle vif1, MooreVifHandle vif2);
+
+/// Release a virtual interface handle.
+/// This unbinds the virtual interface and releases associated resources.
+/// The handle should not be used after this call.
+///
+/// @param vif The virtual interface handle to release
+void __moore_vif_release(MooreVifHandle vif);
+
+/// Clear all virtual interface handles.
+/// This is useful for test cleanup between test cases.
+void __moore_vif_clear_all(void);
+
+/// Register a signal within an interface type for virtual interface access.
+/// This is called during interface elaboration to register signals that can
+/// be accessed through virtual interfaces.
+///
+/// @param interfaceTypeName Name of the interface type
+/// @param interfaceTypeNameLen Length of the interface type name
+/// @param signalName Name of the signal within the interface
+/// @param signalNameLen Length of the signal name
+/// @param signalOffset Byte offset of the signal within the interface instance
+/// @param signalSize Size of the signal in bytes
+/// @return 1 on success, 0 on failure
+int32_t __moore_vif_register_signal(const char *interfaceTypeName,
+                                    int64_t interfaceTypeNameLen,
+                                    const char *signalName,
+                                    int64_t signalNameLen,
+                                    int64_t signalOffset,
+                                    int64_t signalSize);
+
+/// Clear all registered interface signal information.
+/// This is useful for test cleanup.
+void __moore_vif_clear_registry(void);
+
+//===----------------------------------------------------------------------===//
 // UVM Component Hierarchy Support
 //===----------------------------------------------------------------------===//
 //
