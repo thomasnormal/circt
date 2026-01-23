@@ -11991,9 +11991,9 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
                 ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp,
                 ConversionOp, StructExtractOp, StringCmpOp,
                 ClassHandleCmpOp, WildcardEqOp, WildcardNeOp,
-                IntToLogicOp, ClassNullOp, StringToLowerOp, StringToUpperOp>(
-                definingOp) ||
-            isa<func::CallOp>(definingOp)) {
+                IntToLogicOp, ClassNullOp, StringToLowerOp, StringToUpperOp,
+                VTableLoadMethodOp>(definingOp) ||
+            isa<func::CallOp, func::CallIndirectOp>(definingOp)) {
           // Recursively convert the defining operation
           // First, ensure all operands of the defining op are converted
           for (Value operand : definingOp->getOperands()) {
@@ -12522,7 +12522,64 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         convertedOperands.push_back(converted);
       }
 
-      // Create the call indirect operation
+      // If callee is an LLVM pointer (from vtable lookup), use LLVM call
+      if (isa<LLVM::LLVMPointerType>(callee.getType())) {
+        // Build LLVM function type from the converted operand/result types
+        SmallVector<Type> inputTypes;
+        for (Value operand : convertedOperands)
+          inputTypes.push_back(operand.getType());
+
+        SmallVector<Type> convResTypes;
+        for (Type resType : callOp.getResultTypes()) {
+          Type converted = typeConverter->convertType(resType);
+          if (!converted)
+            return nullptr;
+          convResTypes.push_back(converted);
+        }
+
+        // Create LLVM function type
+        Type llvmResType = convResTypes.empty()
+                               ? LLVM::LLVMVoidType::get(ctx)
+                               : convResTypes[0];
+        auto llvmFnType = LLVM::LLVMFunctionType::get(llvmResType, inputTypes);
+
+        // For LLVM indirect call, callee is the first operand
+        SmallVector<Value> allOperands;
+        allOperands.push_back(callee);
+        allOperands.append(convertedOperands.begin(), convertedOperands.end());
+
+        // Create LLVM call with the function pointer as first operand
+        auto llvmCall = LLVM::CallOp::create(rewriter, loc, llvmFnType,
+                                              allOperands);
+        if (!convResTypes.empty())
+          return llvmCall.getResult();
+
+        return nullptr;
+      }
+
+      // For func-style function types, use func.call_indirect
+      // Build the new function type from converted input/result types
+      SmallVector<Type> inputTypes;
+      for (Value operand : convertedOperands)
+        inputTypes.push_back(operand.getType());
+
+      SmallVector<Type> convResTypes;
+      for (Type resType : callOp.getResultTypes()) {
+        Type converted = typeConverter->convertType(resType);
+        if (!converted)
+          return nullptr;
+        convResTypes.push_back(converted);
+      }
+      auto newFuncType = FunctionType::get(ctx, inputTypes, convResTypes);
+
+      // If callee type doesn't match, cast it
+      if (callee.getType() != newFuncType) {
+        callee = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                     TypeRange{newFuncType},
+                                                     ValueRange{callee})
+                     .getResult(0);
+      }
+
       auto newCallOp = func::CallIndirectOp::create(rewriter, loc, callee,
                                                      convertedOperands);
       if (newCallOp.getNumResults() > 0)
@@ -12534,23 +12591,90 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
     // Handle moore.vtable.load_method (virtual method dispatch)
     // This operation loads a function pointer from the vtable for dynamic dispatch.
-    // For inline conversion, we need to handle it specially.
     if (auto vtableLoadOp = dyn_cast<VTableLoadMethodOp>(mooreOp)) {
-      Value obj = getConvertedOperand(vtableLoadOp.getObject());
-      if (!obj)
+      Value objPtr = getConvertedOperand(vtableLoadOp.getObject());
+      if (!objPtr)
         return nullptr;
 
-      // Get the result function type
-      Type resultType = typeConverter->convertType(vtableLoadOp.getResult().getType());
-      if (!resultType)
+      // Get the class type from the object operand
+      auto handleTy = cast<ClassHandleType>(vtableLoadOp.getObject().getType());
+      auto classSym = handleTy.getClassSym();
+
+      // Resolve the class struct info to get method-to-vtable-index mapping
+      if (failed(resolveClassStructBody(mod, classSym, *typeConverter, classCache)))
         return nullptr;
 
-      // For vtable.load_method, we need to actually compute the vtable lookup.
-      // This is complex because it requires class struct info.
-      // As a fallback, use unrealized conversion cast which will be resolved later.
-      // The actual conversion pattern will handle this properly.
-      return UnrealizedConversionCastOp::create(rewriter, loc, resultType, obj)
-                 .getResult(0);
+      auto structInfoOpt = classCache.getStructInfo(classSym);
+      if (!structInfoOpt)
+        return nullptr;
+
+      auto &structInfo = *structInfoOpt;
+
+      // Get the method name and find its vtable index
+      auto methodSym = vtableLoadOp.getMethodSym();
+      StringRef methodName = methodSym.getLeafReference();
+
+      auto indexIt = structInfo.methodToVtableIndex.find(methodName);
+      if (indexIt == structInfo.methodToVtableIndex.end())
+        return nullptr;
+
+      unsigned vtableIndex = indexIt->second;
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i32Ty = IntegerType::get(ctx, 32);
+
+      // Get the class's struct type for GEP
+      auto structTy = structInfo.classBody;
+
+      // Build GEP path to the vtable pointer field.
+      // The vtable pointer is at index 1 in the root class (after typeId).
+      // For inheritance hierarchy A -> B -> C:
+      //   C: { B: { A: { i32 typeId, ptr vtablePtr, ...}, ...}, ...}
+      // We need to GEP through [0, 0, ..., 0, 1] to reach vtablePtr.
+      SmallVector<Value> gepIndices;
+      // First index is always 0 (pointer dereference)
+      gepIndices.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+      // Navigate through base class chain
+      for (int32_t i = 0; i < structInfo.inheritanceDepth; ++i) {
+        gepIndices.push_back(LLVM::ConstantOp::create(
+            rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+      }
+      // Index to vtable pointer field (index 1 in root class)
+      gepIndices.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty,
+          rewriter.getI32IntegerAttr(ClassTypeCache::ClassStructInfo::vtablePtrFieldIndex)));
+
+      // GEP to vtable pointer field
+      Value vtablePtrPtr =
+          LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy, objPtr, gepIndices);
+
+      // Load the vtable pointer
+      Value vtablePtr = LLVM::LoadOp::create(rewriter, loc, ptrTy, vtablePtrPtr);
+
+      // GEP into the vtable array at the method's index.
+      // The vtable is an array of pointers, so we create a GEP that indexes
+      // into the array. For LLVM GEP on an array type:
+      // - First index (0) dereferences the pointer to the array
+      // - Second index (vtableIndex) selects the element
+      unsigned vtableSize = 0;
+      for (const auto &kv : structInfo.methodToVtableIndex) {
+        if (kv.second >= vtableSize)
+          vtableSize = kv.second + 1;
+      }
+      auto vtableArrayTy = LLVM::LLVMArrayType::get(ptrTy, vtableSize > 0 ? vtableSize : 1);
+
+      SmallVector<LLVM::GEPArg> vtableGepIndices;
+      vtableGepIndices.push_back(static_cast<int64_t>(0));  // Dereference pointer
+      vtableGepIndices.push_back(static_cast<int64_t>(vtableIndex));  // Array index
+
+      Value funcPtrPtr =
+          LLVM::GEPOp::create(rewriter, loc, ptrTy, vtableArrayTy, vtablePtr, vtableGepIndices);
+
+      // Load the function pointer from the vtable
+      Value funcPtr = LLVM::LoadOp::create(rewriter, loc, ptrTy, funcPtrPtr);
+
+      return funcPtr;
     }
 
     // Handle moore.string_cmp
