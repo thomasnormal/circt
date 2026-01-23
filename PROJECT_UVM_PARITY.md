@@ -13,7 +13,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 |---------|-------|-----------|--------|
 | 5 | Lexical Conventions | 43/50 (86%) | 5 negative, 2 macro |
 | 6 | Data Types | 73/84 (87%) | ~8 negative tests |
-| 7 | Aggregate Data Types | 101/103 (98%) | 2 known limitations |
+| 7 | Aggregate Data Types | 101/103 (98%) | 2 negative tests |
 | 8 | Classes | 44/53 (83%) | 9 interface class issues |
 | 9 | Processes | 44/46 (96%) | 1 known limitation (@seq) |
 | 10 | Assignments | 9/10 (90%) | 1 negative test |
