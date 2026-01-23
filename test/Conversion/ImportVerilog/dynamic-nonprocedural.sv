@@ -1,9 +1,10 @@
-// RUN: circt-verilog --allow-nonprocedural-dynamic --ir-moore %s 2>&1 | FileCheck %s
+// RUN: circt-verilog --ir-moore %s 2>&1 | FileCheck %s
 
 // Test that continuous assignments accessing class members (dynamic type) are
-// converted to always_comb blocks when --allow-nonprocedural-dynamic is set.
-// This allows simulation of patterns like `assign o = obj.val;` which would
-// otherwise fail with "dynamic type member used outside procedural context".
+// converted to always_comb blocks by default (--allow-nonprocedural-dynamic is
+// now enabled by default). This allows simulation of patterns like
+// `assign o = obj.val;` which would otherwise fail with "dynamic type member
+// used outside procedural context".
 
 class Container;
     logic [7:0] val;
