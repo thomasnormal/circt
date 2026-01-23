@@ -495,9 +495,6 @@ struct LTLPropertyLowerer {
   std::optional<uint64_t> getSequenceMaxLength(Value seq) {
     if (!seq)
       return 0;
-    if (!isa<ltl::SequenceType>(seq.getType()))
-      return 1;
-
     if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>())
       return getSequenceMaxLength(clockOp.getInput());
     if (auto pastOp = seq.getDefiningOp<ltl::PastOp>())
@@ -511,6 +508,8 @@ struct LTLPropertyLowerer {
         maxDelay += *length;
       return *innerMax + maxDelay;
     }
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return 1;
     if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
       uint64_t total = 0;
       for (auto input : concatOp.getInputs()) {
@@ -575,9 +574,6 @@ struct LTLPropertyLowerer {
   getSequenceLengthBounds(Value seq) {
     if (!seq)
       return std::make_pair<uint64_t, uint64_t>(0, 0);
-    if (!isa<ltl::SequenceType>(seq.getType()))
-      return std::make_pair<uint64_t, uint64_t>(1, 1);
-
     if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>())
       return getSequenceLengthBounds(clockOp.getInput());
     if (auto pastOp = seq.getDefiningOp<ltl::PastOp>())
@@ -594,6 +590,8 @@ struct LTLPropertyLowerer {
       }
       return std::nullopt;
     }
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return std::make_pair<uint64_t, uint64_t>(1, 1);
     if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
       uint64_t minLen = 0;
       uint64_t maxLen = 0;
@@ -821,13 +819,40 @@ struct LTLPropertyLowerer {
     if (isa<ltl::SequenceType>(prop.getType())) {
       auto trueVal =
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-      return {lowerSequence(prop, clock, edge), trueVal};
+      auto match = lowerSequence(prop, clock, edge);
+      if (!match)
+        return {Value(), {}};
+      if (auto bounds = getSequenceLengthBounds(prop)) {
+        if (bounds->first == bounds->second && bounds->first > 0) {
+          uint64_t shift = bounds->first - 1;
+          if (shift > 0) {
+            auto warmup = shiftValue(trueVal, shift, clock);
+            auto notWarmup = comb::XorOp::create(
+                builder, loc, warmup,
+                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
+            match = comb::OrOp::create(
+                builder, loc, SmallVector<Value, 2>{notWarmup, match}, true);
+          }
+        }
+      }
+      return {match, trueVal};
     }
 
     if (auto clockOp = prop.getDefiningOp<ltl::ClockOp>()) {
-      return lowerProperty(clockOp.getInput(),
-                           normalizeClock(clockOp.getClock(), clockOp.getEdge()),
-                           clockOp.getEdge());
+      auto normalizedClock =
+          normalizeClock(clockOp.getClock(), clockOp.getEdge());
+      auto result =
+          lowerProperty(clockOp.getInput(), normalizedClock, clockOp.getEdge());
+      if (!result.safety || !result.finalCheck)
+        return {Value(), {}};
+      // Apply sampled-value semantics at the top-level clock boundary for
+      // properties. Sequences already model their own cycle alignment.
+      if (!clock && normalizedClock &&
+          isa<ltl::PropertyType>(clockOp.getInput().getType())) {
+        result.safety = shiftValue(result.safety, 1, normalizedClock);
+        result.finalCheck = shiftValue(result.finalCheck, 1, normalizedClock);
+      }
+      return result;
     }
 
     if (auto constOp = prop.getDefiningOp<ltl::BooleanConstantOp>()) {
@@ -844,9 +869,24 @@ struct LTLPropertyLowerer {
         notOp.emitError("invalid property lowering");
         return {Value(), {}};
       }
-      auto neg = comb::XorOp::create(builder, loc, inner.safety,
-                                     hw::ConstantOp::create(
-                                         builder, loc, builder.getI1Type(), 1));
+      Value neg = comb::XorOp::create(
+          builder, loc, inner.safety,
+          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
+      if (auto bounds = getSequenceLengthBounds(notOp.getInput())) {
+        if (bounds->first == bounds->second && bounds->first > 0 && clock) {
+          uint64_t shift = bounds->first - 1;
+          if (shift > 0) {
+            auto trueVal =
+                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+            auto warmup = shiftValue(trueVal, shift, clock);
+            auto notWarmup = comb::XorOp::create(
+                builder, loc, warmup,
+                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
+            neg = comb::OrOp::create(
+                builder, loc, SmallVector<Value, 2>{notWarmup, neg}, true);
+          }
+        }
+      }
       // For sequences (i1 or !ltl.sequence), the negation is a safety property:
       // the sequence should never complete. The finalCheck should remain true
       // (no liveness requirement). For properties, we also negate finalCheck.
@@ -1019,8 +1059,9 @@ struct LTLPropertyLowerer {
       return seq;
 
     if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>()) {
-      return lowerSequence(clockOp.getInput(),
-                           normalizeClock(clockOp.getClock(), clockOp.getEdge()),
+      auto normalizedClock =
+          normalizeClock(clockOp.getClock(), clockOp.getEdge());
+      return lowerSequence(clockOp.getInput(), normalizedClock,
                            clockOp.getEdge());
     }
     if (auto pastOp = seq.getDefiningOp<ltl::PastOp>()) {
