@@ -11,10 +11,10 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
-| 5 | Lexical Conventions | 43/50 (86%) | 5 negative, 2 macro |
+| 5 | Lexical Conventions | 43/50 (86%) | 5 negative, 2 need -D |
 | 6 | Data Types | 73/84 (87%) | ~8 negative tests |
 | 7 | Aggregate Data Types | 101/103 (98%) | 2 negative tests |
-| 8 | Classes | 44/53 (83%) | 9 interface class issues |
+| 8 | Classes | 44/53 (83%) | 9 negative tests |
 | 9 | Processes | 44/46 (96%) | 1 known limitation (@seq) |
 | 10 | Assignments | 9/10 (90%) | 1 negative test |
 | 11 | Operators | 76/78 (97%) | 2 negative tests |
@@ -116,36 +116,44 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ## Next Steps (Iteration 146)
 
-### Track A: Interface Class Support (Chapter-8)
-- 9 tests fail due to interface class issues
-- Investigate `8.26.*` tests for interface class implements
-- Fix type access and parameter handling for interface classes
-- Add unit tests for each fix
+### Track A: Signal Strength Support (Priority: High)
+- 13 verilator-verification tests fail due to signal strengths
+- Slang parses strength info via `getDriveStrength()`
+- Need to add to Moore dialect, ImportVerilog, and simulation
+- Components: DriveStrength enum, ContinuousAssignOp attrs, signal resolution
 
-### Track B: Macro Expansion Edge Cases (Chapter-5, Chapter-22)
-- 2 macro tests fail in Chapter-5 (5.6.4--compiler-directives-preprocessor-macro)
-- 8 define-expansion tests fail in Chapter-22
-- Investigate slang preprocessor handling
-- Add regression tests
+### Track B: Chapter-22 Define-Expansion Test 26
+- Only 1 of 26 define-expansion tests fails (test_26)
+- Token concatenation works, but test uses undeclared identifier
+- Verify if test is valid or should be marked as expected failure
 
-### Track C: AVIP Extended Simulation
-- Run longer simulations with circt-sim
-- Test UART AVIP with actual transactions
-- Compare simulation output with xrun
+### Track C: AVIP Extended Simulation Testing
+- UART AVIP compiles on both circt-verilog and xrun
+- Test with circt-sim for actual UVM transactions
+- Compare behavioral results with xrun
 - Profile simulation performance
 
-### Track D: Signal Strength Support (verilator-verification)
-- 13 tests fail due to signal strengths (highz, strong, etc.)
-- Investigate Verilog strength modeling in ImportVerilog
-- Add strength support or document limitations
+### Track D: Chapter-6 Negative Test Verification
+- ~8 tests may be negative tests
+- Verify each has `:should_fail_because:` annotation
+- Update baseline if all are correctly rejected
+
+### Findings from Iteration 146 Investigation
+
+1. **Chapter-8 Interface Classes**: All 9 "failures" are negative tests that circt-verilog correctly rejects. NOT real limitations.
+
+2. **Chapter-5 Macro Tests**: The 2 failures need `-D` flags passed from test harness `:defines:` metadata. circt-verilog `-D` flag works correctly.
+
+3. **Chapter-22 Define-Expansion**: 25/26 pass. Test 26 uses undeclared identifier after token concat.
+
+4. **UART AVIP**: Successfully compiles on both circt-verilog and xrun with minor diagnostic differences.
 
 ### Remaining Limitations
 
-1. **Interface classes** - 9 Chapter-8 tests fail
-2. **Macro expansion** - Some edge cases not handled
-3. **Signal strengths** - Not fully supported
-4. **@seq event controls** - SVA feature (Codex agent scope)
-5. **Covergroup get_coverage()** - Runtime not implemented
+1. **Signal strengths** - Not preserved (Priority: High for verilator-verification)
+2. **@seq event controls** - SVA feature (Codex agent scope)
+3. **Covergroup get_coverage()** - Runtime not implemented
+4. **VCD dump tasks** - $dumpfile/$dumpvars ignored
 
 ## Test Commands
 
