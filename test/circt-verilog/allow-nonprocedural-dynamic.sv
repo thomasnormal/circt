@@ -1,4 +1,6 @@
-// RUN: circt-verilog --parse-only --allow-nonprocedural-dynamic %s
+// RUN: circt-verilog --parse-only %s
+// RUN: circt-verilog --parse-only --allow-nonprocedural-dynamic=false %s 2>&1 | FileCheck %s
+// CHECK: error: cannot refer to an element or member of a dynamic type outside of a procedural context
 
 module top;
   class C;

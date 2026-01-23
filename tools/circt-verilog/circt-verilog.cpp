@@ -245,8 +245,10 @@ struct CLOptions {
 
   cl::opt<bool> allowNonProceduralDynamic{
       "allow-nonprocedural-dynamic",
-      cl::desc("Allow dynamic type members in non-procedural contexts"),
-      cl::init(false), cl::cat(cat)};
+      cl::desc("Allow dynamic type members in non-procedural contexts "
+               "(converts to always_comb blocks). Use --allow-nonprocedural-dynamic=false "
+               "for strict SystemVerilog semantics."),
+      cl::init(true), cl::cat(cat)};
 
   cl::list<std::string> topModules{
       "top",
