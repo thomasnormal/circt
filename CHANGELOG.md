@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 115 - January 23, 2026
+
+### AHB AVIP E2E circt-sim Execution ✅
+
+Successfully ran AHB AVIP through complete circt-sim pipeline:
+
+- Compiles to 22MB MLIR (298K lines)
+- Clock generation works (10ns period)
+- Reset sequence executes properly
+- 5 processes, 107 executions, clock/reset work
+
+**Fix:** Added hierarchical module instance support in LLHDProcessInterpreter to descend into `hw.instance` operations.
+
+**Commit:** `19e747b00 [circt-sim] Add hierarchical module instance support`
+
+### UVM Message Reporting Infrastructure ✅
+
+Implemented full UVM message system:
+
+**Functions:**
+- `__moore_uvm_report_info/warning/error/fatal()` - Report messages
+- `__moore_uvm_set/get_report_verbosity()` - Verbosity control
+- `__moore_uvm_report_enabled()` - Check if message would be displayed
+- `__moore_uvm_set_report_id_verbosity()` - Per-ID verbosity
+- `__moore_uvm_get_report_count()` - Track message counts
+- `__moore_uvm_report_summarize()` - End-of-sim summary
+
+**Features:** UVM_NONE/LOW/MEDIUM/HIGH/FULL/DEBUG verbosity, per-severity actions, max quit count
+
+**Unit Tests:** 11 new tests (601 total runtime tests pass)
+
+**Commit:** `31bf70361 [UVM] Add message reporting infrastructure`
+
+### sv-tests Chapter-8: 100% Effective Pass Rate ✅
+
+Verified all 53 Chapter-8 tests:
+- 44 positive tests: ALL PASS
+- 9 negative tests: ALL CORRECTLY REJECTED
+
+Chapter-8 (Classes) achieves 100% effective pass rate.
+
+---
+
 ## Iteration 114 - January 23, 2026
 
 ### Fix Recursive Function Calls in UVM Initialization
@@ -55,6 +98,92 @@ Implemented shallow copy for SystemVerilog class instances:
 Per IEEE 1800-2017 Section 8.12: shallow copy creates new object with same property values; nested class handles are copied as-is (both point to same nested objects).
 
 **Commit:** `27220818e [MooreToCore] Add moore.class.copy legalization`
+
+### sv-tests Chapter-12 Pattern Matching Research
+
+Analyzed the 6 failing tests in Chapter-12, all related to SystemVerilog pattern matching.
+
+**Test Results:**
+- Total: 27 tests
+- Pass: 21 tests (77.8%)
+- Fail: 6 tests (all pattern-matching related)
+
+**Failing Tests:**
+1. `12.5.4--case_set.sv` - `case(a) inside` set membership
+2. `12.6.1--case_pattern.sv` - `case matches` with tagged unions
+3. `12.6.1--casex_pattern.sv` - `casex matches` with wildcards
+4. `12.6.1--casez_pattern.sv` - `casez matches` with wildcards
+5. `12.6.2--if_pattern.sv` - `if matches` conditional
+6. `12.6.3--conditional_pattern.sv` - `?:` ternary with pattern
+
+**Supported vs Unsupported Pattern Types:**
+| Pattern Kind | Status | Example |
+|-------------|--------|---------|
+| Wildcard | Supported | `.*` |
+| Constant | Supported | `42` |
+| Tagged (simple) | Supported | `tagged i` |
+| Tagged (nested) | Unsupported | `tagged a '{.v, 0}` |
+| Variable | Unsupported | `.v` (binds value) |
+| Structure | Unsupported | `'{.v1, .v2}` |
+
+**Current Implementation Status:**
+- Location: `lib/Conversion/ImportVerilog/Statements.cpp`
+- `matchPattern()` function handles Wildcard, Constant, and simple Tagged patterns
+- `matchTaggedPattern()` correctly extracts tag/data from tagged unions
+- **Gap:** When TaggedPattern has a valuePattern, it recursively calls matchPattern which fails on Structure patterns
+
+**What's Needed for Full Support:**
+
+1. **Variable Pattern (`PatternKind::Variable`):**
+   - Bind matched value to a pattern variable
+   - Used in syntax like `.v` or `.v1, .v2`
+   - Requires: Creating local variables and assigning matched values
+   - Complexity: Low-Medium
+
+2. **Structure Pattern (`PatternKind::Structure`):**
+   - Match struct fields by position or name
+   - Used in syntax like `'{.val1, .val2}` or `'{4'b01zx, .v}`
+   - Requires: Extracting struct fields and recursively matching sub-patterns
+   - Complexity: Medium
+
+3. **Set Membership (`CaseStatementCondition::Inside`):**
+   - Match value against set of values/ranges
+   - Used in syntax like `case(a) inside 1, 3: ... [5:6]: ...`
+   - Requires: Building OR chain of range/equality checks
+   - Complexity: Medium
+
+4. **Conditional Expression with Pattern:**
+   - Pattern matching in ternary `?:` expressions
+   - Location: `lib/Conversion/ImportVerilog/Expressions.cpp`
+   - Currently has placeholder error at line 2718
+
+**Implementation Approach:**
+To add Structure pattern support, extend `matchPattern()` in Statements.cpp:
+```cpp
+case PatternKind::Structure: {
+  auto &structPattern = pattern.as<slang::ast::StructurePattern>();
+  Value result; // Start with true
+  for (auto &fp : structPattern.patterns) {
+    // Extract field from value
+    auto fieldValue = moore::StructExtractOp::create(...);
+    // Recursively match sub-pattern
+    auto match = matchPattern(*fp.pattern, fieldValue, ...);
+    // AND with previous matches
+    result = createUnifiedAndOp(builder, loc, result, *match);
+  }
+  return result;
+}
+```
+
+**Priority Assessment:**
+- Low priority for UVM parity (these patterns rarely used in UVM)
+- Medium priority for general SV compliance
+- Tagged union patterns are used in some verification IPs
+
+**References:**
+- IEEE 1800-2017 Section 12.6: Pattern matching conditional statements
+- slang: `include/slang/ast/Patterns.h` (pattern AST definitions)
+- Test: `test/Conversion/ImportVerilog/tagged-union.sv` (existing support)
 
 ---
 
