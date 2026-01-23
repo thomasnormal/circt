@@ -1181,6 +1181,16 @@ module Expressions;
     // CHECK: moore.string_cmp le [[TMP15]], [[TMP16]] : string -> i1
     x = s <= s1;
 
+    // Test string case equality (===) and case inequality (!==)
+    // CHECK: [[SCEEQ1:%.+]] = moore.read %s
+    // CHECK: [[SCEEQ2:%.+]] = moore.read %s1
+    // CHECK: moore.string_cmp eq [[SCEEQ1]], [[SCEEQ2]] : string -> i1
+    x = s === s1;
+    // CHECK: [[SCENEQ1:%.+]] = moore.read %s
+    // CHECK: [[SCENEQ2:%.+]] = moore.read %s1
+    // CHECK: moore.string_cmp ne [[SCENEQ1]], [[SCENEQ2]] : string -> i1
+    x = s !== s1;
+
     // CHECK: [[TMP1:%.+]] = moore.read %a
     // CHECK: [[TMP2:%.+]] = moore.read %b
     // CHECK: moore.ne [[TMP1]], [[TMP2]] : i32 -> i1
