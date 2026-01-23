@@ -67,17 +67,17 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 108 Complete)
+### Track Status & Next Tasks (Iteration 109 Complete)
 
 **17+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
 - sv-tests Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-7: **103/103** (100%) ✅
 - sv-tests Chapter-8: **100% effective** (all 9 failures are negative tests)
-- sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅ **NEW**
+- sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅
 - sv-tests Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-12: **27/27** (100%) ✅
-- sv-tests Chapter-13: **15/15** (100%) ✅
+- sv-tests Chapter-13: **15/15** (100%) ✅ Fixed arith.select legalization
 - sv-tests Chapter-14: **5/5** (100%) ✅
 - sv-tests Chapter-15: **5/5** (100%) ✅
 - sv-tests Chapter-16: **53/53** (100%) ✅
@@ -92,40 +92,42 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator-verification: **99/141 passing** (70.2%) non-UVM tests ✅
+- verilator-verification: **65.6%** standard, **75.3%** with --allow-nonprocedural-dynamic ✅
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
 - **4 AVIPs run in circt-sim:** APB, SPI, UART, I3C (clock/reset/UVM_INFO working) ✅
 - **AHB AVIP compiles** with `--single-unit --ignore-unknown-modules` ✅
 
-### Remaining Limitations (Updated Iteration 108)
+### Remaining Limitations (Updated Iteration 109)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
 2. ~~**+UVM_TESTNAME parsing**~~: ✅ IMPLEMENTED (Iter 107) - Command-line test name support
 3. ~~**UVM config_db**~~: ✅ IMPLEMENTED (Iter 108) - Hierarchical/wildcard path matching
-4. **TLM Ports/Exports**: Design doc complete (Iter 108), implementation pending
+4. ~~**TLM Ports/Exports**~~: ✅ IMPLEMENTED (Iter 109) - Runtime infrastructure for analysis ports/FIFOs
 
 **For sv-tests Completion:**
 1. **Chapter-9 (97.8%)**: 1 test uses SVA sequence events (Codex agent)
 
-**For verilator-verification (70.2%):**
-- Most failures are test file syntax bugs, not CIRCT bugs
-- 6 SVA tests (Codex agent)
-- 13 UVM-dependent tests (skip)
+**For verilator-verification (75.3% with flag):**
+- Non-procedural dynamic constructs: 15 tests (requires --allow-nonprocedural-dynamic)
+- UVM-dependent tests: 13 tests (skip)
+- SVA tests: 6 tests (Codex agent)
+- Non-LRM-compliant syntax: Various tests
 
-### Next Tasks for Tracks (Iteration 109)
+### Next Tasks for Tracks (Iteration 110)
 
-**Track A**: Implement TLM port/export runtime (based on design doc)
-**Track B**: Continue AHB AVIP circt-sim integration (array.locator conversions)
-**Track C**: Chapter-9 SVA sequence event investigation
-**Track D**: Improve verilator-verification pass rate
+**Track A**: UVM objection system runtime (raise/drop/drain objections)
+**Track B**: AHB AVIP end-to-end circt-sim execution
+**Track C**: sv-tests Chapter-9 remaining failures
+**Track D**: verilator-verification non-procedural dynamic support
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops supported** ✅
 - UVM Phase System: **All 9 phases + component callbacks** ✅
-- UVM config_db: **Hierarchical/wildcard matching** ✅ **NEW**
+- UVM config_db: **Hierarchical/wildcard matching** ✅
+- UVM TLM Ports: **Analysis port/FIFO runtime** ✅ **NEW (Iter 109)**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)

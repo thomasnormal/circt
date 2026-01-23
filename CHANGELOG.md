@@ -1,5 +1,76 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 109 - January 23, 2026
+
+### TLM Port/Export Runtime Infrastructure ✅
+
+Implemented comprehensive TLM runtime support for UVM analysis patterns:
+
+**New Runtime Functions (include/circt/Runtime/MooreRuntime.h):**
+- `__moore_tlm_port_create()` - Create analysis port/export/imp
+- `__moore_tlm_port_destroy()` - Clean up port resources
+- `__moore_tlm_port_connect()` - Connect port to export
+- `__moore_tlm_port_write()` - Write transaction to port (broadcasts to all subscribers)
+- `__moore_tlm_fifo_create()` - Create TLM analysis FIFO
+- `__moore_tlm_fifo_put()` / `__moore_tlm_fifo_get()` / `__moore_tlm_fifo_try_get()` / `__moore_tlm_fifo_peek()` - FIFO operations
+- `__moore_tlm_fifo_flush()` / `__moore_tlm_fifo_is_empty()` / `__moore_tlm_fifo_size()` - FIFO management
+- `__moore_tlm_set_tracing()` / `__moore_tlm_get_statistics()` - Debugging support
+
+**Features:**
+- Thread-safe port and FIFO operations with mutexes
+- Multiple subscriber support (analysis ports broadcast to all subscribers)
+- Bounded and unbounded FIFO modes
+- Condition variable-based blocking get
+- Statistics tracking for debugging
+
+**Unit Tests:** 12 new TLM tests (all 525 runtime tests pass)
+
+**Commit:** `1d943ba1b [UVM] Add TLM port/export runtime infrastructure for UVM`
+
+### MooreToCore Array Locator Extensions ✅
+
+Extended array.locator inline conversion to support complex UVM predicate patterns:
+
+**New Operations Supported:**
+- `ClassHandleCmpOp` - Class handle equality comparison
+- `ClassNullOp` - Null class handle check
+- `WildcardEqOp` / `WildcardNeOp` - 4-state wildcard equality
+- `IntToLogicOp` - Integer to logic type conversion
+
+**4-State Logic Handling:**
+- Proper AND/OR handling for 4-state struct types in predicates
+- Extracts value/unknown parts and creates proper 4-state struct result
+
+**Commit:** `5c8ef9ec5 [MooreToCore] Extend array.locator inline conversion for UVM patterns`
+
+### arith.select Legalization Fix ✅
+
+Fixed arith.select legalization for sim dialect types:
+
+**Problem:** arith.select on sim types (like !sim.fstring) was incorrectly marked as illegal during Moore-to-Core conversion, causing failures when control flow canonicalizers introduced arith.select on format strings.
+
+**Fix:** Added explicit check to keep arith.select on sim types legal since they don't need conversion.
+
+**Commit:** `a7d4bb855 [MooreToCore] Fix arith.select legalization for sim types`
+
+### verilator-verification Test Documentation ✅
+
+Documented comprehensive test results for verilator-verification suite:
+
+**Results:**
+- Pass rate: 65.6% (101/154 tests) standard
+- Pass rate: 75.3% (116/154 tests) with `--allow-nonprocedural-dynamic` flag
+
+**Failure Categories:**
+- Non-procedural dynamic constructs: 15 tests
+- UVM-required: 13 tests
+- SVA/assertions: 6 tests (Codex agent)
+- Non-LRM-compliant syntax: Various tests
+
+**Commit:** `46a2e7e25 [Docs] Update verilator-verification test results`
+
+---
+
 ## Iteration 108 - January 23, 2026
 
 ### UVM config_db Hierarchical/Wildcard Matching ✅
