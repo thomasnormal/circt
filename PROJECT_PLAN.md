@@ -67,16 +67,16 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 114 Complete)
+### Track Status & Next Tasks (Iteration 115 Complete)
 
-**17+ Chapters at 100% effective:**
+**18+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
 - sv-tests Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-7: **103/103** (100%) ✅
-- sv-tests Chapter-8: **100% effective** (all 9 failures are negative tests)
+- sv-tests Chapter-8: **100%** (44 pass + 9 negative tests) ✅ **VERIFIED (Iter 115)**
 - sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅
 - sv-tests Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
-- sv-tests Chapter-12: **27/27** (100%) ✅
+- sv-tests Chapter-12: **21/27** (77.8%) - 6 pattern matching tests
 - sv-tests Chapter-13: **15/15** (100%) ✅ Fixed arith.select legalization
 - sv-tests Chapter-14: **5/5** (100%) ✅
 - sv-tests Chapter-15: **5/5** (100%) ✅
@@ -96,11 +96,11 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
-- **AHB AVIP:** Compiles successfully (recursive call fix, Iter 114) ✅ **NEW**
-- **APB AVIP:** E2E circt-sim test (clock/reset sequences work, Iter 114) ✅ **NEW**
-- **4 AVIPs run in circt-sim:** APB, SPI, UART, I3C (clock/reset/UVM_INFO working) ✅
+- **AHB AVIP:** E2E circt-sim (clock/reset work, 107 process executions, Iter 115) ✅ **NEW**
+- **APB AVIP:** E2E circt-sim (clock/reset work, 56 process executions, Iter 114) ✅
+- **4+ AVIPs run in circt-sim:** APB, AHB, SPI, UART, I3C (clock/reset working) ✅
 
-### Remaining Limitations (Updated Iteration 114)
+### Remaining Limitations (Updated Iteration 115)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
@@ -114,6 +114,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 9. ~~**Array locator external calls**~~: ✅ FIXED (Iter 111, 112, 113) - Pre-scan + vtable dispatch
 10. ~~**UVM recursive init calls**~~: ✅ FIXED (Iter 114) - Skip inlining guarded recursion
 11. ~~**Class shallow copy**~~: ✅ FIXED (Iter 114) - moore.class.copy legalization
+12. ~~**UVM Messages**~~: ✅ IMPLEMENTED (Iter 115) - Report info/warning/error/fatal with verbosity
+13. ~~**Hierarchical instances**~~: ✅ FIXED (Iter 115) - circt-sim descends into hw.instance
 
 **For sv-tests Completion:**
 1. **Chapter-9 (97%)**:
@@ -128,15 +130,15 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Next Tasks for Tracks (Iteration 115)
+### Next Tasks for Tracks (Iteration 116)
 
-**Track A**: Run AHB AVIP through circt-sim E2E
-**Track B**: UVM message infrastructure (UVM_INFO, UVM_ERROR output)
-**Track C**: sv-tests Chapter-8 remaining failures
-**Track D**: sv-tests Chapter-12 pattern matching research
+**Track A**: Test I2C AVIP through circt-sim E2E
+**Track B**: UVM virtual interface binding runtime
+**Track C**: sv-tests Chapter-12 pattern matching implementation
+**Track D**: Additional AVIP testing (SPI, UART)
 
 **Infrastructure:**
-- circt-sim: **LLVM dialect + FP ops supported** ✅
+- circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**
 - UVM Phase System: **All 9 phases + component callbacks** ✅
 - UVM config_db: **Hierarchical/wildcard matching** ✅
 - UVM TLM Ports: **Analysis port/FIFO runtime** ✅
@@ -144,7 +146,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - UVM Sequences: **Sequencer arbitration + driver handshake** ✅
 - UVM Scoreboard: **Transaction comparison with TLM integration** ✅
 - UVM RAL: **Register model with fields, blocks, maps** ✅
-- UVM Init: **Recursive call handling for guarded recursion** ✅ **NEW (Iter 114)**
+- UVM Messages: **Report info/warning/error/fatal with verbosity** ✅ **NEW (Iter 115)**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
