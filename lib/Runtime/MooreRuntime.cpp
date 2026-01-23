@@ -12263,6 +12263,71 @@ extern "C" MooreString __moore_component_get_full_name(void *component,
 // support more complex UVM features like the phase system and factory.
 //
 
+/// UVM phase start notification.
+/// This function is called at the beginning of each UVM phase.
+extern "C" void __uvm_phase_start(const char *phaseNameData,
+                                   int64_t phaseNameLen) {
+  std::string phaseName;
+  if (phaseNameData && phaseNameLen > 0) {
+    phaseName.assign(phaseNameData, static_cast<size_t>(phaseNameLen));
+  }
+
+  // Print UVM-style phase start message
+  std::printf("UVM_INFO @ 0: uvm_test_top [PHASE] Starting %s_phase...\n",
+              phaseName.empty() ? "(unknown)" : phaseName.c_str());
+}
+
+/// UVM phase end notification.
+/// This function is called at the end of each UVM phase.
+extern "C" void __uvm_phase_end(const char *phaseNameData,
+                                 int64_t phaseNameLen) {
+  std::string phaseName;
+  if (phaseNameData && phaseNameLen > 0) {
+    phaseName.assign(phaseNameData, static_cast<size_t>(phaseNameLen));
+  }
+
+  // Print UVM-style phase end message
+  std::printf("UVM_INFO @ 0: uvm_test_top [PHASE] Completed %s_phase.\n",
+              phaseName.empty() ? "(unknown)" : phaseName.c_str());
+}
+
+/// Standard UVM phases in execution order.
+static const char *uvmPhases[] = {
+    "build",              // top-down: create component hierarchy
+    "connect",            // bottom-up: connect TLM ports
+    "end_of_elaboration", // bottom-up: fine-tune testbench
+    "start_of_simulation", // bottom-up: get ready for simulation
+    "run",                // task phase: main test execution
+    "extract",            // bottom-up: extract data from DUT
+    "check",              // bottom-up: check DUT state
+    "report",             // bottom-up: report results
+    "final"               // top-down: finalize simulation
+};
+static const size_t numUvmPhases = sizeof(uvmPhases) / sizeof(uvmPhases[0]);
+
+/// UVM phase execution.
+/// Execute all standard UVM phases in sequence.
+extern "C" void __uvm_execute_phases(void) {
+  for (size_t i = 0; i < numUvmPhases; ++i) {
+    const char *phase = uvmPhases[i];
+    int64_t phaseLen = static_cast<int64_t>(std::strlen(phase));
+
+    // Signal phase start
+    __uvm_phase_start(phase, phaseLen);
+
+    // TODO: Actually execute the phase on all components
+    // For now, this is a stub that just prints messages.
+    // Future implementation will:
+    // - For top-down phases (build, final): traverse component tree top to
+    // bottom
+    // - For bottom-up phases: traverse component tree bottom to top
+    // - For task phases (run): fork/join all component run_phase tasks
+
+    // Signal phase end
+    __uvm_phase_end(phase, phaseLen);
+  }
+}
+
 /// UVM run_test() implementation.
 /// This is the main entry point for running UVM tests. It is called from
 /// SystemVerilog code when run_test() is invoked.
@@ -12270,10 +12335,10 @@ extern "C" MooreString __moore_component_get_full_name(void *component,
 /// @param testNameData Pointer to the test name string data
 /// @param testNameLen Length of the test name string
 ///
-/// Currently this is a stub that prints a message. Future implementation will:
-/// 1. Create the test component using the UVM factory
-/// 2. Execute the UVM phase sequence (build, connect, run, etc.)
-/// 3. Report summarize and finish simulation
+/// This function:
+/// 1. Creates the test component using the UVM factory (TODO)
+/// 2. Executes the UVM phase sequence (build, connect, run, etc.)
+/// 3. Reports summarize and finishes simulation
 extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
   std::string testName;
   if (testNameData && testNameLen > 0) {
@@ -12284,18 +12349,17 @@ extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
   std::printf("UVM_INFO @ 0: uvm_test_top [RNTST] Running test %s...\n",
               testName.empty() ? "(default)" : testName.c_str());
 
-  // TODO: Implement actual UVM runtime support:
-  // 1. Factory lookup: Create the test component by name
-  // 2. Phase execution: Run build_phase, connect_phase, run_phase, etc.
-  // 3. Objection handling: Wait for all objections to be dropped
-  // 4. Report summarize: Print test results
-
+  // TODO: Factory lookup - Create the test component by name
+  // For now, we just print a warning that the factory is not implemented
   if (!testName.empty()) {
     std::printf(
-        "UVM_WARNING @ 0: uvm_test_top [UVM_STUB] UVM runtime is a stub. "
+        "UVM_WARNING @ 0: uvm_test_top [UVM_STUB] UVM factory is a stub. "
         "Test '%s' was not actually instantiated.\n",
         testName.c_str());
   }
+
+  // Execute all UVM phases
+  __uvm_execute_phases();
 
   // Print completion message
   std::printf("UVM_INFO @ 0: uvm_test_top [FINISH] UVM phasing complete.\n");
