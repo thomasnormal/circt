@@ -12522,13 +12522,35 @@ extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
   std::printf("UVM_INFO @ 0: uvm_test_top [RNTST] Running test %s...\n",
               testName.empty() ? "(default)" : testName.c_str());
 
-  // TODO: Factory lookup - Create the test component by name
-  // For now, we just print a warning that the factory is not implemented
+  // Try to create the test component using the factory
+  void *testComponent = nullptr;
   if (!testName.empty()) {
-    std::printf(
-        "UVM_WARNING @ 0: uvm_test_top [UVM_STUB] UVM factory is a stub. "
-        "Test '%s' was not actually instantiated.\n",
-        testName.c_str());
+    // First check if the type is registered in the factory
+    if (__moore_uvm_factory_is_type_registered(testName.c_str(),
+                                               static_cast<int64_t>(testName.size()))) {
+      // Create the test component with name "uvm_test_top"
+      const char *instName = "uvm_test_top";
+      testComponent = __moore_uvm_factory_create_component_by_name(
+          testName.c_str(), static_cast<int64_t>(testName.size()), instName,
+          static_cast<int64_t>(std::strlen(instName)), nullptr);
+
+      if (testComponent) {
+        std::printf(
+            "UVM_INFO @ 0: uvm_test_top [RNTST] Test component '%s' created "
+            "successfully.\n",
+            testName.c_str());
+      } else {
+        std::printf(
+            "UVM_ERROR @ 0: uvm_test_top [RNTST] Failed to create test '%s'.\n",
+            testName.c_str());
+      }
+    } else {
+      // Type not registered - print warning
+      std::printf(
+          "UVM_WARNING @ 0: uvm_test_top [NOTYPE] Test type '%s' is not "
+          "registered with the factory. Test was not instantiated.\n",
+          testName.c_str());
+    }
   }
 
   // Execute all UVM phases
@@ -12536,6 +12558,232 @@ extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
 
   // Print completion message
   std::printf("UVM_INFO @ 0: uvm_test_top [FINISH] UVM phasing complete.\n");
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Factory Implementation
+//===----------------------------------------------------------------------===//
+//
+// The factory maintains registries of component and object types that can be
+// created by name. This enables late binding of test components and type/instance
+// overrides as specified in IEEE 1800.2.
+//
+
+namespace {
+
+/// Information about a registered component type.
+struct UvmComponentTypeInfo {
+  std::string typeName;
+  MooreUvmComponentCreator creator;
+  void *userData;
+};
+
+/// Information about a registered object type.
+struct UvmObjectTypeInfo {
+  std::string typeName;
+  MooreUvmObjectCreator creator;
+  void *userData;
+};
+
+/// The UVM factory registry.
+struct UvmFactoryRegistry {
+  std::map<std::string, UvmComponentTypeInfo> componentTypes;
+  std::map<std::string, UvmObjectTypeInfo> objectTypes;
+  std::map<std::string, std::string> typeOverrides;
+
+  void clear() {
+    componentTypes.clear();
+    objectTypes.clear();
+    typeOverrides.clear();
+  }
+
+  /// Apply type overrides to get the final type name.
+  std::string resolveType(const std::string &typeName) const {
+    std::string resolved = typeName;
+    // Apply overrides (with loop detection)
+    std::set<std::string> visited;
+    while (typeOverrides.count(resolved) && !visited.count(resolved)) {
+      visited.insert(resolved);
+      resolved = typeOverrides.at(resolved);
+    }
+    return resolved;
+  }
+};
+
+/// Global factory registry instance.
+static UvmFactoryRegistry &getFactoryRegistry() {
+  static UvmFactoryRegistry registry;
+  return registry;
+}
+
+} // anonymous namespace
+
+/// Register a component type with the factory.
+extern "C" int32_t __moore_uvm_factory_register_component(
+    const char *typeName, int64_t typeNameLen,
+    MooreUvmComponentCreator creator, void *userData) {
+  if (!typeName || typeNameLen <= 0 || !creator)
+    return 0;
+
+  auto &registry = getFactoryRegistry();
+  std::string name(typeName, static_cast<size_t>(typeNameLen));
+
+  // Check if already registered
+  if (registry.componentTypes.count(name))
+    return 0;
+
+  UvmComponentTypeInfo info;
+  info.typeName = name;
+  info.creator = creator;
+  info.userData = userData;
+  registry.componentTypes[name] = info;
+
+  return 1;
+}
+
+/// Register an object type with the factory.
+extern "C" int32_t __moore_uvm_factory_register_object(
+    const char *typeName, int64_t typeNameLen, MooreUvmObjectCreator creator,
+    void *userData) {
+  if (!typeName || typeNameLen <= 0 || !creator)
+    return 0;
+
+  auto &registry = getFactoryRegistry();
+  std::string name(typeName, static_cast<size_t>(typeNameLen));
+
+  // Check if already registered
+  if (registry.objectTypes.count(name))
+    return 0;
+
+  UvmObjectTypeInfo info;
+  info.typeName = name;
+  info.creator = creator;
+  info.userData = userData;
+  registry.objectTypes[name] = info;
+
+  return 1;
+}
+
+/// Create a component by type name.
+extern "C" void *__moore_uvm_factory_create_component_by_name(
+    const char *typeName, int64_t typeNameLen, const char *instName,
+    int64_t instNameLen, void *parent) {
+  if (!typeName || typeNameLen <= 0)
+    return nullptr;
+
+  auto &registry = getFactoryRegistry();
+  std::string requestedType(typeName, static_cast<size_t>(typeNameLen));
+
+  // Apply type overrides
+  std::string resolvedType = registry.resolveType(requestedType);
+
+  // Look up the type
+  auto it = registry.componentTypes.find(resolvedType);
+  if (it == registry.componentTypes.end()) {
+    std::printf(
+        "UVM_WARNING @ 0: uvm_factory [NOTYPE] Component type '%s' not found "
+        "in factory registry.\n",
+        resolvedType.c_str());
+    return nullptr;
+  }
+
+  // Create the component
+  return it->second.creator(instName, instNameLen, parent, it->second.userData);
+}
+
+/// Create an object by type name.
+extern "C" void *__moore_uvm_factory_create_object_by_name(
+    const char *typeName, int64_t typeNameLen, const char *instName,
+    int64_t instNameLen) {
+  if (!typeName || typeNameLen <= 0)
+    return nullptr;
+
+  auto &registry = getFactoryRegistry();
+  std::string requestedType(typeName, static_cast<size_t>(typeNameLen));
+
+  // Apply type overrides
+  std::string resolvedType = registry.resolveType(requestedType);
+
+  // Look up the type
+  auto it = registry.objectTypes.find(resolvedType);
+  if (it == registry.objectTypes.end()) {
+    std::printf("UVM_WARNING @ 0: uvm_factory [NOTYPE] Object type '%s' not "
+                "found in factory registry.\n",
+                resolvedType.c_str());
+    return nullptr;
+  }
+
+  // Create the object
+  return it->second.creator(instName, instNameLen, it->second.userData);
+}
+
+/// Set a type override in the factory.
+extern "C" int32_t __moore_uvm_factory_set_type_override(
+    const char *originalType, int64_t originalTypeLen,
+    const char *overrideType, int64_t overrideTypeLen, int32_t replace) {
+  if (!originalType || originalTypeLen <= 0 || !overrideType ||
+      overrideTypeLen <= 0)
+    return 0;
+
+  auto &registry = getFactoryRegistry();
+  std::string original(originalType, static_cast<size_t>(originalTypeLen));
+  std::string override(overrideType, static_cast<size_t>(overrideTypeLen));
+
+  // Check if override already exists
+  if (!replace && registry.typeOverrides.count(original))
+    return 0;
+
+  registry.typeOverrides[original] = override;
+  return 1;
+}
+
+/// Check if a type is registered with the factory.
+extern "C" int32_t __moore_uvm_factory_is_type_registered(const char *typeName,
+                                                          int64_t typeNameLen) {
+  if (!typeName || typeNameLen <= 0)
+    return 0;
+
+  auto &registry = getFactoryRegistry();
+  std::string name(typeName, static_cast<size_t>(typeNameLen));
+
+  return registry.componentTypes.count(name) ||
+                 registry.objectTypes.count(name)
+             ? 1
+             : 0;
+}
+
+/// Get the number of registered types in the factory.
+extern "C" int64_t __moore_uvm_factory_get_type_count(void) {
+  auto &registry = getFactoryRegistry();
+  return static_cast<int64_t>(registry.componentTypes.size() +
+                              registry.objectTypes.size());
+}
+
+/// Clear all registered types and overrides from the factory.
+extern "C" void __moore_uvm_factory_clear(void) {
+  getFactoryRegistry().clear();
+}
+
+/// Print the factory state for debugging.
+extern "C" void __moore_uvm_factory_print(void) {
+  auto &registry = getFactoryRegistry();
+
+  std::printf("UVM Factory State:\n");
+  std::printf("  Registered component types: %zu\n",
+              registry.componentTypes.size());
+  for (const auto &[name, info] : registry.componentTypes) {
+    std::printf("    - %s\n", name.c_str());
+  }
+
+  std::printf("  Registered object types: %zu\n", registry.objectTypes.size());
+  for (const auto &[name, info] : registry.objectTypes) {
+    std::printf("    - %s\n", name.c_str());
+  }
+
+  std::printf("  Type overrides: %zu\n", registry.typeOverrides.size());
+  for (const auto &[original, override] : registry.typeOverrides) {
+    std::printf("    - %s -> %s\n", original.c_str(), override.c_str());
+  }
 }
 
 //===----------------------------------------------------------------------===//

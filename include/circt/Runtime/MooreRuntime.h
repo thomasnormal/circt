@@ -3410,6 +3410,136 @@ void __uvm_phase_end(const char *phaseNameData, int64_t phaseNameLen);
 void __uvm_execute_phases(void);
 
 //===----------------------------------------------------------------------===//
+// UVM Factory
+//===----------------------------------------------------------------------===//
+//
+// The UVM factory provides a mechanism to create objects and components by
+// name at runtime. This enables:
+// - Late binding of test components (run_test("test_name"))
+// - Type overrides (replace one class with another)
+// - Instance overrides (replace specific instances)
+//
+// The factory maintains a registry of type names to creation functions.
+// When create_component_by_name is called, it looks up the registered
+// creator and invokes it to instantiate the component.
+//
+
+/// Callback function type for component creation.
+/// This function is called by the factory to create a new component instance.
+///
+/// @param name The instance name for the new component
+/// @param nameLen Length of the name string
+/// @param parent Pointer to the parent component (NULL for root)
+/// @param userData User data registered with the type
+/// @return Pointer to the newly created component, or NULL on failure
+typedef void *(*MooreUvmComponentCreator)(const char *name, int64_t nameLen,
+                                          void *parent, void *userData);
+
+/// Callback function type for object creation.
+/// This function is called by the factory to create a new object instance.
+///
+/// @param name The instance name for the new object
+/// @param nameLen Length of the name string
+/// @param userData User data registered with the type
+/// @return Pointer to the newly created object, or NULL on failure
+typedef void *(*MooreUvmObjectCreator)(const char *name, int64_t nameLen,
+                                       void *userData);
+
+/// Register a component type with the factory.
+/// After registration, the type can be created by name using
+/// __moore_uvm_factory_create_component_by_name.
+///
+/// @param typeName The type name to register (e.g., "my_test")
+/// @param typeNameLen Length of the type name string
+/// @param creator Function to create instances of this type
+/// @param userData User data to pass to the creator function
+/// @return 1 on success, 0 on failure (e.g., already registered)
+int32_t __moore_uvm_factory_register_component(const char *typeName,
+                                               int64_t typeNameLen,
+                                               MooreUvmComponentCreator creator,
+                                               void *userData);
+
+/// Register an object type with the factory.
+/// After registration, the type can be created by name using
+/// __moore_uvm_factory_create_object_by_name.
+///
+/// @param typeName The type name to register
+/// @param typeNameLen Length of the type name string
+/// @param creator Function to create instances of this type
+/// @param userData User data to pass to the creator function
+/// @return 1 on success, 0 on failure (e.g., already registered)
+int32_t __moore_uvm_factory_register_object(const char *typeName,
+                                            int64_t typeNameLen,
+                                            MooreUvmObjectCreator creator,
+                                            void *userData);
+
+/// Create a component by type name.
+/// Looks up the type in the factory registry and creates an instance.
+///
+/// @param typeName The registered type name
+/// @param typeNameLen Length of the type name string
+/// @param instName The instance name for the new component
+/// @param instNameLen Length of the instance name string
+/// @param parent Pointer to the parent component (NULL for root)
+/// @return Pointer to the newly created component, or NULL if type not found
+void *__moore_uvm_factory_create_component_by_name(const char *typeName,
+                                                   int64_t typeNameLen,
+                                                   const char *instName,
+                                                   int64_t instNameLen,
+                                                   void *parent);
+
+/// Create an object by type name.
+/// Looks up the type in the factory registry and creates an instance.
+///
+/// @param typeName The registered type name
+/// @param typeNameLen Length of the type name string
+/// @param instName The instance name for the new object
+/// @param instNameLen Length of the instance name string
+/// @return Pointer to the newly created object, or NULL if type not found
+void *__moore_uvm_factory_create_object_by_name(const char *typeName,
+                                                int64_t typeNameLen,
+                                                const char *instName,
+                                                int64_t instNameLen);
+
+/// Set a type override in the factory.
+/// All future requests to create the original type will instead create
+/// the override type.
+///
+/// @param originalType The type name to override
+/// @param originalTypeLen Length of the original type name
+/// @param overrideType The type name to create instead
+/// @param overrideTypeLen Length of the override type name
+/// @param replace If true, replace existing override; if false, only add if no override exists
+/// @return 1 on success, 0 on failure
+int32_t __moore_uvm_factory_set_type_override(const char *originalType,
+                                              int64_t originalTypeLen,
+                                              const char *overrideType,
+                                              int64_t overrideTypeLen,
+                                              int32_t replace);
+
+/// Check if a type is registered with the factory.
+///
+/// @param typeName The type name to check
+/// @param typeNameLen Length of the type name string
+/// @return 1 if registered, 0 if not
+int32_t __moore_uvm_factory_is_type_registered(const char *typeName,
+                                               int64_t typeNameLen);
+
+/// Get the number of registered types in the factory.
+/// Useful for testing and debugging.
+///
+/// @return The number of registered component and object types
+int64_t __moore_uvm_factory_get_type_count(void);
+
+/// Clear all registered types and overrides from the factory.
+/// Primarily used for testing.
+void __moore_uvm_factory_clear(void);
+
+/// Print the factory state for debugging.
+/// Lists all registered types and any active overrides.
+void __moore_uvm_factory_print(void);
+
+//===----------------------------------------------------------------------===//
 // UVM Component Phase Callback Registration
 //===----------------------------------------------------------------------===//
 //
