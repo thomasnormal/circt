@@ -17159,8 +17159,14 @@ static void populateLegality(ConversionTarget &target,
   // arith.select on Moore types needs to be converted to comb.mux.
   // This handles cases where MLIR canonicalizers introduce arith.select
   // on Moore types during control flow simplification.
+  // However, arith.select on sim types (like !sim.fstring) should remain as-is
+  // since they are already in a legal dialect and comb.mux doesn't support them.
   target.addDynamicallyLegalOp<arith::SelectOp>([&](arith::SelectOp op) {
-    return converter.isLegal(op.getTrueValue().getType());
+    auto type = op.getTrueValue().getType();
+    // Sim types are already legal and don't need conversion to comb.mux
+    if (isa<sim::FormatStringType, sim::DynamicStringType>(type))
+      return true;
+    return converter.isLegal(type);
   });
 
   target.addLegalOp<debug::ScopeOp>();
