@@ -1856,12 +1856,20 @@ package uvm_pkg;
     endfunction
 
     virtual task get(output T t);
-      t = null;
+      // Block until item is available (simplified - waits in a loop)
+      wait (m_fifo.size() > 0);
+      t = m_fifo.pop_front();
+      get_ap.write(t);
     endtask
 
     virtual function bit try_get(output T t);
-      t = null;
-      return 0;
+      if (is_empty()) begin
+        t = null;
+        return 0;
+      end
+      t = m_fifo.pop_front();
+      get_ap.write(t);
+      return 1;
     endfunction
 
     virtual function bit can_get();
@@ -1869,12 +1877,18 @@ package uvm_pkg;
     endfunction
 
     virtual task peek(output T t);
-      t = null;
+      // Block until item is available
+      wait (m_fifo.size() > 0);
+      t = m_fifo[0];
     endtask
 
     virtual function bit try_peek(output T t);
-      t = null;
-      return 0;
+      if (is_empty()) begin
+        t = null;
+        return 0;
+      end
+      t = m_fifo[0];
+      return 1;
     endfunction
 
     virtual function bit can_peek();
@@ -5354,6 +5368,481 @@ package uvm_pkg;
       if (m_if != null)
         m_if.peek(t);
     endtask
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // TLM Implementation (Imp) Classes - Added for AVIP compatibility
+  //=========================================================================
+
+  // uvm_blocking_put_imp
+  class uvm_blocking_put_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_blocking_put_imp";
+    endfunction
+
+    virtual task put(input T t);
+      m_imp.put(t);
+    endtask
+
+  endclass
+
+  // uvm_nonblocking_put_imp
+  class uvm_nonblocking_put_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_put_imp";
+    endfunction
+
+    virtual function bit try_put(input T t);
+      return m_imp.try_put(t);
+    endfunction
+
+    virtual function bit can_put();
+      return m_imp.can_put();
+    endfunction
+
+  endclass
+
+  // uvm_blocking_get_imp
+  class uvm_blocking_get_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_blocking_get_imp";
+    endfunction
+
+    virtual task get(output T t);
+      m_imp.get(t);
+    endtask
+
+  endclass
+
+  // uvm_nonblocking_get_imp
+  class uvm_nonblocking_get_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_get_imp";
+    endfunction
+
+    virtual function bit try_get(output T t);
+      return m_imp.try_get(t);
+    endfunction
+
+    virtual function bit can_get();
+      return m_imp.can_get();
+    endfunction
+
+  endclass
+
+  // uvm_blocking_peek_imp
+  class uvm_blocking_peek_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_blocking_peek_imp";
+    endfunction
+
+    virtual task peek(output T t);
+      m_imp.peek(t);
+    endtask
+
+  endclass
+
+  // uvm_nonblocking_peek_imp
+  class uvm_nonblocking_peek_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_peek_imp";
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      return m_imp.try_peek(t);
+    endfunction
+
+    virtual function bit can_peek();
+      return m_imp.can_peek();
+    endfunction
+
+  endclass
+
+  // uvm_peek_imp - combined blocking and nonblocking peek
+  class uvm_peek_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_peek_imp";
+    endfunction
+
+    virtual task peek(output T t);
+      m_imp.peek(t);
+    endtask
+
+    virtual function bit try_peek(output T t);
+      return m_imp.try_peek(t);
+    endfunction
+
+    virtual function bit can_peek();
+      return m_imp.can_peek();
+    endfunction
+
+  endclass
+
+  // uvm_blocking_get_peek_imp
+  class uvm_blocking_get_peek_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_blocking_get_peek_imp";
+    endfunction
+
+    virtual task get(output T t);
+      m_imp.get(t);
+    endtask
+
+    virtual task peek(output T t);
+      m_imp.peek(t);
+    endtask
+
+  endclass
+
+  // uvm_nonblocking_get_peek_imp
+  class uvm_nonblocking_get_peek_imp #(type T = int, type IMP = uvm_component)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+    local IMP m_imp;
+
+    function new(string name, IMP imp);
+      super.new(name, imp, UVM_IMPLEMENTATION, 1, 1);
+      m_imp = imp;
+      m_if = this;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_get_peek_imp";
+    endfunction
+
+    virtual function bit try_get(output T t);
+      return m_imp.try_get(t);
+    endfunction
+
+    virtual function bit can_get();
+      return m_imp.can_get();
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      return m_imp.try_peek(t);
+    endfunction
+
+    virtual function bit can_peek();
+      return m_imp.can_peek();
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // Additional Nonblocking Ports and Exports for AVIP compatibility
+  //=========================================================================
+
+  // uvm_nonblocking_peek_port
+  class uvm_nonblocking_peek_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_peek_port";
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_peek_port - combined blocking and nonblocking
+  class uvm_peek_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_peek_port";
+    endfunction
+
+    virtual task peek(output T t);
+      if (m_if != null)
+        m_if.peek(t);
+    endtask
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_nonblocking_get_peek_port
+  class uvm_nonblocking_get_peek_port #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_PORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_get_peek_port";
+    endfunction
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_nonblocking_put_export
+  class uvm_nonblocking_put_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_put_export";
+    endfunction
+
+    virtual function bit try_put(input T t);
+      if (m_if != null)
+        return m_if.try_put(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_put();
+      if (m_if != null)
+        return m_if.can_put();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_nonblocking_get_export
+  class uvm_nonblocking_get_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_get_export";
+    endfunction
+
+    virtual function bit try_get(output T t);
+      if (m_if != null)
+        return m_if.try_get(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_get();
+      if (m_if != null)
+        return m_if.can_get();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_nonblocking_peek_export
+  class uvm_nonblocking_peek_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_peek_export";
+    endfunction
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_peek_export - combined blocking and nonblocking
+  class uvm_peek_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_peek_export";
+    endfunction
+
+    virtual task peek(output T t);
+      if (m_if != null)
+        m_if.peek(t);
+    endtask
+
+    virtual function bit try_peek(output T t);
+      if (m_if != null)
+        return m_if.try_peek(t);
+      return 0;
+    endfunction
+
+    virtual function bit can_peek();
+      if (m_if != null)
+        return m_if.can_peek();
+      return 0;
+    endfunction
+
+  endclass
+
+  // uvm_nonblocking_get_peek_export
+  class uvm_nonblocking_get_peek_export #(type T = int)
+    extends uvm_port_base #(uvm_tlm_if_base #(T, T));
+
+    function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
+      super.new(name, parent, UVM_EXPORT, min_size, max_size);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_nonblocking_get_peek_export";
+    endfunction
 
     virtual function bit try_get(output T t);
       if (m_if != null)
