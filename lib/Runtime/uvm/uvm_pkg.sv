@@ -2159,8 +2159,12 @@ package uvm_pkg;
   //=========================================================================
   // uvm_seq_item_pull_port - Sequencer to driver communication
   //=========================================================================
+  // Note: For seq_item_pull ports, the TLM interface direction is reversed:
+  // - put operations send RSP (responses to sequencer)
+  // - get operations receive REQ (requests from sequencer)
+  // So we parameterize as uvm_tlm_if_base #(RSP, REQ) where T1=RSP for put, T2=REQ for get
   class uvm_seq_item_pull_port #(type REQ = uvm_sequence_item, type RSP = REQ)
-    extends uvm_port_base #(uvm_tlm_if_base #(REQ, RSP));
+    extends uvm_port_base #(uvm_tlm_if_base #(RSP, REQ));
 
     function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
       super.new(name, parent, UVM_PORT, min_size, max_size);
@@ -2218,8 +2222,9 @@ package uvm_pkg;
   //=========================================================================
   // uvm_seq_item_pull_imp - Sequencer implementation
   //=========================================================================
+  // Same reversed parameterization as uvm_seq_item_pull_port
   class uvm_seq_item_pull_imp #(type REQ = uvm_sequence_item, type RSP = REQ, type IMP = uvm_component)
-    extends uvm_port_base #(uvm_tlm_if_base #(REQ, RSP));
+    extends uvm_port_base #(uvm_tlm_if_base #(RSP, REQ));
     local IMP m_imp;
 
     function new(string name, IMP imp);
@@ -2266,8 +2271,9 @@ package uvm_pkg;
   //=========================================================================
   // uvm_seq_item_pull_export - Sequencer export
   //=========================================================================
+  // Same reversed parameterization as uvm_seq_item_pull_port
   class uvm_seq_item_pull_export #(type REQ = uvm_sequence_item, type RSP = REQ)
-    extends uvm_port_base #(uvm_tlm_if_base #(REQ, RSP));
+    extends uvm_port_base #(uvm_tlm_if_base #(RSP, REQ));
 
     function new(string name, uvm_component parent, int min_size = 0, int max_size = 1);
       super.new(name, parent, UVM_EXPORT, min_size, max_size);
