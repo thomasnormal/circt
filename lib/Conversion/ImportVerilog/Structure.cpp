@@ -16,6 +16,7 @@
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/types/NetType.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
 
@@ -307,6 +308,11 @@ struct ModuleVisitor : public BaseVisitor {
   LogicalResult visit(const slang::ast::TypeParameterSymbol &) {
     return success();
   }
+
+  // Skip user-defined nettype declarations. These define custom net types with
+  // optional resolution functions, but the actual net declarations using these
+  // types are handled separately.
+  LogicalResult visit(const slang::ast::NetType &) { return success(); }
 
   SmallString<64>
   formatInstanceName(const slang::ast::InstanceSymbolBase &instNode) {

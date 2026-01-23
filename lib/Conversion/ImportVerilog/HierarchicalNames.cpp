@@ -12,10 +12,13 @@ using namespace circt;
 using namespace ImportVerilog;
 
 namespace {
-struct HierPathValueExprVisitor {
+struct HierPathValueExprVisitor
+    : public slang::ast::ASTVisitor<HierPathValueExprVisitor, false, true,
+                                    true> {
   Context &context;
   Location loc;
   OpBuilder &builder;
+  LogicalResult result = success();
 
   // Such as `sub.a`, the `sub` is the outermost module for the hierarchical
   // variable `a`.
@@ -27,16 +30,27 @@ struct HierPathValueExprVisitor {
         outermostModule(outermostModule) {}
 
   // Handle hierarchical values
-  LogicalResult visit(const slang::ast::HierarchicalValueExpression &expr) {
+  void handle(const slang::ast::HierarchicalValueExpression &expr) {
+    if (failed(result))
+      return;
     auto *currentInstBody =
         expr.symbol.getParentScope()->getContainingInstance();
+    if (!currentInstBody) {
+      for (auto it = expr.ref.path.rbegin(); it != expr.ref.path.rend(); ++it) {
+        if (auto *instSym =
+                (*it).symbol->as_if<slang::ast::InstanceSymbol>()) {
+          currentInstBody = &instSym->body;
+          break;
+        }
+      }
+    }
     auto *outermostInstBody =
         outermostModule.as_if<slang::ast::InstanceBodySymbol>();
 
     // Like module Foo; int a; Foo.a; endmodule.
     // Ignore "Foo.a" invoked by this module itself.
     if (currentInstBody == outermostInstBody)
-      return success();
+      return;
 
     // Skip interface port member accesses. When accessing a member of an
     // interface port (e.g., `iface.data` where `iface` is an interface port),
@@ -45,7 +59,7 @@ struct HierPathValueExprVisitor {
     // VirtualInterfaceSignalRefOp, not as hierarchical ports that need to be
     // threaded through the module hierarchy.
     if (expr.ref.isViaIfacePort())
-      return success();
+      return;
 
     auto hierName = builder.getStringAttr(expr.symbol.name);
     const slang::ast::InstanceBodySymbol *parentInstBody = nullptr;
@@ -53,18 +67,18 @@ struct HierPathValueExprVisitor {
     // Collect hierarchical names that are added to the port list.
     std::function<void(const slang::ast::InstanceBodySymbol *, bool)>
         collectHierarchicalPaths = [&](auto sym, bool isUpward) {
-          // Here we use "sameHierPaths" to avoid collecting the repeat
-          // hierarchical names on the same path.
-          if (!context.sameHierPaths.contains(hierName) ||
-              !context.hierPaths.contains(sym)) {
-            context.hierPaths[sym].push_back(
+          // Avoid collecting duplicate hierarchical names for the same module.
+          auto &paths = context.hierPaths[sym];
+          bool exists = llvm::any_of(paths, [&](const auto &info) {
+            return info.hierName == hierName;
+          });
+          if (!exists)
+            paths.push_back(
                 HierPathInfo{hierName,
                              {},
                              isUpward ? slang::ast::ArgumentDirection::Out
                                       : slang::ast::ArgumentDirection::In,
                              &expr.symbol});
-            context.sameHierPaths.insert(hierName);
-          }
 
           // Iterate up from the current instance body symbol until meeting the
           // outermost module.
@@ -94,27 +108,39 @@ struct HierPathValueExprVisitor {
                          ->getContainingInstance();
       if (tempInstBody == outermostInstBody) {
         collectHierarchicalPaths(currentInstBody, true);
-        return success();
+        return;
       }
     }
 
-    hierName = builder.getStringAttr(currentInstBody->parentInstance->name +
-                                     llvm::Twine(".") + hierName.getValue());
+    if (!currentInstBody)
+      return;
+    auto baseHierName = hierName;
+    collectHierarchicalPaths(currentInstBody, true);
+    StringRef parentName;
+    if (currentInstBody->parentInstance)
+      parentName = currentInstBody->parentInstance->name;
+    else {
+      for (const auto &elem : expr.ref.path) {
+        if (auto *instSym =
+                elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+          parentName = instSym->name;
+          break;
+        }
+      }
+    }
+    if (parentName.empty())
+      return;
+    hierName =
+        builder.getStringAttr(parentName + llvm::Twine(".") +
+                              baseHierName.getValue());
     collectHierarchicalPaths(outermostInstBody, false);
-    return success();
   }
 
-  /// TODO:Skip all others.
-  /// But we should output a warning to display which symbol had been skipped.
-  /// However, to ensure we can test smoothly, we didn't do that.
-  template <typename T>
-  LogicalResult visit(T &&node) {
-    return success();
-  }
-
-  LogicalResult visitInvalid(const slang::ast::Expression &expr) {
+  void handle(const slang::ast::InvalidExpression &expr) {
+    if (failed(result))
+      return;
     mlir::emitError(loc, "invalid expression");
-    return failure();
+    result = failure();
   }
 };
 } // namespace
@@ -123,7 +149,9 @@ LogicalResult
 Context::collectHierarchicalValues(const slang::ast::Expression &expr,
                                    const slang::ast::Symbol &outermostModule) {
   auto loc = convertLocation(expr.sourceRange);
-  return expr.visit(HierPathValueExprVisitor(*this, loc, outermostModule));
+  HierPathValueExprVisitor visitor(*this, loc, outermostModule);
+  expr.visit(visitor);
+  return visitor.result;
 }
 
 /// Traverse the instance body.
@@ -177,15 +205,12 @@ struct InstBodyVisitor {
     // Such as `sub.a`, the `sub` is the outermost module for the hierarchical
     // variable `a`.
     auto &outermostModule = assignNode.getParentScope()->asSymbol();
-    if (expr->left().hasHierarchicalReference())
-      if (failed(context.collectHierarchicalValues(expr->left(),
-                                                   outermostModule)))
-        return failure();
+    if (failed(context.collectHierarchicalValues(expr->left(), outermostModule)))
+      return failure();
 
-    if (expr->right().hasHierarchicalReference())
-      if (failed(context.collectHierarchicalValues(expr->right(),
-                                                   outermostModule)))
-        return failure();
+    if (failed(
+            context.collectHierarchicalValues(expr->right(), outermostModule)))
+      return failure();
 
     return success();
   }
