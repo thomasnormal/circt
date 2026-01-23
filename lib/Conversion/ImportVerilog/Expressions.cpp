@@ -5544,6 +5544,27 @@ struct RvalueExprVisitor : public ExprVisitor {
     return moore::CovergroupInstOp::create(builder, loc, cgTy, cgSym);
   }
 
+  // Handle shallow copy of class instances: new <source>
+  // IEEE 1800-2017 Section 8.12: Shallow copy creates a new object with the
+  // same property values as the source object.
+  Value visit(const slang::ast::CopyClassExpression &expr) {
+    // Convert the source expression (the object being copied).
+    auto source = context.convertRvalueExpression(expr.sourceExpr());
+    if (!source)
+      return {};
+
+    // Get the class handle type from the source.
+    auto classTy = dyn_cast<moore::ClassHandleType>(source.getType());
+    if (!classTy) {
+      mlir::emitError(loc) << "expected class handle type for copy source, got "
+                           << source.getType();
+      return {};
+    }
+
+    // Create the shallow copy operation.
+    return moore::ClassCopyOp::create(builder, loc, classTy, source);
+  }
+
   // Handle distribution expression: variable dist { items }
   // This is used within constraints to specify weighted random distributions.
   Value visit(const slang::ast::DistExpression &expr) {
