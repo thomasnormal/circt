@@ -30,16 +30,45 @@ Added IEEE 1800-2017 Section 6.6.8 interconnect net support:
 - Enabled interconnect nets in Structure.cpp and MooreToCore.cpp
 - New test case in basic.sv
 
+### Disable Statement Support ✅
+
+Added IEEE 1800-2017 Section 9.6.2 `disable` statement support:
+- New `visit(DisableStatement)` handler in Statements.cpp
+- Extracts target block name from ArbitrarySymbolExpression
+- Creates `moore::DisableOp` with target name
+- Chapter-9 improved: 93.5% → **97.8%** (+2 tests)
+
+### MooreToCore Array Locator Fix ✅
+
+Fixed complex predicate handling in array locator conversion:
+- New `convertMooreOpInline` helper for inline conversion of:
+  - `moore.constant`, `moore.read`, `moore.class.property_ref`
+  - `moore.dyn_extract`, `moore.array.size`, `moore.eq/ne/cmp`
+  - `moore.and/or`, `moore.add/sub`, `moore.conversion`
+- AXI4 AVIP now compiles through MooreToCore
+- New test: array-locator-complex-predicate.mlir
+
 ### Test Results (Current)
-- Chapter-6: **73/84 passing** (87%) (+1 from Iter 104)
+- Chapter-6: **73/84 passing** (87%)
+- Chapter-7: **103/103 passing** (100%) ✅
+- Chapter-9: **45/46 passing** (97.8%) ✅
 - Chapter-11: **76/78 passing** (97%)
+- Chapter-18: **119/134 passing** (89%) with UVM
 - Chapter-20: **47/47 passing** (100%) ✅
 - Chapter-21: **29/29 passing** (100%) ✅
-- 5 AVIPs compile to LLHD: APB, SPI, UART, AHB, I2S
+- 8 AVIPs compile to LLHD: APB, SPI, UART, AHB, I2S, I3C, AXI4 (partial), AXI4Lite
+
+### AVIP End-to-End Testing ✅
+
+- **APB AVIP**: Full pipeline works - circt-sim runs with clock/reset active
+- **UART/SPI/I3C AVIPs**: Full ImportVerilog + MooreToCore pipeline works
+- **AXI4 AVIP**: Now compiles after array locator fix
 
 ### Commits
 - `45f033ff7` [Runtime] Add UVM component phase callback registration system
 - `582d31551` [ImportVerilog] Add support for interconnect nets
+- `20007b28b` [ImportVerilog] Add support for disable statement
+- `b06421de9` [MooreToCore] Fix array locator with complex predicates
 
 ---
 

@@ -73,12 +73,15 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-20: **47/47 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-11: **76/78 passing** (97%) ✅
-- sv-tests Chapter-6: **73/84 passing** (87%) ✅ +1 test (interconnect)
-- sv-tests Chapter-18: **56/134 passing** (42%) - needs investigation
+- sv-tests Chapter-9: **45/46 passing** (97.8%) ✅ NEW
+- sv-tests Chapter-7: **103/103 passing** (100%) ✅ COMPLETE
+- sv-tests Chapter-6: **73/84 passing** (87%) ✅
+- sv-tests Chapter-18: **119/134 passing** (89%) with UVM ✅ (was 42% due to test config)
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
 - verilator circt-sim: **15/21 passing** (71%) ✅ (100% of non-SVA tests)
-- UVM AVIP: **APB, SPI, UART, AHB, I2S compile to LLHD** ✅
+- UVM AVIP: **8 AVIPs compile: APB, SPI, UART, AHB, I2S, I3C, AXI4, AXI4Lite** ✅
+- APB AVIP runs in circt-sim (clock/reset working) ✅
 - circt-sim: **LLVM dialect + FP ops supported** ✅
 - UVM Phase System: **All 9 phases + component callbacks** ✅
 
