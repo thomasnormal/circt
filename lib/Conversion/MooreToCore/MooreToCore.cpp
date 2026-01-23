@@ -723,11 +723,19 @@ static void getValuesToObserve(Region *region,
 static bool hasMultiBlockFunctionCalls(Region &region, ModuleOp moduleOp) {
   llvm::SmallDenseSet<StringRef> visited;
   llvm::SmallVector<StringRef> worklist;
+  bool hasIndirectCall = false;
 
   // Collect initial function calls from the region
   region.walk([&](func::CallOp callOp) {
     worklist.push_back(callOp.getCallee());
   });
+
+  // Check for indirect calls (e.g., virtual method calls via call_indirect).
+  // These cannot be statically analyzed, so we conservatively assume they
+  // may call multi-block functions.
+  region.walk([&](func::CallIndirectOp) { hasIndirectCall = true; });
+  if (hasIndirectCall)
+    return true;
 
   while (!worklist.empty()) {
     StringRef callee = worklist.pop_back_val();
@@ -743,10 +751,13 @@ static bool hasMultiBlockFunctionCalls(Region &region, ModuleOp moduleOp) {
     if (!funcOp.getBody().hasOneBlock())
       return true;
 
-    // Check for transitive calls
+    // Check for transitive calls (both direct and indirect)
     funcOp.getBody().walk([&](func::CallOp nestedCall) {
       worklist.push_back(nestedCall.getCallee());
     });
+    funcOp.getBody().walk([&](func::CallIndirectOp) { hasIndirectCall = true; });
+    if (hasIndirectCall)
+      return true;
   }
 
   return false;
@@ -785,6 +796,12 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
 
       // Check if all captured values are constant-like. If not, we can't
       // use seq.initial due to IsolatedFromAbove constraint.
+      // Note: We can't use getUsedValuesDefinedAbove() here because during
+      // dialect conversion, block arguments that are being converted may have
+      // their parent region set to null, causing the check to miss them.
+      // Instead, we manually check for:
+      // 1. Block arguments (which are never constant-like)
+      // 2. Non-constant operations defined outside the procedure body
       llvm::SetVector<Value> captures;
       getUsedValuesDefinedAbove(op.getBody(), op.getBody(), captures);
       bool allCapturesConstant = true;
@@ -793,6 +810,37 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
         if (!defOp || !defOp->hasTrait<OpTrait::ConstantLike>()) {
           allCapturesConstant = false;
           break;
+        }
+      }
+
+      // During dialect conversion, block arguments may have null parent regions,
+      // so getUsedValuesDefinedAbove misses them. Check for BlockArguments
+      // explicitly - if any operand is a BlockArgument from outside the
+      // procedure body, we can't use seq.initial.
+      if (allCapturesConstant) {
+        for (auto &block : op.getBody()) {
+          for (auto &bodyOp : block) {
+            for (Value operand : bodyOp.getOperands()) {
+              if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+                // Check if this block argument belongs to a block in the
+                // procedure body
+                Block *ownerBlock = blockArg.getOwner();
+                if (!ownerBlock || !ownerBlock->getParent()) {
+                  // Null owner or parent region - happens during conversion
+                  allCapturesConstant = false;
+                  break;
+                }
+                if (ownerBlock->getParent() != &op.getBody()) {
+                  allCapturesConstant = false;
+                  break;
+                }
+              }
+            }
+            if (!allCapturesConstant)
+              break;
+          }
+          if (!allCapturesConstant)
+            break;
         }
       }
 
@@ -1997,20 +2045,73 @@ struct InterfaceInstanceOpConversion
     assert(structInfo && "interface struct info must exist");
     auto structTy = structInfo->interfaceBody;
 
-    // Calculate the size of the interface struct.
-    uint64_t byteSize = getTypeSizeSafe(structTy, mod);
     auto i64Ty = IntegerType::get(ctx, 64);
-    auto cSize = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
-                                          rewriter.getI64IntegerAttr(byteSize));
-
-    // Get or declare malloc and call it.
-    auto mallocFn = getOrCreateMalloc(mod, rewriter);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-    auto call =
-        LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
-                             SymbolRefAttr::get(mallocFn), ValueRange{cSize});
+    auto mallocFn = getOrCreateMalloc(mod, rewriter);
 
-    Value ifacePtr = call.getResult();
+    auto allocateInterfacePtr =
+        [&](LLVM::LLVMStructType ifaceStructTy) -> Value {
+      uint64_t ifaceSize = getTypeSizeSafe(ifaceStructTy, mod);
+      auto sizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(ifaceSize));
+      auto call =
+          LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
+                               SymbolRefAttr::get(mallocFn),
+                               ValueRange{sizeConst});
+      return call.getResult();
+    };
+
+    Value ifacePtr = allocateInterfacePtr(structTy);
+
+    // Initialize nested interface instances if this interface declares any.
+    if (auto *ifaceDeclSym = mod.lookupSymbol(ifaceSymRef.getRootReference())) {
+      if (auto ifaceDeclOp = dyn_cast<InterfaceDeclOp>(*ifaceDeclSym)) {
+        auto &body = ifaceDeclOp.getBody().front();
+        for (Operation &child : body) {
+          auto signal = dyn_cast<InterfaceSignalDeclOp>(child);
+          if (!signal || !signal->hasAttr("interface_instance"))
+            continue;
+
+          auto nestedType =
+              dyn_cast<VirtualInterfaceType>(signal.getSignalType());
+          if (!nestedType)
+            continue;
+
+          auto nestedIfaceRef = nestedType.getInterface();
+          auto nestedIfaceSym =
+              SymbolRefAttr::get(ctx, nestedIfaceRef.getRootReference());
+          if (failed(resolveInterfaceStructBody(mod, nestedIfaceSym,
+                                                *typeConverter, cache)))
+            return op.emitError()
+                   << "Could not resolve interface struct for "
+                   << nestedIfaceSym;
+
+          auto nestedInfo = cache.getStructInfo(nestedIfaceSym);
+          if (!nestedInfo)
+            return op.emitError()
+                   << "Missing interface struct info for "
+                   << nestedIfaceSym;
+
+          Value nestedPtr = allocateInterfacePtr(nestedInfo->interfaceBody);
+
+          auto idxOpt = structInfo->getSignalIndex(signal.getSymName());
+          if (!idxOpt)
+            return op.emitError()
+                   << "Missing interface field index for "
+                   << signal.getSymName();
+
+          auto i32Ty = IntegerType::get(ctx, 32);
+          Value zero = LLVM::ConstantOp::create(
+              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
+          Value idx = LLVM::ConstantOp::create(
+              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(*idxOpt));
+          auto fieldPtr = LLVM::GEPOp::create(
+              rewriter, loc, ptrTy, structTy, ifacePtr, ValueRange{zero, idx});
+
+          LLVM::StoreOp::create(rewriter, loc, nestedPtr, fieldPtr);
+        }
+      }
+    }
 
     // The InterfaceInstanceOp returns a ref<virtual_interface> which should be
     // an llhd.ref that holds a pointer to the interface struct. Create a signal
@@ -15875,6 +15976,7 @@ struct DistConstraintInfo {
   SmallVector<int64_t> perRange;  // 0 = := (per-value), 1 = :/ (per-range)
   unsigned fieldIndex;      // Index of the field in the struct
   unsigned bitWidth;        // Bit width of the property
+  bool isSigned = false;    // Signedness of the property
 };
 
 /// Extract simple range constraints from a class declaration.
@@ -16216,6 +16318,7 @@ extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         info.constraintName = constraintName;
         info.fieldIndex = fieldIdx;
         info.bitWidth = bitWidth;
+        info.isSigned = distOp.getIsSignedAttr() != nullptr;
 
         // Convert values array to ranges vector
         for (size_t i = 0; i < values.size(); i += 2) {
@@ -16558,6 +16661,7 @@ extractInlineDistConstraints(Region &inlineRegion,
       info.constraintName = ""; // Inline constraints don't have a name
       info.fieldIndex = fieldIdx;
       info.bitWidth = bitWidth;
+      info.isSigned = distOp.getIsSignedAttr() != nullptr;
 
       // Convert values array to ranges vector
       for (size_t i = 0; i < values.size(); i += 2)
@@ -17124,9 +17228,9 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       // Apply distribution constraints - generate weighted random values
       // using __moore_randomize_with_dist(ranges, weights, perRange, numRanges)
       if (!distConstraints.empty()) {
-        // Function type: __moore_randomize_with_dist(ptr, ptr, ptr, i64) -> i64
-        auto distFnTy =
-            LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, ptrTy, ptrTy, i64Ty});
+        // Function type: __moore_randomize_with_dist(ptr, ptr, ptr, i64, i64) -> i64
+        auto distFnTy = LLVM::LLVMFunctionType::get(
+            i64Ty, {ptrTy, ptrTy, ptrTy, i64Ty, i64Ty});
         auto distFn = getOrCreateRuntimeFunc(mod, rewriter,
                                              "__moore_randomize_with_dist",
                                              distFnTy);
@@ -17210,14 +17314,17 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             LLVM::StoreOp::create(rewriter, loc, perRangeVal, perRangePtr);
           }
 
-          // Call __moore_randomize_with_dist(ranges, weights, perRange, numRanges)
+          // Call __moore_randomize_with_dist(ranges, weights, perRange, numRanges, isSigned)
           auto numRangesConst = LLVM::ConstantOp::create(
               rewriter, loc, i64Ty,
               rewriter.getI64IntegerAttr(static_cast<int64_t>(numRanges)));
+          auto isSignedConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(dist.isSigned ? 1 : 0));
           auto distResult = LLVM::CallOp::create(
               rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(distFn),
               ValueRange{rangesAlloca, weightsAlloca, perRangeAlloca,
-                         numRangesConst});
+                         numRangesConst, isSignedConst});
 
           // Truncate to the field's bit width if needed
           Type fieldIntTy = IntegerType::get(ctx, dist.bitWidth);

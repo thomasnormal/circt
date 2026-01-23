@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iterations 138-139 - January 23, 2026
+
+### Simulation Testing with circt-sim
+
+Tested AHB AVIP simulation with circt-sim:
+- **HDL/BFM simulation works** - Interfaces, clock generation, basic stimulus
+- **UVM class instantiation hangs** - Complex UVM object creation needs more runtime support
+- Basic simulation completed successfully with `$finish`
+
+### xrun Comparison
+
+Compared circt-verilog with Cadence xrun on APB AVIP:
+- CIRCT is **stricter** about implicit type conversions (string/bitvector)
+- CIRCT requires uvm-core library (not Cadence UVM due to timescale/type issues)
+- xrun compiles with warnings, CIRCT either passes or fails cleanly
+
+### Bug Fix: TLM seq_item_pull_port Parameterization (Commit acf32a352)
+
+**Problem:** When REQ and RSP types differ in UVM sequences, the TLM ports had incorrect parameterization causing type mismatches.
+
+**Fix:** Changed `uvm_tlm_if_base #(REQ, RSP)` to `#(RSP, REQ)` because:
+- `put()` sends RSP (responses to sequencer)
+- `get()` receives REQ (requests from sequencer)
+
+**Regression test:** `test/Runtime/uvm/uvm_stress_test.sv` (907 lines)
+
+### Cross-Module Event Bug Investigation
+
+Root cause identified for Chapter-15 cross-module event triggering bug:
+- **Location:** `lib/Conversion/MooreToCore/MooreToCore.cpp` in `ProcedureOpConversion`
+- **Issue:** Capture detection doesn't properly handle block arguments remapped during module conversion
+- **Fix needed:** Check for `BlockArgument` in captures and force `llhd.process` instead of `seq.initial`
+
+### AVIP Regression Verification
+
+All 7 working AVIPs verified - no regressions:
+- AHB, APB, UART, SPI, I2S, I3C, AXI4 all compile successfully
+
 ## Iterations 132-137 - January 23, 2026
 
 ### sv-tests Verification Progress
@@ -140,7 +178,7 @@ SPI AVIP compiles and simulates successfully with circt-sim:
 - **APB AVIP**: full compile with real UVM succeeds using `--no-uvm-auto-include` and `sim/apb_compile.f` via `utils/run_avip_circt_verilog.sh`.
 - **SPI AVIP**: full compile with real UVM succeeds via `utils/run_avip_circt_verilog.sh` with `TIMESCALE=1ns/1ps` and `sim/SpiCompile.f`.
 - **AXI4 AVIP**: full compile with real UVM succeeds via `utils/run_avip_circt_verilog.sh` with `TIMESCALE=1ns/1ps` and `sim/axi4_compile.f`.
-- **AXI4Lite AVIP**: bind to `Axi4LiteCoverProperty` now resolves; `dist` ranges with `$` are accepted in ImportVerilog. Full AVIP rerun pending to find the next blocker.
+- **AXI4Lite AVIP**: bind to `Axi4LiteCoverProperty` now resolves; `dist` ranges with `$` (including 64-bit unsigned) now compile. New blocker: unknown interface instance for port `axi4LiteMasterInterface` in `Axi4LiteHdlTop.sv`.
 - AVIP runner now supports multiple filelists and env-var expansion for complex projects.
 
 ### LEC Regression Coverage
