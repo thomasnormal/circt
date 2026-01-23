@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 111 - January 23, 2026
+
+### UVM Sequence/Sequencer Runtime Infrastructure ✅
+
+Implemented comprehensive sequence/sequencer runtime for UVM testbench execution:
+
+**New Runtime Functions (include/circt/Runtime/MooreRuntime.h):**
+- `__moore_sequencer_create()` / `destroy()` - Sequencer lifecycle
+- `__moore_sequencer_start()` / `stop()` - Control sequencer execution
+- `__moore_sequencer_set_arbitration()` - Set arbitration mode
+- `__moore_sequence_create()` / `destroy()` - Sequence lifecycle
+- `__moore_sequence_start()` - Start sequence on sequencer
+- `__moore_sequence_start_item()` / `finish_item()` - Driver handshake
+- `__moore_sequencer_get_next_item()` / `item_done()` - Driver side
+- 27 total new runtime functions
+
+**Features:**
+- 6 arbitration modes: FIFO, RANDOM, WEIGHTED, STRICT_FIFO, STRICT_RANDOM, USER
+- Thread-safe with mutex and condition variable synchronization
+- Complete sequence-driver handshake protocol
+- Response data transfer support
+- Priority-based sequence scheduling
+
+**Unit Tests:** 15 new tests (552 total runtime tests pass)
+
+**Commit:** `c92d1bf88 [UVM] Add sequence/sequencer runtime infrastructure`
+
+### Multi-Block Function Inlining Fix ✅
+
+Fixed the multi-block function inlining limitation that prevented process class tests from working:
+
+**Problem:** Tasks with control flow (`foreach`, `fork-join_none`) create multi-block MLIR functions that couldn't be inlined into `seq.initial` single-block regions.
+
+**Solution:** Added `hasMultiBlockFunctionCalls()` helper function that transitively checks if functions called from initial blocks have multiple basic blocks. When detected, uses `llhd.process` instead of `seq.initial`.
+
+**Result:** All 4 sv-tests Chapter-9 process class tests now pass:
+- `9.7--process_cls_await.sv`
+- `9.7--process_cls_kill.sv`
+- `9.7--process_cls_self.sv`
+- `9.7--process_cls_suspend_resume.sv`
+
+**Chapter-9 effective pass rate:** 93.5% (43/46)
+
+### Array Locator Predicates with External Function Calls ✅
+
+Fixed SSA value invalidation when array locator predicates contain function calls referencing outer scope values:
+
+**Problem:** In code like `arb_sequence_q.find_first_index(item) with (is_blocked(item.sequence_ptr) == 0)`, the `func.call` references values from the outer scope (like `this` pointer), which become invalid during conversion.
+
+**Solution:** Added pre-scan loop in `lowerWithInlineLoop` to identify external values and remap them before processing the predicate body.
+
+**Commit:** `28b74b816 [MooreToCore] Fix array locator predicates with external function calls`
+
+### String Methods in Array Locator Predicates ✅
+
+Added inline conversion support for `StringToLowerOp` and `StringToUpperOp` in array locator predicates:
+
+**Example:** `string_q.find_last(s) with (s.tolower() == "a")` now works.
+
+**Result:** verilator-verification pass rate improved from 72.1% to **72.7%** (+1 test)
+
+**Commit:** `edd8c3ee6 [MooreToCore] Support string methods in array locator predicates`
+
+---
+
 ## Iteration 110 - January 23, 2026
 
 ### UVM Objection System Runtime ✅
