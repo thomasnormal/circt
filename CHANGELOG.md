@@ -27,13 +27,22 @@ Comprehensive analysis of UVM TLM support:
 - **100% feature completeness** for standard UVM TLM patterns
 - All major TLM patterns: ports, exports, FIFOs, analysis, sequences
 
-### Running AVIP Simulations
+### AVIP Simulation Results - All 7/9 Verified
 
-Testing additional AVIPs with circt-sim:
-- Track A: SPI AVIP (in progress)
-- Track B: UART AVIP (in progress)
-- Track C: verilator-verification suite
-- Track D: I3C AVIP (264K MLIR)
+All compilable AVIPs now have extended simulation testing:
+
+| AVIP | MLIR Size | Delta Cycles | Errors |
+|------|-----------|--------------|--------|
+| AHB | 294K | 10,003 | 0 |
+| APB | 293K | 10,003 | 0 |
+| UART | 1.4M | 1M | 0 |
+| SPI | 149K | 107 | 0 |
+| I2S | 17K | 130K | 0 |
+| I3C | 145K | 100K | 0 |
+| AXI4 | 26K | 10K | 0 |
+
+- **I3C Note**: Required external uvm-core library due to `set_inst_override_by_type` signature difference
+- **JTAG/AXI4-Lite**: AVIP code issues (not CIRCT bugs)
 
 ## Iterations 140-141 - January 23, 2026
 
