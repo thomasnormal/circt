@@ -12253,3 +12253,50 @@ extern "C" MooreString __moore_component_get_full_name(void *component,
   std::memcpy(result.data, fullName.c_str(), fullName.length());
   return result;
 }
+
+//===----------------------------------------------------------------------===//
+// UVM Runtime Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// These functions provide the basic UVM runtime support needed to execute
+// UVM testbenches. The implementation starts simple and can be expanded to
+// support more complex UVM features like the phase system and factory.
+//
+
+/// UVM run_test() implementation.
+/// This is the main entry point for running UVM tests. It is called from
+/// SystemVerilog code when run_test() is invoked.
+///
+/// @param testNameData Pointer to the test name string data
+/// @param testNameLen Length of the test name string
+///
+/// Currently this is a stub that prints a message. Future implementation will:
+/// 1. Create the test component using the UVM factory
+/// 2. Execute the UVM phase sequence (build, connect, run, etc.)
+/// 3. Report summarize and finish simulation
+extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
+  std::string testName;
+  if (testNameData && testNameLen > 0) {
+    testName.assign(testNameData, static_cast<size_t>(testNameLen));
+  }
+
+  // Print UVM-style message
+  std::printf("UVM_INFO @ 0: uvm_test_top [RNTST] Running test %s...\n",
+              testName.empty() ? "(default)" : testName.c_str());
+
+  // TODO: Implement actual UVM runtime support:
+  // 1. Factory lookup: Create the test component by name
+  // 2. Phase execution: Run build_phase, connect_phase, run_phase, etc.
+  // 3. Objection handling: Wait for all objections to be dropped
+  // 4. Report summarize: Print test results
+
+  if (!testName.empty()) {
+    std::printf(
+        "UVM_WARNING @ 0: uvm_test_top [UVM_STUB] UVM runtime is a stub. "
+        "Test '%s' was not actually instantiated.\n",
+        testName.c_str());
+  }
+
+  // Print completion message
+  std::printf("UVM_INFO @ 0: uvm_test_top [FINISH] UVM phasing complete.\n");
+}

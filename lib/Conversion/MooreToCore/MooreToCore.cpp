@@ -7474,6 +7474,49 @@ struct CallOpConversion : public OpConversionPattern<func::CallOp> {
   LogicalResult
   matchAndRewrite(func::CallOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Check if this is a call to uvm_pkg::run_test - intercept and redirect
+    // to the __uvm_run_test runtime function.
+    StringRef callee = op.getCallee();
+    if (callee == "uvm_pkg::run_test") {
+      auto mod = op->getParentOfType<ModuleOp>();
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = rewriter.getI64Type();
+      auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+      // __uvm_run_test takes (const char *testNameData, int64_t testNameLen)
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__uvm_run_test", fnTy);
+
+      // The input should be a string struct {ptr, len}
+      if (adaptor.getOperands().size() == 1) {
+        Value stringStruct = adaptor.getOperands()[0];
+
+        // Extract string pointer and length from the struct
+        auto stringPtr =
+            LLVM::ExtractValueOp::create(rewriter, loc, stringStruct, 0);
+        auto stringLen =
+            LLVM::ExtractValueOp::create(rewriter, loc, stringStruct, 1);
+
+        // Call __uvm_run_test(ptr, len)
+        LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                             ValueRange{stringPtr, stringLen});
+      } else {
+        // No arguments - pass null pointer and zero length
+        auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        auto zeroLen =
+            LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(0));
+        LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                             ValueRange{nullPtr, zeroLen});
+      }
+
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Default handling for other calls
     SmallVector<Type> convResTypes;
     if (typeConverter->convertTypes(op.getResultTypes(), convResTypes).failed())
       return failure();
@@ -13160,6 +13203,222 @@ struct StringAtoBinOpConversion : public OpConversionPattern<StringAtoBinOp> {
   }
 };
 
+// moore.string.atoreal -> call to __moore_string_atoreal runtime function
+struct StringAtoRealOpConversion : public OpConversionPattern<StringAtoRealOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringAtoRealOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto f64Ty = Float64Type::get(ctx);
+    auto stringStructTy = getStringStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    auto fnTy = LLVM::LLVMFunctionType::get(f64Ty, {ptrTy});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_atoreal", fnTy);
+
+    // Store string to alloca and pass pointer.
+    auto one =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto strAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getStr(), strAlloca);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{f64Ty},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{strAlloca});
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+// moore.string.hextoa -> call to __moore_string_hextoa runtime function
+struct StringHexToAOpConversion : public OpConversionPattern<StringHexToAOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringHexToAOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    Value value = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs.
+    if (isFourStateStructType(value.getType())) {
+      value = extractFourStateValue(rewriter, loc, value);
+    }
+
+    if (!value.getType().isIntOrFloat())
+      return rewriter.notifyMatchFailure(op, "value must be an integer type");
+    auto valueWidth = value.getType().getIntOrFloatBitWidth();
+
+    Value valueI64;
+    if (valueWidth < 64) {
+      valueI64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, value);
+    } else if (valueWidth > 64) {
+      valueI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, value);
+    } else {
+      valueI64 = value;
+    }
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_hextoa", fnTy);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{valueI64});
+    Value resultString = call.getResult();
+
+    LLVM::StoreOp::create(rewriter, loc, resultString, adaptor.getDest());
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// moore.string.octtoa -> call to __moore_string_octtoa runtime function
+struct StringOctToAOpConversion : public OpConversionPattern<StringOctToAOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringOctToAOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    Value value = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs.
+    if (isFourStateStructType(value.getType())) {
+      value = extractFourStateValue(rewriter, loc, value);
+    }
+
+    if (!value.getType().isIntOrFloat())
+      return rewriter.notifyMatchFailure(op, "value must be an integer type");
+    auto valueWidth = value.getType().getIntOrFloatBitWidth();
+
+    Value valueI64;
+    if (valueWidth < 64) {
+      valueI64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, value);
+    } else if (valueWidth > 64) {
+      valueI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, value);
+    } else {
+      valueI64 = value;
+    }
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_octtoa", fnTy);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{valueI64});
+    Value resultString = call.getResult();
+
+    LLVM::StoreOp::create(rewriter, loc, resultString, adaptor.getDest());
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// moore.string.bintoa -> call to __moore_string_bintoa runtime function
+struct StringBinToAOpConversion : public OpConversionPattern<StringBinToAOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringBinToAOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    Value value = adaptor.getValue();
+
+    // Handle 4-state types which are lowered to {value, unknown} structs.
+    if (isFourStateStructType(value.getType())) {
+      value = extractFourStateValue(rewriter, loc, value);
+    }
+
+    if (!value.getType().isIntOrFloat())
+      return rewriter.notifyMatchFailure(op, "value must be an integer type");
+    auto valueWidth = value.getType().getIntOrFloatBitWidth();
+
+    Value valueI64;
+    if (valueWidth < 64) {
+      valueI64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, value);
+    } else if (valueWidth > 64) {
+      valueI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, value);
+    } else {
+      valueI64 = value;
+    }
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_bintoa", fnTy);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{valueI64});
+    Value resultString = call.getResult();
+
+    LLVM::StoreOp::create(rewriter, loc, resultString, adaptor.getDest());
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// moore.string.realtoa -> call to __moore_string_realtoa runtime function
+struct StringRealToAOpConversion : public OpConversionPattern<StringRealToAOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(StringRealToAOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto stringStructTy = getStringStructType(ctx);
+    auto f64Ty = Float64Type::get(ctx);
+
+    Value value = adaptor.getValue();
+
+    auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {f64Ty});
+    auto runtimeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_realtoa", fnTy);
+
+    auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{stringStructTy},
+                                     SymbolRefAttr::get(runtimeFn),
+                                     ValueRange{value});
+    Value resultString = call.getResult();
+
+    LLVM::StoreOp::create(rewriter, loc, resultString, adaptor.getDest());
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // moore.string_concat -> call to __moore_string_concat runtime function
 struct StringConcatOpConversion : public OpConversionPattern<StringConcatOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -16834,6 +17093,11 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StringAtoHexOpConversion,
     StringAtoOctOpConversion,
     StringAtoBinOpConversion,
+    StringAtoRealOpConversion,
+    StringHexToAOpConversion,
+    StringOctToAOpConversion,
+    StringBinToAOpConversion,
+    StringRealToAOpConversion,
     StringConcatOpConversion,
     StringReplicateOpConversion,
     StringCmpOpConversion,
