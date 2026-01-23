@@ -79,6 +79,88 @@ static bool isUvmGetFullNameMethod(StringRef funcName) {
   return false;
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Initialization Guarded Recursion Support
+//===----------------------------------------------------------------------===//
+//
+// UVM's initialization code has a recursive call pattern that is guarded by
+// state checks at runtime:
+//   uvm_get_report_object -> uvm_coreservice_t::get -> uvm_init ->
+//     (via uvm_fatal macro) -> uvm_get_report_object
+//
+// This recursion is safe at runtime because:
+// 1. uvm_coreservice_t::get() checks if (inst==null) before calling uvm_init
+// 2. uvm_init() checks get_core_state() and returns early if not uninitialized
+// 3. The recursive path only happens in error/race conditions
+//
+// To handle this, we detect these UVM initialization functions and allow
+// recursion through them, trusting the runtime guards to prevent infinite loops.
+//
+
+/// Check if a function is part of the UVM initialization recursive cycle.
+/// These functions have guarded recursion that terminates at runtime.
+///
+/// The function name detection needs to be specific enough to avoid false
+/// positives with non-UVM code, while still catching the mangled names
+/// from ImportVerilog.
+static bool isUvmInitializationFunction(StringRef funcName) {
+  // The UVM initialization has several recursive call patterns:
+  //
+  // Pattern 1: Report object initialization
+  //   uvm_get_report_object -> uvm_coreservice_t::get -> uvm_init
+  //   -> (error path via uvm_fatal) -> uvm_get_report_object
+  //
+  // Pattern 2: Factory/Registry initialization
+  //   uvm_coreservice_t::get -> uvm_init -> m_rh_init -> type_id::create
+  //   -> create_by_type -> uvm_coreservice_t::get
+  //
+  // All these patterns are guarded by:
+  // - uvm_coreservice_t::get() checks if (inst==null) before calling uvm_init
+  // - uvm_init() checks get_core_state() and returns early if not uninitialized
+
+  // Only match if the function is from uvm_pkg (UVM package)
+  // This avoids false positives with non-UVM code
+  if (!funcName.contains("uvm_pkg") && !funcName.contains("uvm_"))
+    return false;
+
+  // Check for uvm_coreservice_t::get
+  if (funcName.contains("uvm_coreservice_t::get") ||
+      funcName.contains("coreservice") ||
+      // The mangled name may be "get_N" where N is a number, but only if
+      // we're sure this is a UVM function (checked above)
+      (funcName.contains("::get") && funcName.contains("uvm_")))
+    return true;
+
+  // List of UVM initialization functions involved in the recursive cycle
+  static const char *initFunctions[] = {
+      "uvm_get_report_object",  // Global function that calls coreservice::get
+      "uvm_init",               // Main init function, guarded by state check
+      "get_core_state",         // State check function
+      // Report functions that can be called from uvm_init error paths
+      "uvm_report_fatal",
+      "uvm_report_error",
+      "uvm_report_warning",
+      "uvm_report_info",
+      "uvm_report",
+      "uvm_report_enabled",
+      // Factory/Registry functions in the initialization chain
+      "create_by_type",
+      "m_rh_init",
+      "type_id::create",
+      "uvm_object_registry",
+      "uvm_component_registry",
+      "uvm_registry_object_creator",
+      "uvm_registry_component_creator",
+  };
+
+  for (const char *initFunc : initFunctions) {
+    if (funcName.contains(initFunc))
+      return true;
+  }
+
+  return false;
+}
+
 /// Get or create the __moore_component_get_full_name runtime function
 /// declaration in the module.
 static LLVM::LLVMFuncOp
@@ -329,12 +411,24 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
         return failure();
       }
 
+      // Check if this is a UVM initialization function with guarded recursion.
+      // These functions are part of UVM's initialization cycle and have runtime
+      // guards to prevent infinite recursion. We skip inlining them entirely
+      // to avoid infinite expansion during compilation.
+      StringRef funcName = funcOp.getSymName();
+      if (isUvmInitializationFunction(funcName)) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "- Skipping UVM init function " << funcName
+                   << " (not inlining to avoid recursion)\n");
+        // Don't inline - leave as function call for runtime resolution
+        continue;
+      }
+
       if (!callOp->getParentWithTrait<ProceduralRegion>() &&
           callOp->getParentRegion()->hasOneBlock()) {
         if (!callStack.insert(funcOp)) {
           // Check if this is a UVM get_full_name() call that we can handle
           // with the runtime function instead of failing
-          StringRef funcName = funcOp.getSymName();
           if (isUvmGetFullNameMethod(funcName)) {
             OpBuilder builder(callOp);
             if (replaceGetFullNameWithRuntimeCall(callOp, funcOp, builder)) {
@@ -363,7 +457,6 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
       if (!callStack.insert(funcOp)) {
         // Check if this is a UVM get_full_name() call that we can handle
         // with the runtime function instead of failing
-        StringRef funcName = funcOp.getSymName();
         if (isUvmGetFullNameMethod(funcName)) {
           OpBuilder builder(callOp);
           if (replaceGetFullNameWithRuntimeCall(callOp, funcOp, builder)) {

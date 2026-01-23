@@ -105,3 +105,50 @@ func.func private @readSig(%arg0: !llhd.ref<i1>) -> i1 {
   %0 = llhd.prb %arg0 : i1
   return %0 : i1
 }
+
+// Test that UVM initialization functions are not inlined to avoid infinite
+// recursion. These functions have guarded recursion at runtime.
+// CHECK-LABEL: @UvmInitGuardedRecursion
+hw.module @UvmInitGuardedRecursion(out out0 : i32) {
+  %c0 = hw.constant 0 : i32
+  %sig = llhd.sig %c0 : i32
+  // CHECK: call @"uvm_pkg::uvm_init"
+  // The UVM init function should not be inlined
+  %val = func.call @"uvm_pkg::uvm_init"(%sig) : (!llhd.ref<i32>) -> i32
+  hw.output %val : i32
+}
+
+// This function simulates the UVM initialization pattern where there's
+// guarded recursion (the recursion is safe at runtime due to state checks).
+func.func private @"uvm_pkg::uvm_init"(%arg0: !llhd.ref<i32>) -> i32 {
+  %c1 = hw.constant 1 : i32
+  // In real UVM, this would call back to uvm_get_report_object which calls
+  // uvm_coreservice_t::get which calls uvm_init, but with runtime guards.
+  return %c1 : i32
+}
+
+// Test that uvm_coreservice_t::get is not inlined
+// CHECK-LABEL: @UvmCoreserviceGet
+hw.module @UvmCoreserviceGet(out out0 : i32) {
+  // CHECK: call @"uvm_pkg::uvm_coreservice_t::get"
+  %val = func.call @"uvm_pkg::uvm_coreservice_t::get"() : () -> i32
+  hw.output %val : i32
+}
+
+func.func private @"uvm_pkg::uvm_coreservice_t::get"() -> i32 {
+  %c1 = hw.constant 1 : i32
+  return %c1 : i32
+}
+
+// Test that uvm_get_report_object is not inlined
+// CHECK-LABEL: @UvmGetReportObject
+hw.module @UvmGetReportObject(out out0 : i32) {
+  // CHECK: call @"uvm_pkg::uvm_get_report_object"
+  %val = func.call @"uvm_pkg::uvm_get_report_object"() : () -> i32
+  hw.output %val : i32
+}
+
+func.func private @"uvm_pkg::uvm_get_report_object"() -> i32 {
+  %c1 = hw.constant 1 : i32
+  return %c1 : i32
+}
