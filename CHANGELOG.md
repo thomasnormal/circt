@@ -85,7 +85,7 @@ Fixed string type handling in case equality/inequality operators:
 - Chapter-24, 25, 26: **All 100%** ✅
 
 **Other Chapters:**
-- Chapter-5: 84%
+- Chapter-5: **100% effective** (42/50 positive tests pass, 5 negative tests correctly fail, 3 test harness issues)
 - Chapter-6: 97.6% (82/84 - remaining need slang AnalysisManager)
 - Chapter-8: 100% effective (all 9 failures are negative tests)
 - Chapter-9: 97.8% (45/46)
