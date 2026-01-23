@@ -3365,6 +3365,50 @@ MooreString __moore_component_get_full_name(void *component,
 /// 3. Report summarize and finish simulation
 void __uvm_run_test(const char *testNameData, int64_t testNameLen);
 
+/// UVM phase start notification.
+/// This function is called at the beginning of each UVM phase.
+/// It can be used to track phase execution and implement phase callbacks.
+///
+/// @param phaseNameData Pointer to the phase name string data
+/// @param phaseNameLen Length of the phase name string
+///
+/// Standard UVM phases (in order):
+/// - "build" - Create component hierarchy (top-down)
+/// - "connect" - Connect TLM ports (bottom-up)
+/// - "end_of_elaboration" - Fine-tune testbench (bottom-up)
+/// - "start_of_simulation" - Get ready for simulation (bottom-up)
+/// - "run" - Main test execution (task phase, time-consuming)
+/// - "extract" - Extract data from DUT (bottom-up)
+/// - "check" - Check DUT state (bottom-up)
+/// - "report" - Report results (bottom-up)
+/// - "final" - Finalize simulation (top-down)
+void __uvm_phase_start(const char *phaseNameData, int64_t phaseNameLen);
+
+/// UVM phase end notification.
+/// This function is called at the end of each UVM phase.
+/// It can be used to track phase execution and implement phase callbacks.
+///
+/// @param phaseNameData Pointer to the phase name string data
+/// @param phaseNameLen Length of the phase name string
+void __uvm_phase_end(const char *phaseNameData, int64_t phaseNameLen);
+
+/// UVM phase execution.
+/// Execute all standard UVM phases in sequence.
+/// This is called internally by __uvm_run_test after the test component
+/// is created by the factory.
+///
+/// The phases are executed in the standard UVM order:
+/// 1. build_phase (top-down)
+/// 2. connect_phase (bottom-up)
+/// 3. end_of_elaboration_phase (bottom-up)
+/// 4. start_of_simulation_phase (bottom-up)
+/// 5. run_phase (task phase)
+/// 6. extract_phase (bottom-up)
+/// 7. check_phase (bottom-up)
+/// 8. report_phase (bottom-up)
+/// 9. final_phase (top-down)
+void __uvm_execute_phases(void);
+
 #ifdef __cplusplus
 }
 #endif

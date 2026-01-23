@@ -9044,4 +9044,173 @@ TEST(MooreRuntimeSimControlTest, ResetFinishStateResetsAll) {
   EXPECT_EQ(__moore_get_warning_count(), 0);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Phase System Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeUvmPhaseTest, PhaseStartWithValidName) {
+  // Capture stdout to verify the phase start message
+  testing::internal::CaptureStdout();
+
+  __uvm_phase_start("build", 5);
+
+  std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_NE(output.find("Starting build_phase"), std::string::npos);
+  EXPECT_NE(output.find("[PHASE]"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, PhaseStartWithEmptyName) {
+  testing::internal::CaptureStdout();
+
+  __uvm_phase_start(nullptr, 0);
+
+  std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_NE(output.find("(unknown)"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, PhaseEndWithValidName) {
+  testing::internal::CaptureStdout();
+
+  __uvm_phase_end("run", 3);
+
+  std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_NE(output.find("Completed run_phase"), std::string::npos);
+  EXPECT_NE(output.find("[PHASE]"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, PhaseEndWithEmptyName) {
+  testing::internal::CaptureStdout();
+
+  __uvm_phase_end(nullptr, 0);
+
+  std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_NE(output.find("(unknown)"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, ExecutePhasesRunsAllPhases) {
+  testing::internal::CaptureStdout();
+
+  __uvm_execute_phases();
+
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify all standard UVM phases are executed in order
+  EXPECT_NE(output.find("Starting build_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed build_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting connect_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed connect_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting end_of_elaboration_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed end_of_elaboration_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting start_of_simulation_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed start_of_simulation_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting run_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed run_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting extract_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed extract_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting check_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed check_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting report_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed report_phase"), std::string::npos);
+
+  EXPECT_NE(output.find("Starting final_phase"), std::string::npos);
+  EXPECT_NE(output.find("Completed final_phase"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, ExecutePhasesOrder) {
+  testing::internal::CaptureStdout();
+
+  __uvm_execute_phases();
+
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify phases execute in the correct order
+  size_t buildPos = output.find("Starting build_phase");
+  size_t connectPos = output.find("Starting connect_phase");
+  size_t endElabPos = output.find("Starting end_of_elaboration_phase");
+  size_t startSimPos = output.find("Starting start_of_simulation_phase");
+  size_t runPos = output.find("Starting run_phase");
+  size_t extractPos = output.find("Starting extract_phase");
+  size_t checkPos = output.find("Starting check_phase");
+  size_t reportPos = output.find("Starting report_phase");
+  size_t finalPos = output.find("Starting final_phase");
+
+  EXPECT_LT(buildPos, connectPos);
+  EXPECT_LT(connectPos, endElabPos);
+  EXPECT_LT(endElabPos, startSimPos);
+  EXPECT_LT(startSimPos, runPos);
+  EXPECT_LT(runPos, extractPos);
+  EXPECT_LT(extractPos, checkPos);
+  EXPECT_LT(checkPos, reportPos);
+  EXPECT_LT(reportPos, finalPos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, RunTestWithNameCallsPhases) {
+  testing::internal::CaptureStdout();
+
+  __uvm_run_test("my_test", 7);
+
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify run_test message
+  EXPECT_NE(output.find("[RNTST]"), std::string::npos);
+  EXPECT_NE(output.find("Running test my_test"), std::string::npos);
+
+  // Verify phases are executed
+  EXPECT_NE(output.find("Starting build_phase"), std::string::npos);
+  EXPECT_NE(output.find("Starting run_phase"), std::string::npos);
+
+  // Verify completion message
+  EXPECT_NE(output.find("[FINISH]"), std::string::npos);
+  EXPECT_NE(output.find("UVM phasing complete"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, RunTestWithEmptyName) {
+  testing::internal::CaptureStdout();
+
+  __uvm_run_test(nullptr, 0);
+
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify default test message
+  EXPECT_NE(output.find("(default)"), std::string::npos);
+
+  // Verify phases are still executed
+  EXPECT_NE(output.find("Starting build_phase"), std::string::npos);
+
+  // Verify completion
+  EXPECT_NE(output.find("[FINISH]"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, RunTestWarningForUninstantiatedTest) {
+  testing::internal::CaptureStdout();
+
+  __uvm_run_test("unimplemented_test", 18);
+
+  std::string output = testing::internal::GetCapturedStdout();
+
+  // Verify warning about stub
+  EXPECT_NE(output.find("UVM_WARNING"), std::string::npos);
+  EXPECT_NE(output.find("UVM_STUB"), std::string::npos);
+  EXPECT_NE(output.find("unimplemented_test"), std::string::npos);
+}
+
+TEST(MooreRuntimeUvmPhaseTest, PhaseStartWithPartialLength) {
+  // Test with length shorter than actual string
+  testing::internal::CaptureStdout();
+
+  // "build_extra" with length 5 should only use "build"
+  __uvm_phase_start("build_extra", 5);
+
+  std::string output = testing::internal::GetCapturedStdout();
+  EXPECT_NE(output.find("Starting build_phase"), std::string::npos);
+  EXPECT_EQ(output.find("build_extra"), std::string::npos);
+}
+
 } // namespace
