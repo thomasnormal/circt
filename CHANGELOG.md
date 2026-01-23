@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 104 - January 23, 2026
+
+### UVM Phase System ✅
+
+Implemented comprehensive UVM phase system support in the runtime:
+
+**New Runtime Functions:**
+- `__uvm_phase_start(const char *phaseName, int64_t len)` - Phase start notification
+- `__uvm_phase_end(const char *phaseName, int64_t len)` - Phase end notification
+- `__uvm_execute_phases()` - Execute all standard UVM phases in sequence
+
+**Standard UVM Phases Supported (in order):**
+1. build_phase (top-down)
+2. connect_phase (bottom-up)
+3. end_of_elaboration_phase (bottom-up)
+4. start_of_simulation_phase (bottom-up)
+5. run_phase (task phase)
+6. extract_phase (bottom-up)
+7. check_phase (bottom-up)
+8. report_phase (bottom-up)
+9. final_phase (top-down)
+
+**Unit Tests:** 10 new tests for the UVM phase system
+
+### Chapter-6 Progress ✅
+
+Chapter-6 improved from 69/84 (82%) to **72/84 (85%)** (+3 tests):
+- TypeReference handling in HierarchicalNames
+- Nettype declaration support in Structure.cpp
+
+### UVM Recursive Function Fix ✅
+
+Fixed recursive function inlining error for UVM code:
+- Added `uvm_get_report_object()` to UVM stubs with non-recursive implementation
+- Enables more UVM code to compile through `--ir-hw` pipeline
+
+### I2S AVIP Fixed ✅
+
+Fixed fixed-to-dynamic array conversion in MooreToCore:
+- Support for `uarray<N x T>` to `open_uarray<T>` conversion
+- Allocates memory, copies elements, creates proper dynamic array reference
+- I2S AVIP now compiles through MooreToCore
+
+### Commits
+- `280ac1cdc` [Runtime] Implement UVM phase system with all 9 phases
+- `964f66e58` [ImportVerilog] Add TypeReference and nettype support for Chapter-6
+- `93bc92615` [Runtime] Fix UVM recursive function issue via stubs
+- `6aeace445` [MooreToCore] Add fixed-to-dynamic array conversion
+- `279a6eb01` [ImportVerilog] Add hierarchical net assignment support
+- `89904b96b` [LTLToCore] Improvements to assertion conversion
+
+---
+
 ## Iteration 103 - January 22, 2026
 
 ### More AVIPs Tested ✅
