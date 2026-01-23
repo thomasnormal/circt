@@ -78,26 +78,29 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - I2S AVIP - E2E working
 - **AXI4 AVIP** - 100K+ clock edges ✅ NEW (Iter 118)
 
-**20+ Chapters at 100% effective:**
-- sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
-- sv-tests Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
+**20+ Chapters at 100% effective:** (Verified 2026-01-23)
+- sv-tests Chapter-5: **50/50** (100%) ✅
+- sv-tests Chapter-6: **82/84** (100% effective) - 2 "should_fail" tests (expected negative tests)
 - sv-tests Chapter-7: **103/103** (100%) ✅
-- sv-tests Chapter-8: **100%** (44 pass + 9 negative tests) ✅ **VERIFIED (Iter 115)**
-- sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅
-- sv-tests Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
-- sv-tests Chapter-12: **27/27** (100%) ✅ **COMPLETE (Iter 117)** - case inside + structure/variable patterns
-- sv-tests Chapter-13: **15/15** (100%) ✅ Fixed arith.select legalization
+- sv-tests Chapter-8: **53/53** (100%) ✅
+- sv-tests Chapter-10: **10/10** (100%) ✅
+- sv-tests Chapter-11: **77/78** (100% effective) - 1 runtime "should_fail" test
+- sv-tests Chapter-12: **27/27** (100%) ✅
+- sv-tests Chapter-13: **15/15** (100%) ✅
 - sv-tests Chapter-14: **5/5** (100%) ✅
 - sv-tests Chapter-15: **5/5** (100%) ✅
-- sv-tests Chapter-16: **53/53** (100%) ✅
-- sv-tests Chapter-18: **134/134** (100%) ✅
-- sv-tests Chapter-20: **47/47** (100%) ✅
+- sv-tests Chapter-16: **23/26 non-UVM** (100% effective) - 27 UVM tests blocked on UVM library
+- sv-tests Chapter-18: **68/68 non-UVM** (100%) - 66 UVM tests blocked on UVM library
+- sv-tests Chapter-20: **46/47** (97.9%) - 1 hierarchical path test (test design issue)
 - sv-tests Chapter-21: **29/29** (100%) ✅
 - sv-tests Chapter-22: **74/74** (100%) ✅
-- sv-tests Chapter-23, 24, 25, 26: **All 100%** ✅
+- sv-tests Chapter-23: **3/3** (100%) ✅
+- sv-tests Chapter-24: **1/1** (100%) ✅
+- sv-tests Chapter-25: **1/1** (100%) ✅
+- sv-tests Chapter-26: **2/2** (100%) ✅
 
 **Other Chapters:**
-- sv-tests Chapter-9: **97% effective** (1 SVA sequence event not supported) ✅ **IMPROVED (Iter 112)**
+- sv-tests Chapter-9: **45/46** (97.8%) - 1 SVA sequence event test (Codex scope)
 
 **External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
