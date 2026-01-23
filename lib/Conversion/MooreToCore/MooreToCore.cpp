@@ -11910,8 +11910,10 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     // Helper to get converted operand. This handles:
     // 1. Values already in valueMap (converted predicate ops)
     // 2. Values remapped by the rewriter (external values already converted)
-    // 3. Block arguments and external values that need materialization
-    auto getConvertedOperand = [&](Value mooreVal) -> Value {
+    // 3. External Moore operations that need recursive conversion
+    // 4. Block arguments and external values that need materialization
+    std::function<Value(Value)> getConvertedOperand;
+    getConvertedOperand = [&](Value mooreVal) -> Value {
       // Check if already in our value map
       auto it = valueMap.find(mooreVal);
       if (it != valueMap.end())
@@ -11922,6 +11924,33 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       if (remapped)
         return remapped;
 
+      // For external values that are results of Moore operations,
+      // recursively convert the defining operation
+      if (Operation *definingOp = mooreVal.getDefiningOp()) {
+        // Check if this is a Moore operation that we can convert inline
+        if (isa<ClassPropertyRefOp, ReadOp, ConstantOp, DynExtractOp,
+                ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp,
+                ConversionOp>(definingOp)) {
+          // Recursively convert the defining operation
+          // First, ensure all operands of the defining op are converted
+          for (Value operand : definingOp->getOperands()) {
+            if (valueMap.find(operand) == valueMap.end()) {
+              Value converted = getConvertedOperand(operand);
+              if (converted)
+                valueMap[operand] = converted;
+            }
+          }
+
+          // Now convert the defining operation itself
+          Value result = convertMooreOpInline(definingOp, rewriter, loc, ctx,
+                                              valueMap, mod);
+          if (result) {
+            valueMap[mooreVal] = result;
+            return result;
+          }
+        }
+      }
+
       // For external values (defined outside the predicate block),
       // try to materialize conversion
       Type targetType = typeConverter->convertType(mooreVal.getType());
@@ -11929,15 +11958,19 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         // Use materializeTargetConversion which creates an UnrealizedConversionCast
         Value converted = typeConverter->materializeTargetConversion(
             rewriter, loc, targetType, mooreVal);
-        if (converted)
+        if (converted) {
+          valueMap[mooreVal] = converted;
           return converted;
+        }
       }
 
       // Last resort: create an unrealized conversion cast
       if (targetType) {
-        return UnrealizedConversionCastOp::create(rewriter, loc, targetType,
-                                                  mooreVal)
+        Value cast = UnrealizedConversionCastOp::create(rewriter, loc, targetType,
+                                                        mooreVal)
             .getResult(0);
+        valueMap[mooreVal] = cast;
+        return cast;
       }
 
       return nullptr;
@@ -12029,14 +12062,15 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       if (!resultType)
         return nullptr;
 
-      // Handle queue/dynamic array access (LLVM pointer)
-      if (isa<LLVM::LLVMPointerType>(input.getType())) {
-        // For queues, extract data pointer and index into it
-        auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-        auto i64Ty = IntegerType::get(ctx, 64);
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
 
-        // Check if input is a queue struct {ptr, i64}
-        if (auto structTy = dyn_cast<LLVM::LLVMStructType>(input.getType())) {
+      // Handle queue/dynamic array represented as LLVM struct {ptr, i64}
+      if (auto structTy = dyn_cast<LLVM::LLVMStructType>(input.getType())) {
+        // Check if this looks like a queue struct (has 2 elements: ptr and i64)
+        auto body = structTy.getBody();
+        if (body.size() == 2 && isa<LLVM::LLVMPointerType>(body[0]) &&
+            body[1] == i64Ty) {
           // Extract data pointer from queue struct
           Value dataPtr = LLVM::ExtractValueOp::create(
               rewriter, loc, ptrTy, input, ArrayRef<int64_t>{0});
@@ -12063,6 +12097,31 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
           }
           return loaded;
         }
+      }
+
+      // Handle queue/dynamic array access via LLVM pointer
+      if (isa<LLVM::LLVMPointerType>(input.getType())) {
+        // Extend index to i64 if needed
+        if (index.getType() != i64Ty) {
+          if (auto intTy = dyn_cast<IntegerType>(index.getType())) {
+            if (intTy.getWidth() < 64)
+              index = arith::ExtSIOp::create(rewriter, loc, i64Ty, index);
+            else if (intTy.getWidth() > 64)
+              index = arith::TruncIOp::create(rewriter, loc, i64Ty, index);
+          }
+        }
+
+        // GEP to the element
+        Type llvmResultType = convertToLLVMType(resultType);
+        Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                            llvmResultType, input, index);
+        Value loaded = LLVM::LoadOp::create(rewriter, loc, llvmResultType, elemPtr);
+        if (resultType != llvmResultType) {
+          loaded = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                      resultType, loaded)
+                       .getResult(0);
+        }
+        return loaded;
       }
 
       // Handle hw::ArrayType
@@ -12482,6 +12541,10 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       valueMap[indexArg] = ivTrunc;
     }
 
+    // Map the input array to its converted value so that operations inside the
+    // predicate body that reference the array can find the converted value.
+    valueMap[op.getArray()] = adaptor.getArray();
+
     // Convert each Moore operation in the predicate block inline to LLVM/arith.
     // Process operations in order to ensure operand dependencies are resolved.
     for (Operation &innerOp : body.without_terminator()) {
@@ -12825,23 +12888,17 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, convertedFieldType, one);
 
       // Get the comparison value - it may come from a read op or constant
+      // For complex cases (comparing fields with other fields, or with variable
+      // reads), fall back to the inline loop approach which can handle any predicate.
       Value llvmCmpValue;
-      if (auto readOp = fieldCmpValue.getDefiningOp<ReadOp>()) {
-        // The value comes from reading a variable - we need to handle this
-        // For now, we'll inline the read and get the converted value
-        // The conversion infrastructure should have already converted reads
-        // Look for already-converted value in the adaptor
-        // Since the read is inside the region, we need to handle it specially
-        return rewriter.notifyMatchFailure(
-            op, "field comparison with variable read not yet supported - "
-                "use constants");
-      } else if (auto constOp = fieldCmpValue.getDefiningOp<ConstantOp>()) {
+      if (auto constOp = fieldCmpValue.getDefiningOp<ConstantOp>()) {
         APInt constAPInt = constOp.getValue().toAPInt(false);
         llvmCmpValue = LLVM::ConstantOp::create(rewriter, loc, convertedFieldType,
                                                 constAPInt.getSExtValue());
       } else {
-        return rewriter.notifyMatchFailure(
-            op, "field comparison value must be a constant");
+        // For non-constant comparison values (including reads from variables,
+        // other field accesses, etc.), use the inline loop approach.
+        return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
       }
 
       LLVM::StoreOp::create(rewriter, loc, llvmCmpValue, cmpValueAlloca);

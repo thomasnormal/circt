@@ -123,3 +123,77 @@ moore.module @test_add_in_predicate() {
   moore.blocking_assign %result_var, %result : queue<i32, 0>
   moore.output
 }
+
+// Test array locator with field-to-field comparison: item.field == queue[last].field
+// This requires the inline loop approach because the comparison value is not a constant.
+// It's derived from another class property accessed via dyn_extract.
+// CHECK-LABEL: hw.module @test_field_vs_extracted_field
+// CHECK: scf.for
+// CHECK: llvm.getelementptr
+// CHECK: llvm.load
+// CHECK: llvm.extractvalue
+// CHECK: llvm.getelementptr
+// CHECK: llvm.load
+// CHECK: comb.icmp eq
+// CHECK: scf.if
+moore.module @test_field_vs_extracted_field() {
+  %qos_queue_var = moore.variable : <queue<class<@QosEntry>, 0>>
+  %qos_queue = moore.read %qos_queue_var : <queue<class<@QosEntry>, 0>>
+  %result_var = moore.variable : <queue<i32, 0>>
+  %one = moore.constant 1 : i32
+
+  // Find all items where item.awid == queue[last].awid
+  // This is a field-to-field comparison, not field-to-constant.
+  %result = moore.array.locator last, indices %qos_queue : queue<class<@QosEntry>, 0> -> <i32, 0> {
+  ^bb0(%item: !moore.class<@QosEntry>, %idx: !moore.i32):
+    // Get awid from current item
+    %item_awid_ref = moore.class.property_ref %item[@awid] : <@QosEntry> -> !moore.ref<i32>
+    %item_awid = moore.read %item_awid_ref : <i32>
+
+    // Get awid from last element in queue
+    %size = moore.array.size %qos_queue : queue<class<@QosEntry>, 0>
+    %last_idx = moore.sub %size, %one : i32
+    %last_elem = moore.dyn_extract %qos_queue from %last_idx : queue<class<@QosEntry>, 0>, i32 -> class<@QosEntry>
+    %last_awid_ref = moore.class.property_ref %last_elem[@awid] : <@QosEntry> -> !moore.ref<i32>
+    %last_awid = moore.read %last_awid_ref : <i32>
+
+    // Compare: item.awid == queue[last].awid
+    %cond = moore.eq %item_awid, %last_awid : i32 -> i1
+    moore.array.locator.yield %cond : i1
+  }
+
+  moore.blocking_assign %result_var, %result : queue<i32, 0>
+  moore.output
+}
+
+// Test array locator that references the input queue directly inside the predicate
+// The queue argument is used both as input to array.locator and inside the body
+// CHECK-LABEL: hw.module @test_queue_ref_in_body
+// CHECK: scf.for
+// CHECK: llvm.extractvalue
+// CHECK: llvm.getelementptr
+// CHECK: llvm.load
+// CHECK: comb.icmp eq
+// CHECK: scf.if
+moore.module @test_queue_ref_in_body() {
+  %queue_var = moore.variable : <queue<i32, 0>>
+  %queue = moore.read %queue_var : <queue<i32, 0>>
+  %result_var = moore.variable : <queue<i32, 0>>
+  %one = moore.constant 1 : i32
+
+  // Find items where item == queue[last]
+  %result = moore.array.locator all, elements %queue : queue<i32, 0> -> <i32, 0> {
+  ^bb0(%item: !moore.i32):
+    // Get last element from the same queue
+    %size = moore.array.size %queue : queue<i32, 0>
+    %last_idx = moore.sub %size, %one : i32
+    %last_elem = moore.dyn_extract %queue from %last_idx : queue<i32, 0>, i32 -> i32
+
+    // Compare: item == queue[last]
+    %cond = moore.eq %item, %last_elem : i32 -> i1
+    moore.array.locator.yield %cond : i1
+  }
+
+  moore.blocking_assign %result_var, %result : queue<i32, 0>
+  moore.output
+}
