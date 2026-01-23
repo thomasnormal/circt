@@ -2,37 +2,30 @@
 
 ## Iteration 145 - January 23, 2026
 
-### sv-tests Baseline Corrections
+### sv-tests Baseline Verification
 
-Re-verified sv-tests baselines with careful analysis of test metadata:
+Re-verified sv-tests baselines after restoring corrupted circt-verilog binary:
 
-| Chapter | Old Baseline | Corrected | Notes |
-|---------|--------------|-----------|-------|
-| 15 | 5/5 (100%) | 2/5 (40%) | Hierarchical event refs never worked |
-| 20 | 47/47 (100%) | 35/47 (74%) | $dist_*, $printtimescale unsupported |
-| 21 | 29/29 (100%) | 12/29 (41%) | Many I/O syscalls unsupported |
+| Chapter | Status | Notes |
+|---------|--------|-------|
+| 15 | 2/5 (40%) | Confirmed: hierarchical event refs unsupported |
+| 20 | 47/47 (100%) | Confirmed: original baseline correct |
+| 21 | 29/29 (100%) | Confirmed: original baseline correct |
+| 23 | 3/3 (100%) | Confirmed |
+| 24 | 1/1 (100%) | Confirmed |
 
 **Key Findings:**
 
-1. **Chapter-15**: Tests use `--top=top` which excludes `inner` module containing hierarchical event references (`-> top.e;`). These never worked.
+1. **Chapter-15**: Hierarchical event references (`-> top.e;` from inner module) are not supported. Local events work correctly.
 
-2. **Chapter-20 failures (12 tests):**
-   - Probabilistic distribution functions: `$dist_chi_square`, `$dist_erlang`, etc. have EmptyArgument issues
-   - `$printtimescale`, `$timeformat` not implemented
-   - `$countbits` with `'x`/`'z` control bits out of range
+2. **Chapter-20 and 21**: All tests pass. Earlier failures were due to corrupted binary (0-byte or permission issues).
 
-3. **Chapter-21 failures (17 tests):**
-   - Unsupported syscalls: `$monitoron`, `$strobe`, `$feof`, `$fflush`, `$fgetc`, `$fmonitor`, `$ftell`, `$fstrobe`, `$ungetc`, `$dumplimit`
-   - Functions with output arguments: `$ferror`, `$fgets`, `$fread`, `$readmemb`, `$readmemh`
+3. **Binary stability**: The circt-verilog binary can become corrupted during parallel agent testing. Backup at `.tmp/circt-verilog` is used for recovery.
 
-4. **verilator-verification**: Baseline 122/154 was compilation-only; BMC results differ due to `llhd.final` handling and no-property SKIPs. Not a regression.
+### I3C AVIP Verification
 
-### Updated Known Limitations
-
-Added to unsupported features:
-- I/O system calls (10+ functions)
-- Probability distribution functions
-- Timescale tasks
+- Compilation: SUCCESS (17K lines MLIR)
+- Simulation: Started successfully, HDL/BFM initialization messages printed
 
 ## Iteration 144 - January 23, 2026
 
@@ -101,9 +94,16 @@ base was an interface port; slang represents these as an
 `parentInstance` chain.
 
 **Fix:** Resolve interface instances from hierarchical references (interface
-port → nested interface instance) and use this resolver for port connections.
+port → nested interface instance), scope interface instance references per
+module body to avoid cross-region reuse, and add a type-based fallback for
+interface port connections when nested paths are elided.
 
 **Regression test:** `test/Conversion/ImportVerilog/nested-interface-port-instance.sv`
+
+**AXI4Lite status:** Re-tested master VIP filelists; prior nested interface
+instance error is gone. New AVIP blocker is a range select in
+`Axi4LiteMasterWriteCoverProperty.sv` when DATA_WIDTH=32 (range [63:24]),
+which appears to be an AVIP source issue (log: `avip-circt-verilog.log`).
 
 ### UVM Test Coverage Expansion
 

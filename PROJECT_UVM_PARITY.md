@@ -6,7 +6,7 @@
 
 ## Current Status
 
-### sv-tests Coverage (774 tests, ~91% pass rate)
+### sv-tests Coverage (774 tests, ~95% pass rate)
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
@@ -23,8 +23,8 @@
 | 15 | Inter-Process Sync | 2/5 (40%) | Hierarchical events unsupported |
 | 16 | Assertions | - | Codex agent scope |
 | 18 | Random Constraints | 119/134 (89%) | Complete |
-| 20 | Utility System Tasks | 35/47 (74%) | $dist_*, $printtimescale unsupported |
-| 21 | I/O System Tasks | 12/29 (41%) | Many I/O syscalls unsupported |
+| 20 | Utility System Tasks | 47/47 (100%) | Complete |
+| 21 | I/O System Tasks | 29/29 (100%) | Complete |
 | 22 | Compiler Directives | 55/74 (74%) | 1 bug: include-via-macro |
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
@@ -69,11 +69,6 @@
 2. **Class builtin functions** - Randomization/constraints partially supported
 3. **Some VCD dump tasks** - Stubbed for compilation
 4. **Covergroup get_coverage()** - Compiles but returns unsupported format at runtime (Iteration 143)
-5. **I/O system calls** - Many file I/O functions not yet implemented:
-   - `$monitoron`, `$strobe`, `$feof`, `$fflush`, `$fgetc`, `$fmonitor`, `$ftell`, `$fstrobe`, `$ungetc`, `$dumplimit`
-   - Functions with output arguments: `$ferror`, `$fgets`, `$fread`, `$readmemb`, `$readmemh`
-6. **Probability distribution functions** - `$dist_*` functions have EmptyArgument issues
-7. **Timescale tasks** - `$printtimescale`, `$timeformat` not fully supported
 
 ## Recent Fixes (Iterations 132-143)
 
