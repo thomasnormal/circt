@@ -61,6 +61,11 @@ package uvm_pkg;
   typedef class uvm_resource_base;
   typedef class uvm_resource_pool;
   typedef class uvm_default_coreservice_t;
+  typedef class uvm_coverage;
+  typedef class uvm_mem_region;
+  typedef class uvm_mem_mam;
+  typedef class uvm_mem_mam_cfg;
+  typedef class uvm_coverage_db;
 
   typedef int unsigned uvm_bitstream_t;
   typedef longint uvm_integral_t;
@@ -6860,6 +6865,560 @@ package uvm_pkg;
 
     virtual function string get_access(uvm_reg_map map = null);
       return "RW";
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_coverage - Abstract base class for functional coverage
+  //=========================================================================
+  // This class provides the foundation for functional coverage collection
+  // in UVM. It defines the interface for coverage sampling and querying.
+  // IEEE 1800.2-2020 Section 19.1
+  virtual class uvm_coverage extends uvm_object;
+    // Coverage model type for this object
+    protected uvm_reg_cvr_t m_coverage_model;
+    // Flag to enable/disable coverage
+    protected bit m_coverage_enabled;
+    // Coverage goal (percentage)
+    protected real m_coverage_goal;
+
+    function new(string name = "uvm_coverage");
+      super.new(name);
+      m_coverage_model = UVM_NO_COVERAGE;
+      m_coverage_enabled = 1;
+      m_coverage_goal = 100.0;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_coverage";
+    endfunction
+
+    // Enable/disable coverage collection
+    virtual function void set_coverage_enabled(bit enabled);
+      m_coverage_enabled = enabled;
+    endfunction
+
+    virtual function bit get_coverage_enabled();
+      return m_coverage_enabled;
+    endfunction
+
+    // Set/get coverage goal
+    virtual function void set_coverage_goal(real goal);
+      m_coverage_goal = goal;
+    endfunction
+
+    virtual function real get_coverage_goal();
+      return m_coverage_goal;
+    endfunction
+
+    // Set/get coverage model
+    virtual function uvm_reg_cvr_t set_coverage(uvm_reg_cvr_t is_on);
+      uvm_reg_cvr_t prev = m_coverage_model;
+      m_coverage_model = is_on;
+      return prev;
+    endfunction
+
+    virtual function uvm_reg_cvr_t get_coverage(bit is_field = 0);
+      return m_coverage_model;
+    endfunction
+
+    virtual function bit has_coverage(uvm_reg_cvr_t models);
+      return (m_coverage_model & models) != 0;
+    endfunction
+
+    // Sample coverage - override in derived classes
+    pure virtual function void sample();
+
+    // Get current coverage percentage - override in derived classes
+    virtual function real get_coverage_pct();
+      return 0.0;
+    endfunction
+
+    // Check if coverage goal has been met
+    virtual function bit is_coverage_goal_met();
+      return get_coverage_pct() >= m_coverage_goal;
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_mem_region - Memory region descriptor for MAM
+  //=========================================================================
+  // Represents a contiguous memory region managed by the Memory Allocation
+  // Manager. Used for dynamic memory allocation in verification.
+  class uvm_mem_region extends uvm_object;
+    protected longint unsigned m_start_offset;
+    protected longint unsigned m_end_offset;
+    protected longint unsigned m_len;
+    protected int unsigned m_n_bytes;
+    protected uvm_mem m_parent;
+    protected string m_fname;
+    protected int m_lineno;
+    protected bit m_is_allocated;
+
+    function new(string name = "uvm_mem_region");
+      super.new(name);
+      m_start_offset = 0;
+      m_end_offset = 0;
+      m_len = 0;
+      m_n_bytes = 0;
+      m_parent = null;
+      m_is_allocated = 0;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_mem_region";
+    endfunction
+
+    // Initialize the region with bounds
+    virtual function void configure(longint unsigned start_offset,
+                                    longint unsigned end_offset,
+                                    int unsigned n_bytes,
+                                    uvm_mem parent);
+      m_start_offset = start_offset;
+      m_end_offset = end_offset;
+      m_len = end_offset - start_offset + 1;
+      m_n_bytes = n_bytes;
+      m_parent = parent;
+      m_is_allocated = 1;
+    endfunction
+
+    // Get the start offset
+    virtual function longint unsigned get_start_offset();
+      return m_start_offset;
+    endfunction
+
+    // Get the end offset
+    virtual function longint unsigned get_end_offset();
+      return m_end_offset;
+    endfunction
+
+    // Get the length (number of addresses)
+    virtual function longint unsigned get_len();
+      return m_len;
+    endfunction
+
+    // Get the number of bytes per address
+    virtual function int unsigned get_n_bytes();
+      return m_n_bytes;
+    endfunction
+
+    // Get the parent memory
+    virtual function uvm_mem get_memory();
+      return m_parent;
+    endfunction
+
+    // Check if region is allocated
+    virtual function bit is_allocated();
+      return m_is_allocated;
+    endfunction
+
+    // Release this region
+    virtual function void release_region();
+      m_is_allocated = 0;
+    endfunction
+
+    // Write to this region (offset relative to region start)
+    virtual task write(output uvm_status_e status,
+                       input longint unsigned offset,
+                       input uvm_reg_data_t value,
+                       input uvm_path_e path = UVM_DEFAULT_PATH,
+                       input uvm_reg_map map = null,
+                       input uvm_sequence_base parent = null,
+                       input int prior = -1,
+                       input uvm_object extension = null,
+                       input string fname = "", input int lineno = 0);
+      if (m_parent != null && offset < m_len) begin
+        m_parent.write(status, m_start_offset + offset, value, path, map,
+                       parent, prior, extension, fname, lineno);
+      end else begin
+        status = UVM_NOT_OK;
+      end
+    endtask
+
+    // Read from this region (offset relative to region start)
+    virtual task read(output uvm_status_e status,
+                      input longint unsigned offset,
+                      output uvm_reg_data_t value,
+                      input uvm_path_e path = UVM_DEFAULT_PATH,
+                      input uvm_reg_map map = null,
+                      input uvm_sequence_base parent = null,
+                      input int prior = -1,
+                      input uvm_object extension = null,
+                      input string fname = "", input int lineno = 0);
+      if (m_parent != null && offset < m_len) begin
+        m_parent.read(status, m_start_offset + offset, value, path, map,
+                      parent, prior, extension, fname, lineno);
+      end else begin
+        status = UVM_NOT_OK;
+        value = 0;
+      end
+    endtask
+
+    virtual function string convert2string();
+      return $sformatf("Region[%0h:%0h] len=%0d bytes=%0d allocated=%0b",
+                       m_start_offset, m_end_offset, m_len, m_n_bytes, m_is_allocated);
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_mem_mam_policy - Memory allocation policy
+  //=========================================================================
+  typedef enum {
+    UVM_MEM_MAM_GREEDY,   // First fit allocation
+    UVM_MEM_MAM_BEST_FIT, // Best fit allocation
+    UVM_MEM_MAM_RANDOM    // Random location allocation
+  } uvm_mem_mam_policy_e;
+
+  //=========================================================================
+  // uvm_mem_mam_cfg - Memory Allocation Manager configuration
+  //=========================================================================
+  class uvm_mem_mam_cfg extends uvm_object;
+    longint unsigned start_offset;
+    longint unsigned end_offset;
+    int unsigned n_bytes;
+    uvm_mem_mam_policy_e mode;
+    bit locality;
+
+    function new(string name = "uvm_mem_mam_cfg");
+      super.new(name);
+      start_offset = 0;
+      end_offset = 0;
+      n_bytes = 1;
+      mode = UVM_MEM_MAM_GREEDY;
+      locality = 0;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_mem_mam_cfg";
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_mem_mam - Memory Allocation Manager
+  //=========================================================================
+  // Provides dynamic memory allocation for verification environments.
+  // Tracks allocated and free regions in a memory model.
+  // IEEE 1800.2-2020 compliant stub implementation.
+  class uvm_mem_mam extends uvm_object;
+    protected uvm_mem m_memory;
+    protected uvm_mem_mam_cfg m_cfg;
+    protected uvm_mem_region m_allocated_regions[$];
+    protected longint unsigned m_total_size;
+    protected longint unsigned m_allocated_size;
+
+    function new(string name = "", uvm_mem_mam_cfg cfg = null, uvm_mem mem = null);
+      super.new(name);
+      m_memory = mem;
+      m_cfg = cfg;
+      m_total_size = 0;
+      m_allocated_size = 0;
+      if (cfg != null) begin
+        m_total_size = cfg.end_offset - cfg.start_offset + 1;
+      end
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_mem_mam";
+    endfunction
+
+    // Reconfigure the MAM
+    virtual function void reconfigure(uvm_mem_mam_cfg cfg = null);
+      if (cfg != null) begin
+        m_cfg = cfg;
+        m_total_size = cfg.end_offset - cfg.start_offset + 1;
+      end
+    endfunction
+
+    // Reserve a memory region by address
+    virtual function uvm_mem_region reserve_region(longint unsigned start_offset,
+                                                    int unsigned n_bytes,
+                                                    string fname = "",
+                                                    int lineno = 0);
+      uvm_mem_region region;
+      longint unsigned end_offset;
+
+      // Calculate end offset
+      end_offset = start_offset + n_bytes - 1;
+
+      // Check bounds
+      if (m_cfg != null) begin
+        if (start_offset < m_cfg.start_offset || end_offset > m_cfg.end_offset) begin
+          return null;
+        end
+      end
+
+      // Check for overlap with existing regions
+      foreach (m_allocated_regions[i]) begin
+        if (m_allocated_regions[i].is_allocated()) begin
+          longint unsigned r_start = m_allocated_regions[i].get_start_offset();
+          longint unsigned r_end = m_allocated_regions[i].get_end_offset();
+          if (!(end_offset < r_start || start_offset > r_end)) begin
+            // Overlap detected
+            return null;
+          end
+        end
+      end
+
+      // Create and configure the region
+      region = new($sformatf("region_%0h", start_offset));
+      region.configure(start_offset, end_offset, n_bytes, m_memory);
+      m_allocated_regions.push_back(region);
+      m_allocated_size += n_bytes;
+
+      return region;
+    endfunction
+
+    // Request allocation of a memory region
+    virtual function uvm_mem_region request_region(int unsigned n_bytes,
+                                                    uvm_mem_mam_policy_e alloc_mode = UVM_MEM_MAM_GREEDY,
+                                                    string fname = "",
+                                                    int lineno = 0);
+      uvm_mem_region region;
+      longint unsigned start_offset;
+      longint unsigned cfg_start;
+      longint unsigned cfg_end;
+
+      // Get configuration bounds
+      cfg_start = (m_cfg != null) ? m_cfg.start_offset : 0;
+      cfg_end = (m_cfg != null) ? m_cfg.end_offset : 64'hFFFFFFFF;
+
+      // Find a free location based on allocation mode
+      case (alloc_mode)
+        UVM_MEM_MAM_GREEDY: begin
+          // First fit: find first available location
+          start_offset = cfg_start;
+          while (start_offset + n_bytes - 1 <= cfg_end) begin
+            bit overlap = 0;
+            foreach (m_allocated_regions[i]) begin
+              if (m_allocated_regions[i].is_allocated()) begin
+                longint unsigned r_start = m_allocated_regions[i].get_start_offset();
+                longint unsigned r_end = m_allocated_regions[i].get_end_offset();
+                if (!(start_offset + n_bytes - 1 < r_start || start_offset > r_end)) begin
+                  overlap = 1;
+                  start_offset = r_end + 1;
+                  break;
+                end
+              end
+            end
+            if (!overlap) break;
+          end
+          if (start_offset + n_bytes - 1 > cfg_end) begin
+            return null;
+          end
+        end
+
+        UVM_MEM_MAM_BEST_FIT: begin
+          // Best fit: find smallest gap that fits
+          longint unsigned best_start = 0;
+          longint unsigned best_gap = 64'hFFFFFFFFFFFFFFFF;
+          bit found = 0;
+
+          // This is a simplified implementation
+          start_offset = cfg_start;
+          while (start_offset + n_bytes - 1 <= cfg_end) begin
+            bit overlap = 0;
+            longint unsigned gap_end = cfg_end;
+
+            foreach (m_allocated_regions[i]) begin
+              if (m_allocated_regions[i].is_allocated()) begin
+                longint unsigned r_start = m_allocated_regions[i].get_start_offset();
+                longint unsigned r_end = m_allocated_regions[i].get_end_offset();
+                if (r_start > start_offset && r_start < gap_end) begin
+                  gap_end = r_start - 1;
+                end
+                if (!(start_offset + n_bytes - 1 < r_start || start_offset > r_end)) begin
+                  overlap = 1;
+                  start_offset = r_end + 1;
+                  break;
+                end
+              end
+            end
+
+            if (!overlap) begin
+              longint unsigned gap_size = gap_end - start_offset + 1;
+              if (gap_size >= n_bytes && gap_size < best_gap) begin
+                best_gap = gap_size;
+                best_start = start_offset;
+                found = 1;
+              end
+              // Move to next gap
+              start_offset = gap_end + 1;
+            end
+          end
+
+          if (!found) return null;
+          start_offset = best_start;
+        end
+
+        UVM_MEM_MAM_RANDOM: begin
+          // Random: try random locations
+          int max_tries = 100;
+          bit found = 0;
+          bit overlap;
+          int try_count;
+
+          for (try_count = 0; try_count < max_tries; try_count++) begin
+            start_offset = cfg_start + ($urandom() % (cfg_end - cfg_start - n_bytes + 2));
+            overlap = 0;
+            foreach (m_allocated_regions[i]) begin
+              if (m_allocated_regions[i].is_allocated()) begin
+                longint unsigned r_start = m_allocated_regions[i].get_start_offset();
+                longint unsigned r_end = m_allocated_regions[i].get_end_offset();
+                if (!(start_offset + n_bytes - 1 < r_start || start_offset > r_end)) begin
+                  overlap = 1;
+                  break;
+                end
+              end
+            end
+            if (!overlap) begin
+              found = 1;
+              break;
+            end
+          end
+
+          if (!found) begin
+            // Fall back to greedy
+            return request_region(n_bytes, UVM_MEM_MAM_GREEDY, fname, lineno);
+          end
+        end
+      endcase
+
+      return reserve_region(start_offset, n_bytes, fname, lineno);
+    endfunction
+
+    // Release a memory region
+    virtual function void release_region(uvm_mem_region region);
+      if (region != null) begin
+        m_allocated_size -= region.get_len();
+        region.release_region();
+      end
+    endfunction
+
+    // Release all allocated regions
+    virtual function void release_all_regions();
+      foreach (m_allocated_regions[i]) begin
+        if (m_allocated_regions[i].is_allocated()) begin
+          m_allocated_regions[i].release_region();
+        end
+      end
+      m_allocated_size = 0;
+    endfunction
+
+    // Get the managed memory
+    virtual function uvm_mem get_memory();
+      return m_memory;
+    endfunction
+
+    // Get list of allocated regions
+    virtual function void get_allocated_regions(ref uvm_mem_region regions[$]);
+      regions.delete();
+      foreach (m_allocated_regions[i]) begin
+        if (m_allocated_regions[i].is_allocated()) begin
+          regions.push_back(m_allocated_regions[i]);
+        end
+      end
+    endfunction
+
+    // Get usage statistics
+    virtual function longint unsigned get_total_size();
+      return m_total_size;
+    endfunction
+
+    virtual function longint unsigned get_allocated_size();
+      return m_allocated_size;
+    endfunction
+
+    virtual function longint unsigned get_available_size();
+      return m_total_size - m_allocated_size;
+    endfunction
+
+    virtual function string convert2string();
+      return $sformatf("MAM: total=%0d allocated=%0d available=%0d regions=%0d",
+                       m_total_size, m_allocated_size, get_available_size(),
+                       m_allocated_regions.size());
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_coverage_db - Coverage database for collecting coverage info
+  //=========================================================================
+  // Global coverage database that tracks all coverage objects and provides
+  // unified access to coverage data. Singleton pattern.
+  class uvm_coverage_db;
+    static local uvm_coverage_db m_inst;
+    protected uvm_coverage m_coverage_objects[$];
+    protected bit m_enabled;
+
+    local function new();
+      m_enabled = 1;
+    endfunction
+
+    // Get singleton instance
+    static function uvm_coverage_db get();
+      if (m_inst == null)
+        m_inst = new();
+      return m_inst;
+    endfunction
+
+    // Register a coverage object
+    virtual function void register_coverage(uvm_coverage cov);
+      if (cov != null)
+        m_coverage_objects.push_back(cov);
+    endfunction
+
+    // Enable/disable all coverage
+    virtual function void set_enabled(bit enabled);
+      m_enabled = enabled;
+      foreach (m_coverage_objects[i]) begin
+        m_coverage_objects[i].set_coverage_enabled(enabled);
+      end
+    endfunction
+
+    virtual function bit get_enabled();
+      return m_enabled;
+    endfunction
+
+    // Sample all registered coverage objects
+    virtual function void sample_all();
+      if (m_enabled) begin
+        foreach (m_coverage_objects[i]) begin
+          if (m_coverage_objects[i].get_coverage_enabled())
+            m_coverage_objects[i].sample();
+        end
+      end
+    endfunction
+
+    // Get overall coverage percentage
+    virtual function real get_coverage_pct();
+      real total = 0.0;
+      int count = 0;
+      foreach (m_coverage_objects[i]) begin
+        total += m_coverage_objects[i].get_coverage_pct();
+        count++;
+      end
+      return (count > 0) ? (total / count) : 0.0;
+    endfunction
+
+    // Get number of registered coverage objects
+    virtual function int get_num_coverage_objects();
+      return m_coverage_objects.size();
+    endfunction
+
+    // Report coverage summary
+    virtual function void report();
+      $display("=== UVM Coverage Summary ===");
+      $display("Total coverage objects: %0d", m_coverage_objects.size());
+      $display("Overall coverage: %.2f%%", get_coverage_pct());
+      foreach (m_coverage_objects[i]) begin
+        $display("  %s: %.2f%%",
+                 m_coverage_objects[i].get_name(),
+                 m_coverage_objects[i].get_coverage_pct());
+      end
     endfunction
 
   endclass
