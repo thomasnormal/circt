@@ -4045,6 +4045,41 @@ int32_t __moore_tlm_fifo_is_full(MooreTlmFifoHandle fifo);
 /// @param fifo Handle to the FIFO
 void __moore_tlm_fifo_flush(MooreTlmFifoHandle fifo);
 
+/// Check if put can proceed without blocking.
+/// This implements the can_put() method of uvm_tlm_fifo.
+/// For unbounded FIFOs, always returns 1.
+/// For bounded FIFOs, returns 1 if there is free space.
+/// @param fifo Handle to the FIFO
+/// @return 1 if put can proceed, 0 if FIFO is full
+int32_t __moore_tlm_fifo_can_put(MooreTlmFifoHandle fifo);
+
+/// Check if get can proceed without blocking.
+/// This implements the can_get() method of uvm_tlm_fifo.
+/// @param fifo Handle to the FIFO
+/// @return 1 if get can proceed, 0 if FIFO is empty
+int32_t __moore_tlm_fifo_can_get(MooreTlmFifoHandle fifo);
+
+/// Get the number of items currently in the FIFO.
+/// This implements the used() method of uvm_tlm_fifo.
+/// Alias for __moore_tlm_fifo_size().
+/// @param fifo Handle to the FIFO
+/// @return Number of items in the FIFO
+int64_t __moore_tlm_fifo_used(MooreTlmFifoHandle fifo);
+
+/// Get the number of free slots in the FIFO.
+/// This implements the free() method of uvm_tlm_fifo.
+/// For unbounded FIFOs, returns INT64_MAX.
+/// For bounded FIFOs, returns (maxSize - currentSize).
+/// @param fifo Handle to the FIFO
+/// @return Number of free slots
+int64_t __moore_tlm_fifo_free(MooreTlmFifoHandle fifo);
+
+/// Get the maximum capacity of the FIFO.
+/// This implements the capacity() method of uvm_tlm_fifo.
+/// @param fifo Handle to the FIFO
+/// @return Maximum capacity (0 for unbounded FIFO)
+int64_t __moore_tlm_fifo_capacity(MooreTlmFifoHandle fifo);
+
 //===----------------------------------------------------------------------===//
 // TLM Subscriber Operations
 //===----------------------------------------------------------------------===//
