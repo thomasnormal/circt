@@ -197,6 +197,20 @@ package uvm_pkg;
     UVM_ALL_DROPPED
   } uvm_objection_event;
 
+  // Phase state enum (for wait_for_state)
+  typedef enum {
+    UVM_PHASE_DORMANT,
+    UVM_PHASE_SCHEDULED,
+    UVM_PHASE_SYNCING,
+    UVM_PHASE_STARTED,
+    UVM_PHASE_EXECUTING,
+    UVM_PHASE_READY_TO_END,
+    UVM_PHASE_ENDED,
+    UVM_PHASE_CLEANUP,
+    UVM_PHASE_DONE,
+    UVM_PHASE_JUMPING
+  } uvm_phase_state;
+
   // Port types
   typedef enum int {
     UVM_PORT,
@@ -597,11 +611,13 @@ package uvm_pkg;
     local uvm_phase m_predecessors[$];
     local uvm_phase m_successors[$];
     local uvm_objection m_phase_objection;
+    local uvm_phase_state m_state;
 
     function new(string name = "uvm_phase");
       super.new(name);
       m_phase_name = name;
       m_phase_objection = new({name, "_objection"});
+      m_state = UVM_PHASE_DORMANT;
     endfunction
 
     virtual function string get_name();
@@ -647,6 +663,27 @@ package uvm_pkg;
       return 0;
     endfunction
 
+    // Get current phase state
+    virtual function uvm_phase_state get_state();
+      return m_state;
+    endfunction
+
+    // Set phase state (internal use)
+    virtual function void set_state(uvm_phase_state state);
+      m_state = state;
+    endfunction
+
+    // Wait for phase to reach specified state
+    // In stub implementation, we assume the phase is already in the requested
+    // state or will transition immediately (since we don't have a real phase machine)
+    virtual task wait_for_state(uvm_phase_state state, uvm_objection_event op = UVM_ALL_DROPPED);
+      // Stub: In a real implementation, this would block until the phase
+      // reaches the specified state. For compilation purposes, we set the
+      // state immediately and return.
+      m_state = state;
+      #0; // Allow other processes to execute
+    endtask
+
   endclass
 
   // Common phase instances (global)
@@ -659,6 +696,18 @@ package uvm_pkg;
   uvm_phase check_phase_h = new("check");
   uvm_phase report_phase_h = new("report");
   uvm_phase final_phase_h = new("final");
+
+  // Standard UVM phase handle aliases (with _ph suffix per IEEE 1800.2)
+  // These are the names used in real-world UVM code
+  uvm_phase build_ph = build_phase_h;
+  uvm_phase connect_ph = connect_phase_h;
+  uvm_phase end_of_elaboration_ph = end_of_elaboration_phase_h;
+  uvm_phase start_of_simulation_ph = start_of_simulation_phase_h;
+  uvm_phase run_ph = run_phase_h;
+  uvm_phase extract_ph = extract_phase_h;
+  uvm_phase check_ph = check_phase_h;
+  uvm_phase report_ph = report_phase_h;
+  uvm_phase final_ph = final_phase_h;
 
   //=========================================================================
   // uvm_objection - Objection mechanism
