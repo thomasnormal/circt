@@ -13,6 +13,8 @@
 //   - uvm_env, uvm_test, uvm_scoreboard, uvm_subscriber
 //   - uvm_phase, uvm_config_db, uvm_factory
 //   - TLM: uvm_analysis_port, uvm_analysis_imp, uvm_tlm_analysis_fifo, etc.
+//   - Comparators: uvm_in_order_comparator, uvm_in_order_built_in_comparator,
+//                  uvm_algorithmic_comparator, uvm_pair
 //
 //===----------------------------------------------------------------------===//
 
@@ -7419,6 +7421,399 @@ package uvm_pkg;
                  m_coverage_objects[i].get_name(),
                  m_coverage_objects[i].get_coverage_pct());
       end
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_pair - Pair class for comparator match/mismatch reporting
+  //=========================================================================
+  class uvm_pair #(type T = uvm_object) extends uvm_object;
+    T first;
+    T second;
+
+    function new(string name = "uvm_pair");
+      super.new(name);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_pair";
+    endfunction
+
+    virtual function void do_copy(uvm_object rhs);
+      uvm_pair #(T) rhs_pair;
+      super.do_copy(rhs);
+      if ($cast(rhs_pair, rhs)) begin
+        first = rhs_pair.first;
+        second = rhs_pair.second;
+      end
+    endfunction
+
+    virtual function string convert2string();
+      string first_str, second_str;
+      if (first != null)
+        first_str = first.convert2string();
+      else
+        first_str = "<null>";
+      if (second != null)
+        second_str = second.convert2string();
+      else
+        second_str = "<null>";
+      return $sformatf("first: %s, second: %s", first_str, second_str);
+    endfunction
+  endclass
+
+  //=========================================================================
+  // uvm_in_order_comparator - In-order comparator for scoreboard support
+  //=========================================================================
+  // The in-order comparator compares transactions received on two analysis
+  // exports (before_export and after_export). When transactions are received
+  // on both ports, they are compared in order. Matches and mismatches are
+  // counted and reported.
+  //=========================================================================
+  class uvm_in_order_comparator #(
+    type T = uvm_object,
+    type COMP = uvm_comparer,
+    type CONVERT = int,
+    type PAIR = uvm_pair #(T)
+  ) extends uvm_component;
+
+    // Analysis exports for receiving transactions
+    uvm_analysis_imp #(T, uvm_in_order_comparator #(T, COMP, CONVERT, PAIR)) before_export;
+    uvm_analysis_imp #(T, uvm_in_order_comparator #(T, COMP, CONVERT, PAIR)) after_export;
+
+    // Analysis port for broadcasting match/mismatch pairs
+    uvm_analysis_port #(PAIR) pair_ap;
+
+    // Internal FIFOs for buffering transactions
+    protected T m_before_fifo[$];
+    protected T m_after_fifo[$];
+
+    // Statistics
+    protected int unsigned m_matches;
+    protected int unsigned m_mismatches;
+
+    function new(string name, uvm_component parent);
+      super.new(name, parent);
+      before_export = new("before_export", this);
+      after_export = new("after_export", this);
+      pair_ap = new("pair_ap", this);
+      m_matches = 0;
+      m_mismatches = 0;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_in_order_comparator";
+    endfunction
+
+    // Write function for before_export - buffer transactions and try to compare
+    virtual function void write_before(T t);
+      m_before_fifo.push_back(t);
+      try_compare();
+    endfunction
+
+    // Write function for after_export - buffer transactions and try to compare
+    virtual function void write_after(T t);
+      m_after_fifo.push_back(t);
+      try_compare();
+    endfunction
+
+    // Default write goes to before_export
+    virtual function void write(T t);
+      write_before(t);
+    endfunction
+
+    // Try to compare if we have items in both FIFOs
+    protected virtual function void try_compare();
+      T before_item, after_item;
+      PAIR pair;
+      bit match;
+
+      while (m_before_fifo.size() > 0 && m_after_fifo.size() > 0) begin
+        before_item = m_before_fifo.pop_front();
+        after_item = m_after_fifo.pop_front();
+
+        // Perform comparison using built-in compare
+        match = comp(before_item, after_item);
+
+        // Create pair for reporting
+        pair = new("pair");
+        pair.first = before_item;
+        pair.second = after_item;
+
+        if (match) begin
+          m_matches++;
+          `uvm_info("CMPMATCH", $sformatf("Match #%0d: %s", m_matches,
+            before_item.convert2string()), UVM_MEDIUM)
+        end
+        else begin
+          m_mismatches++;
+          `uvm_error("CMPMISMATCH", $sformatf("Mismatch #%0d: before=%s, after=%s",
+            m_mismatches, before_item.convert2string(), after_item.convert2string()))
+        end
+
+        // Broadcast the pair
+        pair_ap.write(pair);
+      end
+    endfunction
+
+    // Virtual comparison function - can be overridden for custom comparison
+    protected virtual function bit comp(T a, T b);
+      if (a == null && b == null)
+        return 1;
+      if (a == null || b == null)
+        return 0;
+      return a.compare(b);
+    endfunction
+
+    // Get match count
+    virtual function int unsigned get_matches();
+      return m_matches;
+    endfunction
+
+    // Get mismatch count
+    virtual function int unsigned get_mismatches();
+      return m_mismatches;
+    endfunction
+
+    // Get total comparison count
+    virtual function int unsigned get_total();
+      return m_matches + m_mismatches;
+    endfunction
+
+    // Flush internal FIFOs
+    virtual function void flush();
+      m_before_fifo.delete();
+      m_after_fifo.delete();
+    endfunction
+
+    // Report phase - print statistics
+    virtual function void report_phase(uvm_phase phase);
+      super.report_phase(phase);
+      `uvm_info("CMPSTATS", $sformatf(
+        "Comparator '%s': %0d comparisons, %0d matches, %0d mismatches",
+        get_full_name(), get_total(), m_matches, m_mismatches), UVM_LOW)
+      if (m_mismatches > 0)
+        `uvm_error("CMPERR", $sformatf(
+          "Comparator '%s' completed with %0d mismatches", get_full_name(), m_mismatches))
+      if (m_before_fifo.size() > 0)
+        `uvm_warning("CMPWARN", $sformatf(
+          "Comparator '%s' has %0d unmatched 'before' items",
+          get_full_name(), m_before_fifo.size()))
+      if (m_after_fifo.size() > 0)
+        `uvm_warning("CMPWARN", $sformatf(
+          "Comparator '%s' has %0d unmatched 'after' items",
+          get_full_name(), m_after_fifo.size()))
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_in_order_built_in_comparator - Uses built-in compare() method
+  //=========================================================================
+  // This is a simplified version of the in-order comparator that uses
+  // the built-in compare() method of uvm_object directly.
+  //=========================================================================
+  class uvm_in_order_built_in_comparator #(type T = uvm_object)
+    extends uvm_in_order_comparator #(T);
+
+    function new(string name, uvm_component parent);
+      super.new(name, parent);
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_in_order_built_in_comparator";
+    endfunction
+
+    // Use the default compare() method
+    protected virtual function bit comp(T a, T b);
+      if (a == null && b == null)
+        return 1;
+      if (a == null || b == null)
+        return 0;
+      return a.compare(b);
+    endfunction
+
+  endclass
+
+  //=========================================================================
+  // uvm_algorithmic_comparator - Comparator with transformer function
+  //=========================================================================
+  // The algorithmic comparator allows a custom transformation to be applied
+  // to the 'before' transaction before comparison. This is useful when the
+  // expected output differs from the input in a predictable way.
+  //
+  // Type parameters:
+  //   BEFORE - Type of transaction on before_export
+  //   AFTER  - Type of transaction on after_export
+  //   TRANSFORMER - Class that provides transform() method
+  //=========================================================================
+  class uvm_algorithmic_comparator #(
+    type BEFORE = uvm_object,
+    type AFTER = uvm_object,
+    type TRANSFORMER = uvm_object
+  ) extends uvm_component;
+
+    // Analysis exports for receiving transactions
+    uvm_analysis_imp #(BEFORE, uvm_algorithmic_comparator #(BEFORE, AFTER, TRANSFORMER)) before_export;
+    uvm_analysis_imp #(AFTER, uvm_algorithmic_comparator #(BEFORE, AFTER, TRANSFORMER)) after_export;
+
+    // Analysis port for broadcasting match/mismatch pairs
+    uvm_analysis_port #(uvm_pair #(AFTER)) pair_ap;
+
+    // Internal FIFOs for buffering transactions
+    protected BEFORE m_before_fifo[$];
+    protected AFTER m_after_fifo[$];
+
+    // Transformer object
+    TRANSFORMER m_transformer;
+
+    // Statistics
+    protected int unsigned m_matches;
+    protected int unsigned m_mismatches;
+
+    function new(string name, uvm_component parent, TRANSFORMER transformer = null);
+      super.new(name, parent);
+      before_export = new("before_export", this);
+      after_export = new("after_export", this);
+      pair_ap = new("pair_ap", this);
+      m_transformer = transformer;
+      m_matches = 0;
+      m_mismatches = 0;
+    endfunction
+
+    virtual function string get_type_name();
+      return "uvm_algorithmic_comparator";
+    endfunction
+
+    // Set the transformer object
+    virtual function void set_transformer(TRANSFORMER transformer);
+      m_transformer = transformer;
+    endfunction
+
+    // Get the transformer object
+    virtual function TRANSFORMER get_transformer();
+      return m_transformer;
+    endfunction
+
+    // Write function for before_export - buffer transactions and try to compare
+    virtual function void write_before(BEFORE t);
+      m_before_fifo.push_back(t);
+      try_compare();
+    endfunction
+
+    // Write function for after_export - buffer transactions and try to compare
+    virtual function void write_after(AFTER t);
+      m_after_fifo.push_back(t);
+      try_compare();
+    endfunction
+
+    // Default write goes to before_export
+    virtual function void write(BEFORE t);
+      write_before(t);
+    endfunction
+
+    // Try to compare if we have items in both FIFOs
+    protected virtual function void try_compare();
+      BEFORE before_item;
+      AFTER after_item, transformed_item;
+      uvm_pair #(AFTER) pair;
+      bit match;
+
+      while (m_before_fifo.size() > 0 && m_after_fifo.size() > 0) begin
+        before_item = m_before_fifo.pop_front();
+        after_item = m_after_fifo.pop_front();
+
+        // Transform the before item
+        transformed_item = transform(before_item);
+
+        // Perform comparison
+        match = comp(transformed_item, after_item);
+
+        // Create pair for reporting
+        pair = new("pair");
+        pair.first = transformed_item;
+        pair.second = after_item;
+
+        if (match) begin
+          m_matches++;
+          `uvm_info("CMPMATCH", $sformatf("Match #%0d", m_matches), UVM_MEDIUM)
+        end
+        else begin
+          m_mismatches++;
+          `uvm_error("CMPMISMATCH", $sformatf("Mismatch #%0d: expected=%s, actual=%s",
+            m_mismatches,
+            (transformed_item != null) ? transformed_item.convert2string() : "<null>",
+            (after_item != null) ? after_item.convert2string() : "<null>"))
+        end
+
+        // Broadcast the pair
+        pair_ap.write(pair);
+      end
+    endfunction
+
+    // Transform function - override in derived class or set transformer
+    protected virtual function AFTER transform(BEFORE t);
+      // Default implementation: try to cast directly
+      // In real usage, the transformer's transform() method would be called
+      AFTER result;
+      if (m_transformer != null) begin
+        // Call transformer's transform method if it exists
+        // Since we can't call arbitrary methods, users should override this
+        `uvm_info("TRANSFORM", "Using default transform (direct cast)", UVM_DEBUG)
+      end
+      if (!$cast(result, t))
+        result = null;
+      return result;
+    endfunction
+
+    // Comparison function - can be overridden
+    protected virtual function bit comp(AFTER a, AFTER b);
+      if (a == null && b == null)
+        return 1;
+      if (a == null || b == null)
+        return 0;
+      return a.compare(b);
+    endfunction
+
+    // Get match count
+    virtual function int unsigned get_matches();
+      return m_matches;
+    endfunction
+
+    // Get mismatch count
+    virtual function int unsigned get_mismatches();
+      return m_mismatches;
+    endfunction
+
+    // Get total comparison count
+    virtual function int unsigned get_total();
+      return m_matches + m_mismatches;
+    endfunction
+
+    // Flush internal FIFOs
+    virtual function void flush();
+      m_before_fifo.delete();
+      m_after_fifo.delete();
+    endfunction
+
+    // Report phase - print statistics
+    virtual function void report_phase(uvm_phase phase);
+      super.report_phase(phase);
+      `uvm_info("CMPSTATS", $sformatf(
+        "Algorithmic Comparator '%s': %0d comparisons, %0d matches, %0d mismatches",
+        get_full_name(), get_total(), m_matches, m_mismatches), UVM_LOW)
+      if (m_mismatches > 0)
+        `uvm_error("CMPERR", $sformatf(
+          "Algorithmic Comparator '%s' completed with %0d mismatches", get_full_name(), m_mismatches))
+      if (m_before_fifo.size() > 0)
+        `uvm_warning("CMPWARN", $sformatf(
+          "Algorithmic Comparator '%s' has %0d unmatched 'before' items",
+          get_full_name(), m_before_fifo.size()))
+      if (m_after_fifo.size() > 0)
+        `uvm_warning("CMPWARN", $sformatf(
+          "Algorithmic Comparator '%s' has %0d unmatched 'after' items",
+          get_full_name(), m_after_fifo.size()))
     endfunction
 
   endclass
