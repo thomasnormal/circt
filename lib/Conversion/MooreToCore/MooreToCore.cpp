@@ -2339,6 +2339,61 @@ struct ClassNullOpConversion : public OpConversionPattern<ClassNullOp> {
   }
 };
 
+/// moore.class.copy lowering: create a shallow copy of a class instance.
+/// This allocates new memory and copies all bytes from the source object.
+struct ClassCopyOpConversion : public OpConversionPattern<ClassCopyOp> {
+  ClassCopyOpConversion(TypeConverter &tc, MLIRContext *ctx,
+                        ClassTypeCache &cache)
+      : OpConversionPattern<ClassCopyOp>(tc, ctx), cache(cache) {}
+
+  LogicalResult
+  matchAndRewrite(ClassCopyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    auto handleTy = cast<ClassHandleType>(op.getResult().getType());
+    auto sym = handleTy.getClassSym();
+
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    if (failed(resolveClassStructBody(mod, sym, *typeConverter, cache)))
+      return op.emitError() << "Could not resolve class struct for " << sym;
+
+    auto structInfo = cache.getStructInfo(sym);
+    auto structTy = structInfo->classBody;
+
+    // Compute struct size.
+    uint64_t byteSize = getTypeSizeSafe(structTy, mod);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto cSize = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                          rewriter.getI64IntegerAttr(byteSize));
+
+    // Get or declare malloc and call it to allocate memory for the new object.
+    auto mallocFn = getOrCreateMalloc(mod, rewriter);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto mallocCall =
+        LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
+                             SymbolRefAttr::get(mallocFn), ValueRange{cSize});
+
+    Value destPtr = mallocCall.getResult();
+    Value srcPtr = adaptor.getSource();
+
+    // Copy all bytes from source to destination using memcpy.
+    // This performs a shallow copy - nested class handles (pointers) are
+    // copied as-is, so both original and copy reference the same nested objects.
+    LLVM::MemcpyOp::create(rewriter, loc, destPtr, srcPtr, cSize,
+                           /*isVolatile=*/false);
+
+    // Replace the copy op with the new object pointer.
+    rewriter.replaceOp(op, destPtr);
+    return success();
+  }
+
+private:
+  ClassTypeCache &cache;
+};
+
 /// Lowering for InterfaceDeclOp.
 /// The interface declaration is resolved to an LLVM struct and then erased.
 struct InterfaceDeclOpConversion : public OpConversionPattern<InterfaceDeclOp> {
@@ -18048,6 +18103,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   // ClassDynCastOpConversion needs cache for RTTI type ID lookup
   patterns.add<ClassDynCastOpConversion>(typeConverter, patterns.getContext(),
                                          classCache);
+  patterns.add<ClassCopyOpConversion>(typeConverter, patterns.getContext(),
+                                      classCache);
 
   // Virtual interface patterns.
   patterns.add<InterfaceDeclOpConversion>(typeConverter, patterns.getContext(),
