@@ -1,5 +1,67 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 112 - January 23, 2026
+
+### UVM Scoreboard Utility Functions ✅
+
+Implemented comprehensive scoreboard infrastructure for verification:
+
+**New Runtime Functions (include/circt/Runtime/MooreRuntime.h):**
+- `__moore_scoreboard_create()` / `destroy()` - Scoreboard lifecycle
+- `__moore_scoreboard_add_expected()` / `add_actual()` - Transaction input
+- `__moore_scoreboard_compare()` / `try_compare()` / `compare_all()` - Comparison
+- `__moore_scoreboard_get_expected_export()` / `get_actual_export()` - TLM integration
+- `__moore_scoreboard_report()` / `passed()` / `get_*_count()` - Statistics
+- Custom comparison and mismatch callbacks
+
+**Features:**
+- TLM analysis export integration for reference model / DUT monitor connection
+- Default byte-by-byte comparison with custom callback support
+- Thread-safe with mutex protection
+- Per-scoreboard and global statistics
+
+**Unit Tests:** 16 new tests (568 total runtime tests pass)
+
+**Commit:** `d54d9d746 [UVM] Add scoreboard utility functions for verification`
+
+### Function Calls in Array Locator Predicates ✅
+
+Extended array locator predicate support with additional inline conversion handlers:
+
+**New Operations Supported:**
+- `ZExtOp` - Zero extension operations
+- `ClassUpcastOp` - Class inheritance type casting
+- `func::CallIndirectOp` - Indirect function calls (virtual dispatch)
+- `VTableLoadMethodOp` - VTable method loading
+
+**Key Fix:** Enabled `allowPatternRollback` in ConversionConfig to preserve value mappings longer during conversion, properly resolving block arguments from enclosing functions.
+
+**Commit:** `070f079bb [MooreToCore] Support function calls in array locator predicates`
+
+### Sequence/Property Event Control Error Handling ✅
+
+Added clear error message for unsupported SVA sequence event controls:
+
+**Before:** Cryptic verification failure with invalid IR
+**After:** Clear error: "sequence/property event controls are not yet supported"
+
+**Chapter-9 effective pass rate:** 97% (45/46 - 1 SVA feature not yet supported)
+
+**Commit:** `e8052e464 [ImportVerilog] Add clear error for sequence/property event controls`
+
+### Supply Net Type Support ✅
+
+Added support for `supply0` and `supply1` net types:
+
+- `supply0` nets initialized to all zeros (ground)
+- `supply1` nets initialized to all ones (power/VCC)
+
+**verilator-verification pass rate:** 73.4% (113/154 tests, +1)
+
+**Commit:** `13ee53ebe [MooreToCore] Add supply0 and supply1 net type support`
+
+---
+
 ## Iteration 111 - January 23, 2026
 
 ### UVM Sequence/Sequencer Runtime Infrastructure ✅
