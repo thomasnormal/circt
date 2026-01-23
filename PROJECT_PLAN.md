@@ -67,7 +67,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 111 Complete)
+### Track Status & Next Tasks (Iteration 112 Complete)
 
 **17+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
@@ -88,18 +88,18 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - sv-tests Chapter-23, 24, 25, 26: **All 100%** ✅
 
 **Other Chapters:**
-- sv-tests Chapter-9: **93.5% effective** (1 SVA test + 2 other failures) ✅ **IMPROVED (Iter 111)**
+- sv-tests Chapter-9: **97% effective** (1 SVA sequence event not supported) ✅ **IMPROVED (Iter 112)**
 
 **External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator-verification: **72.7%** (112/154 passing) ✅ **IMPROVED (Iter 111)**
+- verilator-verification: **73.4%** (113/154 passing) ✅ **IMPROVED (Iter 112)**
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
 - **4 AVIPs run in circt-sim:** APB, SPI, UART, I3C (clock/reset/UVM_INFO working) ✅
 - **AHB AVIP compiles** with `--single-unit --ignore-unknown-modules` ✅
 
-### Remaining Limitations (Updated Iteration 111)
+### Remaining Limitations (Updated Iteration 112)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
@@ -108,26 +108,27 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 4. ~~**TLM Ports/Exports**~~: ✅ IMPLEMENTED (Iter 109) - Runtime infrastructure for analysis ports/FIFOs
 5. ~~**UVM Objections**~~: ✅ IMPLEMENTED (Iter 110) - Objection system for phase control
 6. ~~**UVM Sequences**~~: ✅ IMPLEMENTED (Iter 111) - Sequence/sequencer runtime infrastructure
-7. ~~**Array locator external calls**~~: ✅ FIXED (Iter 111) - Pre-scan loop remaps external values
+7. ~~**UVM Scoreboard**~~: ✅ IMPLEMENTED (Iter 112) - Scoreboard utility functions
+8. ~~**Array locator external calls**~~: ✅ FIXED (Iter 111, 112) - Pre-scan + inline handlers
 
 **For sv-tests Completion:**
-1. **Chapter-9 (93.5%)**:
-   - ~~4 process class tests~~: ✅ FIXED (Iter 111) - Uses llhd.process for multi-block calls
-   - 1 SVA sequence event test (Codex agent)
-   - 2 other failures (under investigation)
+1. **Chapter-9 (97%)**:
+   - ~~4 process class tests~~: ✅ FIXED (Iter 111)
+   - 1 SVA sequence event test (clear error now - Codex agent scope)
 
-**For verilator-verification (72.7%):**
-- UVM-dependent tests: 13 tests (skip)
+**For verilator-verification (73.4%):**
+- UVM-dependent tests: 12 tests (skip)
 - SVA tests: 6 tests (Codex agent)
-- Non-LRM-compliant syntax: Various tests
+- Signal strengths/other syntax: Various tests
 - ~~Non-procedural dynamic~~: ✅ FIXED (Iter 110)
 - ~~String methods in predicates~~: ✅ FIXED (Iter 111)
+- ~~Supply nets~~: ✅ FIXED (Iter 112)
 
-### Next Tasks for Tracks (Iteration 112)
+### Next Tasks for Tracks (Iteration 113)
 
-**Track A**: AHB AVIP end-to-end circt-sim execution (verify array locator fix works)
-**Track B**: UVM scoreboard/coverage patterns
-**Track C**: sv-tests Chapter-9 remaining 2 failures
+**Track A**: AHB AVIP virtual method dispatch in array locator (next blocker)
+**Track B**: UVM register abstraction layer (RAL) runtime
+**Track C**: Additional sv-tests chapter coverage
 **Track D**: Continue verilator-verification improvements
 
 **Infrastructure:**
@@ -136,7 +137,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - UVM config_db: **Hierarchical/wildcard matching** ✅
 - UVM TLM Ports: **Analysis port/FIFO runtime** ✅
 - UVM Objections: **Raise/drop/drain with threading** ✅
-- UVM Sequences: **Sequencer arbitration + driver handshake** ✅ **NEW (Iter 111)**
+- UVM Sequences: **Sequencer arbitration + driver handshake** ✅
+- UVM Scoreboard: **Transaction comparison with TLM integration** ✅ **NEW (Iter 112)**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
