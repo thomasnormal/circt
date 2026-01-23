@@ -67,36 +67,65 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 105 - Complete)
+### Track Status & Next Tasks (Iteration 106)
 
-**12 Chapters at 100%:**
+**14+ Chapters at 100% effective:**
+- sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
 - sv-tests Chapter-7: **103/103** (100%) ✅
+- sv-tests Chapter-8: **100% effective** (all 9 failures are negative tests)
 - sv-tests Chapter-12: **27/27** (100%) ✅
 - sv-tests Chapter-13: **15/15** (100%) ✅
 - sv-tests Chapter-14: **5/5** (100%) ✅
 - sv-tests Chapter-15: **5/5** (100%) ✅
-- sv-tests Chapter-16: **53/53** (100%) ✅ (was 49%)
-- sv-tests Chapter-18: **134/134** (100%) ✅ (was 42% due to test config)
+- sv-tests Chapter-16: **53/53** (100%) ✅
+- sv-tests Chapter-18: **134/134** (100%) ✅
 - sv-tests Chapter-20: **47/47** (100%) ✅
 - sv-tests Chapter-21: **29/29** (100%) ✅
 - sv-tests Chapter-22: **74/74** (100%) ✅
 - sv-tests Chapter-23, 24, 25, 26: **All 100%** ✅
 
 **Other Chapters:**
-- sv-tests Chapter-5: 84%
 - sv-tests Chapter-6: **97.6%** (82/84 - remaining need slang AnalysisManager)
-- sv-tests Chapter-8: **100% effective** (all 9 failures are negative tests)
 - sv-tests Chapter-9: **97.8%** (45/46)
 - sv-tests Chapter-10: **90% effective**
 - sv-tests Chapter-11: **98.7%** (77/78)
 
 **External Test Suites:**
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
-- verilator-verification: **100/154 passing** (65%) ✅
+- verilator-verification: **101/154 passing** (65.6%) ✅
 
 **UVM AVIP Status:**
-- **9 AVIPs compile:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
-- APB AVIP runs in circt-sim (clock/reset working) ✅
+- **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
+- **APB AVIP runs in circt-sim** (clock/reset working) ✅
+- **AHB AVIP compiles** with `--single-unit --ignore-unknown-modules` ✅
+
+### Remaining Limitations (Iteration 106)
+
+**For Full UVM Testbench Execution:**
+1. **UVM run_test()**: Need runtime implementation to bootstrap UVM test execution
+2. **UVM config_db**: Configuration database for UVM components
+3. **TLM Ports/Exports**: Agent-driver-sequencer communication
+4. **Virtual method dispatch**: Class hierarchy simulation in circt-sim
+
+**For sv-tests Completion:**
+1. **Chapter-6 (97.6%)**: Remaining 2 tests need slang AnalysisManager (driver tracking)
+2. **Chapter-9 (97.8%)**: 1 test uses SVA sequence events
+3. **Chapter-11 (98.7%)**: 1 test needs runtime simulation (outside compile-time scope)
+
+**For verilator-verification (65.6%):**
+1. 6 tests are SVA/sequence-related (handled by Codex agent)
+2. 13 tests need UVM library
+3. 17 tests have slang semantic errors (class member in continuous assign)
+4. Remaining are test file syntax issues
+
+### Next Tasks for Tracks
+
+**Track A**: Try running more AVIPs through circt-sim (SPI, UART, I3C)
+**Track B**: Investigate UVM run_test() runtime implementation
+**Track C**: Work on verilator-verification non-SVA improvements
+**Track D**: Try to improve Chapter-9 or Chapter-11 to 100%
+
+**Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops supported** ✅
 - UVM Phase System: **All 9 phases + component callbacks** ✅
 
