@@ -182,6 +182,119 @@ struct StmtVisitor {
     return *block.release();
   }
 
+  /// Handle foreach loops for queues and dynamic arrays.
+  /// Uses size-based iteration (for i=0 to size-1).
+  LogicalResult recursiveForeachQueue(
+      const slang::ast::ForeachLoopStatement &stmt, uint32_t level) {
+    const auto &loopDim = stmt.loopDims[level];
+    const auto &iter = loopDim.loopVar;
+
+    // Get the array reference as an lvalue
+    auto arrayRef = context.convertLvalueExpression(stmt.arrayRef);
+    if (!arrayRef)
+      return failure();
+
+    auto iterType = context.convertType(*iter->getDeclaredType());
+    if (!iterType)
+      return failure();
+
+    auto intType = dyn_cast<moore::IntType>(iterType);
+    if (!intType) {
+      mlir::emitError(loc)
+          << "queue foreach iterator must have integer type, but got "
+          << iterType;
+      return failure();
+    }
+
+    auto &exitBlock = createBlock();
+    auto &stepBlock = createBlock();
+    auto &bodyBlock = createBlock();
+    auto &checkBlock = createBlock();
+
+    // Push the blocks onto the loop stack such that we can continue and break.
+    context.loopStack.push_back({&stepBlock, &exitBlock});
+    auto done = llvm::make_scope_exit([&] { context.loopStack.pop_back(); });
+
+    // Initialize iterator to 0
+    Value initial = moore::ConstantOp::create(builder, loc, intType, 0);
+
+    // Create loop variable
+    Value varOp = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(cast<moore::UnpackedType>(intType)),
+        builder.getStringAttr(iter->name), initial);
+    context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                         iter, varOp);
+
+    cf::BranchOp::create(builder, loc, &checkBlock);
+    builder.setInsertionPointToEnd(&checkBlock);
+
+    // Get array size and check if iterator < size
+    Value arrayVal = moore::ReadOp::create(builder, loc, arrayRef);
+    Value arraySize = moore::ArraySizeOp::create(builder, loc, arrayVal);
+    Value var = moore::ReadOp::create(builder, loc, varOp);
+    Value cond = moore::SltOp::create(builder, loc, var, arraySize);
+    if (!cond)
+      return failure();
+    cond = context.convertToBool(cond);
+    if (!cond)
+      return failure();
+    cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+    cf::CondBranchOp::create(builder, loc, cond, &bodyBlock, &exitBlock);
+
+    // Body block
+    builder.setInsertionPointToEnd(&bodyBlock);
+
+    // Find next dimension in this foreach statement
+    bool hasNext = false;
+    for (uint32_t nextLevel = level + 1; nextLevel < stmt.loopDims.size();
+         nextLevel++) {
+      if (stmt.loopDims[nextLevel].loopVar) {
+        if (!stmt.loopDims[nextLevel].range.has_value()) {
+          // Check if the array type at this level is a queue or dynamic array
+          auto arrayType = arrayRef.getType();
+          if (auto refType = dyn_cast<moore::RefType>(arrayType))
+            arrayType = refType.getNestedType();
+          if (isa<moore::QueueType, moore::OpenUnpackedArrayType>(arrayType)) {
+            if (failed(recursiveForeachQueue(stmt, nextLevel)))
+              return failure();
+          } else {
+            if (failed(recursiveForeachDynamic(stmt, nextLevel)))
+              return failure();
+          }
+        } else {
+          if (failed(recursiveForeach(stmt, nextLevel)))
+            return failure();
+        }
+        hasNext = true;
+        break;
+      }
+    }
+
+    if (!hasNext) {
+      if (failed(context.convertStatement(stmt.body)))
+        return failure();
+    }
+
+    if (!isTerminated())
+      cf::BranchOp::create(builder, loc, &stepBlock);
+
+    // Step block: increment iterator
+    builder.setInsertionPointToEnd(&stepBlock);
+    Value currentVar = moore::ReadOp::create(builder, loc, varOp);
+    Value one = moore::ConstantOp::create(builder, loc, intType, 1);
+    Value nextVar = moore::AddOp::create(builder, loc, currentVar, one);
+    moore::BlockingAssignOp::create(builder, loc, varOp, nextVar);
+    cf::BranchOp::create(builder, loc, &checkBlock);
+
+    if (exitBlock.hasNoPredecessors()) {
+      exitBlock.erase();
+      setTerminated();
+    } else {
+      builder.setInsertionPointToEnd(&exitBlock);
+    }
+    return success();
+  }
+
   /// Handle dynamic foreach loops for associative arrays.
   /// Uses first/next pattern to iterate over keys.
   LogicalResult recursiveForeachDynamic(
@@ -274,7 +387,23 @@ struct StmtVisitor {
     // find current dimension we are operate.
     const auto &loopDim = stmt.loopDims[level];
     if (!loopDim.range.has_value()) {
-      // Dynamic loop variable - use first/next pattern for associative arrays
+      // Dynamic loop variable - check if it's a queue or associative array
+      // to determine the iteration pattern.
+      auto arrayRef = context.convertLvalueExpression(stmt.arrayRef);
+      if (!arrayRef)
+        return failure();
+      auto arrayType = arrayRef.getType();
+      // Unwrap RefType if present
+      if (auto refType = dyn_cast<moore::RefType>(arrayType))
+        arrayType = refType.getNestedType();
+
+      // Queues and dynamic arrays use size-based iteration (for i=0 to size-1)
+      // Associative arrays use first/next iteration pattern
+      bool isQueueOrDynArray =
+          isa<moore::QueueType, moore::OpenUnpackedArrayType>(arrayType);
+      if (isQueueOrDynArray) {
+        return recursiveForeachQueue(stmt, level);
+      }
       return recursiveForeachDynamic(stmt, level);
     }
     auto &exitBlock = createBlock();
