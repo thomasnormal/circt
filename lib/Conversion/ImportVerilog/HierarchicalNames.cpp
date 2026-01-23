@@ -143,6 +143,40 @@ struct HierPathValueExprVisitor
     result = failure();
   }
 };
+
+/// Visitor to traverse statements and collect hierarchical value references.
+/// This visitor visits both statements and expressions within them, reusing
+/// the HierPathValueExprVisitor logic for expression handling.
+struct HierPathValueStmtVisitor
+    : public slang::ast::ASTVisitor<HierPathValueStmtVisitor, true, true,
+                                    true> {
+  Context &context;
+  Location loc;
+  LogicalResult result = success();
+
+  // The outermost module for determining hierarchical paths.
+  const slang::ast::Symbol &outermostModule;
+
+  HierPathValueStmtVisitor(Context &context, Location loc,
+                           const slang::ast::Symbol &outermostModule)
+      : context(context), loc(loc), outermostModule(outermostModule) {}
+
+  // Handle hierarchical values found in expressions within statements.
+  void handle(const slang::ast::HierarchicalValueExpression &expr) {
+    if (failed(result))
+      return;
+    // Delegate to the expression visitor logic via collectHierarchicalValues
+    if (failed(context.collectHierarchicalValues(expr, outermostModule)))
+      result = failure();
+  }
+
+  void handle(const slang::ast::InvalidExpression &expr) {
+    if (failed(result))
+      return;
+    mlir::emitError(loc, "invalid expression");
+    result = failure();
+  }
+};
 } // namespace
 
 LogicalResult
@@ -151,6 +185,15 @@ Context::collectHierarchicalValues(const slang::ast::Expression &expr,
   auto loc = convertLocation(expr.sourceRange);
   HierPathValueExprVisitor visitor(*this, loc, outermostModule);
   expr.visit(visitor);
+  return visitor.result;
+}
+
+LogicalResult Context::collectHierarchicalValuesFromStatement(
+    const slang::ast::Statement &stmt,
+    const slang::ast::Symbol &outermostModule) {
+  auto loc = convertLocation(stmt.sourceRange);
+  HierPathValueStmtVisitor visitor(*this, loc, outermostModule);
+  stmt.visit(visitor);
   return visitor.result;
 }
 
@@ -213,6 +256,15 @@ struct InstBodyVisitor {
       return failure();
 
     return success();
+  }
+
+  // Handle procedural blocks (always, initial, final, etc.).
+  // Traverse the procedure body to collect hierarchical references
+  // from event triggers, wait statements, and other expressions.
+  LogicalResult visit(const slang::ast::ProceduralBlockSymbol &procNode) {
+    auto &outermostModule = procNode.getParentScope()->asSymbol();
+    return context.collectHierarchicalValuesFromStatement(procNode.getBody(),
+                                                          outermostModule);
   }
 
   /// TODO:Skip all others.
