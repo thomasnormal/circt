@@ -2381,8 +2381,34 @@ struct RvalueExprVisitor : public ExprVisitor {
       } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
+      // Handle string comparisons with CaseEquality (===)
+      if (isa<moore::StringType>(lhs.getType()) ||
+          isa<moore::StringType>(rhs.getType()) ||
+          isa<moore::FormatStringType>(lhs.getType()) ||
+          isa<moore::FormatStringType>(rhs.getType())) {
+        auto strTy = moore::StringType::get(context.getContext());
+        lhs = context.materializeConversion(strTy, lhs, false, lhs.getLoc());
+        rhs = context.materializeConversion(strTy, rhs, false, rhs.getLoc());
+        if (!lhs || !rhs)
+          return {};
+        return moore::StringCmpOp::create(
+            builder, loc, moore::StringCmpPredicate::eq, lhs, rhs);
+      }
       return createBinary<moore::CaseEqOp>(lhs, rhs);
     case BinaryOperator::CaseInequality:
+      // Handle string comparisons with CaseInequality (!==)
+      if (isa<moore::StringType>(lhs.getType()) ||
+          isa<moore::StringType>(rhs.getType()) ||
+          isa<moore::FormatStringType>(lhs.getType()) ||
+          isa<moore::FormatStringType>(rhs.getType())) {
+        auto strTy = moore::StringType::get(context.getContext());
+        lhs = context.materializeConversion(strTy, lhs, false, lhs.getLoc());
+        rhs = context.materializeConversion(strTy, rhs, false, rhs.getLoc());
+        if (!lhs || !rhs)
+          return {};
+        return moore::StringCmpOp::create(
+            builder, loc, moore::StringCmpPredicate::ne, lhs, rhs);
+      }
       return createBinary<moore::CaseNeOp>(lhs, rhs);
     case BinaryOperator::WildcardEquality:
       return createBinary<moore::WildcardEqOp>(lhs, rhs);
