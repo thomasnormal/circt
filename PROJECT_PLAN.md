@@ -67,21 +67,20 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 104 - Complete)
+### Track Status & Next Tasks (Iteration 105 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-20: **47/47 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-7: **103/103 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-11: **78/78 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-18: **119/134 passing** (89%) ✅ (15 XFAIL remaining)
-- sv-tests Chapter-6: **72/84 passing** (85%) ✅ +3 tests (TypeRef, nettype)
+- sv-tests Chapter-11: **76/78 passing** (97%) ✅
+- sv-tests Chapter-6: **73/84 passing** (87%) ✅ +1 test (interconnect)
+- sv-tests Chapter-18: **56/134 passing** (42%) - needs investigation
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
 - verilator circt-sim: **15/21 passing** (71%) ✅ (100% of non-SVA tests)
-- UVM AVIP: **APB, SPI, UART, AHB, I2S compile to LLHD** ✅ (+I2S)
+- UVM AVIP: **APB, SPI, UART, AHB, I2S compile to LLHD** ✅
 - circt-sim: **LLVM dialect + FP ops supported** ✅
-- UVM Phase System: **All 9 phases implemented** ✅
+- UVM Phase System: **All 9 phases + component callbacks** ✅
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)

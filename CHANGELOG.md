@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 105 - January 23, 2026
+
+### UVM Component Phase Callback System ✅
+
+Implemented comprehensive UVM component phase callback registration:
+
+**New Runtime Functions:**
+- `__moore_uvm_register_component(component, name, len, parent, depth)` - Register component
+- `__moore_uvm_unregister_component(handle)` - Unregister component
+- `__moore_uvm_set_phase_callback(handle, phase, callback, userData)` - Set phase callback
+- `__moore_uvm_set_run_phase_callback(handle, callback, userData)` - Set run_phase callback
+- `__moore_uvm_set_global_phase_callbacks(startCb, startData, endCb, endData)` - Global callbacks
+- `__moore_uvm_execute_phases_with_callbacks()` - Execute with callbacks
+- `__moore_uvm_get_component_count()` - Get registered component count
+- `__moore_uvm_clear_components()` - Clear all registrations
+
+**Phase Execution Order:**
+- Top-down phases (build, final): Root to leaves by depth
+- Bottom-up phases (connect, end_of_elaboration, etc.): Leaves to root
+- Task phases (run): Concurrent callback signature support
+
+**Unit Tests:** 12+ new tests for component registration and callbacks
+
+### Interconnect Net Support ✅
+
+Added IEEE 1800-2017 Section 6.6.8 interconnect net support:
+- `UntypedType` handling in Types.cpp (lowered to 1-bit 4-state logic)
+- Enabled interconnect nets in Structure.cpp and MooreToCore.cpp
+- New test case in basic.sv
+
+### Test Results (Current)
+- Chapter-6: **73/84 passing** (87%) (+1 from Iter 104)
+- Chapter-11: **76/78 passing** (97%)
+- Chapter-20: **47/47 passing** (100%) ✅
+- Chapter-21: **29/29 passing** (100%) ✅
+- 5 AVIPs compile to LLHD: APB, SPI, UART, AHB, I2S
+
+### Commits
+- `45f033ff7` [Runtime] Add UVM component phase callback registration system
+- `582d31551` [ImportVerilog] Add support for interconnect nets
+
+---
+
 ## Iteration 104 - January 23, 2026
 
 ### UVM Phase System ✅
