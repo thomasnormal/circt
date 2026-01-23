@@ -11898,9 +11898,467 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     return success();
   }
 
+  /// Convert a single Moore operation to its LLVM/arith equivalent inline.
+  /// This handles the common operations that appear in array locator predicates.
+  /// The valueMap maps Moore values to their converted LLVM/arith values.
+  /// Returns the converted result value, or nullptr if conversion failed.
+  Value convertMooreOpInline(Operation *mooreOp,
+                             ConversionPatternRewriter &rewriter,
+                             Location loc, MLIRContext *ctx,
+                             DenseMap<Value, Value> &valueMap,
+                             ModuleOp mod) const {
+    // Helper to get converted operand. This handles:
+    // 1. Values already in valueMap (converted predicate ops)
+    // 2. Values remapped by the rewriter (external values already converted)
+    // 3. Block arguments and external values that need materialization
+    auto getConvertedOperand = [&](Value mooreVal) -> Value {
+      // Check if already in our value map
+      auto it = valueMap.find(mooreVal);
+      if (it != valueMap.end())
+        return it->second;
+
+      // Try to get remapped value from rewriter (for already-converted values)
+      Value remapped = rewriter.getRemappedValue(mooreVal);
+      if (remapped)
+        return remapped;
+
+      // For external values (defined outside the predicate block),
+      // try to materialize conversion
+      Type targetType = typeConverter->convertType(mooreVal.getType());
+      if (targetType) {
+        // Use materializeTargetConversion which creates an UnrealizedConversionCast
+        Value converted = typeConverter->materializeTargetConversion(
+            rewriter, loc, targetType, mooreVal);
+        if (converted)
+          return converted;
+      }
+
+      // Last resort: create an unrealized conversion cast
+      if (targetType) {
+        return UnrealizedConversionCastOp::create(rewriter, loc, targetType,
+                                                  mooreVal)
+            .getResult(0);
+      }
+
+      return nullptr;
+    };
+
+    // Handle moore.constant
+    if (auto constOp = dyn_cast<ConstantOp>(mooreOp)) {
+      Type resultType = typeConverter->convertType(constOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      APInt constAPInt = constOp.getValue().toAPInt(false);
+      // Check if result type is a 4-state struct
+      if (auto structTy = dyn_cast<hw::StructType>(resultType)) {
+        // 4-state value: create struct with {value, unknown=0}
+        auto intWidth = constAPInt.getBitWidth();
+        Value valPart = hw::ConstantOp::create(rewriter, loc, constAPInt);
+        APInt zeroAPInt(intWidth, 0);
+        Value unkPart = hw::ConstantOp::create(rewriter, loc, zeroAPInt);
+        return hw::StructCreateOp::create(rewriter, loc, structTy,
+                                          ValueRange{valPart, unkPart});
+      }
+      return hw::ConstantOp::create(rewriter, loc, constAPInt);
+    }
+
+    // Handle moore.read
+    if (auto readOp = dyn_cast<ReadOp>(mooreOp)) {
+      Value input = getConvertedOperand(readOp.getInput());
+      if (!input)
+        return nullptr;
+      Type resultType = typeConverter->convertType(readOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      // If input is LLVM pointer, use LLVM load
+      if (isa<LLVM::LLVMPointerType>(input.getType())) {
+        Type llvmResultType = convertToLLVMType(resultType);
+        Value loaded = LLVM::LoadOp::create(rewriter, loc, llvmResultType, input);
+        if (resultType != llvmResultType) {
+          loaded = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                      resultType, loaded)
+                       .getResult(0);
+        }
+        return loaded;
+      }
+      // Otherwise use llhd.prb
+      return llhd::ProbeOp::create(rewriter, loc, input);
+    }
+
+    // Handle moore.class.property_ref
+    if (auto propRefOp = dyn_cast<ClassPropertyRefOp>(mooreOp)) {
+      Value instance = getConvertedOperand(propRefOp.getInstance());
+      if (!instance)
+        return nullptr;
+
+      // Resolve class struct info
+      auto classRefTy = cast<ClassHandleType>(propRefOp.getInstance().getType());
+      SymbolRefAttr classSym = classRefTy.getClassSym();
+      if (failed(resolveClassStructBody(mod, classSym, *typeConverter, classCache)))
+        return nullptr;
+
+      auto structInfo = classCache.getStructInfo(classSym);
+      if (!structInfo)
+        return nullptr;
+
+      auto propSym = propRefOp.getProperty();
+      auto pathOpt = structInfo->getFieldPath(propSym);
+      if (!pathOpt)
+        return nullptr;
+
+      auto i32Ty = IntegerType::get(ctx, 32);
+      SmallVector<Value> idxVals;
+      for (unsigned idx : *pathOpt)
+        idxVals.push_back(LLVM::ConstantOp::create(
+            rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(idx)));
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto gep = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                     structInfo->classBody, instance, idxVals);
+      return gep;
+    }
+
+    // Handle moore.dyn_extract (dynamic array element extraction)
+    if (auto dynExtOp = dyn_cast<DynExtractOp>(mooreOp)) {
+      Value input = getConvertedOperand(dynExtOp.getInput());
+      Value index = getConvertedOperand(dynExtOp.getLowBit());
+      if (!input || !index)
+        return nullptr;
+
+      Type resultType = typeConverter->convertType(dynExtOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Handle queue/dynamic array access (LLVM pointer)
+      if (isa<LLVM::LLVMPointerType>(input.getType())) {
+        // For queues, extract data pointer and index into it
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+        auto i64Ty = IntegerType::get(ctx, 64);
+
+        // Check if input is a queue struct {ptr, i64}
+        if (auto structTy = dyn_cast<LLVM::LLVMStructType>(input.getType())) {
+          // Extract data pointer from queue struct
+          Value dataPtr = LLVM::ExtractValueOp::create(
+              rewriter, loc, ptrTy, input, ArrayRef<int64_t>{0});
+
+          // Extend index to i64 if needed
+          if (index.getType() != i64Ty) {
+            if (auto intTy = dyn_cast<IntegerType>(index.getType())) {
+              if (intTy.getWidth() < 64)
+                index = arith::ExtSIOp::create(rewriter, loc, i64Ty, index);
+              else if (intTy.getWidth() > 64)
+                index = arith::TruncIOp::create(rewriter, loc, i64Ty, index);
+            }
+          }
+
+          // GEP to the element
+          Type llvmResultType = convertToLLVMType(resultType);
+          Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                              llvmResultType, dataPtr, index);
+          Value loaded = LLVM::LoadOp::create(rewriter, loc, llvmResultType, elemPtr);
+          if (resultType != llvmResultType) {
+            loaded = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                        resultType, loaded)
+                         .getResult(0);
+          }
+          return loaded;
+        }
+      }
+
+      // Handle hw::ArrayType
+      if (auto hwArrayTy = dyn_cast<hw::ArrayType>(input.getType())) {
+        return hw::ArrayGetOp::create(rewriter, loc, input, index);
+      }
+
+      return nullptr;
+    }
+
+    // Handle moore.array.size
+    if (auto arraySizeOp = dyn_cast<ArraySizeOp>(mooreOp)) {
+      Value input = getConvertedOperand(arraySizeOp.getArray());
+      if (!input)
+        return nullptr;
+
+      Type resultType = typeConverter->convertType(arraySizeOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Handle queue/dynamic array (LLVM struct {ptr, i64})
+      if (auto structTy = dyn_cast<LLVM::LLVMStructType>(input.getType())) {
+        auto i64Ty = IntegerType::get(ctx, 64);
+        Value size = LLVM::ExtractValueOp::create(
+            rewriter, loc, i64Ty, input, ArrayRef<int64_t>{1});
+        // Truncate to result type if needed
+        if (auto intResultTy = dyn_cast<IntegerType>(resultType)) {
+          if (intResultTy.getWidth() < 64)
+            size = arith::TruncIOp::create(rewriter, loc, resultType, size);
+        }
+        return size;
+      }
+
+      // Handle hw::ArrayType
+      if (auto hwArrayTy = dyn_cast<hw::ArrayType>(input.getType())) {
+        APInt sizeVal(cast<IntegerType>(resultType).getWidth(),
+                      hwArrayTy.getNumElements());
+        return hw::ConstantOp::create(rewriter, loc, sizeVal);
+      }
+
+      return nullptr;
+    }
+
+    // Handle moore.eq
+    if (auto eqOp = dyn_cast<EqOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(eqOp.getLhs());
+      Value rhs = getConvertedOperand(eqOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      Type resultType = typeConverter->convertType(eqOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Handle 4-state struct comparison
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+
+        Value cmpVal = comb::ICmpOp::create(rewriter, loc,
+                                            comb::ICmpPredicate::eq, lhsVal, rhsVal);
+        Value zeroUnk = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+        Value lhsHasUnk = comb::ICmpOp::create(rewriter, loc,
+                                               comb::ICmpPredicate::ne, lhsUnk, zeroUnk);
+        Value rhsHasUnk = comb::ICmpOp::create(rewriter, loc,
+                                               comb::ICmpPredicate::ne, rhsUnk, zeroUnk);
+        Value hasUnk = comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+        Value zero = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+        Value resultVal = comb::MuxOp::create(rewriter, loc, hasUnk, zero, cmpVal);
+        return createFourStateStruct(rewriter, loc, resultVal, hasUnk);
+      }
+
+      return comb::ICmpOp::create(rewriter, loc, resultType,
+                                  comb::ICmpPredicate::eq, lhs, rhs);
+    }
+
+    // Handle moore.ne
+    if (auto neOp = dyn_cast<NeOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(neOp.getLhs());
+      Value rhs = getConvertedOperand(neOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      Type resultType = typeConverter->convertType(neOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // Handle 4-state struct comparison
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+
+        Value cmpVal = comb::ICmpOp::create(rewriter, loc,
+                                            comb::ICmpPredicate::ne, lhsVal, rhsVal);
+        Value zeroUnk = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+        Value lhsHasUnk = comb::ICmpOp::create(rewriter, loc,
+                                               comb::ICmpPredicate::ne, lhsUnk, zeroUnk);
+        Value rhsHasUnk = comb::ICmpOp::create(rewriter, loc,
+                                               comb::ICmpPredicate::ne, rhsUnk, zeroUnk);
+        Value hasUnk = comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+        Value zero = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+        Value resultVal = comb::MuxOp::create(rewriter, loc, hasUnk, zero, cmpVal);
+        return createFourStateStruct(rewriter, loc, resultVal, hasUnk);
+      }
+
+      return comb::ICmpOp::create(rewriter, loc, resultType,
+                                  comb::ICmpPredicate::ne, lhs, rhs);
+    }
+
+    // Handle moore.sgt (signed greater than)
+    if (auto sgtOp = dyn_cast<SgtOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(sgtOp.getLhs());
+      Value rhs = getConvertedOperand(sgtOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      Type resultType = typeConverter->convertType(sgtOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      return comb::ICmpOp::create(rewriter, loc, resultType,
+                                  comb::ICmpPredicate::sgt, lhs, rhs);
+    }
+
+    // Handle moore.sge (signed greater than or equal)
+    if (auto sgeOp = dyn_cast<SgeOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(sgeOp.getLhs());
+      Value rhs = getConvertedOperand(sgeOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      Type resultType = typeConverter->convertType(sgeOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      return comb::ICmpOp::create(rewriter, loc, resultType,
+                                  comb::ICmpPredicate::sge, lhs, rhs);
+    }
+
+    // Handle moore.slt (signed less than)
+    if (auto sltOp = dyn_cast<SltOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(sltOp.getLhs());
+      Value rhs = getConvertedOperand(sltOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      Type resultType = typeConverter->convertType(sltOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      return comb::ICmpOp::create(rewriter, loc, resultType,
+                                  comb::ICmpPredicate::slt, lhs, rhs);
+    }
+
+    // Handle moore.sle (signed less than or equal)
+    if (auto sleOp = dyn_cast<SleOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(sleOp.getLhs());
+      Value rhs = getConvertedOperand(sleOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      Type resultType = typeConverter->convertType(sleOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+      return comb::ICmpOp::create(rewriter, loc, resultType,
+                                  comb::ICmpPredicate::sle, lhs, rhs);
+    }
+
+    // Handle moore.and (logical AND)
+    if (auto andOp = dyn_cast<AndOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(andOp.getLhs());
+      Value rhs = getConvertedOperand(andOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      return comb::AndOp::create(rewriter, loc, lhs, rhs, false);
+    }
+
+    // Handle moore.or (logical OR)
+    if (auto orOp = dyn_cast<OrOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(orOp.getLhs());
+      Value rhs = getConvertedOperand(orOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      return comb::OrOp::create(rewriter, loc, lhs, rhs, false);
+    }
+
+    // Handle moore.conversion (type conversion)
+    if (auto convOp = dyn_cast<ConversionOp>(mooreOp)) {
+      Value input = getConvertedOperand(convOp.getInput());
+      if (!input)
+        return nullptr;
+      Type resultType = typeConverter->convertType(convOp.getResult().getType());
+      if (!resultType)
+        return nullptr;
+
+      // If types match, just return input
+      if (input.getType() == resultType)
+        return input;
+
+      // Handle integer width conversions
+      auto srcIntTy = dyn_cast<IntegerType>(input.getType());
+      auto dstIntTy = dyn_cast<IntegerType>(resultType);
+      if (srcIntTy && dstIntTy) {
+        if (srcIntTy.getWidth() < dstIntTy.getWidth())
+          return arith::ExtSIOp::create(rewriter, loc, resultType, input);
+        else if (srcIntTy.getWidth() > dstIntTy.getWidth())
+          return arith::TruncIOp::create(rewriter, loc, resultType, input);
+        return input;
+      }
+
+      // Use unrealized conversion cast as fallback
+      return UnrealizedConversionCastOp::create(rewriter, loc, resultType, input)
+                 .getResult(0);
+    }
+
+    // Handle moore.sub (subtraction for index calculation like $ - 1)
+    if (auto subOp = dyn_cast<SubOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(subOp.getLhs());
+      Value rhs = getConvertedOperand(subOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      return comb::SubOp::create(rewriter, loc, lhs, rhs, false);
+    }
+
+    // Handle moore.add
+    if (auto addOp = dyn_cast<AddOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(addOp.getLhs());
+      Value rhs = getConvertedOperand(addOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+      return comb::AddOp::create(rewriter, loc, lhs, rhs, false);
+    }
+
+    // Handle moore.string_cmp
+    if (auto stringCmpOp = dyn_cast<StringCmpOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(stringCmpOp.getLhs());
+      Value rhs = getConvertedOperand(stringCmpOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      // Create string struct type: {ptr, i64}
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto stringStructTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+      auto i32Ty = IntegerType::get(ctx, 32);
+
+      auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, ptrTy});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_string_cmp", fnTy);
+
+      auto one =
+          LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+      auto lhsAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+      LLVM::StoreOp::create(rewriter, loc, lhs, lhsAlloca);
+
+      auto rhsAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringStructTy, one);
+      LLVM::StoreOp::create(rewriter, loc, rhs, rhsAlloca);
+
+      SmallVector<Value> operands = {lhsAlloca, rhsAlloca};
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(runtimeFn),
+          operands);
+      Value cmpResult = call.getResult();
+
+      Value zero = arith::ConstantOp::create(rewriter, loc, i32Ty,
+                                             rewriter.getI32IntegerAttr(0));
+      arith::CmpIPredicate arithPred;
+      switch (stringCmpOp.getPredicate()) {
+      case StringCmpPredicate::eq:
+        arithPred = arith::CmpIPredicate::eq;
+        break;
+      case StringCmpPredicate::ne:
+        arithPred = arith::CmpIPredicate::ne;
+        break;
+      case StringCmpPredicate::lt:
+        arithPred = arith::CmpIPredicate::slt;
+        break;
+      case StringCmpPredicate::le:
+        arithPred = arith::CmpIPredicate::sle;
+        break;
+      case StringCmpPredicate::gt:
+        arithPred = arith::CmpIPredicate::sgt;
+        break;
+      case StringCmpPredicate::ge:
+        arithPred = arith::CmpIPredicate::sge;
+        break;
+      }
+      return arith::CmpIOp::create(rewriter, loc, arithPred, cmpResult, zero);
+    }
+
+    // Unsupported operation
+    return nullptr;
+  }
+
   /// Lower array.locator with an inline loop for complex predicates.
   /// This works for arbitrary predicate expressions because the predicate
-  /// region is cloned into the loop body and converted by existing patterns.
+  /// operations are converted inline to LLVM/arith equivalents.
   LogicalResult
   lowerWithInlineLoop(ArrayLocatorOp op, OpAdaptor adaptor,
                       ConversionPatternRewriter &rewriter, Location loc,
@@ -12008,84 +12466,71 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType, dataPtr, iv);
     Value currentElem = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
 
-    // Map the predicate block argument to the current element (with a cast
-    // back to Moore type for the cloned predicate ops).
-    IRMapping mapper;
-    Value currentElemMoore =
-        UnrealizedConversionCastOp::create(rewriter, loc, blockArg.getType(),
-                                           currentElem)
-            .getResult(0);
-    mapper.map(blockArg, currentElemMoore);
+    // Build a value map from Moore values to converted LLVM/arith values.
+    // This is used by convertMooreOpInline to resolve operands.
+    DenseMap<Value, Value> valueMap;
+
+    // Map the block argument (item) to the current element
+    valueMap[blockArg] = currentElem;
 
     // Map the index block argument (if present) to the loop induction variable
-    // for item.index support.
     if (body.getNumArguments() >= 2) {
       Value indexArg = body.getArgument(1);
       // The induction variable is i64, but the index block arg is typically i32
-      // Cast to the expected Moore type
       auto i32Ty = IntegerType::get(ctx, 32);
       Value ivTrunc = arith::TruncIOp::create(rewriter, loc, i32Ty, iv);
-      Value indexMoore =
-          UnrealizedConversionCastOp::create(rewriter, loc, indexArg.getType(),
-                                             ivTrunc)
-              .getResult(0);
-      mapper.map(indexArg, indexMoore);
+      valueMap[indexArg] = ivTrunc;
     }
 
-    // Map external values (values defined outside the predicate block) to
-    // their converted versions. This is necessary because the cloned Moore
-    // operations will reference these external values, but they need to be
-    // properly converted to LLVM types.
+    // Convert each Moore operation in the predicate block inline to LLVM/arith.
+    // Process operations in order to ensure operand dependencies are resolved.
     for (Operation &innerOp : body.without_terminator()) {
-      for (Value operand : innerOp.getOperands()) {
-        // Skip if already mapped (block argument or result of previous op)
-        if (mapper.contains(operand))
-          continue;
+      Value result = convertMooreOpInline(&innerOp, rewriter, loc, ctx,
+                                          valueMap, mod);
+      if (!result) {
+        // If inline conversion failed, emit a diagnostic with the op name
+        return rewriter.notifyMatchFailure(
+            op, "failed to convert predicate operation: " +
+                    innerOp.getName().getStringRef().str());
+      }
 
-        // Skip if defined inside the block
-        if (operand.getParentBlock() == &body)
-          continue;
-
-        // This is an external value - try to get its converted version
-        Value remapped = rewriter.getRemappedValue(operand);
-        if (remapped) {
-          // Cast back to Moore type so cloned Moore ops can use it
-          Value mooreCast =
-              UnrealizedConversionCastOp::create(rewriter, loc,
-                                                 operand.getType(), remapped)
-                  .getResult(0);
-          mapper.map(operand, mooreCast);
-        } else {
-          // Value hasn't been converted yet - try to materialize a conversion
-          Type targetType = typeConverter->convertType(operand.getType());
-          if (targetType) {
-            Value converted = typeConverter->materializeTargetConversion(
-                rewriter, loc, targetType, operand);
-            if (converted) {
-              // Cast back to Moore type for the cloned Moore ops
-              Value mooreCast =
-                  UnrealizedConversionCastOp::create(rewriter, loc,
-                                                     operand.getType(), converted)
-                      .getResult(0);
-              mapper.map(operand, mooreCast);
-            }
-          }
-        }
+      // Map all results (most ops have single result)
+      if (innerOp.getNumResults() == 1) {
+        valueMap[innerOp.getResult(0)] = result;
       }
     }
 
-    for (Operation &innerOp : body.without_terminator()) {
-      Operation *clonedOp = rewriter.clone(innerOp, mapper);
-      for (auto [oldResult, newResult] :
-           llvm::zip(innerOp.getResults(), clonedOp->getResults()))
-        mapper.map(oldResult, newResult);
+    // Get the converted condition value
+    Value condValue = yieldOp.getCondition();
+    auto condIt = valueMap.find(condValue);
+    Value cond;
+    if (condIt != valueMap.end()) {
+      cond = condIt->second;
+    } else {
+      // Try to materialize conversion for external condition
+      cond = typeConverter->materializeTargetConversion(
+          rewriter, loc, i1Ty, condValue);
     }
 
-    Value condValue = mapper.lookupOrDefault(yieldOp.getCondition());
-    Value cond = typeConverter->materializeTargetConversion(
-        rewriter, loc, i1Ty, condValue);
     if (!cond)
-      return rewriter.notifyMatchFailure(op, "failed to convert predicate");
+      return rewriter.notifyMatchFailure(op, "failed to convert predicate condition");
+
+    // Ensure condition is i1
+    if (cond.getType() != i1Ty) {
+      // Handle 4-state struct by extracting the value part
+      if (isFourStateStructType(cond.getType())) {
+        Value val = extractFourStateValue(rewriter, loc, cond);
+        cond = val;
+      }
+      // Truncate or compare to zero if not i1
+      if (auto intTy = dyn_cast<IntegerType>(cond.getType())) {
+        if (intTy.getWidth() > 1) {
+          Value zero = hw::ConstantOp::create(rewriter, loc, cond.getType(), 0);
+          cond = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ne,
+                                      cond, zero);
+        }
+      }
+    }
 
     auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, cond,
                                   /*withElseRegion=*/false);
