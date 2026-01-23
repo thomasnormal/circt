@@ -1442,6 +1442,24 @@ struct StmtVisitor {
     return success();
   }
 
+  // Handle disable statements: disable <block_name>
+  // This terminates execution of a named block or task.
+  // See IEEE 1800-2017 Section 9.6.2.
+  LogicalResult visit(const slang::ast::DisableStatement &stmt) {
+    // The target is an ArbitrarySymbolExpression that references the block/task
+    const auto *ase =
+        stmt.target.as_if<slang::ast::ArbitrarySymbolExpression>();
+    if (!ase) {
+      mlir::emitError(loc, "disable statement target must be a symbol reference");
+      return failure();
+    }
+
+    // Get the symbol name as the target for the disable operation
+    StringRef targetName = ase->symbol->name;
+    moore::DisableOp::create(builder, loc, builder.getStringAttr(targetName));
+    return success();
+  }
+
   // Handle return statements.
   LogicalResult visit(const slang::ast::ReturnStatement &stmt) {
     // Check if we're inside a randsequence production - if so, return exits
