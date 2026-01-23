@@ -617,6 +617,13 @@ def AnyAssocArrayType : MooreType<
   "associative array type",
   "moore::UnpackedType">;
 
+/// Any unpacked array type (static, dynamic, or queue).
+def AnyUnpackedArrayType : MooreType<
+  Or<[UnpackedArrayType.predicate, OpenUnpackedArrayType.predicate,
+      QueueType.predicate]>,
+  "static unpacked array, dynamic array, or queue type",
+  "moore::UnpackedType">;
+
 /// A packed or unpacked struct type.
 def AnyStructType : MooreType<
   Or<[StructType.predicate, UnpackedStructType.predicate]>,
