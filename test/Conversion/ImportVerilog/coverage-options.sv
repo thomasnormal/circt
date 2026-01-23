@@ -94,8 +94,20 @@ module test_coverage_options;
     }
   endgroup
 
+  // Test coverpoint with iff condition (IEEE 1800-2017 Section 19.5)
+  logic enable;
+  // CHECK: moore.covergroup.decl @cg_with_iff
+  covergroup cg_with_iff @(posedge clk);
+    // CHECK: moore.coverpoint.decl @data_iff_cp : !moore.l8 iff<"enable">
+    data_iff_cp: coverpoint data iff (enable) {
+      bins low = {[0:127]};
+      bins high = {[128:255]};
+    }
+  endgroup
+
   cg_with_options cg1 = new();
   cg_type_options cg2 = new();
   cg_mixed_options cg3 = new();
+  cg_with_iff cg4 = new();
 
 endmodule

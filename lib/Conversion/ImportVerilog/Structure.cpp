@@ -4202,10 +4202,20 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
             return evaluateConstant(expr);
           });
 
+      // Get the iff condition string, if present.
+      mlir::StringAttr iffAttr;
+      if (const auto *iffExpr = cp->getIffExpr()) {
+        // Convert the iff expression to a string representation.
+        if (iffExpr->syntax) {
+          iffAttr = builder.getStringAttr(iffExpr->syntax->toString());
+        }
+      }
+
       // Create the coverpoint declaration op with all options.
       auto cpOp = moore::CoverpointDeclOp::create(
           builder, cpLoc, builder.getStringAttr(cpName),
           mlir::TypeAttr::get(exprType),
+          iffAttr,
           cpOptions.weight ? builder.getI64IntegerAttr(*cpOptions.weight)
                            : nullptr,
           cpOptions.goal ? builder.getI64IntegerAttr(*cpOptions.goal) : nullptr,
