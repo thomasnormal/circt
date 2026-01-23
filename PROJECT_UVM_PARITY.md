@@ -6,14 +6,15 @@
 
 ## Current Status
 
-### sv-tests Coverage (774 tests, ~95% pass rate)
+### sv-tests Coverage (774 tests, ~83% raw pass rate)
+Note: Many "failures" are negative tests that correctly reject invalid code.
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
-| 5 | Lexical Conventions | 50/50 (100%) | Complete |
-| 6 | Data Types | 84/84 (100%) | Complete |
-| 7 | Aggregate Data Types | 103/103 (100%) | Complete |
-| 8 | Classes | 53/53 (100%) | Complete |
+| 5 | Lexical Conventions | 43/50 (86%) | 5 negative, 2 macro |
+| 6 | Data Types | 73/84 (87%) | ~8 negative tests |
+| 7 | Aggregate Data Types | 101/103 (98%) | 2 known limitations |
+| 8 | Classes | 44/53 (83%) | 9 interface class issues |
 | 9 | Processes | 44/46 (96%) | 1 known limitation (@seq) |
 | 10 | Assignments | 10/10 (100%) | Complete |
 | 11 | Operators | 88/88 (100%) | Complete |
