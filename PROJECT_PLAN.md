@@ -67,19 +67,20 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 102 - Complete)
+### Track Status & Next Tasks (Iteration 103 - Complete)
 
 **Test Results (Current)**:
 - sv-tests Chapter-21: **29/29 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-20: **47/47 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-7: **103/103 passing** (100%) ✅ COMPLETE
 - sv-tests Chapter-11: **78/78 passing** (100%) ✅ COMPLETE
-- sv-tests Chapter-18: **119/134 passing** (89%) ✅ +63 tests! (15 XFAIL remaining)
+- sv-tests Chapter-18: **119/134 passing** (89%) ✅ (15 XFAIL remaining)
+- sv-tests Chapter-6: **69/84 passing** (82%) ✅ +6 tests (string methods)
 - sv-tests Chapter-16: **26/53 passing** (49%) - Codex agent working on this
 - Yosys SVA BMC: **12/14 passing** (86%) ✅
 - verilator circt-sim: **15/21 passing** (71%) ✅ (100% of non-SVA tests)
-- UVM AVIP: **APB & SPI RUN THROUGH circt-sim!** 🎉🎉 MILESTONE
-- circt-sim: **LLVM dialect ops supported** ✅
+- UVM AVIP: **APB, SPI, UART, AHB compile to LLHD** ✅
+- circt-sim: **LLVM dialect + FP ops supported** ✅
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)
@@ -99,17 +100,20 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 15. ✅ LLVM dialect in interpreter (Iteration 102)
 16. ✅ randomize(null) and randomize(v,w) modes (Iteration 102)
 17. ✅ Virtual interface modport access in classes (Iteration 102)
+18. ✅ UVM run_test() runtime stub (Iteration 103)
+19. ✅ LLVM float ops in interpreter (Iteration 103)
+20. ✅ String conversion methods (Iteration 103)
 
 **Remaining Limitations**:
 1. **Sibling Hierarchical Refs** - extnets.sv (cross-module wire refs)
-2. **UVM Runtime Infrastructure** - run_test(), phase system, factory
+2. **UVM Recursive Functions** - UVM inlining limitation for --ir-hw
 3. **SVA Sequence Tests** - 6 verilator-verification tests (Codex handling SVA)
 
 **Active Workstreams (Next)**:
-1. **Track A: UVM Runtime** - Implement run_test(), phase infrastructure
-2. **Track B: Chapter-18 Last Push** - Fix remaining XFAIL tests if possible
-3. **Track C: More LLVM Ops** - Add missing LLVM ops for full class support
-4. **Track D: Test More AVIPs** - Run more MBIT AVIPs through simulation
+1. **Track A: UVM Phase System** - Implement build/run phases
+2. **Track B: Chapter-6 Progress** - Fix remaining string tests
+3. **Track C: Recursive Function Inlining** - Fix UVM recursion issue
+4. **Track D: More AVIP Testing** - Test AXI4Lite, I3C, etc.
 
 **Iteration 93 Accomplishments**:
 1. ✅ **$ferror system call** - Added FErrorBIOp with output argument handling
