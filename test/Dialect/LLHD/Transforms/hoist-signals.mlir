@@ -314,6 +314,27 @@ hw.module @DontHoistAcrossSideEffects(in %v0: i42, in %v1: i42, in %v2: i42) {
   }
 }
 
+// Don't hoist drives of class types (non-fixed-width types).
+// Class types don't have a known bit width, so we can't materialize don't-care values.
+// CHECK-LABEL: @DontHoistClassTypeDrives
+hw.module @DontHoistClassTypeDrives(in %classHandle: !moore.class<@SomeClass>) {
+  %0 = llhd.constant_time <0ns, 0d, 1e>
+  %a = llhd.sig %classHandle : !moore.class<@SomeClass>
+  // CHECK: llhd.process
+  llhd.process {
+    // CHECK-NEXT: llhd.drv %a
+    llhd.drv %a, %classHandle after %0 : !moore.class<@SomeClass>
+    llhd.wait ^bb1
+  ^bb1:
+    // CHECK: ^bb1:
+    // CHECK-NEXT: llhd.drv %a
+    llhd.drv %a, %classHandle after %0 : !moore.class<@SomeClass>
+    // CHECK-NEXT: llhd.halt
+    llhd.halt
+  }
+}
+moore.class.classdecl @SomeClass {}
+
 func.func private @use_i42(%arg0: i42)
 func.func private @use_inout_i42(%arg0: !llhd.ref<i42>)
 func.func private @maybe_side_effecting()

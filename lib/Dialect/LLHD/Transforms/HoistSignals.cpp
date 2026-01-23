@@ -348,6 +348,12 @@ void DriveHoister::findHoistableSlots() {
         }))
       return;
 
+    // Skip slots with types that don't have a known fixed bit width (e.g.,
+    // class types). We cannot materialize don't-care values for such types.
+    auto nestedType = cast<RefType>(slot.getType()).getNestedType();
+    if (hw::getBitWidth(nestedType) < 0)
+      return;
+
     slots.insert(slot);
   });
   LLVM_DEBUG(llvm::dbgs() << "Found " << slots.size()
