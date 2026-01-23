@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 121 - January 23, 2026
+
+### Queue Foreach Iteration Fix
+
+Fixed a critical bug where foreach loops over queues were using associative
+array iteration (first/next pattern) instead of size-based iteration. This
+affected UVM TLM analysis ports where `uvm_analysis_port::write()` iterates
+over the `m_subscribers` queue.
+
+The fix:
+- Added `recursiveForeachQueue()` function for size-based iteration
+- Uses `moore.array.size` to get queue length
+- Uses `moore.slt` for iterator < size comparison
+- Standard CFG loop pattern with increment and conditional branch
+
+This is correct behavior for queues and dynamic arrays, which iterate from
+index 0 to size-1, unlike associative arrays which use first/next to iterate
+over sparse keys.
+
+**Commit:** `f4d09ce1e [ImportVerilog] Fix foreach loop iteration for queues`
+
+### sv-tests Chapter-9 Verification
+
+Confirmed Chapter-9 is at 97.8% (45/46 tests passing):
+- Only failing test: `9.4.2.4--event_sequence.sv` (SVA `@seq` syntax)
+- This is correctly in Codex agent scope - no non-SVA fix possible
+- `9.3.3--fork_return.sv` is a should_fail test CIRCT correctly rejects
+
+### I3C AVIP E2E Testing (In Progress)
+
+I3C AVIP compiles and initializes in circt-sim:
+- Shows "controller Agent BFM" and "target Agent BFM" messages
+- Simulation runs but is slow (UVM overhead in interpreter)
+
+---
+
 ## Iteration 120 - January 23, 2026
 
 ### UVM TLM Type Assignment Fixes
@@ -60,6 +96,19 @@ Added a top-level plan for completing SVA BMC and LEC work:
   are legalized before SMT lowering.
 - sv-tests Chapter-16.10 pass cases now return PASS (with
   `DISABLE_UVM_AUTO_INCLUDE=1` and `Z3_LIB` set).
+
+### CombToSMT Case/Wildcard Equality
+
+- `comb.icmp` now lowers `ceq/cne/weq/wne` to SMT `eq/distinct` for 2-state
+  integers, unblocking UVM code paths in BMC.
+- Updated CombToSMT regression tests to cover case/wildcard equality.
+
+### circt-bmc Unreachable Symbol Pruning
+
+- Added a BMC-only reachability prune pass to drop symbols not reachable from
+  the BMC entrypoint, removing unused UVM vtables/functions before SMT lowering.
+- New regression: `test/Tools/circt-bmc/circt-bmc-strip-unused-funcs.mlir`.
+- sv-tests Chapter-16.10 pass cases succeed with UVM auto-include enabled.
 
 ### UVM config_db Wildcard Pattern Matching
 
