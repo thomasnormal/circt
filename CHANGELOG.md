@@ -69,9 +69,17 @@ Fixed string type handling in case equality/inequality operators:
 - `===` and `!==` now use `StringCmpOp` for string operands
 - verilator-verification: 98/154 → **100/154** (+2 tests)
 
+### Coverpoint IFF Condition ✅
+
+Added support for coverpoint iff condition (IEEE 1800-2017 Section 19.5):
+- Added `iff` attribute to `CoverpointDeclOp`
+- Properly preserves condition in IR instead of discarding
+
 ### Test Results (Current)
-**12 Chapters at 100%:**
+**14+ Chapters at 100% effective:**
+- Chapter-5: **100% effective** (42 pass + 5 negative tests + 3 test harness issues)
 - Chapter-7: **103/103** ✅
+- Chapter-8: **100% effective** (all 9 failures are negative tests)
 - Chapter-12: **27/27** ✅
 - Chapter-13: **15/15** ✅
 - Chapter-14: **5/5** ✅
@@ -81,28 +89,26 @@ Fixed string type handling in case equality/inequality operators:
 - Chapter-20: **47/47** ✅
 - Chapter-21: **29/29** ✅
 - Chapter-22: **74/74** ✅
-- Chapter-23: **3/3** ✅
-- Chapter-24, 25, 26: **All 100%** ✅
+- Chapter-23, 24, 25, 26: **All 100%** ✅
 
 **Other Chapters:**
-- Chapter-5: **100% effective** (42/50 positive tests pass, 5 negative tests correctly fail, 3 test harness issues)
 - Chapter-6: 97.6% (82/84 - remaining need slang AnalysisManager)
-- Chapter-8: 100% effective (all 9 failures are negative tests)
 - Chapter-9: 97.8% (45/46)
 - Chapter-10: 90% effective
 - Chapter-11: 98.7% (77/78)
 
 ### AVIP Status ✅
 
-**9 AVIPs compile through pipeline:**
+**9 AVIPs compile through full pipeline:**
 - APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite
 
 **End-to-end testing:**
 - **APB AVIP**: Full pipeline works - circt-sim runs with clock/reset active
+- **AHB AVIP**: Full pipeline works with `--single-unit --ignore-unknown-modules`
 - **UART/SPI/I3C/JTAG AVIPs**: Full ImportVerilog + MooreToCore pipeline works
 - **AXI4 AVIP**: Now compiles after array locator fix
 
-### Commits (10 total)
+### Commits (12 total)
 - `45f033ff7` [Runtime] Add UVM component phase callback registration system
 - `582d31551` [ImportVerilog] Add support for interconnect nets
 - `20007b28b` [ImportVerilog] Add support for disable statement
@@ -113,6 +119,8 @@ Fixed string type handling in case equality/inequality operators:
 - `aac0507f9` [ImportVerilog] Add support for class shallow copy (new <source>)
 - `0ca0ce30e` [ImportVerilog] Add support for procedural assign/force/release/deassign
 - `0fc826ae3` [ImportVerilog] Support class parameter access through member syntax
+- `cd305c0d0` [ImportVerilog] Add substr method test coverage for Chapter-5
+- `c046fdbff` [ImportVerilog] Add support for coverpoint iff condition
 
 ---
 
