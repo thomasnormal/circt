@@ -7928,6 +7928,17 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
   if (!decl)
     return false;
 
+  // Check implemented interfaces first (IEEE 1800-2017 Section 8.26).
+  // A class that implements an interface class can be assigned to a variable
+  // of that interface class type.
+  if (auto interfaces = decl.getImplementedInterfacesAttr()) {
+    for (auto ifaceAttr : interfaces) {
+      auto ifaceSym = cast<mlir::SymbolRefAttr>(ifaceAttr);
+      if (areSameOrRelatedClass(*this, ifaceSym, baseSym))
+        return true;
+    }
+  }
+
   // Walk up the inheritance chain via ClassDeclOp::$base (SymbolRefAttr).
   while (decl) {
     mlir::SymbolRefAttr curBase = decl.getBaseAttr();
@@ -7936,7 +7947,21 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
     // Use the related class check instead of direct equality
     if (areSameOrRelatedClass(*this, curBase, baseSym))
       return true;
-    decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(resolve(*this, curBase));
+
+    // Also check interfaces of base classes
+    auto baseOp = resolve(*this, curBase);
+    auto baseDecl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(baseOp);
+    if (baseDecl) {
+      if (auto interfaces = baseDecl.getImplementedInterfacesAttr()) {
+        for (auto ifaceAttr : interfaces) {
+          auto ifaceSym = cast<mlir::SymbolRefAttr>(ifaceAttr);
+          if (areSameOrRelatedClass(*this, ifaceSym, baseSym))
+            return true;
+        }
+      }
+    }
+
+    decl = baseDecl;
   }
   return false;
 }

@@ -1626,6 +1626,17 @@ ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     if (cur == dstDecl)
       return success(); // legal upcast: dst is src or an ancestor
 
+    // Check implemented interfaces (IEEE 1800-2017 Section 8.26).
+    // A class can be upcast to any interface class it implements.
+    if (auto interfaces = cur.getImplementedInterfacesAttr()) {
+      for (auto ifaceAttr : interfaces) {
+        auto ifaceSym = cast<SymbolRefAttr>(ifaceAttr);
+        auto *ifaceOp = symbolTable.lookupSymbolIn(module, ifaceSym);
+        if (ifaceOp == dstDeclOp)
+          return success(); // legal upcast to implemented interface
+      }
+    }
+
     auto baseSym = cur.getBaseAttr();
     if (!baseSym)
       break;
@@ -1636,7 +1647,7 @@ ClassUpcastOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 
   return emitOpError() << "cannot upcast from " << srcTy.getClassSym() << " to "
                        << dstTy.getClassSym()
-                       << " (destination is not a base class)";
+                       << " (destination is not a base class or implemented interface)";
 }
 
 LogicalResult
