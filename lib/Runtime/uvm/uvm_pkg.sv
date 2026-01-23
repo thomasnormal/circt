@@ -3234,10 +3234,203 @@ package uvm_pkg;
   endclass
 
   class uvm_callbacks #(type T = uvm_object, type CB = uvm_callback);
-    static function void add(T obj, CB cb, uvm_apprepend ordering = UVM_APPEND);
+    // Internal storage: associative array mapping object to queue of callbacks
+    // Using string key based on object's unique ID for portability
+    static CB m_cb_pool[string][$];
+    // Type-wide (global) callbacks that apply to all objects of type T
+    static CB m_type_cbs[$];
+
+    // Get unique key for an object (null key for type-wide callbacks)
+    static function string get_obj_key(T obj);
+      if (obj == null)
+        return "__null__";
+      else
+        return $sformatf("%0d", obj.get_inst_id());
     endfunction
 
+    // Add a callback for a specific object or type-wide (if obj is null)
+    static function void add(T obj, CB cb, uvm_apprepend ordering = UVM_APPEND);
+      string key;
+      if (cb == null) return;
+
+      if (obj == null) begin
+        // Type-wide callback
+        if (ordering == UVM_APPEND)
+          m_type_cbs.push_back(cb);
+        else
+          m_type_cbs.push_front(cb);
+      end else begin
+        // Object-specific callback
+        key = get_obj_key(obj);
+        if (!m_cb_pool.exists(key)) begin
+          CB empty_queue[$];
+          m_cb_pool[key] = empty_queue;
+        end
+        if (ordering == UVM_APPEND)
+          m_cb_pool[key].push_back(cb);
+        else
+          m_cb_pool[key].push_front(cb);
+      end
+    endfunction
+
+    // Delete a callback from a specific object or type-wide (if obj is null)
     static function void delete(T obj, CB cb);
+      string key;
+      int idx;
+      if (cb == null) return;
+
+      if (obj == null) begin
+        // Delete from type-wide callbacks
+        foreach (m_type_cbs[i]) begin
+          if (m_type_cbs[i] == cb) begin
+            m_type_cbs.delete(i);
+            return;
+          end
+        end
+      end else begin
+        // Delete from object-specific callbacks
+        key = get_obj_key(obj);
+        if (m_cb_pool.exists(key)) begin
+          foreach (m_cb_pool[key][i]) begin
+            if (m_cb_pool[key][i] == cb) begin
+              m_cb_pool[key].delete(i);
+              return;
+            end
+          end
+        end
+      end
+    endfunction
+
+    // Get all callbacks for an object (includes type-wide + object-specific)
+    static function void get(T obj, ref CB cbs[$]);
+      string key;
+      cbs.delete();  // Clear the output queue
+
+      // First add type-wide callbacks
+      foreach (m_type_cbs[i]) begin
+        cbs.push_back(m_type_cbs[i]);
+      end
+
+      // Then add object-specific callbacks
+      if (obj != null) begin
+        key = get_obj_key(obj);
+        if (m_cb_pool.exists(key)) begin
+          foreach (m_cb_pool[key][i]) begin
+            cbs.push_back(m_cb_pool[key][i]);
+          end
+        end
+      end
+    endfunction
+
+    // Get number of callbacks for an object
+    static function int get_count(T obj);
+      string key;
+      int count = m_type_cbs.size();
+      if (obj != null) begin
+        key = get_obj_key(obj);
+        if (m_cb_pool.exists(key))
+          count += m_cb_pool[key].size();
+      end
+      return count;
+    endfunction
+
+    // Check if a callback is registered for an object
+    static function bit is_registered(T obj, CB cb);
+      string key;
+      if (cb == null) return 0;
+
+      // Check type-wide callbacks
+      foreach (m_type_cbs[i]) begin
+        if (m_type_cbs[i] == cb) return 1;
+      end
+
+      // Check object-specific callbacks
+      if (obj != null) begin
+        key = get_obj_key(obj);
+        if (m_cb_pool.exists(key)) begin
+          foreach (m_cb_pool[key][i]) begin
+            if (m_cb_pool[key][i] == cb) return 1;
+          end
+        end
+      end
+      return 0;
+    endfunction
+
+    // Display registered callbacks (for debugging)
+    static function void display(T obj = null);
+      string key;
+      $display("=== uvm_callbacks display ===");
+      $display("Type-wide callbacks: %0d", m_type_cbs.size());
+      foreach (m_type_cbs[i]) begin
+        $display("  [%0d] %s", i, m_type_cbs[i].get_name());
+      end
+      if (obj != null) begin
+        key = get_obj_key(obj);
+        if (m_cb_pool.exists(key)) begin
+          $display("Object-specific callbacks for %s: %0d", obj.get_name(), m_cb_pool[key].size());
+          foreach (m_cb_pool[key][i]) begin
+            $display("  [%0d] %s", i, m_cb_pool[key][i].get_name());
+          end
+        end else begin
+          $display("No object-specific callbacks for %s", obj.get_name());
+        end
+      end
+      $display("=============================");
+    endfunction
+  endclass
+
+  //=========================================================================
+  // uvm_callback_iter - Iterator for traversing callbacks
+  //=========================================================================
+  class uvm_callback_iter #(type T = uvm_object, type CB = uvm_callback);
+    local T m_obj;
+    local CB m_cbs[$];
+    local int m_idx;
+
+    function new(T obj);
+      m_obj = obj;
+      m_idx = -1;
+      uvm_callbacks#(T, CB)::get(obj, m_cbs);
+    endfunction
+
+    // Get first callback, returns null if no callbacks
+    function CB first();
+      m_idx = 0;
+      if (m_cbs.size() > 0)
+        return m_cbs[0];
+      return null;
+    endfunction
+
+    // Get last callback, returns null if no callbacks
+    function CB last();
+      if (m_cbs.size() > 0) begin
+        m_idx = m_cbs.size() - 1;
+        return m_cbs[m_idx];
+      end
+      return null;
+    endfunction
+
+    // Get next callback, returns null if at end
+    function CB next();
+      m_idx++;
+      if (m_idx < m_cbs.size())
+        return m_cbs[m_idx];
+      return null;
+    endfunction
+
+    // Get previous callback, returns null if at beginning
+    function CB prev();
+      m_idx--;
+      if (m_idx >= 0)
+        return m_cbs[m_idx];
+      return null;
+    endfunction
+
+    // Get callback at current index
+    function CB get_cb();
+      if (m_idx >= 0 && m_idx < m_cbs.size())
+        return m_cbs[m_idx];
+      return null;
     endfunction
   endclass
 
