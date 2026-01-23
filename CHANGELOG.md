@@ -1,5 +1,193 @@
 # CIRCT UVM Parity Changelog
 
+## Iterations 132-137 - January 23, 2026
+
+### sv-tests Verification Progress
+
+Comprehensive testing of SystemVerilog LRM chapters (736+ tests, ~95% pass rate):
+
+| Chapter | Topic | Pass Rate | Notes |
+|---------|-------|-----------|-------|
+| 5 | Lexical Conventions | 50/50 (100%) | All tests pass |
+| 6 | Data Types | 84/84 (100%) | All tests pass |
+| 7 | Aggregate Data Types | 103/103 (100%) | Arrays, structs, unions, queues |
+| 8 | Classes | 53/53 (100%) | All tests pass |
+| 9 | Processes | 44/46 (96%) | 1 expected fail, 1 known limitation (@seq) |
+| 10 | Assignments | 10/10 (100%) | All tests pass |
+| 11 | Operators | 88/88 (100%) | All tests pass |
+| 12 | Procedural Programming | 27/27 (100%) | All if/case/loop/jump statements |
+| 13 | Tasks and Functions | 15/15 (100%) | 2 expected failures correctly rejected |
+| 14 | Clocking Blocks | 5/5 (100%) | 1 expected failure correctly rejected |
+| 15 | Inter-Process Sync | 3/5 (60%) | Bug: cross-module event triggers |
+| 18 | Random Constraints | 119/134 (89%) | 15 expected failures correctly rejected |
+| 20 | Utility System Tasks | 47/47 (100%) | All math/time/data query functions |
+| 21 | I/O System Tasks | 29/29 (100%) | All display/file/VCD tasks |
+| 22 | Compiler Directives | 55/74 (74%) | 18 expected fails, 1 include-via-macro bug |
+| 23 | Modules and Hierarchy | 3/3 (100%) | All module constructs |
+| 24 | Programs | 1/1 (100%) | Program blocks supported |
+
+### I2S AVIP - SUCCESS
+
+After fixing UVM phase handle aliases, I2S AVIP now compiles successfully:
+- **173,993 lines** of MLIR generated
+- All UVM testbench components compiled
+- 5th AVIP successfully tested (after AHB, APB, UART, SPI)
+
+### Bug Fix: UVM Phase Handle Aliases
+
+**Problem:** UVM stubs defined phase handles with `_phase_h` suffix but standard UVM (IEEE 1800.2) uses `_ph` suffix. This broke real-world AVIP code that references `start_of_simulation_ph`, `build_ph`, etc.
+
+**Fix:** Added standard `_ph` suffix aliases in `lib/Runtime/uvm/uvm_pkg.sv`:
+- `build_ph`, `connect_ph`, `end_of_elaboration_ph`, `start_of_simulation_ph`
+- `run_ph`, `extract_ph`, `check_ph`, `report_ph`, `final_ph`
+
+**Regression test:** `test/Runtime/uvm/uvm_phase_aliases_test.sv`
+
+### Bug Fix: UVM Phase wait_for_state() Method
+
+**Problem:** AXI4-Lite AVIP assertion modules use `start_of_simulation_ph.wait_for_state(UVM_PHASE_STARTED)` to synchronize with UVM phasing. The `wait_for_state()` method and `uvm_phase_state` enum were missing.
+
+**Fix:** Added to `lib/Runtime/uvm/uvm_pkg.sv`:
+- `uvm_phase_state` enum with all standard phase states
+- `uvm_phase::wait_for_state()` task
+- `uvm_phase::get_state()` and `set_state()` functions
+
+**Regression test:** `test/Runtime/uvm/uvm_phase_wait_for_state_test.sv`
+
+### Known Bug: Cross-Module Event Triggering
+
+Cross-module hierarchical event triggers (`-> other_module.event`) fail with SSA region isolation error:
+```
+error: 'llhd.prb' op using value defined outside the region
+```
+Affects Chapter-15 tests 15.5.1. Local event triggering works correctly.
+
+### AVIP Testing Status
+
+| AVIP | Status | Notes |
+|------|--------|-------|
+| AHB | **SUCCESS** | Full compilation, regression verified |
+| APB | **SUCCESS** | Full compilation |
+| UART | **SUCCESS** | Full compilation |
+| SPI | **SUCCESS** | Full compilation |
+| I2S | **SUCCESS** | 173K lines MLIR generated |
+| I3C | **SUCCESS** | 264K lines MLIR generated |
+| JTAG | Partial | Pre-existing AVIP code issues |
+| AXI4 | **SUCCESS** | Full compilation |
+| AXI4-Lite | Partial | Assertions compile, cover properties have AVIP bugs |
+
+**7 of 9 AVIPs compile fully, 2 have pre-existing AVIP code issues (not CIRCT bugs)**
+
+## Iteration 122 - January 23, 2026
+
+### UVM Objection Mechanism Improvements
+
+Enhanced UVM objection support to provide full functionality for phase control:
+
+**uvm_phase class improvements:**
+- Added internal `uvm_objection` member (`m_phase_objection`) to each phase
+- `raise_objection()` now delegates to the internal objection object
+- `drop_objection()` now delegates to the internal objection object
+- `get_objection()` returns the actual objection object (was returning null)
+- Added `get_objection_count()` method to query phase objection count
+
+**uvm_objection class improvements:**
+- Added `m_total_count` to track total objections ever raised
+- Added `m_drain_time` member with `get_drain_time()` accessor
+- Added `get_objection_total()` method
+- Added `clear()` method to reset objection count
+- Added `raised()` method to check if any objections are active
+- Improved `wait_for()` task with basic UVM_ALL_DROPPED support
+- Added `display_objections()` method for debugging
+
+**New test coverage:**
+- Created `/test/Conversion/ImportVerilog/uvm-objection-test.sv` with 10 test cases
+- Added 8 new C++ unit tests in `UVMPhaseManagerTest.cpp`
+
+This enables proper UVM testbench patterns like:
+```systemverilog
+task run_phase(uvm_phase phase);
+  phase.raise_objection(this, "Starting test", 1);
+  // ... test logic ...
+  phase.drop_objection(this, "Test complete", 1);
+endtask
+```
+
+### sv-tests Chapter-7 Verification
+
+Confirmed Chapter-7 (User-Defined Types) at **100% pass rate** (103/103 tests):
+- All array, queue, struct, union, memory tests pass
+- Expected-to-fail tests correctly produce errors
+- No bug fixes required
+
+### SPI AVIP End-to-End Testing
+
+SPI AVIP compiles and simulates successfully with circt-sim:
+- Compilation: 19 source files, 22MB MLIR output
+- Simulation: 1 second (1T fs) with 100K+ process executions
+- Output shows "SpiHdlTop", "Slave Agent BFM", "Master Agent BFM"
+- Zero errors, zero warnings
+- Fourth AVIP successfully tested (after AHB, APB, UART)
+
+### SVA BMC Suite Runs
+
+- **Yosys SVA**: 14 tests, failures=0, skipped=2 (vhdl), no-property=2 (extnets pass/fail). `sva_value_change_sim` fail case skipped due to missing FAIL macro.
+- **sv-tests SVA**: total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010.
+- **verilator-verification BMC**: total=17 pass=8 error=0 no-property=9; sequence tests now parse, remaining cases lack properties.
+
+### AVIP Smoke Checks
+
+- **APB AVIP**: full compile with real UVM succeeds using `--no-uvm-auto-include` and `sim/apb_compile.f` via `utils/run_avip_circt_verilog.sh`.
+- **SPI AVIP**: full compile with real UVM succeeds via `utils/run_avip_circt_verilog.sh` with `TIMESCALE=1ns/1ps` and `sim/SpiCompile.f`.
+- **AXI4 AVIP**: full compile with real UVM succeeds via `utils/run_avip_circt_verilog.sh` with `TIMESCALE=1ns/1ps` and `sim/axi4_compile.f`.
+- **AXI4Lite AVIP**: bind to `Axi4LiteCoverProperty` now resolves; `dist` ranges with `$` are accepted in ImportVerilog. Full AVIP rerun pending to find the next blocker.
+- AVIP runner now supports multiple filelists and env-var expansion for complex projects.
+
+### LEC Regression Coverage
+
+- Added `test/Tools/circt-lec/lec-smt.mlir` to exercise the SMT lowering path in `circt-lec`.
+
+### SVA BMC Fixes (Clocked Gating + Async Reset)
+
+- Folded clocked i1 assertion enable/edge conditions into the property so BMC
+  respects gating even when enable is not handled downstream.
+- ExternalizeRegisters now models async reset by muxing the reset value into the
+  current and next-state paths.
+- sv-tests updates (filtered runs):
+  - `16.12--property*.sv` now pass.
+  - `16.15--property-disable-iff.sv` now passes; fail variant remains XFAIL.
+
+### SVA Parser Compatibility (Sequence Event Controls)
+
+- Slang patch: accept `@posedge` / `@negedge` timing controls in sequence
+  declarations (matches verilator-verification style).
+- Slang patch: disambiguate `@posedge (clk)` followed by parenthesized
+  sequence expressions (avoids parsing as a call).
+- Slang patch: allow missing semicolons before `endsequence` to ease parsing
+  of suite tests.
+- Downgrade trailing comma diagnostics to warnings so ANSI port lists with
+  trailing commas parse successfully.
+- Slang preprocessor: accept `ifdef` / `elsif` expressions with integer
+  comparisons (e.g. `ADDR_WIDTH == 32 && DATA_WIDTH == 32`).
+- New regressions:
+  - `test/Conversion/ImportVerilog/sva-sequence-event-control.sv`
+  - `test/Conversion/ImportVerilog/sva-sequence-event-control-paren.sv`
+  - `test/Conversion/ImportVerilog/trailing-comma-portlist.sv`
+  - `test/Conversion/ImportVerilog/pp-ifdef-expr.sv`
+
+### SVA BMC Tooling (Clocking Defaults + Harness Flags)
+
+- Default `circt-bmc` to `--rising-clocks-only` to avoid half-cycle assertion
+  sampling artifacts.
+- Harness scripts now accept `RISING_CLOCKS_ONLY` and
+  `PRUNE_UNREACHABLE_SYMBOLS` for debugging/triage.
+- Registered `strip-unreachable-symbols` as a standalone pass with an
+  `entry-symbol` option for `circt-opt` and custom pipelines.
+- Expanded `docs/SVA_BMC_LEC_PLAN.md` with explicit test gates and evidence
+  requirements for ongoing work.
+
+---
+
 ## Iteration 121 - January 23, 2026
 
 ### Queue Foreach Iteration Fix
@@ -107,8 +295,16 @@ Added a top-level plan for completing SVA BMC and LEC work:
 
 - Added a BMC-only reachability prune pass to drop symbols not reachable from
   the BMC entrypoint, removing unused UVM vtables/functions before SMT lowering.
+- New flag `--prune-unreachable-symbols` to disable pruning for debugging.
 - New regression: `test/Tools/circt-bmc/circt-bmc-strip-unused-funcs.mlir`.
 - sv-tests Chapter-16.10 pass cases succeed with UVM auto-include enabled.
+
+### Verilator-Verification Harness Updates
+
+- `utils/run_verilator_verification_circt_bmc.sh` now skips tests that emit
+  "no property provided" to avoid treating parser-only files as errors.
+- Current failures include assert helper semantics ($rose/$fell/$past/$stable)
+  and sequence delay handling; see `verilator-verification-bmc-results.txt`.
 
 ### UVM config_db Wildcard Pattern Matching
 
@@ -1819,17 +2015,20 @@ This caused hw.bitcast to fail when trying to convert from packed integer to ope
 **Feature**: Added a Sim dialect stripping pass and enabled it in the `circt-bmc` pipeline.
 
 **Details**:
-- New `sim-strip` pass erases Sim dialect operations when they are only used
+- New `strip-sim` pass erases Sim dialect operations when they are only used
   for simulation-side effects (e.g. `$display`, `$finish`).
-- `circt-bmc` now registers the Sim dialect and runs `sim-strip` early to avoid
+- `circt-bmc` now registers the Sim dialect and runs `strip-sim` early to avoid
   parse/verification failures on sim ops in formal flows.
 - This unblocks BMC ingestion of designs that include simulation tasks, with
   follow-up work still needed for LLHD-side `$stop/$finish` lowering.
 
-**Test**: `test/Dialect/Sim/strip-sim.mlir`
+**Tests**:
+- `test/Dialect/Sim/strip-sim.mlir`
+- `test/Tools/circt-bmc/strip-sim-ops.mlir`
 
-**Impact**: Verilator-verification and sv-tests no longer fail immediately on
-sim dialect ops, exposing the next LLHD-related blockers in BMC.
+**Impact**: Verilator-verification assert suite now passes (8/10, 2 no-property)
+after LLHD lowering can proceed, and sv-tests no longer fail immediately on sim
+dialect ops.
 
 ### LLHD Halt + Combinational Handling for BMC ✅ NEW
 
