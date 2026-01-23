@@ -70,10 +70,29 @@ struct EventControlVisitor {
       return clockEvent.visit(visitor);
     }
 
+    // Check if the expression references a sequence or property.
+    // Using a sequence/property as an event control (@seq) is an SVA feature
+    // that waits for the sequence/property to match. This is not yet supported.
+    if (symRef && symRef->kind == slang::ast::SymbolKind::Sequence)
+      return mlir::emitError(loc)
+             << "sequence event controls (@sequence_name) are not yet "
+                "supported";
+    if (symRef && symRef->kind == slang::ast::SymbolKind::Property)
+      return mlir::emitError(loc)
+             << "property event controls (@property_name) are not yet "
+                "supported";
+
     auto edge = convertEdgeKind(ctrl.edge);
     auto expr = context.convertRvalueExpression(ctrl.expr);
     if (!expr)
       return failure();
+
+    // Check if the expression evaluates to an LTL sequence or property type.
+    // This can happen when a sequence/property is referenced indirectly.
+    if (isa<ltl::SequenceType, ltl::PropertyType>(expr.getType()))
+      return mlir::emitError(loc)
+             << "sequence/property event controls are not yet supported";
+
     Value condition;
     if (ctrl.iffCondition) {
       condition = context.convertRvalueExpression(*ctrl.iffCondition);
