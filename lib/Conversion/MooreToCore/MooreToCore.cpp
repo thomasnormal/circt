@@ -4101,6 +4101,46 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       return success();
     }
 
+    // Handle wildcard associative array variables [*] - same as regular assoc
+    // arrays but with default key/value sizes since index type is unspecified.
+    if (auto wildcardType = dyn_cast<WildcardAssocArrayType>(nestedMooreType)) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i32Ty = IntegerType::get(ctx, 32);
+
+      // Get or create __moore_assoc_create function
+      auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {i32Ty, i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
+
+      // Wildcard associative arrays can use any index type, so we use
+      // string key (keySize=0) as a sensible default that works with any type.
+      int32_t keySize = 0;
+
+      // Determine value size
+      auto valueType = wildcardType.getElementType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      int32_t valueSize = 4; // Default
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+
+      // Create constants for key_size and value_size
+      auto keySizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
+      auto valueSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+      // Call __moore_assoc_create(key_size, value_size)
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(fn),
+          ValueRange{keySizeConst, valueSizeConst});
+
+      rewriter.replaceOp(op, call.getResult());
+      return success();
+    }
+
     // Handle string variables - these need stack allocation with empty init
     if (isa<StringType>(nestedMooreType)) {
       auto *ctx = rewriter.getContext();
@@ -13933,8 +13973,14 @@ struct AssocArrayCreateOpConversion
       auto convertedValueType = typeConverter->convertType(valueType);
       if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
         valueSize = (intTy.getWidth() + 7) / 8;
+    } else if (auto wildcardType = dyn_cast<WildcardAssocArrayType>(resultType)) {
+      // For WildcardAssocArrayType, use string key (keySize=0) and determine
+      // value size from the element type.
+      auto valueType = wildcardType.getElementType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
     }
-    // For WildcardAssocArrayType, use defaults (string key = 0, 4-byte value)
 
     auto keySizeConst = LLVM::ConstantOp::create(
         rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
@@ -17883,6 +17929,14 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     return LLVM::LLVMPointerType::get(type.getContext());
   });
 
+  // WildcardAssocArrayType (wildcard associative array [*]) -> LLVM pointer
+  // (opaque map handle). Wildcard associative arrays use any indexing type,
+  // so they're represented the same as regular associative arrays at runtime.
+  typeConverter.addConversion(
+      [&](WildcardAssocArrayType type) -> std::optional<Type> {
+        return LLVM::LLVMPointerType::get(type.getContext());
+      });
+
   // Convert packed union type to hw::UnionType
   typeConverter.addConversion([&](UnionType type) -> std::optional<Type> {
     SmallVector<hw::UnionType::FieldInfo> fields;
@@ -17953,11 +18007,12 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
     auto nestedType = type.getNestedType();
     if (auto innerType = typeConverter.convertType(nestedType)) {
       // For dynamic container types (queues, dynamic arrays, associative
-      // arrays, and strings), return an LLVM pointer instead of llhd.ref.
-      // These are dynamic types that don't fit the llhd signal/probe model.
-      // Check the original Moore type to distinguish from other pointer types.
-      if (isa<QueueType, OpenUnpackedArrayType, AssocArrayType, StringType>(
-              nestedType))
+      // arrays including wildcard, and strings), return an LLVM pointer instead
+      // of llhd.ref. These are dynamic types that don't fit the llhd
+      // signal/probe model. Check the original Moore type to distinguish from
+      // other pointer types.
+      if (isa<QueueType, OpenUnpackedArrayType, AssocArrayType,
+              WildcardAssocArrayType, StringType>(nestedType))
         return LLVM::LLVMPointerType::get(type.getContext());
       // If the inner type converted to an LLVM struct (e.g., unpacked struct
       // containing dynamic types like strings), also use LLVM pointer.

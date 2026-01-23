@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 116 - January 23, 2026
+
+### Wildcard Associative Array Support
+
+Added complete lowering support for SystemVerilog wildcard associative arrays (`[*]`):
+
+**Changes:**
+- Added `WildcardAssocArrayType` type conversion to LLVM pointer
+- Added `RefType<WildcardAssocArrayType>` conversion to LLVM pointer
+- Added `VariableOp` conversion for wildcard associative array allocation
+- Added `AssocArrayCreateOp` conversion for wildcard arrays
+
+**Result:**
+- verilator-verification: 114/154 passing (was 113/154)
+- `types_wildcard.sv` test now passes
+
+**Test Added:** `test/Conversion/MooreToCore/wildcard-assoc-array-test.sv`
+
+---
+
 ## Iteration 115 - January 23, 2026
 
 ### AHB AVIP E2E circt-sim Execution ✅
