@@ -15641,3 +15641,1078 @@ extern "C" void __moore_scoreboard_get_statistics(int64_t *totalScoreboards,
   if (totalMismatches)
     *totalMismatches = scoreboardTotalMismatches.load();
 }
+
+//===----------------------------------------------------------------------===//
+// UVM Register Abstraction Layer (RAL) Infrastructure
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+// Global RAL tracing flag
+static bool ralTraceEnabled = false;
+
+// Global RAL statistics
+static std::atomic<int64_t> ralTotalRegs{0};
+static std::atomic<int64_t> ralTotalReads{0};
+static std::atomic<int64_t> ralTotalWrites{0};
+
+/// Register field structure
+struct RegField {
+  std::string name;
+  int32_t numBits;
+  int32_t lsbPos;
+  MooreRegAccessPolicy access;
+  uint64_t resetValue;
+
+  RegField(const std::string &n, int32_t bits, int32_t lsb,
+           MooreRegAccessPolicy acc, uint64_t reset)
+      : name(n), numBits(bits), lsbPos(lsb), access(acc), resetValue(reset) {}
+
+  uint64_t getMask() const {
+    if (numBits >= 64)
+      return ~0ULL;
+    return ((1ULL << numBits) - 1) << lsbPos;
+  }
+
+  uint64_t extractValue(uint64_t regValue) const {
+    return (regValue >> lsbPos) & ((1ULL << numBits) - 1);
+  }
+
+  uint64_t insertValue(uint64_t regValue, uint64_t fieldValue) const {
+    uint64_t mask = getMask();
+    uint64_t shiftedValue = (fieldValue << lsbPos) & mask;
+    return (regValue & ~mask) | shiftedValue;
+  }
+};
+
+/// Register structure
+struct Register {
+  std::string name;
+  int32_t numBits;
+
+  // Values
+  uint64_t mirrorValue;      // Current predicted value
+  uint64_t desiredValue;     // Value to write on update
+  uint64_t hardResetValue;   // Value after hard reset
+  uint64_t softResetValue;   // Value after soft reset
+
+  // Fields
+  std::vector<std::unique_ptr<RegField>> fields;
+
+  // Address mapping (map handle -> offset)
+  std::map<MooreRegMapHandle, uint64_t> mapOffsets;
+
+  // Access callback
+  MooreRegAccessCallback accessCallback;
+  void *accessCallbackUserData;
+
+  // Parent block
+  MooreRegBlockHandle parentBlock;
+
+  // Write-once tracking
+  bool hasBeenWritten;
+
+  Register(const std::string &n, int32_t bits)
+      : name(n), numBits(bits), mirrorValue(0), desiredValue(0),
+        hardResetValue(0), softResetValue(0), accessCallback(nullptr),
+        accessCallbackUserData(nullptr), parentBlock(MOORE_REG_INVALID_HANDLE),
+        hasBeenWritten(false) {}
+
+  uint64_t getMask() const {
+    if (numBits >= 64)
+      return ~0ULL;
+    return (1ULL << numBits) - 1;
+  }
+};
+
+/// Register map entry
+struct RegMapEntry {
+  MooreRegHandle reg;
+  uint64_t offset;
+  std::string rights;
+
+  RegMapEntry(MooreRegHandle r, uint64_t off, const std::string &r_str)
+      : reg(r), offset(off), rights(r_str) {}
+};
+
+/// Register map structure
+struct RegMap {
+  std::string name;
+  uint64_t baseAddr;
+  int32_t nBytes;      // Bus width in bytes
+  int32_t endian;      // 0=little, 1=big
+
+  // Register entries (offset -> entry)
+  std::vector<RegMapEntry> entries;
+
+  // Sub-maps (offset -> child map handle)
+  std::vector<std::pair<uint64_t, MooreRegMapHandle>> submaps;
+
+  // Sequencer/adapter for frontdoor access
+  int64_t sequencer;
+  int64_t adapter;
+
+  // Parent block
+  MooreRegBlockHandle parentBlock;
+
+  RegMap(const std::string &n, uint64_t base, int32_t bytes, int32_t end)
+      : name(n), baseAddr(base), nBytes(bytes), endian(end),
+        sequencer(0), adapter(0), parentBlock(MOORE_REG_INVALID_HANDLE) {}
+};
+
+/// Register block entry (register with offset)
+struct RegBlockRegEntry {
+  MooreRegHandle reg;
+  uint64_t offset;
+
+  RegBlockRegEntry(MooreRegHandle r, uint64_t off) : reg(r), offset(off) {}
+};
+
+/// Register block sub-block entry
+struct RegBlockSubBlockEntry {
+  MooreRegBlockHandle block;
+  uint64_t offset;
+
+  RegBlockSubBlockEntry(MooreRegBlockHandle b, uint64_t off)
+      : block(b), offset(off) {}
+};
+
+/// Register block structure
+struct RegBlock {
+  std::string name;
+
+  // Registers in this block
+  std::vector<RegBlockRegEntry> registers;
+
+  // Sub-blocks
+  std::vector<RegBlockSubBlockEntry> subBlocks;
+
+  // Maps owned by this block
+  std::vector<MooreRegMapHandle> maps;
+
+  // Default map
+  MooreRegMapHandle defaultMap;
+
+  // Lock state
+  bool locked;
+
+  RegBlock(const std::string &n)
+      : name(n), defaultMap(MOORE_REG_INVALID_HANDLE), locked(false) {}
+};
+
+/// Global register registry
+struct RegRegistry {
+  std::vector<std::unique_ptr<Register>> registers;
+  std::mutex regMutex;
+
+  Register *getRegister(MooreRegHandle handle) {
+    std::lock_guard<std::mutex> lock(regMutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= registers.size())
+      return nullptr;
+    return registers[handle].get();
+  }
+
+  MooreRegHandle addRegister(std::unique_ptr<Register> reg) {
+    std::lock_guard<std::mutex> lock(regMutex);
+    MooreRegHandle handle = static_cast<MooreRegHandle>(registers.size());
+    registers.push_back(std::move(reg));
+    return handle;
+  }
+};
+
+/// Global register block registry
+struct RegBlockRegistry {
+  std::vector<std::unique_ptr<RegBlock>> blocks;
+  std::mutex mutex;
+
+  RegBlock *getBlock(MooreRegBlockHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= blocks.size())
+      return nullptr;
+    return blocks[handle].get();
+  }
+
+  MooreRegBlockHandle addBlock(std::unique_ptr<RegBlock> block) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreRegBlockHandle handle = static_cast<MooreRegBlockHandle>(blocks.size());
+    blocks.push_back(std::move(block));
+    return handle;
+  }
+};
+
+/// Global register map registry
+struct RegMapRegistry {
+  std::vector<std::unique_ptr<RegMap>> maps;
+  std::mutex mutex;
+
+  RegMap *getMap(MooreRegMapHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= maps.size())
+      return nullptr;
+    return maps[handle].get();
+  }
+
+  MooreRegMapHandle addMap(std::unique_ptr<RegMap> map) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreRegMapHandle handle = static_cast<MooreRegMapHandle>(maps.size());
+    maps.push_back(std::move(map));
+    return handle;
+  }
+};
+
+RegRegistry &getRegRegistry() {
+  static RegRegistry registry;
+  return registry;
+}
+
+RegBlockRegistry &getRegBlockRegistry() {
+  static RegBlockRegistry registry;
+  return registry;
+}
+
+RegMapRegistry &getRegMapRegistry() {
+  static RegMapRegistry registry;
+  return registry;
+}
+
+void ralTrace(const char *fmt, ...) {
+  if (!ralTraceEnabled)
+    return;
+  va_list args;
+  va_start(args, fmt);
+  std::printf("[RAL] ");
+  std::vprintf(fmt, args);
+  std::printf("\n");
+  va_end(args);
+}
+
+} // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Register Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreRegHandle __moore_reg_create(const char *name, int64_t nameLen,
+                                             int32_t numBits) {
+  if (!name || nameLen <= 0 || numBits <= 0 || numBits > 64)
+    return MOORE_REG_INVALID_HANDLE;
+
+  std::string regName(name, nameLen);
+  auto reg = std::make_unique<Register>(regName, numBits);
+
+  MooreRegHandle handle = getRegRegistry().addRegister(std::move(reg));
+  ralTotalRegs.fetch_add(1);
+
+  ralTrace("Created register '%s' with %d bits (handle=%lld)",
+           regName.c_str(), numBits, (long long)handle);
+
+  return handle;
+}
+
+extern "C" void __moore_reg_destroy(MooreRegHandle reg) {
+  auto &registry = getRegRegistry();
+  std::lock_guard<std::mutex> lock(registry.regMutex);
+
+  if (reg >= 0 && static_cast<size_t>(reg) < registry.registers.size()) {
+    ralTrace("Destroyed register handle=%lld", (long long)reg);
+    registry.registers[reg].reset();
+  }
+}
+
+extern "C" MooreString __moore_reg_get_name(MooreRegHandle reg) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r) {
+    return {nullptr, 0};
+  }
+
+  char *data = static_cast<char *>(std::malloc(r->name.size()));
+  if (!data)
+    return {nullptr, 0};
+
+  std::memcpy(data, r->name.data(), r->name.size());
+  return {data, static_cast<int64_t>(r->name.size())};
+}
+
+extern "C" int32_t __moore_reg_get_n_bits(MooreRegHandle reg) {
+  Register *r = getRegRegistry().getRegister(reg);
+  return r ? r->numBits : 0;
+}
+
+extern "C" uint64_t __moore_reg_get_address(MooreRegHandle reg,
+                                            MooreRegMapHandle map) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r)
+    return 0;
+
+  // If specific map requested, get offset from that map
+  if (map != MOORE_REG_INVALID_HANDLE) {
+    auto it = r->mapOffsets.find(map);
+    if (it != r->mapOffsets.end()) {
+      RegMap *m = getRegMapRegistry().getMap(map);
+      if (m)
+        return m->baseAddr + it->second;
+    }
+  }
+
+  // Otherwise use first available map
+  if (!r->mapOffsets.empty()) {
+    auto it = r->mapOffsets.begin();
+    RegMap *m = getRegMapRegistry().getMap(it->first);
+    if (m)
+      return m->baseAddr + it->second;
+  }
+
+  return 0;
+}
+
+extern "C" uint64_t __moore_reg_read(MooreRegHandle reg, MooreRegMapHandle map,
+                                     MooreRegPathKind path,
+                                     MooreRegStatus *status, int64_t parent) {
+  (void)map;
+  (void)parent;
+
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r) {
+    if (status)
+      *status = UVM_REG_STATUS_NOT_OK;
+    return 0;
+  }
+
+  uint64_t value = r->mirrorValue;
+
+  // For backdoor access, we could read from HDL path if configured
+  // For now, just return the mirror value
+  if (path == UVM_BACKDOOR) {
+    // TODO: Integrate with HDL access functions if HDL path is set
+    value = r->mirrorValue;
+  }
+
+  // Call access callback if registered
+  if (r->accessCallback) {
+    r->accessCallback(reg, value, 0, r->accessCallbackUserData);
+  }
+
+  ralTotalReads.fetch_add(1);
+
+  ralTrace("Read register '%s': value=0x%llx (path=%d)",
+           r->name.c_str(), (unsigned long long)value, (int)path);
+
+  if (status)
+    *status = UVM_REG_STATUS_OK;
+
+  return value;
+}
+
+extern "C" void __moore_reg_write(MooreRegHandle reg, MooreRegMapHandle map,
+                                  uint64_t value, MooreRegPathKind path,
+                                  MooreRegStatus *status, int64_t parent) {
+  (void)map;
+  (void)parent;
+
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r) {
+    if (status)
+      *status = UVM_REG_STATUS_NOT_OK;
+    return;
+  }
+
+  // Mask value to register width
+  value &= r->getMask();
+
+  // Update mirror value
+  r->mirrorValue = value;
+  r->hasBeenWritten = true;
+
+  // For backdoor access, we could write to HDL path if configured
+  if (path == UVM_BACKDOOR) {
+    // TODO: Integrate with HDL access functions if HDL path is set
+  }
+
+  // Call access callback if registered
+  if (r->accessCallback) {
+    r->accessCallback(reg, value, 1, r->accessCallbackUserData);
+  }
+
+  ralTotalWrites.fetch_add(1);
+
+  ralTrace("Write register '%s': value=0x%llx (path=%d)",
+           r->name.c_str(), (unsigned long long)value, (int)path);
+
+  if (status)
+    *status = UVM_REG_STATUS_OK;
+}
+
+extern "C" uint64_t __moore_reg_get_value(MooreRegHandle reg) {
+  Register *r = getRegRegistry().getRegister(reg);
+  return r ? r->mirrorValue : 0;
+}
+
+extern "C" void __moore_reg_set_value(MooreRegHandle reg, uint64_t value) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (r) {
+    r->mirrorValue = value & r->getMask();
+    ralTrace("Set register '%s' mirror value to 0x%llx",
+             r->name.c_str(), (unsigned long long)r->mirrorValue);
+  }
+}
+
+extern "C" uint64_t __moore_reg_get_desired(MooreRegHandle reg) {
+  Register *r = getRegRegistry().getRegister(reg);
+  return r ? r->desiredValue : 0;
+}
+
+extern "C" void __moore_reg_set_desired(MooreRegHandle reg, uint64_t value) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (r) {
+    r->desiredValue = value & r->getMask();
+    ralTrace("Set register '%s' desired value to 0x%llx",
+             r->name.c_str(), (unsigned long long)r->desiredValue);
+  }
+}
+
+extern "C" void __moore_reg_update(MooreRegHandle reg, MooreRegMapHandle map,
+                                   MooreRegPathKind path,
+                                   MooreRegStatus *status) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r) {
+    if (status)
+      *status = UVM_REG_STATUS_NOT_OK;
+    return;
+  }
+
+  // Write desired value to register
+  __moore_reg_write(reg, map, r->desiredValue, path, status, 0);
+}
+
+extern "C" void __moore_reg_mirror(MooreRegHandle reg, MooreRegMapHandle map,
+                                   MooreRegPathKind path,
+                                   MooreRegStatus *status) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r) {
+    if (status)
+      *status = UVM_REG_STATUS_NOT_OK;
+    return;
+  }
+
+  // Read actual value and update mirror
+  uint64_t value = __moore_reg_read(reg, map, path, status, 0);
+  r->mirrorValue = value;
+  r->desiredValue = value;
+
+  ralTrace("Mirror register '%s': value=0x%llx",
+           r->name.c_str(), (unsigned long long)value);
+}
+
+extern "C" bool __moore_reg_predict(MooreRegHandle reg, uint64_t value,
+                                    bool isWrite) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r)
+    return false;
+
+  value &= r->getMask();
+
+  if (isWrite) {
+    // Predict effect of write
+    r->mirrorValue = value;
+  }
+  // For read, mirror doesn't change (unless special access policy)
+
+  ralTrace("Predict register '%s': value=0x%llx (isWrite=%d)",
+           r->name.c_str(), (unsigned long long)value, isWrite);
+
+  return true;
+}
+
+extern "C" void __moore_reg_reset(MooreRegHandle reg, const char *kind) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r)
+    return;
+
+  bool isHard = (kind && std::strcmp(kind, "HARD") == 0);
+
+  r->mirrorValue = isHard ? r->hardResetValue : r->softResetValue;
+  r->desiredValue = r->mirrorValue;
+  r->hasBeenWritten = false;
+
+  ralTrace("Reset register '%s' (%s): value=0x%llx",
+           r->name.c_str(), kind ? kind : "HARD",
+           (unsigned long long)r->mirrorValue);
+}
+
+extern "C" void __moore_reg_set_reset(MooreRegHandle reg, uint64_t value,
+                                      const char *kind) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r)
+    return;
+
+  value &= r->getMask();
+
+  bool isHard = (kind && std::strcmp(kind, "HARD") == 0);
+  if (isHard) {
+    r->hardResetValue = value;
+  } else {
+    r->softResetValue = value;
+  }
+
+  ralTrace("Set reset value for register '%s' (%s): 0x%llx",
+           r->name.c_str(), kind ? kind : "HARD", (unsigned long long)value);
+}
+
+extern "C" uint64_t __moore_reg_get_reset(MooreRegHandle reg, const char *kind) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r)
+    return 0;
+
+  bool isHard = (kind && std::strcmp(kind, "HARD") == 0);
+  return isHard ? r->hardResetValue : r->softResetValue;
+}
+
+extern "C" bool __moore_reg_needs_update(MooreRegHandle reg) {
+  Register *r = getRegRegistry().getRegister(reg);
+  return r ? (r->mirrorValue != r->desiredValue) : false;
+}
+
+extern "C" void __moore_reg_set_access_callback(MooreRegHandle reg,
+                                                MooreRegAccessCallback callback,
+                                                void *userData) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (r) {
+    r->accessCallback = callback;
+    r->accessCallbackUserData = userData;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Register Field Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreRegFieldHandle __moore_reg_add_field(MooreRegHandle reg,
+                                                     const char *name,
+                                                     int64_t nameLen,
+                                                     int32_t numBits,
+                                                     int32_t lsbPos,
+                                                     MooreRegAccessPolicy access,
+                                                     uint64_t reset) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r || !name || nameLen <= 0 || numBits <= 0)
+    return MOORE_REG_INVALID_HANDLE;
+
+  // Validate field fits within register
+  if (lsbPos + numBits > r->numBits)
+    return MOORE_REG_INVALID_HANDLE;
+
+  std::string fieldName(name, nameLen);
+  auto field = std::make_unique<RegField>(fieldName, numBits, lsbPos,
+                                          access, reset);
+
+  MooreRegFieldHandle handle = static_cast<MooreRegFieldHandle>(r->fields.size());
+  r->fields.push_back(std::move(field));
+
+  // Update register's reset value with this field's reset value
+  r->hardResetValue = r->fields.back()->insertValue(r->hardResetValue, reset);
+  r->softResetValue = r->hardResetValue;
+  r->mirrorValue = r->hardResetValue;
+  r->desiredValue = r->hardResetValue;
+
+  ralTrace("Added field '%s' to register '%s': bits=%d, lsb=%d, reset=0x%llx",
+           fieldName.c_str(), r->name.c_str(), numBits, lsbPos,
+           (unsigned long long)reset);
+
+  return handle;
+}
+
+extern "C" uint64_t __moore_reg_field_get_value(MooreRegHandle reg,
+                                                MooreRegFieldHandle field) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r || field < 0 || static_cast<size_t>(field) >= r->fields.size())
+    return 0;
+
+  return r->fields[field]->extractValue(r->mirrorValue);
+}
+
+extern "C" void __moore_reg_field_set_value(MooreRegHandle reg,
+                                            MooreRegFieldHandle field,
+                                            uint64_t value) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r || field < 0 || static_cast<size_t>(field) >= r->fields.size())
+    return;
+
+  r->mirrorValue = r->fields[field]->insertValue(r->mirrorValue, value);
+
+  ralTrace("Set field %lld of register '%s' to 0x%llx (mirror now 0x%llx)",
+           (long long)field, r->name.c_str(), (unsigned long long)value,
+           (unsigned long long)r->mirrorValue);
+}
+
+extern "C" MooreRegFieldHandle __moore_reg_get_field_by_name(MooreRegHandle reg,
+                                                             const char *name,
+                                                             int64_t nameLen) {
+  Register *r = getRegRegistry().getRegister(reg);
+  if (!r || !name || nameLen <= 0)
+    return MOORE_REG_INVALID_HANDLE;
+
+  std::string fieldName(name, nameLen);
+  for (size_t i = 0; i < r->fields.size(); ++i) {
+    if (r->fields[i]->name == fieldName)
+      return static_cast<MooreRegFieldHandle>(i);
+  }
+
+  return MOORE_REG_INVALID_HANDLE;
+}
+
+extern "C" int32_t __moore_reg_get_n_fields(MooreRegHandle reg) {
+  Register *r = getRegRegistry().getRegister(reg);
+  return r ? static_cast<int32_t>(r->fields.size()) : 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Register Block Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreRegBlockHandle __moore_reg_block_create(const char *name,
+                                                        int64_t nameLen) {
+  if (!name || nameLen <= 0)
+    return MOORE_REG_INVALID_HANDLE;
+
+  std::string blockName(name, nameLen);
+  auto block = std::make_unique<RegBlock>(blockName);
+
+  MooreRegBlockHandle handle = getRegBlockRegistry().addBlock(std::move(block));
+
+  ralTrace("Created register block '%s' (handle=%lld)",
+           blockName.c_str(), (long long)handle);
+
+  return handle;
+}
+
+extern "C" void __moore_reg_block_destroy(MooreRegBlockHandle block) {
+  auto &registry = getRegBlockRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+
+  if (block >= 0 && static_cast<size_t>(block) < registry.blocks.size()) {
+    RegBlock *b = registry.blocks[block].get();
+    if (b) {
+      // Destroy all maps in this block
+      for (auto mapHandle : b->maps) {
+        __moore_reg_map_destroy(mapHandle);
+      }
+
+      // Note: We don't destroy registers here as they may be shared
+      // with other blocks. The caller should manage register lifetime.
+
+      ralTrace("Destroyed register block handle=%lld", (long long)block);
+    }
+    registry.blocks[block].reset();
+  }
+}
+
+extern "C" MooreString __moore_reg_block_get_name(MooreRegBlockHandle block) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (!b) {
+    return {nullptr, 0};
+  }
+
+  char *data = static_cast<char *>(std::malloc(b->name.size()));
+  if (!data)
+    return {nullptr, 0};
+
+  std::memcpy(data, b->name.data(), b->name.size());
+  return {data, static_cast<int64_t>(b->name.size())};
+}
+
+extern "C" void __moore_reg_block_add_reg(MooreRegBlockHandle block,
+                                          MooreRegHandle reg, uint64_t offset) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  Register *r = getRegRegistry().getRegister(reg);
+
+  if (!b || !r)
+    return;
+
+  if (b->locked) {
+    ralTrace("Cannot add register to locked block '%s'", b->name.c_str());
+    return;
+  }
+
+  b->registers.emplace_back(reg, offset);
+  r->parentBlock = block;
+
+  ralTrace("Added register '%s' to block '%s' at offset 0x%llx",
+           r->name.c_str(), b->name.c_str(), (unsigned long long)offset);
+}
+
+extern "C" void __moore_reg_block_add_block(MooreRegBlockHandle parent,
+                                            MooreRegBlockHandle child,
+                                            uint64_t offset) {
+  RegBlock *p = getRegBlockRegistry().getBlock(parent);
+  RegBlock *c = getRegBlockRegistry().getBlock(child);
+
+  if (!p || !c)
+    return;
+
+  if (p->locked) {
+    ralTrace("Cannot add sub-block to locked block '%s'", p->name.c_str());
+    return;
+  }
+
+  p->subBlocks.emplace_back(child, offset);
+
+  ralTrace("Added sub-block '%s' to block '%s' at offset 0x%llx",
+           c->name.c_str(), p->name.c_str(), (unsigned long long)offset);
+}
+
+extern "C" MooreRegMapHandle __moore_reg_block_get_default_map(
+    MooreRegBlockHandle block) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  return b ? b->defaultMap : MOORE_REG_INVALID_HANDLE;
+}
+
+extern "C" void __moore_reg_block_set_default_map(MooreRegBlockHandle block,
+                                                  MooreRegMapHandle map) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (b) {
+    b->defaultMap = map;
+    ralTrace("Set default map for block '%s' to handle=%lld",
+             b->name.c_str(), (long long)map);
+  }
+}
+
+extern "C" MooreRegHandle __moore_reg_block_get_reg_by_name(
+    MooreRegBlockHandle block, const char *name, int64_t nameLen) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (!b || !name || nameLen <= 0)
+    return MOORE_REG_INVALID_HANDLE;
+
+  std::string regName(name, nameLen);
+
+  // Check for hierarchical name (contains '.')
+  size_t dotPos = regName.find('.');
+  if (dotPos != std::string::npos) {
+    std::string subBlockName = regName.substr(0, dotPos);
+    std::string remainingName = regName.substr(dotPos + 1);
+
+    // Find sub-block
+    for (const auto &entry : b->subBlocks) {
+      RegBlock *subBlock = getRegBlockRegistry().getBlock(entry.block);
+      if (subBlock && subBlock->name == subBlockName) {
+        return __moore_reg_block_get_reg_by_name(entry.block,
+                                                  remainingName.c_str(),
+                                                  remainingName.size());
+      }
+    }
+    return MOORE_REG_INVALID_HANDLE;
+  }
+
+  // Search in this block's registers
+  for (const auto &entry : b->registers) {
+    Register *r = getRegRegistry().getRegister(entry.reg);
+    if (r && r->name == regName)
+      return entry.reg;
+  }
+
+  return MOORE_REG_INVALID_HANDLE;
+}
+
+extern "C" int32_t __moore_reg_block_get_n_regs(MooreRegBlockHandle block) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  return b ? static_cast<int32_t>(b->registers.size()) : 0;
+}
+
+extern "C" void __moore_reg_block_lock(MooreRegBlockHandle block) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (b) {
+    b->locked = true;
+    ralTrace("Locked register block '%s'", b->name.c_str());
+  }
+}
+
+extern "C" bool __moore_reg_block_is_locked(MooreRegBlockHandle block) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  return b ? b->locked : false;
+}
+
+extern "C" void __moore_reg_block_reset(MooreRegBlockHandle block,
+                                        const char *kind) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (!b)
+    return;
+
+  // Reset all registers in this block
+  for (const auto &entry : b->registers) {
+    __moore_reg_reset(entry.reg, kind);
+  }
+
+  // Reset all sub-blocks
+  for (const auto &entry : b->subBlocks) {
+    __moore_reg_block_reset(entry.block, kind);
+  }
+
+  ralTrace("Reset register block '%s' (%s)", b->name.c_str(),
+           kind ? kind : "HARD");
+}
+
+//===----------------------------------------------------------------------===//
+// Register Map Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreRegMapHandle __moore_reg_map_create(MooreRegBlockHandle block,
+                                                    const char *name,
+                                                    int64_t nameLen,
+                                                    uint64_t baseAddr,
+                                                    int32_t nBytes,
+                                                    int32_t endian) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (!b || !name || nameLen <= 0)
+    return MOORE_REG_INVALID_HANDLE;
+
+  if (b->locked) {
+    ralTrace("Cannot create map in locked block '%s'", b->name.c_str());
+    return MOORE_REG_INVALID_HANDLE;
+  }
+
+  std::string mapName(name, nameLen);
+  auto regMap = std::make_unique<RegMap>(mapName, baseAddr, nBytes, endian);
+  regMap->parentBlock = block;
+
+  MooreRegMapHandle handle = getRegMapRegistry().addMap(std::move(regMap));
+
+  // Add map to block's list and set as default if first map
+  b->maps.push_back(handle);
+  if (b->defaultMap == MOORE_REG_INVALID_HANDLE) {
+    b->defaultMap = handle;
+  }
+
+  ralTrace("Created register map '%s' in block '%s': base=0x%llx, bytes=%d "
+           "(handle=%lld)",
+           mapName.c_str(), b->name.c_str(), (unsigned long long)baseAddr,
+           nBytes, (long long)handle);
+
+  return handle;
+}
+
+extern "C" void __moore_reg_map_destroy(MooreRegMapHandle map) {
+  auto &registry = getRegMapRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+
+  if (map >= 0 && static_cast<size_t>(map) < registry.maps.size()) {
+    ralTrace("Destroyed register map handle=%lld", (long long)map);
+    registry.maps[map].reset();
+  }
+}
+
+extern "C" MooreString __moore_reg_map_get_name(MooreRegMapHandle map) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  if (!m) {
+    return {nullptr, 0};
+  }
+
+  char *data = static_cast<char *>(std::malloc(m->name.size()));
+  if (!data)
+    return {nullptr, 0};
+
+  std::memcpy(data, m->name.data(), m->name.size());
+  return {data, static_cast<int64_t>(m->name.size())};
+}
+
+extern "C" uint64_t __moore_reg_map_get_base_addr(MooreRegMapHandle map) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  return m ? m->baseAddr : 0;
+}
+
+extern "C" void __moore_reg_map_add_reg(MooreRegMapHandle map,
+                                        MooreRegHandle reg, uint64_t offset,
+                                        const char *rights) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  Register *r = getRegRegistry().getRegister(reg);
+
+  if (!m || !r)
+    return;
+
+  std::string rightsStr = rights ? rights : "RW";
+  m->entries.emplace_back(reg, offset, rightsStr);
+
+  // Record mapping in register
+  r->mapOffsets[map] = offset;
+
+  ralTrace("Added register '%s' to map '%s' at offset 0x%llx (rights=%s)",
+           r->name.c_str(), m->name.c_str(), (unsigned long long)offset,
+           rightsStr.c_str());
+}
+
+extern "C" void __moore_reg_map_add_submap(MooreRegMapHandle parent,
+                                           MooreRegMapHandle child,
+                                           uint64_t offset) {
+  RegMap *p = getRegMapRegistry().getMap(parent);
+  RegMap *c = getRegMapRegistry().getMap(child);
+
+  if (!p || !c)
+    return;
+
+  p->submaps.emplace_back(offset, child);
+
+  ralTrace("Added sub-map '%s' to map '%s' at offset 0x%llx",
+           c->name.c_str(), p->name.c_str(), (unsigned long long)offset);
+}
+
+extern "C" MooreRegHandle __moore_reg_map_get_reg_by_addr(MooreRegMapHandle map,
+                                                          uint64_t addr) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  if (!m)
+    return MOORE_REG_INVALID_HANDLE;
+
+  // Calculate offset from base
+  if (addr < m->baseAddr)
+    return MOORE_REG_INVALID_HANDLE;
+
+  uint64_t offset = addr - m->baseAddr;
+
+  // Search in this map's entries
+  for (const auto &entry : m->entries) {
+    if (entry.offset == offset)
+      return entry.reg;
+  }
+
+  // Search in sub-maps
+  for (const auto &submap : m->submaps) {
+    RegMap *sub = getRegMapRegistry().getMap(submap.second);
+    if (sub && addr >= m->baseAddr + submap.first) {
+      uint64_t subAddr = addr - submap.first;
+      MooreRegHandle found = __moore_reg_map_get_reg_by_addr(submap.second,
+                                                             subAddr);
+      if (found != MOORE_REG_INVALID_HANDLE)
+        return found;
+    }
+  }
+
+  return MOORE_REG_INVALID_HANDLE;
+}
+
+extern "C" uint64_t __moore_reg_map_get_reg_offset(MooreRegMapHandle map,
+                                                   MooreRegHandle reg) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  if (!m)
+    return 0;
+
+  for (const auto &entry : m->entries) {
+    if (entry.reg == reg)
+      return entry.offset;
+  }
+
+  return 0;
+}
+
+extern "C" void __moore_reg_map_set_sequencer(MooreRegMapHandle map,
+                                              int64_t sequencer) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  if (m) {
+    m->sequencer = sequencer;
+    ralTrace("Set sequencer for map '%s' to %lld",
+             m->name.c_str(), (long long)sequencer);
+  }
+}
+
+extern "C" void __moore_reg_map_set_adapter(MooreRegMapHandle map,
+                                            int64_t adapter) {
+  RegMap *m = getRegMapRegistry().getMap(map);
+  if (m) {
+    m->adapter = adapter;
+    ralTrace("Set adapter for map '%s' to %lld",
+             m->name.c_str(), (long long)adapter);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// RAL Debugging and Tracing
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_reg_set_trace_enabled(int32_t enable) {
+  ralTraceEnabled = (enable != 0);
+}
+
+extern "C" int32_t __moore_reg_is_trace_enabled(void) {
+  return ralTraceEnabled ? 1 : 0;
+}
+
+extern "C" void __moore_reg_block_print(MooreRegBlockHandle block) {
+  RegBlock *b = getRegBlockRegistry().getBlock(block);
+  if (!b) {
+    std::printf("Invalid block handle: %lld\n", (long long)block);
+    return;
+  }
+
+  std::printf("\n=== Register Block: %s ===\n", b->name.c_str());
+  std::printf("  Locked: %s\n", b->locked ? "yes" : "no");
+  std::printf("  Default Map: %lld\n", (long long)b->defaultMap);
+  std::printf("  Registers: %zu\n", b->registers.size());
+
+  for (const auto &entry : b->registers) {
+    Register *r = getRegRegistry().getRegister(entry.reg);
+    if (r) {
+      std::printf("    - %s (offset=0x%llx, bits=%d, mirror=0x%llx)\n",
+                  r->name.c_str(), (unsigned long long)entry.offset,
+                  r->numBits, (unsigned long long)r->mirrorValue);
+
+      for (size_t i = 0; i < r->fields.size(); ++i) {
+        const auto &f = r->fields[i];
+        std::printf("      . %s [%d:%d] (access=%d, reset=0x%llx)\n",
+                    f->name.c_str(), f->lsbPos + f->numBits - 1, f->lsbPos,
+                    (int)f->access, (unsigned long long)f->resetValue);
+      }
+    }
+  }
+
+  std::printf("  Sub-blocks: %zu\n", b->subBlocks.size());
+  for (const auto &entry : b->subBlocks) {
+    RegBlock *sub = getRegBlockRegistry().getBlock(entry.block);
+    if (sub) {
+      std::printf("    - %s (offset=0x%llx)\n",
+                  sub->name.c_str(), (unsigned long long)entry.offset);
+    }
+  }
+
+  std::printf("  Maps: %zu\n", b->maps.size());
+  for (auto mapHandle : b->maps) {
+    RegMap *m = getRegMapRegistry().getMap(mapHandle);
+    if (m) {
+      std::printf("    - %s (base=0x%llx, bytes=%d)%s\n",
+                  m->name.c_str(), (unsigned long long)m->baseAddr, m->nBytes,
+                  mapHandle == b->defaultMap ? " [default]" : "");
+    }
+  }
+
+  std::printf("==============================\n");
+}
+
+extern "C" void __moore_reg_get_statistics(int64_t *totalRegs,
+                                           int64_t *totalReads,
+                                           int64_t *totalWrites) {
+  if (totalRegs)
+    *totalRegs = ralTotalRegs.load();
+  if (totalReads)
+    *totalReads = ralTotalReads.load();
+  if (totalWrites)
+    *totalWrites = ralTotalWrites.load();
+}
+
+extern "C" void __moore_reg_clear_all(void) {
+  {
+    auto &registry = getRegRegistry();
+    std::lock_guard<std::mutex> lock(registry.regMutex);
+    registry.registers.clear();
+  }
+  {
+    auto &registry = getRegBlockRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.blocks.clear();
+  }
+  {
+    auto &registry = getRegMapRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.maps.clear();
+  }
+
+  ralTotalRegs.store(0);
+  ralTotalReads.store(0);
+  ralTotalWrites.store(0);
+
+  ralTrace("Cleared all RAL components");
+}

@@ -11990,4 +11990,634 @@ TEST(MooreRuntimeScoreboardTest, MixedMatchMismatch) {
   __moore_scoreboard_destroy(sb);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Register Abstraction Layer (RAL) Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeRALTest, RegisterCreation) {
+  // Clear any previous state
+  __moore_reg_clear_all();
+
+  const char *regName = "test_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Check name
+  MooreString name = __moore_reg_get_name(reg);
+  EXPECT_EQ(name.len, strlen(regName));
+  EXPECT_EQ(std::string(name.data, name.len), std::string(regName));
+  std::free(name.data);
+
+  // Check bit width
+  EXPECT_EQ(__moore_reg_get_n_bits(reg), 32);
+
+  // Initial values should be 0
+  EXPECT_EQ(__moore_reg_get_value(reg), 0ULL);
+  EXPECT_EQ(__moore_reg_get_desired(reg), 0ULL);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterInvalidParams) {
+  // Null name
+  EXPECT_EQ(__moore_reg_create(nullptr, 5, 32), MOORE_REG_INVALID_HANDLE);
+
+  // Zero length name
+  EXPECT_EQ(__moore_reg_create("test", 0, 32), MOORE_REG_INVALID_HANDLE);
+
+  // Invalid bit width
+  EXPECT_EQ(__moore_reg_create("test", 4, 0), MOORE_REG_INVALID_HANDLE);
+  EXPECT_EQ(__moore_reg_create("test", 4, 65), MOORE_REG_INVALID_HANDLE);
+}
+
+TEST(MooreRuntimeRALTest, RegisterReadWrite) {
+  __moore_reg_clear_all();
+
+  const char *regName = "rw_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Write a value
+  MooreRegStatus status;
+  __moore_reg_write(reg, MOORE_REG_INVALID_HANDLE, 0xDEADBEEF,
+                    UVM_FRONTDOOR, &status, 0);
+  EXPECT_EQ(status, UVM_REG_STATUS_OK);
+
+  // Read it back
+  uint64_t value = __moore_reg_read(reg, MOORE_REG_INVALID_HANDLE,
+                                    UVM_FRONTDOOR, &status, 0);
+  EXPECT_EQ(status, UVM_REG_STATUS_OK);
+  EXPECT_EQ(value, 0xDEADBEEF);
+
+  // Check mirror value
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xDEADBEEF);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterMirrorDesired) {
+  __moore_reg_clear_all();
+
+  const char *regName = "mirror_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 16);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Set mirror value directly
+  __moore_reg_set_value(reg, 0x1234);
+  EXPECT_EQ(__moore_reg_get_value(reg), 0x1234);
+
+  // Set desired value
+  __moore_reg_set_desired(reg, 0x5678);
+  EXPECT_EQ(__moore_reg_get_desired(reg), 0x5678);
+
+  // Check needs update
+  EXPECT_TRUE(__moore_reg_needs_update(reg));
+
+  // Make them equal
+  __moore_reg_set_value(reg, 0x5678);
+  EXPECT_FALSE(__moore_reg_needs_update(reg));
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterUpdate) {
+  __moore_reg_clear_all();
+
+  const char *regName = "update_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Set desired value
+  __moore_reg_set_desired(reg, 0xCAFEBABE);
+  EXPECT_EQ(__moore_reg_get_desired(reg), 0xCAFEBABE);
+  EXPECT_NE(__moore_reg_get_value(reg), 0xCAFEBABE);
+
+  // Update (write desired to mirror)
+  MooreRegStatus status;
+  __moore_reg_update(reg, MOORE_REG_INVALID_HANDLE, UVM_FRONTDOOR, &status);
+  EXPECT_EQ(status, UVM_REG_STATUS_OK);
+
+  // Now mirror should match desired
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xCAFEBABE);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterReset) {
+  __moore_reg_clear_all();
+
+  const char *regName = "reset_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Set reset values
+  __moore_reg_set_reset(reg, 0xABCD1234, "HARD");
+  __moore_reg_set_reset(reg, 0x00001111, "SOFT");
+
+  // Write a different value
+  __moore_reg_set_value(reg, 0xFFFFFFFF);
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xFFFFFFFF);
+
+  // Hard reset
+  __moore_reg_reset(reg, "HARD");
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xABCD1234);
+
+  // Write again
+  __moore_reg_set_value(reg, 0xFFFFFFFF);
+
+  // Soft reset
+  __moore_reg_reset(reg, "SOFT");
+  EXPECT_EQ(__moore_reg_get_value(reg), 0x00001111);
+
+  // Check get_reset
+  EXPECT_EQ(__moore_reg_get_reset(reg, "HARD"), 0xABCD1234);
+  EXPECT_EQ(__moore_reg_get_reset(reg, "SOFT"), 0x00001111);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterPredict) {
+  __moore_reg_clear_all();
+
+  const char *regName = "predict_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Initial value
+  EXPECT_EQ(__moore_reg_get_value(reg), 0ULL);
+
+  // Predict write
+  EXPECT_TRUE(__moore_reg_predict(reg, 0x12345678, true));
+  EXPECT_EQ(__moore_reg_get_value(reg), 0x12345678);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterFieldBasic) {
+  __moore_reg_clear_all();
+
+  const char *regName = "field_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Add field: bits [7:0]
+  const char *fieldName1 = "low_byte";
+  MooreRegFieldHandle field1 = __moore_reg_add_field(
+      reg, fieldName1, strlen(fieldName1), 8, 0, UVM_REG_ACCESS_RW, 0xAB);
+  EXPECT_NE(field1, MOORE_REG_INVALID_HANDLE);
+
+  // Add field: bits [15:8]
+  const char *fieldName2 = "high_byte";
+  MooreRegFieldHandle field2 = __moore_reg_add_field(
+      reg, fieldName2, strlen(fieldName2), 8, 8, UVM_REG_ACCESS_RW, 0xCD);
+  EXPECT_NE(field2, MOORE_REG_INVALID_HANDLE);
+
+  // Check field count
+  EXPECT_EQ(__moore_reg_get_n_fields(reg), 2);
+
+  // Initial register value should be set from field resets
+  // 0xCDAB (high_byte=0xCD, low_byte=0xAB)
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xCDAB);
+
+  // Get field values
+  EXPECT_EQ(__moore_reg_field_get_value(reg, field1), 0xAB);
+  EXPECT_EQ(__moore_reg_field_get_value(reg, field2), 0xCD);
+
+  // Set field value
+  __moore_reg_field_set_value(reg, field1, 0x12);
+  EXPECT_EQ(__moore_reg_field_get_value(reg, field1), 0x12);
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xCD12);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterFieldByName) {
+  __moore_reg_clear_all();
+
+  const char *regName = "named_field_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  EXPECT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Add fields
+  const char *enableField = "enable";
+  __moore_reg_add_field(reg, enableField, strlen(enableField),
+                        1, 0, UVM_REG_ACCESS_RW, 0);
+
+  const char *modeField = "mode";
+  __moore_reg_add_field(reg, modeField, strlen(modeField),
+                        4, 1, UVM_REG_ACCESS_RW, 0);
+
+  // Look up field by name
+  MooreRegFieldHandle enable =
+      __moore_reg_get_field_by_name(reg, enableField, strlen(enableField));
+  EXPECT_NE(enable, MOORE_REG_INVALID_HANDLE);
+
+  MooreRegFieldHandle mode =
+      __moore_reg_get_field_by_name(reg, modeField, strlen(modeField));
+  EXPECT_NE(mode, MOORE_REG_INVALID_HANDLE);
+
+  // Non-existent field
+  MooreRegFieldHandle notFound =
+      __moore_reg_get_field_by_name(reg, "nonexistent", 11);
+  EXPECT_EQ(notFound, MOORE_REG_INVALID_HANDLE);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterBlockCreation) {
+  __moore_reg_clear_all();
+
+  const char *blockName = "test_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+  EXPECT_NE(block, MOORE_REG_INVALID_HANDLE);
+
+  // Check name
+  MooreString name = __moore_reg_block_get_name(block);
+  EXPECT_EQ(name.len, strlen(blockName));
+  EXPECT_EQ(std::string(name.data, name.len), std::string(blockName));
+  std::free(name.data);
+
+  // Initial state
+  EXPECT_EQ(__moore_reg_block_get_n_regs(block), 0);
+  EXPECT_FALSE(__moore_reg_block_is_locked(block));
+  EXPECT_EQ(__moore_reg_block_get_default_map(block), MOORE_REG_INVALID_HANDLE);
+
+  __moore_reg_block_destroy(block);
+}
+
+TEST(MooreRuntimeRALTest, RegisterBlockAddRegister) {
+  __moore_reg_clear_all();
+
+  // Create block
+  const char *blockName = "add_reg_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+  EXPECT_NE(block, MOORE_REG_INVALID_HANDLE);
+
+  // Create registers
+  const char *reg1Name = "ctrl_reg";
+  MooreRegHandle reg1 = __moore_reg_create(reg1Name, strlen(reg1Name), 32);
+
+  const char *reg2Name = "status_reg";
+  MooreRegHandle reg2 = __moore_reg_create(reg2Name, strlen(reg2Name), 32);
+
+  // Add to block
+  __moore_reg_block_add_reg(block, reg1, 0x0000);
+  __moore_reg_block_add_reg(block, reg2, 0x0004);
+
+  EXPECT_EQ(__moore_reg_block_get_n_regs(block), 2);
+
+  // Find by name
+  MooreRegHandle found =
+      __moore_reg_block_get_reg_by_name(block, reg1Name, strlen(reg1Name));
+  EXPECT_EQ(found, reg1);
+
+  found = __moore_reg_block_get_reg_by_name(block, reg2Name, strlen(reg2Name));
+  EXPECT_EQ(found, reg2);
+
+  // Not found
+  found = __moore_reg_block_get_reg_by_name(block, "nonexistent", 11);
+  EXPECT_EQ(found, MOORE_REG_INVALID_HANDLE);
+
+  __moore_reg_block_destroy(block);
+  __moore_reg_destroy(reg1);
+  __moore_reg_destroy(reg2);
+}
+
+TEST(MooreRuntimeRALTest, RegisterBlockLocking) {
+  __moore_reg_clear_all();
+
+  const char *blockName = "lock_test_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+  EXPECT_NE(block, MOORE_REG_INVALID_HANDLE);
+
+  // Create and add register
+  const char *regName = "test_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  __moore_reg_block_add_reg(block, reg, 0x0000);
+  EXPECT_EQ(__moore_reg_block_get_n_regs(block), 1);
+
+  // Lock block
+  __moore_reg_block_lock(block);
+  EXPECT_TRUE(__moore_reg_block_is_locked(block));
+
+  // Try to add another register (should be silently ignored due to lock)
+  const char *reg2Name = "another_reg";
+  MooreRegHandle reg2 = __moore_reg_create(reg2Name, strlen(reg2Name), 32);
+  __moore_reg_block_add_reg(block, reg2, 0x0004);
+  // Count should still be 1
+  EXPECT_EQ(__moore_reg_block_get_n_regs(block), 1);
+
+  __moore_reg_block_destroy(block);
+  __moore_reg_destroy(reg);
+  __moore_reg_destroy(reg2);
+}
+
+TEST(MooreRuntimeRALTest, RegisterBlockReset) {
+  __moore_reg_clear_all();
+
+  const char *blockName = "reset_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+
+  // Create registers with reset values
+  const char *reg1Name = "reg1";
+  MooreRegHandle reg1 = __moore_reg_create(reg1Name, strlen(reg1Name), 32);
+  __moore_reg_set_reset(reg1, 0x11111111, "HARD");
+
+  const char *reg2Name = "reg2";
+  MooreRegHandle reg2 = __moore_reg_create(reg2Name, strlen(reg2Name), 32);
+  __moore_reg_set_reset(reg2, 0x22222222, "HARD");
+
+  __moore_reg_block_add_reg(block, reg1, 0x0000);
+  __moore_reg_block_add_reg(block, reg2, 0x0004);
+
+  // Write different values
+  __moore_reg_set_value(reg1, 0xFFFFFFFF);
+  __moore_reg_set_value(reg2, 0xFFFFFFFF);
+
+  // Reset block
+  __moore_reg_block_reset(block, "HARD");
+
+  // Check values are reset
+  EXPECT_EQ(__moore_reg_get_value(reg1), 0x11111111);
+  EXPECT_EQ(__moore_reg_get_value(reg2), 0x22222222);
+
+  __moore_reg_block_destroy(block);
+  __moore_reg_destroy(reg1);
+  __moore_reg_destroy(reg2);
+}
+
+TEST(MooreRuntimeRALTest, RegisterMapCreation) {
+  __moore_reg_clear_all();
+
+  // Create block first
+  const char *blockName = "map_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+
+  // Create map
+  const char *mapName = "default_map";
+  MooreRegMapHandle map = __moore_reg_map_create(
+      block, mapName, strlen(mapName), 0x1000, 4, 0);
+  EXPECT_NE(map, MOORE_REG_INVALID_HANDLE);
+
+  // Check map properties
+  MooreString name = __moore_reg_map_get_name(map);
+  EXPECT_EQ(std::string(name.data, name.len), std::string(mapName));
+  std::free(name.data);
+
+  EXPECT_EQ(__moore_reg_map_get_base_addr(map), 0x1000);
+
+  // Map should be set as default
+  EXPECT_EQ(__moore_reg_block_get_default_map(block), map);
+
+  __moore_reg_block_destroy(block);
+}
+
+TEST(MooreRuntimeRALTest, RegisterMapAddRegister) {
+  __moore_reg_clear_all();
+
+  // Create block and map
+  const char *blockName = "map_reg_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+
+  const char *mapName = "test_map";
+  MooreRegMapHandle map = __moore_reg_map_create(
+      block, mapName, strlen(mapName), 0x2000, 4, 0);
+
+  // Create register
+  const char *regName = "mapped_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+
+  // Add to block and map
+  __moore_reg_block_add_reg(block, reg, 0x0010);
+  __moore_reg_map_add_reg(map, reg, 0x0010, "RW");
+
+  // Get register address
+  uint64_t addr = __moore_reg_get_address(reg, map);
+  EXPECT_EQ(addr, 0x2010);  // base 0x2000 + offset 0x0010
+
+  // Get register by address
+  MooreRegHandle found = __moore_reg_map_get_reg_by_addr(map, 0x2010);
+  EXPECT_EQ(found, reg);
+
+  // Get register offset
+  uint64_t offset = __moore_reg_map_get_reg_offset(map, reg);
+  EXPECT_EQ(offset, 0x0010);
+
+  __moore_reg_block_destroy(block);
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterSubBlock) {
+  __moore_reg_clear_all();
+
+  // Create parent block
+  const char *parentName = "parent_block";
+  MooreRegBlockHandle parent =
+      __moore_reg_block_create(parentName, strlen(parentName));
+
+  // Create child block
+  const char *childName = "child";
+  MooreRegBlockHandle child =
+      __moore_reg_block_create(childName, strlen(childName));
+
+  // Create register in child
+  const char *regName = "child_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  __moore_reg_block_add_reg(child, reg, 0x0000);
+
+  // Add child to parent
+  __moore_reg_block_add_block(parent, child, 0x1000);
+
+  // Find register via hierarchical name
+  const char *hierName = "child.child_reg";
+  MooreRegHandle found =
+      __moore_reg_block_get_reg_by_name(parent, hierName, strlen(hierName));
+  EXPECT_EQ(found, reg);
+
+  __moore_reg_block_destroy(parent);
+  __moore_reg_block_destroy(child);
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterAccessCallback) {
+  __moore_reg_clear_all();
+
+  // Track callback invocations
+  static int callbackCount = 0;
+  static uint64_t lastValue = 0;
+  static int32_t lastIsWrite = -1;
+
+  callbackCount = 0;
+  lastValue = 0;
+  lastIsWrite = -1;
+
+  auto callback = [](MooreRegHandle reg, uint64_t value, int32_t isWrite,
+                     void *userData) {
+    (void)reg;
+    (void)userData;
+    callbackCount++;
+    lastValue = value;
+    lastIsWrite = isWrite;
+  };
+
+  const char *regName = "callback_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+
+  __moore_reg_set_access_callback(reg, callback, nullptr);
+
+  // Write
+  MooreRegStatus status;
+  __moore_reg_write(reg, MOORE_REG_INVALID_HANDLE, 0x12345678,
+                    UVM_FRONTDOOR, &status, 0);
+  EXPECT_EQ(callbackCount, 1);
+  EXPECT_EQ(lastValue, 0x12345678);
+  EXPECT_EQ(lastIsWrite, 1);
+
+  // Read
+  __moore_reg_read(reg, MOORE_REG_INVALID_HANDLE, UVM_FRONTDOOR, &status, 0);
+  EXPECT_EQ(callbackCount, 2);
+  EXPECT_EQ(lastIsWrite, 0);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RALStatistics) {
+  __moore_reg_clear_all();
+
+  int64_t totalRegs, totalReads, totalWrites;
+
+  // Initial stats
+  __moore_reg_get_statistics(&totalRegs, &totalReads, &totalWrites);
+  EXPECT_EQ(totalRegs, 0);
+  EXPECT_EQ(totalReads, 0);
+  EXPECT_EQ(totalWrites, 0);
+
+  // Create registers
+  const char *reg1Name = "stat_reg1";
+  MooreRegHandle reg1 = __moore_reg_create(reg1Name, strlen(reg1Name), 32);
+  const char *reg2Name = "stat_reg2";
+  MooreRegHandle reg2 = __moore_reg_create(reg2Name, strlen(reg2Name), 32);
+
+  __moore_reg_get_statistics(&totalRegs, &totalReads, &totalWrites);
+  EXPECT_EQ(totalRegs, 2);
+
+  // Perform reads and writes
+  MooreRegStatus status;
+  __moore_reg_write(reg1, MOORE_REG_INVALID_HANDLE, 0x100,
+                    UVM_FRONTDOOR, &status, 0);
+  __moore_reg_write(reg2, MOORE_REG_INVALID_HANDLE, 0x200,
+                    UVM_FRONTDOOR, &status, 0);
+  __moore_reg_read(reg1, MOORE_REG_INVALID_HANDLE, UVM_FRONTDOOR, &status, 0);
+
+  __moore_reg_get_statistics(&totalRegs, &totalReads, &totalWrites);
+  EXPECT_EQ(totalWrites, 2);
+  EXPECT_EQ(totalReads, 1);
+
+  __moore_reg_destroy(reg1);
+  __moore_reg_destroy(reg2);
+}
+
+TEST(MooreRuntimeRALTest, RALTracing) {
+  __moore_reg_clear_all();
+
+  // Tracing disabled by default
+  EXPECT_EQ(__moore_reg_is_trace_enabled(), 0);
+
+  // Enable tracing
+  __moore_reg_set_trace_enabled(1);
+  EXPECT_EQ(__moore_reg_is_trace_enabled(), 1);
+
+  // Disable tracing
+  __moore_reg_set_trace_enabled(0);
+  EXPECT_EQ(__moore_reg_is_trace_enabled(), 0);
+}
+
+TEST(MooreRuntimeRALTest, RegisterBitMasking) {
+  __moore_reg_clear_all();
+
+  // 8-bit register
+  const char *reg8Name = "reg8";
+  MooreRegHandle reg8 = __moore_reg_create(reg8Name, strlen(reg8Name), 8);
+
+  // Write value larger than 8 bits - should be masked
+  __moore_reg_set_value(reg8, 0xFFFF);
+  EXPECT_EQ(__moore_reg_get_value(reg8), 0xFF);
+
+  // 16-bit register
+  const char *reg16Name = "reg16";
+  MooreRegHandle reg16 = __moore_reg_create(reg16Name, strlen(reg16Name), 16);
+  __moore_reg_set_value(reg16, 0xFFFFFFFF);
+  EXPECT_EQ(__moore_reg_get_value(reg16), 0xFFFF);
+
+  __moore_reg_destroy(reg8);
+  __moore_reg_destroy(reg16);
+}
+
+TEST(MooreRuntimeRALTest, InvalidHandleOperations) {
+  __moore_reg_clear_all();
+
+  // Operations on invalid handle should not crash
+  MooreRegHandle invalid = MOORE_REG_INVALID_HANDLE;
+
+  MooreString name = __moore_reg_get_name(invalid);
+  EXPECT_EQ(name.data, nullptr);
+  EXPECT_EQ(name.len, 0);
+
+  EXPECT_EQ(__moore_reg_get_n_bits(invalid), 0);
+  EXPECT_EQ(__moore_reg_get_value(invalid), 0ULL);
+  EXPECT_EQ(__moore_reg_get_address(invalid, MOORE_REG_INVALID_HANDLE), 0ULL);
+
+  MooreRegStatus status;
+  EXPECT_EQ(__moore_reg_read(invalid, MOORE_REG_INVALID_HANDLE,
+                             UVM_FRONTDOOR, &status, 0), 0ULL);
+  EXPECT_EQ(status, UVM_REG_STATUS_NOT_OK);
+
+  // Block operations
+  MooreRegBlockHandle invalidBlock = MOORE_REG_INVALID_HANDLE;
+  MooreString blockName = __moore_reg_block_get_name(invalidBlock);
+  EXPECT_EQ(blockName.data, nullptr);
+  EXPECT_EQ(__moore_reg_block_get_n_regs(invalidBlock), 0);
+  EXPECT_FALSE(__moore_reg_block_is_locked(invalidBlock));
+
+  // Map operations
+  MooreRegMapHandle invalidMap = MOORE_REG_INVALID_HANDLE;
+  MooreString mapName = __moore_reg_map_get_name(invalidMap);
+  EXPECT_EQ(mapName.data, nullptr);
+  EXPECT_EQ(__moore_reg_map_get_base_addr(invalidMap), 0ULL);
+}
+
+TEST(MooreRuntimeRALTest, ClearAll) {
+  __moore_reg_clear_all();
+
+  // Create some components
+  const char *blockName = "clear_block";
+  MooreRegBlockHandle block =
+      __moore_reg_block_create(blockName, strlen(blockName));
+
+  const char *regName = "clear_reg";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+
+  int64_t totalRegs, totalReads, totalWrites;
+  __moore_reg_get_statistics(&totalRegs, &totalReads, &totalWrites);
+  EXPECT_GT(totalRegs, 0);
+
+  // Clear all
+  __moore_reg_clear_all();
+
+  // Stats should be reset
+  __moore_reg_get_statistics(&totalRegs, &totalReads, &totalWrites);
+  EXPECT_EQ(totalRegs, 0);
+  EXPECT_EQ(totalReads, 0);
+  EXPECT_EQ(totalWrites, 0);
+
+  // Old handles should be invalid now (accessing would be undefined,
+  // so we don't test that)
+}
+
 } // namespace

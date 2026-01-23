@@ -4577,6 +4577,501 @@ void __moore_scoreboard_get_statistics(int64_t *totalScoreboards,
                                         int64_t *totalMatches,
                                         int64_t *totalMismatches);
 
+//===----------------------------------------------------------------------===//
+// UVM Register Abstraction Layer (RAL) Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// These functions implement the UVM Register Abstraction Layer (RAL) runtime
+// infrastructure for register-based verification. RAL provides a standardized
+// way to model, access, and verify hardware registers and memories.
+//
+// UVM RAL Architecture:
+// - uvm_reg_block: Container for registers, register files, and sub-blocks
+// - uvm_reg: Individual register model with fields
+// - uvm_reg_field: Bit fields within a register
+// - uvm_reg_map: Address map for register access (supports multiple maps)
+//
+// Access Modes:
+// - Frontdoor: Access through bus interface (uses sequences/drivers)
+// - Backdoor: Direct access bypassing bus (faster, for debug)
+//
+// Key Features:
+// - Mirror/desired value tracking for each register
+// - Read/write operations with automatic prediction
+// - Coverage collection for register access patterns
+//
+// Usage:
+//   // Create register block and map
+//   MooreRegBlockHandle blk = __moore_reg_block_create("my_block", 10);
+//   MooreRegMapHandle map = __moore_reg_map_create(blk, "default_map", 14, 0,
+//                                                   0x1000, 4, 0);
+//
+//   // Create and add registers
+//   MooreRegHandle reg = __moore_reg_create("ctrl_reg", 32, 8);
+//   __moore_reg_block_add_reg(blk, reg, 0x0000);
+//
+//   // Add register to map
+//   __moore_reg_map_add_reg(map, reg, 0x0000, "RW");
+//
+//   // Access register
+//   __moore_reg_write(reg, map, 0xDEADBEEF, UVM_FRONTDOOR, NULL, 0);
+//   uint64_t value = __moore_reg_read(reg, map, UVM_FRONTDOOR, NULL, 0);
+//
+
+/// Handle type for UVM registers.
+typedef int64_t MooreRegHandle;
+
+/// Handle type for UVM register blocks.
+typedef int64_t MooreRegBlockHandle;
+
+/// Handle type for UVM register maps.
+typedef int64_t MooreRegMapHandle;
+
+/// Handle type for UVM register fields.
+typedef int64_t MooreRegFieldHandle;
+
+/// Invalid handle value for RAL components.
+#define MOORE_REG_INVALID_HANDLE (-1)
+
+/// UVM register access modes (from uvm_reg_model.svh).
+typedef enum {
+  UVM_FRONTDOOR = 0, ///< Access via bus interface (uses adapter/sequencer)
+  UVM_BACKDOOR = 1,  ///< Direct access bypassing bus (hdl path)
+  UVM_PREDICT = 2,   ///< Predict only, no actual access
+  UVM_DEFAULT_PATH = 3 ///< Use default path set on register/block
+} MooreRegPathKind;
+
+/// UVM register field access policies.
+typedef enum {
+  UVM_REG_ACCESS_RO = 0,   ///< Read-only
+  UVM_REG_ACCESS_RW = 1,   ///< Read-write
+  UVM_REG_ACCESS_RC = 2,   ///< Read-clear (read returns value, clears to 0)
+  UVM_REG_ACCESS_RS = 3,   ///< Read-set (read returns value, sets to all 1s)
+  UVM_REG_ACCESS_WRC = 4,  ///< Write-1-to-clear, read returns value
+  UVM_REG_ACCESS_WRS = 5,  ///< Write-1-to-set, read returns value
+  UVM_REG_ACCESS_WC = 6,   ///< Write clears all bits
+  UVM_REG_ACCESS_WS = 7,   ///< Write sets all bits
+  UVM_REG_ACCESS_WSRC = 8, ///< Write sets all, read clears
+  UVM_REG_ACCESS_WCRS = 9, ///< Write clears all, read sets
+  UVM_REG_ACCESS_W1 = 10,  ///< Write once (first write only)
+  UVM_REG_ACCESS_WO = 11,  ///< Write-only
+  UVM_REG_ACCESS_WOC = 12, ///< Write-only clears
+  UVM_REG_ACCESS_WOS = 13, ///< Write-only sets
+  UVM_REG_ACCESS_W1C = 14, ///< Write-1-to-clear
+  UVM_REG_ACCESS_W1S = 15, ///< Write-1-to-set
+  UVM_REG_ACCESS_W1T = 16, ///< Write-1-to-toggle
+  UVM_REG_ACCESS_W0C = 17, ///< Write-0-to-clear
+  UVM_REG_ACCESS_W0S = 18, ///< Write-0-to-set
+  UVM_REG_ACCESS_W0T = 19, ///< Write-0-to-toggle
+  UVM_REG_ACCESS_W1SRC = 20, ///< Write-1-to-set, read clears
+  UVM_REG_ACCESS_W1CRS = 21, ///< Write-1-to-clear, read sets
+  UVM_REG_ACCESS_W0SRC = 22, ///< Write-0-to-set, read clears
+  UVM_REG_ACCESS_W0CRS = 23, ///< Write-0-to-clear, read sets
+  UVM_REG_ACCESS_WO1 = 24    ///< Write-once (any subsequent writes ignored)
+} MooreRegAccessPolicy;
+
+/// UVM register status from operations.
+typedef enum {
+  UVM_REG_STATUS_OK = 0,     ///< Operation completed successfully
+  UVM_REG_STATUS_NOT_OK = 1, ///< Operation failed
+  UVM_REG_STATUS_IS_BUSY = 2 ///< Register is busy (retry later)
+} MooreRegStatus;
+
+/// Register access callback function type.
+/// Called before/after register read/write operations.
+typedef void (*MooreRegAccessCallback)(MooreRegHandle reg, uint64_t value,
+                                       int32_t isWrite, void *userData);
+
+//===----------------------------------------------------------------------===//
+// Register Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new UVM register model.
+/// This creates an individual register with the specified name and size.
+/// Fields can be added after creation using __moore_reg_add_field.
+///
+/// @param name Name of the register
+/// @param nameLen Length of the name string
+/// @param numBits Width of the register in bits (1-64)
+/// @return Handle to the created register, or MOORE_REG_INVALID_HANDLE on failure
+MooreRegHandle __moore_reg_create(const char *name, int64_t nameLen,
+                                  int32_t numBits);
+
+/// Destroy a register and free its resources.
+/// @param reg Handle to the register to destroy
+void __moore_reg_destroy(MooreRegHandle reg);
+
+/// Get the name of a register.
+/// @param reg Handle to the register
+/// @return The register name as a MooreString (caller must free)
+MooreString __moore_reg_get_name(MooreRegHandle reg);
+
+/// Get the bit width of a register.
+/// @param reg Handle to the register
+/// @return Width in bits (1-64)
+int32_t __moore_reg_get_n_bits(MooreRegHandle reg);
+
+/// Get the address of a register within a specific map.
+/// @param reg Handle to the register
+/// @param map Handle to the address map (or MOORE_REG_INVALID_HANDLE for default)
+/// @return The register's base address in the specified map
+uint64_t __moore_reg_get_address(MooreRegHandle reg, MooreRegMapHandle map);
+
+/// Read the current value from a register.
+/// This performs a read operation using the specified access path.
+/// For frontdoor access, this would use the bus adapter/sequencer.
+/// For backdoor access, this reads the HDL signal directly.
+///
+/// @param reg Handle to the register
+/// @param map Handle to the address map (NULL for default)
+/// @param path Access path (UVM_FRONTDOOR, UVM_BACKDOOR, etc.)
+/// @param status Output: status of the operation (can be NULL)
+/// @param parent Sequencer parent for frontdoor access (can be 0)
+/// @return The value read from the register
+uint64_t __moore_reg_read(MooreRegHandle reg, MooreRegMapHandle map,
+                          MooreRegPathKind path, MooreRegStatus *status,
+                          int64_t parent);
+
+/// Write a value to a register.
+/// This performs a write operation using the specified access path.
+/// For frontdoor access, this would use the bus adapter/sequencer.
+/// For backdoor access, this writes the HDL signal directly.
+///
+/// @param reg Handle to the register
+/// @param map Handle to the address map (NULL for default)
+/// @param value Value to write
+/// @param path Access path (UVM_FRONTDOOR, UVM_BACKDOOR, etc.)
+/// @param status Output: status of the operation (can be NULL)
+/// @param parent Sequencer parent for frontdoor access (can be 0)
+void __moore_reg_write(MooreRegHandle reg, MooreRegMapHandle map,
+                       uint64_t value, MooreRegPathKind path,
+                       MooreRegStatus *status, int64_t parent);
+
+/// Get the mirrored (predicted) value of a register.
+/// The mirror value tracks what the register value should be based on
+/// read/write operations and reset.
+///
+/// @param reg Handle to the register
+/// @return The current mirror value
+uint64_t __moore_reg_get_value(MooreRegHandle reg);
+
+/// Set the mirror value of a register directly.
+/// This updates the predicted value without performing an actual access.
+/// Useful for initializing register models or correcting predictions.
+///
+/// @param reg Handle to the register
+/// @param value New mirror value
+void __moore_reg_set_value(MooreRegHandle reg, uint64_t value);
+
+/// Get the desired value of a register.
+/// The desired value is the value intended to be written on next update.
+///
+/// @param reg Handle to the register
+/// @return The current desired value
+uint64_t __moore_reg_get_desired(MooreRegHandle reg);
+
+/// Set the desired value of a register.
+/// This sets the value that will be written on the next update operation.
+///
+/// @param reg Handle to the register
+/// @param value New desired value
+void __moore_reg_set_desired(MooreRegHandle reg, uint64_t value);
+
+/// Update a register (write desired value to actual).
+/// Writes the current desired value to the register using the specified path.
+///
+/// @param reg Handle to the register
+/// @param map Handle to the address map
+/// @param path Access path (UVM_FRONTDOOR, UVM_BACKDOOR)
+/// @param status Output: status of the operation (can be NULL)
+void __moore_reg_update(MooreRegHandle reg, MooreRegMapHandle map,
+                        MooreRegPathKind path, MooreRegStatus *status);
+
+/// Mirror a register (read actual value into mirror).
+/// Reads the register and updates the mirror to match the actual value.
+///
+/// @param reg Handle to the register
+/// @param map Handle to the address map
+/// @param path Access path (UVM_FRONTDOOR, UVM_BACKDOOR)
+/// @param status Output: status of the operation (can be NULL)
+void __moore_reg_mirror(MooreRegHandle reg, MooreRegMapHandle map,
+                        MooreRegPathKind path, MooreRegStatus *status);
+
+/// Predict the effect of a read or write on the register mirror.
+/// Updates the mirror value based on the access policy without actual access.
+///
+/// @param reg Handle to the register
+/// @param value Value being read/written
+/// @param isWrite true for write prediction, false for read prediction
+/// @return true if prediction succeeded
+bool __moore_reg_predict(MooreRegHandle reg, uint64_t value, bool isWrite);
+
+/// Reset the register to its reset value.
+/// @param reg Handle to the register
+/// @param kind Reset kind: "HARD" for power-on, "SOFT" for soft reset
+void __moore_reg_reset(MooreRegHandle reg, const char *kind);
+
+/// Set the reset value for a register.
+/// @param reg Handle to the register
+/// @param value Reset value
+/// @param kind Reset kind ("HARD" or "SOFT")
+void __moore_reg_set_reset(MooreRegHandle reg, uint64_t value, const char *kind);
+
+/// Get the reset value for a register.
+/// @param reg Handle to the register
+/// @param kind Reset kind ("HARD" or "SOFT")
+/// @return The reset value
+uint64_t __moore_reg_get_reset(MooreRegHandle reg, const char *kind);
+
+/// Check if mirror needs to be updated (value changed).
+/// @param reg Handle to the register
+/// @return true if mirror differs from desired
+bool __moore_reg_needs_update(MooreRegHandle reg);
+
+/// Set a callback for register access events.
+/// @param reg Handle to the register
+/// @param callback Function to call on access (NULL to disable)
+/// @param userData User data passed to callback
+void __moore_reg_set_access_callback(MooreRegHandle reg,
+                                     MooreRegAccessCallback callback,
+                                     void *userData);
+
+//===----------------------------------------------------------------------===//
+// Register Field Operations
+//===----------------------------------------------------------------------===//
+
+/// Add a field to a register.
+/// Fields represent named bit ranges within a register with specific access
+/// policies.
+///
+/// @param reg Handle to the register
+/// @param name Field name
+/// @param nameLen Length of the name string
+/// @param numBits Width of the field in bits
+/// @param lsbPos LSB position of the field within the register
+/// @param access Access policy for the field
+/// @param reset Reset value for the field
+/// @return Handle to the created field, or MOORE_REG_INVALID_HANDLE on failure
+MooreRegFieldHandle __moore_reg_add_field(MooreRegHandle reg, const char *name,
+                                          int64_t nameLen, int32_t numBits,
+                                          int32_t lsbPos,
+                                          MooreRegAccessPolicy access,
+                                          uint64_t reset);
+
+/// Get the value of a specific field within a register.
+/// @param reg Handle to the register
+/// @param field Handle to the field
+/// @return The field value (extracted from mirror)
+uint64_t __moore_reg_field_get_value(MooreRegHandle reg,
+                                     MooreRegFieldHandle field);
+
+/// Set the value of a specific field within a register.
+/// Updates the mirror value for just this field.
+/// @param reg Handle to the register
+/// @param field Handle to the field
+/// @param value New field value
+void __moore_reg_field_set_value(MooreRegHandle reg, MooreRegFieldHandle field,
+                                 uint64_t value);
+
+/// Get a field handle by name.
+/// @param reg Handle to the register
+/// @param name Field name to search for
+/// @param nameLen Length of the name string
+/// @return Handle to the field, or MOORE_REG_INVALID_HANDLE if not found
+MooreRegFieldHandle __moore_reg_get_field_by_name(MooreRegHandle reg,
+                                                  const char *name,
+                                                  int64_t nameLen);
+
+/// Get the number of fields in a register.
+/// @param reg Handle to the register
+/// @return Number of fields
+int32_t __moore_reg_get_n_fields(MooreRegHandle reg);
+
+//===----------------------------------------------------------------------===//
+// Register Block Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new register block.
+/// A register block is a container that groups registers, register files,
+/// and sub-blocks together with a common address map.
+///
+/// @param name Name of the register block
+/// @param nameLen Length of the name string
+/// @return Handle to the created block, or MOORE_REG_INVALID_HANDLE on failure
+MooreRegBlockHandle __moore_reg_block_create(const char *name, int64_t nameLen);
+
+/// Destroy a register block and all its contents.
+/// This recursively destroys all registers, fields, maps, and sub-blocks.
+/// @param block Handle to the block to destroy
+void __moore_reg_block_destroy(MooreRegBlockHandle block);
+
+/// Get the name of a register block.
+/// @param block Handle to the register block
+/// @return The block name as a MooreString (caller must free)
+MooreString __moore_reg_block_get_name(MooreRegBlockHandle block);
+
+/// Add a register to a block.
+/// @param block Handle to the register block
+/// @param reg Handle to the register to add
+/// @param offset Address offset of the register within the block
+void __moore_reg_block_add_reg(MooreRegBlockHandle block, MooreRegHandle reg,
+                               uint64_t offset);
+
+/// Add a sub-block to a block.
+/// Creates a hierarchical register model.
+/// @param parent Handle to the parent block
+/// @param child Handle to the child block to add
+/// @param offset Base address offset for the sub-block
+void __moore_reg_block_add_block(MooreRegBlockHandle parent,
+                                 MooreRegBlockHandle child, uint64_t offset);
+
+/// Get the default map for a register block.
+/// @param block Handle to the register block
+/// @return Handle to the default map, or MOORE_REG_INVALID_HANDLE if none
+MooreRegMapHandle __moore_reg_block_get_default_map(MooreRegBlockHandle block);
+
+/// Set the default map for a register block.
+/// @param block Handle to the register block
+/// @param map Handle to the map to set as default
+void __moore_reg_block_set_default_map(MooreRegBlockHandle block,
+                                       MooreRegMapHandle map);
+
+/// Get a register by name from a block.
+/// Searches the block hierarchy for a register with the given name.
+/// @param block Handle to the register block
+/// @param name Register name (may include hierarchy: "subblock.reg")
+/// @param nameLen Length of the name string
+/// @return Handle to the register, or MOORE_REG_INVALID_HANDLE if not found
+MooreRegHandle __moore_reg_block_get_reg_by_name(MooreRegBlockHandle block,
+                                                 const char *name,
+                                                 int64_t nameLen);
+
+/// Get the number of registers in a block (non-recursive).
+/// @param block Handle to the register block
+/// @return Number of registers directly in this block
+int32_t __moore_reg_block_get_n_regs(MooreRegBlockHandle block);
+
+/// Lock the register block model.
+/// After locking, no structural changes (adding regs/fields/maps) are allowed.
+/// This is typically called after building the complete register model.
+/// @param block Handle to the register block
+void __moore_reg_block_lock(MooreRegBlockHandle block);
+
+/// Check if a register block is locked.
+/// @param block Handle to the register block
+/// @return true if locked
+bool __moore_reg_block_is_locked(MooreRegBlockHandle block);
+
+/// Reset all registers in a block to their reset values.
+/// @param block Handle to the register block
+/// @param kind Reset kind: "HARD" for power-on, "SOFT" for soft reset
+void __moore_reg_block_reset(MooreRegBlockHandle block, const char *kind);
+
+//===----------------------------------------------------------------------===//
+// Register Map Operations
+//===----------------------------------------------------------------------===//
+
+/// Create a new register map.
+/// A register map defines address decoding for a set of registers and provides
+/// a transaction interface (sequencer/adapter) for frontdoor access.
+///
+/// @param block Handle to the parent register block
+/// @param name Name of the map
+/// @param nameLen Length of the name string
+/// @param baseAddr Base address for the map
+/// @param nBytes Bus width in bytes (e.g., 4 for 32-bit bus)
+/// @param endian Endianness (0=little, 1=big)
+/// @return Handle to the created map, or MOORE_REG_INVALID_HANDLE on failure
+MooreRegMapHandle __moore_reg_map_create(MooreRegBlockHandle block,
+                                         const char *name, int64_t nameLen,
+                                         uint64_t baseAddr, int32_t nBytes,
+                                         int32_t endian);
+
+/// Destroy a register map.
+/// @param map Handle to the map to destroy
+void __moore_reg_map_destroy(MooreRegMapHandle map);
+
+/// Get the name of a register map.
+/// @param map Handle to the register map
+/// @return The map name as a MooreString (caller must free)
+MooreString __moore_reg_map_get_name(MooreRegMapHandle map);
+
+/// Get the base address of a register map.
+/// @param map Handle to the register map
+/// @return The base address
+uint64_t __moore_reg_map_get_base_addr(MooreRegMapHandle map);
+
+/// Add a register to a map with specific access rights.
+/// This maps a register to an address within the map's address space.
+///
+/// @param map Handle to the register map
+/// @param reg Handle to the register to add
+/// @param offset Address offset from map's base address
+/// @param rights Access rights string ("RW", "RO", "WO", etc.)
+void __moore_reg_map_add_reg(MooreRegMapHandle map, MooreRegHandle reg,
+                             uint64_t offset, const char *rights);
+
+/// Add a sub-map to a map.
+/// Creates a hierarchical address space.
+/// @param parent Handle to the parent map
+/// @param child Handle to the child map to add
+/// @param offset Address offset for the sub-map
+void __moore_reg_map_add_submap(MooreRegMapHandle parent,
+                                MooreRegMapHandle child, uint64_t offset);
+
+/// Get a register by address from a map.
+/// @param map Handle to the register map
+/// @param addr Address to look up
+/// @return Handle to the register at that address, or MOORE_REG_INVALID_HANDLE
+MooreRegHandle __moore_reg_map_get_reg_by_addr(MooreRegMapHandle map,
+                                               uint64_t addr);
+
+/// Get the offset of a register within a map.
+/// @param map Handle to the register map
+/// @param reg Handle to the register
+/// @return The register's offset within the map
+uint64_t __moore_reg_map_get_reg_offset(MooreRegMapHandle map,
+                                        MooreRegHandle reg);
+
+/// Set the sequencer for frontdoor access.
+/// The sequencer is used for generating bus transactions.
+/// @param map Handle to the register map
+/// @param sequencer Handle to the sequencer (from sequence infrastructure)
+void __moore_reg_map_set_sequencer(MooreRegMapHandle map, int64_t sequencer);
+
+/// Set the bus adapter for translating register operations to bus transactions.
+/// @param map Handle to the register map
+/// @param adapter Adapter handle (implementation-specific)
+void __moore_reg_map_set_adapter(MooreRegMapHandle map, int64_t adapter);
+
+//===----------------------------------------------------------------------===//
+// RAL Debugging and Tracing
+//===----------------------------------------------------------------------===//
+
+/// Enable or disable RAL tracing.
+/// When enabled, all register operations are logged for debugging.
+/// @param enable 1 to enable, 0 to disable
+void __moore_reg_set_trace_enabled(int32_t enable);
+
+/// Check if RAL tracing is enabled.
+/// @return 1 if enabled, 0 otherwise
+int32_t __moore_reg_is_trace_enabled(void);
+
+/// Print a summary of the register model hierarchy.
+/// Outputs block/register/field structure to stdout.
+/// @param block Handle to the register block (root)
+void __moore_reg_block_print(MooreRegBlockHandle block);
+
+/// Get global RAL statistics.
+/// @param totalRegs Output: total number of registers created
+/// @param totalReads Output: total read operations performed
+/// @param totalWrites Output: total write operations performed
+void __moore_reg_get_statistics(int64_t *totalRegs, int64_t *totalReads,
+                                int64_t *totalWrites);
+
+/// Clear all RAL components and reset statistics.
+void __moore_reg_clear_all(void);
+
 #ifdef __cplusplus
 }
 #endif
