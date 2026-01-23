@@ -145,6 +145,8 @@ module Basic;
   supply0 w11;
   // CHECK: %w12 = moore.net supply1 : <l1>
   supply1 w12;
+  // CHECK: %w13 = moore.net interconnect : <l1>
+  interconnect w13;
 
   // CHECK: %b1 = moore.variable : <i1>
   // CHECK: [[TMP1:%.+]] = moore.read %b1
