@@ -3342,6 +3342,29 @@ MooreString __moore_component_get_full_name(void *component,
                                             int64_t parentOffset,
                                             int64_t nameOffset);
 
+//===----------------------------------------------------------------------===//
+// UVM Runtime Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// These functions provide the basic UVM runtime support needed to execute
+// UVM testbenches. The implementation supports the UVM run_test() entry point
+// and can be expanded to support more complex UVM features like the phase
+// system and factory.
+//
+
+/// UVM run_test() implementation.
+/// This is the main entry point for running UVM tests. It is called from
+/// SystemVerilog code when run_test() is invoked.
+///
+/// @param testNameData Pointer to the test name string data
+/// @param testNameLen Length of the test name string
+///
+/// Currently this is a stub that prints a message. Future implementation will:
+/// 1. Create the test component using the UVM factory
+/// 2. Execute the UVM phase sequence (build, connect, run, etc.)
+/// 3. Report summarize and finish simulation
+void __uvm_run_test(const char *testNameData, int64_t testNameLen);
+
 #ifdef __cplusplus
 }
 #endif
