@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 106 - January 23, 2026
+
+### UVM Factory Implementation ✅
+
+Implemented complete UVM factory for run_test() support:
+
+**New Runtime Functions:**
+- `__moore_uvm_factory_register_component(typeName, len, creator, userData)` - Register component type
+- `__moore_uvm_factory_register_object(typeName, len, creator, userData)` - Register object type
+- `__moore_uvm_factory_create_component_by_name(typeName, len, instName, len, parent)` - Create by name
+- `__moore_uvm_factory_create_object_by_name(typeName, len, instName, len)` - Create object by name
+- `__moore_uvm_factory_set_type_override(origType, len, overrideType, len, replace)` - Override types
+- `__moore_uvm_factory_is_type_registered(typeName, len)` - Check registration
+- `__moore_uvm_factory_get_type_count()` - Get registered type count
+- `__moore_uvm_factory_clear()` - Clear all registrations
+- `__moore_uvm_factory_print()` - Debug print
+
+**Unit Tests:** 14 new factory tests
+
+### AVIP circt-sim Testing ✅
+
+Three more AVIPs now run through circt-sim end-to-end:
+- **SPI AVIP**: Clock, reset, UVM_INFO all working
+- **UART AVIP**: Clock, reset, UVM_INFO all working
+- **I3C AVIP**: Clock, reset, UVM_INFO all working
+
+### Test Results (Updated)
+
+**Chapters at 100%:**
+- Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
+- Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
+- Chapter-7: **103/103** ✅
+- Chapter-8: **100% effective**
+- Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
+- Chapter-12: **27/27** ✅
+- Chapter-13: **15/15** ✅
+- Chapter-14: **5/5** ✅
+- Chapter-15: **5/5** ✅
+- Chapter-16: **53/53** ✅
+- Chapter-18: **134/134** ✅
+- Chapter-20: **47/47** ✅
+- Chapter-21: **29/29** ✅
+- Chapter-22: **74/74** ✅
+- Chapter-23, 24, 25, 26: **All 100%** ✅
+
+**Other Chapters:**
+- Chapter-9: 97.8% (1 SVA test)
+- Chapter-10: 90% (1 hierarchical ref feature gap)
+
+**verilator-verification:** 99/141 (70.2%) non-UVM tests
+
+### Commits
+- `f16bbd317` [Runtime] Add UVM factory implementation for run_test() support
+
+---
+
 ## Iteration 105 - January 23, 2026
 
 ### UVM Component Phase Callback System ✅
