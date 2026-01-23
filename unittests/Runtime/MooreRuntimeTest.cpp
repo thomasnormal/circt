@@ -9213,4 +9213,511 @@ TEST(MooreRuntimeUvmPhaseTest, PhaseStartWithPartialLength) {
   EXPECT_EQ(output.find("build_extra"), std::string::npos);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Component Phase Callback Tests
+//===----------------------------------------------------------------------===//
+
+// Test data structure for tracking callback invocations
+struct PhaseCallbackTestData {
+  int callCount = 0;
+  std::vector<MooreUvmPhase> phasesExecuted;
+  std::vector<void *> componentsExecuted;
+  void *lastComponent = nullptr;
+  MooreUvmPhase lastPhase = UVM_PHASE_BUILD;
+};
+
+// Test callback for function phases
+static void testPhaseCallback(void *component, void *phase, void *userData) {
+  auto *data = static_cast<PhaseCallbackTestData *>(userData);
+  data->callCount++;
+  data->lastComponent = component;
+  data->componentsExecuted.push_back(component);
+}
+
+// Test callback for run_phase (task phase)
+static void testRunPhaseCallback(void *component, void *phase, void *userData) {
+  auto *data = static_cast<PhaseCallbackTestData *>(userData);
+  data->callCount++;
+  data->lastComponent = component;
+  data->componentsExecuted.push_back(component);
+}
+
+// Global phase callback data
+struct GlobalPhaseCallbackData {
+  int startCount = 0;
+  int endCount = 0;
+  std::vector<MooreUvmPhase> startPhases;
+  std::vector<MooreUvmPhase> endPhases;
+  std::vector<std::string> startPhaseNames;
+  std::vector<std::string> endPhaseNames;
+};
+
+static void globalPhaseStartCallback(MooreUvmPhase phase, const char *phaseName,
+                                     void *userData) {
+  auto *data = static_cast<GlobalPhaseCallbackData *>(userData);
+  data->startCount++;
+  data->startPhases.push_back(phase);
+  if (phaseName)
+    data->startPhaseNames.push_back(phaseName);
+}
+
+static void globalPhaseEndCallback(MooreUvmPhase phase, const char *phaseName,
+                                   void *userData) {
+  auto *data = static_cast<GlobalPhaseCallbackData *>(userData);
+  data->endCount++;
+  data->endPhases.push_back(phase);
+  if (phaseName)
+    data->endPhaseNames.push_back(phaseName);
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, RegisterComponent) {
+  // Clear any existing state
+  __moore_uvm_clear_components();
+  EXPECT_EQ(__moore_uvm_get_component_count(), 0);
+
+  // Register a component
+  int dummyComponent = 42;
+  int64_t handle = __moore_uvm_register_component(&dummyComponent, "test_comp",
+                                                   9, nullptr, 0);
+
+  EXPECT_NE(handle, 0);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 1);
+
+  // Clean up
+  __moore_uvm_clear_components();
+  EXPECT_EQ(__moore_uvm_get_component_count(), 0);
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, RegisterNullComponent) {
+  __moore_uvm_clear_components();
+
+  // Registering null component should fail
+  int64_t handle = __moore_uvm_register_component(nullptr, "test", 4, nullptr, 0);
+  EXPECT_EQ(handle, 0);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 0);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, RegisterMultipleComponents) {
+  __moore_uvm_clear_components();
+
+  int comp1 = 1, comp2 = 2, comp3 = 3;
+
+  int64_t h1 = __moore_uvm_register_component(&comp1, "comp1", 5, nullptr, 0);
+  int64_t h2 = __moore_uvm_register_component(&comp2, "comp2", 5, &comp1, 1);
+  int64_t h3 = __moore_uvm_register_component(&comp3, "comp3", 5, &comp1, 1);
+
+  EXPECT_NE(h1, 0);
+  EXPECT_NE(h2, 0);
+  EXPECT_NE(h3, 0);
+  EXPECT_NE(h1, h2);
+  EXPECT_NE(h2, h3);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 3);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, UnregisterComponent) {
+  __moore_uvm_clear_components();
+
+  int comp1 = 1, comp2 = 2;
+
+  int64_t h1 = __moore_uvm_register_component(&comp1, "comp1", 5, nullptr, 0);
+  int64_t h2 = __moore_uvm_register_component(&comp2, "comp2", 5, nullptr, 0);
+
+  EXPECT_EQ(__moore_uvm_get_component_count(), 2);
+
+  __moore_uvm_unregister_component(h1);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 1);
+
+  __moore_uvm_unregister_component(h2);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 0);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, UnregisterInvalidHandle) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+  (void)__moore_uvm_register_component(&comp, "comp", 4, nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 1);
+
+  // Unregistering invalid handle should not affect count
+  __moore_uvm_unregister_component(999);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 1);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, SetPhaseCallback) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+  PhaseCallbackTestData data;
+
+  int64_t handle = __moore_uvm_register_component(&comp, "comp", 4, nullptr, 0);
+  __moore_uvm_set_phase_callback(handle, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &data);
+
+  // Execute phases to trigger callback
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(data.callCount, 1);
+  EXPECT_EQ(data.lastComponent, &comp);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, SetRunPhaseCallback) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+  PhaseCallbackTestData data;
+
+  int64_t handle = __moore_uvm_register_component(&comp, "comp", 4, nullptr, 0);
+  __moore_uvm_set_run_phase_callback(handle, testRunPhaseCallback, &data);
+
+  // Execute phases to trigger callback
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(data.callCount, 1);
+  EXPECT_EQ(data.lastComponent, &comp);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, MultiplePhaseCallbacks) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+  PhaseCallbackTestData buildData, connectData, runData, reportData;
+
+  int64_t handle = __moore_uvm_register_component(&comp, "comp", 4, nullptr, 0);
+  __moore_uvm_set_phase_callback(handle, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &buildData);
+  __moore_uvm_set_phase_callback(handle, UVM_PHASE_CONNECT, testPhaseCallback,
+                                  &connectData);
+  __moore_uvm_set_run_phase_callback(handle, testRunPhaseCallback, &runData);
+  __moore_uvm_set_phase_callback(handle, UVM_PHASE_REPORT, testPhaseCallback,
+                                  &reportData);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(buildData.callCount, 1);
+  EXPECT_EQ(connectData.callCount, 1);
+  EXPECT_EQ(runData.callCount, 1);
+  EXPECT_EQ(reportData.callCount, 1);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, TopDownPhaseOrder) {
+  __moore_uvm_clear_components();
+
+  // Create a hierarchy: root -> child1, child2
+  int root = 1, child1 = 2, child2 = 3;
+  PhaseCallbackTestData data;
+
+  int64_t hRoot = __moore_uvm_register_component(&root, "root", 4, nullptr, 0);
+  int64_t hChild1 =
+      __moore_uvm_register_component(&child1, "child1", 6, &root, 1);
+  int64_t hChild2 =
+      __moore_uvm_register_component(&child2, "child2", 6, &root, 1);
+
+  // Set callbacks for build_phase (top-down)
+  __moore_uvm_set_phase_callback(hRoot, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_phase_callback(hChild1, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_phase_callback(hChild2, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // For top-down phases, root should be called first
+  EXPECT_EQ(data.callCount, 3);
+  EXPECT_EQ(data.componentsExecuted.size(), 3u);
+  EXPECT_EQ(data.componentsExecuted[0], &root);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, BottomUpPhaseOrder) {
+  __moore_uvm_clear_components();
+
+  // Create a hierarchy: root -> child
+  int root = 1, child = 2;
+  PhaseCallbackTestData data;
+
+  int64_t hRoot = __moore_uvm_register_component(&root, "root", 4, nullptr, 0);
+  int64_t hChild = __moore_uvm_register_component(&child, "child", 5, &root, 1);
+
+  // Set callbacks for connect_phase (bottom-up)
+  __moore_uvm_set_phase_callback(hRoot, UVM_PHASE_CONNECT, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_phase_callback(hChild, UVM_PHASE_CONNECT, testPhaseCallback,
+                                  &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // For bottom-up phases, child should be called first
+  EXPECT_EQ(data.callCount, 2);
+  EXPECT_EQ(data.componentsExecuted.size(), 2u);
+  EXPECT_EQ(data.componentsExecuted[0], &child);
+  EXPECT_EQ(data.componentsExecuted[1], &root);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, GlobalPhaseCallbacks) {
+  __moore_uvm_clear_components();
+
+  GlobalPhaseCallbackData data;
+
+  __moore_uvm_set_global_phase_start_callback(globalPhaseStartCallback, &data);
+  __moore_uvm_set_global_phase_end_callback(globalPhaseEndCallback, &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // Should have 9 phases
+  EXPECT_EQ(data.startCount, 9);
+  EXPECT_EQ(data.endCount, 9);
+  EXPECT_EQ(data.startPhases.size(), 9u);
+  EXPECT_EQ(data.endPhases.size(), 9u);
+
+  // Verify phase order
+  EXPECT_EQ(data.startPhases[0], UVM_PHASE_BUILD);
+  EXPECT_EQ(data.startPhases[1], UVM_PHASE_CONNECT);
+  EXPECT_EQ(data.startPhases[4], UVM_PHASE_RUN);
+  EXPECT_EQ(data.startPhases[8], UVM_PHASE_FINAL);
+
+  // Clean up
+  __moore_uvm_set_global_phase_start_callback(nullptr, nullptr);
+  __moore_uvm_set_global_phase_end_callback(nullptr, nullptr);
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, GlobalPhaseCallbackNames) {
+  __moore_uvm_clear_components();
+
+  GlobalPhaseCallbackData data;
+
+  __moore_uvm_set_global_phase_start_callback(globalPhaseStartCallback, &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // Verify phase names
+  EXPECT_EQ(data.startPhaseNames.size(), 9u);
+  EXPECT_EQ(data.startPhaseNames[0], "build");
+  EXPECT_EQ(data.startPhaseNames[1], "connect");
+  EXPECT_EQ(data.startPhaseNames[2], "end_of_elaboration");
+  EXPECT_EQ(data.startPhaseNames[3], "start_of_simulation");
+  EXPECT_EQ(data.startPhaseNames[4], "run");
+  EXPECT_EQ(data.startPhaseNames[5], "extract");
+  EXPECT_EQ(data.startPhaseNames[6], "check");
+  EXPECT_EQ(data.startPhaseNames[7], "report");
+  EXPECT_EQ(data.startPhaseNames[8], "final");
+
+  // Clean up
+  __moore_uvm_set_global_phase_start_callback(nullptr, nullptr);
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, SetCallbackOnInvalidHandle) {
+  __moore_uvm_clear_components();
+
+  PhaseCallbackTestData data;
+
+  // Should not crash
+  __moore_uvm_set_phase_callback(999, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_run_phase_callback(999, testRunPhaseCallback, &data);
+
+  // Execute phases - should not call any callbacks
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(data.callCount, 0);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, SetCallbackWithInvalidPhase) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+  PhaseCallbackTestData data;
+
+  int64_t handle = __moore_uvm_register_component(&comp, "comp", 4, nullptr, 0);
+
+  // Should not crash with invalid phase values
+  __moore_uvm_set_phase_callback(handle, static_cast<MooreUvmPhase>(-1),
+                                  testPhaseCallback, &data);
+  __moore_uvm_set_phase_callback(handle, static_cast<MooreUvmPhase>(100),
+                                  testPhaseCallback, &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // Invalid phase callbacks should not have been registered
+  EXPECT_EQ(data.callCount, 0);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, ClearResetsAll) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+  PhaseCallbackTestData data;
+  GlobalPhaseCallbackData globalData;
+
+  int64_t handle = __moore_uvm_register_component(&comp, "comp", 4, nullptr, 0);
+  __moore_uvm_set_phase_callback(handle, UVM_PHASE_BUILD, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_global_phase_start_callback(globalPhaseStartCallback,
+                                               &globalData);
+
+  EXPECT_EQ(__moore_uvm_get_component_count(), 1);
+
+  // Clear everything
+  __moore_uvm_clear_components();
+
+  EXPECT_EQ(__moore_uvm_get_component_count(), 0);
+
+  // Execute phases - no callbacks should fire
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(data.callCount, 0);
+  EXPECT_EQ(globalData.startCount, 0);
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, PhaseEnumValues) {
+  // Verify phase enum values match expected order
+  EXPECT_EQ(UVM_PHASE_BUILD, 0);
+  EXPECT_EQ(UVM_PHASE_CONNECT, 1);
+  EXPECT_EQ(UVM_PHASE_END_OF_ELABORATION, 2);
+  EXPECT_EQ(UVM_PHASE_START_OF_SIMULATION, 3);
+  EXPECT_EQ(UVM_PHASE_RUN, 4);
+  EXPECT_EQ(UVM_PHASE_EXTRACT, 5);
+  EXPECT_EQ(UVM_PHASE_CHECK, 6);
+  EXPECT_EQ(UVM_PHASE_REPORT, 7);
+  EXPECT_EQ(UVM_PHASE_FINAL, 8);
+  EXPECT_EQ(UVM_PHASE_COUNT, 9);
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, ComponentWithEmptyName) {
+  __moore_uvm_clear_components();
+
+  int comp = 1;
+
+  // Register with empty name
+  int64_t handle = __moore_uvm_register_component(&comp, "", 0, nullptr, 0);
+  EXPECT_NE(handle, 0);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 1);
+
+  // Register with null name
+  int comp2 = 2;
+  int64_t handle2 =
+      __moore_uvm_register_component(&comp2, nullptr, 0, nullptr, 0);
+  EXPECT_NE(handle2, 0);
+  EXPECT_EQ(__moore_uvm_get_component_count(), 2);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, DeepHierarchy) {
+  __moore_uvm_clear_components();
+
+  // Create a deep hierarchy: root -> level1 -> level2 -> level3
+  int root = 0, level1 = 1, level2 = 2, level3 = 3;
+  PhaseCallbackTestData data;
+
+  int64_t hRoot = __moore_uvm_register_component(&root, "root", 4, nullptr, 0);
+  int64_t hL1 =
+      __moore_uvm_register_component(&level1, "level1", 6, &root, 1);
+  int64_t hL2 =
+      __moore_uvm_register_component(&level2, "level2", 6, &level1, 2);
+  int64_t hL3 =
+      __moore_uvm_register_component(&level3, "level3", 6, &level2, 3);
+
+  // Set callbacks for final_phase (top-down)
+  __moore_uvm_set_phase_callback(hRoot, UVM_PHASE_FINAL, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_phase_callback(hL1, UVM_PHASE_FINAL, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_phase_callback(hL2, UVM_PHASE_FINAL, testPhaseCallback,
+                                  &data);
+  __moore_uvm_set_phase_callback(hL3, UVM_PHASE_FINAL, testPhaseCallback,
+                                  &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // Verify order: root, level1, level2, level3 (top-down)
+  EXPECT_EQ(data.callCount, 4);
+  EXPECT_EQ(data.componentsExecuted[0], &root);
+  EXPECT_EQ(data.componentsExecuted[1], &level1);
+  EXPECT_EQ(data.componentsExecuted[2], &level2);
+  EXPECT_EQ(data.componentsExecuted[3], &level3);
+
+  __moore_uvm_clear_components();
+}
+
+TEST(MooreRuntimeUvmComponentCallbackTest, AllPhasesExecuteInOrder) {
+  __moore_uvm_clear_components();
+
+  // Use global callbacks to track phase order
+  GlobalPhaseCallbackData data;
+  __moore_uvm_set_global_phase_start_callback(globalPhaseStartCallback, &data);
+
+  // Execute phases
+  testing::internal::CaptureStdout();
+  __uvm_execute_phases();
+  testing::internal::GetCapturedStdout();
+
+  // Verify all 9 phases executed in order
+  ASSERT_EQ(data.startPhases.size(), 9u);
+  EXPECT_EQ(data.startPhases[0], UVM_PHASE_BUILD);
+  EXPECT_EQ(data.startPhases[1], UVM_PHASE_CONNECT);
+  EXPECT_EQ(data.startPhases[2], UVM_PHASE_END_OF_ELABORATION);
+  EXPECT_EQ(data.startPhases[3], UVM_PHASE_START_OF_SIMULATION);
+  EXPECT_EQ(data.startPhases[4], UVM_PHASE_RUN);
+  EXPECT_EQ(data.startPhases[5], UVM_PHASE_EXTRACT);
+  EXPECT_EQ(data.startPhases[6], UVM_PHASE_CHECK);
+  EXPECT_EQ(data.startPhases[7], UVM_PHASE_REPORT);
+  EXPECT_EQ(data.startPhases[8], UVM_PHASE_FINAL);
+
+  __moore_uvm_set_global_phase_start_callback(nullptr, nullptr);
+  __moore_uvm_clear_components();
+}
+
 } // namespace

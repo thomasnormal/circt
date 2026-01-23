@@ -3409,6 +3409,132 @@ void __uvm_phase_end(const char *phaseNameData, int64_t phaseNameLen);
 /// 9. final_phase (top-down)
 void __uvm_execute_phases(void);
 
+//===----------------------------------------------------------------------===//
+// UVM Component Phase Callback Registration
+//===----------------------------------------------------------------------===//
+//
+// These functions allow UVM components to register their phase methods with
+// the runtime. When phases are executed, the runtime will call all registered
+// callbacks for that phase.
+//
+// UVM defines 9 standard phases. Phase methods can be either:
+// - Function phases (build, connect, end_of_elaboration, start_of_simulation,
+//   extract, check, report, final): These are called synchronously
+// - Task phases (run): These may involve time delays and are executed
+//   concurrently for all components
+//
+// Phase execution order:
+// - Top-down phases (build, final): Called from root to leaves
+// - Bottom-up phases (connect, end_of_elaboration, start_of_simulation,
+//   extract, check, report): Called from leaves to root
+// - Task phases (run): All components execute concurrently
+//
+
+/// UVM phase enumeration.
+/// These values identify the standard UVM phases.
+typedef enum {
+  UVM_PHASE_BUILD = 0,
+  UVM_PHASE_CONNECT = 1,
+  UVM_PHASE_END_OF_ELABORATION = 2,
+  UVM_PHASE_START_OF_SIMULATION = 3,
+  UVM_PHASE_RUN = 4,
+  UVM_PHASE_EXTRACT = 5,
+  UVM_PHASE_CHECK = 6,
+  UVM_PHASE_REPORT = 7,
+  UVM_PHASE_FINAL = 8,
+  UVM_PHASE_COUNT = 9
+} MooreUvmPhase;
+
+/// Phase callback function type for function phases.
+/// This is used for all phases except run_phase (which is a task).
+///
+/// @param component Pointer to the component instance
+/// @param phase The phase being executed (for passing to super.XXX_phase())
+/// @param userData User data registered with the callback
+typedef void (*MooreUvmPhaseCallback)(void *component, void *phase,
+                                      void *userData);
+
+/// Phase callback function type for task phases (run_phase).
+/// Task phases may involve time and run concurrently.
+/// In the current implementation, these are called synchronously but
+/// the signature allows for future async implementation.
+///
+/// @param component Pointer to the component instance
+/// @param phase The phase being executed
+/// @param userData User data registered with the callback
+typedef void (*MooreUvmTaskPhaseCallback)(void *component, void *phase,
+                                          void *userData);
+
+/// Register a UVM component with the phase system.
+/// The component will be called during phase execution based on its position
+/// in the component hierarchy.
+///
+/// @param component Pointer to the component instance
+/// @param name The component's instance name
+/// @param nameLen Length of the name string
+/// @param parent Pointer to the parent component (NULL for root)
+/// @param depth Hierarchy depth (0 for root, 1 for direct children, etc.)
+/// @return A handle for the registered component (0 on failure)
+int64_t __moore_uvm_register_component(void *component, const char *name,
+                                       int64_t nameLen, void *parent,
+                                       int32_t depth);
+
+/// Unregister a UVM component from the phase system.
+/// This should be called when a component is destroyed.
+///
+/// @param handle The handle returned by __moore_uvm_register_component
+void __moore_uvm_unregister_component(int64_t handle);
+
+/// Register a phase callback for a component.
+/// The callback will be invoked when the specified phase is executed.
+///
+/// @param handle The component handle from __moore_uvm_register_component
+/// @param phase The phase to register for
+/// @param callback The callback function to invoke
+/// @param userData User data to pass to the callback
+void __moore_uvm_set_phase_callback(int64_t handle, MooreUvmPhase phase,
+                                    MooreUvmPhaseCallback callback,
+                                    void *userData);
+
+/// Register a task phase callback for a component (for run_phase).
+/// The callback will be invoked when the run phase is executed.
+///
+/// @param handle The component handle from __moore_uvm_register_component
+/// @param callback The callback function to invoke
+/// @param userData User data to pass to the callback
+void __moore_uvm_set_run_phase_callback(int64_t handle,
+                                        MooreUvmTaskPhaseCallback callback,
+                                        void *userData);
+
+/// Get the number of registered components.
+/// Useful for testing and debugging.
+///
+/// @return The number of components currently registered
+int64_t __moore_uvm_get_component_count(void);
+
+/// Clear all registered components and callbacks.
+/// This resets the phase system to its initial state.
+/// Primarily used for testing.
+void __moore_uvm_clear_components(void);
+
+/// Set a global phase start callback.
+/// This callback is invoked before any component callbacks for the phase.
+///
+/// @param callback The callback function (NULL to disable)
+/// @param userData User data to pass to the callback
+void __moore_uvm_set_global_phase_start_callback(
+    void (*callback)(MooreUvmPhase phase, const char *phaseName, void *userData),
+    void *userData);
+
+/// Set a global phase end callback.
+/// This callback is invoked after all component callbacks for the phase.
+///
+/// @param callback The callback function (NULL to disable)
+/// @param userData User data to pass to the callback
+void __moore_uvm_set_global_phase_end_callback(
+    void (*callback)(MooreUvmPhase phase, const char *phaseName, void *userData),
+    void *userData);
+
 #ifdef __cplusplus
 }
 #endif

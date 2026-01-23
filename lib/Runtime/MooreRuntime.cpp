@@ -12291,6 +12291,162 @@ extern "C" void __uvm_phase_end(const char *phaseNameData,
               phaseName.empty() ? "(unknown)" : phaseName.c_str());
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Component Phase Callback Registration (Internal)
+//===----------------------------------------------------------------------===//
+//
+// This section implements the component phase callback system that allows
+// UVM components to register their phase methods with the runtime.
+// Defined here so it can be used by __uvm_execute_phases below.
+//
+
+namespace {
+
+/// Information about a registered UVM component.
+struct UvmComponentInfo {
+  void *component;                     // Pointer to the component instance
+  std::string name;                    // Component instance name
+  void *parent;                        // Parent component pointer
+  int32_t depth;                       // Hierarchy depth (0 = root)
+  int64_t handle;                      // Unique handle for this registration
+
+  // Phase callbacks (one per phase)
+  MooreUvmPhaseCallback phaseCallbacks[UVM_PHASE_COUNT];
+  void *phaseUserData[UVM_PHASE_COUNT];
+
+  // Task phase callback (for run_phase)
+  MooreUvmTaskPhaseCallback runPhaseCallback;
+  void *runPhaseUserData;
+
+  UvmComponentInfo()
+      : component(nullptr), parent(nullptr), depth(0), handle(0),
+        runPhaseCallback(nullptr), runPhaseUserData(nullptr) {
+    for (int i = 0; i < UVM_PHASE_COUNT; ++i) {
+      phaseCallbacks[i] = nullptr;
+      phaseUserData[i] = nullptr;
+    }
+  }
+};
+
+/// Global registry of UVM components.
+struct UvmComponentRegistry {
+  std::vector<UvmComponentInfo> components;
+  int64_t nextHandle = 1;
+
+  // Global phase callbacks
+  void (*globalPhaseStartCallback)(MooreUvmPhase, const char *, void *) =
+      nullptr;
+  void *globalPhaseStartUserData = nullptr;
+  void (*globalPhaseEndCallback)(MooreUvmPhase, const char *, void *) = nullptr;
+  void *globalPhaseEndUserData = nullptr;
+
+  /// Find a component by handle.
+  UvmComponentInfo *findByHandle(int64_t handle) {
+    for (auto &comp : components) {
+      if (comp.handle == handle)
+        return &comp;
+    }
+    return nullptr;
+  }
+
+  /// Get components sorted by depth for top-down traversal.
+  std::vector<UvmComponentInfo *> getTopDown() {
+    std::vector<UvmComponentInfo *> result;
+    for (auto &comp : components) {
+      result.push_back(&comp);
+    }
+    // Sort by depth ascending (parents before children)
+    std::sort(result.begin(), result.end(),
+              [](const UvmComponentInfo *a, const UvmComponentInfo *b) {
+                return a->depth < b->depth;
+              });
+    return result;
+  }
+
+  /// Get components sorted by depth for bottom-up traversal.
+  std::vector<UvmComponentInfo *> getBottomUp() {
+    std::vector<UvmComponentInfo *> result;
+    for (auto &comp : components) {
+      result.push_back(&comp);
+    }
+    // Sort by depth descending (children before parents)
+    std::sort(result.begin(), result.end(),
+              [](const UvmComponentInfo *a, const UvmComponentInfo *b) {
+                return a->depth > b->depth;
+              });
+    return result;
+  }
+
+  void clear() {
+    components.clear();
+    nextHandle = 1;
+    globalPhaseStartCallback = nullptr;
+    globalPhaseStartUserData = nullptr;
+    globalPhaseEndCallback = nullptr;
+    globalPhaseEndUserData = nullptr;
+  }
+};
+
+/// Global component registry instance.
+static UvmComponentRegistry &getComponentRegistry() {
+  static UvmComponentRegistry registry;
+  return registry;
+}
+
+/// Phase name lookup table for callback system.
+static const char *callbackPhaseNames[UVM_PHASE_COUNT] = {
+    "build",              "connect",  "end_of_elaboration",
+    "start_of_simulation", "run",      "extract",
+    "check",              "report",   "final"};
+
+/// Check if a phase is top-down (build, final) or bottom-up.
+static bool isTopDownPhase(MooreUvmPhase phase) {
+  return phase == UVM_PHASE_BUILD || phase == UVM_PHASE_FINAL;
+}
+
+/// Execute callbacks for a specific phase.
+static void executePhaseCallbacks(MooreUvmPhase phase) {
+  auto &registry = getComponentRegistry();
+
+  // Get the phase name
+  const char *phaseName =
+      (phase >= 0 && phase < UVM_PHASE_COUNT) ? callbackPhaseNames[phase] : "unknown";
+
+  // Call global phase start callback
+  if (registry.globalPhaseStartCallback) {
+    registry.globalPhaseStartCallback(phase, phaseName,
+                                       registry.globalPhaseStartUserData);
+  }
+
+  // Get components in the appropriate order
+  std::vector<UvmComponentInfo *> orderedComponents =
+      isTopDownPhase(phase) ? registry.getTopDown() : registry.getBottomUp();
+
+  // Execute callbacks for each component
+  for (auto *comp : orderedComponents) {
+    if (phase == UVM_PHASE_RUN) {
+      // For run_phase, use the task phase callback
+      if (comp->runPhaseCallback) {
+        comp->runPhaseCallback(comp->component, nullptr, comp->runPhaseUserData);
+      }
+    } else {
+      // For function phases, use the regular callback
+      if (comp->phaseCallbacks[phase]) {
+        comp->phaseCallbacks[phase](comp->component, nullptr,
+                                    comp->phaseUserData[phase]);
+      }
+    }
+  }
+
+  // Call global phase end callback
+  if (registry.globalPhaseEndCallback) {
+    registry.globalPhaseEndCallback(phase, phaseName,
+                                     registry.globalPhaseEndUserData);
+  }
+}
+
+} // anonymous namespace
+
 /// Standard UVM phases in execution order.
 static const char *uvmPhases[] = {
     "build",              // top-down: create component hierarchy
@@ -12305,6 +12461,23 @@ static const char *uvmPhases[] = {
 };
 static const size_t numUvmPhases = sizeof(uvmPhases) / sizeof(uvmPhases[0]);
 
+/// Map phase index to MooreUvmPhase enum.
+static MooreUvmPhase phaseIndexToEnum(size_t index) {
+  static const MooreUvmPhase mapping[] = {
+      UVM_PHASE_BUILD,
+      UVM_PHASE_CONNECT,
+      UVM_PHASE_END_OF_ELABORATION,
+      UVM_PHASE_START_OF_SIMULATION,
+      UVM_PHASE_RUN,
+      UVM_PHASE_EXTRACT,
+      UVM_PHASE_CHECK,
+      UVM_PHASE_REPORT,
+      UVM_PHASE_FINAL};
+  if (index < sizeof(mapping) / sizeof(mapping[0]))
+    return mapping[index];
+  return UVM_PHASE_BUILD;
+}
+
 /// UVM phase execution.
 /// Execute all standard UVM phases in sequence.
 extern "C" void __uvm_execute_phases(void) {
@@ -12315,13 +12488,13 @@ extern "C" void __uvm_execute_phases(void) {
     // Signal phase start
     __uvm_phase_start(phase, phaseLen);
 
-    // TODO: Actually execute the phase on all components
-    // For now, this is a stub that just prints messages.
-    // Future implementation will:
-    // - For top-down phases (build, final): traverse component tree top to
-    // bottom
-    // - For bottom-up phases: traverse component tree bottom to top
-    // - For task phases (run): fork/join all component run_phase tasks
+    // Execute phase callbacks on all registered components.
+    // The executePhaseCallbacks function handles:
+    // - Top-down phases (build, final): traverse component tree top to bottom
+    // - Bottom-up phases: traverse component tree bottom to top
+    // - Task phases (run): currently executed synchronously (future: fork/join)
+    MooreUvmPhase phaseEnum = phaseIndexToEnum(i);
+    executePhaseCallbacks(phaseEnum);
 
     // Signal phase end
     __uvm_phase_end(phase, phaseLen);
@@ -12363,4 +12536,100 @@ extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
 
   // Print completion message
   std::printf("UVM_INFO @ 0: uvm_test_top [FINISH] UVM phasing complete.\n");
+}
+
+//===----------------------------------------------------------------------===//
+// UVM Component Phase Callback Registration (Public API)
+//===----------------------------------------------------------------------===//
+
+/// Register a UVM component with the phase system.
+extern "C" int64_t __moore_uvm_register_component(void *component,
+                                                   const char *name,
+                                                   int64_t nameLen,
+                                                   void *parent,
+                                                   int32_t depth) {
+  if (!component)
+    return 0;
+
+  auto &registry = getComponentRegistry();
+
+  UvmComponentInfo info;
+  info.component = component;
+  if (name && nameLen > 0) {
+    info.name.assign(name, static_cast<size_t>(nameLen));
+  }
+  info.parent = parent;
+  info.depth = depth;
+  info.handle = registry.nextHandle++;
+
+  registry.components.push_back(std::move(info));
+  return registry.components.back().handle;
+}
+
+/// Unregister a UVM component from the phase system.
+extern "C" void __moore_uvm_unregister_component(int64_t handle) {
+  auto &registry = getComponentRegistry();
+
+  auto it = std::remove_if(
+      registry.components.begin(), registry.components.end(),
+      [handle](const UvmComponentInfo &info) { return info.handle == handle; });
+
+  registry.components.erase(it, registry.components.end());
+}
+
+/// Register a phase callback for a component.
+extern "C" void __moore_uvm_set_phase_callback(int64_t handle,
+                                                MooreUvmPhase phase,
+                                                MooreUvmPhaseCallback callback,
+                                                void *userData) {
+  if (phase < 0 || phase >= UVM_PHASE_COUNT)
+    return;
+
+  auto &registry = getComponentRegistry();
+  auto *comp = registry.findByHandle(handle);
+  if (!comp)
+    return;
+
+  comp->phaseCallbacks[phase] = callback;
+  comp->phaseUserData[phase] = userData;
+}
+
+/// Register a task phase callback for a component (for run_phase).
+extern "C" void __moore_uvm_set_run_phase_callback(
+    int64_t handle, MooreUvmTaskPhaseCallback callback, void *userData) {
+  auto &registry = getComponentRegistry();
+  auto *comp = registry.findByHandle(handle);
+  if (!comp)
+    return;
+
+  comp->runPhaseCallback = callback;
+  comp->runPhaseUserData = userData;
+}
+
+/// Get the number of registered components.
+extern "C" int64_t __moore_uvm_get_component_count(void) {
+  return static_cast<int64_t>(getComponentRegistry().components.size());
+}
+
+/// Clear all registered components and callbacks.
+extern "C" void __moore_uvm_clear_components(void) {
+  getComponentRegistry().clear();
+}
+
+/// Set a global phase start callback.
+extern "C" void __moore_uvm_set_global_phase_start_callback(
+    void (*callback)(MooreUvmPhase phase, const char *phaseName, void *userData),
+    void *userData) {
+  auto &registry = getComponentRegistry();
+  registry.globalPhaseStartCallback = callback;
+  registry.globalPhaseStartUserData = userData;
+}
+
+/// Set a global phase end callback.
+extern "C" void __moore_uvm_set_global_phase_end_callback(
+    void (*callback)(MooreUvmPhase phase, const char *phaseName, void *userData),
+    void *userData) {
+  auto &registry = getComponentRegistry();
+  registry.globalPhaseEndCallback = callback;
+  registry.globalPhaseEndUserData = userData;
 }
