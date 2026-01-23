@@ -9,6 +9,7 @@
 #include "ImportVerilogInternals.h"
 #include "slang/ast/Compilation.h"
 #include <cmath>
+#include "slang/ast/Patterns.h"
 #include "slang/ast/Statement.h"
 #include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/ast/SystemSubroutine.h"
@@ -1093,6 +1094,12 @@ struct StmtVisitor {
     case PatternKind::Tagged:
       return matchTaggedPattern(pattern.as<slang::ast::TaggedPattern>(), value,
                                 targetType, condKind);
+    case PatternKind::Variable:
+      return matchVariablePattern(pattern.as<slang::ast::VariablePattern>(),
+                                  value, targetType);
+    case PatternKind::Structure:
+      return matchStructurePattern(pattern.as<slang::ast::StructurePattern>(),
+                                   value, targetType, condKind);
     default:
       mlir::emitError(loc) << "unsupported pattern in case statement: "
                            << slang::ast::toString(pattern.kind);
@@ -1257,6 +1264,96 @@ struct StmtVisitor {
 
     auto combined = createUnifiedAndOp(builder, loc, *tagMatch, *valueMatch);
     return context.convertToBool(combined);
+  }
+
+  /// Match a variable pattern - binds the value to a pattern variable.
+  /// Variable patterns always match and store the value for later use.
+  FailureOr<Value>
+  matchVariablePattern(const slang::ast::VariablePattern &pattern, Value value,
+                       const slang::ast::Type &targetType) {
+    // Get the pattern variable symbol and convert its type.
+    const auto &var = pattern.variable;
+    auto type = context.convertType(var.getType());
+    if (!type)
+      return failure();
+    auto unpackedType = dyn_cast<moore::UnpackedType>(type);
+    if (!unpackedType) {
+      mlir::emitError(loc) << "pattern variable '" << var.name
+                           << "' has non-unpacked type: " << type;
+      return failure();
+    }
+
+    // Create a local variable for the pattern variable.
+    auto varOp = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(unpackedType),
+        builder.getStringAttr(var.name), value);
+
+    // Register the pattern variable so it can be used in the case body.
+    context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                         &var, varOp);
+
+    // Variable patterns always match - return true.
+    auto boolType =
+        moore::IntType::get(context.getContext(), 1, moore::Domain::TwoValued);
+    return Value(moore::ConstantOp::create(builder, loc, boolType, 1));
+  }
+
+  /// Match a structure pattern - matches struct fields against sub-patterns.
+  FailureOr<Value>
+  matchStructurePattern(const slang::ast::StructurePattern &pattern,
+                        Value value, const slang::ast::Type &targetType,
+                        slang::ast::CaseStatementCondition condKind) {
+    // Get the container type for extracting struct fields.
+    auto containerType = value.getType();
+    if (auto refTy = dyn_cast<moore::RefType>(containerType))
+      containerType = refTy.getNestedType();
+
+    // Match each field pattern.
+    Value combinedMatch;
+    for (const auto &fieldPattern : pattern.patterns) {
+      // Get the field name and type.
+      auto fieldName = builder.getStringAttr(fieldPattern.field->name);
+      auto fieldType = context.convertType(fieldPattern.field->getType());
+      if (!fieldType)
+        return failure();
+
+      // Extract the field value from the struct.
+      Value fieldValue;
+      if (auto structTy = dyn_cast<moore::StructType>(containerType)) {
+        fieldValue = moore::StructExtractOp::create(builder, loc, fieldType,
+                                                    fieldName, value);
+      } else if (auto structTy =
+                     dyn_cast<moore::UnpackedStructType>(containerType)) {
+        fieldValue = moore::StructExtractOp::create(builder, loc, fieldType,
+                                                    fieldName, value);
+      } else {
+        mlir::emitError(loc) << "structure pattern applied to non-struct type";
+        return failure();
+      }
+
+      // Recursively match the sub-pattern.
+      auto fieldMatch =
+          matchPattern(*fieldPattern.pattern, fieldValue,
+                       fieldPattern.field->getType(), condKind);
+      if (failed(fieldMatch))
+        return failure();
+
+      // Combine with previous match results.
+      if (combinedMatch)
+        combinedMatch =
+            createUnifiedAndOp(builder, loc, combinedMatch, *fieldMatch);
+      else
+        combinedMatch = *fieldMatch;
+    }
+
+    // If no patterns, always match.
+    if (!combinedMatch) {
+      auto boolType = moore::IntType::get(context.getContext(), 1,
+                                          moore::Domain::TwoValued);
+      return Value(moore::ConstantOp::create(builder, loc, boolType, 1));
+    }
+
+    return context.convertToBool(combinedMatch);
   }
 
   // Handle `for` loops.
@@ -3028,5 +3125,15 @@ LogicalResult Context::convertStatement(const slang::ast::Statement &stmt) {
   assert(builder.getInsertionBlock());
   auto loc = convertLocation(stmt.sourceRange);
   return stmt.visit(StmtVisitor(*this, loc));
+}
+
+FailureOr<Value>
+Context::matchPattern(const slang::ast::Pattern &pattern, Value value,
+                      const slang::ast::Type &targetType,
+                      slang::ast::CaseStatementCondition condKind,
+                      Location loc) {
+  // Create a temporary StmtVisitor to use its pattern matching implementation.
+  StmtVisitor visitor(*this, loc);
+  return visitor.matchPattern(pattern, value, targetType, condKind);
 }
 // NOLINTEND(misc-no-recursion)

@@ -2675,9 +2675,14 @@ struct RvalueExprVisitor : public ExprVisitor {
         }
         if (!listExpr->type->isIntegral()) {
           if (listExpr->type->isUnpackedArray()) {
-            mlir::emitError(
-                loc, "unpacked arrays in 'inside' expressions not supported");
-            return {};
+            // Handle unpacked arrays by checking if lhs is contained in the
+            // array. This generates a moore.array.contains operation.
+            auto arrayValue = context.convertRvalueExpression(*listExpr);
+            if (!arrayValue)
+              return {};
+            cond = moore::ArrayContainsOp::create(builder, loc, arrayValue, lhs);
+            conditions.push_back(cond);
+            continue;
           }
           mlir::emitError(
               loc, "only simple bit vectors supported in 'inside' expressions");
@@ -2714,12 +2719,21 @@ struct RvalueExprVisitor : public ExprVisitor {
       return {};
     }
     const auto &cond = expr.conditions[0];
+    Value value;
     if (cond.pattern) {
-      mlir::emitError(loc) << "unsupported conditional expression with pattern";
-      return {};
+      // Handle pattern matching condition (e.g., "x matches tagged a '{...}")
+      auto exprValue = context.convertRvalueExpression(*cond.expr);
+      if (!exprValue)
+        return {};
+      auto patternMatch = context.matchPattern(
+          *cond.pattern, exprValue, *cond.expr->type,
+          slang::ast::CaseStatementCondition::Normal, loc);
+      if (failed(patternMatch))
+        return {};
+      value = context.convertToBool(*patternMatch);
+    } else {
+      value = context.convertToBool(context.convertRvalueExpression(*cond.expr));
     }
-    auto value =
-        context.convertToBool(context.convertRvalueExpression(*cond.expr));
     if (!value)
       return {};
     auto conditionalOp =

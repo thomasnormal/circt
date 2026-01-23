@@ -29,6 +29,8 @@
 namespace slang {
 namespace ast {
 class LocalAssertionVarSymbol;
+class Pattern;
+enum class CaseStatementCondition;
 } // namespace ast
 } // namespace slang
 
@@ -185,6 +187,12 @@ struct Context {
   Value convertRvalueExpression(const slang::ast::Expression &expr,
                                 Type requiredType = {});
   Value convertLvalueExpression(const slang::ast::Expression &expr);
+
+  // Match a pattern against a value and return the match result (boolean).
+  FailureOr<Value> matchPattern(const slang::ast::Pattern &pattern, Value value,
+                                const slang::ast::Type &targetType,
+                                slang::ast::CaseStatementCondition condKind,
+                                Location loc);
 
   // Convert an assertion expression AST node to MLIR ops.
   Value convertAssertionExpression(const slang::ast::AssertionExpr &expr,
