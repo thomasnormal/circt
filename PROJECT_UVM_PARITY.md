@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 23, 2026 (Iteration 138)
+**Last Updated**: January 23, 2026 (Iteration 144)
 
 ## Current Status
 
@@ -39,7 +39,7 @@
 | APB | SUCCESS | Tested | Full UVM testbench |
 | UART | SUCCESS | Not tested | Full compilation |
 | SPI | SUCCESS | Tested | Full UVM testbench |
-| I2S | SUCCESS | Not tested | 173K lines MLIR |
+| I2S | SUCCESS | Tested | 17K lines MLIR, 130K cycles, 0 errors |
 | I3C | SUCCESS | Not tested | 264K lines MLIR |
 | JTAG | Partial | - | AVIP code issues (not CIRCT) |
 | AXI4 | SUCCESS | Not tested | Full compilation |
@@ -66,8 +66,9 @@
 1. **Sequence event controls (@seq)** - SVA feature, Codex agent scope
 2. **Class builtin functions** - Randomization/constraints partially supported
 3. **Some VCD dump tasks** - Stubbed for compilation
+4. **Covergroup get_coverage()** - Compiles but returns unsupported format at runtime (Iteration 143)
 
-## Recent Fixes (Iterations 132-138)
+## Recent Fixes (Iterations 132-143)
 
 1. **UVM Phase Handle Aliases** (Commit 155b9ef93)
    - Added `_ph` suffix aliases per IEEE 1800.2
@@ -78,24 +79,54 @@
    - Added `wait_for_state()` task
    - Enabled AXI4-Lite assertion compilation
 
+3. **TLM seq_item_pull_port** (Commit acf32a352)
+   - Fixed parameterization from `#(REQ, RSP)` to `#(RSP, REQ)`
+   - Corrected put/get type direction for sequences
+
+4. **Cross-module Event Triggering** (Commit cdaed5b93)
+   - Added BlockArgument detection in ProcedureOpConversion
+   - Chapter-15 tests now 100% (was 60%)
+
+5. **UVM Callbacks Implementation** (Commit f39093a90)
+   - Implemented callback storage with associative arrays
+   - Enabled proper callback iteration and filtering
+
+6. **I2S AVIP Simulation Verified** (Iteration 143)
+   - Full end-to-end simulation with circt-sim
+   - 130,000 clock cycles, 0 errors
+   - Validates UVM testbench compilation and simulation flow
+
+7. **CIRCT vs xrun Comparison** (Iteration 143)
+   - CIRCT stricter on type safety (string/bit conversions)
+   - xrun stricter on IEEE timescale compliance
+   - APB AVIP design code compiles cleanly with both
+
+8. **Covergroup Feature Testing** (Iteration 143)
+   - Most covergroup features compile and simulate correctly
+   - Explicit bins, cross coverage, wildcard bins all work
+   - get_coverage() runtime computation not yet implemented
+
 ## Next Steps
 
-### Track A: Simulation Testing
-- Run circt-sim on compiled AVIPs
-- Compare output with xrun
-- Identify runtime vs compile-time issues
+### Track A: Simulation Runtime
+- Improve circt-sim for complex UVM patterns
+- Address UVM class instantiation overhead
+- Test more AVIPs with simulation
 
-### Track B: Cross-module Event Bug
-- Investigate ImportVerilog handling of hierarchical event references
-- Files: `lib/Conversion/ImportVerilog/`
+### Track B: UVM Feature Gaps
+- Implement missing uvm_callbacks features (wildcards)
+- Add missing TLM 2.0 features if needed
+- Enhance config_db pattern matching
 
-### Track C: Remaining sv-tests
-- Chapter-19 (Functional Coverage) if exists
-- Re-verify any failed chapters
+### Track C: Real-world Testing
+- Continue AVIP testing with circt-sim
+- Compare with xrun for behavioral verification
+- Test complex sequence patterns
 
-### Track D: Real-world Testbenches
-- Test more complex UVM patterns
-- Find edge cases in UVM stub implementation
+### Track D: Edge Cases
+- Find and fix UVM stub edge cases
+- Test less common UVM patterns
+- Verify randomization stub behavior
 
 ## Test Commands
 
@@ -117,5 +148,14 @@ xrun -f [filelist].f
 
 - `lib/Runtime/uvm/uvm_pkg.sv` - UVM stubs
 - `lib/Conversion/ImportVerilog/` - Verilog frontend
-- `test/Runtime/uvm/` - UVM regression tests
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` - Moore to Core conversion (event fix)
+- `test/Runtime/uvm/` - UVM regression tests (8 comprehensive tests)
+  - `uvm_phase_aliases_test.sv` - Phase handle aliases
+  - `uvm_phase_wait_for_state_test.sv` - Phase wait_for_state
+  - `uvm_stress_test.sv` - TLM stress testing (907 lines)
+  - `uvm_factory_test.sv` - Factory patterns (500+ lines)
+  - `uvm_callback_test.sv` - Callbacks (600+ lines)
+  - `uvm_sequence_test.sv` - Sequences (1082 lines)
+  - `uvm_ral_test.sv` - Register Abstraction Layer (1393 lines)
+  - `uvm_tlm_fifo_test.sv` - TLM FIFOs (884 lines)
 - `CHANGELOG.md` - Detailed iteration history
