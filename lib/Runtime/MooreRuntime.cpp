@@ -12425,6 +12425,318 @@ extern "C" void __moore_config_db_clear(void) {
 }
 
 //===----------------------------------------------------------------------===//
+// UVM Virtual Interface Binding Runtime
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Information about a signal within an interface type.
+struct VifSignalInfo {
+  std::string signalName;  ///< Name of the signal
+  int64_t offset;          ///< Byte offset within the interface instance
+  int64_t size;            ///< Size of the signal in bytes
+};
+
+/// Information about a registered interface type.
+struct VifInterfaceTypeInfo {
+  std::string typeName;                             ///< Interface type name
+  std::map<std::string, VifSignalInfo> signals;     ///< Signals in this interface
+};
+
+/// Internal representation of a virtual interface handle.
+struct VifHandle {
+  std::string interfaceTypeName;  ///< Name of the interface type
+  std::string modportName;        ///< Optional modport name
+  void *boundInstance;            ///< Pointer to the bound interface instance
+  bool isBound;                   ///< Whether this vif is bound to an instance
+};
+
+/// Global registry of interface types and their signals.
+std::map<std::string, VifInterfaceTypeInfo> __moore_vif_type_registry;
+std::mutex __moore_vif_type_registry_mutex;
+
+/// Global storage of all virtual interface handles.
+std::vector<VifHandle *> __moore_vif_handles;
+std::mutex __moore_vif_handles_mutex;
+
+/// Helper to convert string parameters to std::string.
+std::string vifMakeString(const char *data, int64_t len) {
+  if (!data || len <= 0)
+    return "";
+  return std::string(data, static_cast<size_t>(len));
+}
+
+/// Look up signal info for an interface type.
+const VifSignalInfo *lookupSignalInfo(const std::string &typeName,
+                                      const std::string &signalName) {
+  std::lock_guard<std::mutex> lock(__moore_vif_type_registry_mutex);
+  auto typeIt = __moore_vif_type_registry.find(typeName);
+  if (typeIt == __moore_vif_type_registry.end())
+    return nullptr;
+  auto sigIt = typeIt->second.signals.find(signalName);
+  if (sigIt == typeIt->second.signals.end())
+    return nullptr;
+  return &sigIt->second;
+}
+
+} // namespace
+
+extern "C" MooreVifHandle __moore_vif_create(const char *interfaceTypeName,
+                                             int64_t interfaceTypeNameLen,
+                                             const char *modportName,
+                                             int64_t modportNameLen) {
+  if (!interfaceTypeName || interfaceTypeNameLen <= 0)
+    return MOORE_VIF_NULL;
+
+  VifHandle *handle = new VifHandle();
+  handle->interfaceTypeName = vifMakeString(interfaceTypeName, interfaceTypeNameLen);
+  handle->modportName = vifMakeString(modportName, modportNameLen);
+  handle->boundInstance = nullptr;
+  handle->isBound = false;
+
+  // Register the handle for tracking
+  {
+    std::lock_guard<std::mutex> lock(__moore_vif_handles_mutex);
+    __moore_vif_handles.push_back(handle);
+  }
+
+  return static_cast<MooreVifHandle>(handle);
+}
+
+extern "C" int32_t __moore_vif_bind(MooreVifHandle vif, void *interfaceInstance) {
+  if (!vif)
+    return 0;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  handle->boundInstance = interfaceInstance;
+  handle->isBound = (interfaceInstance != nullptr);
+  return 1;
+}
+
+extern "C" int32_t __moore_vif_is_bound(MooreVifHandle vif) {
+  if (!vif)
+    return 0;
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  return handle->isBound ? 1 : 0;
+}
+
+extern "C" void *__moore_vif_get_instance(MooreVifHandle vif) {
+  if (!vif)
+    return nullptr;
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  return handle->boundInstance;
+}
+
+extern "C" int32_t __moore_vif_get_signal(MooreVifHandle vif,
+                                          const char *signalName,
+                                          int64_t signalNameLen,
+                                          void *outValue,
+                                          int64_t valueSize) {
+  if (!vif || !signalName || signalNameLen <= 0 || !outValue || valueSize <= 0)
+    return 0;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  if (!handle->isBound || !handle->boundInstance)
+    return 0;
+
+  std::string sigName = vifMakeString(signalName, signalNameLen);
+  const VifSignalInfo *info = lookupSignalInfo(handle->interfaceTypeName, sigName);
+
+  if (!info)
+    return 0;
+
+  // Calculate the pointer to the signal within the interface instance
+  char *base = static_cast<char *>(handle->boundInstance);
+  void *signalPtr = base + info->offset;
+
+  // Copy the signal value to the output buffer
+  int64_t copySize = std::min(valueSize, info->size);
+  std::memcpy(outValue, signalPtr, static_cast<size_t>(copySize));
+
+  return 1;
+}
+
+extern "C" int32_t __moore_vif_set_signal(MooreVifHandle vif,
+                                          const char *signalName,
+                                          int64_t signalNameLen,
+                                          const void *value,
+                                          int64_t valueSize) {
+  if (!vif || !signalName || signalNameLen <= 0 || !value || valueSize <= 0)
+    return 0;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  if (!handle->isBound || !handle->boundInstance)
+    return 0;
+
+  std::string sigName = vifMakeString(signalName, signalNameLen);
+  const VifSignalInfo *info = lookupSignalInfo(handle->interfaceTypeName, sigName);
+
+  if (!info)
+    return 0;
+
+  // Calculate the pointer to the signal within the interface instance
+  char *base = static_cast<char *>(handle->boundInstance);
+  void *signalPtr = base + info->offset;
+
+  // Copy the value to the signal storage
+  int64_t copySize = std::min(valueSize, info->size);
+  std::memcpy(signalPtr, value, static_cast<size_t>(copySize));
+
+  return 1;
+}
+
+extern "C" void *__moore_vif_get_signal_ref(MooreVifHandle vif,
+                                            const char *signalName,
+                                            int64_t signalNameLen) {
+  if (!vif || !signalName || signalNameLen <= 0)
+    return nullptr;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  if (!handle->isBound || !handle->boundInstance)
+    return nullptr;
+
+  std::string sigName = vifMakeString(signalName, signalNameLen);
+  const VifSignalInfo *info = lookupSignalInfo(handle->interfaceTypeName, sigName);
+
+  if (!info)
+    return nullptr;
+
+  // Calculate and return the pointer to the signal
+  char *base = static_cast<char *>(handle->boundInstance);
+  return base + info->offset;
+}
+
+extern "C" MooreString __moore_vif_get_type_name(MooreVifHandle vif) {
+  MooreString result = {nullptr, 0};
+  if (!vif)
+    return result;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  if (handle->interfaceTypeName.empty())
+    return result;
+
+  // Allocate and copy the type name
+  result.len = static_cast<int64_t>(handle->interfaceTypeName.size());
+  result.data = static_cast<char *>(std::malloc(static_cast<size_t>(result.len)));
+  if (result.data) {
+    std::memcpy(result.data, handle->interfaceTypeName.data(),
+                static_cast<size_t>(result.len));
+  } else {
+    result.len = 0;
+  }
+
+  return result;
+}
+
+extern "C" MooreString __moore_vif_get_modport_name(MooreVifHandle vif) {
+  MooreString result = {nullptr, 0};
+  if (!vif)
+    return result;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+  if (handle->modportName.empty())
+    return result;
+
+  // Allocate and copy the modport name
+  result.len = static_cast<int64_t>(handle->modportName.size());
+  result.data = static_cast<char *>(std::malloc(static_cast<size_t>(result.len)));
+  if (result.data) {
+    std::memcpy(result.data, handle->modportName.data(),
+                static_cast<size_t>(result.len));
+  } else {
+    result.len = 0;
+  }
+
+  return result;
+}
+
+extern "C" int32_t __moore_vif_compare(MooreVifHandle vif1, MooreVifHandle vif2) {
+  // Both null/unbound is considered equal
+  if (!vif1 && !vif2)
+    return 1;
+
+  // One null, one not - not equal
+  if (!vif1 || !vif2)
+    return 0;
+
+  VifHandle *h1 = static_cast<VifHandle *>(vif1);
+  VifHandle *h2 = static_cast<VifHandle *>(vif2);
+
+  // Both unbound is considered equal
+  if (!h1->isBound && !h2->isBound)
+    return 1;
+
+  // One bound, one unbound - not equal
+  if (h1->isBound != h2->isBound)
+    return 0;
+
+  // Both bound - compare the instance pointers
+  return (h1->boundInstance == h2->boundInstance) ? 1 : 0;
+}
+
+extern "C" void __moore_vif_release(MooreVifHandle vif) {
+  if (!vif)
+    return;
+
+  VifHandle *handle = static_cast<VifHandle *>(vif);
+
+  // Remove from the global tracking list
+  {
+    std::lock_guard<std::mutex> lock(__moore_vif_handles_mutex);
+    auto it = std::find(__moore_vif_handles.begin(), __moore_vif_handles.end(),
+                        handle);
+    if (it != __moore_vif_handles.end()) {
+      __moore_vif_handles.erase(it);
+    }
+  }
+
+  delete handle;
+}
+
+extern "C" void __moore_vif_clear_all(void) {
+  std::lock_guard<std::mutex> lock(__moore_vif_handles_mutex);
+
+  // Delete all handles
+  for (VifHandle *handle : __moore_vif_handles) {
+    delete handle;
+  }
+  __moore_vif_handles.clear();
+}
+
+extern "C" int32_t __moore_vif_register_signal(const char *interfaceTypeName,
+                                               int64_t interfaceTypeNameLen,
+                                               const char *signalName,
+                                               int64_t signalNameLen,
+                                               int64_t signalOffset,
+                                               int64_t signalSize) {
+  if (!interfaceTypeName || interfaceTypeNameLen <= 0 ||
+      !signalName || signalNameLen <= 0 || signalSize <= 0)
+    return 0;
+
+  std::string typeName = vifMakeString(interfaceTypeName, interfaceTypeNameLen);
+  std::string sigName = vifMakeString(signalName, signalNameLen);
+
+  std::lock_guard<std::mutex> lock(__moore_vif_type_registry_mutex);
+
+  // Create the interface type entry if it doesn't exist
+  VifInterfaceTypeInfo &typeInfo = __moore_vif_type_registry[typeName];
+  typeInfo.typeName = typeName;
+
+  // Add or update the signal info
+  VifSignalInfo &sigInfo = typeInfo.signals[sigName];
+  sigInfo.signalName = sigName;
+  sigInfo.offset = signalOffset;
+  sigInfo.size = signalSize;
+
+  return 1;
+}
+
+extern "C" void __moore_vif_clear_registry(void) {
+  std::lock_guard<std::mutex> lock(__moore_vif_type_registry_mutex);
+  __moore_vif_type_registry.clear();
+}
+
+//===----------------------------------------------------------------------===//
 // UVM Component Hierarchy Support
 //===----------------------------------------------------------------------===//
 
