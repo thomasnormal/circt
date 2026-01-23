@@ -94,3 +94,32 @@ moore.module @test_array_locator_indices() {
   moore.blocking_assign %result_var, %result : queue<i32, 0>
   moore.output
 }
+
+// Test array locator with packed struct element type and field access
+// This tests the fix for handling packed structs (moore::StructType) in
+// the inline conversion path of ArrayLocatorOpConversion.
+// Previously, this would crash with "cast<UnpackedStructType> failed" because
+// the code assumed only unpacked structs could appear in LLVM lowering.
+// CHECK-LABEL: hw.module @test_array_locator_packed_struct
+moore.module @test_array_locator_packed_struct() {
+  // Queue of packed structs
+  %queue_var = moore.variable : <queue<packed_struct<{x: i32, y: i32}>, 0>>
+  %queue = moore.read %queue_var : <queue<packed_struct<{x: i32, y: i32}>, 0>>
+
+  // Array locator with field access on packed struct
+  // The predicate accesses item.x which requires proper handling of packed struct types
+  // CHECK: scf.for
+  // CHECK: llvm.load
+  // CHECK: llvm.extractvalue
+  %result = moore.array.locator first, elements %queue : queue<packed_struct<{x: i32, y: i32}>, 0> -> <packed_struct<{x: i32, y: i32}>, 0> {
+  ^bb0(%item: !moore.packed_struct<{x: i32, y: i32}>):
+    %x_field = moore.struct_extract %item, "x" : packed_struct<{x: i32, y: i32}> -> i32
+    %one = moore.constant 1 : i32
+    %cond = moore.eq %x_field, %one : i32 -> i1
+    moore.array.locator.yield %cond : i1
+  }
+
+  %result_var = moore.variable : <queue<packed_struct<{x: i32, y: i32}>, 0>>
+  moore.blocking_assign %result_var, %result : queue<packed_struct<{x: i32, y: i32}>, 0>
+  moore.output
+}
