@@ -15077,3 +15077,567 @@ extern "C" void __moore_seq_get_statistics(int64_t *totalSequences,
   if (totalArbitrations)
     *totalArbitrations = registry.totalArbitrations.load();
 }
+
+//===----------------------------------------------------------------------===//
+// UVM Scoreboard Utilities Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Global statistics for scoreboard operations
+static std::atomic<bool> scoreboardTraceEnabled{false};
+static std::atomic<int64_t> scoreboardTotalCreated{0};
+static std::atomic<int64_t> scoreboardTotalComparisons{0};
+static std::atomic<int64_t> scoreboardTotalMatches{0};
+static std::atomic<int64_t> scoreboardTotalMismatches{0};
+
+/// Scoreboard structure
+struct Scoreboard {
+  std::string name;
+  int64_t transactionSize;
+
+  // Transaction FIFOs
+  std::vector<std::vector<uint8_t>> expectedQueue;
+  std::vector<std::vector<uint8_t>> actualQueue;
+
+  // TLM analysis exports for receiving transactions
+  MooreTlmFifoHandle expectedFifo;
+  MooreTlmFifoHandle actualFifo;
+
+  // Comparison callback
+  MooreScoreboardCompareCallback compareCallback;
+  void *compareCallbackUserData;
+
+  // Mismatch callback
+  MooreScoreboardMismatchCallback mismatchCallback;
+  void *mismatchCallbackUserData;
+
+  // Statistics
+  std::atomic<int64_t> matchCount{0};
+  std::atomic<int64_t> mismatchCount{0};
+
+  // Synchronization
+  std::mutex mutex;
+  std::condition_variable expectedAvailable;
+  std::condition_variable actualAvailable;
+
+  Scoreboard(const std::string &n, int64_t txSize)
+      : name(n), transactionSize(txSize),
+        expectedFifo(MOORE_TLM_INVALID_HANDLE),
+        actualFifo(MOORE_TLM_INVALID_HANDLE),
+        compareCallback(nullptr), compareCallbackUserData(nullptr),
+        mismatchCallback(nullptr), mismatchCallbackUserData(nullptr) {}
+};
+
+/// Global scoreboard registry
+struct ScoreboardRegistry {
+  std::vector<std::unique_ptr<Scoreboard>> scoreboards;
+  std::mutex mutex;
+
+  Scoreboard *getScoreboard(MooreScoreboardHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= scoreboards.size())
+      return nullptr;
+    return scoreboards[handle].get();
+  }
+
+  MooreScoreboardHandle addScoreboard(std::unique_ptr<Scoreboard> sb) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreScoreboardHandle handle =
+        static_cast<MooreScoreboardHandle>(scoreboards.size());
+    scoreboards.push_back(std::move(sb));
+    return handle;
+  }
+};
+
+ScoreboardRegistry &getScoreboardRegistry() {
+  static ScoreboardRegistry registry;
+  return registry;
+}
+
+void scoreboardTrace(const char *fmt, ...) {
+  if (!scoreboardTraceEnabled)
+    return;
+  va_list args;
+  va_start(args, fmt);
+  std::printf("[SCOREBOARD] ");
+  std::vprintf(fmt, args);
+  std::printf("\n");
+  va_end(args);
+}
+
+/// Default byte-by-byte comparison function
+int32_t defaultScoreboardCompare(const void *expected, const void *actual,
+                                  int64_t transactionSize, void *userData) {
+  (void)userData;
+  return std::memcmp(expected, actual, transactionSize) == 0 ? 1 : 0;
+}
+
+} // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Creation and Configuration
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreScoreboardHandle __moore_scoreboard_create(const char *name,
+                                                           int64_t nameLen,
+                                                           int64_t transactionSize) {
+  std::string sbName(name, nameLen);
+  auto scoreboard = std::make_unique<Scoreboard>(sbName, transactionSize);
+
+  // Create TLM FIFOs for expected and actual transactions
+  std::string expectedFifoName = sbName + ".expected_fifo";
+  std::string actualFifoName = sbName + ".actual_fifo";
+
+  scoreboard->expectedFifo = __moore_tlm_fifo_create(
+      expectedFifoName.c_str(), expectedFifoName.size(), 0, 0, transactionSize);
+  scoreboard->actualFifo = __moore_tlm_fifo_create(
+      actualFifoName.c_str(), actualFifoName.size(), 0, 0, transactionSize);
+
+  scoreboardTotalCreated++;
+
+  scoreboardTrace("Created scoreboard '%s' (transactionSize=%lld)",
+                  sbName.c_str(), (long long)transactionSize);
+
+  return getScoreboardRegistry().addScoreboard(std::move(scoreboard));
+}
+
+extern "C" void __moore_scoreboard_destroy(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (sb) {
+    scoreboardTrace("Destroyed scoreboard '%s'", sb->name.c_str());
+    // Destroy the underlying FIFOs
+    if (sb->expectedFifo != MOORE_TLM_INVALID_HANDLE)
+      __moore_tlm_fifo_destroy(sb->expectedFifo);
+    if (sb->actualFifo != MOORE_TLM_INVALID_HANDLE)
+      __moore_tlm_fifo_destroy(sb->actualFifo);
+  }
+}
+
+extern "C" void __moore_scoreboard_set_compare_callback(
+    MooreScoreboardHandle scoreboard,
+    MooreScoreboardCompareCallback callback,
+    void *userData) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+  sb->compareCallback = callback;
+  sb->compareCallbackUserData = userData;
+
+  scoreboardTrace("Set compare callback for scoreboard '%s'", sb->name.c_str());
+}
+
+extern "C" void __moore_scoreboard_set_mismatch_callback(
+    MooreScoreboardHandle scoreboard,
+    MooreScoreboardMismatchCallback callback,
+    void *userData) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+  sb->mismatchCallback = callback;
+  sb->mismatchCallbackUserData = userData;
+
+  scoreboardTrace("Set mismatch callback for scoreboard '%s'", sb->name.c_str());
+}
+
+extern "C" MooreString __moore_scoreboard_get_name(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  MooreString result;
+  result.len = sb->name.size();
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, sb->name.c_str(), result.len);
+  }
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Transaction Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_scoreboard_add_expected(MooreScoreboardHandle scoreboard,
+                                                 void *transaction,
+                                                 int64_t transactionSize) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+
+  // Copy transaction data
+  std::vector<uint8_t> txData(static_cast<uint8_t *>(transaction),
+                              static_cast<uint8_t *>(transaction) + transactionSize);
+  sb->expectedQueue.push_back(std::move(txData));
+
+  // Notify any waiting comparisons
+  sb->expectedAvailable.notify_one();
+
+  scoreboardTrace("Added expected transaction to '%s' (queue size=%zu)",
+                  sb->name.c_str(), sb->expectedQueue.size());
+}
+
+extern "C" void __moore_scoreboard_add_actual(MooreScoreboardHandle scoreboard,
+                                               void *transaction,
+                                               int64_t transactionSize) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+
+  // Copy transaction data
+  std::vector<uint8_t> txData(static_cast<uint8_t *>(transaction),
+                              static_cast<uint8_t *>(transaction) + transactionSize);
+  sb->actualQueue.push_back(std::move(txData));
+
+  // Notify any waiting comparisons
+  sb->actualAvailable.notify_one();
+
+  scoreboardTrace("Added actual transaction to '%s' (queue size=%zu)",
+                  sb->name.c_str(), sb->actualQueue.size());
+}
+
+extern "C" MooreScoreboardCompareResult
+__moore_scoreboard_compare(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return MOORE_SCOREBOARD_TIMEOUT;
+
+  std::unique_lock<std::mutex> lock(sb->mutex);
+
+  // Wait for expected transaction
+  while (sb->expectedQueue.empty()) {
+    sb->expectedAvailable.wait(lock);
+  }
+
+  // Wait for actual transaction
+  while (sb->actualQueue.empty()) {
+    sb->actualAvailable.wait(lock);
+  }
+
+  // Get the transactions
+  std::vector<uint8_t> expected = std::move(sb->expectedQueue.front());
+  sb->expectedQueue.erase(sb->expectedQueue.begin());
+
+  std::vector<uint8_t> actual = std::move(sb->actualQueue.front());
+  sb->actualQueue.erase(sb->actualQueue.begin());
+
+  // Get the comparison function
+  MooreScoreboardCompareCallback compareFn = sb->compareCallback;
+  void *compareUserData = sb->compareCallbackUserData;
+  MooreScoreboardMismatchCallback mismatchFn = sb->mismatchCallback;
+  void *mismatchUserData = sb->mismatchCallbackUserData;
+
+  lock.unlock();
+
+  // Perform comparison
+  int32_t match;
+  if (compareFn) {
+    match = compareFn(expected.data(), actual.data(),
+                      sb->transactionSize, compareUserData);
+  } else {
+    match = defaultScoreboardCompare(expected.data(), actual.data(),
+                                      sb->transactionSize, nullptr);
+  }
+
+  // Update statistics
+  scoreboardTotalComparisons++;
+  if (match) {
+    sb->matchCount++;
+    scoreboardTotalMatches++;
+    scoreboardTrace("Comparison MATCH in '%s'", sb->name.c_str());
+    return MOORE_SCOREBOARD_MATCH;
+  } else {
+    sb->mismatchCount++;
+    scoreboardTotalMismatches++;
+    scoreboardTrace("Comparison MISMATCH in '%s'", sb->name.c_str());
+
+    // Call mismatch callback if registered
+    if (mismatchFn) {
+      mismatchFn(expected.data(), actual.data(),
+                 sb->transactionSize, mismatchUserData);
+    }
+
+    return MOORE_SCOREBOARD_MISMATCH;
+  }
+}
+
+extern "C" MooreScoreboardCompareResult
+__moore_scoreboard_try_compare(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return MOORE_SCOREBOARD_TIMEOUT;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+
+  // Check if both transactions are available
+  if (sb->expectedQueue.empty() || sb->actualQueue.empty()) {
+    return MOORE_SCOREBOARD_TIMEOUT;
+  }
+
+  // Get the transactions
+  std::vector<uint8_t> expected = std::move(sb->expectedQueue.front());
+  sb->expectedQueue.erase(sb->expectedQueue.begin());
+
+  std::vector<uint8_t> actual = std::move(sb->actualQueue.front());
+  sb->actualQueue.erase(sb->actualQueue.begin());
+
+  // Perform comparison
+  int32_t match;
+  if (sb->compareCallback) {
+    match = sb->compareCallback(expected.data(), actual.data(),
+                                 sb->transactionSize, sb->compareCallbackUserData);
+  } else {
+    match = defaultScoreboardCompare(expected.data(), actual.data(),
+                                      sb->transactionSize, nullptr);
+  }
+
+  // Update statistics
+  scoreboardTotalComparisons++;
+  if (match) {
+    sb->matchCount++;
+    scoreboardTotalMatches++;
+    scoreboardTrace("Try comparison MATCH in '%s'", sb->name.c_str());
+    return MOORE_SCOREBOARD_MATCH;
+  } else {
+    sb->mismatchCount++;
+    scoreboardTotalMismatches++;
+    scoreboardTrace("Try comparison MISMATCH in '%s'", sb->name.c_str());
+
+    // Call mismatch callback if registered
+    if (sb->mismatchCallback) {
+      sb->mismatchCallback(expected.data(), actual.data(),
+                           sb->transactionSize, sb->mismatchCallbackUserData);
+    }
+
+    return MOORE_SCOREBOARD_MISMATCH;
+  }
+}
+
+extern "C" int64_t __moore_scoreboard_compare_all(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 0;
+
+  int64_t comparisons = 0;
+
+  while (true) {
+    MooreScoreboardCompareResult result = __moore_scoreboard_try_compare(scoreboard);
+    if (result == MOORE_SCOREBOARD_TIMEOUT) {
+      break;
+    }
+    comparisons++;
+  }
+
+  scoreboardTrace("Compared all: %lld comparisons in '%s'",
+                  (long long)comparisons, sb->name.c_str());
+
+  return comparisons;
+}
+
+//===----------------------------------------------------------------------===//
+// Scoreboard TLM Integration
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreTlmPortHandle
+__moore_scoreboard_get_expected_export(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb || sb->expectedFifo == MOORE_TLM_INVALID_HANDLE)
+    return MOORE_TLM_INVALID_HANDLE;
+
+  return __moore_tlm_fifo_get_analysis_export(sb->expectedFifo);
+}
+
+extern "C" MooreTlmPortHandle
+__moore_scoreboard_get_actual_export(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb || sb->actualFifo == MOORE_TLM_INVALID_HANDLE)
+    return MOORE_TLM_INVALID_HANDLE;
+
+  return __moore_tlm_fifo_get_analysis_export(sb->actualFifo);
+}
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Statistics and Reporting
+//===----------------------------------------------------------------------===//
+
+extern "C" int64_t __moore_scoreboard_get_match_count(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 0;
+  return sb->matchCount.load();
+}
+
+extern "C" int64_t __moore_scoreboard_get_mismatch_count(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 0;
+  return sb->mismatchCount.load();
+}
+
+extern "C" int64_t __moore_scoreboard_get_pending_expected(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+  return static_cast<int64_t>(sb->expectedQueue.size());
+}
+
+extern "C" int64_t __moore_scoreboard_get_pending_actual(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+  return static_cast<int64_t>(sb->actualQueue.size());
+}
+
+extern "C" int32_t __moore_scoreboard_is_empty(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 1;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+  return (sb->expectedQueue.empty() && sb->actualQueue.empty()) ? 1 : 0;
+}
+
+extern "C" void __moore_scoreboard_report(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb) {
+    std::printf("[SCOREBOARD] Error: Invalid scoreboard handle\n");
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+
+  int64_t matches = sb->matchCount.load();
+  int64_t mismatches = sb->mismatchCount.load();
+  int64_t pendingExpected = static_cast<int64_t>(sb->expectedQueue.size());
+  int64_t pendingActual = static_cast<int64_t>(sb->actualQueue.size());
+  bool passed = (mismatches == 0 && pendingExpected == 0 && pendingActual == 0);
+
+  std::printf("\n========================================\n");
+  std::printf("Scoreboard Report: %s\n", sb->name.c_str());
+  std::printf("========================================\n");
+  std::printf("  Matches:          %lld\n", (long long)matches);
+  std::printf("  Mismatches:       %lld\n", (long long)mismatches);
+  std::printf("  Pending Expected: %lld\n", (long long)pendingExpected);
+  std::printf("  Pending Actual:   %lld\n", (long long)pendingActual);
+  std::printf("  Status:           %s\n", passed ? "PASSED" : "FAILED");
+  std::printf("========================================\n\n");
+}
+
+extern "C" int32_t __moore_scoreboard_passed(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+
+  // A scoreboard passes if:
+  // - No mismatches
+  // - No pending expected transactions
+  // - No pending actual transactions
+  return (sb->mismatchCount.load() == 0 &&
+          sb->expectedQueue.empty() &&
+          sb->actualQueue.empty()) ? 1 : 0;
+}
+
+extern "C" void __moore_scoreboard_reset(MooreScoreboardHandle scoreboard) {
+  auto *sb = getScoreboardRegistry().getScoreboard(scoreboard);
+  if (!sb)
+    return;
+
+  std::lock_guard<std::mutex> lock(sb->mutex);
+
+  sb->expectedQueue.clear();
+  sb->actualQueue.clear();
+  sb->matchCount = 0;
+  sb->mismatchCount = 0;
+
+  // Also flush the TLM FIFOs
+  if (sb->expectedFifo != MOORE_TLM_INVALID_HANDLE)
+    __moore_tlm_fifo_flush(sb->expectedFifo);
+  if (sb->actualFifo != MOORE_TLM_INVALID_HANDLE)
+    __moore_tlm_fifo_flush(sb->actualFifo);
+
+  scoreboardTrace("Reset scoreboard '%s'", sb->name.c_str());
+}
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Debugging/Tracing
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_scoreboard_set_trace_enabled(int32_t enable) {
+  scoreboardTraceEnabled = (enable != 0);
+}
+
+extern "C" int32_t __moore_scoreboard_is_trace_enabled(void) {
+  return scoreboardTraceEnabled ? 1 : 0;
+}
+
+extern "C" void __moore_scoreboard_print_summary(void) {
+  auto &registry = getScoreboardRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+
+  std::printf("\n=== UVM Scoreboard Summary ===\n");
+
+  if (registry.scoreboards.empty()) {
+    std::printf("  No scoreboards registered.\n");
+  } else {
+    for (size_t i = 0; i < registry.scoreboards.size(); ++i) {
+      auto &sb = registry.scoreboards[i];
+      if (sb) {
+        std::lock_guard<std::mutex> sbLock(sb->mutex);
+        int64_t matches = sb->matchCount.load();
+        int64_t mismatches = sb->mismatchCount.load();
+        int64_t pendingExp = static_cast<int64_t>(sb->expectedQueue.size());
+        int64_t pendingAct = static_cast<int64_t>(sb->actualQueue.size());
+        bool passed = (mismatches == 0 && pendingExp == 0 && pendingAct == 0);
+
+        std::printf("  [%zu] '%s': matches=%lld, mismatches=%lld, "
+                    "pending_exp=%lld, pending_act=%lld, %s\n",
+                    i, sb->name.c_str(),
+                    (long long)matches, (long long)mismatches,
+                    (long long)pendingExp, (long long)pendingAct,
+                    passed ? "PASSED" : "FAILED");
+      }
+    }
+  }
+
+  std::printf("\nGlobal Statistics:\n");
+  std::printf("  Total scoreboards created: %lld\n",
+              (long long)scoreboardTotalCreated.load());
+  std::printf("  Total comparisons: %lld\n",
+              (long long)scoreboardTotalComparisons.load());
+  std::printf("  Total matches: %lld\n",
+              (long long)scoreboardTotalMatches.load());
+  std::printf("  Total mismatches: %lld\n",
+              (long long)scoreboardTotalMismatches.load());
+
+  std::printf("\n==============================\n");
+}
+
+extern "C" void __moore_scoreboard_get_statistics(int64_t *totalScoreboards,
+                                                   int64_t *totalComparisons,
+                                                   int64_t *totalMatches,
+                                                   int64_t *totalMismatches) {
+  if (totalScoreboards)
+    *totalScoreboards = scoreboardTotalCreated.load();
+  if (totalComparisons)
+    *totalComparisons = scoreboardTotalComparisons.load();
+  if (totalMatches)
+    *totalMatches = scoreboardTotalMatches.load();
+  if (totalMismatches)
+    *totalMismatches = scoreboardTotalMismatches.load();
+}

@@ -11579,4 +11579,415 @@ TEST(MooreRuntimeSequenceTest, MultipleSequences) {
   __moore_sequence_destroy(seq2);
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Scoreboard Tests
+//===----------------------------------------------------------------------===//
+
+// Test transaction type for scoreboard tests
+struct TestScoreboardTransaction {
+  int32_t addr;
+  int32_t data;
+  int8_t kind;
+
+  bool operator==(const TestScoreboardTransaction &other) const {
+    return addr == other.addr && data == other.data && kind == other.kind;
+  }
+};
+
+// Custom compare callback for scoreboard tests
+static int32_t customScoreboardCompare(const void *expected, const void *actual,
+                                        int64_t transactionSize, void *userData) {
+  (void)transactionSize;
+  (void)userData;
+  const auto *exp = static_cast<const TestScoreboardTransaction *>(expected);
+  const auto *act = static_cast<const TestScoreboardTransaction *>(actual);
+  return (exp->addr == act->addr && exp->data == act->data) ? 1 : 0;
+}
+
+// Mismatch callback state for tests
+static std::atomic<int> scoreboardMismatchCount{0};
+static TestScoreboardTransaction lastMismatchExpected;
+static TestScoreboardTransaction lastMismatchActual;
+
+static void testMismatchCallback(const void *expected, const void *actual,
+                                  int64_t transactionSize, void *userData) {
+  (void)transactionSize;
+  (void)userData;
+  lastMismatchExpected = *static_cast<const TestScoreboardTransaction *>(expected);
+  lastMismatchActual = *static_cast<const TestScoreboardTransaction *>(actual);
+  scoreboardMismatchCount++;
+}
+
+TEST(MooreRuntimeScoreboardTest, Creation) {
+  const char *sbName = "test_scoreboard";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+  EXPECT_NE(sb, MOORE_SCOREBOARD_INVALID_HANDLE);
+
+  EXPECT_EQ(__moore_scoreboard_is_empty(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_passed(sb), 1);
+
+  MooreString name = __moore_scoreboard_get_name(sb);
+  EXPECT_EQ(name.len, strlen(sbName));
+  EXPECT_EQ(std::string(name.data, name.len), std::string(sbName));
+  std::free(name.data);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, AddExpectedAndActual) {
+  const char *sbName = "add_transactions_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  TestScoreboardTransaction tx1 = {0x1000, 0xDEAD, 1};
+  TestScoreboardTransaction tx2 = {0x2000, 0xBEEF, 0};
+
+  __moore_scoreboard_add_expected(sb, &tx1, sizeof(tx1));
+  EXPECT_EQ(__moore_scoreboard_get_pending_expected(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_get_pending_actual(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_is_empty(sb), 0);
+
+  __moore_scoreboard_add_actual(sb, &tx2, sizeof(tx2));
+  EXPECT_EQ(__moore_scoreboard_get_pending_expected(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_get_pending_actual(sb), 1);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, TryCompareMatch) {
+  const char *sbName = "try_compare_match_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  TestScoreboardTransaction tx = {0x1000, 0xDEAD, 1};
+
+  __moore_scoreboard_add_expected(sb, &tx, sizeof(tx));
+  __moore_scoreboard_add_actual(sb, &tx, sizeof(tx));
+
+  MooreScoreboardCompareResult result = __moore_scoreboard_try_compare(sb);
+  EXPECT_EQ(result, MOORE_SCOREBOARD_MATCH);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_is_empty(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_passed(sb), 1);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, TryCompareMismatch) {
+  const char *sbName = "try_compare_mismatch_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  TestScoreboardTransaction expected = {0x1000, 0xDEAD, 1};
+  TestScoreboardTransaction actual = {0x1000, 0xBEEF, 1};
+
+  __moore_scoreboard_add_expected(sb, &expected, sizeof(expected));
+  __moore_scoreboard_add_actual(sb, &actual, sizeof(actual));
+
+  MooreScoreboardCompareResult result = __moore_scoreboard_try_compare(sb);
+  EXPECT_EQ(result, MOORE_SCOREBOARD_MISMATCH);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_passed(sb), 0);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, TryCompareTimeout) {
+  const char *sbName = "try_compare_timeout_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  // No transactions added, should return timeout
+  MooreScoreboardCompareResult result = __moore_scoreboard_try_compare(sb);
+  EXPECT_EQ(result, MOORE_SCOREBOARD_TIMEOUT);
+
+  // Add only expected, should still timeout
+  TestScoreboardTransaction tx = {0x1000, 0xDEAD, 1};
+  __moore_scoreboard_add_expected(sb, &tx, sizeof(tx));
+  result = __moore_scoreboard_try_compare(sb);
+  EXPECT_EQ(result, MOORE_SCOREBOARD_TIMEOUT);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, CompareAll) {
+  const char *sbName = "compare_all_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  // Add multiple matching transactions
+  TestScoreboardTransaction tx1 = {0x1000, 0xDEAD, 1};
+  TestScoreboardTransaction tx2 = {0x2000, 0xBEEF, 0};
+  TestScoreboardTransaction tx3 = {0x3000, 0xCAFE, 1};
+
+  __moore_scoreboard_add_expected(sb, &tx1, sizeof(tx1));
+  __moore_scoreboard_add_expected(sb, &tx2, sizeof(tx2));
+  __moore_scoreboard_add_expected(sb, &tx3, sizeof(tx3));
+
+  __moore_scoreboard_add_actual(sb, &tx1, sizeof(tx1));
+  __moore_scoreboard_add_actual(sb, &tx2, sizeof(tx2));
+  __moore_scoreboard_add_actual(sb, &tx3, sizeof(tx3));
+
+  int64_t comparisons = __moore_scoreboard_compare_all(sb);
+  EXPECT_EQ(comparisons, 3);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 3);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_is_empty(sb), 1);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, CustomCompareCallback) {
+  const char *sbName = "custom_compare_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  __moore_scoreboard_set_compare_callback(sb, customScoreboardCompare, nullptr);
+
+  // Transactions differ in 'kind' field, but custom compare only checks addr and data
+  TestScoreboardTransaction expected = {0x1000, 0xDEAD, 0};
+  TestScoreboardTransaction actual = {0x1000, 0xDEAD, 1};  // Different kind
+
+  __moore_scoreboard_add_expected(sb, &expected, sizeof(expected));
+  __moore_scoreboard_add_actual(sb, &actual, sizeof(actual));
+
+  MooreScoreboardCompareResult result = __moore_scoreboard_try_compare(sb);
+  EXPECT_EQ(result, MOORE_SCOREBOARD_MATCH);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, MismatchCallback) {
+  const char *sbName = "mismatch_callback_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  scoreboardMismatchCount = 0;
+  __moore_scoreboard_set_mismatch_callback(sb, testMismatchCallback, nullptr);
+
+  TestScoreboardTransaction expected = {0x1000, 0xDEAD, 1};
+  TestScoreboardTransaction actual = {0x2000, 0xBEEF, 0};
+
+  __moore_scoreboard_add_expected(sb, &expected, sizeof(expected));
+  __moore_scoreboard_add_actual(sb, &actual, sizeof(actual));
+
+  MooreScoreboardCompareResult result = __moore_scoreboard_try_compare(sb);
+  EXPECT_EQ(result, MOORE_SCOREBOARD_MISMATCH);
+  EXPECT_EQ(scoreboardMismatchCount.load(), 1);
+  EXPECT_TRUE(lastMismatchExpected == expected);
+  EXPECT_TRUE(lastMismatchActual == actual);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, Reset) {
+  const char *sbName = "reset_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  TestScoreboardTransaction tx1 = {0x1000, 0xDEAD, 1};
+  TestScoreboardTransaction tx2 = {0x2000, 0xBEEF, 0};
+
+  // Add some transactions and do a comparison
+  __moore_scoreboard_add_expected(sb, &tx1, sizeof(tx1));
+  __moore_scoreboard_add_actual(sb, &tx1, sizeof(tx1));
+  __moore_scoreboard_try_compare(sb);
+
+  // Add more pending transactions
+  __moore_scoreboard_add_expected(sb, &tx2, sizeof(tx2));
+  __moore_scoreboard_add_actual(sb, &tx2, sizeof(tx2));
+
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_get_pending_expected(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_get_pending_actual(sb), 1);
+
+  // Reset the scoreboard
+  __moore_scoreboard_reset(sb);
+
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_get_pending_expected(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_get_pending_actual(sb), 0);
+  EXPECT_EQ(__moore_scoreboard_is_empty(sb), 1);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, TlmIntegration) {
+  const char *sbName = "tlm_integration_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  // Get analysis exports
+  MooreTlmPortHandle expectedExport = __moore_scoreboard_get_expected_export(sb);
+  MooreTlmPortHandle actualExport = __moore_scoreboard_get_actual_export(sb);
+
+  EXPECT_NE(expectedExport, MOORE_TLM_INVALID_HANDLE);
+  EXPECT_NE(actualExport, MOORE_TLM_INVALID_HANDLE);
+
+  // Create analysis ports (simulating monitor outputs)
+  const char *refPortName = "ref_model.analysis_port";
+  const char *dutPortName = "dut_monitor.analysis_port";
+
+  MooreTlmPortHandle refPort = __moore_tlm_port_create(
+      refPortName, strlen(refPortName), 0, MOORE_TLM_PORT_ANALYSIS);
+  MooreTlmPortHandle dutPort = __moore_tlm_port_create(
+      dutPortName, strlen(dutPortName), 0, MOORE_TLM_PORT_ANALYSIS);
+
+  // Connect ports to scoreboard exports
+  EXPECT_EQ(__moore_tlm_port_connect(refPort, expectedExport), 1);
+  EXPECT_EQ(__moore_tlm_port_connect(dutPort, actualExport), 1);
+
+  // Write transactions via the TLM ports
+  TestScoreboardTransaction tx = {0x4000, 0xFACE, 1};
+  __moore_tlm_port_write(refPort, &tx, sizeof(tx));
+  __moore_tlm_port_write(dutPort, &tx, sizeof(tx));
+
+  // The FIFOs should have received the transactions
+  // We need to transfer them to the scoreboard queues manually
+  // (In a real UVM flow, this would be done via subscribers)
+
+  __moore_tlm_port_destroy(refPort);
+  __moore_tlm_port_destroy(dutPort);
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, PassedWithPending) {
+  const char *sbName = "passed_pending_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  // A scoreboard with pending transactions should not pass
+  TestScoreboardTransaction tx = {0x1000, 0xDEAD, 1};
+  __moore_scoreboard_add_expected(sb, &tx, sizeof(tx));
+
+  EXPECT_EQ(__moore_scoreboard_passed(sb), 0);
+
+  // Add matching actual and compare
+  __moore_scoreboard_add_actual(sb, &tx, sizeof(tx));
+  __moore_scoreboard_try_compare(sb);
+
+  EXPECT_EQ(__moore_scoreboard_passed(sb), 1);
+
+  __moore_scoreboard_destroy(sb);
+}
+
+TEST(MooreRuntimeScoreboardTest, TracingEnableDisable) {
+  EXPECT_EQ(__moore_scoreboard_is_trace_enabled(), 0);
+
+  __moore_scoreboard_set_trace_enabled(1);
+  EXPECT_EQ(__moore_scoreboard_is_trace_enabled(), 1);
+
+  __moore_scoreboard_set_trace_enabled(0);
+  EXPECT_EQ(__moore_scoreboard_is_trace_enabled(), 0);
+}
+
+TEST(MooreRuntimeScoreboardTest, Statistics) {
+  int64_t totalSb, totalComp, totalMatch, totalMismatch;
+  __moore_scoreboard_get_statistics(&totalSb, &totalComp, &totalMatch, &totalMismatch);
+
+  // Statistics should be non-negative (they accumulate from previous tests)
+  EXPECT_GE(totalSb, 0);
+  EXPECT_GE(totalComp, 0);
+  EXPECT_GE(totalMatch, 0);
+  EXPECT_GE(totalMismatch, 0);
+}
+
+TEST(MooreRuntimeScoreboardTest, InvalidHandle) {
+  MooreScoreboardHandle invalid = MOORE_SCOREBOARD_INVALID_HANDLE;
+
+  // All operations on invalid handle should be safe
+  EXPECT_EQ(__moore_scoreboard_get_match_count(invalid), 0);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(invalid), 0);
+  EXPECT_EQ(__moore_scoreboard_get_pending_expected(invalid), 0);
+  EXPECT_EQ(__moore_scoreboard_get_pending_actual(invalid), 0);
+  EXPECT_EQ(__moore_scoreboard_is_empty(invalid), 1);
+  EXPECT_EQ(__moore_scoreboard_passed(invalid), 0);
+  EXPECT_EQ(__moore_scoreboard_try_compare(invalid), MOORE_SCOREBOARD_TIMEOUT);
+  EXPECT_EQ(__moore_scoreboard_get_expected_export(invalid), MOORE_TLM_INVALID_HANDLE);
+  EXPECT_EQ(__moore_scoreboard_get_actual_export(invalid), MOORE_TLM_INVALID_HANDLE);
+
+  MooreString name = __moore_scoreboard_get_name(invalid);
+  EXPECT_EQ(name.data, nullptr);
+  EXPECT_EQ(name.len, 0);
+
+  // These should be safe to call (no crash)
+  __moore_scoreboard_destroy(invalid);
+  __moore_scoreboard_reset(invalid);
+}
+
+TEST(MooreRuntimeScoreboardTest, MultipleScoreboards) {
+  const char *name1 = "scoreboard_1";
+  const char *name2 = "scoreboard_2";
+  const char *name3 = "scoreboard_3";
+
+  MooreScoreboardHandle sb1 = __moore_scoreboard_create(
+      name1, strlen(name1), sizeof(TestScoreboardTransaction));
+  MooreScoreboardHandle sb2 = __moore_scoreboard_create(
+      name2, strlen(name2), sizeof(TestScoreboardTransaction));
+  MooreScoreboardHandle sb3 = __moore_scoreboard_create(
+      name3, strlen(name3), sizeof(TestScoreboardTransaction));
+
+  EXPECT_NE(sb1, sb2);
+  EXPECT_NE(sb2, sb3);
+  EXPECT_NE(sb1, sb3);
+
+  // Each scoreboard operates independently
+  TestScoreboardTransaction tx1 = {0x1000, 0x11, 0};
+  TestScoreboardTransaction tx2 = {0x2000, 0x22, 1};
+
+  __moore_scoreboard_add_expected(sb1, &tx1, sizeof(tx1));
+  __moore_scoreboard_add_actual(sb1, &tx1, sizeof(tx1));
+
+  __moore_scoreboard_add_expected(sb2, &tx2, sizeof(tx2));
+  __moore_scoreboard_add_actual(sb2, &tx2, sizeof(tx2));
+
+  __moore_scoreboard_try_compare(sb1);
+  __moore_scoreboard_try_compare(sb2);
+
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb1), 1);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb2), 1);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb3), 0);
+
+  __moore_scoreboard_destroy(sb1);
+  __moore_scoreboard_destroy(sb2);
+  __moore_scoreboard_destroy(sb3);
+}
+
+TEST(MooreRuntimeScoreboardTest, MixedMatchMismatch) {
+  const char *sbName = "mixed_results_sb";
+  MooreScoreboardHandle sb = __moore_scoreboard_create(
+      sbName, strlen(sbName), sizeof(TestScoreboardTransaction));
+
+  TestScoreboardTransaction tx1 = {0x1000, 0xDEAD, 1};
+  TestScoreboardTransaction tx2 = {0x2000, 0xBEEF, 0};
+  TestScoreboardTransaction tx3 = {0x3000, 0xCAFE, 1};
+  TestScoreboardTransaction tx3_bad = {0x3000, 0xBAD0, 1};
+
+  // First transaction: match
+  __moore_scoreboard_add_expected(sb, &tx1, sizeof(tx1));
+  __moore_scoreboard_add_actual(sb, &tx1, sizeof(tx1));
+
+  // Second transaction: match
+  __moore_scoreboard_add_expected(sb, &tx2, sizeof(tx2));
+  __moore_scoreboard_add_actual(sb, &tx2, sizeof(tx2));
+
+  // Third transaction: mismatch
+  __moore_scoreboard_add_expected(sb, &tx3, sizeof(tx3));
+  __moore_scoreboard_add_actual(sb, &tx3_bad, sizeof(tx3_bad));
+
+  int64_t comparisons = __moore_scoreboard_compare_all(sb);
+  EXPECT_EQ(comparisons, 3);
+  EXPECT_EQ(__moore_scoreboard_get_match_count(sb), 2);
+  EXPECT_EQ(__moore_scoreboard_get_mismatch_count(sb), 1);
+  EXPECT_EQ(__moore_scoreboard_passed(sb), 0);
+
+  __moore_scoreboard_destroy(sb);
+}
+
 } // namespace

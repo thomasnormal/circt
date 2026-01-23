@@ -4354,6 +4354,229 @@ void __moore_seq_print_summary(void);
 void __moore_seq_get_statistics(int64_t *totalSequences, int64_t *totalItems,
                                  int64_t *totalArbitrations);
 
+//===----------------------------------------------------------------------===//
+// UVM Scoreboard Utilities
+//===----------------------------------------------------------------------===//
+//
+// The UVM scoreboard pattern compares expected vs actual transactions to verify
+// design correctness. Scoreboards typically receive transactions via TLM analysis
+// FIFOs from monitors and compare them against expected results.
+//
+// Key concepts:
+// - Expected vs Actual: Two FIFOs hold transactions from reference model and DUT
+// - Transaction matching: Comparison function determines if transactions match
+// - Statistics: Track matches, mismatches, and pending transactions
+// - Reporting: Generate verification summary at end of simulation
+//
+// Integration with TLM:
+// - Scoreboards use analysis FIFOs to receive transactions
+// - Monitor writes to analysis port -> FIFO -> scoreboard reads
+// - Supports in-order comparison (FIFO) or out-of-order matching
+//
+//===----------------------------------------------------------------------===//
+
+/// Handle type for scoreboards.
+typedef int64_t MooreScoreboardHandle;
+
+/// Invalid scoreboard handle value.
+#define MOORE_SCOREBOARD_INVALID_HANDLE (-1)
+
+/// Comparison result values.
+typedef enum {
+  MOORE_SCOREBOARD_MATCH = 0,      ///< Transactions match
+  MOORE_SCOREBOARD_MISMATCH = 1,   ///< Transactions do not match
+  MOORE_SCOREBOARD_TIMEOUT = 2     ///< Comparison timed out (no transaction available)
+} MooreScoreboardCompareResult;
+
+/// Transaction compare callback function type.
+/// Called to compare an expected transaction with an actual transaction.
+/// @param expected Pointer to the expected transaction data
+/// @param actual Pointer to the actual transaction data
+/// @param transactionSize Size of the transaction in bytes
+/// @param userData User-provided context data
+/// @return 1 if transactions match, 0 if they do not match
+typedef int32_t (*MooreScoreboardCompareCallback)(const void *expected,
+                                                   const void *actual,
+                                                   int64_t transactionSize,
+                                                   void *userData);
+
+/// Mismatch callback function type.
+/// Called when a mismatch is detected between expected and actual transactions.
+/// @param expected Pointer to the expected transaction data
+/// @param actual Pointer to the actual transaction data
+/// @param transactionSize Size of the transaction in bytes
+/// @param userData User-provided context data
+typedef void (*MooreScoreboardMismatchCallback)(const void *expected,
+                                                 const void *actual,
+                                                 int64_t transactionSize,
+                                                 void *userData);
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Creation and Configuration
+//===----------------------------------------------------------------------===//
+
+/// Create a new scoreboard.
+/// @param name Scoreboard name (for debugging/reporting)
+/// @param nameLen Length of the name string
+/// @param transactionSize Size of each transaction in bytes
+/// @return Handle to the created scoreboard, or MOORE_SCOREBOARD_INVALID_HANDLE
+MooreScoreboardHandle __moore_scoreboard_create(const char *name,
+                                                 int64_t nameLen,
+                                                 int64_t transactionSize);
+
+/// Destroy a scoreboard and release its resources.
+/// @param scoreboard Handle to the scoreboard to destroy
+void __moore_scoreboard_destroy(MooreScoreboardHandle scoreboard);
+
+/// Set the comparison callback for a scoreboard.
+/// If not set, a default byte-by-byte comparison is used.
+/// @param scoreboard Handle to the scoreboard
+/// @param callback Comparison function
+/// @param userData User data to pass to the callback
+void __moore_scoreboard_set_compare_callback(MooreScoreboardHandle scoreboard,
+                                              MooreScoreboardCompareCallback callback,
+                                              void *userData);
+
+/// Set the mismatch callback for a scoreboard.
+/// Called when a mismatch is detected.
+/// @param scoreboard Handle to the scoreboard
+/// @param callback Mismatch notification function
+/// @param userData User data to pass to the callback
+void __moore_scoreboard_set_mismatch_callback(MooreScoreboardHandle scoreboard,
+                                               MooreScoreboardMismatchCallback callback,
+                                               void *userData);
+
+/// Get the name of a scoreboard.
+/// @param scoreboard Handle to the scoreboard
+/// @return The scoreboard name as a MooreString
+MooreString __moore_scoreboard_get_name(MooreScoreboardHandle scoreboard);
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Transaction Operations
+//===----------------------------------------------------------------------===//
+
+/// Add an expected transaction to the scoreboard.
+/// Expected transactions come from the reference model.
+/// @param scoreboard Handle to the scoreboard
+/// @param transaction Pointer to the transaction data
+/// @param transactionSize Size of the transaction in bytes
+void __moore_scoreboard_add_expected(MooreScoreboardHandle scoreboard,
+                                      void *transaction,
+                                      int64_t transactionSize);
+
+/// Add an actual transaction to the scoreboard.
+/// Actual transactions come from the DUT monitor.
+/// @param scoreboard Handle to the scoreboard
+/// @param transaction Pointer to the transaction data
+/// @param transactionSize Size of the transaction in bytes
+void __moore_scoreboard_add_actual(MooreScoreboardHandle scoreboard,
+                                    void *transaction,
+                                    int64_t transactionSize);
+
+/// Compare the next expected vs actual transactions (blocking).
+/// Waits for both expected and actual transactions to be available.
+/// @param scoreboard Handle to the scoreboard
+/// @return MOORE_SCOREBOARD_MATCH if match, MOORE_SCOREBOARD_MISMATCH otherwise
+MooreScoreboardCompareResult __moore_scoreboard_compare(MooreScoreboardHandle scoreboard);
+
+/// Try to compare transactions (non-blocking).
+/// Returns immediately if either FIFO is empty.
+/// @param scoreboard Handle to the scoreboard
+/// @return Comparison result, or MOORE_SCOREBOARD_TIMEOUT if no transactions available
+MooreScoreboardCompareResult __moore_scoreboard_try_compare(MooreScoreboardHandle scoreboard);
+
+/// Compare all pending transactions (non-blocking).
+/// Compares as many transactions as possible without blocking.
+/// @param scoreboard Handle to the scoreboard
+/// @return Number of comparisons performed
+int64_t __moore_scoreboard_compare_all(MooreScoreboardHandle scoreboard);
+
+//===----------------------------------------------------------------------===//
+// Scoreboard TLM Integration
+//===----------------------------------------------------------------------===//
+
+/// Get the expected transaction FIFO's analysis export.
+/// Connect this to the reference model's analysis port.
+/// @param scoreboard Handle to the scoreboard
+/// @return Handle to the analysis export, or MOORE_TLM_INVALID_HANDLE on error
+MooreTlmPortHandle __moore_scoreboard_get_expected_export(MooreScoreboardHandle scoreboard);
+
+/// Get the actual transaction FIFO's analysis export.
+/// Connect this to the DUT monitor's analysis port.
+/// @param scoreboard Handle to the scoreboard
+/// @return Handle to the analysis export, or MOORE_TLM_INVALID_HANDLE on error
+MooreTlmPortHandle __moore_scoreboard_get_actual_export(MooreScoreboardHandle scoreboard);
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Statistics and Reporting
+//===----------------------------------------------------------------------===//
+
+/// Get the number of matching comparisons.
+/// @param scoreboard Handle to the scoreboard
+/// @return Number of transactions that matched
+int64_t __moore_scoreboard_get_match_count(MooreScoreboardHandle scoreboard);
+
+/// Get the number of mismatching comparisons.
+/// @param scoreboard Handle to the scoreboard
+/// @return Number of transactions that did not match
+int64_t __moore_scoreboard_get_mismatch_count(MooreScoreboardHandle scoreboard);
+
+/// Get the number of pending expected transactions.
+/// @param scoreboard Handle to the scoreboard
+/// @return Number of expected transactions not yet compared
+int64_t __moore_scoreboard_get_pending_expected(MooreScoreboardHandle scoreboard);
+
+/// Get the number of pending actual transactions.
+/// @param scoreboard Handle to the scoreboard
+/// @return Number of actual transactions not yet compared
+int64_t __moore_scoreboard_get_pending_actual(MooreScoreboardHandle scoreboard);
+
+/// Check if all transactions have been compared (no pending).
+/// @param scoreboard Handle to the scoreboard
+/// @return 1 if no pending transactions, 0 otherwise
+int32_t __moore_scoreboard_is_empty(MooreScoreboardHandle scoreboard);
+
+/// Print a verification report for the scoreboard.
+/// Outputs match/mismatch counts and any pending transactions.
+/// @param scoreboard Handle to the scoreboard
+void __moore_scoreboard_report(MooreScoreboardHandle scoreboard);
+
+/// Get the pass/fail status based on scoreboard results.
+/// A scoreboard passes if there are no mismatches and no pending transactions.
+/// @param scoreboard Handle to the scoreboard
+/// @return 1 if passed (no errors), 0 if failed
+int32_t __moore_scoreboard_passed(MooreScoreboardHandle scoreboard);
+
+/// Reset the scoreboard statistics and clear all pending transactions.
+/// @param scoreboard Handle to the scoreboard
+void __moore_scoreboard_reset(MooreScoreboardHandle scoreboard);
+
+//===----------------------------------------------------------------------===//
+// Scoreboard Debugging/Tracing
+//===----------------------------------------------------------------------===//
+
+/// Enable or disable scoreboard tracing.
+/// When enabled, all scoreboard operations are logged for debugging.
+/// @param enable 1 to enable, 0 to disable
+void __moore_scoreboard_set_trace_enabled(int32_t enable);
+
+/// Check if scoreboard tracing is enabled.
+/// @return 1 if enabled, 0 otherwise
+int32_t __moore_scoreboard_is_trace_enabled(void);
+
+/// Print a summary of all scoreboards and their current state.
+void __moore_scoreboard_print_summary(void);
+
+/// Get global statistics about scoreboard operations.
+/// @param totalScoreboards Output: total number of scoreboards created
+/// @param totalComparisons Output: total number of comparisons performed
+/// @param totalMatches Output: total number of matches across all scoreboards
+/// @param totalMismatches Output: total number of mismatches across all scoreboards
+void __moore_scoreboard_get_statistics(int64_t *totalScoreboards,
+                                        int64_t *totalComparisons,
+                                        int64_t *totalMatches,
+                                        int64_t *totalMismatches);
+
 #ifdef __cplusplus
 }
 #endif
