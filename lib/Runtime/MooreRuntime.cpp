@@ -20,13 +20,17 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <climits>
+#include <condition_variable>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <regex>
@@ -13118,4 +13122,545 @@ extern "C" void __moore_uvm_set_global_phase_end_callback(
   auto &registry = getComponentRegistry();
   registry.globalPhaseEndCallback = callback;
   registry.globalPhaseEndUserData = userData;
+}
+
+//===----------------------------------------------------------------------===//
+// TLM Port/Export Runtime Infrastructure
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// TLM tracing state
+static bool tlmTraceEnabled = false;
+
+/// TLM statistics
+static int64_t tlmTotalConnections = 0;
+static int64_t tlmTotalWrites = 0;
+static int64_t tlmTotalGets = 0;
+
+/// Forward declarations
+struct TlmPort;
+struct TlmFifo;
+
+/// TLM port structure
+struct TlmPort {
+  std::string name;
+  int64_t parentHandle;
+  MooreTlmPortType type;
+  std::vector<TlmPort *> connectedPorts;  // For analysis ports: list of subscribers
+  TlmFifo *owningFifo;                    // If this is an analysis_export of a FIFO
+  MooreTlmWriteCallback writeCallback;
+  void *writeCallbackUserData;
+
+  TlmPort(const std::string &n, int64_t parent, MooreTlmPortType t)
+      : name(n), parentHandle(parent), type(t), owningFifo(nullptr),
+        writeCallback(nullptr), writeCallbackUserData(nullptr) {}
+};
+
+/// TLM FIFO structure
+struct TlmFifo {
+  std::string name;
+  int64_t parentHandle;
+  int64_t maxSize;       // 0 = unbounded
+  int64_t elementSize;
+  std::vector<std::vector<uint8_t>> data;  // Queue of transactions
+  TlmPort *analysisExport;  // The analysis_export port for this FIFO
+  std::mutex mutex;  // For thread-safe operations
+  std::condition_variable notEmpty;  // Condition variable for blocking get
+
+  TlmFifo(const std::string &n, int64_t parent, int64_t max, int64_t elemSize)
+      : name(n), parentHandle(parent), maxSize(max), elementSize(elemSize),
+        analysisExport(nullptr) {}
+};
+
+/// Global TLM registry
+struct TlmRegistry {
+  std::vector<std::unique_ptr<TlmPort>> ports;
+  std::vector<std::unique_ptr<TlmFifo>> fifos;
+  std::mutex mutex;
+
+  TlmPort *getPort(MooreTlmPortHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= ports.size())
+      return nullptr;
+    return ports[handle].get();
+  }
+
+  TlmFifo *getFifo(MooreTlmFifoHandle handle) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (handle < 0 || static_cast<size_t>(handle) >= fifos.size())
+      return nullptr;
+    return fifos[handle].get();
+  }
+
+  MooreTlmPortHandle addPort(std::unique_ptr<TlmPort> port) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreTlmPortHandle handle = static_cast<MooreTlmPortHandle>(ports.size());
+    ports.push_back(std::move(port));
+    return handle;
+  }
+
+  MooreTlmFifoHandle addFifo(std::unique_ptr<TlmFifo> fifo) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MooreTlmFifoHandle handle = static_cast<MooreTlmFifoHandle>(fifos.size());
+    fifos.push_back(std::move(fifo));
+    return handle;
+  }
+};
+
+TlmRegistry &getTlmRegistry() {
+  static TlmRegistry registry;
+  return registry;
+}
+
+void tlmTrace(const char *fmt, ...) {
+  if (!tlmTraceEnabled)
+    return;
+  va_list args;
+  va_start(args, fmt);
+  std::printf("[TLM] ");
+  std::vprintf(fmt, args);
+  std::printf("\n");
+  va_end(args);
+}
+
+} // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// TLM Port Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreTlmPortHandle __moore_tlm_port_create(const char *name,
+                                                      int64_t nameLen,
+                                                      int64_t parent,
+                                                      MooreTlmPortType portType) {
+  std::string portName(name, nameLen);
+  auto port = std::make_unique<TlmPort>(portName, parent, portType);
+
+  tlmTrace("Created port '%s' (type=%d)", portName.c_str(), portType);
+
+  return getTlmRegistry().addPort(std::move(port));
+}
+
+extern "C" void __moore_tlm_port_destroy(MooreTlmPortHandle port) {
+  auto *p = getTlmRegistry().getPort(port);
+  if (p) {
+    tlmTrace("Destroyed port '%s'", p->name.c_str());
+    // Note: We don't actually remove from the vector to preserve handles
+    // In a real implementation, we'd use a more sophisticated memory management
+  }
+}
+
+extern "C" int32_t __moore_tlm_port_connect(MooreTlmPortHandle port,
+                                            MooreTlmPortHandle export_) {
+  auto *p = getTlmRegistry().getPort(port);
+  auto *e = getTlmRegistry().getPort(export_);
+
+  if (!p || !e) {
+    std::fprintf(stderr, "[TLM] Error: Invalid port handles in connect()\n");
+    return 0;
+  }
+
+  // For analysis ports, add the export to the subscriber list
+  p->connectedPorts.push_back(e);
+  tlmTotalConnections++;
+
+  tlmTrace("Connected '%s' -> '%s'", p->name.c_str(), e->name.c_str());
+
+  return 1;
+}
+
+extern "C" void __moore_tlm_port_write(MooreTlmPortHandle port,
+                                       void *transaction,
+                                       int64_t transactionSize) {
+  auto *p = getTlmRegistry().getPort(port);
+  if (!p) {
+    std::fprintf(stderr, "[TLM] Error: Invalid port handle in write()\n");
+    return;
+  }
+
+  tlmTrace("write() on port '%s' (size=%lld, subscribers=%zu)",
+           p->name.c_str(), (long long)transactionSize, p->connectedPorts.size());
+
+  tlmTotalWrites++;
+
+  // Broadcast to all connected ports
+  for (auto *subscriber : p->connectedPorts) {
+    if (subscriber->writeCallback) {
+      // Call the subscriber's write callback
+      subscriber->writeCallback(subscriber->writeCallbackUserData,
+                                transaction, transactionSize);
+    } else if (subscriber->owningFifo) {
+      // If connected to a FIFO's analysis_export, put the transaction in the FIFO
+      TlmFifo *fifo = subscriber->owningFifo;
+      std::lock_guard<std::mutex> lock(fifo->mutex);
+
+      // Copy transaction data
+      std::vector<uint8_t> txData(static_cast<uint8_t *>(transaction),
+                                  static_cast<uint8_t *>(transaction) + transactionSize);
+      fifo->data.push_back(std::move(txData));
+
+      // Notify any waiting get() calls
+      fifo->notEmpty.notify_one();
+
+      tlmTrace("  -> Wrote to FIFO '%s' (size now %zu)",
+               fifo->name.c_str(), fifo->data.size());
+    }
+  }
+}
+
+extern "C" MooreString __moore_tlm_port_get_name(MooreTlmPortHandle port) {
+  auto *p = getTlmRegistry().getPort(port);
+  if (!p) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  MooreString result;
+  result.len = p->name.size();
+  result.data = static_cast<char *>(std::malloc(result.len));
+  if (result.data) {
+    std::memcpy(result.data, p->name.c_str(), result.len);
+  }
+  return result;
+}
+
+extern "C" int64_t __moore_tlm_port_get_num_connections(MooreTlmPortHandle port) {
+  auto *p = getTlmRegistry().getPort(port);
+  if (!p)
+    return 0;
+  return static_cast<int64_t>(p->connectedPorts.size());
+}
+
+//===----------------------------------------------------------------------===//
+// TLM FIFO Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" MooreTlmFifoHandle __moore_tlm_fifo_create(const char *name,
+                                                      int64_t nameLen,
+                                                      int64_t parent,
+                                                      int64_t maxSize,
+                                                      int64_t elementSize) {
+  std::string fifoName(name, nameLen);
+  auto fifo = std::make_unique<TlmFifo>(fifoName, parent, maxSize, elementSize);
+
+  // Create the analysis_export port for this FIFO
+  std::string exportName = fifoName + ".analysis_export";
+  auto exportPort = std::make_unique<TlmPort>(exportName, parent,
+                                              MOORE_TLM_PORT_ANALYSIS);
+  exportPort->owningFifo = fifo.get();
+
+  MooreTlmPortHandle exportHandle = getTlmRegistry().addPort(std::move(exportPort));
+  fifo->analysisExport = getTlmRegistry().getPort(exportHandle);
+
+  tlmTrace("Created FIFO '%s' (maxSize=%lld, elementSize=%lld)",
+           fifoName.c_str(), (long long)maxSize, (long long)elementSize);
+
+  return getTlmRegistry().addFifo(std::move(fifo));
+}
+
+extern "C" void __moore_tlm_fifo_destroy(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (f) {
+    tlmTrace("Destroyed FIFO '%s'", f->name.c_str());
+  }
+}
+
+extern "C" MooreTlmPortHandle
+__moore_tlm_fifo_get_analysis_export(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f || !f->analysisExport)
+    return MOORE_TLM_INVALID_HANDLE;
+
+  // Find the handle for the analysis_export port
+  auto &registry = getTlmRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  for (size_t i = 0; i < registry.ports.size(); ++i) {
+    if (registry.ports[i].get() == f->analysisExport) {
+      return static_cast<MooreTlmPortHandle>(i);
+    }
+  }
+  return MOORE_TLM_INVALID_HANDLE;
+}
+
+extern "C" int32_t __moore_tlm_fifo_try_put(MooreTlmFifoHandle fifo,
+                                            void *transaction,
+                                            int64_t transactionSize) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+
+  // Check if bounded FIFO is full
+  if (f->maxSize > 0 && static_cast<int64_t>(f->data.size()) >= f->maxSize)
+    return 0;
+
+  // Copy transaction data
+  std::vector<uint8_t> txData(static_cast<uint8_t *>(transaction),
+                              static_cast<uint8_t *>(transaction) + transactionSize);
+  f->data.push_back(std::move(txData));
+
+  // Notify any waiting get() calls
+  f->notEmpty.notify_one();
+
+  tlmTrace("try_put() on FIFO '%s' succeeded (size now %zu)",
+           f->name.c_str(), f->data.size());
+
+  return 1;
+}
+
+extern "C" void __moore_tlm_fifo_put(MooreTlmFifoHandle fifo,
+                                     void *transaction,
+                                     int64_t transactionSize) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return;
+
+  std::unique_lock<std::mutex> lock(f->mutex);
+
+  // For bounded FIFOs, wait until space is available
+  // (For unbounded FIFOs, this is always immediate)
+  // Note: In a real simulation environment, this would need proper
+  // integration with the simulation scheduler
+
+  // Copy transaction data
+  std::vector<uint8_t> txData(static_cast<uint8_t *>(transaction),
+                              static_cast<uint8_t *>(transaction) + transactionSize);
+  f->data.push_back(std::move(txData));
+
+  // Notify any waiting get() calls
+  f->notEmpty.notify_one();
+
+  tlmTrace("put() on FIFO '%s' (size now %zu)",
+           f->name.c_str(), f->data.size());
+}
+
+extern "C" int32_t __moore_tlm_fifo_get(MooreTlmFifoHandle fifo,
+                                        void *transaction,
+                                        int64_t transactionSize) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::unique_lock<std::mutex> lock(f->mutex);
+
+  // Wait until data is available
+  // Note: In a real simulation environment, this would need integration
+  // with the simulation scheduler. For now, we use a condition variable
+  // which works for threaded simulations.
+  while (f->data.empty()) {
+    // Use a timed wait to avoid infinite blocking in case of simulation issues
+    auto status = f->notEmpty.wait_for(lock, std::chrono::milliseconds(100));
+    if (status == std::cv_status::timeout && f->data.empty()) {
+      // Keep waiting - in a real simulation, we'd yield to the scheduler here
+      continue;
+    }
+  }
+
+  // Get the front transaction
+  auto &front = f->data.front();
+  int64_t copySize = std::min(transactionSize, static_cast<int64_t>(front.size()));
+  std::memcpy(transaction, front.data(), copySize);
+
+  f->data.erase(f->data.begin());
+
+  tlmTotalGets++;
+
+  tlmTrace("get() on FIFO '%s' (size now %zu)",
+           f->name.c_str(), f->data.size());
+
+  return 1;
+}
+
+extern "C" int32_t __moore_tlm_fifo_try_get(MooreTlmFifoHandle fifo,
+                                            void *transaction,
+                                            int64_t transactionSize) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+
+  if (f->data.empty())
+    return 0;
+
+  // Get the front transaction
+  auto &front = f->data.front();
+  int64_t copySize = std::min(transactionSize, static_cast<int64_t>(front.size()));
+  std::memcpy(transaction, front.data(), copySize);
+
+  f->data.erase(f->data.begin());
+
+  tlmTotalGets++;
+
+  tlmTrace("try_get() on FIFO '%s' succeeded (size now %zu)",
+           f->name.c_str(), f->data.size());
+
+  return 1;
+}
+
+extern "C" int32_t __moore_tlm_fifo_peek(MooreTlmFifoHandle fifo,
+                                         void *transaction,
+                                         int64_t transactionSize) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::unique_lock<std::mutex> lock(f->mutex);
+
+  // Wait until data is available
+  while (f->data.empty()) {
+    auto status = f->notEmpty.wait_for(lock, std::chrono::milliseconds(100));
+    if (status == std::cv_status::timeout && f->data.empty()) {
+      continue;
+    }
+  }
+
+  // Peek at the front transaction (don't remove it)
+  auto &front = f->data.front();
+  int64_t copySize = std::min(transactionSize, static_cast<int64_t>(front.size()));
+  std::memcpy(transaction, front.data(), copySize);
+
+  tlmTrace("peek() on FIFO '%s'", f->name.c_str());
+
+  return 1;
+}
+
+extern "C" int32_t __moore_tlm_fifo_try_peek(MooreTlmFifoHandle fifo,
+                                             void *transaction,
+                                             int64_t transactionSize) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+
+  if (f->data.empty())
+    return 0;
+
+  // Peek at the front transaction (don't remove it)
+  auto &front = f->data.front();
+  int64_t copySize = std::min(transactionSize, static_cast<int64_t>(front.size()));
+  std::memcpy(transaction, front.data(), copySize);
+
+  tlmTrace("try_peek() on FIFO '%s' succeeded", f->name.c_str());
+
+  return 1;
+}
+
+extern "C" int64_t __moore_tlm_fifo_size(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+  return static_cast<int64_t>(f->data.size());
+}
+
+extern "C" int32_t __moore_tlm_fifo_is_empty(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 1;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+  return f->data.empty() ? 1 : 0;
+}
+
+extern "C" int32_t __moore_tlm_fifo_is_full(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return 0;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+
+  // Unbounded FIFOs are never full
+  if (f->maxSize == 0)
+    return 0;
+
+  return static_cast<int64_t>(f->data.size()) >= f->maxSize ? 1 : 0;
+}
+
+extern "C" void __moore_tlm_fifo_flush(MooreTlmFifoHandle fifo) {
+  auto *f = getTlmRegistry().getFifo(fifo);
+  if (!f)
+    return;
+
+  std::lock_guard<std::mutex> lock(f->mutex);
+  f->data.clear();
+
+  tlmTrace("flush() on FIFO '%s'", f->name.c_str());
+}
+
+//===----------------------------------------------------------------------===//
+// TLM Subscriber Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_tlm_subscriber_set_write_callback(
+    MooreTlmPortHandle port, MooreTlmWriteCallback callback, void *userData) {
+  auto *p = getTlmRegistry().getPort(port);
+  if (!p)
+    return;
+
+  p->writeCallback = callback;
+  p->writeCallbackUserData = userData;
+
+  tlmTrace("Set write callback on port '%s'", p->name.c_str());
+}
+
+//===----------------------------------------------------------------------===//
+// TLM Debugging/Tracing
+//===----------------------------------------------------------------------===//
+
+extern "C" void __moore_tlm_set_trace_enabled(int32_t enable) {
+  tlmTraceEnabled = (enable != 0);
+  if (tlmTraceEnabled) {
+    std::printf("[TLM] Tracing enabled\n");
+  }
+}
+
+extern "C" int32_t __moore_tlm_is_trace_enabled(void) {
+  return tlmTraceEnabled ? 1 : 0;
+}
+
+extern "C" void __moore_tlm_print_topology(void) {
+  auto &registry = getTlmRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+
+  std::printf("\n=== TLM Connection Topology ===\n");
+
+  std::printf("\nPorts (%zu):\n", registry.ports.size());
+  for (size_t i = 0; i < registry.ports.size(); ++i) {
+    auto &port = registry.ports[i];
+    if (port) {
+      std::printf("  [%zu] %s (type=%d, connections=%zu)\n",
+                  i, port->name.c_str(), port->type, port->connectedPorts.size());
+      for (auto *conn : port->connectedPorts) {
+        std::printf("       -> %s\n", conn->name.c_str());
+      }
+    }
+  }
+
+  std::printf("\nFIFOs (%zu):\n", registry.fifos.size());
+  for (size_t i = 0; i < registry.fifos.size(); ++i) {
+    auto &fifo = registry.fifos[i];
+    if (fifo) {
+      std::printf("  [%zu] %s (maxSize=%lld, elementSize=%lld, current=%zu)\n",
+                  i, fifo->name.c_str(), (long long)fifo->maxSize,
+                  (long long)fifo->elementSize, fifo->data.size());
+    }
+  }
+
+  std::printf("\n===============================\n");
+}
+
+extern "C" void __moore_tlm_get_statistics(int64_t *totalConnections,
+                                           int64_t *totalWrites,
+                                           int64_t *totalGets) {
+  if (totalConnections)
+    *totalConnections = tlmTotalConnections;
+  if (totalWrites)
+    *totalWrites = tlmTotalWrites;
+  if (totalGets)
+    *totalGets = tlmTotalGets;
 }
