@@ -663,6 +663,11 @@ package uvm_pkg;
       return m_verbosity;
     endfunction
 
+    // Returns this object as a report object (compatibility with real UVM)
+    virtual function uvm_report_object uvm_get_report_object();
+      return this;
+    endfunction
+
   endclass
 
   //=========================================================================
@@ -5248,6 +5253,16 @@ package uvm_pkg;
     uvm_root top = cs.get_root();
     $display("[UVM] Running test: %s", test_name);
   endtask
+
+  //=========================================================================
+  // uvm_get_report_object - Global function to get report object
+  //=========================================================================
+  // Returns the uvm_root singleton, which is a uvm_report_object.
+  // This avoids the recursion issue present in the real UVM library where
+  // uvm_get_report_object -> uvm_coreservice_t::get -> uvm_init -> ...
+  function uvm_report_object uvm_get_report_object();
+    return uvm_root::get();
+  endfunction
 
 endpackage
 
