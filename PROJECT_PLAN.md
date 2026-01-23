@@ -67,7 +67,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 115 Complete)
+### Track Status & Next Tasks (Iteration 116 Complete)
 
 **18+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
@@ -76,7 +76,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - sv-tests Chapter-8: **100%** (44 pass + 9 negative tests) ✅ **VERIFIED (Iter 115)**
 - sv-tests Chapter-10: **100%** (all failures are expected negative tests) ✅
 - sv-tests Chapter-11: **100%** (all 2 "failures" are correctly rejected negative tests)
-- sv-tests Chapter-12: **21/27** (77.8%) - 6 pattern matching tests
+- sv-tests Chapter-12: **22/27** (81.5%) - case inside ✅ (Iter 116), 5 remaining pattern matching tests
 - sv-tests Chapter-13: **15/15** (100%) ✅ Fixed arith.select legalization
 - sv-tests Chapter-14: **5/5** (100%) ✅
 - sv-tests Chapter-15: **5/5** (100%) ✅
@@ -96,11 +96,12 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **UVM AVIP Status:**
 - **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
-- **AHB AVIP:** E2E circt-sim (clock/reset work, 107 process executions, Iter 115) ✅ **NEW**
+- **SPI AVIP:** E2E circt-sim (111 executions, 107 cycles, no fixes needed, Iter 116) ✅ **NEW**
+- **AHB AVIP:** E2E circt-sim (clock/reset work, 107 process executions, Iter 115) ✅
 - **APB AVIP:** E2E circt-sim (clock/reset work, 56 process executions, Iter 114) ✅
-- **4+ AVIPs run in circt-sim:** APB, AHB, SPI, UART, I3C (clock/reset working) ✅
+- **5+ AVIPs run in circt-sim:** APB, AHB, SPI, UART, I3C (clock/reset working) ✅
 
-### Remaining Limitations (Updated Iteration 115)
+### Remaining Limitations (Updated Iteration 116)
 
 **For Full UVM Testbench Execution:**
 1. ~~**UVM run_test()**~~: ✅ IMPLEMENTED - Factory-based component creation
@@ -116,6 +117,9 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 11. ~~**Class shallow copy**~~: ✅ FIXED (Iter 114) - moore.class.copy legalization
 12. ~~**UVM Messages**~~: ✅ IMPLEMENTED (Iter 115) - Report info/warning/error/fatal with verbosity
 13. ~~**Hierarchical instances**~~: ✅ FIXED (Iter 115) - circt-sim descends into hw.instance
+14. ~~**Virtual Interface Binding**~~: ✅ IMPLEMENTED (Iter 116) - Thread-safe vif registries with modport support
+15. ~~**case inside**~~: ✅ IMPLEMENTED (Iter 116) - Set membership with ranges and wildcards
+16. ~~**Wildcard associative arrays**~~: ✅ FIXED (Iter 116) - [*] array key type lowering
 
 **For sv-tests Completion:**
 1. **Chapter-9 (97%)**:
@@ -130,12 +134,12 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Next Tasks for Tracks (Iteration 116)
+### Next Tasks for Tracks (Iteration 117)
 
 **Track A**: Test I2C AVIP through circt-sim E2E
-**Track B**: UVM virtual interface binding runtime
-**Track C**: sv-tests Chapter-12 pattern matching implementation
-**Track D**: Additional AVIP testing (SPI, UART)
+**Track B**: UVM TLM connection improvements
+**Track C**: sv-tests Chapter-12 remaining pattern matching (case matches, if matches)
+**Track D**: UART AVIP E2E circt-sim testing
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**
@@ -146,7 +150,8 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - UVM Sequences: **Sequencer arbitration + driver handshake** ✅
 - UVM Scoreboard: **Transaction comparison with TLM integration** ✅
 - UVM RAL: **Register model with fields, blocks, maps** ✅
-- UVM Messages: **Report info/warning/error/fatal with verbosity** ✅ **NEW (Iter 115)**
+- UVM Messages: **Report info/warning/error/fatal with verbosity** ✅
+- UVM Virtual Interfaces: **Thread-safe vif registries with modport support** ✅ **NEW (Iter 116)**
 
 **Key Blockers RESOLVED**:
 1. ✅ VTable polymorphism (Iteration 96)

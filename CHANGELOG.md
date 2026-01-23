@@ -2,21 +2,45 @@
 
 ## Iteration 116 - January 23, 2026
 
-### Wildcard Associative Array Support
+### SPI AVIP E2E circt-sim Execution ✅
 
-Added complete lowering support for SystemVerilog wildcard associative arrays (`[*]`):
+Successfully tested SPI AVIP through complete circt-sim pipeline:
 
-**Changes:**
-- Added `WildcardAssocArrayType` type conversion to LLVM pointer
-- Added `RefType<WildcardAssocArrayType>` conversion to LLVM pointer
-- Added `VariableOp` conversion for wildcard associative array allocation
-- Added `AssocArrayCreateOp` conversion for wildcard arrays
+- Compiles to 22MB MLIR (319K lines)
+- Runs: 111 process executions, 107 delta cycles, 0 errors
+- Clock and reset sequences work - no fixes needed
 
-**Result:**
-- verilator-verification: 114/154 passing (was 113/154)
-- `types_wildcard.sv` test now passes
+**SPI is the 3rd AVIP** (after AHB, APB) to complete E2E simulation.
 
-**Test Added:** `test/Conversion/MooreToCore/wildcard-assoc-array-test.sv`
+### UVM Virtual Interface Binding Runtime ✅
+
+Implemented full virtual interface binding support:
+
+**Functions:** `__moore_vif_create()`, `bind()`, `get_signal()`, `set_signal()`, `get_signal_ref()`, etc.
+
+**Features:** Thread-safe registries, modport support, config_db integration
+
+**Unit Tests:** 16 new tests (617 total runtime tests pass)
+
+**Commit:** `582d01d3e [UVM] Add virtual interface binding runtime support`
+
+### case inside Set Membership Statement ✅
+
+Implemented `case inside` (SV 12.5.4) pattern matching:
+
+- Range expressions `[5:6]` with uge/ule comparisons
+- Wildcard patterns `4'b01??` with `moore.wildcard_eq`
+- Multiple values per case item with OR chaining
+
+**Result:** Chapter-12 test `12.5.4--case_set.sv` now passes
+
+**Commit:** `1400b7838 [ImportVerilog] Implement case inside set membership statement`
+
+### Wildcard Associative Array [*] Support ✅
+
+Added lowering for wildcard associative arrays:
+
+**Commit:** `4c642b42f [MooreToCore] Add wildcard associative array [*] lowering support`
 
 ---
 
