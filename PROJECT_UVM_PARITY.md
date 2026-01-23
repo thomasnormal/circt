@@ -22,10 +22,10 @@
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
 | 15 | Inter-Process Sync | 2/5 (40%) | Hierarchical events unsupported |
 | 16 | Assertions | - | Codex agent scope |
-| 18 | Random Constraints | 119/134 (89%) | Complete |
+| 18 | Random Constraints | 56/134 (42%) | 66 need UVM, 12 negative |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
-| 22 | Compiler Directives | 55/74 (74%) | 1 bug: include-via-macro |
+| 22 | Compiler Directives | 53/74 (72%) | 15 negative tests, macros |
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
 | 25 | Interfaces | Tested | See Iteration 122 |
