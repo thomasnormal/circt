@@ -1294,3 +1294,32 @@ module testShallowCopy;
         obj1 = new obj0;
     end
 endmodule
+
+/// Check class parameter access (IEEE 1800-2017 Section 8.25)
+/// Class parameters can be accessed like properties but are compile-time constants.
+
+// CHECK-LABEL: moore.class.classdecl @ParameterizedClass {
+// CHECK: }
+class ParameterizedClass #(parameter int VALUE = 10);
+endclass
+
+// CHECK-LABEL: moore.module @testClassParameter() {
+// CHECK: [[CONST:%.*]] = moore.constant 42 : l32
+// CHECK: [[OBJ:%.*]] = moore.variable : <class<@ParameterizedClass>>
+// CHECK: [[RESULT:%.*]] = moore.variable : <i32>
+// CHECK: moore.procedure initial {
+// CHECK:    [[NEW:%.*]] = moore.class.new : <@ParameterizedClass>
+// CHECK:    moore.blocking_assign [[OBJ]], [[NEW]] : class<@ParameterizedClass>
+// CHECK:    moore.blocking_assign [[RESULT]], [[CONST]] : l32
+// CHECK:    moore.return
+// CHECK: }
+// CHECK: moore.output
+// CHECK: }
+module testClassParameter;
+    ParameterizedClass #(42) obj;
+    int result;
+    initial begin
+        obj = new;
+        result = obj.VALUE;
+    end
+endmodule
