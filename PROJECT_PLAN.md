@@ -67,9 +67,18 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 117 Complete)
+### Track Status & Next Tasks (Iteration 118 Complete)
 
-**19+ Chapters at 100% effective:**
+**7 AVIPs Running in circt-sim:**
+- AHB AVIP - 1M+ clock edges
+- APB AVIP - 1M+ clock edges
+- SPI AVIP - 111 executions
+- UART AVIP - 20K+ executions
+- I3C AVIP - 112 executions
+- I2S AVIP - E2E working
+- **AXI4 AVIP** - 100K+ clock edges ✅ NEW (Iter 118)
+
+**20+ Chapters at 100% effective:**
 - sv-tests Chapter-5: **100% effective** (42 pass + 5 negative + 3 test harness)
 - sv-tests Chapter-6: **100%** (all 11 "failures" are correctly rejected negative tests)
 - sv-tests Chapter-7: **103/103** (100%) ✅

@@ -1,6 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 118 - January 23, 2026
+
+### AXI4 AVIP E2E circt-sim Execution
+
+Successfully tested AXI4 AVIP through complete circt-sim pipeline:
+
+**Bug Fixed:** Queue pop operations with `hw::StructType` containing arrays
+- Error: `'llvm.load' op result #0 must be LLVM type with size, but got '!hw.struct<...>'`
+- Fix: Use `convertToLLVMType()` for alloca/load operations in `QueuePopBackOpConversion` and `QueuePopFrontOpConversion`
+
+**Results:**
+- AXI4 AVIP compiles to 13MB MLIR
+- 100,000+ clock edges executed successfully
+- 100,004 process executions, 0 errors
+
+**Commit:** `e8b118ec5 [MooreToCore] Fix queue pop operations for hw::StructType with arrays`
+
+### UVM Semaphore Support
+
+Added complete semaphore implementation for multi-threaded AVIP coordination:
+
+| Runtime Function | Description |
+|-----------------|-------------|
+| `__moore_semaphore_create()` | Create semaphore with initial key count |
+| `__moore_semaphore_put()` | Return key to semaphore |
+| `__moore_semaphore_get()` | Get key (blocking) |
+| `__moore_semaphore_try_get()` | Try to get key (non-blocking) |
+| `__moore_semaphore_get_key_count()` | Query available keys |
+| `__moore_semaphore_destroy()` | Destroy semaphore |
+
+**Commit:** `7bebdbb1b [UVM] Add semaphore support and driver infrastructure tests`
+
+### sv-tests Chapter-9 Verification
+
+Verified Chapter-9 at **97.8% (45/46)**. The only failing test is SVA-related (handled by Codex agent).
+
+### AXI4Lite AVIP Analysis
+
+Identified source code issues in AXI4Lite AVIP (wildcard import conflicts). APB AVIP verified to run E2E (1M clock edges).
+
+### PROJECT_SVA.md Created
+
+New tracking file for SVA-related bugs and features. Codex agent handles all SVA work.
+
+---
+
 ## Iteration 117 - January 23, 2026
+
+### BMC LLHD Ref Outputs (WIP)
+
+- `lower-to-bmc` now probes `!llhd.ref` module outputs before `verif.yield`,
+  avoiding ref-typed yields in the BMC circuit.
+- Regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-ref-output.mlir`
+- **Still blocked:** `circt-bmc` segfaults on Yosys `extnets.sv` (crash in
+  `LowerToBMC` during LLHD-heavy HW IR).
 
 ### I3C AVIP E2E circt-sim with Unpacked Array Inside Fix
 
