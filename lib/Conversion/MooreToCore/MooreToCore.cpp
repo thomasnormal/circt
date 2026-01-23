@@ -10956,6 +10956,116 @@ struct ArraySizeOpConversion : public RuntimeCallConversionBase<ArraySizeOp> {
   }
 };
 
+/// Conversion for moore.array.contains -> runtime function call that checks
+/// if a value is contained in an unpacked array. This is used to implement
+/// the SystemVerilog 'inside' operator with unpacked arrays.
+struct ArrayContainsOpConversion
+    : public RuntimeCallConversionBase<ArrayContainsOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(ArrayContainsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto arrayType = op.getArray().getType();
+    auto valueType = op.getValue().getType();
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+    // Get the element type and calculate element size
+    Type mooreElemType;
+    if (auto uarrayTy = dyn_cast<UnpackedArrayType>(arrayType))
+      mooreElemType = uarrayTy.getElementType();
+    else if (auto openUarrayTy = dyn_cast<OpenUnpackedArrayType>(arrayType))
+      mooreElemType = openUarrayTy.getElementType();
+    else if (auto queueTy = dyn_cast<QueueType>(arrayType))
+      mooreElemType = queueTy.getElementType();
+    else
+      return failure();
+
+    // Calculate element size in bytes
+    int64_t elemBitWidth = 1;
+    if (auto elemIntType = dyn_cast<moore::IntType>(mooreElemType))
+      elemBitWidth = elemIntType.getWidth();
+    int64_t elemByteSize = (elemBitWidth + 7) / 8;
+
+    Value elemSizeVal = arith::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemByteSize));
+
+    // Convert the value to search for to a pointer (via alloca)
+    Type convertedValueType = typeConverter->convertType(valueType);
+    if (!convertedValueType)
+      return failure();
+
+    auto oneVal =
+        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+    auto valueAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy,
+                                              convertedValueType, oneVal, 0);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getValue(), valueAlloca);
+
+    // Handle static unpacked arrays
+    if (auto uarrayTy = dyn_cast<UnpackedArrayType>(arrayType)) {
+      int64_t numElements = uarrayTy.getSize();
+      Value numElemsVal = arith::ConstantOp::create(
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(numElements));
+
+      // Get pointer to the array data
+      Value arrayPtr = adaptor.getArray();
+      if (!isa<LLVM::LLVMPointerType>(arrayPtr.getType())) {
+        // If it's not already a pointer, allocate and store
+        auto convertedArrayType = typeConverter->convertType(arrayType);
+        auto arrayAlloca = LLVM::AllocaOp::create(
+            rewriter, loc, ptrTy, convertedArrayType, oneVal, 0);
+        LLVM::StoreOp::create(rewriter, loc, arrayPtr, arrayAlloca);
+        arrayPtr = arrayAlloca;
+      }
+
+      // Function: i1 __moore_array_contains(void* arr, i64 numElems,
+      //                                     void* value, i64 elemSize)
+      auto fnTy =
+          LLVM::LLVMFunctionType::get(i1Ty, {ptrTy, i64Ty, ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_contains",
+                                       fnTy);
+
+      SmallVector<Value, 4> args = {arrayPtr, numElemsVal, valueAlloca,
+                                    elemSizeVal};
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i1Ty},
+                                       SymbolRefAttr::get(fn), args);
+      rewriter.replaceOp(op, call.getResult());
+      return success();
+    }
+
+    // Handle dynamic arrays and queues
+    if (isa<OpenUnpackedArrayType, QueueType>(arrayType)) {
+      // Extract pointer and size from the {ptr, i64} struct
+      Value dataPtr = LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrTy, adaptor.getArray(), ArrayRef<int64_t>{0});
+      Value numElems = LLVM::ExtractValueOp::create(
+          rewriter, loc, i64Ty, adaptor.getArray(), ArrayRef<int64_t>{1});
+
+      // Function: i1 __moore_array_contains(void* arr, i64 numElems,
+      //                                     void* value, i64 elemSize)
+      auto fnTy =
+          LLVM::LLVMFunctionType::get(i1Ty, {ptrTy, i64Ty, ptrTy, i64Ty});
+      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_contains",
+                                       fnTy);
+
+      SmallVector<Value, 4> args = {dataPtr, numElems, valueAlloca,
+                                    elemSizeVal};
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i1Ty},
+                                       SymbolRefAttr::get(fn), args);
+      rewriter.replaceOp(op, call.getResult());
+      return success();
+    }
+
+    return failure();
+  }
+};
+
 /// Conversion for moore.stream_concat -> runtime function call.
 /// This handles streaming concatenation of queues/dynamic arrays.
 /// For string queues, concatenates all strings into a single string.
@@ -18460,6 +18570,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     StreamUnpackMixedOpConversion,
     DynArrayNewOpConversion,
     ArraySizeOpConversion,
+    ArrayContainsOpConversion,
     AssocArrayDeleteOpConversion,
     AssocArrayDeleteKeyOpConversion,
     AssocArrayCreateOpConversion,

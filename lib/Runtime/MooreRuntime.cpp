@@ -598,6 +598,30 @@ extern "C" int64_t __moore_assoc_size(void *array) {
   }
 }
 
+/// Check if an unpacked array contains a value.
+/// This supports static unpacked arrays, dynamic arrays, and queues.
+/// Uses byte-wise comparison for the element values.
+/// @param arr Pointer to the array data (contiguous elements)
+/// @param numElems Number of elements in the array
+/// @param value Pointer to the value to search for
+/// @param elemSize Size of each element in bytes
+/// @return true if the value is found in the array, false otherwise
+extern "C" bool __moore_array_contains(void *arr, int64_t numElems,
+                                       void *value, int64_t elemSize) {
+  if (!arr || !value || numElems <= 0 || elemSize <= 0)
+    return false;
+
+  auto *arrData = static_cast<const uint8_t *>(arr);
+  auto *valueData = static_cast<const uint8_t *>(value);
+
+  for (int64_t i = 0; i < numElems; ++i) {
+    const uint8_t *elemPtr = arrData + (i * elemSize);
+    if (std::memcmp(elemPtr, valueData, static_cast<size_t>(elemSize)) == 0)
+      return true;
+  }
+  return false;
+}
+
 extern "C" void __moore_assoc_delete(void *array) {
   if (!array)
     return;

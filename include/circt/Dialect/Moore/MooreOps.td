@@ -5910,6 +5910,30 @@ def ArraySizeOp : ArrayBuiltin<"size"> {
   let assemblyFormat = "$array `:` type($array) attr-dict";
 }
 
+def ArrayContainsOp : ArrayBuiltin<"contains", [Pure]> {
+  let summary = "Check if an unpacked array contains a value";
+  let description = [{
+    Returns true (1) if the given value is found in the array, false (0)
+    otherwise. This corresponds to checking membership in the SystemVerilog
+    `inside` operator when the right-hand side is an unpacked array.
+
+    The comparison uses wildcard equality semantics (X/Z bits match anything).
+
+    This operation supports static unpacked arrays, dynamic arrays, and queues.
+
+    Example:
+    ```mlir
+    // Check if arr contains value 42
+    %found = moore.array.contains %arr, %value : !moore.uarray<10 x i32>, i32
+    %found = moore.array.contains %dyn_arr, %value : !moore.open_uarray<i32>, i32
+    %found = moore.array.contains %queue, %value : !moore.queue<i32, 0>, i32
+    ```
+  }];
+  let arguments = (ins AnyUnpackedArrayType:$array, UnpackedType:$value);
+  let results = (outs TwoValuedI1:$result);
+  let assemblyFormat = "$array `,` $value `:` type($array) `,` type($value) attr-dict";
+}
+
 def DynArrayNewOp : MooreOp<"dyn_array.new",
     [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Create a new dynamic array with a given size";
