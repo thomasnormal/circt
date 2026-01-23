@@ -341,8 +341,17 @@ Context::convertTimingControl(const slang::ast::TimingControl &ctrl,
     auto done = llvm::make_scope_exit([&] { rvalueReadCallback = previousCallback; });
     // Reads happening as part of the event control should not be added to a
     // surrounding implicit event control's list of implicitly observed
-    // variables.
-    rvalueReadCallback = nullptr;
+    // variables. However, we still need to propagate reads to any outer
+    // callback (e.g., for function capture tracking) so that event controls
+    // inside tasks/functions that reference module-level signals can properly
+    // capture those signals.
+    //
+    // We use a lambda that discards the read locally (doesn't add to implicit
+    // event list) but still chains to the previous callback if present.
+    rvalueReadCallback = previousCallback ? [previousCallback](moore::ReadOp readOp) {
+      // Chain to previous callback (e.g., function capture callback)
+      previousCallback(readOp);
+    } : std::function<void(moore::ReadOp)>(nullptr);
     if (failed(handleRoot(*this, ctrl, &implicitWaitOp)))
       return failure();
   }
