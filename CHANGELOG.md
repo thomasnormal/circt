@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 117 - January 23, 2026
+
+### I3C AVIP E2E circt-sim with Unpacked Array Inside Fix
+
+Found no I2C AVIP, but tested I3C AVIP instead. Discovered and fixed missing feature:
+
+**Problem:** `error: unpacked arrays in 'inside' expressions not supported`
+- I3C uses: `constraint c { targetAddress inside {valid_addrs}; }` where `valid_addrs` is dynamic array
+
+**Fix:** Implemented `moore.array.contains` operation:
+- `ArrayContainsOp` in MooreOps.td - checks if value is in unpacked array
+- `AnyUnpackedArrayType` type constraint for static/dynamic/queue arrays
+- Lowering to `__moore_array_contains()` runtime function
+- Runtime: byte-wise element comparison
+
+**Result:** I3C AVIP compiles and simulates (112 executions, 107 cycles, 0 errors)
+
+**Commit:** `5e06f1a61 [Moore] Add support for unpacked arrays in 'inside' expressions`
+
+### UVM TLM FIFO Query Methods
+
+Added 5 missing TLM FIFO methods for AVIP compatibility:
+
+| Method | Description |
+|--------|-------------|
+| `can_put()` | Check if put can proceed without blocking |
+| `can_get()` | Check if get can proceed without blocking |
+| `used()` | Number of items in FIFO |
+| `free()` | Number of free slots |
+| `capacity()` | Maximum FIFO depth |
+
+**Unit Tests:** 4 new tests (16 TLM tests total)
+
+**Commit:** `395972445 [UVM TLM] Add missing FIFO query methods for AVIP compatibility`
+
+### Chapter-12 Pattern Matching: 100% Complete
+
+Improved sv-tests Chapter-12 from 81.5% (22/27) to **100% (27/27)**:
+
+**New Features:**
+- `PatternKind::Variable` - binds matched values to pattern variables
+- `PatternKind::Structure` - matches struct fields recursively
+- Conditional expression with `matches` operator (`x matches pattern ? a : b`)
+
+**Tests Now Passing:**
+- `12.6.1--case_pattern.sv`, `casex_pattern.sv`, `casez_pattern.sv`
+- `12.6.2--if_pattern.sv`
+- `12.6.3--conditional_pattern.sv`
+
+**Commit:** `f1d964713 [ImportVerilog] Add structure and variable pattern support`
+
+### UART AVIP E2E circt-sim Execution
+
+Successfully tested UART AVIP through complete pipeline:
+
+- 500MHz clock (100ps half-period) - faster than APB/SPI/AHB
+- 2 LLHD processes, 20,000+ process executions
+- Reset sequence works properly
+
+**Commit:** `937b30257 [circt-sim] Add UART AVIP E2E test for clock/reset patterns`
+
+---
+
 ## Iteration 116 - January 23, 2026
 
 ### SPI AVIP E2E circt-sim Execution ✅
