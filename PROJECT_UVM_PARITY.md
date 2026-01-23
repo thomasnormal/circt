@@ -20,7 +20,7 @@
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 15/15 (100%) | Complete |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
-| 15 | Inter-Process Sync | 3/5 (60%) | Bug: cross-module events |
+| 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 140 |
 | 16 | Assertions | - | Codex agent scope |
 | 18 | Random Constraints | 119/134 (89%) | Complete |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
@@ -53,10 +53,9 @@
 
 ### CIRCT Bugs (To Fix)
 
-1. **Cross-module event triggering** (Priority: Medium)
-   - Affects: Chapter-15 tests (15.5.1)
-   - Error: `'llhd.prb' op using value defined outside the region`
-   - Pattern: `-> other_module.event` fails
+1. ~~**Cross-module event triggering**~~ **FIXED** (Commit cdaed5b93)
+   - Was: Chapter-15 tests failing with region isolation error
+   - Fixed: Block argument detection in ProcedureOpConversion
 
 2. **Include-via-macro path resolution** (Priority: Low)
    - Affects: Chapter-22 test (22.4--include_via_define.sv)
