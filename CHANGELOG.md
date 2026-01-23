@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 119 - January 23, 2026
+
+### JTAG AVIP E2E Testing
+
+JTAG AVIP compiles and runs through circt-sim:
+- 100,000+ clock edges executed successfully
+- SVA-related `bind` statements are Codex scope
+- No CIRCT bugs needed to be fixed
+
+### UVM config_db Wildcard Pattern Matching
+
+Added `uvm_is_match()` for glob-style pattern matching in config_db:
+- Supports `*` (any sequence) and `?` (single character)
+- Hierarchical path construction via `m_get_lookup_path()`
+- Separate storage for exact matches vs wildcard patterns
+
+**Commit:** `59d5cfee4 [UVM] Add config_db wildcard pattern matching support`
+
+### Array Locator Packed Struct Fix
+
+Fixed crash when using packed structs in array locator predicates:
+- `StructExtractOp` handling now supports both packed and unpacked structs
+- Fixed `elemType` conversion for queue/dynamic array locators
+
+**Commit:** `0875a69de [MooreToCore] Fix packed struct handling in array locators`
+
+### Chapter-18 `disable soft` Constraint
+
+Fixed `disable soft` constraint implementation (IEEE 1800-2017 Section 18.5.14.2):
+- All 56 non-UVM Chapter-18 tests now pass
+- Proper conversion of slang's `DisableSoftConstraint`
+
+**Commit:** `4c297f979 [ImportVerilog] Implement disable soft constraint`
+
+---
+
 ## Iteration 118 - January 23, 2026
 
 ### AXI4 AVIP E2E circt-sim Execution
@@ -52,7 +88,10 @@ New tracking file for SVA-related bugs and features. Codex agent handles all SVA
 
 - `lower-to-bmc` now probes `!llhd.ref` module outputs before `verif.yield`,
   avoiding ref-typed yields in the BMC circuit.
+- Resolve `llhd.prb` values used as `llhd.drv` inputs to avoid dangling probe
+  SSA after LLHD lowering.
 - Regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-ref-output.mlir`
+- Regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-probe-drive.mlir`
 - **Still blocked:** `circt-bmc` segfaults on Yosys `extnets.sv` (crash in
   `LowerToBMC` during LLHD-heavy HW IR).
 
