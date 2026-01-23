@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iterations 140-141 - January 23, 2026
+
+### Major Bug Fix: Cross-Module Event Triggering (Commit cdaed5b93)
+
+**Problem:** Cross-module event triggers (`-> other_module.event`) failed with region isolation error.
+
+**Root Cause:** During dialect conversion, block arguments have null parent region pointers, causing capture detection to fail. The code incorrectly used `seq.initial` (IsolatedFromAbove) instead of `llhd.process`.
+
+**Fix:** Added explicit BlockArgument detection in `ProcedureOpConversion`:
+- Walk all operands in procedure body
+- Check if BlockArgument with null parent region or owner outside procedure
+- Force `llhd.process` when such references exist
+
+**Result:** Chapter-15 sv-tests now at **100%** (was 60%)
+
+### UVM Test Coverage Expansion
+
+Added comprehensive UVM test files:
+
+| Test File | Lines | Coverage |
+|-----------|-------|----------|
+| uvm_factory_test.sv | 500+ | Factory patterns, overrides |
+| uvm_callback_test.sv | 600+ | Callback infrastructure |
+| uvm_sequence_test.sv | 1082 | Sequences, virtual sequences |
+| uvm_ral_test.sv | 1393 | Register abstraction layer |
+
+### Test Suite Verification
+
+- **check-circt-sim:** 39/39 (100%)
+- **check-circt-dialect-sim:** 11/11 (100%)
+- Some pre-existing Moore dialect test failures unrelated to our changes
+
 ## Iterations 138-139 - January 23, 2026
 
 ### Simulation Testing with circt-sim
