@@ -12620,4 +12620,304 @@ TEST(MooreRuntimeRALTest, ClearAll) {
   // so we don't test that)
 }
 
+//===----------------------------------------------------------------------===//
+// UVM Message Reporting Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeUvmReportTest, VerbosityGetSet) {
+  // Default verbosity should be UVM_MEDIUM (200)
+  __moore_uvm_set_report_verbosity(MOORE_UVM_MEDIUM);
+  EXPECT_EQ(__moore_uvm_get_report_verbosity(), MOORE_UVM_MEDIUM);
+
+  // Set to different values
+  __moore_uvm_set_report_verbosity(MOORE_UVM_LOW);
+  EXPECT_EQ(__moore_uvm_get_report_verbosity(), MOORE_UVM_LOW);
+
+  __moore_uvm_set_report_verbosity(MOORE_UVM_HIGH);
+  EXPECT_EQ(__moore_uvm_get_report_verbosity(), MOORE_UVM_HIGH);
+
+  __moore_uvm_set_report_verbosity(MOORE_UVM_DEBUG);
+  EXPECT_EQ(__moore_uvm_get_report_verbosity(), MOORE_UVM_DEBUG);
+
+  // Restore default
+  __moore_uvm_set_report_verbosity(MOORE_UVM_MEDIUM);
+}
+
+TEST(MooreRuntimeUvmReportTest, ReportEnabled) {
+  __moore_uvm_set_report_verbosity(MOORE_UVM_MEDIUM);
+
+  // Info messages should be filtered by verbosity
+  const char *id = "TEST";
+  int64_t idLen = 4;
+
+  // UVM_LOW (100) <= UVM_MEDIUM (200), should be enabled
+  EXPECT_EQ(__moore_uvm_report_enabled(MOORE_UVM_LOW, MOORE_UVM_INFO, id, idLen),
+            1);
+
+  // UVM_MEDIUM (200) <= UVM_MEDIUM (200), should be enabled
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_MEDIUM, MOORE_UVM_INFO, id, idLen),
+      1);
+
+  // UVM_HIGH (300) > UVM_MEDIUM (200), should be disabled
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_HIGH, MOORE_UVM_INFO, id, idLen), 0);
+
+  // Warnings, errors, and fatals are always enabled
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_HIGH, MOORE_UVM_WARNING, id, idLen),
+      1);
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_HIGH, MOORE_UVM_ERROR, id, idLen), 1);
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_HIGH, MOORE_UVM_FATAL, id, idLen), 1);
+}
+
+TEST(MooreRuntimeUvmReportTest, IdSpecificVerbosity) {
+  __moore_uvm_set_report_verbosity(MOORE_UVM_MEDIUM);
+
+  const char *id1 = "VERBOSE_ID";
+  int64_t id1Len = 10;
+  const char *id2 = "QUIET_ID";
+  int64_t id2Len = 8;
+
+  // Set ID-specific verbosity
+  __moore_uvm_set_report_id_verbosity(id1, id1Len, MOORE_UVM_DEBUG);
+  __moore_uvm_set_report_id_verbosity(id2, id2Len, MOORE_UVM_LOW);
+
+  // VERBOSE_ID should allow high verbosity messages
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_HIGH, MOORE_UVM_INFO, id1, id1Len),
+      1);
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_DEBUG, MOORE_UVM_INFO, id1, id1Len),
+      1);
+
+  // QUIET_ID should filter medium verbosity messages
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_LOW, MOORE_UVM_INFO, id2, id2Len), 1);
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_MEDIUM, MOORE_UVM_INFO, id2, id2Len),
+      0);
+
+  // Unknown ID should use global verbosity
+  const char *id3 = "UNKNOWN";
+  int64_t id3Len = 7;
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_MEDIUM, MOORE_UVM_INFO, id3, id3Len),
+      1);
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_HIGH, MOORE_UVM_INFO, id3, id3Len),
+      0);
+}
+
+TEST(MooreRuntimeUvmReportTest, ReportCounting) {
+  // Reset counts
+  __moore_uvm_reset_report_counts();
+
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_WARNING), 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_ERROR), 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_FATAL), 0);
+
+  // Disable exit on fatal for testing
+  __moore_uvm_set_fatal_exits(false);
+
+  // Report messages and check counts
+  const char *id = "TEST";
+  int64_t idLen = 4;
+  const char *msg = "Test message";
+  int64_t msgLen = 12;
+
+  __moore_uvm_report_info(id, idLen, msg, msgLen, MOORE_UVM_LOW, nullptr, 0, 0,
+                          nullptr, 0);
+  // Info messages don't count by default (only DISPLAY action)
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 0);
+
+  __moore_uvm_report_warning(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0,
+                             0, nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_WARNING), 1);
+
+  __moore_uvm_report_error(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0, 0,
+                           nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_ERROR), 1);
+
+  __moore_uvm_report_fatal(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0, 0,
+                           nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_FATAL), 1);
+
+  // Report more messages
+  __moore_uvm_report_warning(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0,
+                             0, nullptr, 0);
+  __moore_uvm_report_error(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0, 0,
+                           nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_WARNING), 2);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_ERROR), 2);
+
+  // Reset and verify
+  __moore_uvm_reset_report_counts();
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_WARNING), 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_ERROR), 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_FATAL), 0);
+
+  // Re-enable fatal exits
+  __moore_uvm_set_fatal_exits(true);
+}
+
+TEST(MooreRuntimeUvmReportTest, MaxQuitCount) {
+  __moore_uvm_set_max_quit_count(0); // Unlimited
+  EXPECT_EQ(__moore_uvm_get_max_quit_count(), 0);
+
+  __moore_uvm_set_max_quit_count(10);
+  EXPECT_EQ(__moore_uvm_get_max_quit_count(), 10);
+
+  __moore_uvm_set_max_quit_count(0); // Restore unlimited
+}
+
+TEST(MooreRuntimeUvmReportTest, SeverityActions) {
+  // Get default actions
+  int32_t defaultInfoAction = __moore_uvm_get_report_severity_action(MOORE_UVM_INFO);
+  int32_t defaultWarningAction = __moore_uvm_get_report_severity_action(MOORE_UVM_WARNING);
+  int32_t defaultErrorAction = __moore_uvm_get_report_severity_action(MOORE_UVM_ERROR);
+  int32_t defaultFatalAction = __moore_uvm_get_report_severity_action(MOORE_UVM_FATAL);
+
+  // Verify defaults
+  EXPECT_EQ(defaultInfoAction, MOORE_UVM_DISPLAY);
+  EXPECT_EQ(defaultWarningAction, MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+  EXPECT_EQ(defaultErrorAction, MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+  EXPECT_EQ(defaultFatalAction, MOORE_UVM_DISPLAY | MOORE_UVM_EXIT);
+
+  // Modify actions
+  __moore_uvm_set_report_severity_action(MOORE_UVM_INFO,
+                                         MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+  EXPECT_EQ(__moore_uvm_get_report_severity_action(MOORE_UVM_INFO),
+            MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+
+  // Restore defaults
+  __moore_uvm_set_report_severity_action(MOORE_UVM_INFO, MOORE_UVM_DISPLAY);
+}
+
+TEST(MooreRuntimeUvmReportTest, SimulationTime) {
+  __moore_uvm_set_time(0);
+  EXPECT_EQ(__moore_uvm_get_time(), 0ULL);
+
+  __moore_uvm_set_time(12345);
+  EXPECT_EQ(__moore_uvm_get_time(), 12345ULL);
+
+  __moore_uvm_set_time(0xFFFFFFFFFFFFFFFFULL);
+  EXPECT_EQ(__moore_uvm_get_time(), 0xFFFFFFFFFFFFFFFFULL);
+
+  __moore_uvm_set_time(0);
+}
+
+TEST(MooreRuntimeUvmReportTest, ReportInfoWithFilename) {
+  __moore_uvm_reset_report_counts();
+  __moore_uvm_set_report_verbosity(MOORE_UVM_HIGH);
+  __moore_uvm_set_time(1000);
+
+  const char *id = "MYTEST";
+  int64_t idLen = 6;
+  const char *msg = "Test info message";
+  int64_t msgLen = 17;
+  const char *filename = "test.sv";
+  int64_t filenameLen = 7;
+  const char *context = "top.dut";
+  int64_t contextLen = 7;
+
+  // This should print:
+  // UVM_INFO test.sv(42) @ 1000: MYTEST [top.dut] Test info message
+  __moore_uvm_report_info(id, idLen, msg, msgLen, MOORE_UVM_MEDIUM, filename,
+                          filenameLen, 42, context, contextLen);
+
+  // The message was displayed (no count for info by default)
+  // Just verify it doesn't crash
+  __moore_uvm_set_time(0);
+}
+
+TEST(MooreRuntimeUvmReportTest, ReportSummarize) {
+  __moore_uvm_reset_report_counts();
+  __moore_uvm_set_fatal_exits(false);
+
+  const char *id = "TEST";
+  int64_t idLen = 4;
+  const char *msg = "msg";
+  int64_t msgLen = 3;
+
+  // Report some messages
+  __moore_uvm_report_warning(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0,
+                             0, nullptr, 0);
+  __moore_uvm_report_error(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0, 0,
+                           nullptr, 0);
+
+  // This should print a summary
+  __moore_uvm_report_summarize();
+
+  __moore_uvm_set_fatal_exits(true);
+  __moore_uvm_reset_report_counts();
+}
+
+TEST(MooreRuntimeUvmReportTest, VerbosityFiltering) {
+  __moore_uvm_reset_report_counts();
+  __moore_uvm_set_report_verbosity(MOORE_UVM_LOW);
+
+  // Enable counting for info to verify filtering
+  __moore_uvm_set_report_severity_action(MOORE_UVM_INFO,
+                                         MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+
+  const char *id = "TEST";
+  int64_t idLen = 4;
+  const char *msg = "msg";
+  int64_t msgLen = 3;
+
+  // UVM_LOW message should be displayed (verbosity <= threshold)
+  __moore_uvm_report_info(id, idLen, msg, msgLen, MOORE_UVM_LOW, nullptr, 0, 0,
+                          nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 1);
+
+  // UVM_MEDIUM message should be filtered (verbosity > threshold)
+  __moore_uvm_report_info(id, idLen, msg, msgLen, MOORE_UVM_MEDIUM, nullptr, 0,
+                          0, nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 1); // Still 1
+
+  // UVM_HIGH message should be filtered
+  __moore_uvm_report_info(id, idLen, msg, msgLen, MOORE_UVM_HIGH, nullptr, 0, 0,
+                          nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 1); // Still 1
+
+  // UVM_NONE (0) message should always be displayed
+  __moore_uvm_report_info(id, idLen, msg, msgLen, MOORE_UVM_NONE, nullptr, 0, 0,
+                          nullptr, 0);
+  EXPECT_EQ(__moore_uvm_get_report_count(MOORE_UVM_INFO), 2);
+
+  // Restore defaults
+  __moore_uvm_set_report_severity_action(MOORE_UVM_INFO, MOORE_UVM_DISPLAY);
+  __moore_uvm_set_report_verbosity(MOORE_UVM_MEDIUM);
+  __moore_uvm_reset_report_counts();
+}
+
+TEST(MooreRuntimeUvmReportTest, NullInputs) {
+  // Test that null inputs don't crash
+
+  // Null ID
+  __moore_uvm_report_info(nullptr, 0, "msg", 3, MOORE_UVM_LOW, nullptr, 0, 0,
+                          nullptr, 0);
+
+  // Null message
+  __moore_uvm_report_info("ID", 2, nullptr, 0, MOORE_UVM_LOW, nullptr, 0, 0,
+                          nullptr, 0);
+
+  // Empty ID and message
+  __moore_uvm_report_info("", 0, "", 0, MOORE_UVM_LOW, nullptr, 0, 0, nullptr,
+                          0);
+
+  // Null ID for set_report_id_verbosity
+  __moore_uvm_set_report_id_verbosity(nullptr, 0, MOORE_UVM_HIGH);
+
+  // Null ID for report_enabled
+  EXPECT_EQ(
+      __moore_uvm_report_enabled(MOORE_UVM_MEDIUM, MOORE_UVM_INFO, nullptr, 0),
+      1); // Uses global verbosity
+}
+
 } // namespace

@@ -16716,3 +16716,369 @@ extern "C" void __moore_reg_clear_all(void) {
 
   ralTrace("Cleared all RAL components");
 }
+
+//===----------------------------------------------------------------------===//
+// UVM Message Reporting Infrastructure
+//===----------------------------------------------------------------------===//
+//
+// This section implements UVM-compatible message reporting with verbosity
+// filtering, severity tracking, and formatted output.
+//
+
+namespace {
+
+/// State for UVM message reporting.
+struct UvmReportState {
+  /// Global verbosity threshold (default: UVM_MEDIUM = 200)
+  std::atomic<int32_t> verbosity{200};
+
+  /// Message counts by severity
+  std::atomic<int32_t> infoCount{0};
+  std::atomic<int32_t> warningCount{0};
+  std::atomic<int32_t> errorCount{0};
+  std::atomic<int32_t> fatalCount{0};
+
+  /// Maximum error count before quit (0 = unlimited)
+  std::atomic<int32_t> maxQuitCount{0};
+
+  /// Actions by severity
+  std::atomic<int32_t> infoAction{MOORE_UVM_DISPLAY};
+  std::atomic<int32_t> warningAction{MOORE_UVM_DISPLAY | MOORE_UVM_COUNT};
+  std::atomic<int32_t> errorAction{MOORE_UVM_DISPLAY | MOORE_UVM_COUNT};
+  std::atomic<int32_t> fatalAction{MOORE_UVM_DISPLAY | MOORE_UVM_EXIT};
+
+  /// Whether fatal should actually exit (for testing)
+  std::atomic<bool> fatalExits{true};
+
+  /// Current simulation time
+  std::atomic<uint64_t> simTime{0};
+
+  /// Per-ID verbosity overrides
+  std::mutex idVerbosityMutex;
+  std::unordered_map<std::string, int32_t> idVerbosity;
+};
+
+/// Get the singleton UVM report state.
+UvmReportState &getUvmReportState() {
+  static UvmReportState state;
+  return state;
+}
+
+/// Format and print a UVM message.
+/// Format: UVM_<SEVERITY> <filename>(<line>) @ <time>: <id> [<context>] <message>
+void printUvmMessage(FILE *stream, const char *severity, const char *id,
+                     int64_t idLen, const char *message, int64_t messageLen,
+                     const char *filename, int64_t filenameLen, int32_t line,
+                     const char *context, int64_t contextLen) {
+  auto &state = getUvmReportState();
+
+  // Print severity
+  std::fprintf(stream, "%s ", severity);
+
+  // Print filename and line if available
+  if (filename && filenameLen > 0) {
+    std::fwrite(filename, 1, static_cast<size_t>(filenameLen), stream);
+    std::fprintf(stream, "(%d) ", line);
+  }
+
+  // Print timestamp
+  std::fprintf(stream, "@ %llu: ", (unsigned long long)state.simTime.load());
+
+  // Print ID
+  if (id && idLen > 0) {
+    std::fwrite(id, 1, static_cast<size_t>(idLen), stream);
+    std::fputc(' ', stream);
+  }
+
+  // Print context if available
+  if (context && contextLen > 0) {
+    std::fputc('[', stream);
+    std::fwrite(context, 1, static_cast<size_t>(contextLen), stream);
+    std::fprintf(stream, "] ");
+  }
+
+  // Print message
+  if (message && messageLen > 0) {
+    std::fwrite(message, 1, static_cast<size_t>(messageLen), stream);
+  }
+
+  std::fputc('\n', stream);
+  std::fflush(stream);
+}
+
+/// Get the verbosity threshold for a specific ID.
+/// Returns the ID-specific verbosity if set, otherwise the global verbosity.
+int32_t getIdVerbosity(const char *id, int64_t idLen) {
+  auto &state = getUvmReportState();
+
+  if (id && idLen > 0) {
+    std::lock_guard<std::mutex> lock(state.idVerbosityMutex);
+    std::string idStr(id, static_cast<size_t>(idLen));
+    auto it = state.idVerbosity.find(idStr);
+    if (it != state.idVerbosity.end()) {
+      return it->second;
+    }
+  }
+
+  return state.verbosity.load();
+}
+
+} // namespace
+
+extern "C" void __moore_uvm_set_report_verbosity(int32_t verbosity) {
+  getUvmReportState().verbosity.store(verbosity);
+}
+
+extern "C" int32_t __moore_uvm_get_report_verbosity(void) {
+  return getUvmReportState().verbosity.load();
+}
+
+extern "C" void __moore_uvm_report_info(const char *id, int64_t idLen,
+                                        const char *message, int64_t messageLen,
+                                        int32_t verbosity, const char *filename,
+                                        int64_t filenameLen, int32_t line,
+                                        const char *context,
+                                        int64_t contextLen) {
+  auto &state = getUvmReportState();
+
+  // Check verbosity filter
+  int32_t threshold = getIdVerbosity(id, idLen);
+  if (verbosity > threshold) {
+    return; // Message filtered out
+  }
+
+  int32_t action = state.infoAction.load();
+
+  // Display action
+  if (action & MOORE_UVM_DISPLAY) {
+    printUvmMessage(stdout, "UVM_INFO", id, idLen, message, messageLen,
+                    filename, filenameLen, line, context, contextLen);
+  }
+
+  // Count action
+  if (action & MOORE_UVM_COUNT) {
+    state.infoCount.fetch_add(1);
+  }
+}
+
+extern "C" void __moore_uvm_report_warning(const char *id, int64_t idLen,
+                                           const char *message,
+                                           int64_t messageLen, int32_t verbosity,
+                                           const char *filename,
+                                           int64_t filenameLen, int32_t line,
+                                           const char *context,
+                                           int64_t contextLen) {
+  (void)verbosity; // Warnings are always displayed
+  auto &state = getUvmReportState();
+
+  int32_t action = state.warningAction.load();
+
+  // Display action
+  if (action & MOORE_UVM_DISPLAY) {
+    printUvmMessage(stderr, "UVM_WARNING", id, idLen, message, messageLen,
+                    filename, filenameLen, line, context, contextLen);
+  }
+
+  // Count action
+  if (action & MOORE_UVM_COUNT) {
+    state.warningCount.fetch_add(1);
+  }
+}
+
+extern "C" void __moore_uvm_report_error(const char *id, int64_t idLen,
+                                         const char *message, int64_t messageLen,
+                                         int32_t verbosity, const char *filename,
+                                         int64_t filenameLen, int32_t line,
+                                         const char *context,
+                                         int64_t contextLen) {
+  (void)verbosity; // Errors are always displayed
+  auto &state = getUvmReportState();
+
+  int32_t action = state.errorAction.load();
+
+  // Display action
+  if (action & MOORE_UVM_DISPLAY) {
+    printUvmMessage(stderr, "UVM_ERROR", id, idLen, message, messageLen,
+                    filename, filenameLen, line, context, contextLen);
+  }
+
+  // Count action
+  if (action & MOORE_UVM_COUNT) {
+    int32_t newCount = state.errorCount.fetch_add(1) + 1;
+
+    // Check max quit count
+    int32_t maxQuit = state.maxQuitCount.load();
+    if (maxQuit > 0 && newCount >= maxQuit) {
+      std::fprintf(stderr, "UVM_ERROR: Quit count reached (%d errors)\n",
+                   newCount);
+
+      if (action & MOORE_UVM_EXIT) {
+        if (state.fatalExits.load()) {
+          std::exit(1);
+        }
+      }
+    }
+  }
+}
+
+extern "C" void __moore_uvm_report_fatal(const char *id, int64_t idLen,
+                                         const char *message, int64_t messageLen,
+                                         int32_t verbosity, const char *filename,
+                                         int64_t filenameLen, int32_t line,
+                                         const char *context,
+                                         int64_t contextLen) {
+  (void)verbosity; // Fatal messages are always displayed
+  auto &state = getUvmReportState();
+
+  int32_t action = state.fatalAction.load();
+
+  // Display action
+  if (action & MOORE_UVM_DISPLAY) {
+    printUvmMessage(stderr, "UVM_FATAL", id, idLen, message, messageLen,
+                    filename, filenameLen, line, context, contextLen);
+  }
+
+  // Count action (always count fatal)
+  state.fatalCount.fetch_add(1);
+
+  // Exit action
+  if (action & MOORE_UVM_EXIT) {
+    if (state.fatalExits.load()) {
+      std::exit(1);
+    }
+  }
+}
+
+extern "C" int32_t __moore_uvm_report_enabled(int32_t verbosity,
+                                              int32_t severity, const char *id,
+                                              int64_t idLen) {
+  // Warnings, errors, and fatals are always enabled
+  if (severity != MOORE_UVM_INFO) {
+    return 1;
+  }
+
+  // For info messages, check verbosity
+  int32_t threshold = getIdVerbosity(id, idLen);
+  return verbosity <= threshold ? 1 : 0;
+}
+
+extern "C" void __moore_uvm_set_report_id_verbosity(const char *id,
+                                                    int64_t idLen,
+                                                    int32_t verbosity) {
+  if (!id || idLen <= 0) {
+    return;
+  }
+
+  auto &state = getUvmReportState();
+  std::lock_guard<std::mutex> lock(state.idVerbosityMutex);
+  std::string idStr(id, static_cast<size_t>(idLen));
+  state.idVerbosity[idStr] = verbosity;
+}
+
+extern "C" int32_t __moore_uvm_get_report_count(int32_t severity) {
+  auto &state = getUvmReportState();
+
+  switch (severity) {
+  case MOORE_UVM_INFO:
+    return state.infoCount.load();
+  case MOORE_UVM_WARNING:
+    return state.warningCount.load();
+  case MOORE_UVM_ERROR:
+    return state.errorCount.load();
+  case MOORE_UVM_FATAL:
+    return state.fatalCount.load();
+  default:
+    return 0;
+  }
+}
+
+extern "C" void __moore_uvm_reset_report_counts(void) {
+  auto &state = getUvmReportState();
+  state.infoCount.store(0);
+  state.warningCount.store(0);
+  state.errorCount.store(0);
+  state.fatalCount.store(0);
+}
+
+extern "C" void __moore_uvm_set_max_quit_count(int32_t count) {
+  getUvmReportState().maxQuitCount.store(count);
+}
+
+extern "C" int32_t __moore_uvm_get_max_quit_count(void) {
+  return getUvmReportState().maxQuitCount.load();
+}
+
+extern "C" void __moore_uvm_set_report_severity_action(int32_t severity,
+                                                       int32_t action) {
+  auto &state = getUvmReportState();
+
+  switch (severity) {
+  case MOORE_UVM_INFO:
+    state.infoAction.store(action);
+    break;
+  case MOORE_UVM_WARNING:
+    state.warningAction.store(action);
+    break;
+  case MOORE_UVM_ERROR:
+    state.errorAction.store(action);
+    break;
+  case MOORE_UVM_FATAL:
+    state.fatalAction.store(action);
+    break;
+  }
+}
+
+extern "C" int32_t __moore_uvm_get_report_severity_action(int32_t severity) {
+  auto &state = getUvmReportState();
+
+  switch (severity) {
+  case MOORE_UVM_INFO:
+    return state.infoAction.load();
+  case MOORE_UVM_WARNING:
+    return state.warningAction.load();
+  case MOORE_UVM_ERROR:
+    return state.errorAction.load();
+  case MOORE_UVM_FATAL:
+    return state.fatalAction.load();
+  default:
+    return 0;
+  }
+}
+
+extern "C" void __moore_uvm_report_summarize(void) {
+  auto &state = getUvmReportState();
+
+  int32_t infoCount = state.infoCount.load();
+  int32_t warningCount = state.warningCount.load();
+  int32_t errorCount = state.errorCount.load();
+  int32_t fatalCount = state.fatalCount.load();
+
+  std::fprintf(stdout, "\n--- UVM Report Summary ---\n");
+  std::fprintf(stdout, "** Report counts by severity **\n");
+  std::fprintf(stdout, "  UVM_INFO:    %d\n", infoCount);
+  std::fprintf(stdout, "  UVM_WARNING: %d\n", warningCount);
+  std::fprintf(stdout, "  UVM_ERROR:   %d\n", errorCount);
+  std::fprintf(stdout, "  UVM_FATAL:   %d\n", fatalCount);
+
+  if (errorCount > 0 || fatalCount > 0) {
+    std::fprintf(stdout, "\n** SIMULATION FAILED **\n");
+  } else if (warningCount > 0) {
+    std::fprintf(stdout, "\n** SIMULATION PASSED (with warnings) **\n");
+  } else {
+    std::fprintf(stdout, "\n** SIMULATION PASSED **\n");
+  }
+
+  std::fflush(stdout);
+}
+
+extern "C" void __moore_uvm_set_fatal_exits(bool should_exit) {
+  getUvmReportState().fatalExits.store(should_exit);
+}
+
+extern "C" uint64_t __moore_uvm_get_time(void) {
+  return getUvmReportState().simTime.load();
+}
+
+extern "C" void __moore_uvm_set_time(uint64_t time) {
+  getUvmReportState().simTime.store(time);
+}
