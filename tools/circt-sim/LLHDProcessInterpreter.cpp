@@ -1265,8 +1265,11 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     }
 
     bool result = false;
-    const llvm::APInt &lhsVal = lhs.getAPInt();
-    const llvm::APInt &rhsVal = rhs.getAPInt();
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    // Normalize widths for comparison - use the larger of the two widths
+    unsigned compareWidth = std::max(lhsVal.getBitWidth(), rhsVal.getBitWidth());
+    normalizeWidths(lhsVal, rhsVal, compareWidth);
     switch (icmpOp.getPredicate()) {
     case comb::ICmpPredicate::eq:
     case comb::ICmpPredicate::ceq:
@@ -1309,70 +1312,68 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   }
 
   if (auto andOp = dyn_cast<comb::AndOp>(op)) {
-    llvm::APInt result;
-    bool hasResult = false;
+    unsigned targetWidth = getTypeWidth(andOp.getType());
+    llvm::APInt result(targetWidth, 0);
+    result.setAllBits(); // Start with all 1s for AND
     for (Value operand : andOp.getOperands()) {
       InterpretedValue value = getValue(procId, operand);
       if (value.isX()) {
         setValue(procId, andOp.getResult(),
-                 InterpretedValue::makeX(getTypeWidth(andOp.getType())));
+                 InterpretedValue::makeX(targetWidth));
         return success();
       }
-      if (!hasResult) {
-        result = value.getAPInt();
-        hasResult = true;
-      } else {
-        result &= value.getAPInt();
-      }
+      APInt operandVal = value.getAPInt();
+      // Normalize to target width
+      if (operandVal.getBitWidth() < targetWidth)
+        operandVal = operandVal.zext(targetWidth);
+      else if (operandVal.getBitWidth() > targetWidth)
+        operandVal = operandVal.trunc(targetWidth);
+      result &= operandVal;
     }
-    if (!hasResult)
-      result = llvm::APInt(getTypeWidth(andOp.getType()), 0);
     setValue(procId, andOp.getResult(), InterpretedValue(result));
     return success();
   }
 
   if (auto orOp = dyn_cast<comb::OrOp>(op)) {
-    llvm::APInt result;
-    bool hasResult = false;
+    unsigned targetWidth = getTypeWidth(orOp.getType());
+    llvm::APInt result(targetWidth, 0); // Start with all 0s for OR
     for (Value operand : orOp.getOperands()) {
       InterpretedValue value = getValue(procId, operand);
       if (value.isX()) {
         setValue(procId, orOp.getResult(),
-                 InterpretedValue::makeX(getTypeWidth(orOp.getType())));
+                 InterpretedValue::makeX(targetWidth));
         return success();
       }
-      if (!hasResult) {
-        result = value.getAPInt();
-        hasResult = true;
-      } else {
-        result |= value.getAPInt();
-      }
+      APInt operandVal = value.getAPInt();
+      // Normalize to target width
+      if (operandVal.getBitWidth() < targetWidth)
+        operandVal = operandVal.zext(targetWidth);
+      else if (operandVal.getBitWidth() > targetWidth)
+        operandVal = operandVal.trunc(targetWidth);
+      result |= operandVal;
     }
-    if (!hasResult)
-      result = llvm::APInt(getTypeWidth(orOp.getType()), 0);
     setValue(procId, orOp.getResult(), InterpretedValue(result));
     return success();
   }
 
   if (auto xorOp = dyn_cast<comb::XorOp>(op)) {
-    llvm::APInt result;
-    bool hasResult = false;
+    unsigned targetWidth = getTypeWidth(xorOp.getType());
+    llvm::APInt result(targetWidth, 0); // Start with all 0s for XOR
     for (Value operand : xorOp.getOperands()) {
       InterpretedValue value = getValue(procId, operand);
       if (value.isX()) {
         setValue(procId, xorOp.getResult(),
-                 InterpretedValue::makeX(getTypeWidth(xorOp.getType())));
+                 InterpretedValue::makeX(targetWidth));
         return success();
       }
-      if (!hasResult) {
-        result = value.getAPInt();
-        hasResult = true;
-      } else {
-        result ^= value.getAPInt();
-      }
+      APInt operandVal = value.getAPInt();
+      // Normalize to target width
+      if (operandVal.getBitWidth() < targetWidth)
+        operandVal = operandVal.zext(targetWidth);
+      else if (operandVal.getBitWidth() > targetWidth)
+        operandVal = operandVal.trunc(targetWidth);
+      result ^= operandVal;
     }
-    if (!hasResult)
-      result = llvm::APInt(getTypeWidth(xorOp.getType()), 0);
     setValue(procId, xorOp.getResult(), InterpretedValue(result));
     return success();
   }
@@ -1422,35 +1423,38 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto subOp = dyn_cast<comb::SubOp>(op)) {
     InterpretedValue lhs = getValue(procId, subOp.getLhs());
     InterpretedValue rhs = getValue(procId, subOp.getRhs());
+    unsigned targetWidth = getTypeWidth(subOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, subOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(subOp.getType())));
+               InterpretedValue::makeX(targetWidth));
       return success();
     }
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    normalizeWidths(lhsVal, rhsVal, targetWidth);
     setValue(procId, subOp.getResult(),
-             InterpretedValue(lhs.getAPInt() - rhs.getAPInt()));
+             InterpretedValue(lhsVal - rhsVal));
     return success();
   }
 
   if (auto mulOp = dyn_cast<comb::MulOp>(op)) {
-    llvm::APInt result;
-    bool hasResult = false;
+    unsigned targetWidth = getTypeWidth(mulOp.getType());
+    llvm::APInt result(targetWidth, 1); // Start with 1 for multiplication
     for (Value operand : mulOp.getOperands()) {
       InterpretedValue value = getValue(procId, operand);
       if (value.isX()) {
         setValue(procId, mulOp.getResult(),
-                 InterpretedValue::makeX(getTypeWidth(mulOp.getType())));
+                 InterpretedValue::makeX(targetWidth));
         return success();
       }
-      if (!hasResult) {
-        result = value.getAPInt();
-        hasResult = true;
-      } else {
-        result *= value.getAPInt();
-      }
+      APInt operandVal = value.getAPInt();
+      // Normalize to target width
+      if (operandVal.getBitWidth() < targetWidth)
+        operandVal = operandVal.zext(targetWidth);
+      else if (operandVal.getBitWidth() > targetWidth)
+        operandVal = operandVal.trunc(targetWidth);
+      result *= operandVal;
     }
-    if (!hasResult)
-      result = llvm::APInt(getTypeWidth(mulOp.getType()), 0);
     setValue(procId, mulOp.getResult(), InterpretedValue(result));
     return success();
   }
@@ -1458,52 +1462,68 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto divsOp = dyn_cast<comb::DivSOp>(op)) {
     InterpretedValue lhs = getValue(procId, divsOp.getLhs());
     InterpretedValue rhs = getValue(procId, divsOp.getRhs());
+    unsigned targetWidth = getTypeWidth(divsOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, divsOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(divsOp.getType())));
+               InterpretedValue::makeX(targetWidth));
       return success();
     }
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    normalizeWidths(lhsVal, rhsVal, targetWidth);
     setValue(procId, divsOp.getResult(),
-             InterpretedValue(lhs.getAPInt().sdiv(rhs.getAPInt())));
+             InterpretedValue(lhsVal.sdiv(rhsVal)));
     return success();
   }
 
   if (auto divuOp = dyn_cast<comb::DivUOp>(op)) {
     InterpretedValue lhs = getValue(procId, divuOp.getLhs());
     InterpretedValue rhs = getValue(procId, divuOp.getRhs());
+    unsigned targetWidth = getTypeWidth(divuOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, divuOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(divuOp.getType())));
+               InterpretedValue::makeX(targetWidth));
       return success();
     }
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    normalizeWidths(lhsVal, rhsVal, targetWidth);
     setValue(procId, divuOp.getResult(),
-             InterpretedValue(lhs.getAPInt().udiv(rhs.getAPInt())));
+             InterpretedValue(lhsVal.udiv(rhsVal)));
     return success();
   }
 
   if (auto modsOp = dyn_cast<comb::ModSOp>(op)) {
     InterpretedValue lhs = getValue(procId, modsOp.getLhs());
     InterpretedValue rhs = getValue(procId, modsOp.getRhs());
+    unsigned targetWidth = getTypeWidth(modsOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, modsOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(modsOp.getType())));
+               InterpretedValue::makeX(targetWidth));
       return success();
     }
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    normalizeWidths(lhsVal, rhsVal, targetWidth);
     setValue(procId, modsOp.getResult(),
-             InterpretedValue(lhs.getAPInt().srem(rhs.getAPInt())));
+             InterpretedValue(lhsVal.srem(rhsVal)));
     return success();
   }
 
   if (auto moduOp = dyn_cast<comb::ModUOp>(op)) {
     InterpretedValue lhs = getValue(procId, moduOp.getLhs());
     InterpretedValue rhs = getValue(procId, moduOp.getRhs());
+    unsigned targetWidth = getTypeWidth(moduOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, moduOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(moduOp.getType())));
+               InterpretedValue::makeX(targetWidth));
       return success();
     }
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    normalizeWidths(lhsVal, rhsVal, targetWidth);
     setValue(procId, moduOp.getResult(),
-             InterpretedValue(lhs.getAPInt().urem(rhs.getAPInt())));
+             InterpretedValue(lhsVal.urem(rhsVal)));
     return success();
   }
 
@@ -1726,12 +1746,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithAddIOp = dyn_cast<mlir::arith::AddIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithAddIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithAddIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithAddIOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, arithAddIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithAddIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithAddIOp.getResult(),
-               InterpretedValue(lhs.getAPInt() + rhs.getAPInt()));
+               InterpretedValue(lhsVal + rhsVal));
     }
     return success();
   }
@@ -1739,12 +1763,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithSubIOp = dyn_cast<mlir::arith::SubIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithSubIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithSubIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithSubIOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, arithSubIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithSubIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithSubIOp.getResult(),
-               InterpretedValue(lhs.getAPInt() - rhs.getAPInt()));
+               InterpretedValue(lhsVal - rhsVal));
     }
     return success();
   }
@@ -1752,12 +1780,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithMulIOp = dyn_cast<mlir::arith::MulIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithMulIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithMulIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithMulIOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, arithMulIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithMulIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithMulIOp.getResult(),
-               InterpretedValue(lhs.getAPInt() * rhs.getAPInt()));
+               InterpretedValue(lhsVal * rhsVal));
     }
     return success();
   }
@@ -1765,12 +1797,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithDivSIOp = dyn_cast<mlir::arith::DivSIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithDivSIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithDivSIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithDivSIOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, arithDivSIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithDivSIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithDivSIOp.getResult(),
-               InterpretedValue(lhs.getAPInt().sdiv(rhs.getAPInt())));
+               InterpretedValue(lhsVal.sdiv(rhsVal)));
     }
     return success();
   }
@@ -1778,12 +1814,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithDivUIOp = dyn_cast<mlir::arith::DivUIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithDivUIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithDivUIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithDivUIOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, arithDivUIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithDivUIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithDivUIOp.getResult(),
-               InterpretedValue(lhs.getAPInt().udiv(rhs.getAPInt())));
+               InterpretedValue(lhsVal.udiv(rhsVal)));
     }
     return success();
   }
@@ -1791,12 +1831,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithRemSIOp = dyn_cast<mlir::arith::RemSIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithRemSIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithRemSIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithRemSIOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, arithRemSIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithRemSIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithRemSIOp.getResult(),
-               InterpretedValue(lhs.getAPInt().srem(rhs.getAPInt())));
+               InterpretedValue(lhsVal.srem(rhsVal)));
     }
     return success();
   }
@@ -1804,12 +1848,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithRemUIOp = dyn_cast<mlir::arith::RemUIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithRemUIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithRemUIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithRemUIOp.getType());
     if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
       setValue(procId, arithRemUIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithRemUIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithRemUIOp.getResult(),
-               InterpretedValue(lhs.getAPInt().urem(rhs.getAPInt())));
+               InterpretedValue(lhsVal.urem(rhsVal)));
     }
     return success();
   }
@@ -1817,12 +1865,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithAndIOp = dyn_cast<mlir::arith::AndIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithAndIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithAndIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithAndIOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, arithAndIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithAndIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithAndIOp.getResult(),
-               InterpretedValue(lhs.getAPInt() & rhs.getAPInt()));
+               InterpretedValue(lhsVal & rhsVal));
     }
     return success();
   }
@@ -1830,12 +1882,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithOrIOp = dyn_cast<mlir::arith::OrIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithOrIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithOrIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithOrIOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, arithOrIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithOrIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithOrIOp.getResult(),
-               InterpretedValue(lhs.getAPInt() | rhs.getAPInt()));
+               InterpretedValue(lhsVal | rhsVal));
     }
     return success();
   }
@@ -1843,12 +1899,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto arithXOrIOp = dyn_cast<mlir::arith::XOrIOp>(op)) {
     InterpretedValue lhs = getValue(procId, arithXOrIOp.getLhs());
     InterpretedValue rhs = getValue(procId, arithXOrIOp.getRhs());
+    unsigned targetWidth = getTypeWidth(arithXOrIOp.getType());
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, arithXOrIOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(arithXOrIOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
       setValue(procId, arithXOrIOp.getResult(),
-               InterpretedValue(lhs.getAPInt() ^ rhs.getAPInt()));
+               InterpretedValue(lhsVal ^ rhsVal));
     }
     return success();
   }
@@ -1904,8 +1964,11 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     }
 
     bool result = false;
-    const llvm::APInt &lhsVal = lhs.getAPInt();
-    const llvm::APInt &rhsVal = rhs.getAPInt();
+    APInt lhsVal = lhs.getAPInt();
+    APInt rhsVal = rhs.getAPInt();
+    // Normalize widths for comparison - use the larger of the two widths
+    unsigned compareWidth = std::max(lhsVal.getBitWidth(), rhsVal.getBitWidth());
+    normalizeWidths(lhsVal, rhsVal, compareWidth);
     switch (arithCmpIOp.getPredicate()) {
     case mlir::arith::CmpIPredicate::eq:
       result = lhsVal == rhsVal;
