@@ -82,11 +82,13 @@ typedef enum {
 
 // UVM_COMPONENT_UTILS - Register a component with the factory
 // Note: Does NOT define get_type_name - use uvm_type_name_decl for that
+// The static __type_handle ensures registration happens at elaboration time
 `define uvm_component_utils(T) \
   typedef uvm_component_registry #(T, `"T`") type_id; \
   static function type_id get_type(); \
     return type_id::get(); \
-  endfunction
+  endfunction \
+  const static type_id __type_handle = get_type();
 
 // UVM_COMPONENT_UTILS_BEGIN/END - For field automation
 `define uvm_component_utils_begin(T) \
@@ -96,11 +98,13 @@ typedef enum {
 
 // UVM_OBJECT_UTILS - Register an object with the factory
 // Note: Does NOT define get_type_name - use uvm_type_name_decl for that
+// The static __type_handle ensures registration happens at elaboration time
 `define uvm_object_utils(T) \
   typedef uvm_object_registry #(T, `"T`") type_id; \
   static function type_id get_type(); \
     return type_id::get(); \
   endfunction \
+  const static type_id __type_handle = get_type(); \
   virtual function uvm_object create(string name = ""); \
     T tmp = new(name); \
     return tmp; \

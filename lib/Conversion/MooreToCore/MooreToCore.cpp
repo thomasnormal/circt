@@ -7836,45 +7836,10 @@ struct CallOpConversion : public OpConversionPattern<func::CallOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    // Check if this is a call to uvm_pkg::run_test - intercept and redirect
-    // to the __uvm_run_test runtime function.
+    // Note: run_test interception disabled - using pure SV implementation
+    // The SV uvm_root::run_test() now handles phase execution directly.
+    // This allows the SV factory and component hierarchy to work natively.
     StringRef callee = op.getCallee();
-    if (callee == "uvm_pkg::run_test") {
-      auto mod = op->getParentOfType<ModuleOp>();
-      auto *ctx = rewriter.getContext();
-      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-      auto i64Ty = rewriter.getI64Type();
-      auto voidTy = LLVM::LLVMVoidType::get(ctx);
-
-      // __uvm_run_test takes (const char *testNameData, int64_t testNameLen)
-      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
-      auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__uvm_run_test", fnTy);
-
-      // The input should be a string struct {ptr, len}
-      if (adaptor.getOperands().size() == 1) {
-        Value stringStruct = adaptor.getOperands()[0];
-
-        // Extract string pointer and length from the struct
-        auto stringPtr =
-            LLVM::ExtractValueOp::create(rewriter, loc, stringStruct, 0);
-        auto stringLen =
-            LLVM::ExtractValueOp::create(rewriter, loc, stringStruct, 1);
-
-        // Call __uvm_run_test(ptr, len)
-        LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                             ValueRange{stringPtr, stringLen});
-      } else {
-        // No arguments - pass null pointer and zero length
-        auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-        auto zeroLen =
-            LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(0));
-        LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                             ValueRange{nullPtr, zeroLen});
-      }
-
-      rewriter.eraseOp(op);
-      return success();
-    }
 
     // Default handling for other calls
     SmallVector<Type> convResTypes;
