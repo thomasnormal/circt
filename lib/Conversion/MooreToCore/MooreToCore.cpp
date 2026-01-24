@@ -4543,8 +4543,71 @@ struct GlobalVariableOpConversion
     // Create an LLVM global with zero initialization.
     Attribute initAttr = createLLVMZeroAttr(convertedType, op.getContext());
 
-    LLVM::GlobalOp::create(rewriter, loc, convertedType, /*isConstant=*/false,
-                           LLVM::Linkage::Internal, op.getSymName(), initAttr);
+    auto globalOp = LLVM::GlobalOp::create(rewriter, loc, convertedType,
+                                           /*isConstant=*/false,
+                                           LLVM::Linkage::Internal,
+                                           op.getSymName(), initAttr);
+
+    // If there's an init region with a YieldOp, create a global constructor
+    // function to initialize the variable at program startup.
+    Block *initBlock = op.getInitBlock();
+    if (initBlock && !initBlock->empty()) {
+      // Find the YieldOp that provides the initial value.
+      auto yieldOp = dyn_cast<YieldOp>(initBlock->getTerminator());
+      if (yieldOp) {
+        // Create an initializer function.
+        std::string initFuncName =
+            ("__moore_global_init_" + op.getSymName()).str();
+        auto voidTy = LLVM::LLVMVoidType::get(op.getContext());
+        auto funcTy = LLVM::LLVMFunctionType::get(voidTy, {});
+
+        auto initFunc = LLVM::LLVMFuncOp::create(rewriter, loc, initFuncName,
+                                                 funcTy);
+        initFunc.setLinkage(LLVM::Linkage::Internal);
+
+        // Create the function body.
+        Block *funcBlock = rewriter.createBlock(&initFunc.getBody());
+        rewriter.setInsertionPointToStart(funcBlock);
+
+        // Clone all operations from the init region except the yield.
+        IRMapping mapping;
+        for (Operation &initOp : *initBlock) {
+          if (!isa<YieldOp>(initOp)) {
+            rewriter.clone(initOp, mapping);
+          }
+        }
+
+        // Get the yielded value (mapped through the cloning).
+        Value initValue = mapping.lookupOrDefault(yieldOp.getResult());
+
+        // Convert the init value type if needed.
+        Type valueType = initValue.getType();
+        if (valueType != convertedType) {
+          // Try unrealized conversion cast for type mismatch.
+          initValue = rewriter.create<UnrealizedConversionCastOp>(
+                                 loc, convertedType, initValue)
+                          .getResult(0);
+        }
+
+        // Store the value to the global variable.
+        auto ptrTy = LLVM::LLVMPointerType::get(op.getContext());
+        auto addressOf =
+            LLVM::AddressOfOp::create(rewriter, loc, ptrTy, globalOp.getSymName());
+        LLVM::StoreOp::create(rewriter, loc, initValue, addressOf.getResult());
+
+        // Return from the function.
+        LLVM::ReturnOp::create(rewriter, loc, ValueRange{});
+
+        // Register the initializer function with llvm.global_ctors.
+        // Insert at module level after the global.
+        rewriter.setInsertionPointAfter(globalOp);
+        auto ctorAttr = rewriter.getArrayAttr(
+            {FlatSymbolRefAttr::get(op.getContext(), initFuncName)});
+        auto priorityAttr = rewriter.getI32ArrayAttr({65535}); // Default priority
+        auto dataAttr = rewriter.getArrayAttr({LLVM::ZeroAttr::get(op.getContext())});
+        LLVM::GlobalCtorsOp::create(rewriter, loc, ctorAttr, priorityAttr, dataAttr);
+      }
+    }
 
     rewriter.eraseOp(op);
     return success();
@@ -8466,7 +8529,10 @@ struct AssertLikeOpConversion : public OpConversionPattern<MooreOpTy> {
     // If the condition is a 4-state struct (from l1 type), extract the value.
     if (isFourStateStructType(cond.getType()))
       cond = extractFourStateValue(rewriter, op.getLoc(), cond);
-    rewriter.replaceOpWithNewOp<VerifOpTy>(op, cond, mlir::Value(), label);
+    auto newOp =
+        rewriter.replaceOpWithNewOp<VerifOpTy>(op, cond, mlir::Value(), label);
+    if (op.getDefer() == DeferAssert::Final)
+      newOp->setAttr("bmc.final", rewriter.getUnitAttr());
     return success();
   }
 };
