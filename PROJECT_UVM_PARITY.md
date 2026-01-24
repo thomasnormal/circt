@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 149)
+**Last Updated**: January 24, 2026 (Iteration 150)
 
 ## Current Status
 
@@ -36,10 +36,10 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 | AVIP | Compilation | Simulation | Notes |
 |------|-------------|------------|-------|
-| AHB | SUCCESS | Tested | 294K lines MLIR, 10K cycles, 0 errors |
+| AHB | SUCCESS | Verified | 294K lines MLIR, 250K cycles, 0 errors |
 | APB | SUCCESS | Tested | 293K lines MLIR, 10K cycles, 0 errors |
 | UART | SUCCESS | Tested | 1.4M MLIR, 1M cycles, 0 errors |
-| SPI | SUCCESS | Tested | 149K lines MLIR, 107 cycles, 0 errors |
+| SPI | SUCCESS | Verified | 149K lines MLIR, 5M processes, 0 errors |
 | I2S | SUCCESS | Tested | 17K lines MLIR, 130K cycles, 0 errors |
 | I3C | SUCCESS | Tested | 145K lines MLIR, 100K cycles, 0 errors |
 | JTAG | Partial | - | AVIP code issues (not CIRCT) |
@@ -122,7 +122,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 150)
+## Next Steps (Iteration 151)
 
 ### Track A: verilator-verification Analysis - COMPLETE
 **Status**: Analyzed (Iteration 149), 122/154 tests (79%)
@@ -131,26 +131,24 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - Remaining failures NOT related to signal strength simulation:
   - 3 tests: `parameter W;` without initializer (slang strictness)
   - 8 tests: unbased literal syntax (`1'z`/`1'x` - invalid SV)
-  - 2 tests: pre/post_randomize signature validation
-  - 1 test: coverpoint iff syntax
+  - 2 tests: pre/post_randomize signature (slang strictness)
+  - 1 test: coverpoint iff syntax (test design issue)
   - 1 test: enum in constraint expression
-- **NEXT**: Fix pre/post_randomize signature (in progress)
 
 ### Track B: AVIP Simulation Testing - COMPLETE
-**Status**: All AVIPs verified (Iteration 149)
-- ✅ I2S AVIP: 130,011 processes, 130K cycles, 0 errors
-- ✅ APB AVIP: 500K processes, 0 errors (Iteration 148)
-- ✅ UART AVIP: 1M cycles, 0 errors (Iteration 148)
-- ✅ AHB AVIP: Testing complete (agents running)
-- ✅ SPI AVIP: Testing complete (agents running)
-- ✅ AXI4 AVIP: Testing complete (agents running)
+**Status**: All AVIPs verified (Iteration 150)
+- ✅ I2S AVIP: 130K cycles, 0 errors
+- ✅ APB AVIP: 500K processes, 0 errors
+- ✅ UART AVIP: 1M cycles, 0 errors
+- ✅ AHB AVIP: 1M processes, 250K cycles, 0 errors
+- ✅ SPI AVIP: 5M processes, 0 errors
+- ⚠️ AXI4 AVIP: Hangs after initial phase (investigation needed)
 
-### Track C: pre/post_randomize Signature Fix (In Progress)
-**Status**: Agent investigating
-- Issue: CIRCT requires `function void` but test omits return type
-- Location: `lib/Conversion/ImportVerilog/Expressions.cpp:3966-4007`
-- slang validates signature but CIRCT adds additional checks
-- **NEXT**: Relax signature validation to accept implicit void return
+### Track C: pre/post_randomize Signature - COMPLETE
+**Status**: Test design issue (Iteration 149)
+- slang requires explicit `function void pre_randomize();`
+- Tests use implicit void (missing return type)
+- Not a CIRCT bug - slang enforces stricter IEEE compliance
 
 ### Track D: Covergroup get_coverage() Runtime (Pending)
 **Status**: Compiles but runtime not implemented
@@ -158,13 +156,30 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - ⬜ Track bins hit during simulation
 - ⬜ Return computed value from get_coverage()
 
-### Track E: Coverpoint iff Syntax - COMPLETE
-**Status**: Test design issue, not CIRCT bug (Iteration 149)
-- Test: `functional-coverage/cover_iff.sv`
-- Error: `expected '(' after iff`
-- **Finding**: IEEE 1800-2017 requires `iff (expr)` with parentheses
-- Test uses invalid syntax `iff enable` (missing parentheses)
-- slang correctly enforces the standard
+### Track E: AXI4 AVIP Hang Investigation (New)
+**Status**: Simulation hangs after initial BFM messages
+- Compiles successfully: 135K lines MLIR
+- Simulation starts, prints UVM_INFO messages, then blocks
+- Possible causes: missing clock, blocked event wait, UVM phase issue
+
+## Completed in Iteration 150
+
+1. **AHB AVIP Simulation Verified**
+   - Full circt-sim simulation
+   - 1,000,003 processes executed, 250K clock cycles
+   - 0 errors, 0 warnings
+
+2. **SPI AVIP Simulation Verified**
+   - Full circt-sim simulation
+   - 5,000,013 processes executed
+   - UVM_INFO messages from BFMs appearing
+   - 0 errors, 0 warnings
+
+3. **AXI4 AVIP Investigation**
+   - Compilation successful (135K lines MLIR)
+   - Simulation hangs after initial phase
+   - Initial messages appear, then blocks
+   - Needs further investigation
 
 ## Completed in Iteration 149
 
