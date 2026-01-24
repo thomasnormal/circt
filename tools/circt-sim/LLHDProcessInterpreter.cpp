@@ -247,6 +247,27 @@ static APInt flattenAggregateConstant(hw::AggregateConstantOp aggConstOp) {
   return result;
 }
 
+/// Normalize two APInt values to have the same bit width for binary operations.
+/// If the widths differ, both are extended/truncated to the target width.
+/// This prevents assertion failures in APInt binary operators that require
+/// matching bit widths.
+static void normalizeWidths(llvm::APInt &lhs, llvm::APInt &rhs,
+                            unsigned targetWidth) {
+  // Adjust lhs to target width
+  if (lhs.getBitWidth() < targetWidth) {
+    lhs = lhs.zext(targetWidth);
+  } else if (lhs.getBitWidth() > targetWidth) {
+    lhs = lhs.trunc(targetWidth);
+  }
+
+  // Adjust rhs to target width
+  if (rhs.getBitWidth() < targetWidth) {
+    rhs = rhs.zext(targetWidth);
+  } else if (rhs.getBitWidth() > targetWidth) {
+    rhs = rhs.trunc(targetWidth);
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Signal Registration
 //===----------------------------------------------------------------------===//
@@ -1672,12 +1693,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto addOp = dyn_cast<comb::AddOp>(op)) {
     InterpretedValue lhs = getValue(procId, addOp.getOperand(0));
     InterpretedValue rhs = getValue(procId, addOp.getOperand(1));
+    unsigned targetWidth = getTypeWidth(addOp.getType());
 
     if (lhs.isX() || rhs.isX()) {
       setValue(procId, addOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(addOp.getType())));
+               InterpretedValue::makeX(targetWidth));
     } else {
-      APInt result = lhs.getAPInt() + rhs.getAPInt();
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
+      APInt result = lhsVal + rhsVal;
       setValue(procId, addOp.getResult(), InterpretedValue(result));
     }
     return success();
@@ -3029,8 +3054,65 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   // Get the signal ID for the probed signal
   SignalId sigId = getSignalId(probeOp.getSignal());
   if (sigId == 0) {
+    // Check if this is a global variable access via UnrealizedConversionCastOp
+    // This happens when static class properties are accessed - they're stored
+    // in LLVM globals, not LLHD signals.
+    Value signal = probeOp.getSignal();
+    if (auto castOp =
+            signal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() == 1) {
+        Value input = castOp.getInputs()[0];
+        if (auto addrOfOp = input.getDefiningOp<LLVM::AddressOfOp>()) {
+          StringRef globalName = addrOfOp.getGlobalName();
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Probe of global variable: " << globalName << "\n");
+
+          // Read from global memory block
+          auto blockIt = globalMemoryBlocks.find(globalName);
+          if (blockIt != globalMemoryBlocks.end()) {
+            MemoryBlock &block = blockIt->second;
+            // Read the pointer value from global memory
+            uint64_t ptrValue = 0;
+            bool hasUnknown = !block.initialized;
+
+            if (!hasUnknown) {
+              // Read 8 bytes (pointer size) from the memory block
+              unsigned readSize = std::min(8u, static_cast<unsigned>(block.size));
+              for (unsigned i = 0; i < readSize; ++i) {
+                ptrValue |= (static_cast<uint64_t>(block.data[i]) << (i * 8));
+              }
+            }
+
+            InterpretedValue val;
+            if (hasUnknown) {
+              val = InterpretedValue::makeX(64);
+            } else {
+              val = InterpretedValue(ptrValue, 64);
+            }
+            setValue(procId, probeOp.getResult(), val);
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Read global " << globalName << " = "
+                       << (hasUnknown ? "X" : std::to_string(ptrValue)) << "\n");
+            return success();
+          }
+        }
+      }
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in probe\n");
     return failure();
+  }
+
+  // First check for pending epsilon drives - this enables blocking assignment
+  // semantics where a probe sees the value driven earlier in the same process.
+  auto pendingIt = pendingEpsilonDrives.find(sigId);
+  if (pendingIt != pendingEpsilonDrives.end()) {
+    setValue(procId, probeOp.getResult(), pendingIt->second);
+    LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId
+                            << " = " << (pendingIt->second.isX() ? "X"
+                                         : std::to_string(pendingIt->second.getUInt64()))
+                            << " (from pending epsilon drive)\n");
+    return success();
   }
 
   // Get the current signal value from the scheduler
@@ -3103,6 +3185,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                           << " (delay " << delay.realTime << " fs)"
                           << " strength(" << getDriveStrengthName(strength0)
                           << ", " << getDriveStrengthName(strength1) << ")\n");
+
+  // For epsilon/zero delays, also store in pending drives for immediate reads.
+  // This enables blocking assignment semantics where a subsequent probe in the
+  // same process sees the value immediately rather than waiting for the event.
+  if (delay.realTime == 0 && delay.deltaStep <= 1) {
+    pendingEpsilonDrives[sigId] = driveVal;
+  }
 
   // Schedule the signal update with strength information
   SignalValue newVal = driveVal.toSignalValue();
@@ -3774,6 +3863,37 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return InterpretedValue::makeX(64);
   }
 
+  // Check if this is an llvm.mlir.zero (null pointer constant)
+  if (auto zeroOp = value.getDefiningOp<LLVM::ZeroOp>()) {
+    InterpretedValue iv(0, 64);
+    valueMap[value] = iv;
+    return iv;
+  }
+
+  // Check if this is an UnrealizedConversionCastOp - propagate value through
+  if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+    if (!castOp.getInputs().empty()) {
+      InterpretedValue inputVal = getValue(procId, castOp.getInputs()[0]);
+      // Adjust width if needed
+      unsigned outputWidth = getTypeWidth(value.getType());
+      InterpretedValue result;
+      if (inputVal.isX()) {
+        result = InterpretedValue::makeX(outputWidth);
+      } else if (inputVal.getWidth() == outputWidth) {
+        result = inputVal;
+      } else {
+        APInt apVal = inputVal.getAPInt();
+        if (outputWidth < apVal.getBitWidth()) {
+          result = InterpretedValue(apVal.trunc(outputWidth));
+        } else {
+          result = InterpretedValue(apVal.zext(outputWidth));
+        }
+      }
+      valueMap[value] = result;
+      return result;
+    }
+  }
+
   // Check if this is a signal reference
   auto sigIt = valueToSignal.find(value);
   if (sigIt != valueToSignal.end()) {
@@ -4289,6 +4409,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
         }
       }
     }
+
+    // Check if this is a malloc'd memory access
+    if (!block) {
+      for (auto &entry : mallocBlocks) {
+        uint64_t mallocBaseAddr = entry.first;
+        uint64_t mallocSize = entry.second.size;
+        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+          block = &entry.second;
+          offset = addr - mallocBaseAddr;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.load: found malloc block at 0x"
+                                  << llvm::format_hex(mallocBaseAddr, 16)
+                                  << " offset " << offset << "\n");
+          break;
+        }
+      }
+    }
   }
 
   if (!block) {
@@ -4344,23 +4480,64 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     ProcessId procId, LLVM::StoreOp storeOp) {
+  // Get the pointer value first
+  InterpretedValue ptrVal = getValue(procId, storeOp.getAddr());
+
   // Find the memory block for this pointer
   MemoryBlock *block = findMemoryBlock(procId, storeOp.getAddr());
-  if (!block) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.store: no memory block found for pointer\n");
-    return success(); // Don't fail, just skip the store
-  }
-
-  // Calculate the offset within the memory block
-  InterpretedValue ptrVal = getValue(procId, storeOp.getAddr());
   uint64_t offset = 0;
 
-  // If the address is from a GEP, calculate the offset
-  if (auto gepOp = storeOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
-    InterpretedValue baseVal = getValue(procId, gepOp.getBase());
-    if (!baseVal.isX() && !ptrVal.isX()) {
-      offset = ptrVal.getUInt64() - baseVal.getUInt64();
+  if (block) {
+    // Local alloca memory
+    // Calculate the offset within the memory block
+    if (auto gepOp = storeOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
+      InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+      if (!baseVal.isX() && !ptrVal.isX()) {
+        offset = ptrVal.getUInt64() - baseVal.getUInt64();
+      }
     }
+  } else if (!ptrVal.isX()) {
+    // Check if this is a global memory access
+    uint64_t addr = ptrVal.getUInt64();
+
+    // Find which global this address belongs to
+    for (auto &entry : globalAddresses) {
+      StringRef globalName = entry.first();
+      uint64_t globalBaseAddr = entry.second;
+      auto blockIt = globalMemoryBlocks.find(globalName);
+      if (blockIt != globalMemoryBlocks.end()) {
+        uint64_t globalSize = blockIt->second.size;
+        if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+          block = &blockIt->second;
+          offset = addr - globalBaseAddr;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found global '" << globalName
+                                  << "' at offset " << offset << "\n");
+          break;
+        }
+      }
+    }
+
+    // Check if this is a malloc'd memory access
+    if (!block) {
+      for (auto &entry : mallocBlocks) {
+        uint64_t mallocBaseAddr = entry.first;
+        uint64_t mallocSize = entry.second.size;
+        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+          block = &entry.second;
+          offset = addr - mallocBaseAddr;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found malloc block at 0x"
+                                  << llvm::format_hex(mallocBaseAddr, 16)
+                                  << " offset " << offset << "\n");
+          break;
+        }
+      }
+    }
+  }
+
+  if (!block) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.store: no memory block found for pointer 0x"
+                            << llvm::format_hex(ptrVal.isX() ? 0 : ptrVal.getUInt64(), 16) << "\n");
+    return success(); // Don't fail, just skip the store
   }
 
   // Get the value to store
@@ -4582,6 +4759,34 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle malloc - dynamic memory allocation for class instances
+    if (calleeName == "malloc") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue sizeArg = getValue(procId, callOp.getOperand(0));
+        uint64_t size = sizeArg.isX() ? 256 : sizeArg.getUInt64();  // Default size if X
+
+        // Allocate memory block for this allocation
+        auto &procState = processStates[procId];
+        uint64_t addr = procState.nextMemoryAddress;
+        procState.nextMemoryAddress += size;
+
+        // Create a memory block for this allocation
+        MemoryBlock block(size, 64);
+        block.initialized = true;  // Mark as initialized with zeros
+        std::fill(block.data.begin(), block.data.end(), 0);
+
+        // Store the block - use the address as a key
+        // We need to track malloc'd blocks separately so findMemoryBlock can find them
+        mallocBlocks[addr] = std::move(block);
+
+        setValue(procId, callOp.getResult(), InterpretedValue(addr, 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: malloc(" << size
+                                << ") = 0x" << llvm::format_hex(addr, 16) << "\n");
+      }
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' is external (no body)\n");
     for (Value result : callOp.getResults()) {
@@ -4711,6 +4916,18 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
 
     // Create memory block
     MemoryBlock block(size, 64);
+
+    // Check the initializer attribute
+    // Most globals are initialized with #llvm.zero or a constant value
+    // The MemoryBlock constructor already initializes data to 0, so we just
+    // need to mark it as initialized.
+    if (globalOp.getValueOrNull()) {
+      // Has an initializer - mark as initialized
+      // The data is already zeroed from the constructor, which is correct
+      // for #llvm.zero initializers
+      block.initialized = true;
+      LLVM_DEBUG(llvm::dbgs() << "    Initialized to zero\n");
+    }
 
     // Check if this is a vtable (has circt.vtable_entries attribute)
     if (auto vtableEntriesAttr = globalOp->getAttr("circt.vtable_entries")) {

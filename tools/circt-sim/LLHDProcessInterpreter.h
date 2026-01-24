@@ -503,6 +503,12 @@ private:
   /// Map from signal IDs to signal names.
   llvm::DenseMap<SignalId, std::string> signalIdToName;
 
+  /// Pending epsilon drives - for immediate blocking assignment semantics.
+  /// When a signal is driven with epsilon delay within the same process,
+  /// this map holds the value so subsequent probes can see it immediately.
+  /// Key is SignalId, value is the pending value.
+  llvm::DenseMap<SignalId, InterpretedValue> pendingEpsilonDrives;
+
   /// Map from process IDs to execution states.
   llvm::DenseMap<ProcessId, ProcessExecutionState> processStates;
 
@@ -533,6 +539,10 @@ private:
   /// Memory storage for LLVM global variables.
   /// Maps global name to memory block.
   llvm::StringMap<MemoryBlock> globalMemoryBlocks;
+
+  /// Memory storage for dynamically allocated memory (malloc).
+  /// Maps address to memory block.
+  llvm::DenseMap<uint64_t, MemoryBlock> mallocBlocks;
 
   /// Map from simulated addresses to function names (for vtable entries).
   /// When a vtable entry is loaded, we store the function name it maps to.
