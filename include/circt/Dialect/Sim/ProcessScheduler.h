@@ -394,10 +394,78 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
+// DriveStrength - Signal drive strength per IEEE 1800-2017 § 7.9
+//===----------------------------------------------------------------------===//
+
+/// Signal drive strength levels (lower values = stronger).
+enum class DriveStrength : uint8_t {
+  Supply = 0, // Strongest (power/ground)
+  Strong = 1, // Normal drive
+  Pull = 2,   // Pull-up/pull-down
+  Weak = 3,   // Weak drive
+  HighZ = 4,  // High impedance (no driver)
+};
+
+/// Get the name of a drive strength for debugging.
+inline const char *getDriveStrengthName(DriveStrength strength) {
+  switch (strength) {
+  case DriveStrength::Supply:
+    return "supply";
+  case DriveStrength::Strong:
+    return "strong";
+  case DriveStrength::Pull:
+    return "pull";
+  case DriveStrength::Weak:
+    return "weak";
+  case DriveStrength::HighZ:
+    return "highz";
+  }
+  return "unknown";
+}
+
+//===----------------------------------------------------------------------===//
+// SignalDriver - Represents a single driver on a signal
+//===----------------------------------------------------------------------===//
+
+/// Represents a single driver contributing to a signal value.
+struct SignalDriver {
+  /// Unique identifier for this driver (e.g., process ID or drive operation).
+  uint64_t driverId;
+
+  /// The value being driven.
+  SignalValue value;
+
+  /// Drive strength when driving 0.
+  DriveStrength strength0;
+
+  /// Drive strength when driving 1.
+  DriveStrength strength1;
+
+  /// Whether this driver is currently active.
+  bool active;
+
+  SignalDriver()
+      : driverId(0), strength0(DriveStrength::Strong),
+        strength1(DriveStrength::Strong), active(false) {}
+
+  SignalDriver(uint64_t id, const SignalValue &val, DriveStrength s0,
+               DriveStrength s1)
+      : driverId(id), value(val), strength0(s0), strength1(s1), active(true) {}
+
+  /// Get the effective strength based on the driven value.
+  DriveStrength getEffectiveStrength() const {
+    if (value.isUnknown())
+      return DriveStrength::HighZ; // X values treated as weak
+    return value.getLSB() ? strength1 : strength0;
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // SignalState - Tracks signal values for edge detection
 //===----------------------------------------------------------------------===//
 
 /// Tracks the current and previous values of a signal for edge detection.
+/// Also tracks multiple drivers with their strengths for signal resolution.
 class SignalState {
 public:
   SignalState() = default;
@@ -424,9 +492,114 @@ public:
     return SignalValue::detectEdge(previous, current);
   }
 
+  /// Add or update a driver with strength information.
+  void addOrUpdateDriver(uint64_t driverId, const SignalValue &value,
+                         DriveStrength strength0, DriveStrength strength1) {
+    // Find existing driver or add new one
+    for (auto &driver : drivers) {
+      if (driver.driverId == driverId) {
+        driver.value = value;
+        driver.strength0 = strength0;
+        driver.strength1 = strength1;
+        driver.active = true;
+        return;
+      }
+    }
+    // Add new driver
+    drivers.emplace_back(driverId, value, strength0, strength1);
+  }
+
+  /// Resolve all drivers to compute the signal value.
+  /// Returns the resolved value based on IEEE 1800-2017 strength rules.
+  SignalValue resolveDrivers() const {
+    if (drivers.empty())
+      return current;
+
+    // Count active drivers
+    size_t activeCount = 0;
+    for (const auto &d : drivers)
+      if (d.active)
+        ++activeCount;
+
+    if (activeCount == 0)
+      return current;
+
+    if (activeCount == 1) {
+      // Single driver - use its value directly
+      for (const auto &d : drivers)
+        if (d.active)
+          return d.value;
+    }
+
+    // Multiple drivers - need strength-based resolution
+    // Separate drivers by their driven value (0 or 1)
+    DriveStrength strongestFor0 = DriveStrength::HighZ;
+    DriveStrength strongestFor1 = DriveStrength::HighZ;
+    bool has0Driver = false;
+    bool has1Driver = false;
+
+    for (const auto &d : drivers) {
+      if (!d.active)
+        continue;
+      if (d.value.isUnknown())
+        continue; // Skip X drivers
+
+      if (d.value.getLSB()) {
+        // Driving 1
+        has1Driver = true;
+        if (d.strength1 < strongestFor1)
+          strongestFor1 = d.strength1;
+      } else {
+        // Driving 0
+        has0Driver = true;
+        if (d.strength0 < strongestFor0)
+          strongestFor0 = d.strength0;
+      }
+    }
+
+    // Resolution rules:
+    // 1. If only one value is being driven, use that value
+    // 2. If both 0 and 1 are driven, stronger one wins
+    // 3. If equal strength, result is X (unknown)
+    if (has0Driver && !has1Driver) {
+      return SignalValue(0, current.getWidth());
+    }
+    if (has1Driver && !has0Driver) {
+      return SignalValue(1, current.getWidth());
+    }
+    if (has0Driver && has1Driver) {
+      if (strongestFor0 < strongestFor1) {
+        // 0 driver is stronger
+        return SignalValue(0, current.getWidth());
+      } else if (strongestFor1 < strongestFor0) {
+        // 1 driver is stronger
+        return SignalValue(1, current.getWidth());
+      } else {
+        // Equal strength - result is X
+        return SignalValue::makeX(current.getWidth());
+      }
+    }
+
+    // No active non-X drivers
+    return SignalValue::makeX(current.getWidth());
+  }
+
+  /// Check if this signal has multiple drivers.
+  bool hasMultipleDrivers() const {
+    size_t activeCount = 0;
+    for (const auto &d : drivers)
+      if (d.active)
+        ++activeCount;
+    return activeCount > 1;
+  }
+
+  /// Get the list of drivers (for debugging).
+  const std::vector<SignalDriver> &getDrivers() const { return drivers; }
+
 private:
   SignalValue current;
   SignalValue previous;
+  std::vector<SignalDriver> drivers;
 };
 
 //===----------------------------------------------------------------------===//
@@ -494,6 +667,14 @@ public:
 
   /// Update a signal value, triggering sensitive processes.
   void updateSignal(SignalId signalId, const SignalValue &newValue);
+
+  /// Update a signal value with strength information for multi-driver resolution.
+  /// Uses IEEE 1800-2017 § 7.9 strength-based resolution when multiple drivers
+  /// exist on the same signal.
+  void updateSignalWithStrength(SignalId signalId, uint64_t driverId,
+                                const SignalValue &newValue,
+                                DriveStrength strength0,
+                                DriveStrength strength1);
 
   /// Get the current value of a signal.
   const SignalValue &getSignalValue(SignalId signalId) const;

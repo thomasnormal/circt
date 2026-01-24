@@ -182,6 +182,54 @@ void ProcessScheduler::updateSignal(SignalId signalId,
   }
 }
 
+void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
+                                                uint64_t driverId,
+                                                const SignalValue &newValue,
+                                                DriveStrength strength0,
+                                                DriveStrength strength1) {
+  auto it = signalStates.find(signalId);
+  if (it == signalStates.end()) {
+    LLVM_DEBUG(llvm::dbgs() << "Warning: updating unknown signal " << signalId
+                            << "\n");
+    return;
+  }
+
+  SignalValue oldValue = it->second.getCurrentValue();
+
+  // Add/update the driver with its strength information
+  it->second.addOrUpdateDriver(driverId, newValue, strength0, strength1);
+
+  // Resolve all drivers to get the final signal value
+  SignalValue resolvedValue = it->second.resolveDrivers();
+
+  // Update the signal with the resolved value
+  EdgeType edge = it->second.updateValue(resolvedValue);
+
+  ++stats.signalUpdates;
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "Signal " << signalId << " driver " << driverId
+                 << " updated: value=" << (newValue.isUnknown()
+                                               ? "X"
+                                               : std::to_string(newValue.getValue()))
+                 << " strength=(" << getDriveStrengthName(strength0) << ", "
+                 << getDriveStrengthName(strength1) << ")";
+    if (it->second.hasMultipleDrivers()) {
+      llvm::dbgs() << " resolved=" << (resolvedValue.isUnknown()
+                                           ? "X"
+                                           : std::to_string(resolvedValue.getValue()));
+    }
+    llvm::dbgs() << "\n";
+  });
+
+  if (edge != EdgeType::None) {
+    ++stats.edgesDetected;
+    LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
+                            << getEdgeTypeName(edge) << "\n");
+    triggerSensitiveProcesses(signalId, oldValue, resolvedValue);
+  }
+}
+
 const SignalValue &ProcessScheduler::getSignalValue(SignalId signalId) const {
   auto it = signalStates.find(signalId);
   if (it == signalStates.end())
