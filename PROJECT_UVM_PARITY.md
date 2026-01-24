@@ -124,13 +124,16 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ## Next Steps (Iteration 146)
 
-### Track A: Signal Strength Support (Priority: High) - IMPLEMENTED
+### Track A: Signal Strength Support (Priority: High) - COMPLETE
 - ✅ DriveStrengthAttr enum added to Moore dialect (Supply, Strong, Pull, Weak, HighZ)
 - ✅ ContinuousAssignOp now has optional strength0/strength1 attributes
 - ✅ ImportVerilog extracts strength from slang's getDriveStrength()
 - ✅ Pullup/pulldown primitives now emit correct strength (highz/pull or strong)
-- 🔲 MooreToCore lowering needs signal resolution for simulation
-- Remaining: Signal resolution semantics for circt-sim
+- ✅ DriveStrengthAttr enum added to LLHD dialect
+- ✅ LLHD DriveOp now has optional strength0/strength1 attributes
+- ✅ MooreToCore AssignOpConversion passes strength through to LLHD
+- ✅ FileCheck test updated to verify both Moore IR and HW IR
+- Remaining: circt-sim needs to use strength for signal resolution (simulation behavior)
 
 ### Track B: Chapter-22 Define-Expansion Test 26
 - Only 1 of 26 define-expansion tests fails (test_26)
@@ -160,7 +163,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ### Remaining Limitations
 
-1. **Signal strength resolution** - Strengths are now parsed and stored in IR, but simulation doesn't yet resolve competing drivers based on strength (needed for verilator-verification tests)
+1. **Signal strength simulation** - Strengths are now fully lowered to LLHD DriveOp, but circt-sim doesn't yet resolve competing drivers based on strength (needed for verilator-verification tests to produce correct results)
 2. **@seq event controls** - SVA feature (Codex agent scope)
 3. **Covergroup get_coverage()** - Runtime not implemented
 4. **VCD dump tasks** - $dumpfile/$dumpvars ignored
