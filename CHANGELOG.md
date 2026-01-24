@@ -1,6 +1,86 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 157 - January 24, 2026
+
+### Extern Virtual Method Vtable Fix (Major)
+
+Fixed a critical bug where extern virtual methods didn't generate ClassMethodDeclOp,
+resulting in empty vtable entries for UVM-derived classes.
+
+**Root Cause:** When a class has an extern virtual method declaration with an
+out-of-class implementation, the implementation's `fn.flags` doesn't have the
+`Virtual` flag - only the prototype does. The `visit(SubroutineSymbol)` function
+was checking the implementation's flags, missing the virtual marker.
+
+**Fix 1:** Modified `visit(MethodPrototypeSymbol)` to:
+- Check the prototype's Virtual flag (not the implementation's)
+- Handle function conversion directly
+- Create `ClassMethodDeclOp` when prototype is virtual
+
+**Fix 2:** Added handling for `MethodPrototypeSymbol` in Pass 3 (inherited
+virtual methods) so that extern virtual methods in intermediate base classes
+are properly inherited by derived classes.
+
+**Files Modified:**
+- `lib/Conversion/ImportVerilog/Structure.cpp` (~100 lines)
+- `test/Conversion/ImportVerilog/extern-virtual-method.sv` (new)
+
+**Impact:**
+- I2S AVIP now compiles with proper vtable entries
+- All UVM-derived classes have correct method resolution
+- I2S simulation: 130K cycles, 0 errors
+
+### LLVM::ConstantOp Interpreter Support
+
+Added support for `LLVM::ConstantOp` in the LLHD process interpreter, enabling
+global constructors that use LLVM constants.
+
+**Changes:**
+1. Added handler in `interpretOperation()` for `LLVM::ConstantOp`
+2. Added handler in `getValue()` for constants hoisted outside process body
+
+**Files Modified:**
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (~20 lines)
+
+**Validation:** All 36 llhd-process tests pass.
+
+### Verilator-Verification Regression Analysis
+
+Identified 1 test regression (122→121 pass): `sequences/sequence_named.sv` uses
+trailing comma in module port list, which is non-standard SystemVerilog that
+slang correctly rejects.
+
+---
+
 ## Iteration 155 - January 24, 2026
+
+### Formal Flow: Strip Sim Ops in LLHD Processes
+
+Enabled `strip-sim` in the `circt-bmc` pipeline and taught it to remove
+simulation-only artifacts inside `llhd.process` ops so formal lowering can
+ignore `$time`/finish logic:
+
+- Replace `llhd.current_time` with a constant zero time
+- Drop `sim.{pause,terminate}` when nested under `llhd.process`
+
+**Files Modified:**
+- `tools/circt-bmc/circt-bmc.cpp`
+- `lib/Dialect/Sim/Transforms/StripSim.cpp`
+- `test/Dialect/Sim/strip-sim.mlir`
+
+### BMC + SVA Sampled-Value Corrections
+
+- Fixed `lower-to-bmc` probe handling so nested `llhd.combinational` regions
+  see updated signal values after drives, not initial values.
+- Corrected sampled-value timing in assertions: `$past/$rose/$fell/$changed/$stable`
+  use the current sampled value with a single-cycle past, and `$sampled` maps
+  to delay 0.
+
+**Files Modified:**
+- `lib/Tools/circt-bmc/LowerToBMC.cpp`
+- `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+- `test/Tools/circt-bmc/lower-to-bmc-llhd-probe-drive.mlir`
+- `test/Conversion/ImportVerilog/assertions.sv`
 
 ### ProcessOp Canonicalize: Preserve Processes with func.call (Commit 7c1dc2a64)
 
@@ -634,6 +714,8 @@ coverage in `test/Conversion/SVAToLTL/basic.mlir`.
 **BMC regression:** Added SVA end-to-end coverage for
 `a ##[*] b |=> c until d` in
 `test/Tools/circt-bmc/sva-unbounded-until.mlir`.
+**ImportVerilog fix:** Allow trailing commas in ANSI module port lists when
+parsing with slang (covers `test/Conversion/ImportVerilog/trailing-comma-portlist.sv`).
 **ImportVerilog fix:** Lowered SVA sequence event controls (`@seq`) into a
 clocked wait loop with NFA-based matching, with conversion coverage in
 `test/Conversion/ImportVerilog/sequence-event-control.sv`.

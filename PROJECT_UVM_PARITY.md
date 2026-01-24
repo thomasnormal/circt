@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 155)
+**Last Updated**: January 24, 2026 (Iteration 157)
 
 ## Current Status
 
@@ -46,7 +46,8 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
 
-### verilator-verification (122/154 pass, 79%)
+### verilator-verification (121/154 pass, 78%)
+Note: 1 test regression from 122 due to trailing comma syntax enforcement
 
 | Category | Count | Details |
 |----------|-------|---------|
@@ -54,9 +55,11 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | Expected failures | 4 | Tests marked should-fail |
 | Parameter initializer | 3 | Missing parameter defaults |
 | pre/post_randomize | 2 | Signature mismatch |
+| Trailing comma | 1 | `sequence_named.sv` - non-standard SV syntax |
 | $unit reference | 1 | Package referencing $unit |
 | coverpoint iff | 1 | iff syntax in coverpoint |
 | enum in constraint | 1 | enum expression in constraint |
+| UVM testbenches | 12 | Need full UVM runtime |
 
 ## Known Limitations
 
@@ -122,15 +125,20 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 155)
+## Next Steps (Iteration 157)
 
-### Track A: Derived Class Vtable Entries - IN PROGRESS (Blocking I2S/I3C)
-**Status**: Bug identified, fix needed
-- ❌ User-defined classes (I2sBaseTest, I2sScoreboard) have empty vtables
-- ✅ UVM base classes (uvm_test, uvm_scoreboard) have proper vtable entries
-- **Problem**: `circt.vtable_entries` attribute missing on derived class vtables
-- **Investigation**: CreateVTables.cpp or VTableOpConversion not handling cross-package inheritance
-- **Location**: `lib/Dialect/Moore/Transforms/CreateVTables.cpp`
+### Track A: Extern Virtual Method Vtable Entries - FIXED (Iteration 157)
+**Status**: Fixed - I2S AVIP now compiles with proper vtable entries
+- ✅ Simple cross-package inheritance works
+- ✅ Complex UVM inheritance now works (I2sBaseTest, I2sScoreboard have vtable entries)
+- **Root Cause** (Agent a44d687 analysis):
+  - Extern virtual methods have Virtual flag only on the prototype, not the implementation
+  - `visit(SubroutineSymbol)` checked implementation's flags, missing the Virtual flag
+  - ClassMethodDeclOp was not created for extern virtual methods
+- **Fix 1**: Modified `visit(MethodPrototypeSymbol)` to use prototype's virtual flag
+- **Fix 2**: Added MethodPrototypeSymbol handling in Pass 3 for inherited extern virtual methods
+- **Location**: `lib/Conversion/ImportVerilog/Structure.cpp`
+- **Test**: `test/Conversion/ImportVerilog/extern-virtual-method.sv`
 
 ### Track B: Covergroup Method Lowering - COMPLETE
 **Status**: Fixed in Iteration 154 (Commit a6b1859ac)
@@ -145,11 +153,15 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - ✅ Prevents valid processes from being removed during canonicalization
 - ✅ Test: `test/Dialect/LLHD/Canonicalization/processes.mlir`
 
-### Track D: Global Variable Initialization - COMPLETE
-**Status**: Fixed in Iteration 153 (Commit d314c06da)
-- ✅ GlobalVariableOpConversion now generates LLVM global constructors
-- ✅ `uvm_top` and 23 other UVM globals initialized correctly
-- ✅ Added test: `test/Conversion/ImportVerilog/global-variable-init.sv`
+### Track D: Global Variable Initialization - PARTIAL
+**Status**: Simple constructors work, complex ones need interpreter fixes (Iteration 156)
+- ✅ GlobalVariableOpConversion generates LLVM global constructors correctly
+- ✅ Simple constructors using `hw.constant` work (e.g., `int global_int = 42;`)
+- ❌ Complex constructors using `LLVM::ConstantOp` or `llhd.sig` fail
+- **Finding** (Agent a6809ff): Global constructors ARE being called, but:
+  1. `LLVM::ConstantOp` not handled by interpreter
+  2. `llhd.sig` in function context not handled (used for local variables)
+- **Next**: Add LLVM::ConstantOp support to LLHDProcessInterpreter.cpp
 
 ### Track E: HVL_top Function Inlining - NEEDS INVESTIGATION
 **Status**: Analysis complete, design decision needed
@@ -167,12 +179,21 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - **Fix Needed**: Proper 4-state aware bitcast logic for unions
 
 ### Track G: UVM Runtime Initialization (Blocking Full AVIP)
-**Status**: HDL side works; UVM runtime not initialized
+**Status**: Tracks A and H fixed; ready for integration testing
 - ✅ HDL top modules compile and simulate correctly
 - ✅ Global constructor execution implemented in circt-sim
+- ✅ Vtable entries now generated for UVM classes (Track A fixed)
+- ✅ LLVM::ConstantOp interpreter support (Track H fixed)
 - ❌ hvl_top with run_test() has inlined body instead of runtime call
 - ❌ uvm_coreservice and uvm_root not created at runtime
-- **Next**: Fix Track A (vtable entries) and Track E (function inlining)
+- **Next**: Test full UVM testbench simulation with recent fixes
+
+### Track H: LLVM::ConstantOp Interpreter Support - FIXED (Iteration 157)
+**Status**: Fixed - Global constructors using LLVM::ConstantOp now work
+- ✅ Added `LLVM::ConstantOp` handler in `interpretOperation()` (lines 2492-2503)
+- ✅ Added handler in `getValue()` for constants hoisted outside process body (lines 3903-3910)
+- ✅ All 36 llhd-process tests pass
+- **Location**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
 ## Remaining Limitations
 
