@@ -267,8 +267,11 @@ package uvm_pkg;
 
   // Run test task - main UVM entry point
   // This task creates the test from factory and executes all UVM phases
+  // Note: We call uvm_root::get() directly rather than using uvm_top global
+  // because static variable initializers with function calls are not yet
+  // fully supported in CIRCT's ImportVerilog conversion.
   task automatic run_test(string test_name = "");
-    uvm_top.run_test(test_name);
+    uvm_root::get().run_test(test_name);
   endtask
 
   //=========================================================================
