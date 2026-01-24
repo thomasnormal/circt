@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 147)
+**Last Updated**: January 24, 2026 (Iteration 148)
 
 ## Current Status
 
@@ -122,16 +122,18 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 148)
+## Next Steps (Iteration 149)
 
-### Track A: circt-sim Signal Strength Resolution (Priority: High)
-**Status**: IR lowering complete, simulation pending
+### Track A: circt-sim Signal Strength Resolution - COMPLETE
+**Status**: Fully implemented (Iteration 148)
 - ✅ DriveStrengthAttr in Moore dialect
 - ✅ DriveStrengthAttr in LLHD dialect
 - ✅ MooreToCore passes strength to LLHD DriveOp
-- ⬜ **NEXT**: Implement strength-based signal resolution in circt-sim
-- ⬜ When multiple drivers, higher strength wins per IEEE 1364
-- ⬜ This will fix 13+ verilator-verification tests
+- ✅ ProcessScheduler: DriveStrength enum, SignalDriver struct, multi-driver tracking
+- ✅ ProcessScheduler::updateSignalWithStrength() with IEEE 1800 resolution
+- ✅ LLHDProcessInterpreter: extracts strength from DriveOp, uses updateSignalWithStrength
+- ✅ 8 unit tests covering all resolution scenarios
+- **NEXT**: Run verilator-verification to verify the 13+ tests now pass
 
 ### Track B: Chapter-22 Test 26 Investigation - COMPLETE
 **Status**: Test design issue, not CIRCT bug
@@ -162,6 +164,16 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - 2 tests need pre/post_randomize signature fix
 - 1 test needs coverpoint iff syntax
 
+## Completed in Iteration 148
+
+1. **Signal Strength Simulation in circt-sim** (Commit 2f0a4b6dc)
+   - Added DriveStrength enum and SignalDriver struct to ProcessScheduler
+   - Implemented multi-driver tracking with strength-based resolution
+   - IEEE 1800-2017 compliant: stronger wins, equal conflict → X
+   - Modified LLHDProcessInterpreter to extract and use strength attributes
+   - Added 8 comprehensive unit tests for signal strength resolution
+   - Full pipeline complete: Verilog → Moore → LLHD → circt-sim
+
 ## Completed in Iteration 147
 
 1. **Signal Strength LLHD Lowering** (Commit b8037da32)
@@ -177,7 +189,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ## Remaining Limitations
 
-1. **Signal strength simulation** - IR lowering complete, circt-sim resolution needed
+1. ~~**Signal strength simulation**~~ - **COMPLETE** (Iteration 148)
 2. **@seq event controls** - SVA feature (Codex agent scope)
 3. **Covergroup get_coverage()** - Compiles, runtime not implemented
 4. **VCD dump tasks** - $dumpfile/$dumpvars stubbed

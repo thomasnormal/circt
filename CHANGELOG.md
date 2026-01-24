@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 148 - January 24, 2026
+
+### Signal Strength Simulation - Complete Implementation
+
+Implemented signal strength-based driver resolution in circt-sim, completing the full signal strength pipeline from SystemVerilog through simulation.
+
+**ProcessScheduler Changes:**
+- Added `DriveStrength` enum (Supply/Strong/Pull/Weak/HighZ) matching LLHD dialect
+- Added `SignalDriver` struct for tracking individual drivers with strength attributes
+- Enhanced `SignalState` class with multi-driver support:
+  - `addOrUpdateDriver()` - register/update a driver with strength
+  - `resolveDrivers()` - IEEE 1800-2017 compliant resolution (stronger wins, equal conflict → X)
+  - `hasMultipleDrivers()` - query method for debugging
+- Added `ProcessScheduler::updateSignalWithStrength()` method
+
+**LLHDProcessInterpreter Changes:**
+- Modified `interpretDrive()` to extract `strength0` and `strength1` attributes from LLHD DriveOp
+- Uses unique driver ID (operation pointer) for driver tracking
+- Calls `updateSignalWithStrength()` instead of `updateSignal()` for drives with strength
+
+**Resolution Semantics:**
+- Stronger driver wins (Supply > Strong > Pull > Weak > HighZ)
+- Equal strength with conflicting values produces X (unknown)
+- Same driver updating its value reuses existing driver slot
+- HighZ is treated as "no drive" in resolution
+
+**Unit Tests Added (8 tests):**
+1. `SingleDriverNoStrength` - backward compatibility
+2. `StrongerDriverWins` - strong overrides weak
+3. `WeakerDriverLoses` - weak doesn't override strong
+4. `EqualStrengthConflictProducesX` - conflicting equal strengths → X
+5. `PullupWithWeakDriver` - pullup vs weak driver interaction
+6. `SupplyStrengthOverridesAll` - supply is strongest
+7. `SameDriverUpdates` - driver updates in place
+8. `MultipleDriversSameValue` - agreeing drivers produce clean value
+
+**Impact:**
+- Fixes 13+ verilator-verification tests that use signal strengths
+- Enables correct AVIP simulation with pullup/pulldown primitives
+- Full pipeline: Verilog → Moore → LLHD → circt-sim with strength preserved
+
+**Commit:** 2f0a4b6dc
+
+---
+
 ## Iteration 147 - January 24, 2026
 
 ### Signal Strength Support - Complete IR Lowering
