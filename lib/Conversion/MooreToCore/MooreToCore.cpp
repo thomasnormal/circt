@@ -897,6 +897,7 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
       }
       // Complex initial blocks (with wait ops or non-constant captures)
       // still need llhd.process with halt
+      rewriter.setInsertionPoint(op);
       auto newOp = llhd::ProcessOp::create(rewriter, loc, TypeRange{});
       auto &body = newOp->getRegion(0);
       rewriter.inlineRegionBefore(op.getBody(), body, body.end());
@@ -912,6 +913,7 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
     // Handle final procedures. These lower to `llhd.final` op that executes
     // the body and then halts.
     if (op.getKind() == ProcedureKind::Final) {
+      rewriter.setInsertionPoint(op);
       auto newOp = llhd::FinalOp::create(rewriter, loc);
       auto &body = newOp->getRegion(0);
       rewriter.inlineRegionBefore(op.getBody(), body, body.end());
@@ -925,6 +927,7 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
     }
 
     // All other procedures lower to a an `llhd.process`.
+    rewriter.setInsertionPoint(op);
     auto newOp = llhd::ProcessOp::create(rewriter, loc, TypeRange{});
 
     // We need to add an empty entry block because it is not allowed in MLIR to
