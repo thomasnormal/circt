@@ -3069,7 +3069,11 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
             }
             val = InterpretedValue(apVal);
           } else {
-            val = InterpretedValue(val.getUInt64(), outputWidth);
+            // Mask the value to fit in outputWidth bits to avoid APInt assertion
+            uint64_t maskedVal = val.getUInt64();
+            if (outputWidth < 64)
+              maskedVal &= ((1ULL << outputWidth) - 1);
+            val = InterpretedValue(maskedVal, outputWidth);
           }
         }
         setValue(procId, output, val);
@@ -3079,7 +3083,11 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       InterpretedValue val = getValue(procId, castOp.getInputs()[0]);
       for (Value output : castOp.getOutputs()) {
         unsigned outputWidth = getTypeWidth(output.getType());
-        setValue(procId, output, InterpretedValue(val.isX() ? 0 : val.getUInt64(), outputWidth));
+        // Mask the value to fit in outputWidth bits to avoid APInt assertion
+        uint64_t maskedVal = val.isX() ? 0 : val.getUInt64();
+        if (outputWidth < 64)
+          maskedVal &= ((1ULL << outputWidth) - 1);
+        setValue(procId, output, InterpretedValue(maskedVal, outputWidth));
       }
     } else {
       // Just propagate input values for non-standard patterns
