@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 155 - January 24, 2026
+
+### ProcessOp Canonicalize: Preserve Processes with func.call (Commit 7c1dc2a64)
+
+The `ProcessOp::canonicalize` function was removing llhd.process ops that
+appeared to have no side effects, but it wasn't checking for `func.call`
+and `func.call_indirect` operations.
+
+**Fix:** Treat func.call and func.call_indirect conservatively as having
+side effects, preventing valid processes from being removed.
+
+**Files Modified:**
+- `lib/Dialect/LLHD/IR/LLHDOps.cpp` (+11 lines)
+- `test/Dialect/LLHD/Canonicalization/processes.mlir` (+30 lines)
+
+### HVL_top Lowering Analysis
+
+Investigated why UVM hvl_top initial blocks weren't executing. Key findings:
+
+1. **Simple function calls are inlined** during ImportVerilog lowering,
+   not preserved as `func.call` ops
+2. **Only initial blocks with wait events** (like `@(posedge clk)`) get
+   lowered to `llhd.process`
+3. **seq.initial** is used for simple initial blocks that don't need
+   runtime process scheduling
+
+This explains why UVM `run_test()` calls aren't working - the function
+body is being statically inlined rather than being called at runtime.
+
+### I2S/I3C AVIP Vtable Bug Identified
+
+Discovered that derived class vtables are created with correct sizes but
+**NO entries** - the `circt.vtable_entries` attribute is missing.
+
+**Symptoms:**
+- UVM base classes (`uvm_test`, `uvm_scoreboard`) have proper vtable entries
+- User-defined classes (`I2sBaseTest`, `I2sScoreboard`) have empty vtables
+- Calling virtual methods like `end_of_elaboration_phase` fails at runtime
+
+**Root Cause (under investigation):**
+- `VTableEntryOp` may not be generated for classes in external packages
+- Or `VTableOpConversion` may not be collecting entries correctly
+
+### Yosys SVTypes Tests: 72% (13/18)
+
+| Test | Status | Issue |
+|------|--------|-------|
+| enum_simple.sv | FAIL | Invalid test syntax |
+| struct_array.sv | FAIL | Negative tests (correctly rejected) |
+| struct_sizebits.sv | FAIL | $size() needs extension |
+| typedef_initial_and_assign.sv | FAIL | Test bug (forward reference) |
+| union_simple.sv | FAIL | 4-state bitwidth mismatch in unions |
+
+---
+
 ## Iteration 154 - January 24, 2026
 
 ### Covergroup Method Lowering (Commit a6b1859ac)
