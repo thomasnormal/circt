@@ -2891,11 +2891,11 @@ Value Context::resolveInterfaceInstance(
 FunctionLowering *
 Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
   // Check if there already is a declaration for this function.
-  auto &lowering = functions[&subroutine];
-  if (lowering) {
-    if (!lowering->op)
+  auto it = functions.find(&subroutine);
+  if (it != functions.end() && it->second) {
+    if (!it->second->op)
       return {};
-    return lowering.get();
+    return it->second.get();
   }
 
   // Check if this is a task/function inside an interface.
@@ -2959,6 +2959,14 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
     // Failures are tolerated (e.g., for forward references or recursive calls
     // that will be resolved later), but the class declaration must exist.
     (void)convertClassDeclaration(*classTy);
+
+    // Re-check if this function was already created during convertClassDeclaration.
+    // This can happen when converting a class method triggers class body conversion,
+    // which in turn converts all class members including this same method.
+    auto recheck = functions.find(&subroutine);
+    if (recheck != functions.end() && recheck->second && recheck->second->op)
+      return recheck->second.get();
+
     auto *lowering = declareClass(*classTy);
     if (!lowering || !lowering->op) {
       mlir::emitError(loc) << "class '" << classTy->name
@@ -3056,6 +3064,15 @@ Context::declareCallableImpl(const slang::ast::SubroutineSymbol &subroutine,
   auto funcTy = getFunctionSignature(*this, subroutine, extraParams);
   if (!funcTy)
     return nullptr;
+
+  // Re-check if the function was already created during getFunctionSignature.
+  // This can happen when converting argument types triggers class conversions
+  // that recursively lead to declaring this same function.
+  auto recheckIt = functions.find(&subroutine);
+  if (recheckIt != functions.end() && recheckIt->second &&
+      recheckIt->second->op)
+    return recheckIt->second.get();
+
   auto funcOp = mlir::func::FuncOp::create(builder, loc, qualifiedName, funcTy);
 
   SymbolTable::setSymbolVisibility(funcOp, SymbolTable::Visibility::Private);
@@ -3680,6 +3697,93 @@ struct ClassDeclVisitor {
           return failure();
         }
       }
+    }
+
+    // Pass 3: Register inherited virtual methods in the vtable.
+    // When a derived class inherits virtual methods from a base class without
+    // overriding them, those methods must still be registered in the derived
+    // class's vtable so that virtual dispatch works correctly.
+    // classAST.members() only returns explicitly defined members, not inherited
+    // ones, so we need to walk up the inheritance chain manually.
+    LLVM_DEBUG(llvm::dbgs() << "  Pass 3: Inherited virtual methods\n");
+
+    // Collect names of methods explicitly defined in this class to detect
+    // overrides.
+    llvm::StringSet<> definedMethods;
+    for (const auto &mem : classAST.members()) {
+      if (mem.kind == slang::ast::SymbolKind::Subroutine ||
+          mem.kind == slang::ast::SymbolKind::MethodPrototype) {
+        definedMethods.insert(mem.name);
+      }
+    }
+
+    // Walk up the inheritance chain.
+    const slang::ast::Type *baseType = classAST.getBaseClass();
+    while (baseType) {
+      const auto &canonicalBase = baseType->getCanonicalType();
+      const auto *baseClass = canonicalBase.as_if<slang::ast::ClassType>();
+      if (!baseClass)
+        break;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Checking base class: " << baseClass->name
+                              << "\n");
+
+      // Iterate over base class members looking for virtual methods.
+      for (const auto &mem : baseClass->members()) {
+        // Check for SubroutineSymbol (method implementation).
+        if (auto *fn = mem.as_if<slang::ast::SubroutineSymbol>()) {
+          // Skip if not virtual.
+          if (!(fn->flags & slang::ast::MethodFlags::Virtual))
+            continue;
+          // Skip if overridden in derived class.
+          if (definedMethods.contains(fn->name))
+            continue;
+          // Skip pure virtual methods (no implementation).
+          if (fn->flags & slang::ast::MethodFlags::Pure)
+            continue;
+          // Skip builtin methods.
+          if (fn->flags & slang::ast::MethodFlags::BuiltIn)
+            continue;
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "      Registering inherited virtual method: "
+                     << fn->name << "\n");
+
+          // Look up the function lowering from the base class.
+          auto it = context.functions.find(fn);
+          if (it == context.functions.end() || !it->second || !it->second->op) {
+            // The base class function wasn't converted yet - try to convert it.
+            if (failed(context.convertFunction(*fn))) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "        FAILED: Could not convert base method\n");
+              return failure();
+            }
+            it = context.functions.find(fn);
+            if (it == context.functions.end() || !it->second ||
+                !it->second->op) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "        FAILED: Function not in map after "
+                            "conversion\n");
+              return failure();
+            }
+          }
+
+          auto *lowering = it->second.get();
+          auto loc = convertLocation(fn->location);
+          FunctionType fnTy = lowering->op.getFunctionType();
+
+          // Emit the method decl pointing to the base class's function.
+          moore::ClassMethodDeclOp::create(builder, loc, fn->name, fnTy,
+                                           SymbolRefAttr::get(lowering->op));
+
+          // Add to definedMethods so we don't re-register this method if it
+          // appears in an even more ancestral base class.
+          definedMethods.insert(fn->name);
+        }
+      }
+
+      // Move to the next base class.
+      baseType = baseClass->getBaseClass();
     }
 
     LLVM_DEBUG(llvm::dbgs() << "  ClassDeclVisitor::run completed successfully\n");
