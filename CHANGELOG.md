@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 151 - January 24, 2026
+
+### Vtable Support in circt-sim (Complete)
+
+Implemented full vtable and indirect call support for virtual method dispatch in the circt-sim interpreter.
+
+**Changes (Commit c95636ccb):**
+- Added global memory storage for LLVM globals (vtables)
+- Initialize vtables from `circt.vtable_entries` attribute at startup
+- Map function addresses to function names for indirect call resolution
+- Added `llvm.addressof` handler to return addresses of globals
+- Modified `llvm.load` to check global memory in addition to alloca memory
+- Added `func.call_indirect` handler for virtual method dispatch
+- Added `builtin.unrealized_conversion_cast` propagation for function types
+
+**Files Modified:**
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (+330 lines)
+- `tools/circt-sim/LLHDProcessInterpreter.h` (+38 lines)
+
+### UVM Phase Execution Implementation (Commit f2a1a35e8)
+
+Implemented real UVM phase execution in `uvm_root::run_test()`:
+- Factory lookup to create test instance
+- Component hierarchy traversal (depth-first)
+- Phase execution: build → connect → end_of_elaboration → start_of_simulation → run → extract → check → report → final
+- run_phase as concurrent tasks with objection handling
+- Automatic factory registration via static variables in macros
+
+### New Blocker Identified: Static Variable Initialization
+
+Virtual method calls are now supported in circt-sim, but UVM execution is blocked by a different issue:
+
+**Problem:** `uvm_top` singleton is not initialized at elaboration time.
+
+**SystemVerilog code:**
+```systemverilog
+uvm_root uvm_top = uvm_root::get();
+```
+
+**Generated IR:**
+```mlir
+llvm.mlir.global @"uvm_pkg::uvm_top"(#llvm.zero) ...
+```
+
+The static initializer `= uvm_root::get()` is not being lowered to IR. When `run_test()` accesses `uvm_top`, it's null.
+
+**Next Step:** Fix static variable initialization lowering in ImportVerilog.
+
+---
+
 ## Iteration 150 - January 24, 2026
 
 ### AVIP Simulation Verification Complete
@@ -198,6 +248,23 @@ llhd.drv %o, %b after %t strength(strong, strong) : !hw.struct<value: i1, unknow
 **Remaining Work:**
 - circt-sim needs to implement strength-based signal resolution for simulation
 - verilator-verification tests require simulation-time strength resolution to produce correct results
+
+### BMC: Preserve Procedural Asserts in LLHD Processes
+
+Immediate assertions inside LLHD processes are now preserved for BMC by
+hoisting assert/assume/cover logic before stripping processes (when operands
+are sourced from values captured from above). This fixes "no property provided"
+for yosys `extnets.sv` and similar always-@* assertions.
+
+**Regression test:**
+- `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+
+**Suite checks:**
+- `utils/run_yosys_sva_circt_bmc.sh` (14 tests, 0 failures, no-property=0)
+- `utils/run_sv_tests_circt_bmc.sh` with `TEST_FILTER='16.7--sequence$'` (PASS)
+- `utils/run_verilator_verification_circt_bmc.sh` with
+  `TEST_FILTER='assert_sampled|assert_past'` (assert_past PASS,
+  assert_sampled no-property)
 
 ## Iteration 145 - January 23, 2026
 
