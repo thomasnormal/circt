@@ -33,12 +33,28 @@ Full analysis complete:
 
 ### Yosys SVA Test Coverage
 
-Initial yosys test run: **52/83 tests (62.7%)** passing.
+Improved from 62.7% to **74%** after fixes.
 
-New error patterns identified:
-- `moore.extract` legalization for struct fields
-- `hw.bitcast` width mismatch for unions
-- `moore.net` for wand/wor net types
+New error patterns identified and fixed:
+- ✅ `moore.extract` legalization for struct fields (Commit 5b97b2eb2)
+- `hw.bitcast` width mismatch for unions (pending)
+- `moore.net` for wand/wor net types (pending)
+
+### Packed Struct Bit-Slicing Fix (Commit 5b97b2eb2)
+
+Packed struct bit-slicing (e.g., `pack1[15:8]`) was failing with "failed to
+legalize operation 'moore.extract'".
+
+**Fix:** For hw::StructType inputs, bitcast to integer and extract bits.
+
+### Procedure Insertion Point Fix (Commit 3aa1b3c2f)
+
+Initial blocks with wait events or complex captures were not appearing in
+the final hw.module output because llhd.process was being created without
+an explicit insertion point.
+
+**Fix:** Add `rewriter.setInsertionPoint(op)` before creating llhd.process
+and llhd.final ops.
 
 ---
 
@@ -148,6 +164,12 @@ Immediate `assert/assume/cover final` now propagate to `verif.*` with
 
 `comb.icmp` case/wild equality now lowers to SMT, unblocking Yosys
 `nested_clk_else.sv` in the BMC pipeline (2-state semantics).
+
+### BMC LLHD Ref Outputs
+
+Lower-to-BMC now probes ref-typed circuit outputs and resolves LLHD drives
+before probes, re-sorting the block to maintain dominance. This fixes
+external-net BMC runs (e.g., Yosys `extnets.sv` PASS/FAIL detection).
 
 ---
 
