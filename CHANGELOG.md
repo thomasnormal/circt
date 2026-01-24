@@ -1,5 +1,69 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 149 - January 24, 2026
+
+### verilator-verification Full Analysis
+
+Comprehensive analysis of the verilator-verification test suite to identify remaining failure causes.
+
+**Results Summary:**
+- Total: 122/154 tests passing (79.2%)
+- No regression from baseline
+
+**Signal Strength Tests:**
+- `signal-strengths/`: 18/21 pass (86%)
+- `signal-strengths-should-fail/`: 0/4 (correctly rejected negative tests)
+- `unsupported-signal-strengths/`: 8/16 pass
+
+**Failure Analysis:**
+
+| Category | Count | Root Cause |
+|----------|-------|------------|
+| Parameter initializer | 3 | `parameter W;` without default (slang strictness) |
+| Unbased literals | 8 | `1'z`/`1'x` syntax invalid (should be `1'bz`) |
+| pre/post_randomize | 2 | Signature validation requires `function void` |
+| Coverpoint iff | 1 | Missing parentheses in `iff enable` syntax |
+| Enum in constraint | 1 | Type name used in constraint expression |
+
+**Key Finding:** The signal strength simulation implemented in Iteration 148 is working correctly. The remaining failures are unrelated parsing/semantic issues, not simulation problems.
+
+### I2S AVIP Simulation Verified
+
+Successful end-to-end simulation of I2S AVIP with circt-sim.
+
+**Compilation:**
+- Command: `circt-verilog --uvm-path=... --ir-llhd`
+- Output: 47,908 lines MLIR (4.5 MB)
+- Warnings: UVM class builtins, $dumpvars (expected)
+
+**Simulation:**
+- Command: `circt-sim --top=hdlTop --sim-stats`
+- Processes: 7 registered, 130,011 executed
+- Delta cycles: 130,004
+- Signal updates: 130,005
+- Simulation time: 1.3 ms (1,300,000 ns)
+- Errors: 0
+
+**Output Verified:**
+```
+HDL TOP
+Transmitter Agent BFM
+[circt-sim] Simulation finished successfully
+```
+
+### sv-tests Baseline Verification
+
+Confirmed test suite baselines across key chapters:
+
+| Chapter | Pass | Fail | Total | Rate | Notes |
+|---------|------|------|-------|------|-------|
+| 5 (Lexical) | 43 | 7 | 50 | 86% | 5 negative, 2 need -D |
+| 6 (Data Types) | 73 | 11 | 84 | 87% | All failures are negative tests |
+| 8 (Classes) | 44 | 9 | 53 | 83% | All failures are negative tests |
+| 22 (Directives) | 53 | 21 | 74 | 72% | 15 negative + 8 define-expansion |
+
+---
+
 ## Iteration 148 - January 24, 2026
 
 ### Signal Strength Simulation - Complete Implementation
