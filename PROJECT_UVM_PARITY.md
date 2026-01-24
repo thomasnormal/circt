@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 154)
+**Last Updated**: January 24, 2026 (Iteration 155)
 
 ## Current Status
 
@@ -122,29 +122,28 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 154)
+## Next Steps (Iteration 155)
 
-### Track A: Vtable Inheritance for User-Defined Classes - COMPLETE
-**Status**: Fixed in Iteration 152 (Commit 8a8647993)
-- ✅ Inherited virtual methods now properly registered in derived class vtables
-- ✅ Pass 3 added to ClassDeclVisitor to walk inheritance chain
-- ✅ Fixed duplicate function creation during recursive type conversion
-- ✅ Added test: `test/Conversion/ImportVerilog/inherited-virtual-methods.sv`
+### Track A: Derived Class Vtable Entries - IN PROGRESS (Blocking I2S/I3C)
+**Status**: Bug identified, fix needed
+- ❌ User-defined classes (I2sBaseTest, I2sScoreboard) have empty vtables
+- ✅ UVM base classes (uvm_test, uvm_scoreboard) have proper vtable entries
+- **Problem**: `circt.vtable_entries` attribute missing on derived class vtables
+- **Investigation**: CreateVTables.cpp or VTableOpConversion not handling cross-package inheritance
+- **Location**: `lib/Dialect/Moore/Transforms/CreateVTables.cpp`
 
-### Track B: Covergroup Method Lowering (In Progress)
-**Status**: Analysis complete, implementation needed
-- ✅ Runtime functions exist in MooreRuntime.cpp (`__moore_covergroup_get_coverage`, etc.)
-- ✅ MooreToCore lowering exists for `CovergroupGetCoverageOp`
-- ⬜ ImportVerilog needs to detect covergroup method calls and emit Moore ops
-- **Next**: In `Expressions.cpp` visitCall, detect `CovergroupBodySymbol` parent scope
-- **Location**: `lib/Conversion/ImportVerilog/Expressions.cpp` around line 3065
+### Track B: Covergroup Method Lowering - COMPLETE
+**Status**: Fixed in Iteration 154 (Commit a6b1859ac)
+- ✅ Runtime functions exist in MooreRuntime.cpp
+- ✅ ImportVerilog detects covergroup methods via CovergroupBodySymbol
+- ✅ `sample()` → `moore.covergroup.sample`
+- ✅ `get_coverage()` → `moore.covergroup.get_coverage`
 
-### Track C: UVM Class Vtable Override - COMPLETE
-**Status**: Deep inheritance vtables working correctly
-- ✅ AXI4 AVIP compiles and runs with full UVM
-- ✅ Deep inheritance chains (uvm_test → uvm_component → uvm_object) handled correctly
-- ✅ CreateVTables pass propagates most-derived implementation to all nested vtable levels
-- ✅ Test added: `test/Conversion/ImportVerilog/vtable-deep-inheritance.sv`
+### Track C: ProcessOp Canonicalize - COMPLETE
+**Status**: Fixed in Iteration 155 (Commit 7c1dc2a64)
+- ✅ func.call and func.call_indirect now treated as side effects
+- ✅ Prevents valid processes from being removed during canonicalization
+- ✅ Test: `test/Dialect/LLHD/Canonicalization/processes.mlir`
 
 ### Track D: Global Variable Initialization - COMPLETE
 **Status**: Fixed in Iteration 153 (Commit d314c06da)
@@ -152,25 +151,28 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - ✅ `uvm_top` and 23 other UVM globals initialized correctly
 - ✅ Added test: `test/Conversion/ImportVerilog/global-variable-init.sv`
 
-### Track E: Chapter-18 Random Constraints - COMPLETE
-**Status**: Analysis complete - 119/134 (89%) passing
-- ✅ All 68 non-UVM tests handled correctly (100%)
-- ✅ 12 negative tests correctly fail with expected errors
-- ⬜ 66 tests require UVM randomization runtime (out of scope)
-- **Improvement**: +63 tests from 56/134 (42%) to 119/134 (89%)
+### Track E: HVL_top Function Inlining - NEEDS INVESTIGATION
+**Status**: Analysis complete, design decision needed
+- ✅ Simple function calls are being **inlined** during ImportVerilog
+- ✅ Only wait-event initial blocks become llhd.process
+- ❌ UVM `run_test()` body is inlined rather than called at runtime
+- **Decision**: Should complex functions be preserved as func.call? Or is seq.initial sufficient?
+- **Alternative**: Generate llhd.process for all hvl_top initial blocks
 
-### Track F: Packed Struct Bit-Slicing - COMPLETE
-**Status**: Fixed in Iteration 154 (Commit 5b97b2eb2)
-- ✅ ExtractOpConversion now handles hw::StructType
-- ✅ Bitcast struct to integer, then extract bits
-- ✅ Fixes yosys/tests/svtypes/struct_simple.sv
+### Track F: Union Bitwidth Mismatch - PENDING
+**Status**: Identified in yosys tests
+- ❌ hw.bitcast width mismatch when assigning to unions with 4-state members
+- **Example**: yosys/tests/svtypes/union_simple.sv fails
+- **Root Cause**: 4-state logic doubles bitwidth, union members have nested 4-state structs
+- **Fix Needed**: Proper 4-state aware bitcast logic for unions
 
 ### Track G: UVM Runtime Initialization (Blocking Full AVIP)
 **Status**: HDL side works; UVM runtime not initialized
 - ✅ HDL top modules compile and simulate correctly
-- ❌ hvl_top with run_test() has empty body (no llhd.process)
+- ✅ Global constructor execution implemented in circt-sim
+- ❌ hvl_top with run_test() has inlined body instead of runtime call
 - ❌ uvm_coreservice and uvm_root not created at runtime
-- **Next**: Implement UVM runtime initialization in circt-sim or lowering
+- **Next**: Fix Track A (vtable entries) and Track E (function inlining)
 
 ## Remaining Limitations
 
