@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 153)
+**Last Updated**: January 24, 2026 (Iteration 154)
 
 ## Current Status
 
@@ -122,36 +122,48 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 153)
+## Next Steps (Iteration 154)
 
 ### Track A: Vtable Inheritance for User-Defined Classes - COMPLETE
 **Status**: Fixed in Iteration 152 (Commit 8a8647993)
 - ✅ Inherited virtual methods now properly registered in derived class vtables
 - ✅ Pass 3 added to ClassDeclVisitor to walk inheritance chain
 - ✅ Fixed duplicate function creation during recursive type conversion
-- ✅ Added re-check in declareCallableImpl after getFunctionSignature
 - ✅ Added test: `test/Conversion/ImportVerilog/inherited-virtual-methods.sv`
 
-### Track B: Covergroup get_coverage() Runtime (Analysis Complete)
-**Status**: Runtime is implemented in MooreRuntime.cpp
-- ✅ Coverage computation functions exist in MooreRuntime.cpp
-- ⬜ ImportVerilog needs to lower `cg.get_coverage()` calls to Moore ops
-- ⬜ Currently lowered as regular function calls instead of `moore.covergroup.get_coverage`
-- Location: `lib/Conversion/ImportVerilog/Expressions.cpp` visitCall function
+### Track B: Covergroup Method Lowering (In Progress)
+**Status**: Analysis complete, implementation needed
+- ✅ Runtime functions exist in MooreRuntime.cpp (`__moore_covergroup_get_coverage`, etc.)
+- ✅ MooreToCore lowering exists for `CovergroupGetCoverageOp`
+- ⬜ ImportVerilog needs to detect covergroup method calls and emit Moore ops
+- **Next**: In `Expressions.cpp` visitCall, detect `CovergroupBodySymbol` parent scope
+- **Location**: `lib/Conversion/ImportVerilog/Expressions.cpp` around line 3065
 
-### Track C: AXI4 AVIP Hang Investigation (Root Cause Found)
-**Status**: circt-sim only runs one top module; UVM needs both hdl_top and hvl_top
-- Root cause: circt-sim needs a wrapper module instantiating both tops
-- Solution: Use `--max-time` flag and wrapper module approach
-- Agent a121f0f has details on the fix applied to circt-sim.cpp
+### Track C: UVM Class Vtable Override - COMPLETE
+**Status**: Deep inheritance vtables working correctly
+- ✅ AXI4 AVIP compiles and runs with full UVM
+- ✅ Deep inheritance chains (uvm_test → uvm_component → uvm_object) handled correctly
+- ✅ CreateVTables pass propagates most-derived implementation to all nested vtable levels
+- ✅ Test added: `test/Conversion/ImportVerilog/vtable-deep-inheritance.sv`
 
 ### Track D: Global Variable Initialization - COMPLETE
-**Status**: Fixed in Iteration 153
+**Status**: Fixed in Iteration 153 (Commit d314c06da)
 - ✅ GlobalVariableOpConversion now generates LLVM global constructors
-- ✅ Init regions with function calls properly lowered
-- ✅ `llvm.mlir.global_ctors` registers initializer functions
-- ✅ uvm_top and 23 other UVM globals now initialized correctly
+- ✅ `uvm_top` and 23 other UVM globals initialized correctly
 - ✅ Added test: `test/Conversion/ImportVerilog/global-variable-init.sv`
+
+### Track E: Chapter-18 Random Constraints (New)
+**Status**: 56/134 (42%) - many need UVM runtime support
+- 66 tests require UVM randomization features
+- 12 tests are negative (expected to fail)
+- **Next**: Identify which constraints are missing from slang/CIRCT vs which need UVM
+
+## Remaining Limitations
+
+1. **Covergroup method lowering** - `cg.sample()` and `cg.get_coverage()` lower to func.call instead of Moore ops
+2. **@seq event controls** - SVA feature, Codex agent scope
+3. **VCD dump tasks** - `$dumpfile`/`$dumpvars` stubbed
+4. **Some randomization features** - `pre_randomize`/`post_randomize` signature strict
 
 ## Completed in Iteration 150
 
