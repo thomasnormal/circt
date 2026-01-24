@@ -3760,6 +3760,20 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return iv;
   }
 
+  // Check if this is an llvm.mlir.addressof operation (for vtable support)
+  if (auto addrOfOp = value.getDefiningOp<LLVM::AddressOfOp>()) {
+    StringRef globalName = addrOfOp.getGlobalName();
+    auto addrIt = globalAddresses.find(globalName);
+    if (addrIt != globalAddresses.end()) {
+      uint64_t addr = addrIt->second;
+      InterpretedValue iv(addr, 64);
+      valueMap[value] = iv;
+      return iv;
+    }
+    // Global not found - return X
+    return InterpretedValue::makeX(64);
+  }
+
   // Check if this is a signal reference
   auto sigIt = valueToSignal.find(value);
   if (sigIt != valueToSignal.end()) {
@@ -3827,6 +3841,10 @@ unsigned LLHDProcessInterpreter::getTypeWidth(Type type) {
   if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(type))
     return getTypeWidth(llvmArrayType.getElementType()) *
            llvmArrayType.getNumElements();
+
+  // Handle function types (for function pointers/indirect calls)
+  if (isa<FunctionType>(type))
+    return 64;
 
   // Default to 1 bit for unknown types
   return 1;
