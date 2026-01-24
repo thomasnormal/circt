@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 154 - January 24, 2026
+
+### Covergroup Method Lowering (Commit a6b1859ac)
+
+Covergroup method calls like `cg.sample()` and `cg.get_coverage()` were being
+lowered as regular `func.call` instead of specialized Moore ops.
+
+**Fix:** Detect covergroup methods via `CovergroupBodySymbol` parent scope
+and emit appropriate Moore ops:
+- `sample()` → `moore.covergroup.sample`
+- `get_coverage()` → `moore.covergroup.get_coverage` (returns f64)
+
+**Files Modified:**
+- `lib/Conversion/ImportVerilog/Expressions.cpp` (+68 lines)
+- `test/Conversion/ImportVerilog/covergroup-methods.sv` (new)
+
+### Deep Inheritance Vtable Verification
+
+Verified that vtable inheritance for 3+ level class hierarchies works correctly.
+The fix from Iteration 152 properly handles chains like `derived → base_test → base_component → base_object`.
+
+**Test Added:**
+- `test/Conversion/ImportVerilog/vtable-deep-inheritance.sv`
+
+### Chapter-18 Random Constraints Analysis
+
+Full analysis complete:
+- **68 non-UVM tests**: All handled correctly (100%)
+- **66 UVM-dependent tests**: Require UVM randomization runtime
+- **12 negative tests**: Correctly fail with expected errors
+
+### Yosys SVA Test Coverage
+
+Initial yosys test run: **52/83 tests (62.7%)** passing.
+
+New error patterns identified:
+- `moore.extract` legalization for struct fields
+- `hw.bitcast` width mismatch for unions
+- `moore.net` for wand/wor net types
+
+---
+
 ## Iteration 153 - January 24, 2026
 
 ### Global Variable Initialization Fix (Commit d314c06da)
@@ -101,6 +143,11 @@ The static initializer `= uvm_root::get()` is not being lowered to IR. When `run
 
 Immediate `assert/assume/cover final` now propagate to `verif.*` with
 `bmc.final`, enabling final-step checks in the BMC pipeline.
+
+### SVA BMC Case/Wild Equality
+
+`comb.icmp` case/wild equality now lowers to SMT, unblocking Yosys
+`nested_clk_else.sv` in the BMC pipeline (2-state semantics).
 
 ---
 
