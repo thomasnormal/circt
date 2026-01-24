@@ -158,11 +158,13 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - ⬜ Track bins hit during simulation
 - ⬜ Return computed value from get_coverage()
 
-### Track E: Coverpoint iff Syntax (Pending)
-**Status**: Parse error on `coverpoint bar iff enable`
+### Track E: Coverpoint iff Syntax - COMPLETE
+**Status**: Test design issue, not CIRCT bug (Iteration 149)
 - Test: `functional-coverage/cover_iff.sv`
 - Error: `expected '(' after iff`
-- **NEXT**: Investigate slang handling of coverpoint iff clause
+- **Finding**: IEEE 1800-2017 requires `iff (expr)` with parentheses
+- Test uses invalid syntax `iff enable` (missing parentheses)
+- slang correctly enforces the standard
 
 ## Completed in Iteration 149
 
@@ -172,15 +174,26 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Identified remaining failure categories:
      - 3 parameter initializer issues (slang strictness)
      - 8 unbased literal syntax (`1'z` invalid)
-     - 2 pre/post_randomize signature
-     - 1 coverpoint iff, 1 enum in constraint
+     - 2 pre/post_randomize signature (slang strictness)
+     - 1 coverpoint iff (test design issue - missing parentheses)
+     - 1 enum in constraint
 
-2. **I2S AVIP Simulation Verified**
+2. **pre/post_randomize Signature Analysis**
+   - Error from slang: requires explicit `void` return type
+   - IEEE 1800-2017 allows implicit void, but slang enforces explicit
+   - Not a CIRCT bug - slang strictness issue
+
+3. **Coverpoint iff Syntax Analysis**
+   - Test uses `iff enable` without parentheses
+   - IEEE 1800-2017 requires `iff (expr)` with parentheses
+   - slang correctly enforces the standard - test is invalid
+
+4. **I2S AVIP Simulation Verified**
    - Full circt-sim simulation with 130K cycles
    - 0 errors, $display messages appearing
    - hdlTop module with clock/reset/BFM working
 
-3. **sv-tests Baseline Confirmed**
+5. **sv-tests Baseline Confirmed**
    - Chapter 5: 43/50 (86%) - 5 negative tests
    - Chapter 6: 73/84 (87%) - 11 negative tests
    - Chapter 8: 44/53 (83%) - 9 negative tests
