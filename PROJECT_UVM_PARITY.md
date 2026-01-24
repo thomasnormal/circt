@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 150)
+**Last Updated**: January 24, 2026 (Iteration 151)
 
 ## Current Status
 
@@ -165,18 +165,27 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - Possible causes: missing clock, blocked event wait, UVM phase issue
 
 ### Track F: UVM Phase Execution Implementation (Iteration 151)
-**Status**: Implementation complete, blocked by vtable initialization
+**Status**: Implementation complete, blocked by uvm_top singleton initialization
 - ✅ Implemented phase execution in `uvm_root::run_test()`:
   - Factory lookup to create test instance
   - Component hierarchy traversal (depth-first)
   - Phase execution: build → connect → end_of_elaboration → start_of_simulation → run → extract → check → report → final
   - run_phase as concurrent tasks with objection handling
 - ✅ Added automatic factory registration via static variables in macros
-- ❌ **BLOCKED**: Virtual method calls fail because vtables are initialized to zero
-  - MLIR shows: `llvm.mlir.global @"uvm_pkg::uvm_root::__vtable__"(#llvm.zero)`
-  - `circt.vtable_entries` attribute specifies correct entries but vtable memory is null
-  - Calling `uvm_top.run_test()` fails because vtable[85] is null pointer
-- **Next Step**: Fix vtable initialization in MooreToCore or circt-sim runtime
+- ✅ **FIXED**: Vtable support in circt-sim (Commit c95636ccb):
+  - Added global memory storage for LLVM globals (vtables)
+  - Initialize vtables from `circt.vtable_entries` attribute at startup
+  - Map function addresses to function names for indirect call resolution
+  - Added `llvm.addressof` handler to return addresses of globals
+  - Modified `llvm.load` to check global memory in addition to alloca memory
+  - Added `func.call_indirect` handler for virtual method dispatch
+  - Added `builtin.unrealized_conversion_cast` propagation for function types
+- ❌ **BLOCKED**: `uvm_top` singleton not initialized at elaboration time
+  - SV code: `uvm_root uvm_top = uvm_root::get();`
+  - IR shows: `llvm.mlir.global @"uvm_pkg::uvm_top"(#llvm.zero)` (zero-initialized)
+  - The static initializer `= uvm_root::get()` is not being lowered to IR
+  - When `run_test()` accesses `uvm_top`, it's null, causing vtable lookup to fail
+- **Next Step**: Fix static variable initialization lowering in ImportVerilog
 
 ## Completed in Iteration 150
 
