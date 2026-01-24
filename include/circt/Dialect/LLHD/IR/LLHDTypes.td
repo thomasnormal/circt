@@ -16,6 +16,7 @@
 include "circt/Dialect/LLHD/IR/LLHDDialect.td"
 include "circt/Dialect/HW/HWTypes.td"
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 
 // Base class for other typedefs. Provides dialact-specific defaults.
 class LLHDType<string name> : TypeDef<LLHDDialect, name> { }
@@ -78,6 +79,18 @@ class RefNestedTypeMatchesType<string refType, string type> : TypesMatchWith<
 //===----------------------------------------------------------------------===//
 // Attribute declarations
 //===----------------------------------------------------------------------===//
+
+// Drive strength for signal drivers.
+// See IEEE 1800-2017 § 7.9 "Strength reduction".
+def DriveStrengthAttr : I32EnumAttr<"DriveStrength", "Signal drive strength", [
+    I32EnumAttrCase<"Supply", 0, "supply">,
+    I32EnumAttrCase<"Strong", 1, "strong">,
+    I32EnumAttrCase<"Pull", 2, "pull">,
+    I32EnumAttrCase<"Weak", 3, "weak">,
+    I32EnumAttrCase<"HighZ", 4, "highz">,
+  ]> {
+  let cppNamespace = "::circt::llhd";
+}
 
 def LLHDTimeAttr : AttrDef<LLHDDialect, "Time", []> {
   let summary = "time attribute";

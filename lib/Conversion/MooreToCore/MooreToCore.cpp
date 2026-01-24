@@ -12,6 +12,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDTypes.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
@@ -8340,8 +8341,27 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                                         adaptor.getDelay());
     }
 
+    // Extract drive strength for continuous assignments.
+    llhd::DriveStrengthAttr llhdStrength0, llhdStrength1;
+    if constexpr (std::is_same_v<OpTy, ContinuousAssignOp>) {
+      // Convert Moore DriveStrength to LLHD DriveStrength.
+      // The enum values are identical by design.
+      if (auto mooreStr0 = op.getStrength0Attr()) {
+        llhdStrength0 = llhd::DriveStrengthAttr::get(
+            op->getContext(),
+            static_cast<llhd::DriveStrength>(
+                static_cast<uint32_t>(mooreStr0.getValue())));
+      }
+      if (auto mooreStr1 = op.getStrength1Attr()) {
+        llhdStrength1 = llhd::DriveStrengthAttr::get(
+            op->getContext(),
+            static_cast<llhd::DriveStrength>(
+                static_cast<uint32_t>(mooreStr1.getValue())));
+      }
+    }
+
     rewriter.replaceOpWithNewOp<llhd::DriveOp>(
-        op, dst, adaptor.getSrc(), delay, Value{});
+        op, dst, adaptor.getSrc(), delay, Value{}, llhdStrength0, llhdStrength1);
     return success();
   }
 };

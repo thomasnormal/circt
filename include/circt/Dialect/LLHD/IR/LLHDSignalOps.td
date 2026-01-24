@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 include "circt/Dialect/LLHD/IR/LLHDDialect.td"
+include "circt/Dialect/LLHD/IR/LLHDTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/MemorySlotInterfaces.td"
 include "mlir/IR/EnumAttr.td"
@@ -132,6 +133,11 @@ def DriveOp : LLHDOp<"drv", [
     value is 1. In case no enable signal is passed the drive will always be
     performed. This operation does not define any new SSA operands.
 
+    Optional drive strength attributes (strength0, strength1) can specify
+    the drive strength per IEEE 1800-2017 § 7.9. The strength0 applies when
+    driving 0, and strength1 applies when driving 1. When multiple drivers
+    exist, the driver with the highest strength wins.
+
     Example:
 
     ```mlir
@@ -142,6 +148,7 @@ def DriveOp : LLHDOp<"drv", [
 
     llhd.drv %sig, %false after %time : i1
     llhd.drv %sig, %false after %time if %true : i1
+    llhd.drv %sig, %false after %time strength(weak, strong) : i1
     ```
   }];
 
@@ -149,12 +156,23 @@ def DriveOp : LLHDOp<"drv", [
                            [MemWrite]>: $signal,
                        AnyType: $value,
                        LLHDTimeType: $time,
-                       Optional<I1>: $enable);
+                       Optional<I1>: $enable,
+                       OptionalAttr<DriveStrengthAttr>: $strength0,
+                       OptionalAttr<DriveStrengthAttr>: $strength1);
 
   let assemblyFormat = [{
-    $signal `,` $value `after` $time ( `if` $enable^ )? attr-dict `:`
+    $signal `,` $value `after` $time ( `if` $enable^ )?
+    ( `strength` `(` $strength0^ `,` $strength1 `)` )? attr-dict `:`
     type($value)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$signal, "Value":$value, "Value":$time,
+                   "Value":$enable), [{
+      build($_builder, $_state, signal, value, time, enable,
+            DriveStrengthAttr{}, DriveStrengthAttr{});
+    }]>
+  ];
 
   let hasFolder = 1;
   let hasCanonicalizeMethod = 1;
