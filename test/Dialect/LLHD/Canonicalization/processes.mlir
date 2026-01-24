@@ -104,3 +104,33 @@ hw.module @CanonProcessHalt1(in %a : i1, in %b : i1,
   }
   hw.output %0#3, %0#0, %0#1, %0#2 : i1, i1, i1, i1
 }
+
+// Process with function call should NOT be removed, even without other side effects.
+// This is critical for UVM testbenches where initial blocks call functions like run_test().
+// CHECK-LABEL: hw.module @DontRemoveProcessWithFuncCall
+func.func private @external_func()
+hw.module @DontRemoveProcessWithFuncCall() {
+  // CHECK: llhd.process {
+  // CHECK-NEXT: func.call @external_func()
+  // CHECK-NEXT: llhd.halt
+  // CHECK-NEXT: }
+  llhd.process {
+    func.call @external_func() : () -> ()
+    llhd.halt
+  }
+  // CHECK-NEXT: hw.output
+}
+
+// Process with func.call_indirect should also be preserved.
+// CHECK-LABEL: hw.module @DontRemoveProcessWithIndirectCall
+hw.module @DontRemoveProcessWithIndirectCall(in %fn_ptr : () -> ()) {
+  // CHECK: llhd.process {
+  // CHECK-NEXT: func.call_indirect
+  // CHECK-NEXT: llhd.halt
+  // CHECK-NEXT: }
+  llhd.process {
+    func.call_indirect %fn_ptr() : () -> ()
+    llhd.halt
+  }
+  // CHECK-NEXT: hw.output
+}

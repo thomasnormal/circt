@@ -695,6 +695,17 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
         hasSideEffect = true;
         return WalkResult::interrupt();
       }
+      // Check for function calls (func.call, func.call_indirect).
+      // Function calls are conservatively treated as having side effects
+      // since they can perform arbitrary operations including I/O, memory
+      // writes, and other side effects that we cannot analyze statically.
+      // This is critical for UVM testbenches where initial blocks call
+      // functions like run_test().
+      if (innerOp->getName().getStringRef() == "func.call" ||
+          innerOp->getName().getStringRef() == "func.call_indirect") {
+        hasSideEffect = true;
+        return WalkResult::interrupt();
+      }
       // Check for any memory write effects
       if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(innerOp)) {
         SmallVector<MemoryEffects::EffectInstance> effects;
