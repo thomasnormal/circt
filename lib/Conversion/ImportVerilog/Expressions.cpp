@@ -3064,12 +3064,72 @@ struct RvalueExprVisitor : public ExprVisitor {
       return context.materializeConversion(resultType, result, false, loc);
     }
 
+    // Handle covergroup method calls (sample, get_coverage, etc.)
+    // IEEE 1800-2017 Section 19.8 "Covergroup methods"
+    const auto &parentSym = subroutine->getParentScope()->asSymbol();
+    if (parentSym.kind == slang::ast::SymbolKind::CovergroupBody) {
+      // Get the covergroup instance from the call expression
+      Value covergroupInstance;
+      if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+        covergroupInstance = context.convertRvalueExpression(*recvExpr);
+        if (!covergroupInstance)
+          return {};
+      }
+
+      if (!covergroupInstance) {
+        mlir::emitError(loc)
+            << "covergroup method call requires covergroup instance";
+        return {};
+      }
+
+      // Verify the type is a covergroup handle
+      auto covergroupTy =
+          dyn_cast<moore::CovergroupHandleType>(covergroupInstance.getType());
+      if (!covergroupTy) {
+        mlir::emitError(loc)
+            << "covergroup method call requires covergroup handle, got "
+            << covergroupInstance.getType();
+        return {};
+      }
+
+      if (subroutine->name == "sample") {
+        // sample() triggers sampling of the covergroup
+        // Convert any arguments passed to sample()
+        SmallVector<Value> sampleArgs;
+        for (const auto *arg : expr.arguments()) {
+          Value argVal = context.convertRvalueExpression(*arg);
+          if (!argVal)
+            return {};
+          sampleArgs.push_back(argVal);
+        }
+        moore::CovergroupSampleOp::create(builder, loc, covergroupInstance,
+                                          sampleArgs);
+        // sample() returns void, but we need to return something for
+        // expression context. Return a constant 0.
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        return moore::ConstantOp::create(builder, loc, intTy, 0);
+      }
+
+      if (subroutine->name == "get_coverage") {
+        // get_coverage() returns the coverage percentage as a real (64-bit)
+        auto realTy =
+            moore::RealType::get(context.getContext(), moore::RealWidth::f64);
+        return moore::CovergroupGetCoverageOp::create(builder, loc, realTy,
+                                                      covergroupInstance);
+      }
+
+      // For other covergroup methods, emit a warning and fall through
+      // to normal function call handling
+      mlir::emitWarning(loc) << "covergroup method '" << subroutine->name
+                             << "' is not yet implemented; lowering as "
+                                "regular function call";
+    }
+
     // Check if this is an interface method call (task/function defined inside
     // an interface). Interface methods have an implicit first argument for the
     // interface instance, similar to class methods with 'this'.
     bool isInterfaceMethod = false;
     Value interfaceInstance;
-    const auto &parentSym = subroutine->getParentScope()->asSymbol();
     if (parentSym.kind == slang::ast::SymbolKind::InstanceBody) {
       if (auto *instBody = parentSym.as_if<slang::ast::InstanceBodySymbol>()) {
         if (instBody->getDefinition().definitionKind ==
@@ -5706,9 +5766,11 @@ struct RvalueExprVisitor : public ExprVisitor {
       mlir::emitWarning(loc) << "default dist weight not yet supported";
     }
 
-    // Create the distribution constraint op
+    // Create the distribution constraint op.
+    auto isSignedAttr =
+        expr.left().type->isSigned() ? builder.getUnitAttr() : nullptr;
     moore::ConstraintDistOp::create(builder, loc, variable, values, weights,
-                                    perRange);
+                                    perRange, isSignedAttr);
 
     // DistExpression has void type in slang, but we need to return something
     // for the expression visitor. Return a constant 1 (true) as a placeholder
