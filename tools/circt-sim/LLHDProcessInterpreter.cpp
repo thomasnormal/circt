@@ -74,6 +74,11 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(initializeGlobals()))
     return failure();
 
+  // Execute LLVM global constructors (e.g., __moore_global_init_uvm_pkg::uvm_top)
+  // This initializes UVM globals like uvm_top before processes start
+  if (failed(executeGlobalConstructors()))
+    return failure();
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
                           << getNumSignals() << " signals and "
                           << getNumProcesses() << " processes\n");
@@ -2484,6 +2489,19 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   // LLVM Dialect Operations
   //===--------------------------------------------------------------------===//
 
+  // LLVM constant operation (llvm.mlir.constant)
+  if (auto llvmConstOp = dyn_cast<LLVM::ConstantOp>(op)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(llvmConstOp.getValue())) {
+      setValue(procId, llvmConstOp.getResult(),
+               InterpretedValue(intAttr.getValue()));
+    } else {
+      // For non-integer constants, create an X value
+      setValue(procId, llvmConstOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(llvmConstOp.getType())));
+    }
+    return success();
+  }
+
   if (auto allocaOp = dyn_cast<LLVM::AllocaOp>(op))
     return interpretLLVMAlloca(procId, allocaOp);
 
@@ -3882,6 +3900,15 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     }
   }
 
+  // Check if this is an llvm.mlir.constant defined outside the process
+  if (auto llvmConstOp = value.getDefiningOp<LLVM::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(llvmConstOp.getValue())) {
+      InterpretedValue iv(intAttr.getValue());
+      valueMap[value] = iv;
+      return iv;
+    }
+  }
+
   // Check if this is an aggregate constant (struct/array)
   if (auto aggConstOp = value.getDefiningOp<hw::AggregateConstantOp>()) {
     APInt constVal = flattenAggregateConstant(aggConstOp);
@@ -5044,6 +5071,82 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initialized "
                           << globalMemoryBlocks.size() << " globals, "
                           << addressToFunction.size() << " vtable entries\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
+  if (!rootModule)
+    return success();
+
+  LLVM_DEBUG(llvm::dbgs()
+             << "LLHDProcessInterpreter: Executing global constructors\n");
+
+  // Collect all constructor entries with their priorities
+  SmallVector<std::pair<int32_t, StringRef>, 4> ctorEntries;
+
+  rootModule.walk([&](LLVM::GlobalCtorsOp ctorsOp) {
+    ArrayAttr ctors = ctorsOp.getCtors();
+    ArrayAttr priorities = ctorsOp.getPriorities();
+
+    for (auto [ctorAttr, priorityAttr] : llvm::zip(ctors, priorities)) {
+      auto ctorRef = cast<FlatSymbolRefAttr>(ctorAttr);
+      auto priority = cast<IntegerAttr>(priorityAttr).getInt();
+      ctorEntries.emplace_back(priority, ctorRef.getValue());
+      LLVM_DEBUG(llvm::dbgs() << "  Found constructor: " << ctorRef.getValue()
+                              << " (priority " << priority << ")\n");
+    }
+  });
+
+  if (ctorEntries.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "  No global constructors found\n");
+    return success();
+  }
+
+  // Sort by priority (lower priority values execute first)
+  llvm::sort(ctorEntries,
+             [](const auto &a, const auto &b) { return a.first < b.first; });
+
+  // Create a temporary process state for executing constructors
+  // We use process ID 0 as a special "global init" process
+  ProcessExecutionState tempState;
+  ProcessId tempProcId = 0;
+
+  // Check if we already have a process with ID 0; if so, use a different ID
+  if (processStates.count(tempProcId)) {
+    // Find an unused process ID
+    tempProcId = processStates.size() + 1000;
+  }
+  processStates[tempProcId] = std::move(tempState);
+
+  // Execute each constructor in priority order
+  for (auto &[priority, ctorName] : ctorEntries) {
+    LLVM_DEBUG(llvm::dbgs() << "  Calling constructor: " << ctorName
+                            << " (priority " << priority << ")\n");
+
+    // Look up the LLVM function
+    auto funcOp = rootModule.lookupSymbol<LLVM::LLVMFuncOp>(ctorName);
+    if (!funcOp) {
+      LLVM_DEBUG(llvm::dbgs() << "    Warning: constructor function '"
+                              << ctorName << "' not found\n");
+      continue;
+    }
+
+    // Call the constructor with no arguments
+    SmallVector<InterpretedValue, 2> results;
+    if (failed(interpretLLVMFuncBody(tempProcId, funcOp, {}, results))) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    Warning: failed to execute constructor '" << ctorName
+                 << "'\n");
+      // Continue with other constructors even if one fails
+    }
+  }
+
+  // Clean up the temporary process state
+  processStates.erase(tempProcId);
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executed "
+                          << ctorEntries.size() << " global constructors\n");
 
   return success();
 }

@@ -3780,6 +3780,56 @@ struct ClassDeclVisitor {
           // appears in an even more ancestral base class.
           definedMethods.insert(fn->name);
         }
+
+        // Also check for MethodPrototypeSymbol (extern method declarations).
+        // These are important when an intermediate base class has an extern
+        // virtual method that overrides an ancestor's method.
+        if (auto *proto = mem.as_if<slang::ast::MethodPrototypeSymbol>()) {
+          // Skip if not virtual.
+          if (!(proto->flags & slang::ast::MethodFlags::Virtual))
+            continue;
+          // Skip if already defined in derived class or earlier in chain.
+          if (definedMethods.contains(proto->name))
+            continue;
+          // Get the implementation.
+          const auto *impl = proto->getSubroutine();
+          if (!impl)
+            continue;
+          // Skip builtin methods.
+          if (impl->flags & slang::ast::MethodFlags::BuiltIn)
+            continue;
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "      Registering inherited extern virtual method: "
+                     << proto->name << "\n");
+
+          // Look up the function lowering for the implementation.
+          auto it = context.functions.find(impl);
+          if (it == context.functions.end() || !it->second || !it->second->op) {
+            if (failed(context.convertFunction(*impl))) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "        FAILED: Could not convert base method\n");
+              return failure();
+            }
+            it = context.functions.find(impl);
+            if (it == context.functions.end() || !it->second ||
+                !it->second->op) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "        FAILED: Function not in map after "
+                            "conversion\n");
+              return failure();
+            }
+          }
+
+          auto *lowering = it->second.get();
+          auto loc = convertLocation(proto->location);
+          FunctionType fnTy = lowering->op.getFunctionType();
+
+          moore::ClassMethodDeclOp::create(builder, loc, proto->name, fnTy,
+                                           SymbolRefAttr::get(lowering->op));
+
+          definedMethods.insert(proto->name);
+        }
       }
 
       // Move to the next base class.
@@ -4002,8 +4052,54 @@ struct ClassDeclVisitor {
           << fn.name;
       return failure();
     }
-    LLVM_DEBUG(llvm::dbgs() << "      Found implementation, visiting\n");
-    return visit(*externImpl);
+
+    // Check if the PROTOTYPE is virtual. The implementation may not have the
+    // Virtual flag for extern methods - only the prototype carries it.
+    bool protoIsVirtual =
+        (fn.flags & slang::ast::MethodFlags::Virtual) ? true : false;
+
+    LLVM_DEBUG(llvm::dbgs() << "      Found implementation, visiting"
+                            << (protoIsVirtual ? " (virtual)" : "") << "\n");
+
+    // Skip builtin methods.
+    if (externImpl->flags & slang::ast::MethodFlags::BuiltIn) {
+      LLVM_DEBUG(llvm::dbgs() << "        Skipping builtin method\n");
+      return success();
+    }
+
+    // Convert the function body.
+    auto *lowering = context.declareFunction(*externImpl);
+    if (!lowering) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "        FAILED: declareFunction returned null\n");
+      return failure();
+    }
+
+    if (failed(context.convertFunction(*externImpl))) {
+      LLVM_DEBUG(llvm::dbgs() << "        FAILED: convertFunction failed\n");
+      return failure();
+    }
+
+    // If the function is still being converted (recursive call scenario),
+    // capturesFinalized will be false but this is expected.
+    if (!lowering->capturesFinalized && !lowering->isConverting) {
+      mlir::emitError(convertLocation(fn.location))
+          << "function '" << fn.name << "' conversion did not complete";
+      return failure();
+    }
+
+    // Create ClassMethodDeclOp if the PROTOTYPE is virtual.
+    // This is the key fix: we use the prototype's virtual flag, not the
+    // implementation's, because extern method implementations don't carry
+    // the virtual flag - only their prototypes do.
+    if (protoIsVirtual) {
+      auto loc = convertLocation(fn.location);
+      FunctionType fnTy = lowering->op.getFunctionType();
+      moore::ClassMethodDeclOp::create(builder, loc, fn.name, fnTy,
+                                       SymbolRefAttr::get(lowering->op));
+    }
+
+    return success();
   }
 
   // Nested class definition, skip
