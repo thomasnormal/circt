@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 151)
+**Last Updated**: January 24, 2026 (Iteration 153)
 
 ## Current Status
 
@@ -122,70 +122,36 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 151)
+## Next Steps (Iteration 153)
 
-### Track A: verilator-verification Analysis - COMPLETE
-**Status**: Analyzed (Iteration 149), 122/154 tests (79%)
-- ✅ Signal strength parsing works correctly (18/21 signal-strengths tests pass)
-- ✅ 4 should-fail tests correctly rejected
-- Remaining failures NOT related to signal strength simulation:
-  - 3 tests: `parameter W;` without initializer (slang strictness)
-  - 8 tests: unbased literal syntax (`1'z`/`1'x` - invalid SV)
-  - 2 tests: pre/post_randomize signature (slang strictness)
-  - 1 test: coverpoint iff syntax (test design issue)
-  - 1 test: enum in constraint expression
+### Track A: Vtable Inheritance for User-Defined Classes - COMPLETE
+**Status**: Fixed in Iteration 152 (Commit 8a8647993)
+- ✅ Inherited virtual methods now properly registered in derived class vtables
+- ✅ Pass 3 added to ClassDeclVisitor to walk inheritance chain
+- ✅ Fixed duplicate function creation during recursive type conversion
+- ✅ Added re-check in declareCallableImpl after getFunctionSignature
+- ✅ Added test: `test/Conversion/ImportVerilog/inherited-virtual-methods.sv`
 
-### Track B: AVIP Simulation Testing - COMPLETE
-**Status**: All AVIPs HDL-level verified (Iteration 150)
-- ✅ I2S AVIP: 130K cycles, 0 sim errors (HDL clock/reset works)
-- ✅ APB AVIP: 500K processes, 0 sim errors (HDL clock/reset works)
-- ✅ UART AVIP: 1M cycles, 0 sim errors (HDL clock/reset works)
-- ✅ AHB AVIP: 1M processes, 250K cycles, 0 sim errors (HDL clock/reset works)
-- ✅ SPI AVIP: 5M processes, 0 sim errors (HDL clock/reset works)
-- ⚠️ AXI4 AVIP: Hangs after initial phase (investigation needed)
+### Track B: Covergroup get_coverage() Runtime (Analysis Complete)
+**Status**: Runtime is implemented in MooreRuntime.cpp
+- ✅ Coverage computation functions exist in MooreRuntime.cpp
+- ⬜ ImportVerilog needs to lower `cg.get_coverage()` calls to Moore ops
+- ⬜ Currently lowered as regular function calls instead of `moore.covergroup.get_coverage`
+- Location: `lib/Conversion/ImportVerilog/Expressions.cpp` visitCall function
 
-**Note**: "0 errors" = circt-sim runs without crashes. UVM testbench phases/sequences/scoreboard do NOT execute (UVM runtime is stub-only).
+### Track C: AXI4 AVIP Hang Investigation (Root Cause Found)
+**Status**: circt-sim only runs one top module; UVM needs both hdl_top and hvl_top
+- Root cause: circt-sim needs a wrapper module instantiating both tops
+- Solution: Use `--max-time` flag and wrapper module approach
+- Agent a121f0f has details on the fix applied to circt-sim.cpp
 
-### Track C: pre/post_randomize Signature - COMPLETE
-**Status**: Test design issue (Iteration 149)
-- slang requires explicit `function void pre_randomize();`
-- Tests use implicit void (missing return type)
-- Not a CIRCT bug - slang enforces stricter IEEE compliance
-
-### Track D: Covergroup get_coverage() Runtime (Pending)
-**Status**: Compiles but runtime not implemented
-- ⬜ Implement coverage percentage calculation
-- ⬜ Track bins hit during simulation
-- ⬜ Return computed value from get_coverage()
-
-### Track E: AXI4 AVIP Hang Investigation (New)
-**Status**: Simulation hangs after initial BFM messages
-- Compiles successfully: 135K lines MLIR
-- Simulation starts, prints UVM_INFO messages, then blocks
-- Possible causes: missing clock, blocked event wait, UVM phase issue
-
-### Track F: UVM Phase Execution Implementation (Iteration 151)
-**Status**: Implementation complete, blocked by uvm_top singleton initialization
-- ✅ Implemented phase execution in `uvm_root::run_test()`:
-  - Factory lookup to create test instance
-  - Component hierarchy traversal (depth-first)
-  - Phase execution: build → connect → end_of_elaboration → start_of_simulation → run → extract → check → report → final
-  - run_phase as concurrent tasks with objection handling
-- ✅ Added automatic factory registration via static variables in macros
-- ✅ **FIXED**: Vtable support in circt-sim (Commit c95636ccb):
-  - Added global memory storage for LLVM globals (vtables)
-  - Initialize vtables from `circt.vtable_entries` attribute at startup
-  - Map function addresses to function names for indirect call resolution
-  - Added `llvm.addressof` handler to return addresses of globals
-  - Modified `llvm.load` to check global memory in addition to alloca memory
-  - Added `func.call_indirect` handler for virtual method dispatch
-  - Added `builtin.unrealized_conversion_cast` propagation for function types
-- ❌ **BLOCKED**: `uvm_top` singleton not initialized at elaboration time
-  - SV code: `uvm_root uvm_top = uvm_root::get();`
-  - IR shows: `llvm.mlir.global @"uvm_pkg::uvm_top"(#llvm.zero)` (zero-initialized)
-  - The static initializer `= uvm_root::get()` is not being lowered to IR
-  - When `run_test()` accesses `uvm_top`, it's null, causing vtable lookup to fail
-- **Next Step**: Fix static variable initialization lowering in ImportVerilog
+### Track D: Global Variable Initialization - COMPLETE
+**Status**: Fixed in Iteration 153
+- ✅ GlobalVariableOpConversion now generates LLVM global constructors
+- ✅ Init regions with function calls properly lowered
+- ✅ `llvm.mlir.global_ctors` registers initializer functions
+- ✅ uvm_top and 23 other UVM globals now initialized correctly
+- ✅ Added test: `test/Conversion/ImportVerilog/global-variable-init.sv`
 
 ## Completed in Iteration 150
 
