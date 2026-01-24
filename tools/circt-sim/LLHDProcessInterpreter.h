@@ -19,6 +19,7 @@
 
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
@@ -50,6 +51,8 @@ class StoreOp;
 class GEPOp;
 class CallOp;
 class LLVMFuncOp;
+class AddressOfOp;
+class GlobalOp;
 } // namespace LLVM
 } // namespace mlir
 
@@ -411,6 +414,16 @@ private:
   mlir::LogicalResult interpretSeqYield(ProcessId procId, seq::YieldOp yieldOp);
 
   //===--------------------------------------------------------------------===//
+  // Moore Dialect Operation Handlers
+  //===--------------------------------------------------------------------===//
+
+  /// Interpret a moore.wait_event operation.
+  /// This suspends the process until a signal change is detected, similar to
+  /// llhd.wait but using Moore dialect edge detection semantics.
+  mlir::LogicalResult interpretMooreWaitEvent(ProcessId procId,
+                                               moore::WaitEventOp waitEventOp);
+
+  //===--------------------------------------------------------------------===//
   // LLVM Dialect Operation Handlers
   //===--------------------------------------------------------------------===//
 
@@ -512,6 +525,31 @@ private:
   /// Map of dynamic string pointers to their content (for runtime string
   /// handling). Key is the pointer value, value is {data, len}.
   llvm::DenseMap<int64_t, std::pair<const char *, int64_t>> dynamicStrings;
+
+  //===--------------------------------------------------------------------===//
+  // Global Variable and VTable Support
+  //===--------------------------------------------------------------------===//
+
+  /// Memory storage for LLVM global variables.
+  /// Maps global name to memory block.
+  llvm::StringMap<MemoryBlock> globalMemoryBlocks;
+
+  /// Map from simulated addresses to function names (for vtable entries).
+  /// When a vtable entry is loaded, we store the function name it maps to.
+  llvm::DenseMap<uint64_t, std::string> addressToFunction;
+
+  /// Map from global variable names to their simulated base addresses.
+  llvm::StringMap<uint64_t> globalAddresses;
+
+  /// Next available address for global memory allocation.
+  uint64_t nextGlobalAddress = 0x10000000;
+
+  /// Initialize LLVM global variables, especially vtables.
+  mlir::LogicalResult initializeGlobals();
+
+  /// Interpret an llvm.mlir.addressof operation.
+  mlir::LogicalResult interpretLLVMAddressOf(ProcessId procId,
+                                              mlir::LLVM::AddressOfOp addrOfOp);
 };
 
 } // namespace sim
