@@ -5067,6 +5067,50 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
       return success();
     }
 
+    // Handle hw::StructType (packed structs) - bitcast to integer and extract.
+    // This handles SystemVerilog packed struct bit-slicing like pack1[15:8].
+    if (auto structType = dyn_cast<hw::StructType>(inputType)) {
+      int64_t structWidth = hw::getBitWidth(structType);
+      if (structWidth < 0)
+        return failure();
+
+      // Bitcast the struct to an integer of the same total width
+      auto intType = rewriter.getIntegerType(structWidth);
+      Value intValue = rewriter.createOrFold<hw::BitcastOp>(
+          op.getLoc(), intType, adaptor.getInput());
+
+      int32_t inputWidth = structWidth;
+      int32_t resultWidth = hw::getBitWidth(resultType);
+      int32_t high = low + resultWidth;
+
+      SmallVector<Value> toConcat;
+      if (low < 0)
+        toConcat.push_back(hw::ConstantOp::create(
+            rewriter, op.getLoc(), APInt(std::min(-low, resultWidth), 0)));
+
+      if (low < inputWidth && high > 0) {
+        int32_t lowIdx = std::max(low, 0);
+        Value middle = rewriter.createOrFold<comb::ExtractOp>(
+            op.getLoc(),
+            rewriter.getIntegerType(
+                std::min(resultWidth, std::min(high, inputWidth) - lowIdx)),
+            intValue, lowIdx);
+        toConcat.push_back(middle);
+      }
+
+      int32_t diff = high - inputWidth;
+      if (diff > 0) {
+        Value val =
+            hw::ConstantOp::create(rewriter, op.getLoc(), APInt(diff, 0));
+        toConcat.push_back(val);
+      }
+
+      Value concat =
+          rewriter.createOrFold<comb::ConcatOp>(op.getLoc(), toConcat);
+      rewriter.replaceOp(op, concat);
+      return success();
+    }
+
     return failure();
   }
 };
