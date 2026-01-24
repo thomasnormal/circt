@@ -2,9 +2,9 @@
 
 ## Iteration 147 - January 24, 2026
 
-### Signal Strength Support - Frontend Implementation
+### Signal Strength Support - Complete IR Lowering
 
-Implemented signal strength parsing and IR representation in CIRCT:
+Implemented full signal strength lowering from SystemVerilog through Moore dialect to LLHD dialect.
 
 **Moore Dialect Changes:**
 - Added `DriveStrengthAttr` enum with values: Supply, Strong, Pull, Weak, HighZ
@@ -19,21 +19,37 @@ Implemented signal strength parsing and IR representation in CIRCT:
   - Pulldown: `strength(<strength>, highz)` - drives 0, doesn't drive 1
   - Default strength is Pull if not specified
 
+**LLHD Dialect Changes:**
+- Added `DriveStrengthAttr` enum to LLHD dialect (mirrors Moore dialect)
+- Modified `DriveOp` to accept optional `strength0` and `strength1` attributes
+- Updated assembly format to include `strength(<s0>, <s1>)` syntax
+
+**MooreToCore Conversion:**
+- Updated `AssignOpConversion` to pass strength attributes through to LLHD `DriveOp`
+- Enum values are identical by design, so conversion is direct cast
+
 **IR Output Example:**
 ```mlir
+// Moore IR
 moore.assign %o, %a strength(weak, weak) : l1
 moore.assign %o, %b strength(strong, strong) : l1
-moore.assign %w, %const strength(highz, strong) : l1  // pullup
+
+// LLHD IR (after MooreToCore)
+llhd.drv %o, %a after %t strength(weak, weak) : !hw.struct<value: i1, unknown: i1>
+llhd.drv %o, %b after %t strength(strong, strong) : !hw.struct<value: i1, unknown: i1>
 ```
 
 **Files Modified:**
 - `include/circt/Dialect/Moore/MooreOps.td`
+- `include/circt/Dialect/LLHD/IR/LLHDTypes.td`
+- `include/circt/Dialect/LLHD/IR/LLHDSignalOps.td`
 - `lib/Conversion/ImportVerilog/Structure.cpp`
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- `test/Conversion/ImportVerilog/signal-strengths.sv`
 
 **Remaining Work:**
-- MooreToCore conversion needs to handle strength during signal resolution
-- circt-sim needs to resolve competing drivers based on strength
-- verilator-verification tests (13) need the full strength resolution to pass
+- circt-sim needs to implement strength-based signal resolution for simulation
+- verilator-verification tests require simulation-time strength resolution to produce correct results
 
 ## Iteration 145 - January 23, 2026
 
