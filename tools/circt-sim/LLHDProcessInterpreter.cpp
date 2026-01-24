@@ -14,6 +14,7 @@
 #include "LLHDProcessInterpreter.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
 #include "circt/Runtime/MooreRuntime.h"
@@ -503,7 +504,12 @@ void LLHDProcessInterpreter::setupRegistryAccessors() {
 LogicalResult
 LLHDProcessInterpreter::registerProcesses(hw::HWModuleOp hwModule) {
   // Walk the module body to find all llhd.process operations
+  // Note: walk() visits operations in nested regions, so we need to ensure
+  // we're only registering top-level processes (not processes inside other
+  // processes, which shouldn't exist but let's be safe).
   hwModule.walk([&](llhd::ProcessOp processOp) {
+    LLVM_DEBUG(llvm::dbgs() << "  Found llhd.process op (numResults="
+                            << processOp.getNumResults() << ")\n");
     registerProcess(processOp);
   });
 
@@ -1150,6 +1156,20 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   // Seq dialect operations - seq.yield terminates seq.initial blocks
   if (auto yieldOp = dyn_cast<seq::YieldOp>(op))
     return interpretSeqYield(procId, yieldOp);
+
+  // Moore dialect operations - wait_event suspends until signal change
+  // These operations should have been converted to llhd.wait by the
+  // MooreToCore pass, but when they appear in function bodies that haven't
+  // been inlined, we need to handle them directly.
+  if (auto waitEventOp = dyn_cast<moore::WaitEventOp>(op))
+    return interpretMooreWaitEvent(procId, waitEventOp);
+
+  // Moore detect_event ops inside wait_event bodies - handled by wait_event
+  if (isa<moore::DetectEventOp>(op)) {
+    // DetectEventOp is only meaningful inside WaitEventOp - it sets up
+    // edge detection. When executed standalone, just skip it.
+    return success();
+  }
 
   // Format string operations are consumed by interpretProcPrint - just return
   // success as they don't need individual interpretation
@@ -2924,16 +2944,37 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     targetTime.deltaStep = delay.deltaStep;
   }
 
+  // Extract strength attributes if present
+  DriveStrength strength0 = DriveStrength::Strong; // Default
+  DriveStrength strength1 = DriveStrength::Strong; // Default
+
+  if (auto s0Attr = driveOp.getStrength0Attr()) {
+    // Convert LLHD DriveStrength to sim DriveStrength
+    strength0 = static_cast<DriveStrength>(
+        static_cast<uint8_t>(s0Attr.getValue()));
+  }
+  if (auto s1Attr = driveOp.getStrength1Attr()) {
+    strength1 = static_cast<DriveStrength>(
+        static_cast<uint8_t>(s1Attr.getValue()));
+  }
+
+  // Generate a unique driver ID based on the DriveOp
+  // Use hash of operation pointer as driver ID
+  uint64_t driverId = reinterpret_cast<uint64_t>(driveOp.getOperation());
+
   LLVM_DEBUG(llvm::dbgs() << "  Scheduling drive to signal " << sigId
                           << " at time " << targetTime.realTime << " fs"
-                          << " (delay " << delay.realTime << " fs)\n");
+                          << " (delay " << delay.realTime << " fs)"
+                          << " strength(" << getDriveStrengthName(strength0)
+                          << ", " << getDriveStrengthName(strength1) << ")\n");
 
-  // Schedule the signal update
+  // Schedule the signal update with strength information
   SignalValue newVal = driveVal.toSignalValue();
   scheduler.getEventScheduler().schedule(
       targetTime, SchedulingRegion::NBA,
-      Event([this, sigId, newVal]() {
-        scheduler.updateSignal(sigId, newVal);
+      Event([this, sigId, driverId, newVal, strength0, strength1]() {
+        scheduler.updateSignalWithStrength(sigId, driverId, newVal, strength0,
+                                           strength1);
       }));
 
   return success();
@@ -3536,6 +3577,15 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return iv;
   }
 
+  // Check if this is an arith.constant defined outside the process
+  if (auto arithConstOp = value.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue())) {
+      InterpretedValue iv(intAttr.getValue());
+      valueMap[value] = iv;
+      return iv;
+    }
+  }
+
   // Check if this is an aggregate constant (struct/array)
   if (auto aggConstOp = value.getDefiningOp<hw::AggregateConstantOp>()) {
     APInt constVal = flattenAggregateConstant(aggConstOp);
@@ -3822,6 +3872,133 @@ LogicalResult LLHDProcessInterpreter::interpretSeqYield(ProcessId procId,
 
   // Terminate the process in the scheduler
   scheduler.terminateProcess(procId);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Moore Dialect Operation Handlers
+//===----------------------------------------------------------------------===//
+
+LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
+    ProcessId procId, moore::WaitEventOp waitEventOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting moore.wait_event\n");
+
+  auto &state = processStates[procId];
+
+  // The moore.wait_event operation contains a body region with moore.detect_event
+  // operations that specify which signal edges to detect.
+  //
+  // To properly implement this, we need to:
+  // 1. Extract the signals to observe from detect_event ops in the body
+  // 2. Set up edge detection (posedge/negedge/anychange)
+  // 3. Suspend the process until one of the events fires
+  //
+  // For now, we implement a simplified version:
+  // - Walk the body to find detect_event ops
+  // - Extract the input signals they observe
+  // - Wait for any change on those signals
+
+  // Check if the body is empty - if so, just halt (infinite wait)
+  if (waitEventOp.getBody().front().empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "    Empty wait_event body - halting process\n");
+    state.halted = true;
+    scheduler.terminateProcess(procId);
+    return success();
+  }
+
+  // Collect signals to observe from detect_event ops
+  SensitivityList waitList;
+
+  waitEventOp.getBody().walk([&](moore::DetectEventOp detectOp) {
+    Value input = detectOp.getInput();
+
+    // Try to trace the input to a signal
+    std::function<SignalId(Value, int)> traceToSignal = [&](Value value,
+                                                             int depth) -> SignalId {
+      if (depth > 10)
+        return 0; // Prevent infinite recursion
+
+      // Check if this value is a signal reference
+      SignalId sigId = getSignalId(value);
+      if (sigId != 0)
+        return sigId;
+
+      // Try to trace through the defining operation
+      if (Operation *defOp = value.getDefiningOp()) {
+        // For probe operations, get the signal being probed
+        if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp)) {
+          return getSignalId(probeOp.getSignal());
+        }
+
+        // For struct extract, trace the struct
+        if (auto extractOp = dyn_cast<hw::StructExtractOp>(defOp)) {
+          return traceToSignal(extractOp.getInput(), depth + 1);
+        }
+
+        // For LLVM GEP, trace the base
+        if (auto gepOp = dyn_cast<LLVM::GEPOp>(defOp)) {
+          return traceToSignal(gepOp.getBase(), depth + 1);
+        }
+
+        // For llhd.sig.struct_extract, trace to the signal
+        if (auto sigExtractOp = dyn_cast<llhd::SigStructExtractOp>(defOp)) {
+          return traceToSignal(sigExtractOp.getInput(), depth + 1);
+        }
+
+        // For unrealized_conversion_cast, trace through
+        if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+          if (!castOp.getInputs().empty()) {
+            return traceToSignal(castOp.getInputs()[0], depth + 1);
+          }
+        }
+
+        // For other operations, try to trace their operands
+        for (Value operand : defOp->getOperands()) {
+          sigId = traceToSignal(operand, depth + 1);
+          if (sigId != 0)
+            return sigId;
+        }
+      }
+
+      return 0;
+    };
+
+    SignalId sigId = traceToSignal(input, 0);
+    if (sigId != 0) {
+      waitList.addLevel(sigId);
+      LLVM_DEBUG(llvm::dbgs() << "    Waiting on signal " << sigId
+                              << " for edge type " << (int)detectOp.getEdge()
+                              << "\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "    Warning: Could not trace detect_event "
+                                 "input to signal\n");
+    }
+  });
+
+  // If we found signals to wait on, suspend the process
+  if (!waitList.empty()) {
+    state.waiting = true;
+
+    // The continuation point after the wait_event is the next operation
+    // in the current block (which was already advanced by the main loop)
+    // We don't need to set destBlock since we continue sequentially
+
+    // Register the wait sensitivity with the scheduler
+    scheduler.suspendProcessForEvents(procId, waitList);
+
+    LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting on "
+                            << waitList.size() << " signals\n");
+  } else {
+    // No signals found - treat as a single delta cycle wait
+    // This prevents infinite loops when wait_event body has no detectable signals
+    LLVM_DEBUG(llvm::dbgs() << "    Warning: No signals found in wait_event, "
+                               "doing single delta wait\n");
+
+    // Just schedule the process to run in the next active region
+    // This will advance at least one delta cycle
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
 
   return success();
 }

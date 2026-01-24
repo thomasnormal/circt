@@ -967,4 +967,166 @@ TEST(ProcessSchedulerIntegration, SuspendProcessForEventsPeristsMapping) {
   EXPECT_EQ(p->getState(), ProcessState::Waiting);
 }
 
+//===----------------------------------------------------------------------===//
+// Signal Strength Resolution Tests
+//===----------------------------------------------------------------------===//
+
+TEST(SignalStrengthResolution, SingleDriverNoStrength) {
+  // Single driver without explicit strength should behave normally
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Update with strength (default strong)
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(1, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_FALSE(val.isUnknown());
+  EXPECT_EQ(val.getValue(), 1u);
+}
+
+TEST(SignalStrengthResolution, StrongerDriverWins) {
+  // When two drivers drive different values, stronger one wins
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Weak, driving 0
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(0, 1),
+                                     DriveStrength::Weak, DriveStrength::Weak);
+
+  // Driver 2: Strong, driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/2, SignalValue(1, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  // Strong driver (value 1) should win
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_FALSE(val.isUnknown());
+  EXPECT_EQ(val.getValue(), 1u);
+}
+
+TEST(SignalStrengthResolution, WeakerDriverLoses) {
+  // Verify weaker driver loses even when it drives later
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Strong, driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(1, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  // Driver 2: Weak, driving 0 (later but weaker)
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/2, SignalValue(0, 1),
+                                     DriveStrength::Weak, DriveStrength::Weak);
+
+  // Strong driver (value 1) should still win
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_FALSE(val.isUnknown());
+  EXPECT_EQ(val.getValue(), 1u);
+}
+
+TEST(SignalStrengthResolution, EqualStrengthConflictProducesX) {
+  // When two drivers of equal strength drive different values, result is X
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Strong, driving 0
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(0, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  // Driver 2: Strong, driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/2, SignalValue(1, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  // Equal strength conflict should produce X
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_TRUE(val.isUnknown());
+}
+
+TEST(SignalStrengthResolution, PullupWithWeakDriver) {
+  // Pullup (highz for 0, pull for 1) with weak driver
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Pullup (highz0, pull1) driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(1, 1),
+                                     DriveStrength::HighZ, DriveStrength::Pull);
+
+  // Driver 2: Weak driving 0
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/2, SignalValue(0, 1),
+                                     DriveStrength::Weak, DriveStrength::Weak);
+
+  // Weak (strength 3) is weaker than Pull (strength 2) for value 1
+  // But weak driving 0 vs pullup driving 1: weak0 (3) vs pull1 (2)
+  // Pull is stronger, so 1 wins
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_FALSE(val.isUnknown());
+  EXPECT_EQ(val.getValue(), 1u);
+}
+
+TEST(SignalStrengthResolution, SupplyStrengthOverridesAll) {
+  // Supply strength should override all other strengths
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Strong, driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(1, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  // Driver 2: Supply, driving 0
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/2, SignalValue(0, 1),
+                                     DriveStrength::Supply,
+                                     DriveStrength::Supply);
+
+  // Supply driver (value 0) should win
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_FALSE(val.isUnknown());
+  EXPECT_EQ(val.getValue(), 0u);
+}
+
+TEST(SignalStrengthResolution, SameDriverUpdates) {
+  // Same driver updating its value should work correctly
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Strong, driving 0
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(0, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  const SignalValue &val1 = scheduler.getSignalValue(sig);
+  EXPECT_EQ(val1.getValue(), 0u);
+
+  // Same driver now drives 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(1, 1),
+                                     DriveStrength::Strong,
+                                     DriveStrength::Strong);
+
+  const SignalValue &val2 = scheduler.getSignalValue(sig);
+  EXPECT_EQ(val2.getValue(), 1u);
+}
+
+TEST(SignalStrengthResolution, MultipleDriversSameValue) {
+  // Multiple drivers driving the same value should not conflict
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+
+  // Driver 1: Weak, driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/1, SignalValue(1, 1),
+                                     DriveStrength::Weak, DriveStrength::Weak);
+
+  // Driver 2: Pull, driving 1
+  scheduler.updateSignalWithStrength(sig, /*driverId=*/2, SignalValue(1, 1),
+                                     DriveStrength::Pull, DriveStrength::Pull);
+
+  // Both driving 1, no conflict
+  const SignalValue &val = scheduler.getSignalValue(sig);
+  EXPECT_FALSE(val.isUnknown());
+  EXPECT_EQ(val.getValue(), 1u);
+}
+
 } // namespace
