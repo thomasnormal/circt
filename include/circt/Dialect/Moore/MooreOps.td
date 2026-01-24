@@ -259,6 +259,18 @@ def NetKindAttr : I32EnumAttr<"NetKind", "Net type kind", [
   let cppNamespace = "::circt::moore";
 }
 
+// Drive strength for continuous assignments and net declarations.
+// See IEEE 1800-2017 § 7.9 "Strength reduction".
+def DriveStrengthAttr : I32EnumAttr<"DriveStrength", "Signal drive strength", [
+    I32EnumAttrCase<"Supply", 0, "supply">,
+    I32EnumAttrCase<"Strong", 1, "strong">,
+    I32EnumAttrCase<"Pull", 2, "pull">,
+    I32EnumAttrCase<"Weak", 3, "weak">,
+    I32EnumAttrCase<"HighZ", 4, "highz">,
+  ]> {
+  let cppNamespace = "::circt::moore";
+}
+
 def NetOp : MooreOp<"net", [
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
   OptionalTypesMatchWith<"assigned value and variable types match",
@@ -392,15 +404,40 @@ class DelayedAssignOpBase<string mnemonic, list<Trait> traits = []> :
 
 // Continuous assignment
 
-def ContinuousAssignOp : AssignOpBase<"assign", [HasParent<"SVModuleOp">]> {
+def ContinuousAssignOp : MooreOp<"assign", [
+  HasParent<"SVModuleOp">,
+  TypesMatchWith<"src and dst types match",
+    "src", "dst", "RefType::get(cast<UnpackedType>($_self))">
+]> {
   let summary = "Continuous assignment within a module";
   let description = [{
     A continuous assignment in module scope, such as `assign x = y;`, which
     continuously drives the value on the right-hand side onto the left-hand
     side.
 
+    An optional drive strength pair (strength0, strength1) can be specified
+    for the assignment to control how the driven value resolves when multiple
+    drivers exist. The strength0 value applies when driving 0, and strength1
+    when driving 1.
+
     See IEEE 1800-2017 § 10.3 "Continuous assignments".
+    See IEEE 1800-2017 § 7.9 "Strength reduction".
   }];
+  let arguments = (ins
+    RefType:$dst,
+    UnpackedType:$src,
+    OptionalAttr<DriveStrengthAttr>:$strength0,
+    OptionalAttr<DriveStrengthAttr>:$strength1
+  );
+  let assemblyFormat = [{
+    $dst `,` $src (`strength` `(` $strength0^ `,` $strength1 `)`)? attr-dict `:` type($src)
+  }];
+  let builders = [
+    // Builder without strength (for backward compatibility)
+    OpBuilder<(ins "Value":$dst, "Value":$src), [{
+      build($_builder, $_state, dst, src, DriveStrengthAttr{}, DriveStrengthAttr{});
+    }]>
+  ];
 }
 
 def DelayedContinuousAssignOp :
@@ -4173,7 +4210,8 @@ def ConstraintDistOp
   let arguments = (ins AnyType:$variable,
                        DenseI64ArrayAttr:$values,
                        DenseI64ArrayAttr:$weights,
-                       DenseI64ArrayAttr:$per_range);
+                       DenseI64ArrayAttr:$per_range,
+                       OptionalAttr<UnitAttr>:$isSigned);
   let results = (outs);
   let assemblyFormat = [{
     $variable `,` $values `,` $weights `,` $per_range `:` type($variable) attr-dict
@@ -4798,7 +4836,8 @@ def InterfaceSignalDeclOp : MooreOp<"interface.signal", [
 
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    TypeAttr:$type
+    TypeAttr:$type,
+    OptionalAttr<UnitAttr>:$interface_instance
   );
   let assemblyFormat = [{
     $sym_name `:` $type attr-dict
@@ -4806,6 +4845,7 @@ def InterfaceSignalDeclOp : MooreOp<"interface.signal", [
 
   let extraClassDeclaration = [{
     ::mlir::Type getSignalType() { return getTypeAttr().getValue(); }
+    bool isInterfaceInstance() { return getInterfaceInstanceAttr() != nullptr; }
   }];
 }
 

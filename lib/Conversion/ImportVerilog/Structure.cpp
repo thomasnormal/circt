@@ -38,6 +38,20 @@ static void guessNamespacePrefix(const slang::ast::Symbol &symbol,
   }
 }
 
+static bool shouldCacheInterfaceInstance(
+    const slang::ast::InstanceSymbol &instSym) {
+  auto *parentScope = instSym.getParentScope();
+  if (!parentScope)
+    return true;
+  if (auto *parentBody =
+          parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+    if (parentBody->getDefinition().definitionKind ==
+        slang::ast::DefinitionKind::Interface)
+      return false;
+  }
+  return true;
+}
+
 //===----------------------------------------------------------------------===//
 // Base Visitor
 //===----------------------------------------------------------------------===//
@@ -277,6 +291,26 @@ static moore::NetKind convertNetKind(slang::ast::NetType::NetKind kind) {
   llvm_unreachable("all net kinds handled");
 }
 
+// Convert slang drive strength to Moore drive strength.
+static std::optional<moore::DriveStrength>
+convertDriveStrength(std::optional<slang::ast::DriveStrength> strength) {
+  if (!strength)
+    return std::nullopt;
+  switch (*strength) {
+  case slang::ast::DriveStrength::Supply:
+    return moore::DriveStrength::Supply;
+  case slang::ast::DriveStrength::Strong:
+    return moore::DriveStrength::Strong;
+  case slang::ast::DriveStrength::Pull:
+    return moore::DriveStrength::Pull;
+  case slang::ast::DriveStrength::Weak:
+    return moore::DriveStrength::Weak;
+  case slang::ast::DriveStrength::HighZ:
+    return moore::DriveStrength::HighZ;
+  }
+  llvm_unreachable("all drive strengths handled");
+}
+
 namespace {
 struct ModuleVisitor : public BaseVisitor {
   using BaseVisitor::visit;
@@ -385,6 +419,45 @@ struct ModuleVisitor : public BaseVisitor {
       // (e.g., in virtual interface assignments like `vif = intf`)
       context.interfaceInstances[&instNode] = instOp.getResult();
 
+      // Register nested interface instances inside this interface instance.
+      if (auto parentRefTy =
+              dyn_cast<moore::RefType>(instOp.getResult().getType())) {
+        if (auto parentVifTy = dyn_cast<moore::VirtualInterfaceType>(
+                parentRefTy.getNestedType())) {
+          Value parentVif = moore::ConversionOp::create(builder, loc,
+                                                        parentVifTy,
+                                                        instOp.getResult());
+
+          for (auto &member : instNode.body.members()) {
+            if (auto *childInst =
+                    member.as_if<slang::ast::InstanceSymbol>()) {
+              if (childInst->getDefinition().definitionKind !=
+                  slang::ast::DefinitionKind::Interface)
+                continue;
+              if (!shouldCacheInterfaceInstance(*childInst))
+                continue;
+
+              auto *ifaceLowering =
+                  context.convertInterfaceHeader(&childInst->body);
+              if (!ifaceLowering)
+                return failure();
+
+              auto childIfaceRef = mlir::FlatSymbolRefAttr::get(
+                  builder.getContext(), ifaceLowering->op.getSymName());
+              auto childVifTy = moore::VirtualInterfaceType::get(
+                  builder.getContext(), childIfaceRef);
+              auto childRefTy = moore::RefType::get(childVifTy);
+              auto signalSym = mlir::FlatSymbolRefAttr::get(
+                  builder.getContext(), childInst->name);
+
+              Value childRef = moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, childRefTy, parentVif, signalSym);
+              context.interfaceInstances[childInst] = childRef;
+            }
+          }
+        }
+      }
+
       return success();
     }
 
@@ -423,19 +496,98 @@ struct ModuleVisitor : public BaseVisitor {
                  << "unsupported unconnected interface port `"
                  << ifacePort->name << "`";
         }
-        auto *instSym = ifaceConn->as_if<slang::ast::InstanceSymbol>();
-        if (!instSym) {
-          return mlir::emitError(loc)
-                 << "unsupported interface port connection for `"
-                 << ifacePort->name << "`";
+        Value ifaceValue;
+        if (auto *expr = con->getExpression()) {
+          if (auto *arb =
+                  expr->as_if<slang::ast::ArbitrarySymbolExpression>()) {
+            ifaceValue = context.resolveInterfaceInstance(arb->hierRef, loc);
+          } else if (auto *hier =
+                         expr->as_if<
+                             slang::ast::HierarchicalValueExpression>()) {
+            ifaceValue = context.resolveInterfaceInstance(hier->ref, loc);
+          }
         }
-        auto it = context.interfaceInstances.find(instSym);
-        if (it == context.interfaceInstances.end()) {
+        if (!ifaceValue) {
+          if (auto *instSym = ifaceConn->as_if<slang::ast::InstanceSymbol>()) {
+            ifaceValue = context.resolveInterfaceInstance(instSym, loc);
+          } else if (auto *ifacePortSym =
+                         ifaceConn
+                             ->as_if<slang::ast::InterfacePortSymbol>()) {
+            if (auto it = context.interfacePortValues.find(ifacePortSym);
+                it != context.interfacePortValues.end())
+              ifaceValue = it->second;
+          } else {
+            return mlir::emitError(loc)
+                   << "unsupported interface port connection for `"
+                   << ifacePort->name << "`";
+          }
+        }
+        if (ifaceValue && ifacePort->interfaceDef) {
+          if (auto *connInst =
+                  ifaceConn->as_if<slang::ast::InstanceSymbol>()) {
+            const auto &connDef = connInst->getDefinition();
+            if (connDef.definitionKind ==
+                    slang::ast::DefinitionKind::Interface &&
+                &connDef != ifacePort->interfaceDef) {
+              const slang::ast::InstanceSymbol *match = nullptr;
+              for (auto &member : connInst->body.members()) {
+                auto *childInst =
+                    member.as_if<slang::ast::InstanceSymbol>();
+                if (!childInst)
+                  continue;
+                if (childInst->getDefinition().definitionKind !=
+                    slang::ast::DefinitionKind::Interface)
+                  continue;
+                if (&childInst->getDefinition() != ifacePort->interfaceDef)
+                  continue;
+                if (match) {
+                  return mlir::emitError(loc)
+                         << "ambiguous nested interface instance for port `"
+                         << ifacePort->name << "`";
+                }
+                match = childInst;
+              }
+
+              if (match) {
+                auto parentRefTy =
+                    dyn_cast<moore::RefType>(ifaceValue.getType());
+                if (!parentRefTy)
+                  return mlir::emitError(loc)
+                         << "invalid interface connection type for `"
+                         << ifacePort->name << "`";
+                auto parentVifTy =
+                    dyn_cast<moore::VirtualInterfaceType>(
+                        parentRefTy.getNestedType());
+                if (!parentVifTy)
+                  return mlir::emitError(loc)
+                         << "invalid interface connection type for `"
+                         << ifacePort->name << "`";
+
+                Value parentVif = moore::ConversionOp::create(
+                    builder, loc, parentVifTy, ifaceValue);
+                auto *ifaceLowering =
+                    context.convertInterfaceHeader(&match->body);
+                if (!ifaceLowering)
+                  return failure();
+                auto childIfaceRef = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), ifaceLowering->op.getSymName());
+                auto childVifTy = moore::VirtualInterfaceType::get(
+                    builder.getContext(), childIfaceRef);
+                auto childRefTy = moore::RefType::get(childVifTy);
+                auto signalSym = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), match->name);
+                ifaceValue = moore::VirtualInterfaceSignalRefOp::create(
+                    builder, loc, childRefTy, parentVif, signalSym);
+              }
+            }
+          }
+        }
+        if (!ifaceValue) {
           return mlir::emitError(loc)
                  << "unknown interface instance for port `" << ifacePort->name
                  << "`";
         }
-        portValues.insert({portSymbol, it->second});
+        portValues.insert({portSymbol, ifaceValue});
         continue;
       }
 
@@ -883,8 +1035,22 @@ struct ModuleVisitor : public BaseVisitor {
       return success();
     }
 
+    // Extract drive strength from the assignment.
+    auto [strength0, strength1] = assignNode.getDriveStrength();
+    auto str0 = convertDriveStrength(strength0);
+    auto str1 = convertDriveStrength(strength1);
+
+    // Create attribute values for the optional strengths.
+    moore::DriveStrengthAttr str0Attr;
+    moore::DriveStrengthAttr str1Attr;
+    if (str0)
+      str0Attr = moore::DriveStrengthAttr::get(builder.getContext(), *str0);
+    if (str1)
+      str1Attr = moore::DriveStrengthAttr::get(builder.getContext(), *str1);
+
     // Otherwise this is a regular assignment.
-    moore::ContinuousAssignOp::create(builder, loc, lhs, rhs);
+    moore::ContinuousAssignOp::create(builder, loc, lhs, rhs, str0Attr,
+                                      str1Attr);
     return success();
   }
 
@@ -1156,8 +1322,35 @@ struct ModuleVisitor : public BaseVisitor {
             moore::ConversionOp::create(builder, loc, targetType, constVal);
       }
 
+      // Extract drive strength from the primitive instance.
+      // Pullup/pulldown primitives can have an optional strength modifier.
+      // The syntax is: pullup (strength1) (net) or pulldown (strength0) (net)
+      // Default is Pull strength if not specified.
+      auto [strength0, strength1] = primNode.getDriveStrength();
+      moore::DriveStrengthAttr str0Attr;
+      moore::DriveStrengthAttr str1Attr;
+
+      if (isPullup) {
+        // For pullup: strength1 is the relevant one (driving 1).
+        // strength0 should be HighZ (not driving 0).
+        str0Attr = moore::DriveStrengthAttr::get(builder.getContext(),
+                                                  moore::DriveStrength::HighZ);
+        auto str1 = convertDriveStrength(strength1);
+        str1Attr = moore::DriveStrengthAttr::get(
+            builder.getContext(), str1.value_or(moore::DriveStrength::Pull));
+      } else {
+        // For pulldown: strength0 is the relevant one (driving 0).
+        // strength1 should be HighZ (not driving 1).
+        auto str0 = convertDriveStrength(strength0);
+        str0Attr = moore::DriveStrengthAttr::get(
+            builder.getContext(), str0.value_or(moore::DriveStrength::Pull));
+        str1Attr = moore::DriveStrengthAttr::get(builder.getContext(),
+                                                  moore::DriveStrength::HighZ);
+      }
+
       // Create a continuous assignment to drive the constant onto the net.
-      moore::ContinuousAssignOp::create(builder, loc, target, constVal);
+      moore::ContinuousAssignOp::create(builder, loc, target, constVal, str0Attr,
+                                        str1Attr);
       return success();
     }
 
@@ -1915,6 +2108,11 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToEnd(lowering.op.getBody());
 
+  auto prevInterfaceInstances = std::move(interfaceInstances);
+  interfaceInstances.clear();
+  auto interfaceInstancesGuard = llvm::make_scope_exit(
+      [&] { interfaceInstances = std::move(prevInterfaceInstances); });
+
   ValueSymbolScope scope(valueSymbols);
   SmallVector<const slang::ast::InterfacePortSymbol *> ifacePortSymbols;
   auto ifacePortGuard = llvm::make_scope_exit([&] {
@@ -2283,7 +2481,8 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       auto type = convertType(port->getType());
       if (!type)
         return failure();
-      moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type);
+      moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type,
+                                           mlir::UnitAttr());
       // Track the internal symbol so we skip it in member iteration
       if (port->internalSymbol) {
         portInternalSymbols.insert(port->internalSymbol);
@@ -2299,7 +2498,8 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
         auto type = convertType(port->getType());
         if (!type)
           return failure();
-        moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type);
+        moore::InterfaceSignalDeclOp::create(builder, portLoc, port->name, type,
+                                             mlir::UnitAttr());
         if (port->internalSymbol) {
           portInternalSymbols.insert(port->internalSymbol);
           interfaceSignalNames[port->internalSymbol] = port->name;
@@ -2328,7 +2528,8 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       auto type = convertType(var->getType());
       if (!type)
         return failure();
-      moore::InterfaceSignalDeclOp::create(builder, loc, var->name, type);
+      moore::InterfaceSignalDeclOp::create(builder, loc, var->name, type,
+                                           mlir::UnitAttr());
       // Map the variable symbol to its signal name
       interfaceSignalNames[var] = var->name;
       continue;
@@ -2338,10 +2539,32 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
       auto type = convertType(net->getType());
       if (!type)
         return failure();
-      moore::InterfaceSignalDeclOp::create(builder, loc, net->name, type);
+      moore::InterfaceSignalDeclOp::create(builder, loc, net->name, type,
+                                           mlir::UnitAttr());
       // Map the net symbol to its signal name
       interfaceSignalNames[net] = net->name;
       continue;
+    }
+
+    // Handle nested interface instances by modeling them as interface signals
+    // that carry a virtual interface handle.
+    if (auto *inst = member.as_if<slang::ast::InstanceSymbol>()) {
+      if (inst->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        auto *ifaceLowering = convertInterfaceHeader(&inst->body);
+        if (!ifaceLowering)
+          return failure();
+
+        auto ifaceRef = mlir::FlatSymbolRefAttr::get(
+            getContext(), ifaceLowering->op.getSymName());
+        auto vifType =
+            moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+
+        moore::InterfaceSignalDeclOp::create(
+            builder, loc, inst->name, vifType, builder.getUnitAttr());
+        interfaceSignalNames[inst] = inst->name;
+        continue;
+      }
     }
 
     // Handle modports
@@ -2409,6 +2632,258 @@ Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
   }
 
   return success();
+}
+
+Value Context::resolveInterfaceInstance(
+    const slang::ast::InstanceSymbol *instSym, Location loc) {
+  if (!instSym)
+    return {};
+
+  if (shouldCacheInterfaceInstance(*instSym)) {
+    if (auto it = interfaceInstances.find(instSym);
+        it != interfaceInstances.end()) {
+      if (!currentScope)
+        return it->second;
+      if (auto *scope = instSym->getParentScope()) {
+        if (auto *body =
+                scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+          if (body == currentScope)
+            return it->second;
+        }
+      }
+    }
+  }
+
+  auto findPortBase =
+      [&](const slang::ast::InstanceSymbol *target) -> Value {
+    Value candidate;
+    bool ambiguous = false;
+    const auto &targetDef = target->getDefinition();
+    for (const auto &entry : interfacePortValues) {
+      auto *ifacePort = entry.first;
+      auto *scope = ifacePort->getParentScope();
+      if (!scope)
+        continue;
+      auto *body =
+          scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+      if (body && body->parentInstance) {
+        auto [ifaceConn, modport] = ifacePort->getConnection();
+        (void)modport;
+        if (ifaceConn == target)
+          return entry.second;
+        continue;
+      }
+      if (!ifacePort->isGeneric && ifacePort->interfaceDef == &targetDef) {
+        if (candidate) {
+          ambiguous = true;
+          continue;
+        }
+        candidate = entry.second;
+      }
+    }
+    if (ambiguous)
+      return {};
+    return candidate;
+  };
+
+  auto findScopedInstance =
+      [&](const slang::ast::InstanceSymbol *target) -> Value {
+    if (!currentScope)
+      return {};
+    if (auto *sym = currentScope->find(target->name)) {
+      if (auto *inst = sym->as_if<slang::ast::InstanceSymbol>()) {
+        if (&inst->getDefinition() == &target->getDefinition()) {
+          if (auto it = interfaceInstances.find(inst);
+              it != interfaceInstances.end())
+            return it->second;
+        }
+      }
+    }
+    for (const auto &entry : interfaceInstances) {
+      const auto *candidate = entry.first;
+      if (candidate->name != target->name)
+        continue;
+      if (&candidate->getDefinition() != &target->getDefinition())
+        continue;
+      auto *scope = candidate->getParentScope();
+      if (!scope)
+        continue;
+      auto *body =
+          scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+      if (body != currentScope)
+        continue;
+      return entry.second;
+    }
+    // Also search in parent scopes - interface instances defined in an
+    // enclosing module should be visible from within generate blocks.
+    for (const auto &entry : interfaceInstances) {
+      const auto *candidate = entry.first;
+      if (candidate->name != target->name)
+        continue;
+      if (&candidate->getDefinition() != &target->getDefinition())
+        continue;
+      // Check if the candidate is in an ancestor scope of currentScope.
+      auto *candidateScope = candidate->getParentScope();
+      if (!candidateScope)
+        continue;
+      auto *candidateBody =
+          candidateScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+      if (!candidateBody)
+        continue;
+      // Walk up from currentScope looking for candidateBody.
+      const slang::ast::Scope *walkScope = currentScope;
+      while (walkScope) {
+        auto *walkBody =
+            walkScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+        if (walkBody == candidateBody)
+          return entry.second;
+        if (walkBody && walkBody->parentInstance) {
+          walkScope = walkBody->parentInstance->getParentScope();
+          continue;
+        }
+        break;
+      }
+    }
+    return {};
+  };
+
+  SmallVector<const slang::ast::InstanceSymbol *, 4> chain;
+  llvm::SmallPtrSet<const slang::ast::InstanceSymbol *, 8> visited;
+
+  const slang::ast::InstanceSymbol *cursor = instSym;
+  while (cursor) {
+    if (!visited.insert(cursor).second)
+      return {};
+    chain.push_back(cursor);
+    cursor = cursor->body.parentInstance;
+  }
+
+  int baseIndex = -1;
+  Value currentRef;
+
+  for (size_t i = 0; i < chain.size(); ++i) {
+    if (auto base = findPortBase(chain[i])) {
+      baseIndex = static_cast<int>(i);
+      currentRef = base;
+      break;
+    }
+  }
+
+  if (!currentRef) {
+    for (size_t i = 0; i < chain.size(); ++i) {
+      if (!shouldCacheInterfaceInstance(*chain[i]))
+        continue;
+      if (auto it = interfaceInstances.find(chain[i]);
+          it != interfaceInstances.end()) {
+        baseIndex = static_cast<int>(i);
+        currentRef = it->second;
+        break;
+      }
+      if (auto scoped = findScopedInstance(chain[i])) {
+        baseIndex = static_cast<int>(i);
+        currentRef = scoped;
+        break;
+      }
+    }
+  }
+
+  if (!currentRef)
+    return {};
+
+  // Walk from the resolved base down to the requested instance.
+  for (int idx = baseIndex - 1; idx >= 0; --idx) {
+    const auto *childInst = chain[static_cast<size_t>(idx)];
+
+    auto parentRefTy = dyn_cast<moore::RefType>(currentRef.getType());
+    if (!parentRefTy)
+      return {};
+
+    auto parentVifTy =
+        dyn_cast<moore::VirtualInterfaceType>(parentRefTy.getNestedType());
+    if (!parentVifTy)
+      return {};
+
+    Value parentVif =
+        moore::ConversionOp::create(builder, loc, parentVifTy, currentRef);
+
+    auto *ifaceLowering = convertInterfaceHeader(&childInst->body);
+    if (!ifaceLowering)
+      return {};
+
+    auto ifaceRef = mlir::FlatSymbolRefAttr::get(
+        getContext(), ifaceLowering->op.getSymName());
+    auto childVifTy =
+        moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+    auto childRefTy = moore::RefType::get(childVifTy);
+    auto signalSym =
+        mlir::FlatSymbolRefAttr::get(getContext(), childInst->name);
+
+    currentRef = moore::VirtualInterfaceSignalRefOp::create(
+        builder, loc, childRefTy, parentVif, signalSym);
+    if (shouldCacheInterfaceInstance(*childInst))
+      interfaceInstances[childInst] = currentRef;
+  }
+
+  return currentRef;
+}
+
+Value Context::resolveInterfaceInstance(
+    const slang::ast::HierarchicalReference &ref, Location loc) {
+  Value currentRef;
+
+  for (const auto &elem : ref.path) {
+    if (!currentRef) {
+      if (auto *instSym =
+              elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+        currentRef = resolveInterfaceInstance(instSym, loc);
+        if (currentRef)
+          continue;
+      }
+      if (auto *ifacePort =
+              elem.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
+        if (auto it = interfacePortValues.find(ifacePort);
+            it != interfacePortValues.end())
+          currentRef = it->second;
+        continue;
+      }
+      continue;
+    }
+
+    auto *childInst = elem.symbol->as_if<slang::ast::InstanceSymbol>();
+    if (!childInst ||
+        childInst->getDefinition().definitionKind !=
+            slang::ast::DefinitionKind::Interface)
+      continue;
+
+    auto parentRefTy = dyn_cast<moore::RefType>(currentRef.getType());
+    if (!parentRefTy)
+      return {};
+    auto parentVifTy =
+        dyn_cast<moore::VirtualInterfaceType>(parentRefTy.getNestedType());
+    if (!parentVifTy)
+      return {};
+
+    Value parentVif =
+        moore::ConversionOp::create(builder, loc, parentVifTy, currentRef);
+
+    auto *ifaceLowering = convertInterfaceHeader(&childInst->body);
+    if (!ifaceLowering)
+      return {};
+
+    auto ifaceRef = mlir::FlatSymbolRefAttr::get(
+        getContext(), ifaceLowering->op.getSymName());
+    auto childVifTy = moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+    auto childRefTy = moore::RefType::get(childVifTy);
+    auto signalSym =
+        mlir::FlatSymbolRefAttr::get(getContext(), childInst->name);
+
+    currentRef = moore::VirtualInterfaceSignalRefOp::create(
+        builder, loc, childRefTy, parentVif, signalSym);
+    if (shouldCacheInterfaceInstance(*childInst))
+      interfaceInstances[childInst] = currentRef;
+  }
+
+  return currentRef;
 }
 
 /// Convert a function and its arguments to a function declaration in the IR.

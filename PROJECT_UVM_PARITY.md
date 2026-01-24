@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 23, 2026 (Iteration 145)
+**Last Updated**: January 23, 2026 (Iteration 146)
 
 ## Current Status
 
@@ -12,7 +12,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
 | 5 | Lexical Conventions | 43/50 (86%) | 5 negative, 2 need -D |
-| 6 | Data Types | 73/84 (87%) | ~8 negative tests |
+| 6 | Data Types | 73/84 (87%) | 11 negative tests |
 | 7 | Aggregate Data Types | 101/103 (98%) | 2 negative tests |
 | 8 | Classes | 44/53 (83%) | 9 negative tests |
 | 9 | Processes | 44/46 (96%) | 1 known limitation (@seq) |
@@ -46,9 +46,17 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
 
-### verilator-verification
-- 122/154 tests pass (79%)
-- Failures are due to: UVM library missing (12), non-standard syntax (8), expected failures (4)
+### verilator-verification (122/154 pass, 79%)
+
+| Category | Count | Details |
+|----------|-------|---------|
+| Invalid test syntax | 8 | `1'z`/`1'x` not valid SV (should be `1'bz`) |
+| Expected failures | 4 | Tests marked should-fail |
+| Parameter initializer | 3 | Missing parameter defaults |
+| pre/post_randomize | 2 | Signature mismatch |
+| $unit reference | 1 | Package referencing $unit |
+| coverpoint iff | 1 | iff syntax in coverpoint |
+| enum in constraint | 1 | enum expression in constraint |
 
 ## Known Limitations
 
@@ -116,11 +124,13 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ## Next Steps (Iteration 146)
 
-### Track A: Signal Strength Support (Priority: High)
-- 13 verilator-verification tests fail due to signal strengths
-- Slang parses strength info via `getDriveStrength()`
-- Need to add to Moore dialect, ImportVerilog, and simulation
-- Components: DriveStrength enum, ContinuousAssignOp attrs, signal resolution
+### Track A: Signal Strength Support (Priority: High) - IMPLEMENTED
+- ✅ DriveStrengthAttr enum added to Moore dialect (Supply, Strong, Pull, Weak, HighZ)
+- ✅ ContinuousAssignOp now has optional strength0/strength1 attributes
+- ✅ ImportVerilog extracts strength from slang's getDriveStrength()
+- ✅ Pullup/pulldown primitives now emit correct strength (highz/pull or strong)
+- 🔲 MooreToCore lowering needs signal resolution for simulation
+- Remaining: Signal resolution semantics for circt-sim
 
 ### Track B: Chapter-22 Define-Expansion Test 26
 - Only 1 of 26 define-expansion tests fails (test_26)
@@ -150,7 +160,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ### Remaining Limitations
 
-1. **Signal strengths** - Not preserved (Priority: High for verilator-verification)
+1. **Signal strength resolution** - Strengths are now parsed and stored in IR, but simulation doesn't yet resolve competing drivers based on strength (needed for verilator-verification tests)
 2. **@seq event controls** - SVA feature (Codex agent scope)
 3. **Covergroup get_coverage()** - Runtime not implemented
 4. **VCD dump tasks** - $dumpfile/$dumpvars ignored

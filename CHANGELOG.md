@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 147 - January 24, 2026
+
+### Signal Strength Support - Frontend Implementation
+
+Implemented signal strength parsing and IR representation in CIRCT:
+
+**Moore Dialect Changes:**
+- Added `DriveStrengthAttr` enum with values: Supply, Strong, Pull, Weak, HighZ
+- Modified `ContinuousAssignOp` to include optional `strength0` and `strength1` attributes
+- Added backward-compatible builder for ops without strength
+
+**ImportVerilog Changes:**
+- Added `convertDriveStrength()` helper function in Structure.cpp
+- Updated continuous assignment handling to extract strength from slang's `getDriveStrength()`
+- Updated pullup/pulldown primitive handling to use correct strength semantics:
+  - Pullup: `strength(highz, <strength>)` - doesn't drive 0, drives 1
+  - Pulldown: `strength(<strength>, highz)` - drives 0, doesn't drive 1
+  - Default strength is Pull if not specified
+
+**IR Output Example:**
+```mlir
+moore.assign %o, %a strength(weak, weak) : l1
+moore.assign %o, %b strength(strong, strong) : l1
+moore.assign %w, %const strength(highz, strong) : l1  // pullup
+```
+
+**Files Modified:**
+- `include/circt/Dialect/Moore/MooreOps.td`
+- `lib/Conversion/ImportVerilog/Structure.cpp`
+
+**Remaining Work:**
+- MooreToCore conversion needs to handle strength during signal resolution
+- circt-sim needs to resolve competing drivers based on strength
+- verilator-verification tests (13) need the full strength resolution to pass
+
 ## Iteration 145 - January 23, 2026
 
 ### sv-tests Baseline Verification
@@ -174,8 +209,40 @@ check to the current `ltl_past`-based lowering.
 test with explicit `ltl_until_seen` tracking and BMC output checks.
 **BMC regression:** Added unbounded delay (`##[*]`) coverage in the LTL-to-BMC
 integration test (`ltl_unbounded_delay_property`).
+**BMC regression:** Added sequence implication with unbounded delay into until
+(`ltl_seq_until_property`) to cover `a ##[*] b |=> c until d` style lowering.
 **SVAToLTL regression:** Added weak `until` conversion coverage in
 `test/Conversion/SVAToLTL/basic.mlir`.
+**SVAToLTL fix:** Strong until now lowers as `until` + `eventually`; added
+coverage in `test/Conversion/SVAToLTL/basic.mlir`.
+**BMC regression:** Added strong-until LTL integration coverage in
+`test/Tools/circt-bmc/ltl-to-bmc-integration.mlir`.
+**BMC regression:** Added end-to-end SVA strong-until coverage in
+`test/Tools/circt-bmc/sva-strong-until.mlir`.
+**ImportVerilog regression:** Added SV end-to-end coverage for
+`a ##[*] b |=> c until d` in
+`test/Conversion/ImportVerilog/sva_unbounded_until.sv`.
+**BMC regression:** Added SVA end-to-end coverage for
+`a ##[*] b |=> c until d` in
+`test/Tools/circt-bmc/sva-unbounded-until.mlir`.
+**SVAToLTL fix:** Non-overlapping implication with property consequents now
+shifts the antecedent by one cycle instead of delaying the property, enabling
+`|=>` with property-level consequents.
+**SVAToLTL regression:** Added non-overlapping implication coverage for
+property consequents in `test/Conversion/SVAToLTL/property-ops.mlir`.
+**LEC regression:** Added `construct-lec` coverage for the `verif.lec` miter in
+`test/Tools/circt-lec/construct-lec.mlir`.
+**LEC regression:** Added reporting-mode `construct-lec` coverage with printf
+globals in `test/Tools/circt-lec/construct-lec-reporting.mlir`.
+**LEC regression:** Added main-mode `construct-lec` coverage in
+`test/Tools/circt-lec/construct-lec-main.mlir`.
+**LEC regression:** Added SMT equivalent-case coverage in
+`test/Tools/circt-lec/lec-smt-equivalent.mlir`.
+**LEC regression:** Added SMT inequivalent-case coverage in
+`test/Tools/circt-lec/lec-smt-inequivalent.mlir`.
+**SeqToSV:** Added a `disable-mux-reachability-pruning` option to
+`lower-seq-to-sv` for debugging FirReg enable inference (also available via
+`firtool`).
 
 ### UVM Test Coverage Expansion
 
@@ -209,6 +276,8 @@ Added comprehensive UVM test files:
   circt-bmc (see `verilator-verification-bmc-results.txt`)
 - **verilator-verification (SVA):** `assert_named_without_parenthesis` reports
   no property under circt-bmc (see `verilator-verification-bmc-results.txt`)
+- **verilator-verification (SVA):** `assert_sampled` reports no property under
+  circt-bmc (see `verilator-verification-bmc-results.txt`)
 - **verilator-verification (SVA):** `sequence_delay_ranges` reports no
   property under circt-bmc (see `verilator-verification-bmc-results.txt`)
 - **yosys/tests (SVA):** `extnets` marked SKIP for pass/fail due to missing
@@ -224,6 +293,10 @@ Added comprehensive UVM test files:
   (no FAIL macro)
 - **yosys/tests (SVA):** `sva_value_change_changed_wide` pass + fail both PASS
 - **yosys/tests (SVA):** `sva_not` pass + fail both PASS
+- **yosys/tests (SVA):** `counter` pass + fail both PASS
+- **yosys/tests (SVA):** `basic04` requires a `top` wrapper (bind target
+  missing in yosys test). Manual wrapper still reports FAIL in both pass/fail,
+  so this needs follow-up.
 - **circt-lec:** `circt-lec --emit-mlir -c1=modA -c2=modB test/Tools/circt-lec/lec-smt.mlir`
   emits SMT MLIR as expected (manual smoke check)
 
