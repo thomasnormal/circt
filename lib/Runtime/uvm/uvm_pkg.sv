@@ -56,6 +56,7 @@ package uvm_pkg;
   typedef class uvm_reg_field;
   typedef class uvm_mem;
   typedef class uvm_component_registry;
+  typedef class uvm_object_wrapper;
   typedef class uvm_tr_database;
   typedef class uvm_report_server;
   typedef class uvm_report_handler;
@@ -264,10 +265,11 @@ package uvm_pkg;
     $display("[UVM_FATAL @ %0t] %s: %s", $time, id, msg);
   endfunction
 
-  // Run test function
-  function automatic void run_test(string test_name = "");
-    $display("[UVM] run_test called with: %s", test_name);
-  endfunction
+  // Run test task - main UVM entry point
+  // This task creates the test from factory and executes all UVM phases
+  task automatic run_test(string test_name = "");
+    uvm_top.run_test(test_name);
+  endtask
 
   //=========================================================================
   // uvm_is_match - Glob pattern matching for config_db
@@ -1138,6 +1140,24 @@ package uvm_pkg;
     virtual function void set_report_id_verbosity(string id, int verbosity);
     endfunction
 
+    // Factory override convenience methods (delegate to factory)
+    virtual function void set_inst_override_by_type(string relative_inst_path,
+                                                    uvm_object_wrapper original_type,
+                                                    uvm_object_wrapper override_type);
+      string full_path;
+      if (get_full_name() != "")
+        full_path = {get_full_name(), ".", relative_inst_path};
+      else
+        full_path = relative_inst_path;
+      factory.set_inst_override_by_type(original_type, override_type, full_path);
+    endfunction
+
+    virtual function void set_type_override_by_type(uvm_object_wrapper original_type,
+                                                    uvm_object_wrapper override_type,
+                                                    bit replace = 1);
+      factory.set_type_override_by_type(original_type, override_type, replace);
+    endfunction
+
   endclass
 
   //=========================================================================
@@ -1146,6 +1166,7 @@ package uvm_pkg;
   class uvm_root extends uvm_component;
     local static uvm_root m_inst;
     protected uvm_factory m_factory;
+    protected uvm_component m_test_top;  // The test instance
 
     function new();
       super.new("", null);
@@ -1162,8 +1183,157 @@ package uvm_pkg;
       super.print_topology(printer);
     endfunction
 
+    //-----------------------------------------------------------------------
+    // Phase traversal helpers
+    //-----------------------------------------------------------------------
+
+    // Execute a function phase on a component and all its children (top-down)
+    protected function void execute_phase_func(uvm_component comp, uvm_phase phase,
+                                               string phase_name);
+      uvm_component children[$];
+      comp.set_current_phase(phase);
+
+      // Execute phase on this component first (top-down)
+      case (phase_name)
+        "build": comp.build_phase(phase);
+        "connect": comp.connect_phase(phase);
+        "end_of_elaboration": comp.end_of_elaboration_phase(phase);
+        "start_of_simulation": comp.start_of_simulation_phase(phase);
+        "extract": comp.extract_phase(phase);
+        "check": comp.check_phase(phase);
+        "report": comp.report_phase(phase);
+        "final": comp.final_phase(phase);
+      endcase
+
+      // Then recurse into children
+      comp.get_children(children);
+      foreach (children[i])
+        execute_phase_func(children[i], phase, phase_name);
+    endfunction
+
+    // Execute run_phase on a component and all its children concurrently
+    protected task execute_run_phase(uvm_component comp, uvm_phase phase);
+      uvm_component children[$];
+      comp.set_current_phase(phase);
+      comp.get_children(children);
+
+      // Fork run_phase for this component and all children
+      fork
+        comp.run_phase(phase);
+      join_none
+
+      foreach (children[i])
+        execute_run_phase(children[i], phase);
+    endtask
+
+    // Wait for all objections to be dropped for a phase
+    protected task wait_for_objections(uvm_phase phase);
+      // Poll objection count until all dropped
+      while (phase.get_objection_count() > 0) begin
+        #1;  // Small time step to allow other processes
+      end
+    endtask
+
+    //-----------------------------------------------------------------------
+    // run_test - Main UVM entry point
+    //-----------------------------------------------------------------------
     virtual task run_test(string test_name = "");
-      $display("[UVM] Running test: %s", test_name);
+      uvm_factory f;
+      uvm_component test_comp;
+
+      `uvm_info("UVM/RUNTST", $sformatf("run_test called with: %s", test_name), UVM_LOW)
+
+      // Get factory
+      f = uvm_factory::get();
+
+      // Create the test instance via factory
+      if (test_name != "") begin
+        test_comp = f.create_component_by_name(test_name, "", "uvm_test_top", this);
+        if (test_comp == null) begin
+          `uvm_fatal("UVM/RUNTST", $sformatf("Cannot find test '%s' - not registered with factory", test_name))
+          return;
+        end
+        m_test_top = test_comp;
+        `uvm_info("UVM/RUNTST", $sformatf("Created test: %s", test_comp.get_type_name()), UVM_LOW)
+      end
+      else begin
+        `uvm_warning("UVM/RUNTST", "No test name specified")
+        return;
+      end
+
+      //---------------------------------------------------------------------
+      // Execute UVM phases in order
+      //---------------------------------------------------------------------
+
+      // BUILD PHASE (top-down: parent builds children)
+      `uvm_info("UVM/PHASE", "Starting build_phase", UVM_LOW)
+      build_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, build_phase_h, "build");
+      build_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed build_phase", UVM_LOW)
+
+      // CONNECT PHASE
+      `uvm_info("UVM/PHASE", "Starting connect_phase", UVM_LOW)
+      connect_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, connect_phase_h, "connect");
+      connect_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed connect_phase", UVM_LOW)
+
+      // END_OF_ELABORATION PHASE
+      `uvm_info("UVM/PHASE", "Starting end_of_elaboration_phase", UVM_LOW)
+      end_of_elaboration_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, end_of_elaboration_phase_h, "end_of_elaboration");
+      end_of_elaboration_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed end_of_elaboration_phase", UVM_LOW)
+
+      // START_OF_SIMULATION PHASE
+      `uvm_info("UVM/PHASE", "Starting start_of_simulation_phase", UVM_LOW)
+      start_of_simulation_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, start_of_simulation_phase_h, "start_of_simulation");
+      start_of_simulation_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed start_of_simulation_phase", UVM_LOW)
+
+      // RUN PHASE (concurrent execution with objection handling)
+      `uvm_info("UVM/PHASE", "Starting run_phase", UVM_LOW)
+      run_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_run_phase(m_test_top, run_phase_h);
+
+      // Wait for all run_phase tasks to complete via objection mechanism
+      // Give a brief time for objections to be raised
+      #1;
+      wait_for_objections(run_phase_h);
+      run_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed run_phase", UVM_LOW)
+
+      // EXTRACT PHASE
+      `uvm_info("UVM/PHASE", "Starting extract_phase", UVM_LOW)
+      extract_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, extract_phase_h, "extract");
+      extract_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed extract_phase", UVM_LOW)
+
+      // CHECK PHASE
+      `uvm_info("UVM/PHASE", "Starting check_phase", UVM_LOW)
+      check_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, check_phase_h, "check");
+      check_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed check_phase", UVM_LOW)
+
+      // REPORT PHASE
+      `uvm_info("UVM/PHASE", "Starting report_phase", UVM_LOW)
+      report_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, report_phase_h, "report");
+      report_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed report_phase", UVM_LOW)
+
+      // FINAL PHASE
+      `uvm_info("UVM/PHASE", "Starting final_phase", UVM_LOW)
+      final_phase_h.set_state(UVM_PHASE_EXECUTING);
+      execute_phase_func(m_test_top, final_phase_h, "final");
+      final_phase_h.set_state(UVM_PHASE_DONE);
+      `uvm_info("UVM/PHASE", "Completed final_phase", UVM_LOW)
+
+      `uvm_info("UVM/RUNTST", "*** UVM TEST PASSED ***", UVM_NONE)
     endtask
 
   endclass

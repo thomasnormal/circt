@@ -136,13 +136,15 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
   - 1 test: enum in constraint expression
 
 ### Track B: AVIP Simulation Testing - COMPLETE
-**Status**: All AVIPs verified (Iteration 150)
-- ✅ I2S AVIP: 130K cycles, 0 errors
-- ✅ APB AVIP: 500K processes, 0 errors
-- ✅ UART AVIP: 1M cycles, 0 errors
-- ✅ AHB AVIP: 1M processes, 250K cycles, 0 errors
-- ✅ SPI AVIP: 5M processes, 0 errors
+**Status**: All AVIPs HDL-level verified (Iteration 150)
+- ✅ I2S AVIP: 130K cycles, 0 sim errors (HDL clock/reset works)
+- ✅ APB AVIP: 500K processes, 0 sim errors (HDL clock/reset works)
+- ✅ UART AVIP: 1M cycles, 0 sim errors (HDL clock/reset works)
+- ✅ AHB AVIP: 1M processes, 250K cycles, 0 sim errors (HDL clock/reset works)
+- ✅ SPI AVIP: 5M processes, 0 sim errors (HDL clock/reset works)
 - ⚠️ AXI4 AVIP: Hangs after initial phase (investigation needed)
+
+**Note**: "0 errors" = circt-sim runs without crashes. UVM testbench phases/sequences/scoreboard do NOT execute (UVM runtime is stub-only).
 
 ### Track C: pre/post_randomize Signature - COMPLETE
 **Status**: Test design issue (Iteration 149)
@@ -161,6 +163,20 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 - Compiles successfully: 135K lines MLIR
 - Simulation starts, prints UVM_INFO messages, then blocks
 - Possible causes: missing clock, blocked event wait, UVM phase issue
+
+### Track F: UVM Phase Execution Implementation (Iteration 151)
+**Status**: Implementation complete, blocked by vtable initialization
+- ✅ Implemented phase execution in `uvm_root::run_test()`:
+  - Factory lookup to create test instance
+  - Component hierarchy traversal (depth-first)
+  - Phase execution: build → connect → end_of_elaboration → start_of_simulation → run → extract → check → report → final
+  - run_phase as concurrent tasks with objection handling
+- ✅ Added automatic factory registration via static variables in macros
+- ❌ **BLOCKED**: Virtual method calls fail because vtables are initialized to zero
+  - MLIR shows: `llvm.mlir.global @"uvm_pkg::uvm_root::__vtable__"(#llvm.zero)`
+  - `circt.vtable_entries` attribute specifies correct entries but vtable memory is null
+  - Calling `uvm_top.run_test()` fails because vtable[85] is null pointer
+- **Next Step**: Fix vtable initialization in MooreToCore or circt-sim runtime
 
 ## Completed in Iteration 150
 
