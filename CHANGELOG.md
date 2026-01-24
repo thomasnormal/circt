@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 153 - January 24, 2026
+
+### Global Variable Initialization Fix (Commit d314c06da)
+
+Fixed package-level global variables with initializers (e.g., `uvm_top = uvm_root::get()`)
+that were being lowered to zero-initialized LLVM globals, discarding the init region.
+
+**Root Cause:** `GlobalVariableOpConversion` in MooreToCore.cpp was ignoring the
+init region and creating globals with zero initialization.
+
+**Fix:** Generate LLVM global constructor functions for each global with an init region:
+- Create `__moore_global_init_<varname>` function
+- Clone init region operations into the function
+- Store the yielded value to the global
+- Register with `llvm.mlir.global_ctors` at priority 65535
+
+**Impact:**
+- `uvm_top` and 23 other UVM globals now correctly initialized at startup
+- Unblocks UVM phase execution (Track D complete)
+
+**Files Modified:**
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+63 lines)
+- `test/Conversion/ImportVerilog/global-variable-init.sv` (new, 61 lines)
+
+---
+
+## Iteration 152 - January 24, 2026
+
+### Vtable Inheritance for User-Defined Classes (Commit 8a8647993)
+
+Fixed inherited virtual methods not appearing in derived class vtables. When a
+derived class doesn't override a base class virtual method, that method was
+missing from the derived class's vtable, causing virtual dispatch failures.
+
+**Root Cause:** `classAST.members()` only returns explicitly defined members,
+not inherited ones.
+
+**Fix:** Added Pass 3 in ClassDeclVisitor to walk the inheritance chain and
+register inherited virtual methods in derived class vtables.
+
+Also fixed duplicate function creation during recursive type conversion when
+`getFunctionSignature` triggers class conversion for argument types.
+
+**Files Modified:**
+- `lib/Conversion/ImportVerilog/Structure.cpp` (+87 lines)
+- `test/Conversion/ImportVerilog/inherited-virtual-methods.sv` (new, 139 lines)
+
+---
+
 ## Iteration 151 - January 24, 2026
 
 ### Vtable Support in circt-sim (Complete)
@@ -47,6 +96,11 @@ llvm.mlir.global @"uvm_pkg::uvm_top"(#llvm.zero) ...
 The static initializer `= uvm_root::get()` is not being lowered to IR. When `run_test()` accesses `uvm_top`, it's null.
 
 **Next Step:** Fix static variable initialization lowering in ImportVerilog.
+
+### SVA BMC Final Assertions
+
+Immediate `assert/assume/cover final` now propagate to `verif.*` with
+`bmc.final`, enabling final-step checks in the BMC pipeline.
 
 ---
 
@@ -456,11 +510,28 @@ coverage in `test/Conversion/SVAToLTL/basic.mlir`.
 **BMC regression:** Added SVA end-to-end coverage for
 `a ##[*] b |=> c until d` in
 `test/Tools/circt-bmc/sva-unbounded-until.mlir`.
+**ImportVerilog fix:** Lowered SVA sequence event controls (`@seq`) into a
+clocked wait loop with NFA-based matching, with conversion coverage in
+`test/Conversion/ImportVerilog/sequence-event-control.sv`.
 **SVAToLTL fix:** Non-overlapping implication with property consequents now
 shifts the antecedent by one cycle instead of delaying the property, enabling
 `|=>` with property-level consequents.
 **SVAToLTL regression:** Added non-overlapping implication coverage for
 property consequents in `test/Conversion/SVAToLTL/property-ops.mlir`.
+**SVAToLTL:** Lowered `sva.prop.if`, `sva.prop.always`, and `sva.prop.nexttime`
+to LTL (implication gating, always via `eventually`/`not`, nexttime via delayed
+`true`), and added conversion coverage in
+`test/Conversion/SVAToLTL/property-ops.mlir`.
+**SVAToLTL:** Lowered `sva.seq.within` and `sva.seq.throughout` to LTL
+constructs and added conversion coverage in
+`test/Conversion/SVAToLTL/sequence-ops.mlir`.
+**SVAToLTL:** Lowered `sva.disable_iff` to LTL `or` with the disable marker and
+`sva.expect` to `verif.assert`, with conversion coverage in
+`test/Conversion/SVAToLTL/property-ops.mlir`.
+**SVAToLTL/LTLToCore:** Added `sva.seq.matched`/`sva.seq.triggered` lowering to
+LTL `ltl.matched`/`ltl.triggered`, plus LTL-to-Core lowering to `i1`, with
+conversion coverage in `test/Conversion/SVAToLTL/sequence-ops.mlir` and
+`test/Conversion/LTLToCore/sequence-matched-triggered.mlir`.
 **LEC regression:** Added `construct-lec` coverage for the `verif.lec` miter in
 `test/Tools/circt-lec/construct-lec.mlir`.
 **LEC regression:** Added reporting-mode `construct-lec` coverage with printf
