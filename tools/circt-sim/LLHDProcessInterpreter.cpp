@@ -70,6 +70,10 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(initializeChildInstances(hwModule)))
     return failure();
 
+  // Initialize LLVM global variables (especially vtables)
+  if (failed(initializeGlobals()))
+    return failure();
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
                           << getNumSignals() << " signals and "
                           << getNumProcesses() << " processes\n");
@@ -2051,6 +2055,86 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     return interpretFuncCall(procId, callOp);
   }
 
+  // Handle func.call_indirect for virtual method calls
+  if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(op)) {
+    // The callee is the first operand (function pointer)
+    Value calleeValue = callIndirectOp.getCallee();
+    InterpretedValue funcPtrVal = getValue(procId, calleeValue);
+
+    if (funcPtrVal.isX()) {
+      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X\n");
+      for (Value result : callIndirectOp.getResults()) {
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      }
+      return success();
+    }
+
+    // Look up the function name from the vtable
+    uint64_t funcAddr = funcPtrVal.getUInt64();
+    auto it = addressToFunction.find(funcAddr);
+    if (it == addressToFunction.end()) {
+      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: address 0x"
+                              << llvm::format_hex(funcAddr, 16)
+                              << " not in vtable map\n");
+      for (Value result : callIndirectOp.getResults()) {
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      }
+      return success();
+    }
+
+    StringRef calleeName = it->second;
+    LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: resolved 0x"
+                            << llvm::format_hex(funcAddr, 16)
+                            << " -> " << calleeName << "\n");
+
+    // Look up the function
+    auto &state = processStates[procId];
+    Operation *parent = state.processOrInitialOp;
+    while (parent && !isa<ModuleOp>(parent))
+      parent = parent->getParentOp();
+
+    if (!parent) {
+      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: could not find module\n");
+      for (Value result : callIndirectOp.getResults()) {
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      }
+      return success();
+    }
+
+    auto moduleOp = cast<ModuleOp>(parent);
+    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
+    if (!funcOp) {
+      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: function '" << calleeName
+                              << "' not found\n");
+      for (Value result : callIndirectOp.getResults()) {
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      }
+      return success();
+    }
+
+    // Gather argument values (use getArgOperands to get just the arguments, not callee)
+    SmallVector<InterpretedValue, 4> args;
+    for (Value arg : callIndirectOp.getArgOperands()) {
+      args.push_back(getValue(procId, arg));
+    }
+
+    // Call the function
+    SmallVector<InterpretedValue, 2> results;
+    if (failed(interpretFuncBody(procId, funcOp, args, results)))
+      return failure();
+
+    // Set results
+    for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results)) {
+      setValue(procId, result, retVal);
+    }
+
+    return success();
+  }
+
   if (auto returnOp = dyn_cast<mlir::func::ReturnOp>(op)) {
     // Return is handled by the call interpreter
     return success();
@@ -2323,6 +2407,9 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto gepOp = dyn_cast<LLVM::GEPOp>(op))
     return interpretLLVMGEP(procId, gepOp);
+
+  if (auto addrOfOp = dyn_cast<LLVM::AddressOfOp>(op))
+    return interpretLLVMAddressOf(procId, addrOfOp);
 
   if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(op))
     return interpretLLVMCall(procId, llvmCallOp);
@@ -2872,6 +2959,55 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       }
     }
     setValue(procId, fcmpOp.getResult(), InterpretedValue(result ? 1 : 0, 1));
+    return success();
+  }
+
+  // Handle builtin.unrealized_conversion_cast - propagate values through
+  if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+    // For casts, propagate the input values to the output values
+    if (castOp.getNumOperands() == castOp.getNumResults()) {
+      // Simple 1:1 mapping
+      for (auto [input, output] : llvm::zip(castOp.getInputs(), castOp.getOutputs())) {
+        InterpretedValue val = getValue(procId, input);
+        // Adjust width if needed
+        unsigned outputWidth = getTypeWidth(output.getType());
+        if (!val.isX() && val.getWidth() != outputWidth) {
+          if (outputWidth > 64) {
+            APInt apVal = val.getAPInt();
+            if (apVal.getBitWidth() < outputWidth) {
+              apVal = apVal.zext(outputWidth);
+            } else if (apVal.getBitWidth() > outputWidth) {
+              apVal = apVal.trunc(outputWidth);
+            }
+            val = InterpretedValue(apVal);
+          } else {
+            val = InterpretedValue(val.getUInt64(), outputWidth);
+          }
+        }
+        setValue(procId, output, val);
+      }
+    } else if (castOp.getNumOperands() == 1 && castOp.getNumResults() > 0) {
+      // Single input to multiple outputs (common for function types)
+      InterpretedValue val = getValue(procId, castOp.getInputs()[0]);
+      for (Value output : castOp.getOutputs()) {
+        unsigned outputWidth = getTypeWidth(output.getType());
+        setValue(procId, output, InterpretedValue(val.isX() ? 0 : val.getUInt64(), outputWidth));
+      }
+    } else {
+      // Just propagate input values for non-standard patterns
+      unsigned numToCopy = std::min(castOp.getNumOperands(), castOp.getNumResults());
+      for (unsigned i = 0; i < numToCopy; ++i) {
+        setValue(procId, castOp.getResult(i), getValue(procId, castOp.getOperand(i)));
+      }
+      // Set remaining results to X
+      for (unsigned i = numToCopy; i < castOp.getNumResults(); ++i) {
+        setValue(procId, castOp.getResult(i),
+                 InterpretedValue::makeX(getTypeWidth(castOp.getResult(i).getType())));
+      }
+    }
+    LLVM_DEBUG(llvm::dbgs() << "  builtin.unrealized_conversion_cast: propagated "
+                            << castOp.getNumOperands() << " inputs to "
+                            << castOp.getNumResults() << " outputs\n");
     return success();
   }
 
@@ -4096,37 +4232,61 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                                                          LLVM::LoadOp loadOp) {
-  // Find the memory block for this pointer
-  MemoryBlock *block = findMemoryBlock(procId, loadOp.getAddr());
-  if (!block) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: no memory block found for pointer\n");
-    setValue(procId, loadOp.getResult(),
-             InterpretedValue::makeX(getTypeWidth(loadOp.getType())));
-    return success();
-  }
-
-  // Calculate the offset within the memory block
+  // Get the pointer value
   InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
+  Type resultType = loadOp.getType();
+  unsigned bitWidth = getTypeWidth(resultType);
+  unsigned loadSize = getLLVMTypeSize(resultType);
+
+  // First try to find a local memory block (from alloca)
+  MemoryBlock *block = findMemoryBlock(procId, loadOp.getAddr());
   uint64_t offset = 0;
 
-  // If the address is from a GEP, the offset should be encoded in the value
-  // For now, we use a simple approach: get the byte offset from the pointer value
-  // relative to the base address
-  if (auto gepOp = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
-    InterpretedValue baseVal = getValue(procId, gepOp.getBase());
-    if (!baseVal.isX() && !ptrVal.isX()) {
-      offset = ptrVal.getUInt64() - baseVal.getUInt64();
+  if (block) {
+    // Local alloca memory
+    // Calculate the offset within the memory block
+    if (auto gepOp = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
+      InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+      if (!baseVal.isX() && !ptrVal.isX()) {
+        offset = ptrVal.getUInt64() - baseVal.getUInt64();
+      }
+    }
+  } else if (!ptrVal.isX()) {
+    // Check if this is a global memory access
+    uint64_t addr = ptrVal.getUInt64();
+
+    // Find which global this address belongs to
+    for (auto &entry : globalAddresses) {
+      StringRef globalName = entry.first();
+      uint64_t globalBaseAddr = entry.second;
+      auto blockIt = globalMemoryBlocks.find(globalName);
+      if (blockIt != globalMemoryBlocks.end()) {
+        uint64_t globalSize = blockIt->second.size;
+        if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+          block = &blockIt->second;
+          offset = addr - globalBaseAddr;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.load: found global '" << globalName
+                                  << "' at offset " << offset << "\n");
+          break;
+        }
+      }
     }
   }
 
-  // Read the value from memory
-  Type resultType = loadOp.getType();
-  unsigned loadSize = getLLVMTypeSize(resultType);
+  if (!block) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: no memory block found for pointer 0x"
+                            << llvm::format_hex(ptrVal.isX() ? 0 : ptrVal.getUInt64(), 16) << "\n");
+    setValue(procId, loadOp.getResult(),
+             InterpretedValue::makeX(bitWidth));
+    return success();
+  }
 
   if (offset + loadSize > block->size) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: out of bounds access\n");
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: out of bounds access (offset="
+                            << offset << " size=" << loadSize
+                            << " block_size=" << block->size << ")\n");
     setValue(procId, loadOp.getResult(),
-             InterpretedValue::makeX(getTypeWidth(resultType)));
+             InterpretedValue::makeX(bitWidth));
     return success();
   }
 
@@ -4134,12 +4294,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   if (!block->initialized) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: reading uninitialized memory\n");
     setValue(procId, loadOp.getResult(),
-             InterpretedValue::makeX(getTypeWidth(resultType)));
+             InterpretedValue::makeX(bitWidth));
     return success();
   }
 
   // Read bytes from memory and construct the value (little-endian)
-  unsigned bitWidth = getTypeWidth(resultType);
+  uint64_t value = 0;
+  for (unsigned i = 0; i < loadSize && i < 8; ++i) {
+    value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+  }
 
   // For values larger than 64 bits, use APInt directly
   if (bitWidth > 64) {
@@ -4152,12 +4315,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded wide value ("
                             << loadSize << " bytes) from offset " << offset << "\n");
   } else {
-    uint64_t value = 0;
-    for (unsigned i = 0; i < loadSize && i < 8; ++i) {
-      value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
-    }
     setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded " << value << " ("
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded 0x"
+                            << llvm::format_hex(value, 16) << " ("
                             << loadSize << " bytes) from offset " << offset << "\n");
   }
 
@@ -4292,16 +4452,45 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                                          LLVM::CallOp callOp) {
   // Get the callee name
   auto callee = callOp.getCallee();
+  std::string resolvedCalleeName;
+
   if (!callee) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect calls not supported\n");
-    for (Value result : callOp.getResults()) {
-      setValue(procId, result,
-               InterpretedValue::makeX(getTypeWidth(result.getType())));
+    // Indirect call - try to resolve through vtable
+    // The callee operand should be a function pointer loaded from a vtable
+    // For indirect calls, the first callee operand is the function pointer
+    auto calleeOperands = callOp.getCalleeOperands();
+    if (!calleeOperands.empty()) {
+      Value calleeOperand = calleeOperands.front();
+      InterpretedValue funcPtrVal = getValue(procId, calleeOperand);
+      if (!funcPtrVal.isX()) {
+        uint64_t funcAddr = funcPtrVal.getUInt64();
+        auto it = addressToFunction.find(funcAddr);
+        if (it != addressToFunction.end()) {
+          resolvedCalleeName = it->second;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved indirect call 0x"
+                                  << llvm::format_hex(funcAddr, 16)
+                                  << " -> " << resolvedCalleeName << "\n");
+        } else {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect call to 0x"
+                                  << llvm::format_hex(funcAddr, 16)
+                                  << " not in vtable map\n");
+        }
+      }
     }
-    return success();
+
+    if (resolvedCalleeName.empty()) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect call could not be resolved\n");
+      for (Value result : callOp.getResults()) {
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      }
+      return success();
+    }
+  } else {
+    resolvedCalleeName = callee->str();
   }
 
-  StringRef calleeName = *callee;
+  StringRef calleeName = resolvedCalleeName;
 
   // Look up the function in the module
   auto &state = processStates[procId];
@@ -4471,5 +4660,107 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   }
 
   // If no return was encountered, return nothing
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Global Variable and VTable Support
+//===----------------------------------------------------------------------===//
+
+LogicalResult LLHDProcessInterpreter::initializeGlobals() {
+  if (!rootModule)
+    return success();
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing globals\n");
+
+  // Find all LLVM global operations in the module
+  rootModule.walk([&](LLVM::GlobalOp globalOp) {
+    StringRef globalName = globalOp.getSymName();
+
+    LLVM_DEBUG(llvm::dbgs() << "  Found global: " << globalName << "\n");
+
+    // Get the global's type to calculate size
+    Type globalType = globalOp.getGlobalType();
+    unsigned size = getLLVMTypeSize(globalType);
+    if (size == 0)
+      size = 8; // Default minimum size
+
+    // Allocate memory for the global
+    uint64_t addr = nextGlobalAddress;
+    nextGlobalAddress += ((size + 7) / 8) * 8; // Align to 8 bytes
+
+    globalAddresses[globalName] = addr;
+
+    // Create memory block
+    MemoryBlock block(size, 64);
+
+    // Check if this is a vtable (has circt.vtable_entries attribute)
+    if (auto vtableEntriesAttr = globalOp->getAttr("circt.vtable_entries")) {
+      LLVM_DEBUG(llvm::dbgs() << "    This is a vtable with entries\n");
+
+      if (auto entriesArray = dyn_cast<ArrayAttr>(vtableEntriesAttr)) {
+        // Each entry is [index, funcSymbol]
+        for (auto entry : entriesArray) {
+          if (auto entryArray = dyn_cast<ArrayAttr>(entry)) {
+            if (entryArray.size() >= 2) {
+              auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+              auto funcSymbol = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+
+              if (indexAttr && funcSymbol) {
+                unsigned index = indexAttr.getInt();
+                StringRef funcName = funcSymbol.getValue();
+
+                // Create a unique "function address" for this function
+                // We use a simple scheme: high bits identify it as a function ptr
+                uint64_t funcAddr = 0xF0000000 + addressToFunction.size();
+                addressToFunction[funcAddr] = funcName.str();
+
+                // Store the function address in the vtable memory
+                // (little-endian)
+                for (unsigned i = 0; i < 8 && (index * 8 + i) < block.data.size(); ++i) {
+                  block.data[index * 8 + i] = (funcAddr >> (i * 8)) & 0xFF;
+                }
+                block.initialized = true;
+
+                LLVM_DEBUG(llvm::dbgs() << "      Entry " << index << ": "
+                                        << funcName << " -> 0x"
+                                        << llvm::format_hex(funcAddr, 16) << "\n");
+              }
+            }
+          }
+        }
+      }
+    }
+
+    globalMemoryBlocks[globalName] = std::move(block);
+  });
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initialized "
+                          << globalMemoryBlocks.size() << " globals, "
+                          << addressToFunction.size() << " vtable entries\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretLLVMAddressOf(
+    ProcessId procId, LLVM::AddressOfOp addrOfOp) {
+  StringRef globalName = addrOfOp.getGlobalName();
+
+  // Look up the global's address
+  auto it = globalAddresses.find(globalName);
+  if (it == globalAddresses.end()) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.addressof: global '" << globalName
+                            << "' not found, returning X\n");
+    setValue(procId, addrOfOp.getResult(),
+             InterpretedValue::makeX(64));
+    return success();
+  }
+
+  uint64_t addr = it->second;
+  setValue(procId, addrOfOp.getResult(), InterpretedValue(addr, 64));
+
+  LLVM_DEBUG(llvm::dbgs() << "  llvm.addressof: " << globalName << " = 0x"
+                          << llvm::format_hex(addr, 16) << "\n");
+
   return success();
 }
