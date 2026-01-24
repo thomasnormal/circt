@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 23, 2026 (Iteration 146)
+**Last Updated**: January 24, 2026 (Iteration 147)
 
 ## Current Status
 
@@ -122,51 +122,66 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 146)
+## Next Steps (Iteration 148)
 
-### Track A: Signal Strength Support (Priority: High) - COMPLETE
-- ✅ DriveStrengthAttr enum added to Moore dialect (Supply, Strong, Pull, Weak, HighZ)
-- ✅ ContinuousAssignOp now has optional strength0/strength1 attributes
-- ✅ ImportVerilog extracts strength from slang's getDriveStrength()
-- ✅ Pullup/pulldown primitives now emit correct strength (highz/pull or strong)
-- ✅ DriveStrengthAttr enum added to LLHD dialect
-- ✅ LLHD DriveOp now has optional strength0/strength1 attributes
-- ✅ MooreToCore AssignOpConversion passes strength through to LLHD
-- ✅ FileCheck test updated to verify both Moore IR and HW IR
-- Remaining: circt-sim needs to use strength for signal resolution (simulation behavior)
+### Track A: circt-sim Signal Strength Resolution (Priority: High)
+**Status**: IR lowering complete, simulation pending
+- ✅ DriveStrengthAttr in Moore dialect
+- ✅ DriveStrengthAttr in LLHD dialect
+- ✅ MooreToCore passes strength to LLHD DriveOp
+- ⬜ **NEXT**: Implement strength-based signal resolution in circt-sim
+- ⬜ When multiple drivers, higher strength wins per IEEE 1364
+- ⬜ This will fix 13+ verilator-verification tests
 
-### Track B: Chapter-22 Define-Expansion Test 26
-- Only 1 of 26 define-expansion tests fails (test_26)
-- Token concatenation works, but test uses undeclared identifier
-- Verify if test is valid or should be marked as expected failure
+### Track B: Chapter-22 Test 26 Investigation - COMPLETE
+**Status**: Test design issue, not CIRCT bug
+- ✅ 7 of 8 define-expansion failures are negative tests (expected)
+- ✅ Test 26 preprocessor works correctly (produces `clock_master`)
+- ✅ Failure is semantic (undeclared identifier), not preprocessing
+- ✅ With `-E` flag, test 26 passes (exit code 0)
+- **Recommendation**: Mark as test design issue in sv-tests
 
-### Track C: AVIP Extended Simulation Testing
-- UART AVIP compiles on both circt-verilog and xrun
-- Test with circt-sim for actual UVM transactions
-- Compare behavioral results with xrun
-- Profile simulation performance
+### Track C: AVIP Simulation Testing (In Progress)
+**Status**: Running parallel agents
+- UART AVIP: UVM messages printing (HDL_TOP, BFM init)
+- APB AVIP: Testing with circt-sim
+- AHB AVIP: Testing with circt-sim
+- SPI AVIP: Testing with circt-sim
+- **NEXT**: Collect results, compare with xrun
 
-### Track D: Chapter-6 Negative Test Verification
-- ~8 tests may be negative tests
-- Verify each has `:should_fail_because:` annotation
-- Update baseline if all are correctly rejected
+### Track D: Covergroup get_coverage() Runtime (Pending)
+**Status**: Compiles but runtime not implemented
+- ⬜ Implement coverage percentage calculation
+- ⬜ Track bins hit during simulation
+- ⬜ Return computed value from get_coverage()
 
-### Findings from Iteration 146 Investigation
+### Track E: verilator-verification Improvements (Pending)
+**Status**: 122/154 (79%), blocked by Track A
+- 8 tests need signal strength simulation
+- 3 tests need parameter initializers
+- 2 tests need pre/post_randomize signature fix
+- 1 test needs coverpoint iff syntax
 
-1. **Chapter-8 Interface Classes**: All 9 "failures" are negative tests that circt-verilog correctly rejects. NOT real limitations.
+## Completed in Iteration 147
 
-2. **Chapter-5 Macro Tests**: The 2 failures need `-D` flags passed from test harness `:defines:` metadata. circt-verilog `-D` flag works correctly.
+1. **Signal Strength LLHD Lowering** (Commit b8037da32)
+   - Added DriveStrengthAttr to LLHD dialect
+   - Updated DriveOp with strength0/strength1 attributes
+   - MooreToCore AssignOpConversion passes strength through
+   - Full IR path: Verilog → Moore → LLHD with strength preserved
 
-3. **Chapter-22 Define-Expansion**: 25/26 pass. Test 26 uses undeclared identifier after token concat.
+2. **Chapter-22 Define-Expansion Analysis**
+   - 7 of 8 failures are negative tests (correctly rejected)
+   - Test 26 is test design issue (preprocessor works, semantic error)
+   - Effective pass rate: 66/67 positive tests (98.5%)
 
-4. **UART AVIP**: Successfully compiles on both circt-verilog and xrun with minor diagnostic differences.
+## Remaining Limitations
 
-### Remaining Limitations
-
-1. **Signal strength simulation** - Strengths are now fully lowered to LLHD DriveOp, but circt-sim doesn't yet resolve competing drivers based on strength (needed for verilator-verification tests to produce correct results)
+1. **Signal strength simulation** - IR lowering complete, circt-sim resolution needed
 2. **@seq event controls** - SVA feature (Codex agent scope)
-3. **Covergroup get_coverage()** - Runtime not implemented
-4. **VCD dump tasks** - $dumpfile/$dumpvars ignored
+3. **Covergroup get_coverage()** - Compiles, runtime not implemented
+4. **VCD dump tasks** - $dumpfile/$dumpvars stubbed
+5. **pre/post_randomize** - Signature validation too strict
 
 ## Test Commands
 
