@@ -4939,9 +4939,33 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     args.push_back(getValue(procId, arg));
   }
 
+  // Check call depth to prevent stack overflow from unbounded recursion.
+  // Using 100 as the limit since each recursive call uses significant C++ stack
+  // space due to the deep call chain: interpretLLVMFuncBody -> interpretOperation
+  // -> interpretLLVMCall -> interpretLLVMFuncBody.
+  constexpr size_t maxCallDepth = 100;
+  if (state.callDepth >= maxCallDepth) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: max call depth (" << maxCallDepth
+                            << ") exceeded for '" << calleeName << "'\n");
+    // Return X values for results instead of failing hard
+    for (Value result : callOp.getResults()) {
+      setValue(procId, result,
+               InterpretedValue::makeX(getTypeWidth(result.getType())));
+    }
+    return success();
+  }
+
+  // Increment call depth before entering function
+  ++state.callDepth;
+
   // Interpret the function body
   SmallVector<InterpretedValue, 2> results;
-  if (failed(interpretLLVMFuncBody(procId, funcOp, args, results)))
+  LogicalResult funcResult = interpretLLVMFuncBody(procId, funcOp, args, results);
+
+  // Decrement call depth after returning
+  --state.callDepth;
+
+  if (failed(funcResult))
     return failure();
 
   // Set the return values
@@ -4965,10 +4989,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     state.valueMap[blockArg] = argVal;
   }
 
-  // Execute the function body
+  // Execute the function body with operation limit to prevent infinite loops
   Block *currentBlock = &entryBlock;
-  while (currentBlock) {
+  constexpr size_t maxOps = 100000;
+  size_t opCount = 0;
+
+  while (currentBlock && opCount < maxOps) {
     for (Operation &op : *currentBlock) {
+      ++opCount;
+      if (opCount >= maxOps) {
+        LLVM_DEBUG(llvm::dbgs() << "  Warning: LLVM function '"
+                                << funcOp.getName()
+                                << "' reached max operations (" << maxOps
+                                << ")\n");
+        return failure();
+      }
+
       // Handle return
       if (auto returnOp = dyn_cast<LLVM::ReturnOp>(&op)) {
         for (Value retVal : returnOp.getOperands()) {

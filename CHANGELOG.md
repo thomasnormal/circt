@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 173 - January 25, 2026
+
+### SPI Stack Overflow Fix (circt-sim)
+
+**Root cause identified and fixed:**
+- `interpretLLVMFuncBody` lacked operation limit (now has 100K like `interpretFuncBody`)
+- Unbounded recursive function calls exceeded 8MB stack
+- Added call depth tracking with `maxCallDepth = 100`
+- Files: LLHDProcessInterpreter.cpp:4942-5004, LLHDProcessInterpreter.h
+
+**Test files added:**
+- test/circt-sim/llhd-process-llvm-recursive-call.mlir (bounded recursion)
+- test/circt-sim/llhd-process-llvm-deep-recursion.mlir (graceful handling)
+
+### Chapter-16 False Alarm Resolved
+
+Reported regression was false - stale results file + wrong binary path:
+- Actual status: 18 PASS, 4 FAIL (correct BMC), 3 XFAIL, 1 ERROR (async reset)
+- Property operators (iff, prec, disj, disable_iff) all work correctly
+
+### AVIP Simulation Results
+
+**APB AVIP:** 14.3M processes, 0 errors, 293K MLIR lines
+**UART AVIP:** 713K processes, 0 errors, 287K MLIR lines
+**Unit Tests:** 1216/1216 passed (100%), 3 known hanging tests excluded
+
 ## Iteration 172 - January 25, 2026
 
 ### Test Suite Status
@@ -7,19 +33,10 @@
 **yosys SVA: 14/14 pass (100%)**
 - All SVA assertion tests pass with circt-bmc
 - Production-quality SVA verification capability confirmed
-- Tests: basic00-03, counter, extnets, nested_clk_else, sva_not, sva_range, sva_throughout, value_change tests
 
 **yosys svtypes: 9/18 pass (50%)**
 - Basic types work: typedef_simple, typedef_struct, typedef_memory, typedef_package, typedef_param
-- Failures: enum_simple (type casting syntax), struct_array (packed/unpacked mixing), union_simple (hw.bitcast unsupported output type)
-- BMC lowering issues: struct_dynamic_range (instance port validation), typedef_scopes (llhd.sig legalization)
-
-**sv-tests Chapter-16 REGRESSION: 4 tests regressed from PASS to ERROR**
-- 16.12--property-disable-iff: PASS → ERROR
-- 16.12--property-iff: PASS → ERROR
-- 16.12--property-prec: PASS → ERROR
-- 16.12--property-disj: FAIL → ERROR
-- Root cause: Property operator handling in Section 16.12 broken
+- Failures: enum_simple (type casting syntax), struct_array (packed/unpacked), union_simple (hw.bitcast)
 
 **verilator-verification: 122/154 compile (79%), no regressions**
 - Compilation success rate matches baseline

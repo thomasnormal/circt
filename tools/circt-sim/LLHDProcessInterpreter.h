@@ -193,6 +193,10 @@ struct ProcessExecutionState {
   /// Operands to pass to the destination block after a wait.
   llvm::SmallVector<InterpretedValue, 4> destOperands;
 
+  /// Current call depth for tracking recursive function calls.
+  /// Used to prevent stack overflow from unbounded recursion.
+  size_t callDepth = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
@@ -556,6 +560,11 @@ private:
 
   /// Initialize LLVM global variables, especially vtables.
   mlir::LogicalResult initializeGlobals();
+
+  /// Execute LLVM global constructors (llvm.mlir.global_ctors).
+  /// This calls functions like __moore_global_init_* that initialize
+  /// UVM globals (e.g., uvm_top) at simulation startup.
+  mlir::LogicalResult executeGlobalConstructors();
 
   /// Interpret an llvm.mlir.addressof operation.
   mlir::LogicalResult interpretLLVMAddressOf(ProcessId procId,
