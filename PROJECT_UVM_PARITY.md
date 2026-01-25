@@ -32,7 +32,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 25 | Interfaces | Tested | See Iteration 122 |
 | 26 | Packages | Tested | See Iteration 122 |
 
-### AVIP Testing Status (8/10 compile, 8/10 simulate)
+### AVIP Testing Status (9/10 compile, 8/10 simulate)
 
 | AVIP | Compilation | Simulation | Notes |
 |------|-------------|------------|-------|
@@ -42,9 +42,9 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | SPI | SUCCESS | Tested | 22.7MB MLIR, stack overflow FIXED (Iteration 173) |
 | I2S | SUCCESS | Tested | 63K lines MLIR (Iteration 163), 130K cycles |
 | I3C | SUCCESS | Tested | ~1.9MB MLIR (Iteration 163), 100K cycles |
-| JTAG | Partial | - | AVIP code issues: bind+virtual interface conflicts |
+| JTAG | Partial | - | AVIP code issue: bind targets used as virtual interfaces |
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
-| AXI4-Lite | Partial | - | AVIP code issues in cover properties |
+| AXI4-Lite | SUCCESS | - | Cover properties compile OK, needs full testbench |
 | I2C | N/A | - | Directory not found (uses I3C instead) |
 
 ### yosys Tests (SVA: 14/14, bind: 6/6, svtypes: 9/18)
