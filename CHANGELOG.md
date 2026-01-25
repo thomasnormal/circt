@@ -139,6 +139,9 @@ All test suites verified stable:
 - BMC harness scripts now accept `CIRCT_BMC_ARGS` and `BMC_SMOKE_ONLY=1` to
   support smoke testing without solver output; `sv-tests-multiclock` uses this
   mode with `--emit-mlir`.
+- Smoke-mode sv-tests/verilator harnesses now treat expected-fail cases as
+  XFAIL to avoid XPASS reporting; regression in
+  `test/Tools/circt-bmc/sv-tests-smoke-xfail.mlir`.
 - Added end-to-end UVM sequence subroutine coverage for BMC and LEC in
   `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv` and
   `test/Tools/circt-lec/lec-uvm-seq-subroutine.sv`.
