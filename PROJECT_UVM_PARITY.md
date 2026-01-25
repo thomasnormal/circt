@@ -83,11 +83,10 @@ Full unit test suite coverage:
 
 ### CIRCT Bugs (To Fix)
 
-1. **Chapter-16 Property Operator Regression** (Priority: HIGH - Iteration 172)
-   - 4 tests regressed from PASS/FAIL to ERROR in Section 16.12
-   - Affected: property-disable-iff, property-iff, property-prec, property-disj
-   - Root cause: Property operator handling broken in SVA-to-LTL or BMC lowering
-   - Investigation needed in lib/Conversion/SVAToLTL/ and lib/Tools/circt-bmc/
+1. ~~**Chapter-16 Property Operator Regression**~~ **FALSE ALARM** (Iteration 173)
+   - Tests are PASSING with correct binaries (build-test/bin/*)
+   - Was: Stale results file and wrong binary path in test script
+   - Actual Chapter-16 status: 18 PASS, 4 FAIL, 3 XFAIL, 1 ERROR (async reset)
 
 2. ~~**Hierarchical event references**~~ **FIXED** (Iteration 145)
    - Was: Chapter-15 tests failing with "unknown hierarchical name"
