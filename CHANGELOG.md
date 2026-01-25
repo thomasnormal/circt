@@ -20,11 +20,23 @@ Reported regression was false - stale results file + wrong binary path:
 - Actual status: 18 PASS, 4 FAIL (correct BMC), 3 XFAIL, 1 ERROR (async reset)
 - Property operators (iff, prec, disj, disable_iff) all work correctly
 
-### AVIP Simulation Results
+### AVIP Status (9/10 compile, 8/10 simulate)
 
-**APB AVIP:** 14.3M processes, 0 errors, 293K MLIR lines
-**UART AVIP:** 713K processes, 0 errors, 287K MLIR lines
-**Unit Tests:** 1216/1216 passed (100%), 3 known hanging tests excluded
+| AVIP | Status | Details |
+|------|--------|---------|
+| SPI | **FIXED** | 717K cycles, 0 errors (was stack overflow) |
+| APB | Working | 14.3M processes, 0 errors |
+| UART | Working | 713K processes, 0 errors |
+| I2S | Working | 130K processes, 0 errors |
+| AXI4-Lite | **Now compiles** | Cover properties OK |
+
+### sv-tests Baselines Verified
+
+- Chapter-7: 101/103 (98%) - Stable
+- Chapter-11: 76/78 (97%) - Stable
+- Chapter-12: 27/27 (100%) - Stable
+- Chapter-20: 47/47 (100%) - Stable
+- Unit Tests: 1216/1216 (100%)
 
 ## Iteration 172 - January 25, 2026
 
