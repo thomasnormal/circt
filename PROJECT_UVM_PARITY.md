@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 173)
+**Last Updated**: January 25, 2026 (Iteration 174)
 
 ## Current Status
 
@@ -11,7 +11,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
-| 5 | Lexical Conventions | 43/50 (86%) | 5 negative, 2 need -D |
+| 5 | Lexical Conventions | 42/50 (84%) | 8 negative tests |
 | 6 | Data Types | 73/84 (87%) | 11 negative tests |
 | 7 | Aggregate Data Types | 101/103 (98%) | 2 negative tests |
 | 8 | Classes | 44/53 (83%) | 9 negative tests |
@@ -20,13 +20,13 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 11 | Operators | 76/78 (97%) | 2 negative tests |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 13/15 (87%) | 2 negative tests |
-| 14 | Clocking Blocks | 5/5 (100%) | Complete |
+| 14 | Clocking Blocks | 4/5 (80%) | 1 error test failing |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | 26/53 (49%) | 27 UVM-dependent need include paths |
 | 18 | Random Constraints | 56/134 (42% raw, 95% effective) | 63 need UVM, 15 negative |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
-| 22 | Compiler Directives | 53/74 (72%) | 15 negative tests, macros |
+| 22 | Compiler Directives | 51/75 (68%) | pragma, line, resetall, macros |
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
 | 25 | Interfaces | Tested | See Iteration 122 |
