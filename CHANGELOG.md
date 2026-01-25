@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 172 - January 25, 2026
+
+### Test Suite Status
+
+**yosys SVA: 14/14 pass (100%)**
+- All SVA assertion tests pass with circt-bmc
+- Production-quality SVA verification capability confirmed
+- Tests: basic00-03, counter, extnets, nested_clk_else, sva_not, sva_range, sva_throughout, value_change tests
+
+**yosys svtypes: 9/18 pass (50%)**
+- Basic types work: typedef_simple, typedef_struct, typedef_memory, typedef_package, typedef_param
+- Failures: enum_simple (type casting syntax), struct_array (packed/unpacked mixing), union_simple (hw.bitcast unsupported output type)
+- BMC lowering issues: struct_dynamic_range (instance port validation), typedef_scopes (llhd.sig legalization)
+
+**sv-tests Chapter-16 REGRESSION: 4 tests regressed from PASS to ERROR**
+- 16.12--property-disable-iff: PASS → ERROR
+- 16.12--property-iff: PASS → ERROR
+- 16.12--property-prec: PASS → ERROR
+- 16.12--property-disj: FAIL → ERROR
+- Root cause: Property operator handling in Section 16.12 broken
+
+**verilator-verification: 122/154 compile (79%), no regressions**
+- Compilation success rate matches baseline
+- 8 PASS, 7 FAIL, 77 SKIP (no property), 30 BMC ERROR
+
+### AVIP Simulation Progress
+
+**I3C AVIP (I2C successor):**
+- Simulation completed: 451,187 processes executed
+- 451,181 delta cycles, 451,174 signal updates
+- BFM initialization: "HDL TOP", "controller Agent BFM", "target Agent BFM"
+- Note: I2C AVIP doesn't exist - use I3C instead
+
+**AXI4 AVIP Hang Investigation:**
+- Root cause: Dual top-module architecture not supported
+- hdl_top has clock/reset/BFMs, hvl_top has run_test()
+- circt-sim can only run one top module
+- Solution: Combine modules or move run_test() to hdl_top
+
+### Technical Investigations
+
+**Static Variable Initialization (uvm_root::get() not lowered):**
+- Root cause identified in Structure.cpp:1850-1861
+- Non-constant function calls in global initializers not supported
+- evaluateConstant() returns empty for runtime functions
+- LLVM globals require constant initializers; runtime init needs module constructors
+- Files: Structure.cpp, Expressions.cpp lines 2732-2741, 6420-6442
+
 ## Iteration 171 - January 25, 2026
 
 ### Build Fix
@@ -25,6 +73,16 @@
 - 4 failures (uninitialized signal assertions, local variables)
 - 1 error (disable iff async reset)
 - 3 expected failures (negative tests)
+
+**sv-tests Chapter-18 (Random): 14/68 pass (21%)**
+- randcase and randsequence features work (14 tests pass)
+- Constraint features (rand/randc, constraint blocks) not yet supported (42 errors)
+- 12 expected failures (negative tests)
+
+**yosys svtypes: 9/18 pass (50%)**
+- typedef/struct features mostly work
+- Failures: enum_simple (cast syntax), struct_array (packed/unpacked), union_simple (hw.bitcast)
+- Some BMC lowering issues with llhd.sig for struct types
 
 ### AVIP Simulation Progress
 
