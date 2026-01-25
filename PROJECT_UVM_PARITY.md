@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 170)
+**Last Updated**: January 25, 2026 (Iteration 172)
 
 ## Current Status
 
@@ -58,6 +58,14 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 
 ### verilator-verification (17/17 BMC tests pass, 100%)
 Note: BMC test suite includes assertions and sequence tests. All tests pass with current build.
+Build requirement: circt-verilog and circt-bmc must be built with `ninja circt-verilog circt-bmc`.
+
+### Unit Tests (1321/1324 pass, 99.8%)
+Full unit test suite coverage:
+- 616 MooreRuntimeTests pass (46 test suites)
+- All 18 UVM coverage tests pass (SampleFieldCoverageEnabled fixed)
+- 3 hanging tests in MooreRuntimeSequenceTest: TryGetNextItemWithData, PeekNextItem, HasItemsCheck
+- Other suites: ArcRuntime(6), Comb(1), HW(10), LLHD(6), OM(33), RTG(4), Synth(4), Sim(397), Support(187), Debug(24), VerilogLSP(15)
 
 | Category | Count | Details |
 |----------|-------|---------|
@@ -141,13 +149,30 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
     - Fixed by using `strdup()` to copy names and `free()` in destroy function
     - Fixed `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test failure
 
-## Next Steps (Iteration 169)
+## Next Steps (Iteration 172)
 
 ### Priority Tasks
 1. **Fix circt-sim stack overflow** - SPI AVIP simulation crashes due to deep UVM class recursion
-2. **Track verilator-verification stability** - Maintain 17/17 BMC tests passing
-3. **Complete JTAG AVIP compilation** - Fix bind+virtual interface issues
-4. **Test additional AVIPs** - USB, CAN, PCIe if available
+2. **Investigate hanging sequence tests** - 3 tests in MooreRuntimeSequenceTest hang indefinitely
+3. **Track verilator-verification stability** - Maintain 17/17 BMC tests passing
+4. **Complete JTAG AVIP compilation** - Fix bind+virtual interface issues
+5. **Test additional AVIPs** - USB, CAN, PCIe if available
+
+### Iteration 171 Findings
+- **Unit tests**: 1321/1324 pass (99.8%)
+  - Full test suite running with comprehensive coverage (1324 tests)
+  - 616 MooreRuntimeTests pass from 46 test suites
+  - 3 hanging tests: TryGetNextItemWithData, PeekNextItem, HasItemsCheck (all in MooreRuntimeSequenceTest)
+  - SampleFieldCoverageEnabled now PASSING (was build sync issue)
+- **verilator-verification**: 17/17 pass (100%)
+  - Recovered from 17/17 ERROR by building circt-verilog and circt-bmc targets
+- **sv-tests Chapter-16 (SVA)**: 18/26 pass (69%)
+  - 4 FAIL (uninitialized signals, local variables)
+  - 1 ERROR (disable iff async reset)
+  - 3 XFAIL (negative tests)
+- **AHB AVIP simulation**: Running with circt-sim
+  - BFM initialization confirmed: "HDL_TOP", "ENT BFM"
+  - 6 LLHD signals, 7 processes registered
 
 ### Iteration 170 Findings
 - **Unit tests**: 188/189 pass (99.5%) - 1 known failure persists:
@@ -157,8 +182,10 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
   - Shows "HDL_TOP", "gent bfm: ENT BFM" BFM initialization
 - **I3C AVIP simulation**: Running with hdl_top module, BFM output visible
   - Shows "HDL TOP", "controller Agent BFM", "target Agent BFM"
-- **yosys SVA tests**: circt-bmc needs module specification via `-top` flag (not `-t`)
-  - basic00.sv fails due to module name resolution
+- **yosys SVA tests**: 14/16 pass (87%) with circt-bmc
+  - All pure SystemVerilog tests pass (14/14 = 100%)
+  - 2 failures (basic04.sv, basic05.sv) require VHDL companion files
+  - Uses `--no-uvm-auto-include` and `--module=top` flags
 - **verilator-verification**: 17/17 pass (100%) baseline confirmed
 
 ### Iteration 169 Findings

@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 171 - January 25, 2026
+
+### Build Fix
+
+**verilator-verification tests recovered:**
+- Previous ERROR (17/17) was due to missing binaries - circt-verilog and circt-bmc weren't built
+- Built missing targets: `ninja circt-verilog circt-bmc`
+- Now: 17/17 pass (100%) - baseline restored
+
+### Current Status
+
+**verilator-verification: 17/17 pass (100%)**
+- All BMC assertion tests passing
+- Tests: assert_changed, assert_fell, assert_named, assert_past, assert_rose, assert_sampled, assert_stable, sequences
+
+**Unit Tests: 1321/1324 pass (99.8%)**
+- Full unit test suite now runs with comprehensive coverage
+- 616 MooreRuntimeTests pass (excluding 3 hanging sequence tests)
+- 3 hanging tests in MooreRuntimeSequenceTest: TryGetNextItemWithData, PeekNextItem, HasItemsCheck
+- All UVM coverage tests pass (SampleFieldCoverageEnabled fixed)
+
+**sv-tests Chapter-16 (SVA): 18/26 pass (69%)**
+- 4 failures (uninitialized signal assertions, local variables)
+- 1 error (disable iff async reset)
+- 3 expected failures (negative tests)
+
+### AVIP Simulation Progress
+
+**AHB AVIP:**
+- circt-sim simulation running successfully
+- BFM initialization confirmed: "HDL_TOP", "ENT BFM"
+- 6 LLHD signals, 7 LLHD processes registered
+
 ## Iteration 170 - January 25, 2026
 
 ### Baseline Verification
