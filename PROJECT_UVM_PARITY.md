@@ -104,6 +104,13 @@ Full unit test suite coverage:
    - Needs: Module constructor support or deferred initialization
    - Files: Structure.cpp:1850-1861, Expressions.cpp:2732-2741
 
+5. **SPI AVIP Stack Overflow in circt-sim** (Priority: HIGH - Iteration 173)
+   - Root cause: `interpretLLVMFuncBody` lacks operation limit (vs `interpretFuncBody` has 100K limit)
+   - Unbounded recursive function calls exceed 8MB stack
+   - No call depth tracking in `interpretLLVMCall`/`interpretFuncCall`
+   - Suggested fix: Add operation limit + call depth tracking
+   - File: tools/circt-sim/LLHDProcessInterpreter.cpp:4957-5024
+
 ### Known Unsupported Features
 
 1. **Sequence event controls (@seq)** - SVA feature, Codex agent scope
