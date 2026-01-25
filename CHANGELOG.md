@@ -1,5 +1,104 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 169 - January 25, 2026
+
+### sv-tests Chapters 7, 12, 20 (BMC) Testing
+
+Extended sv-tests baseline with BMC tests across multiple chapters:
+
+**Results: 145/179 pass (81%)**
+- Chapter 7 (Aggregate Data Types): Arrays, structs, unions well covered
+- Chapter 12 (Procedural Programming): All basic procedural tests pass
+- Chapter 20 (Utility System Tasks): Good coverage
+- 32 errors (missing features), 2 expected failures, 857 skipped (other chapters)
+
+### AVIP Simulation Status
+
+**AHB AVIP:**
+- Simulation running with HdlTop module
+- BFM initialization output visible: "HDL_TOP", "gent bfm"
+
+**I3C AVIP:**
+- Simulation continues successfully
+- Shows "HDL TOP", "controller Agent BFM", "target Agent BFM"
+
+### Unit Tests
+
+- 188/189 pass (99.5%)
+- 1 known failure: `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled`
+  - Covergroup name dangling pointer issue documented in Iteration 162
+
+## Iteration 168 - January 25, 2026
+
+### sv-tests Chapter-16 (BMC) Detailed Analysis
+
+Comprehensive analysis of sv-tests Chapter-16 SVA tests with circt-bmc:
+
+**Results: 18/23 pass (78%)**
+
+**Failure Analysis:**
+- `16.15--property-disable-iff`: ERROR - async reset registers not supported in BMC ExternalizeRegisters pass
+- `16.12--property`, `16.12--property-disj`: FAIL - tests assert on uninitialized 4-state signals, BMC correctly reports violation
+- `16.10--property-local-var`, `16.10--sequence-local-var`: FAIL - SVA local variable pipeline lowering issue, requires debugging seq.compreg capture timing
+
+**Key Insight:** The 16.12 tests that assert `a == 1` or `a || b` on uninitialized signals are arguably correct BMC behavior - uninitialized signals can be 0/X, so BMC finding a counterexample is valid.
+
+### New Test Suites Verified
+
+**Wishbone RTL (I2C Master with Wishbone interface):**
+- Location: `/home/thomas-ahle/verification/nectar2/tests/test_files/sby_i2c/`
+- Compilation: SUCCESS with 3 hw.modules generated
+- Modules: i2c_master_bit_ctrl, i2c_master_byte_ctrl, i2c_master_top
+- grlib i2c_slave_model.v fails: `specify` block not supported
+
+**yosys frontends/verilog tests:**
+- Results: 21/31 pass (67.7%)
+- Failure categories:
+  - Yosys-specific syntax (2): constparser_f_file.sv, macro_arg_tromp.sv
+  - Multi-file dependencies (2): package_import tests
+  - Lowering limitations (3): net_types.sv (wand), size_cast.sv, struct_access.sv
+  - Strict SV compliance (2): mem_bounds.sv, wire_and_var.sv
+  - Generate naming (1): genvar_loop_decl_1.sv
+
+### I3C AVIP Simulation Confirmed
+
+I3C AVIP simulation continues to work successfully:
+- BFM initialization output: "HDL TOP", "controller Agent BFM", "target Agent BFM"
+- Simulation runs until wall-clock timeout with no crashes
+
+## Iteration 167 - January 25, 2026
+
+### AVIP Simulation Testing Results
+
+Comprehensive testing of AVIP simulation with circt-sim revealed varying levels of support:
+
+**SPI AVIP:**
+- Compilation: SUCCESS (165K lines MLIR)
+- Simulation: CRASH (stack overflow)
+- Root cause: Deep UVM class hierarchy causes interpreter stack overflow during initialization
+- The stack trace shows a repeating pattern indicating infinite recursion in method dispatch
+
+**I3C AVIP:**
+- Compilation: SUCCESS (~1.9MB MLIR)
+- Simulation: SUCCESS with `hdl_top` module
+- Ran for 2.24ps simulated time (10s wall-clock timeout)
+- BFM initialization working: "controller Agent BFM", "target Agent BFM"
+
+**JTAG AVIP:**
+- Full compilation: FAILED
+- Errors: bind directive with virtual interface, hierarchical references in bind
+- Pre-compiled `jtag_test.mlir` simulates successfully (117.8ms simulated time)
+
+**AXI4 AVIP:**
+- Full simulation SUCCESS confirmed
+- Complete write transaction: "Test completed successfully at time 290"
+
+**Known Issue: circt-sim Stack Overflow**
+The SPI AVIP simulation crash exposes a limitation in the circt-sim interpreter:
+- Complex UVM testbenches with deep class inheritance cause stack overflow
+- The interpreter uses recursive evaluation which overflows on deep hierarchies
+- Potential fix: Convert recursive evaluation to iterative or increase stack size
+
 ## Iteration 162 - January 25, 2026
 
 ### Fix Covergroup/Coverpoint Name Dangling Pointer Bug

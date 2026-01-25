@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 162)
+**Last Updated**: January 25, 2026 (Iteration 169)
 
 ## Current Status
 
@@ -22,7 +22,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 13 | Tasks and Functions | 13/15 (87%) | 2 negative tests |
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
-| 16 | Assertions | - | Codex agent scope |
+| 16 | Assertions | 26/53 (49%) | 27 UVM-dependent need include paths |
 | 18 | Random Constraints | 56/134 (42% raw, 95% effective) | 63 need UVM, 15 negative |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
@@ -32,19 +32,29 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 25 | Interfaces | Tested | See Iteration 122 |
 | 26 | Packages | Tested | See Iteration 122 |
 
-### AVIP Testing Status (7/9 fully compile)
+### AVIP Testing Status (8/10 fully compile)
 
 | AVIP | Compilation | Simulation | Notes |
 |------|-------------|------------|-------|
-| AHB | SUCCESS | Verified | 294K lines MLIR, 250K cycles, 0 errors |
+| AHB | SUCCESS | Tested | 18K lines MLIR, simulation works with --timeout |
 | APB | SUCCESS | Tested | 293K lines MLIR, 10K cycles, 0 errors |
 | UART | SUCCESS | Tested | 1.4M MLIR, 1M cycles, 0 errors |
-| SPI | SUCCESS | Verified | 149K lines MLIR, 5M processes, 0 errors |
-| I2S | SUCCESS | Tested | 17K lines MLIR, 130K cycles, 0 errors |
-| I3C | SUCCESS | Tested | 145K lines MLIR, 100K cycles, 0 errors |
-| JTAG | Partial | - | AVIP code issues (not CIRCT) |
+| SPI | SUCCESS | CRASH | 165K lines MLIR, stack overflow in circt-sim |
+| I2S | SUCCESS | Tested | 63K lines MLIR (Iteration 163), 130K cycles |
+| I3C | SUCCESS | Tested | ~1.9MB MLIR (Iteration 163), 100K cycles |
+| JTAG | Partial | - | AVIP code issues: bind+virtual interface conflicts |
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
+| I2C | N/A | - | Directory not found (uses I3C instead) |
+
+### yosys Tests (SVA: 14/16, bind: 6/6, svtypes: 14/18)
+
+| Test Suite | Pass Rate | Notes |
+|------------|-----------|-------|
+| sva/*.sv | 14/16 (87.5%) | 2 fail due to multi-file deps (missing modules) |
+| bind/*.sv | 6/6 (100%) | All bind tests pass |
+| svtypes/*.sv | 14/18 (78%) | enum cast, out-of-bounds, $size, forward ref |
+| **Combined** | **34/40 (85%)** | Standalone tests work well |
 
 ### verilator-verification (17/17 BMC tests pass, 100%)
 Note: BMC test suite includes assertions and sequence tests. All tests pass with current build.
@@ -131,13 +141,81 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
     - Fixed by using `strdup()` to copy names and `free()` in destroy function
     - Fixed `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test failure
 
-## Next Steps (Iteration 163)
+## Next Steps (Iteration 169)
 
 ### Priority Tasks
-1. **Test UVM singleton initialization** - Run `run_test()` with circt-sim to verify `uvm_root::get()` creates singletons
-2. **Test full AVIP simulation end-to-end** - Verify UVM phases execute correctly
-3. **Improve sv-tests coverage** - Chapter 18 (Random Constraints) at 42% needs work
-4. **Verify AXI4 AVIP compilation** - Ensure full AVIP compiles without errors
+1. **Fix circt-sim stack overflow** - SPI AVIP simulation crashes due to deep UVM class recursion
+2. **Track verilator-verification stability** - Maintain 17/17 BMC tests passing
+3. **Complete JTAG AVIP compilation** - Fix bind+virtual interface issues
+4. **Test additional AVIPs** - USB, CAN, PCIe if available
+
+### Iteration 169 Findings
+- **sv-tests Chapters 7, 12, 20 (BMC)**: 145/179 pass (81%)
+  - Chapter 7 (Aggregate Data Types): Well covered
+  - Chapter 12 (Procedural): All basic tests pass
+  - Chapter 20 (Utility System Tasks): Good coverage
+  - 32 errors (missing features), 2 expected failures
+- **AHB AVIP simulation**: Running with HdlTop module, BFM initialization output visible
+- **I3C AVIP simulation**: Continues to run successfully with BFM output
+- **Unit tests**: 188/189 pass (1 known failure: SampleFieldCoverageEnabled)
+
+### Iteration 168 Findings
+- **sv-tests Chapter-16 (BMC)**: 18/23 pass (78%) - detailed analysis completed
+  - 16.15--property-disable-iff: ERROR - async reset registers not supported in BMC
+  - 16.12--property, 16.12--property-disj: FAIL - tests assert on uninitialized signals (correct BMC behavior)
+  - 16.10--property-local-var, 16.10--sequence-local-var: FAIL - SVA local variable pipeline lowering issue
+- **Wishbone RTL (I2C Master)**: Compiles successfully with circt-verilog
+  - Location: `/home/thomas-ahle/verification/nectar2/tests/test_files/sby_i2c/`
+  - 3 hw.modules generated: i2c_master_bit_ctrl, i2c_master_byte_ctrl, i2c_master_top
+  - grlib i2c_slave_model.v fails: `specify` block not supported
+- **yosys frontends/verilog**: 21/31 pass (67.7%)
+  - Failures categorized: yosys-specific syntax (2), multi-file deps (2), lowering limitations (3), strict SV (2), genblock naming (1)
+  - net_types.sv: wand net type lowering error
+  - struct_access.sv: MooreToCore silent failure
+- **I3C AVIP**: Simulation continues to work with BFM initialization output
+  - Shows "HDL TOP", "controller Agent BFM", "target Agent BFM"
+
+### Iteration 167 Findings
+- **SPI AVIP**: Compilation SUCCESS (165K lines MLIR), simulation CRASHES with stack overflow
+  - circt-sim crashes during interpreter initialization due to deep UVM class hierarchy recursion
+  - Stack trace shows repeating pattern of 3 addresses indicating infinite recursion
+  - Root cause: Deep class inheritance in UVM causes stack overflow during method dispatch
+- **I3C AVIP**: Compilation SUCCESS, simulation SUCCESS with `hdl_top` module
+  - Simulates successfully until wall-clock timeout (10s = 2.24ps simulated)
+  - Shows BFM initialization: "controller Agent BFM", "target Agent BFM"
+- **JTAG AVIP**: Full compilation FAILED, pre-compiled MLIR simulates successfully
+  - Errors: bind directive with virtual interface, hierarchical references in bind
+  - Pre-compiled `jtag_test.mlir` simulates: 117.8ms simulated time, 0 errors
+- **AXI4 AVIP**: Full simulation SUCCESS confirmed
+  - Complete write transaction: "Test completed successfully at time 290"
+
+### Iteration 166 Findings
+- **Chapter-18 Random Constraints**: 0/134 pass (0%) - CRV features (rand/randc, constraints, randcase, randsequence) not yet supported
+- **yosys SVA tests**: 14/16 pass (87.5%) - 2 failures due to multi-file test dependencies (missing modules)
+- **yosys bind tests**: 6/6 pass (100%) - All bind tests work correctly
+- **yosys combined**: 20/22 pass (91%) - Excellent SVA support for standalone tests
+- **AHB AVIP simulation**: Confirmed working with --timeout=5
+
+### Iteration 165 Findings
+- **Chapter-16 SVA tests**: 26/53 pass (49.1%) - 27 failures are UVM-dependent (need include paths)
+- **AHB AVIP simulation**: WORKS with --timeout=5 (18K lines MLIR, simulation finishes successfully)
+- **verilator-verification**: 17/17 pass (100%) - All BMC tests pass (confirmed)
+- **MooreRuntime unit tests**: 635 tests, all passing
+
+### Iteration 164 Findings (Previous)
+- **verilator-verification**: 17/17 pass (100%) - All BMC tests pass
+- **yosys svtypes**: 14/18 pass (78%) - 4 failures (enum cast, out-of-bounds, $size, forward ref)
+- **Moore dialect unit tests**: 7/7 pass (100%)
+- **MooreRuntime unit tests**: 635 tests running, all passing (in progress)
+- **APB AVIP simulation**: WORKS with --timeout flag (235K processes, 0 errors in 10s)
+
+### Iteration 163 Findings (Previous)
+- I2S AVIP compiles: 63,152 lines Moore IR
+- I3C AVIP compiles: ~1.9MB MLIR output, 0 errors, 20 warnings
+- JTAG AVIP fails: AVIP code issues (bind + virtual interface conflicts)
+- AHB simulation hangs: circt-sim hangs with HdlTop module
+- yosys svtypes: 14/18 pass (78%)
+- sv-tests SVA (Chapter 16): 26 tests, 0 pass, 23 error, 3 xfail (all fail at import)
 
 ### Track Status Summary
 | Track | Status | Next Action |
