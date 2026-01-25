@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 157)
+**Last Updated**: January 24, 2026 (Iteration 158)
 
 ## Current Status
 
@@ -125,7 +125,7 @@ Note: 1 test regression from 122 due to trailing comma syntax enforcement
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 157)
+## Next Steps (Iteration 158)
 
 ### Track A: Extern Virtual Method Vtable Entries - FIXED (Iteration 157)
 **Status**: Fixed - I2S AVIP now compiles with proper vtable entries
@@ -153,17 +153,14 @@ Note: 1 test regression from 122 due to trailing comma syntax enforcement
 - ✅ Prevents valid processes from being removed during canonicalization
 - ✅ Test: `test/Dialect/LLHD/Canonicalization/processes.mlir`
 
-### Track D: Global Variable Initialization - MOSTLY COMPLETE
-**Status**: LLVM::ConstantOp fixed; llhd.sig in function context still pending
+### Track D: Global Variable Initialization - COMPLETE (Iteration 157)
+**Status**: Fixed - Both LLVM::ConstantOp and llhd.sig now handled
 - ✅ GlobalVariableOpConversion generates LLVM global constructors correctly
 - ✅ Simple constructors using `hw.constant` work
 - ✅ LLVM::ConstantOp now handled (Track H fix)
-- ❌ `llhd.sig` in function context not handled (local variables in constructors)
-- **Root Cause** (Agent abceb68 analysis):
-  1. Local variable declarations produce `llhd.sig` operations at runtime
-  2. Interpreter only registers signals during initialization phase
-  3. Need to add handler for `llhd::SigOp` to dynamically register signals
-- **Location**: `tools/circt-sim/LLHDProcessInterpreter.cpp` line 1163+
+- ✅ `llhd.sig` in function context now handled (Commit a18899b30)
+- **Fix**: Added `llhd::SigOp` handler in `interpretOperation()` to dynamically register runtime signals
+- **Location**: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 1178-1215
 
 ### Track E: HVL_top Function Inlining - NEEDS INVESTIGATION
 **Status**: Analysis complete, design decision needed
@@ -182,11 +179,12 @@ Note: 1 test regression from 122 due to trailing comma syntax enforcement
 - **Location**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (+64 lines)
 
 ### Track G: UVM Runtime Initialization (Blocking Full AVIP)
-**Status**: Tracks A and H fixed; ready for integration testing
+**Status**: Tracks A, D, and H all fixed; ready for integration testing
 - ✅ HDL top modules compile and simulate correctly
 - ✅ Global constructor execution implemented in circt-sim
 - ✅ Vtable entries now generated for UVM classes (Track A fixed)
 - ✅ LLVM::ConstantOp interpreter support (Track H fixed)
+- ✅ Runtime signal creation for local variables (Track D fixed)
 - ❌ hvl_top with run_test() has inlined body instead of runtime call
 - ❌ uvm_coreservice and uvm_root not created at runtime
 - **Next**: Test full UVM testbench simulation with recent fixes
