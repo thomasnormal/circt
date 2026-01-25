@@ -4308,6 +4308,32 @@ def ConstraintDisableSoftOp
   }];
 }
 
+def ConstraintDisableOp
+    : MooreOp<"constraint.disable", [HasParent<"ConstraintBlockOp">]> {
+  let summary = "Disable a named constraint block";
+  let description = [{
+    Disables a named constraint block by symbol reference. This is used within
+    a constraint block to disable another constraint block (typically to override
+    soft constraints or base class constraints).
+
+    Example:
+    ```mlir
+    // Disable the soft_limit constraint block
+    moore.constraint.block @override {
+      moore.constraint.disable @soft_limit
+    }
+    ```
+
+    See IEEE 1800-2017 Section 18.5.14 "Disabling constraints".
+  }];
+
+  let arguments = (ins SymbolRefAttr:$constraint_name);
+  let results = (outs);
+  let assemblyFormat = [{
+    $constraint_name attr-dict
+  }];
+}
+
 def ConstraintUniqueOp
     : MooreOp<"constraint.unique", []> {
   let summary = "Unique constraint for variables or array elements";
