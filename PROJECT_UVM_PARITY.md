@@ -55,6 +55,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | bind/*.sv | 6/6 (100%) | All bind tests pass |
 | svtypes/*.sv | 14/18 (78%) | Improved from 9/18 (Iteration 174) |
 | **Combined** | **34/38 (89%)** | Improved from 29/38 (Iteration 174) |
+| verilog/*.sv | 21/31 (68%) | Package imports, struct access need work |
 
 ### verilator-verification (17/17 BMC tests pass, 100%)
 Note: BMC test suite includes assertions and sequence tests. All tests pass with current build.
