@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 174 - January 25, 2026
+
+### Comprehensive Baseline Verification
+
+All test suites verified stable:
+
+| Test Suite | Result | Notes |
+|------------|--------|-------|
+| verilator-verification | 17/17 (100%) | Stable baseline |
+| yosys SVA | 14/14 (100%) | Stable baseline |
+| Chapter-5 | 42/50 (84%) | 8 negative tests |
+| Chapter-10 | 9/10 (90%) | 1 negative test |
+| Chapter-13 | 13/15 (87%) | 2 negative tests |
+| Chapter-14 | 4/5 (80%) | 1 error test failing |
+| Chapter-15 | 5/5 (100%) | Stable |
+
+### AVIP Simulation Status
+
+| AVIP | Status | Details |
+|------|--------|---------|
+| AHB | Working | 5 LLHD processes, 0 errors, reaches 5s sim time |
+| APB | Working | Very slow (~1 cycle/7s), high memory (1.3GB) |
+| UART | Working | MLIR exists, runs at 0fs (no LLHD processes in HvlTop) |
+| I3C | Partial | Minimal testbench works, full UVM not supported |
+| AXI4-Lite | Partial | UVM-dependent, needs traditional simulator |
+
+### sv-tests Chapters Not Available
+
+- Chapter-17 (Checkers): Does not exist in sv-tests
+- Chapter-19 (VPI Enhancements): Does not exist in sv-tests
+
 ## Iteration 173 - January 25, 2026
 
 ### SPI Stack Overflow Fix (circt-sim)
