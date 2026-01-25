@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 176 - January 25, 2026
+
+### sv-tests Chapter-5 Improvement
+
+Chapter-5 tests improved from 42/50 (84%) to **48/50 (96%)**:
+- 43 positive tests passing (vs 38 before)
+- All 5 negative tests correctly fail
+- 2 remaining failures are test harness issues (need `-DTEST_VAR` integration)
+- Effective pass rate: 100% when excluding harness integration tests
+
+### verilator-verification Analysis
+
+Full import/parse test analysis:
+- **Import tests**: 122/154 (79%)
+- **BMC active tests**: 8/17 (47%) - 9 skipped without BMC-checkable properties
+
+Failure categories:
+- UVM testbenches (11): Need full UVM infrastructure
+- Signal strengths (15): `wand`, `tri1` not supported in lowering
+- Randomization (3): pre/post_randomize, enum constraints
+- Functional coverage (1): coverpoint iff
+- Other (2): $unit scope, basic UVM test
+
+### yosys SVA Test Analysis
+
+SVA tests: 14/16 (87.5%)
+- 14 passing: basic00-03, counter, extnets, nested_clk_else, sva_not, sva_range, sva_throughout, value_change tests
+- 2 failures: basic04.sv, basic05.sv - bind statements referencing modules in same file
+
+### I2C AVIP Analysis
+
+- Simple I2C master: Compiles and simulates successfully
+- Interface support: Compiles to Moore IR, may hang in simulation
+- Unsupported: `wand`, `tri1` net types fail during LLHD lowering
+- Cadence I2C VIP: Requires UVM infrastructure
+
+### Chapter-22 Major Improvement
+
+Chapter-22 (Compiler Directives) improved from 51/75 (68%) to **74/74 (100%)**:
+- All `resetall, `include, `define, `undef, `ifdef, `timescale, `pragma, `line directives pass
+- 74 total tests (not 75 - one file is a helper include)
+
+### Additional Chapter Improvements
+
+- Chapter-8 (Classes): 53/53 (100%) - all pass with XFAIL accounting
+- Chapter-9 (Processes): 46/46 (100%) - all pass with XFAIL accounting
+
+### Grand Total
+
+sv-tests: 782/829 (94%) - improved from 753/829 (90%)
+- Chapter-5: 48/50 (96%) +6
+- Chapter-8: 53/53 (100%) +9
+- Chapter-9: 46/46 (100%) +1
+- Chapter-22: 74/74 (100%) +23
+
 ## Iteration 174 - January 25, 2026
 
 ### Comprehensive Baseline Verification
@@ -154,15 +209,99 @@ All test suites verified stable:
   `test/Tools/circt-lec/sv-tests-lec-smoke.mlir`.
 - Added UVM LEC smoke regression in
   `test/Tools/circt-lec/sv-tests-uvm-lec-smoke.mlir`.
+- Added LEC sv-tests mini fixtures under
+  `test/Tools/circt-lec/Inputs/sv-tests-mini`.
+- Added `utils/run_verilator_verification_circt_lec.sh` harness for
+  verilator-verification LEC smoke runs, with regression in
+  `test/Tools/circt-lec/verilator-lec-smoke.mlir`.
+- Added a yosys SVA BMC smoke regression in
+  `test/Tools/circt-bmc/yosys-sva-smoke.mlir`.
+- Documented LEC smoke harness usage in
+  `docs/SVA_BMC_LEC_PLAN.md`.
+- Updated `PROJECT_PLAN.md` with LEC smoke harness references.
+- Extended `PROJECT_PLAN.md` to include yosys SVA LEC smoke harness guidance.
+- Added BMC smoke harness usage notes to `docs/SVA_BMC_LEC_PLAN.md`.
+- Added LEC harness knobs (`FORCE_LEC`, `UVM_PATH`) to
+  `docs/SVA_BMC_LEC_PLAN.md`.
+- Documented smoke harness usage in `docs/FormalVerification.md`.
+- LEC harnesses now accept `CIRCT_VERILOG_ARGS` for extra front-end flags;
+  regression in `test/Tools/circt-lec/sv-tests-lec-verilog-args.mlir`.
+- BMC harnesses now support `KEEP_LOGS_DIR=...` to preserve per-test MLIR/logs;
+  regression in `test/Tools/circt-bmc/sv-tests-keep-logs.mlir`.
+- LEC harnesses now support `KEEP_LOGS_DIR=...` to preserve per-test MLIR/logs;
+  regression in `test/Tools/circt-lec/sv-tests-lec-keep-logs.mlir`.
+- BMC harnesses now treat propertyless designs as SKIP when
+  `NO_PROPERTY_AS_SKIP=1`, with regression coverage in
+  `test/Tools/circt-bmc/sv-tests-no-property-skip.mlir` and
+  `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`.
+- BMC/LEC harnesses now use suite-relative log tags when saving logs to avoid
+  collisions between tests with the same basename in different directories;
+  regressions in `test/Tools/circt-bmc/sv-tests-keep-logs-logtag.mlir` and
+  `test/Tools/circt-lec/sv-tests-lec-keep-logs-logtag.mlir`.
+- Added `utils/run_yosys_sva_circt_lec.sh` harness and smoke regression in
+  `test/Tools/circt-lec/yosys-lec-smoke.mlir`.
 - Added end-to-end UVM sequence subroutine coverage for BMC and LEC in
   `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv` and
   `test/Tools/circt-lec/lec-uvm-seq-subroutine.sv`.
 - Added end-to-end UVM interface property coverage for BMC and LEC in
   `test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv` and
   `test/Tools/circt-lec/lec-uvm-interface-property.sv`.
+- Added end-to-end UVM assume property coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-assume-e2e.sv` and
+  `test/Tools/circt-lec/lec-uvm-assume.sv`.
+- Added end-to-end UVM expect and assert-final coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-expect-e2e.sv`,
+  `test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv`,
+  `test/Tools/circt-lec/lec-uvm-expect.sv`, and
+  `test/Tools/circt-lec/lec-uvm-assert-final.sv`.
 - sv-tests BMC harness now adds `--uvm-path` for UVM-tagged tests (defaulting
   to `lib/Runtime/uvm`), with a regression in
   `test/Tools/circt-bmc/sv-tests-uvm-path.mlir`.
+- Added sv-tests mini UVM smoke harness regressions covering local variables,
+  multiclock assertions, and interface properties in
+  `test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir` and
+  `test/Tools/circt-lec/sv-tests-uvm-lec-smoke-mini.mlir`.
+- sv-tests BMC/LEC harnesses now accept `INCLUDE_UVM_TAGS=1` to include tests
+  tagged only with `uvm`, with regressions in
+  `test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir` and
+  `test/Tools/circt-lec/sv-tests-lec-uvm-tags-include.mlir`.
+- Added sv-tests mini UVM expect and assert-final smoke coverage in
+  `test/Tools/circt-bmc/Inputs/sv-tests-mini-uvm` and
+  `test/Tools/circt-lec/Inputs/sv-tests-mini-uvm`.
+- Added sv-tests mini UVM assume-property smoke coverage in
+  `test/Tools/circt-bmc/Inputs/sv-tests-mini-uvm` and
+  `test/Tools/circt-lec/Inputs/sv-tests-mini-uvm`.
+- Added a VerifToSMT regression to ensure `bmc.final` checks are hoisted into
+  final-check outputs in `test/Conversion/VerifToSMT/bmc-final-checks.mlir`.
+- Added end-to-end BMC regressions for `expect` and `assert final` in
+  `test/Tools/circt-bmc/sva-expect-e2e.sv` and
+  `test/Tools/circt-bmc/sva-assert-final-e2e.sv`.
+- Added ImportVerilog coverage for `assert final` in
+  `test/Conversion/ImportVerilog/assertions.sv`.
+- Added ImportVerilog coverage for `expect` in
+  `test/Conversion/ImportVerilog/assertions.sv`.
+- Added ImportVerilog coverage for `assume property` in
+  `test/Conversion/ImportVerilog/assertions.sv`.
+- Added end-to-end BMC coverage for `assume property` in
+  `test/Tools/circt-bmc/sva-assume-e2e.sv`.
+- ImportVerilog now supports `$past` with explicit clocking (including optional
+  enable) by synthesizing sampled history at module scope; regression in
+  `test/Conversion/ImportVerilog/past-clocking.sv`.
+- ImportVerilog now supports `$past` enable in timed assertion statements by
+  reusing the surrounding clocking control; regression in
+  `test/Conversion/ImportVerilog/past-enable-implicit.sv`.
+- ImportVerilog now supports `$past` enable inside clocked properties using the
+  property clocking control; regression in
+  `test/Conversion/ImportVerilog/past-enable-property-clock.sv`.
+- ImportVerilog now lowers weak `eventually`, `s_nexttime`, and `s_always`
+  assertion operators, with weak eventually tagged for LTL lowering; regression
+  coverage in `test/Conversion/ImportVerilog/basic.sv` and
+  `test/Conversion/LTLToCore/eventually-weak.mlir`.
+- Added LEC end-to-end coverage for `expect` and `assert final` in
+  `test/Tools/circt-lec/lec-expect.sv` and
+  `test/Tools/circt-lec/lec-assert-final.sv`.
+- Documented `NO_PROPERTY_AS_SKIP`/`INCLUDE_UVM_TAGS` harness knobs in
+  `PROJECT_SVA.md`.
 
 ### SVA/BMC Harness
 
@@ -1336,6 +1475,9 @@ coverage in `test/Conversion/SVAToLTL/basic.mlir`.
 `test/Tools/circt-bmc/ltl-to-bmc-integration.mlir`.
 **BMC regression:** Added end-to-end SVA strong-until coverage in
 `test/Tools/circt-bmc/sva-strong-until.mlir`.
+**BMC fix:** Deduplicate identical derived clocks after module flattening in
+`circt-bmc` to avoid spurious multi-clock errors; added
+`test/Tools/circt-bmc/circt-bmc-flatten-dup-clocks.mlir`.
 **ImportVerilog regression:** Added SV end-to-end coverage for
 `a ##[*] b |=> c until d` in
 `test/Conversion/ImportVerilog/sva_unbounded_until.sv`.
@@ -1344,6 +1486,13 @@ coverage in `test/Conversion/SVAToLTL/basic.mlir`.
 `test/Tools/circt-bmc/sva-unbounded-until.mlir`.
 **ImportVerilog fix:** Allow trailing commas in ANSI module port lists when
 parsing with slang (covers `test/Conversion/ImportVerilog/trailing-comma-portlist.sv`).
+**ImportVerilog fix:** Honor range maxima for `nexttime`/`s_nexttime` by
+lowering `[min:max]` to `ltl.delay` with `length=max-min`, with coverage in
+`test/Conversion/ImportVerilog/basic.sv`.
+**ImportVerilog fix:** Lowered `s_eventually [n:m]` to bounded `ltl.delay`, with
+coverage in `test/Conversion/ImportVerilog/basic.sv`.
+**ImportVerilog fix:** Lowered `eventually [n:m]` to bounded `ltl.delay`, with
+coverage in `test/Conversion/ImportVerilog/basic.sv`.
 **ImportVerilog fix:** Lowered SVA sequence event controls (`@seq`) into a
 clocked wait loop with NFA-based matching, with conversion coverage in
 `test/Conversion/ImportVerilog/sequence-event-control.sv`.

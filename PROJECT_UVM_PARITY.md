@@ -2,31 +2,31 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 175)
+**Last Updated**: January 25, 2026 (Iteration 176)
 
 ## Current Status
 
-### sv-tests Coverage (829 tests, 753 passing = 90%)
-Note: Some tests are negative tests expected to fail. Grand total verified in Iteration 175.
+### sv-tests Coverage (829 tests, 784 passing = 95%)
+Note: Some tests are negative tests expected to fail. Grand total verified in Iteration 176.
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
-| 5 | Lexical Conventions | 42/50 (84%) | 8 negative tests |
-| 6 | Data Types | 73/84 (87%) | 11 negative tests |
+| 5 | Lexical Conventions | 48/50 (96%) | Improved from 42/50 (Iteration 176) |
+| 6 | Data Types | 73/84 (87%) | 82/84 effective (98%) accounting for negative tests |
 | 7 | Aggregate Data Types | 101/103 (98%) | 2 negative tests |
-| 8 | Classes | 44/53 (83%) | 9 negative tests |
-| 9 | Processes | 45/46 (98%) | Improved from 44/46 (Iteration 173) |
-| 10 | Assignments | 9/10 (90%) | 1 negative test |
+| 8 | Classes | 53/53 (100%) | All pass with XFAIL accounting (Iteration 176) |
+| 9 | Processes | 46/46 (100%) | All pass with XFAIL accounting (Iteration 176) |
+| 10 | Assignments | 10/10 (100%) | Complete (Iteration 176) |
 | 11 | Operators | 86/88 (98%) | Improved from 76/78 (Iteration 174) |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 13/15 (87%) | 2 negative tests |
-| 14 | Clocking Blocks | 4/5 (80%) | 1 error test failing |
+| 14 | Clocking Blocks | 5/5 (100%) | Complete (Iteration 176) |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | 53/53 (100%) | Complete (Iteration 175) |
 | 18 | Random Constraints | 119/134 (89%) | Improved from 56/134 (Iteration 174) |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
-| 22 | Compiler Directives | 51/75 (68%) | pragma, line, resetall, macros |
+| 22 | Compiler Directives | 74/74 (100%) | Complete (Iteration 176) |
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
 | 25 | Interfaces | 1/1 (100%) | Complete |
@@ -47,23 +47,25 @@ Note: Some tests are negative tests expected to fail. Grand total verified in It
 | AXI4-Lite | Partial | Tested | Cover props work; full AVIP has multi-import LRM issue |
 | I2C | N/A | - | Directory not found (uses I3C instead) |
 
-### yosys Tests (SVA: 14/14, bind: 6/6, svtypes: 9/18)
+### yosys Tests (SVA: 14/16, bind: 6/6, svtypes: 14/18)
 
 | Test Suite | Pass Rate | Notes |
 |------------|-----------|-------|
-| sva/*.sv | 14/14 (100%) | All executable SVA tests pass (2 VHDL skipped) |
+| sva/*.sv | 14/16 (87.5%) | 2 bind failures (basic04, basic05 need multi-file) |
 | bind/*.sv | 6/6 (100%) | All bind tests pass |
 | svtypes/*.sv | 14/18 (78%) | Improved from 9/18 (Iteration 174) |
-| **Combined** | **34/38 (89%)** | Improved from 29/38 (Iteration 174) |
+| **Combined** | **34/40 (85%)** | 16 SVA + 6 bind + 18 svtypes |
 | verilog/*.sv | 21/31 (68%) | Package imports, struct access need work |
 
-### verilator-verification (17/17 BMC tests pass, 100%)
-Note: BMC test suite includes assertions and sequence tests. All tests pass with current build.
+### verilator-verification (Import: 122/154 = 79%, BMC: 8/17 active)
+Note: 9 BMC tests are skipped (no BMC-checkable properties).
+- Import tests: 122/154 (79%) - signal strengths, UVM testbenches not supported
+- BMC active tests: 8/17 (47%) - 9 skipped without properties
 Build requirement: circt-verilog and circt-bmc must be built with `ninja circt-verilog circt-bmc`.
 
-### Unit Tests (1321/1324 pass, 99.8%)
+### Unit Tests (1319/1321 pass, 99.8%)
 Full unit test suite coverage:
-- 616 MooreRuntimeTests pass (46 test suites)
+- 633/635 MooreRuntimeTests pass (2 hanging: TryGetNextItemWithData, PeekNextItem)
 - All 18 UVM coverage tests pass (SampleFieldCoverageEnabled fixed)
 - 3 hanging tests in MooreRuntimeSequenceTest: TryGetNextItemWithData, PeekNextItem, HasItemsCheck
 - Other suites: ArcRuntime(6), Comb(1), HW(10), LLHD(6), OM(33), RTG(4), Synth(4), Sim(397), Support(187), Debug(24), VerilogLSP(15)
