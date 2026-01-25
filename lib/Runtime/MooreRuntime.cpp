@@ -2612,8 +2612,8 @@ extern "C" void *__moore_covergroup_create(const char *name,
   if (!cg)
     return nullptr;
 
-  // Initialize the covergroup
-  cg->name = name;
+  // Initialize the covergroup - make a copy of the name to avoid dangling pointers
+  cg->name = name ? strdup(name) : nullptr;
   cg->num_coverpoints = num_coverpoints;
 
   // Allocate the coverpoints array
@@ -2646,7 +2646,8 @@ extern "C" void __moore_coverpoint_init(void *cg, int32_t cp_index,
     return;
 
   // Initialize the coverpoint with auto bins (no explicit bins)
-  cp->name = name;
+  // Make a copy of the name to avoid dangling pointers
+  cp->name = name ? strdup(name) : nullptr;
   cp->bins = nullptr;
   cp->num_bins = 0;
   cp->hits = 0;
@@ -2691,6 +2692,10 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
       if (covergroup->coverpoints[i]->bins) {
         std::free(covergroup->coverpoints[i]->bins);
       }
+      // Free coverpoint name (allocated by strdup)
+      if (covergroup->coverpoints[i]->name) {
+        std::free(const_cast<char *>(covergroup->coverpoints[i]->name));
+      }
       std::free(covergroup->coverpoints[i]);
     }
   }
@@ -2710,6 +2715,11 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
 
   // Clean up covergroup options
   covergroupOptions.erase(covergroup);
+
+  // Free the covergroup name (allocated by strdup)
+  if (covergroup->name) {
+    std::free(const_cast<char *>(covergroup->name));
+  }
 
   // Free the covergroup itself
   std::free(covergroup);
@@ -3017,7 +3027,8 @@ extern "C" void __moore_coverpoint_init_with_bins(void *cg, int32_t cp_index,
     return;
 
   // Initialize the coverpoint with explicit bins
-  cp->name = name;
+  // Make a copy of the name to avoid dangling pointers
+  cp->name = name ? strdup(name) : nullptr;
   cp->num_bins = num_bins;
   cp->hits = 0;
   cp->min_val = INT64_MAX;
