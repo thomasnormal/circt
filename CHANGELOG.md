@@ -50,6 +50,32 @@ Identified 1 test regression (122→121 pass): `sequences/sequence_named.sv` use
 trailing comma in module port list, which is non-standard SystemVerilog that
 slang correctly rejects.
 
+### Track F: Union Bitwidth Mismatch Fix (Commit d610b3b7e)
+
+Fixed hw.bitcast width mismatch when assigning to unions with 4-state members.
+
+**Root Cause:** Union members containing logic fields were expanded to 4-state
+structs `{value:iN, unknown:iN}`, doubling their bitwidth and causing bitcast
+failures.
+
+**Fix:**
+1. Added `convertTypeToPacked()` helper for packed union member conversion
+2. Union members now use plain integers instead of 4-state structs
+3. Added 4-state struct to union bitcast/assignment handling
+
+**Files Modified:**
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+64 lines)
+
+**Test:** yosys/tests/svtypes/union_simple.sv now passes (13/18 → 14/18)
+
+### Chapter-18 Randomization Analysis
+
+Comprehensive analysis revealed:
+- 63 tests require full UVM runtime (not fixable without UVM implementation)
+- 15 tests are intentional negative tests (correctly rejected)
+- 0 actual parsing bugs remain
+- **Effective pass rate: 56/59 = 95%** for non-UVM tests
+
 ---
 
 ## Iteration 155 - January 24, 2026

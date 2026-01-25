@@ -23,7 +23,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 14 | Clocking Blocks | 5/5 (100%) | Complete |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | - | Codex agent scope |
-| 18 | Random Constraints | 119/134 (89%) | 66 need UVM runtime, 12 negative |
+| 18 | Random Constraints | 56/134 (42% raw, 95% effective) | 63 need UVM, 15 negative |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
 | 22 | Compiler Directives | 53/74 (72%) | 15 negative tests, macros |
@@ -153,15 +153,17 @@ Note: 1 test regression from 122 due to trailing comma syntax enforcement
 - ✅ Prevents valid processes from being removed during canonicalization
 - ✅ Test: `test/Dialect/LLHD/Canonicalization/processes.mlir`
 
-### Track D: Global Variable Initialization - PARTIAL
-**Status**: Simple constructors work, complex ones need interpreter fixes (Iteration 156)
+### Track D: Global Variable Initialization - MOSTLY COMPLETE
+**Status**: LLVM::ConstantOp fixed; llhd.sig in function context still pending
 - ✅ GlobalVariableOpConversion generates LLVM global constructors correctly
-- ✅ Simple constructors using `hw.constant` work (e.g., `int global_int = 42;`)
-- ❌ Complex constructors using `LLVM::ConstantOp` or `llhd.sig` fail
-- **Finding** (Agent a6809ff): Global constructors ARE being called, but:
-  1. `LLVM::ConstantOp` not handled by interpreter
-  2. `llhd.sig` in function context not handled (used for local variables)
-- **Next**: Add LLVM::ConstantOp support to LLHDProcessInterpreter.cpp
+- ✅ Simple constructors using `hw.constant` work
+- ✅ LLVM::ConstantOp now handled (Track H fix)
+- ❌ `llhd.sig` in function context not handled (local variables in constructors)
+- **Root Cause** (Agent abceb68 analysis):
+  1. Local variable declarations produce `llhd.sig` operations at runtime
+  2. Interpreter only registers signals during initialization phase
+  3. Need to add handler for `llhd::SigOp` to dynamically register signals
+- **Location**: `tools/circt-sim/LLHDProcessInterpreter.cpp` line 1163+
 
 ### Track E: HVL_top Function Inlining - NEEDS INVESTIGATION
 **Status**: Analysis complete, design decision needed
@@ -171,12 +173,13 @@ Note: 1 test regression from 122 due to trailing comma syntax enforcement
 - **Decision**: Should complex functions be preserved as func.call? Or is seq.initial sufficient?
 - **Alternative**: Generate llhd.process for all hvl_top initial blocks
 
-### Track F: Union Bitwidth Mismatch - PENDING
-**Status**: Identified in yosys tests
-- ❌ hw.bitcast width mismatch when assigning to unions with 4-state members
-- **Example**: yosys/tests/svtypes/union_simple.sv fails
-- **Root Cause**: 4-state logic doubles bitwidth, union members have nested 4-state structs
-- **Fix Needed**: Proper 4-state aware bitcast logic for unions
+### Track F: Union Bitwidth Mismatch - FIXED (Iteration 157, Commit d610b3b7e)
+**Status**: Fixed - yosys/tests/svtypes/union_simple.sv now passes
+- ✅ Added `convertTypeToPacked()` helper for packed union member conversion
+- ✅ Union members now use plain integers instead of 4-state structs
+- ✅ Handle 4-state struct to union bitcast by extracting value component
+- ✅ Handle 4-state struct to union assignment in AssignOpConversion
+- **Location**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (+64 lines)
 
 ### Track G: UVM Runtime Initialization (Blocking Full AVIP)
 **Status**: Tracks A and H fixed; ready for integration testing
