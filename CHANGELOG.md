@@ -15,6 +15,8 @@ All test suites verified stable:
 | Chapter-13 | 13/15 (87%) | 2 negative tests |
 | Chapter-14 | 4/5 (80%) | 1 error test failing |
 | Chapter-15 | 5/5 (100%) | Stable |
+| Chapter-18 | 119/134 (89%) | **MAJOR improvement** from 56/134 (42%) |
+| Chapter-11 | 86/88 (98%) | Improved from 76/78 |
 
 ### AVIP Simulation Status
 

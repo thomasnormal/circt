@@ -17,20 +17,20 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 8 | Classes | 44/53 (83%) | 9 negative tests |
 | 9 | Processes | 45/46 (98%) | Improved from 44/46 (Iteration 173) |
 | 10 | Assignments | 9/10 (90%) | 1 negative test |
-| 11 | Operators | 76/78 (97%) | 2 negative tests |
+| 11 | Operators | 86/88 (98%) | Improved from 76/78 (Iteration 174) |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
 | 13 | Tasks and Functions | 13/15 (87%) | 2 negative tests |
 | 14 | Clocking Blocks | 4/5 (80%) | 1 error test failing |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
 | 16 | Assertions | 26/53 (49%) | 27 UVM-dependent need include paths |
-| 18 | Random Constraints | 56/134 (42% raw, 95% effective) | 63 need UVM, 15 negative |
+| 18 | Random Constraints | 119/134 (89%) | Improved from 56/134 (Iteration 174) |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
 | 22 | Compiler Directives | 51/75 (68%) | pragma, line, resetall, macros |
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
-| 25 | Interfaces | Tested | See Iteration 122 |
-| 26 | Packages | Tested | See Iteration 122 |
+| 25 | Interfaces | 1/1 (100%) | Complete |
+| 26 | Packages | 1/2 (50%) | package-ref failing |
 
 ### AVIP Testing Status (9/10 compile, 8/10 simulate)
 
