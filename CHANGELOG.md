@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 158 - January 24, 2026
+
+### Runtime Signal Creation (Track D Complete)
+
+Added support for `llhd.sig` operations at runtime in the LLHD process interpreter.
+This enables local variable declarations in initial blocks and global constructors.
+
+**Root Cause:** When global constructors or initial blocks execute, local variable
+declarations produce `llhd.sig` operations. The interpreter only registered signals
+during initialization phase, causing "unknown signal" errors at runtime.
+
+**Fix:** Added handler in `interpretOperation()` for `llhd::SigOp` that:
+- Creates runtime signals when encountered during execution
+- Registers them with the scheduler for probe/drive operations
+- Sets initial values from the process's value map
+
+**Files Modified:**
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (+39 lines, lines 1178-1215)
+
+**Impact:**
+- Track D now COMPLETE
+- All Tracks A, B, C, D, F, H now fixed
+- Ready for full UVM testbench integration testing
+
 ## Iteration 157 - January 24, 2026
 
 ### Extern Virtual Method Vtable Fix (Major)
