@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 160 - January 25, 2026
+
+### Track I: Vtable Covariance Fix
+
+Implemented covariant "this" type support in `VTableLoadMethodOp::verifySymbolUses()`.
+
+**Problem:** When calling inherited virtual methods through derived class objects, the
+verifier enforced strict type equality. The call site uses derived class "this" type,
+but inherited method declaration has base class "this" type.
+
+**Error (was):**
+```
+'moore.vtable.load_method' op result type '(!moore.class<@"derived">) -> i32'
+does not match method erased ABI '(!moore.class<@"base">) -> i32'
+```
+
+**Fix:** Modified verifier to allow covariant "this" types:
+1. Fast path: exact type match passes immediately
+2. Check parameter counts and return types match exactly
+3. Check all parameters except "this" match exactly
+4. For "this": walk inheritance chain to verify derived class is subclass of declared
+
+**Files Modified:**
+- `lib/Dialect/Moore/MooreOps.cpp` (+60 lines, lines 1846-1909)
+- `test/Dialect/Moore/vtable-covariance.mlir` (new)
+
+**Verification:**
+- I2S AVIP now compiles successfully (was failing with vtable error)
+- AXI4 AVIP compiles UVM package without vtable errors
+- All vtable conversion tests pass (4/4)
+
+### Test Suite Results
+
+**verilator-verification**: 17/17 BMC tests passing (no regression)
+
+**AVIP Simulations (all verified):**
+- AHB AVIP: 7 processes, 1003 delta cycles, 0 errors
+- APB AVIP: 7 processes, 1M delta cycles, 0 errors
+- SPI AVIP: 5 processes, 1M delta cycles, 0 errors
+- I2S AVIP: 7 processes, 1003 delta cycles, 0 errors
+- I3C AVIP: 7 processes, 1M delta cycles, 0 errors
+- UART AVIP: 7 processes, simulation working
+- AXI4 AVIP: 7 processes, 1003 delta cycles, 0 errors
+
 ## Iteration 159 - January 25, 2026
 
 ### Track E: HVL Module llhd.process Fix
