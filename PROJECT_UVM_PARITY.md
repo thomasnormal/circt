@@ -46,8 +46,8 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
 
-### verilator-verification (121/154 pass, 78%)
-Note: 1 test regression from 122 due to trailing comma syntax enforcement
+### verilator-verification (122/154 pass, 79%)
+Note: Improved from 121 baseline - trailing comma issue may have been resolved
 
 | Category | Count | Details |
 |----------|-------|---------|

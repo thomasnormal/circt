@@ -24,6 +24,16 @@ during initialization phase, causing "unknown signal" errors at runtime.
 - All Tracks A, B, C, D, F, H now fixed
 - Ready for full UVM testbench integration testing
 
+### Test Suite Verification
+
+**yosys/svtypes**: 14/18 pass (78%)
+- `union_simple.sv` now PASSES (Track F verification)
+- 4 failures: enum cast syntax, $size() on scalars, unpacked arrays in packed structs
+
+**verilator-verification**: 122/154 pass (79%) - +1 improvement
+- Improved from 121 baseline
+- 32 failures: 12 UVM testbenches, 8 highz signal strengths, others known
+
 ## Iteration 157 - January 24, 2026
 
 ### Extern Virtual Method Vtable Fix (Major)
