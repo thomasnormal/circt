@@ -15,7 +15,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 6 | Data Types | 73/84 (87%) | 11 negative tests |
 | 7 | Aggregate Data Types | 101/103 (98%) | 2 negative tests |
 | 8 | Classes | 44/53 (83%) | 9 negative tests |
-| 9 | Processes | 44/46 (96%) | 1 known limitation (@seq) |
+| 9 | Processes | 45/46 (98%) | Improved from 44/46 (Iteration 173) |
 | 10 | Assignments | 9/10 (90%) | 1 negative test |
 | 11 | Operators | 76/78 (97%) | 2 negative tests |
 | 12 | Procedural Programming | 27/27 (100%) | Complete |
