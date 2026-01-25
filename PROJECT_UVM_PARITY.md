@@ -32,14 +32,14 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 25 | Interfaces | Tested | See Iteration 122 |
 | 26 | Packages | Tested | See Iteration 122 |
 
-### AVIP Testing Status (8/10 fully compile)
+### AVIP Testing Status (8/10 compile, 8/10 simulate)
 
 | AVIP | Compilation | Simulation | Notes |
 |------|-------------|------------|-------|
 | AHB | SUCCESS | Tested | 18K lines MLIR, simulation works with --timeout |
 | APB | SUCCESS | Tested | 293K lines MLIR, 10K cycles, 0 errors |
 | UART | SUCCESS | Tested | 1.4M MLIR, 1M cycles, 0 errors |
-| SPI | SUCCESS | CRASH | 165K lines MLIR, stack overflow in circt-sim |
+| SPI | SUCCESS | Tested | 22.7MB MLIR, stack overflow FIXED (Iteration 173) |
 | I2S | SUCCESS | Tested | 63K lines MLIR (Iteration 163), 130K cycles |
 | I3C | SUCCESS | Tested | ~1.9MB MLIR (Iteration 163), 100K cycles |
 | JTAG | Partial | - | AVIP code issues: bind+virtual interface conflicts |
@@ -104,12 +104,11 @@ Full unit test suite coverage:
    - Needs: Module constructor support or deferred initialization
    - Files: Structure.cpp:1850-1861, Expressions.cpp:2732-2741
 
-5. **SPI AVIP Stack Overflow in circt-sim** (Priority: HIGH - Iteration 173)
-   - Root cause: `interpretLLVMFuncBody` lacks operation limit (vs `interpretFuncBody` has 100K limit)
-   - Unbounded recursive function calls exceed 8MB stack
-   - No call depth tracking in `interpretLLVMCall`/`interpretFuncCall`
-   - Suggested fix: Add operation limit + call depth tracking
-   - File: tools/circt-sim/LLHDProcessInterpreter.cpp:4957-5024
+5. ~~**SPI AVIP Stack Overflow in circt-sim**~~ **FIXED** (Iteration 173)
+   - Was: `interpretLLVMFuncBody` lacks operation limit, unbounded recursion
+   - Fixed: Added maxCallDepth=100 + maxOps=100000 limits
+   - SPI AVIP now simulates: 717K delta cycles, 0 errors
+   - File: tools/circt-sim/LLHDProcessInterpreter.cpp
 
 ### Known Unsupported Features
 
