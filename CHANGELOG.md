@@ -16,7 +16,69 @@ All test suites verified stable:
 | Chapter-14 | 4/5 (80%) | 1 error test failing |
 | Chapter-15 | 5/5 (100%) | Stable |
 | Chapter-18 | 119/134 (89%) | **MAJOR improvement** from 56/134 (42%) |
+| Chapter-16 | 52/53 (98%) | **MAJOR improvement** from 26/53 (49%) |
 | Chapter-11 | 86/88 (98%) | Improved from 76/78 |
+
+### SVA/BMC Updates
+
+- sv-tests Chapter-16 (BMC, `RISING_CLOCKS_ONLY=1`): 23/26 pass, 3 XFAIL, 0 FAIL
+  (compile-only tests filtered).
+- yosys SVA BMC: 14/14 pass, 2 VHDL skipped.
+- BMC harness scripts accept `RISING_CLOCKS_ONLY=1` to pass `--rising-clocks-only`.
+- Added a harness regression: `test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir`.
+- Added sv-tests expectations support via `utils/sv-tests-bmc-expect.txt` and
+  `test/Tools/circt-bmc/sv-tests-expectations.mlir`.
+- `utils/run_avip_circt_verilog.sh` defaults to `TIMESCALE=1ns/1ps`
+  (override with `TIMESCALE=`), with a regression in
+  `test/Tools/circt-verilog/avip-timescale-default.test`.
+- ImportVerilog resolves interface array element connections in module ports
+  (e.g., `intf_s[i]`), with regression coverage in
+  `test/Conversion/ImportVerilog/interface-array-port.sv`.
+- SVA non-overlapping implication now delays the antecedent (not the property
+  consequent), fixing `|=>` with property consequents and enabling
+  `test/Tools/circt-bmc/sva-unbounded-until.mlir`.
+- Added non-overlapping implication coverage with property consequents in
+  `test/Conversion/SVAToLTL/property-ops.mlir`.
+- Added z3-gated LEC SMTLIB end-to-end regressions:
+  `test/Tools/circt-lec/lec-smtlib-equivalent.mlir` and
+  `test/Tools/circt-lec/lec-smtlib-inequivalent.mlir`, plus z3 detection in
+  `test/lit.cfg.py` via `test/lit.site.cfg.py.in`.
+- Added `circt-lec --run-smtlib` (external z3) with end-to-end regressions in
+  `test/Tools/circt-lec/lec-run-smtlib-equivalent.mlir` and
+  `test/Tools/circt-lec/lec-run-smtlib-inequivalent.mlir`.
+- Added `--z3-path` to `circt-lec --run-smtlib`, plus a z3-path regression in
+  `test/Tools/circt-lec/lec-run-smtlib-z3-path.mlir`.
+- LEC SMT-LIB tests now invoke `%z3` from lit substitution to avoid PATH
+  ambiguity.
+- BMC adds `--allow-multi-clock` for `externalize-registers` and `lower-to-bmc`
+  with interleaved clock toggling and scaled bounds; regressions in
+  `test/Tools/circt-bmc/externalize-registers-multiclock.mlir` and
+  `test/Tools/circt-bmc/lower-to-bmc-multiclock.mlir`.
+- `lower-to-bmc` now splits multiple `seq.to_clock` inputs into distinct BMC
+  clocks with `--allow-multi-clock`, with coverage in
+  `test/Tools/circt-bmc/lower-to-bmc-toclock-multiclock.mlir` and an error case
+  in `test/Tools/circt-bmc/lower-to-bmc-errors.mlir`.
+- Added end-to-end SVA multi-clock coverage (two clocked asserts) in
+  `test/Tools/circt-bmc/sva-multiclock-clocked-assert.mlir`.
+- Added SV import coverage for multi-clock SVA assertions in
+  `test/Conversion/ImportVerilog/sva-multiclock.sv`.
+- Added SV end-to-end multi-clock SVA BMC regression in
+  `test/Tools/circt-bmc/sva-multiclock-e2e.sv`.
+- ImportVerilog now supports interface-scoped properties by resolving
+  interface signals through virtual interface refs; regression in
+  `test/Conversion/ImportVerilog/sva-interface-property.sv`.
+- Re-ran sv-tests/yosys/verilator BMC suites after the `|=>` fix: results
+  unchanged (23/26 + 3 XFAIL; 14/14 + 2 VHDL skip; 17/17).
+  Logs: `sv-tests-bmc-results.txt`, `verilator-verification-bmc-results.txt`.
+- APB AVIP compiles with `build-test/bin/circt-verilog`
+  (log: `avip-apb-circt-verilog.log`).
+
+### SVA/BMC Harness
+
+- `utils/run_sv_tests_circt_bmc.sh` skips BMC for tests tagged `:type: ... parsing`
+  and treats them as compile-only.
+- Added a parsing-only regression under
+  `test/Tools/circt-bmc/sv-tests-parsing-filter.mlir`.
 
 ### AVIP Simulation Status
 
@@ -27,6 +89,9 @@ All test suites verified stable:
 | UART | Working | MLIR exists, runs at 0fs (no LLHD processes in HvlTop) |
 | I3C | Partial | Minimal testbench works, full UVM not supported |
 | AXI4-Lite | Partial | UVM-dependent, needs traditional simulator |
+
+- SPI AVIP compiles with `utils/run_avip_circt_verilog.sh` default timescale
+  (log: `avip-spi-circt-verilog.log`).
 
 ### sv-tests Chapters Not Available
 
@@ -135,6 +200,8 @@ Reported regression was false - stale results file + wrong binary path:
 - 4 failures (uninitialized signal assertions, local variables)
 - 1 error (disable iff async reset)
 - 3 expected failures (negative tests)
+- Latest run log: `sv-tests-bmc-run.txt`.
+- Filtered 16.10 run: pass=0 fail=2 xfail=2 (log: `sv-tests-bmc-run-16-10.txt`).
 
 **sv-tests Chapter-18 (Random): 14/68 pass (21%)**
 - randcase and randsequence features work (14 tests pass)
@@ -1189,6 +1256,12 @@ parsing with slang (covers `test/Conversion/ImportVerilog/trailing-comma-portlis
 **ImportVerilog fix:** Lowered SVA sequence event controls (`@seq`) into a
 clocked wait loop with NFA-based matching, with conversion coverage in
 `test/Conversion/ImportVerilog/sequence-event-control.sv`.
+**ImportVerilog fix:** Sequence-concat assertion offsets now account for the
+implicit concat cycle when computing local assertion variable pasts; updated
+`test/Conversion/ImportVerilog/sva-local-var.sv`.
+**LTLToCore fix:** Clocked assert lowering no longer inserts an extra sampled-
+value shift; updated expectations in
+`test/Conversion/LTLToCore/clocked-assert-sampled.mlir`.
 **SVAToLTL fix:** Non-overlapping implication with property consequents now
 shifts the antecedent by one cycle instead of delaying the property, enabling
 `|=>` with property-level consequents.
@@ -1208,6 +1281,15 @@ constructs and added conversion coverage in
 LTL `ltl.matched`/`ltl.triggered`, plus LTL-to-Core lowering to `i1`, with
 conversion coverage in `test/Conversion/SVAToLTL/sequence-ops.mlir` and
 `test/Conversion/LTLToCore/sequence-matched-triggered.mlir`.
+**ImportVerilog:** Align sequence-local assertion variables with concat timing
+by matching the adjusted delay offsets; `test/Conversion/ImportVerilog/sva-local-var.sv`
+now checks `moore.past` delay 3 for sequence locals and passes.
+**LTLToCore:** Applied sampled-value shifts for `verif.clocked_*` properties
+and tightened `test/Conversion/LTLToCore/clocked-assert-sampled.mlir` to
+require both sampled registers.
+**LTLToCore:** Added nested `ltl.clock` gating for multiclock sequences using
+sampled clock ticks, with conversion coverage in
+`test/Conversion/LTLToCore/multiclock-sequence.mlir`.
 **LEC regression:** Added `construct-lec` coverage for the `verif.lec` miter in
 `test/Tools/circt-lec/construct-lec.mlir`.
 **LEC regression:** Added reporting-mode `construct-lec` coverage with printf
@@ -1450,6 +1532,11 @@ SPI AVIP compiles and simulates successfully with circt-sim:
 - **Yosys SVA**: 14 tests, failures=0, skipped=2 (vhdl), no-property=2 (extnets pass/fail). `sva_value_change_sim` fail case skipped due to missing FAIL macro.
 - **sv-tests SVA**: total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010.
 - **verilator-verification BMC**: total=17 pass=8 error=0 no-property=9; sequence tests now parse, remaining cases lack properties.
+- **Yosys SVA (rerun)**: 14 tests, failures=0, skipped=2 (VHDL). The
+  `sva_value_change_sim` fail case is skipped due to missing `FAIL` macro.
+  Log: `yosys-sva-bmc-run.txt`.
+- **verilator-verification BMC (rerun)**: total=17 pass=17 fail=0 error=0;
+  log: `verilator-verification-bmc-run.txt`.
 
 ### AVIP Smoke Checks
 
@@ -1462,6 +1549,8 @@ SPI AVIP compiles and simulates successfully with circt-sim:
 ### LEC Regression Coverage
 
 - Added `test/Tools/circt-lec/lec-smt.mlir` to exercise the SMT lowering path in `circt-lec`.
+- LEC lit run (`build-test/integration_test/circt-lec`): 1/4 pass, 3 unsupported
+  due to missing `mlir-runner` in PATH.
 
 ### SVA BMC Fixes (Clocked Gating + Async Reset)
 
