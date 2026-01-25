@@ -1175,6 +1175,45 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto constTimeOp = dyn_cast<llhd::ConstantTimeOp>(op))
     return interpretConstantTime(procId, constTimeOp);
 
+  // Handle llhd.sig (runtime signal creation for local variables in initial blocks)
+  // When global constructors or initial blocks execute, local variable declarations
+  // produce llhd.sig operations at runtime. We need to dynamically register these
+  // signals so that subsequent probe/drive operations can access them.
+  if (auto sigOp = dyn_cast<llhd::SignalOp>(op)) {
+    // Get the initial value from the process's value map
+    InterpretedValue initVal = getValue(procId, sigOp.getInit());
+
+    // Generate a unique name for this runtime signal
+    std::string name = sigOp.getName().value_or("").str();
+    if (name.empty()) {
+      name = "runtime_sig_" + std::to_string(valueToSignal.size());
+    }
+
+    // Get the type width
+    Type innerType = sigOp.getInit().getType();
+    unsigned width = getTypeWidth(innerType);
+
+    // Register with the scheduler
+    SignalId sigId = scheduler.registerSignal(name, width);
+
+    // Store the mapping from the signal result to the signal ID
+    valueToSignal[sigOp.getResult()] = sigId;
+    signalIdToName[sigId] = name;
+
+    // Set the initial value
+    if (!initVal.isX()) {
+      SignalValue sv = initVal.toSignalValue();
+      scheduler.updateSignal(sigId, sv);
+    }
+
+    LLVM_DEBUG(llvm::dbgs() << "  Runtime signal '" << name << "' registered with ID "
+                            << sigId << " (width=" << width << ", init="
+                            << (initVal.isX() ? "X" : std::to_string(initVal.getUInt64()))
+                            << ")\n");
+
+    return success();
+  }
+
   // Sim dialect operations - for $display support
   if (auto printOp = dyn_cast<sim::PrintFormattedProcOp>(op))
     return interpretProcPrint(procId, printOp);
