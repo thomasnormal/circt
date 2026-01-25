@@ -1843,14 +1843,70 @@ VTableLoadMethodOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError() << "`" << methodName
                          << "` is not a method declaration";
 
-  // Make sure method signature matches
+  // Make sure method signature matches (allowing covariant "this" types)
   auto resFnTy = cast<FunctionType>(getResult().getType());
   auto declFnTy = cast<FunctionType>(methodDecl.getFunctionType());
-  if (resFnTy != declFnTy)
+
+  // Fast path: exact type match
+  if (resFnTy == declFnTy)
+    return success();
+
+  // Check covariance: result type's "this" may be a derived class of declared
+  // method's "this" type. Verify:
+  // 1. Same number of inputs/outputs
+  // 2. All types except "this" (first param) match exactly
+  // 3. "this" type is a subclass of declared "this" type
+
+  if (resFnTy.getNumInputs() != declFnTy.getNumInputs() ||
+      resFnTy.getResults() != declFnTy.getResults())
     return emitOpError() << "result type " << resFnTy
                          << " does not match method erased ABI " << declFnTy;
 
-  return success();
+  // Need at least one parameter (the "this" pointer)
+  if (resFnTy.getNumInputs() == 0)
+    return emitOpError() << "method must have at least 'this' parameter";
+
+  // Check all parameters except "this" (first parameter) match exactly
+  for (unsigned i = 1; i < resFnTy.getNumInputs(); ++i) {
+    if (resFnTy.getInput(i) != declFnTy.getInput(i))
+      return emitOpError() << "result type " << resFnTy
+                           << " does not match method erased ABI " << declFnTy;
+  }
+
+  // Check covariance of "this" (first parameter)
+  auto resThisTy = dyn_cast<ClassHandleType>(resFnTy.getInput(0));
+  auto declThisTy = dyn_cast<ClassHandleType>(declFnTy.getInput(0));
+  if (!resThisTy || !declThisTy)
+    return emitOpError() << "expected class handle as first parameter";
+
+  // Walk class hierarchy to verify resThisTy is a subclass of declThisTy
+  auto resClassSym = resThisTy.getClassSym();
+  auto declClassSym = declThisTy.getClassSym();
+
+  // Same class symbol is trivially valid
+  if (resClassSym == declClassSym)
+    return success();
+
+  // Walk inheritance chain from result's class to find declared class
+  Operation *resClassOp = symbolTable.lookupNearestSymbolFrom(op, resClassSym);
+  if (!resClassOp)
+    return emitOpError() << "failed to resolve 'this' class " << resClassSym;
+
+  auto curClass = dyn_cast<moore::ClassDeclOp>(resClassOp);
+  while (curClass) {
+    SymbolRefAttr baseSym = curClass.getBaseAttr();
+    if (!baseSym)
+      break;
+    if (baseSym == declClassSym)
+      return success(); // Valid covariance: result is subclass of declared
+    Operation *baseOp = symbolTable.lookupNearestSymbolFrom(op, baseSym);
+    curClass = baseOp ? dyn_cast<moore::ClassDeclOp>(baseOp)
+                      : moore::ClassDeclOp();
+  }
+
+  return emitOpError() << "result type " << resFnTy
+                       << " does not match method erased ABI " << declFnTy
+                       << " ('this' type is not covariant)";
 }
 
 LogicalResult VTableOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
