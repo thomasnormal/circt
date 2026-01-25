@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 160)
+**Last Updated**: January 25, 2026 (Iteration 161)
 
 ## Current Status
 
@@ -125,13 +125,13 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 161)
+## Next Steps (Iteration 162)
 
 ### Priority Tasks
 1. **Test UVM singleton initialization** - Run `run_test()` with circt-sim to verify `uvm_root::get()` creates singletons
-2. **Implement `moore.constraint.disable` op** - Missing op blocking test/Dialect/Moore/classes.mlir
-3. **Test full AVIP simulation end-to-end** - Verify UVM phases execute correctly
-4. **Improve sv-tests coverage** - Chapter 18 (Random Constraints) at 42% needs work
+2. **Test full AVIP simulation end-to-end** - Verify UVM phases execute correctly
+3. **Improve sv-tests coverage** - Chapter 18 (Random Constraints) at 42% needs work
+4. **Verify AXI4 AVIP compilation** - Ensure full AVIP compiles without errors
 
 ### Track Status Summary
 | Track | Status | Next Action |
@@ -145,7 +145,7 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
 | G | Testing | Run full UVM testbench |
 | H | ✅ FIXED | - |
 | I | ✅ FIXED | - |
-| J | NEW | Implement constraint.disable op |
+| J | ✅ FIXED | - |
 
 ---
 
