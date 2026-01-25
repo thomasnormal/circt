@@ -323,6 +323,42 @@ static Value createFourStateStruct(OpBuilder &builder, Location loc,
                                     ValueRange{value, unknown});
 }
 
+/// Convert a Moore type to its packed representation (plain integers for
+/// 4-state types). This is used for packed unions where all members share
+/// the same bit storage and we cannot expand 4-state types.
+static Type convertTypeToPacked(const TypeConverter &typeConverter,
+                                Type mooreType) {
+  MLIRContext *ctx = mooreType.getContext();
+
+  // For IntType, always return plain integer regardless of domain
+  if (auto intType = dyn_cast<IntType>(mooreType)) {
+    return IntegerType::get(ctx, intType.getWidth());
+  }
+
+  // For struct types, recursively convert members
+  if (auto structType = dyn_cast<StructType>(mooreType)) {
+    SmallVector<hw::StructType::FieldInfo> fields;
+    for (auto member : structType.getMembers()) {
+      Type convertedType = convertTypeToPacked(typeConverter, member.type);
+      if (!convertedType)
+        return {};
+      fields.push_back({member.name, convertedType});
+    }
+    return hw::StructType::get(ctx, fields);
+  }
+
+  // For array types, convert element type
+  if (auto arrayType = dyn_cast<ArrayType>(mooreType)) {
+    Type elemType = convertTypeToPacked(typeConverter, arrayType.getElementType());
+    if (!elemType)
+      return {};
+    return hw::ArrayType::get(elemType, arrayType.getSize());
+  }
+
+  // For other types, use the standard converter
+  return typeConverter.convertType(mooreType);
+}
+
 static LogicalResult resolveClassStructBody(ClassDeclOp op,
                                             TypeConverter const &typeConverter,
                                             ClassTypeCache &cache) {
@@ -7491,6 +7527,16 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
       return success();
     }
 
+    // Handle 4-state struct to union bitcast.
+    // When the source is a 4-state struct and destination is a union with
+    // 4-state members, we need to extract the value component first to avoid
+    // bitwidth mismatch (the union has double bitwidth due to 4-state members).
+    if (isFourStateStructType(inputType) && isa<hw::UnionType>(type)) {
+      Value valueComponent = extractFourStateValue(rewriter, op.getLoc(), input);
+      rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, type, valueComponent);
+      return success();
+    }
+
     // Otherwise use bitcast.
     rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, type, input);
     return success();
@@ -8435,8 +8481,21 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       }
     }
 
+    // Handle 4-state struct to union assignment.
+    // When assigning a constant to a union with 4-state members, the source
+    // gets wrapped in a 4-state struct {value:iN, unknown:iN} which has double
+    // the bitwidth, causing hw.bitcast to fail. Extract the value component.
+    Value srcValue = adaptor.getSrc();
+    if (isFourStateStructType(srcValue.getType())) {
+      if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
+        if (isa<hw::UnionType>(refType.getNestedType())) {
+          srcValue = extractFourStateValue(rewriter, op.getLoc(), srcValue);
+        }
+      }
+    }
+
     rewriter.replaceOpWithNewOp<llhd::DriveOp>(
-        op, dst, adaptor.getSrc(), delay, Value{}, llhdStrength0, llhdStrength1);
+        op, dst, srcValue, delay, Value{}, llhdStrength0, llhdStrength1);
     return success();
   }
 };
@@ -18286,11 +18345,14 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
       });
 
   // Convert packed union type to hw::UnionType
+  // For packed unions, member types are converted without 4-state expansion
+  // because all members share the same underlying bit storage.
   typeConverter.addConversion([&](UnionType type) -> std::optional<Type> {
     SmallVector<hw::UnionType::FieldInfo> fields;
     for (auto field : type.getMembers()) {
       hw::UnionType::FieldInfo info;
-      info.type = typeConverter.convertType(field.type);
+      // Use packed conversion to avoid 4-state expansion
+      info.type = convertTypeToPacked(typeConverter, field.type);
       if (!info.type)
         return {};
       info.name = field.name;
