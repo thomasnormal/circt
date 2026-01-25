@@ -30,7 +30,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 23 | Modules and Hierarchy | 3/3 (100%) | Complete |
 | 24 | Programs | 1/1 (100%) | Complete |
 | 25 | Interfaces | 1/1 (100%) | Complete |
-| 26 | Packages | 1/2 (50%) | package-ref failing |
+| 26 | Packages | 2/2 (100%) | Complete (Iteration 174) |
 
 ### AVIP Testing Status (9/10 compile, 8/10 simulate)
 
