@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 24, 2026 (Iteration 158)
+**Last Updated**: January 25, 2026 (Iteration 159)
 
 ## Current Status
 
@@ -162,29 +162,24 @@ Note: Improved from 121 baseline - trailing comma issue may have been resolved
 - **Fix**: Added `llhd::SigOp` handler in `interpretOperation()` to dynamically register runtime signals
 - **Location**: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 1178-1215
 
-### Track E: HVL_top Function Inlining - ANALYSIS COMPLETE (Iteration 158)
-**Status**: Root cause identified, design decision needed
+### Track E: HVL_top Function Inlining - FIXED (Iteration 159)
+**Status**: Implemented Option A - hvl modules use llhd.process to preserve func.call
 
 **Root Cause** (Agent a301063 analysis):
 - Initial blocks without wait events → `seq.InitialOp` (IsolatedFromAbove)
 - Function bodies get inlined into seq.InitialOp during conversion
-- `hasMultiBlockFunctionCalls()` in MooreToCore.cpp:760-801 decides between seq.initial vs llhd.process
 - If run_test() produces single-block code, it gets inlined instead of runtime call
 
-**Code Flow**:
-1. ImportVerilog: Creates `moore::ProcedureOp` for all initial blocks
-2. MooreToCore: Checks hasWaitEvent, hasWaitDelay, allCapturesConstant, hasSingleBlock, hasMultiBlockCalls
-3. If all conditions pass → `seq.InitialOp` (inlines functions)
-4. Otherwise → `llhd.ProcessOp` (preserves func.call)
+**Fix** (Iteration 159):
+- Added module name check for "hvl" (case-insensitive) in ProcedureOpConversion
+- Modules with "hvl" in name force `llhd.ProcessOp` instead of `seq.InitialOp`
+- This preserves `func.call` operations for UVM runtime calls like `run_test()`
+- **Location**: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 895-906
+- **Test**: `test/Conversion/MooreToCore/hvl-module-llhd-process.mlir`
 
-**Design Options**:
-- **Option A** (Recommended): Force llhd.process for hvl_top initial blocks (minimal change)
-- **Option B** (Better): Detect system task calls and force llhd.process (more general)
-- **Option C**: Modify seq.InitialOp to allow func.call (complex, risky)
-- **Option D**: Convert run_test() to runtime function (long-term, major effort)
-
-**Location**: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 830-895
-**Next**: Implement Option A (module name pattern check) or Option B (system task detection)
+**Verification**:
+- HvlTop, hvl_top, my_hvl_module → use `llhd.process` (func.call preserved)
+- HdlTop, TestBench → use `seq.initial` (optimized path)
 
 ### Track F: Union Bitwidth Mismatch - FIXED (Iteration 157, Commit d610b3b7e)
 **Status**: Fixed - yosys/tests/svtypes/union_simple.sv now passes
