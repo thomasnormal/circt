@@ -2,6 +2,27 @@
 
 ## Iteration 176 - January 25, 2026
 
+### Hanging Sequence Tests Root Cause Found
+
+Root cause of 2 hanging tests (TryGetNextItemWithData, PeekNextItem) identified:
+- `try_get_next_item` and `peek_next_item` look for `itemReady == true`
+- But sequences are blocked in `start_item` waiting for `driverReady`
+- Only `get_next_item` sets `driverReady` (lib/Runtime/MooreRuntime.cpp:15170)
+- **Deadlock**: sequence waits for driverReady, try_get waits for itemReady
+
+**Fix**: Make `try_get_next_item` perform full handshake like `get_next_item`:
+1. Check if waitingSequences is not empty (non-blocking part)
+2. If sequence waiting: set driverReady, wait for itemReady, return item
+3. This matches UVM standard `try_get_next_item()` behavior
+
+### AXI4-Lite AVIP Simulation Verified
+
+Full AXI4-Lite write/read transaction simulated successfully:
+- 19 processes registered, 360 executed
+- 65 delta cycles, 350 signal updates
+- Complete write phase (DEADBEEF data), read phase
+- $finish at 280ns, 0 errors
+
 ### sv-tests Chapter-5 Improvement
 
 Chapter-5 tests improved from 42/50 (84%) to **48/50 (96%)**:
@@ -122,6 +143,8 @@ All test suites verified stable:
   `test/Tools/circt-lec/lec-run-smtlib-z3-path.mlir`.
 - LEC SMT-LIB tests now invoke `%z3` from lit substitution to avoid PATH
   ambiguity.
+- Fixed `circt-lec --run-smtlib` z3 output capture by keeping redirect storage
+  alive so stdout is read reliably.
 - BMC adds `--allow-multi-clock` for `externalize-registers` and `lower-to-bmc`
   with interleaved clock toggling and scaled bounds; regressions in
   `test/Tools/circt-bmc/externalize-registers-multiclock.mlir` and
@@ -160,6 +183,9 @@ All test suites verified stable:
 - `circt-lec` now strips LLHD interface signal storage so interface properties
   can be checked end-to-end in LEC.
 - `circt-lec` now registers LLHD/LTL/Seq dialects needed for SVA LEC inputs.
+- `circt-lec` now lowers `llhd.ref` ports to value ports to unblock LLHD→core
+  lowering in LEC (regression in
+  `test/Tools/circt-lec/lec-lower-llhd-ref-ports.mlir`).
 - Re-ran sv-tests/yosys/verilator BMC suites after the `|=>` fix: results
   unchanged (23/26 + 3 XFAIL; 14/14 + 2 VHDL skip; 17/17).
   Logs: `sv-tests-bmc-results.txt`, `verilator-verification-bmc-results.txt`.
@@ -1475,9 +1501,16 @@ coverage in `test/Conversion/SVAToLTL/basic.mlir`.
 `test/Tools/circt-bmc/ltl-to-bmc-integration.mlir`.
 **BMC regression:** Added end-to-end SVA strong-until coverage in
 `test/Tools/circt-bmc/sva-strong-until.mlir`.
-**BMC fix:** Deduplicate identical derived clocks after module flattening in
-`circt-bmc` to avoid spurious multi-clock errors; added
-`test/Tools/circt-bmc/circt-bmc-flatten-dup-clocks.mlir`.
+**BMC fix:** Deduplicate equivalent derived clocks in `circt-bmc` (including
+use-before-def cases in graph regions) to avoid spurious multi-clock errors;
+added `test/Tools/circt-bmc/circt-bmc-flatten-dup-clocks.mlir` and
+`test/Tools/circt-bmc/circt-bmc-equivalent-derived-clocks.mlir`.
+**LEC pipeline:** `circt-lec` now lowers LLHD to core, externalizes registers,
+and lowers aggregates/bitcasts before SMT conversion, and registers the LLVM
+inliner interface; added required tool link deps.
+**BMC/LEC:** Externalize-registers now traces derived clocks through
+`comb.or`, `comb.mux`, and extract/concat ops to reduce spurious clock-root
+rejections.
 **ImportVerilog regression:** Added SV end-to-end coverage for
 `a ##[*] b |=> c until d` in
 `test/Conversion/ImportVerilog/sva_unbounded_until.sv`.
