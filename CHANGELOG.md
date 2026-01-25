@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 159 - January 25, 2026
+
+### Track E: HVL Module llhd.process Fix
+
+Implemented Option A from Track E analysis: modules with "hvl" in the name now
+use `llhd.process` instead of `seq.initial` for their initial blocks.
+
+**Root Cause:** The `seq.initial` lowering inlines function bodies, which breaks
+UVM testbenches that rely on runtime function dispatch (e.g., `run_test()`).
+
+**Fix:** Added module name check in `ProcedureOpConversion`:
+- Detect "hvl" (case-insensitive) in parent `hw::HWModuleOp` name
+- Force `llhd.ProcessOp` path when detected
+- Preserves `func.call` operations for UVM runtime calls
+
+**Files Modified:**
+- `lib/Conversion/MooreToCore/MooreToCore.cpp` (+12 lines, lines 895-906)
+- `test/Conversion/MooreToCore/hvl-module-llhd-process.mlir` (new)
+
+**Verification:**
+- HvlTop, hvl_top, my_hvl_module → use `llhd.process`
+- HdlTop, TestBench → use `seq.initial` (optimized path)
+
+### Test Suite Results
+
+**verilator-verification**: 17/17 passing (sequence tests subset)
+- All 6 sequence tests now PASS (previously 0/6)
+- `@posedge (clk)` syntax now handled correctly
+
+**AVIP Simulations:**
+- AHB AVIP: 500K cycles, 0 errors (with pre-compiled MLIR)
+- UART AVIP: 1M+ cycles, 0 errors (with pre-compiled MLIR)
+- I2S AVIP: 130K cycles, 0 errors
+
 ## Iteration 158 - January 24, 2026
 
 ### Runtime Signal Creation (Track D Complete)
