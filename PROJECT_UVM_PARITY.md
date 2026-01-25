@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 172)
+**Last Updated**: January 25, 2026 (Iteration 173)
 
 ## Current Status
 
@@ -47,14 +47,14 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | AXI4-Lite | Partial | - | AVIP code issues in cover properties |
 | I2C | N/A | - | Directory not found (uses I3C instead) |
 
-### yosys Tests (SVA: 14/16, bind: 6/6, svtypes: 14/18)
+### yosys Tests (SVA: 14/14, bind: 6/6, svtypes: 9/18)
 
 | Test Suite | Pass Rate | Notes |
 |------------|-----------|-------|
-| sva/*.sv | 14/16 (87.5%) | 2 fail due to multi-file deps (missing modules) |
+| sva/*.sv | 14/14 (100%) | All executable SVA tests pass (2 VHDL skipped) |
 | bind/*.sv | 6/6 (100%) | All bind tests pass |
-| svtypes/*.sv | 14/18 (78%) | enum cast, out-of-bounds, $size, forward ref |
-| **Combined** | **34/40 (85%)** | Standalone tests work well |
+| svtypes/*.sv | 9/18 (50%) | enum cast, packed struct, union types need work |
+| **Combined** | **29/38 (76%)** | SVA production-ready, types need work |
 
 ### verilator-verification (17/17 BMC tests pass, 100%)
 Note: BMC test suite includes assertions and sequence tests. All tests pass with current build.
@@ -83,14 +83,27 @@ Full unit test suite coverage:
 
 ### CIRCT Bugs (To Fix)
 
-1. ~~**Hierarchical event references**~~ **FIXED** (Iteration 145)
+1. **Chapter-16 Property Operator Regression** (Priority: HIGH - Iteration 172)
+   - 4 tests regressed from PASS/FAIL to ERROR in Section 16.12
+   - Affected: property-disable-iff, property-iff, property-prec, property-disj
+   - Root cause: Property operator handling broken in SVA-to-LTL or BMC lowering
+   - Investigation needed in lib/Conversion/SVAToLTL/ and lib/Tools/circt-bmc/
+
+2. ~~**Hierarchical event references**~~ **FIXED** (Iteration 145)
    - Was: Chapter-15 tests failing with "unknown hierarchical name"
    - Fixed: Added ProceduralBlockSymbol handler in HierarchicalNames.cpp
    - All Chapter-15 tests now pass (5/5)
 
-2. **Include-via-macro path resolution** (Priority: Low)
+3. **Include-via-macro path resolution** (Priority: Low)
    - Affects: Chapter-22 test (22.4--include_via_define.sv)
    - Pattern: `` `define DO_INCLUDE(FN) `include FN ``
+
+4. **Static Variable Initialization with Function Calls** (Priority: Medium - Iteration 172)
+   - Pattern: `uvm_root uvm_top = uvm_root::get();` not lowered to IR
+   - evaluateConstant() returns empty for runtime function calls
+   - Generates `#llvm.zero` instead of proper initialization
+   - Needs: Module constructor support or deferred initialization
+   - Files: Structure.cpp:1850-1861, Expressions.cpp:2732-2741
 
 ### Known Unsupported Features
 
