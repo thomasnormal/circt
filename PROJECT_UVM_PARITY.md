@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 169)
+**Last Updated**: January 25, 2026 (Iteration 170)
 
 ## Current Status
 
@@ -148,6 +148,18 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
 2. **Track verilator-verification stability** - Maintain 17/17 BMC tests passing
 3. **Complete JTAG AVIP compilation** - Fix bind+virtual interface issues
 4. **Test additional AVIPs** - USB, CAN, PCIe if available
+
+### Iteration 170 Findings
+- **Unit tests**: 188/189 pass (99.5%) - 1 known failure persists:
+  - `SampleFieldCoverageEnabled` test fails: expects coverage > 0, actual = 0
+  - Investigation needed: strdup() fix from Iteration 162 may be incomplete
+- **AHB AVIP simulation**: Continues running with HdlTop, 6.8M+ delta cycles achieved
+  - Shows "HDL_TOP", "gent bfm: ENT BFM" BFM initialization
+- **I3C AVIP simulation**: Running with hdl_top module, BFM output visible
+  - Shows "HDL TOP", "controller Agent BFM", "target Agent BFM"
+- **yosys SVA tests**: circt-bmc needs module specification via `-top` flag (not `-t`)
+  - basic00.sv fails due to module name resolution
+- **verilator-verification**: 17/17 pass (100%) baseline confirmed
 
 ### Iteration 169 Findings
 - **sv-tests Chapters 7, 12, 20 (BMC)**: 145/179 pass (81%)
