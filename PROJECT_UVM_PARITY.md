@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 174)
+**Last Updated**: January 25, 2026 (Iteration 175)
 
 ## Current Status
 
@@ -168,14 +168,29 @@ Full unit test suite coverage:
     - Fixed by using `strdup()` to copy names and `free()` in destroy function
     - Fixed `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test failure
 
-## Next Steps (Iteration 172)
+## Next Steps (Iteration 175)
 
 ### Priority Tasks
-1. **Fix circt-sim stack overflow** - SPI AVIP simulation crashes due to deep UVM class recursion
-2. **Investigate hanging sequence tests** - 3 tests in MooreRuntimeSequenceTest hang indefinitely
-3. **Track verilator-verification stability** - Maintain 17/17 BMC tests passing
-4. **Complete JTAG AVIP compilation** - Fix bind+virtual interface issues
-5. **Test additional AVIPs** - USB, CAN, PCIe if available
+1. ~~**Fix circt-sim stack overflow**~~ **FIXED** (Iteration 173) - Added maxCallDepth=100 + maxOps=100000
+2. **Investigate hanging sequence tests** - 2 tests in MooreRuntimeSequenceTest hang (TryGetNextItemWithData, PeekNextItem)
+3. **Multi-file package imports** - yosys verilog tests need cross-file package resolution
+4. **Size cast bitwidth mismatch** - hw.bitcast fails for packed struct type casts
+5. **Chapter-22 preprocessor** - pragma, line, resetall directives need work (51/75)
+
+### Track Status (Iteration 175)
+
+| Track | Focus | Current Status | Next Task |
+|-------|-------|----------------|-----------|
+| A: sv-tests | Compilation coverage | 79% overall | Target Chapter-22 (68%) improvements |
+| B: AVIP Simulation | circt-sim runtime | 8/10 simulate | Fix APB slowness, investigate JTAG |
+| C: BMC/SVA | Formal verification | 17/17, 23/26 | Maintain baselines |
+| D: Unit Tests | Runtime stability | 97%+ pass | Fix 2 hanging sequence tests |
+
+### Baselines to Maintain
+- verilator-verification: 17/17 (100%)
+- yosys SVA: 14/14 (100%)
+- Chapter-16 BMC: 23/26 PASS + 3 XFAIL
+- Unit tests: Sim 397, UVM 24, LLHD 6, Support 187
 
 ### Iteration 171 Findings
 - **Unit tests**: 1321/1324 pass (99.8%)
