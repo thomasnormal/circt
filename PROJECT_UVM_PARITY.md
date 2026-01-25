@@ -53,8 +53,8 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 |------------|-----------|-------|
 | sva/*.sv | 14/14 (100%) | All executable SVA tests pass (2 VHDL skipped) |
 | bind/*.sv | 6/6 (100%) | All bind tests pass |
-| svtypes/*.sv | 9/18 (50%) | enum cast, packed struct, union types need work |
-| **Combined** | **29/38 (76%)** | SVA production-ready, types need work |
+| svtypes/*.sv | 14/18 (78%) | Improved from 9/18 (Iteration 174) |
+| **Combined** | **34/38 (89%)** | Improved from 29/38 (Iteration 174) |
 
 ### verilator-verification (17/17 BMC tests pass, 100%)
 Note: BMC test suite includes assertions and sequence tests. All tests pass with current build.
