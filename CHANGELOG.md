@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 162 - January 25, 2026
+
+### Fix Covergroup/Coverpoint Name Dangling Pointer Bug
+
+Fixed a critical memory bug in the UVM coverage runtime where covergroup and
+coverpoint names became dangling pointers.
+
+**Problem:** `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test was
+failing with `Expected: (cov) > (0.0), actual: 0 vs 0`. The root cause was that
+`__moore_covergroup_create`, `__moore_coverpoint_init`, and
+`__moore_coverpoint_init_with_bins` stored name pointers directly without copying.
+When callers passed temporary strings (e.g., `std::string::c_str()`), the pointers
+became dangling.
+
+**Fix:** Use `strdup()` to copy name strings and `free()` them in destroy:
+- `__moore_covergroup_create` - strdup the name
+- `__moore_coverpoint_init` - strdup the name
+- `__moore_coverpoint_init_with_bins` - strdup the name
+- `__moore_covergroup_destroy` - free covergroup and coverpoint names
+
+**Files Modified:**
+- `lib/Runtime/MooreRuntime.cpp` (+15 lines, -4 lines)
+
+**Test Results:**
+- All 18 UvmCoverage unit tests now pass
+- verilator-verification: 17/17 BMC tests passing
+- Unit test fix verified with fresh build
+
 ## Iteration 161 - January 25, 2026
 
 ### Track J: Add moore.constraint.disable Op

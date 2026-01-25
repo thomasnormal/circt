@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 25, 2026 (Iteration 161)
+**Last Updated**: January 25, 2026 (Iteration 162)
 
 ## Current Status
 
@@ -125,7 +125,13 @@ Note: BMC test suite includes assertions and sequence tests. All tests pass with
    - Explicit bins, cross coverage, wildcard bins all work
    - get_coverage() runtime computation not yet implemented
 
-## Next Steps (Iteration 162)
+10. **Covergroup/Coverpoint Name Dangling Pointer Fix** (Iteration 162, Commit 9046df739)
+    - `__moore_covergroup_create` and `__moore_coverpoint_init` were storing name pointers directly
+    - Callers passing temporary strings (e.g., `std::string::c_str()`) caused dangling pointers
+    - Fixed by using `strdup()` to copy names and `free()` in destroy function
+    - Fixed `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test failure
+
+## Next Steps (Iteration 163)
 
 ### Priority Tasks
 1. **Test UVM singleton initialization** - Run `run_test()` with circt-sim to verify `uvm_root::get()` creates singletons
