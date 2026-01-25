@@ -891,8 +891,22 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
       auto moduleOp = op->getParentOfType<ModuleOp>();
       bool hasMultiBlockCalls = moduleOp &&
           hasMultiBlockFunctionCalls(op.getBody(), moduleOp);
+
+      // Track E: Force llhd.process for hvl_top modules to preserve UVM
+      // runtime calls. The seq.initial lowering inlines function bodies,
+      // which breaks UVM run_test() that needs to call runtime functions.
+      // By detecting "hvl" in the module name, we force these modules to
+      // use llhd.process which preserves func.call operations.
+      // Note: By the time ProcedureOp is converted, the parent SVModuleOp
+      // has already been converted to hw::HWModuleOp, so we check that.
+      bool isHvlModule = false;
+      if (auto parentModule = op->getParentOfType<hw::HWModuleOp>()) {
+        StringRef moduleName = parentModule.getSymName();
+        isHvlModule = moduleName.contains_insensitive("hvl");
+      }
+
       if (!hasWaitEvent && !hasWaitDelay && allCapturesConstant &&
-          hasSingleBlock && !hasMultiBlockCalls) {
+          hasSingleBlock && !hasMultiBlockCalls && !isHvlModule) {
         auto initialOp =
             seq::InitialOp::create(rewriter, loc, TypeRange{}, std::function<void()>{});
         auto &body = initialOp.getBody();
