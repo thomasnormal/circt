@@ -19,6 +19,23 @@ All test suites verified stable:
 | Chapter-16 | 52/53 (98%) | **MAJOR improvement** from 26/53 (49%) |
 | Chapter-11 | 86/88 (98%) | Improved from 76/78 |
 
+### Unit Tests Verified
+
+| Test Suite | Pass/Total | Status |
+|------------|------------|--------|
+| Sim dialect | 397/397 | 100% |
+| UVM phase manager | 24/24 | 100% |
+| Moore runtime | 616/635 | 97% (2 hanging) |
+| LLHD dialect | 6/6 | 100% |
+| Support | 187/187 | 100% |
+
+### AVIP Simulations Verified
+
+- I2S AVIP: SUCCESS (1.3s sim time, 0 errors)
+- AXI4 simple: SUCCESS (230ns, full handshake)
+- SPI AVIP: SUCCESS (stack overflow fix holding)
+- AHB AVIP: SUCCESS (5ms sim time, 1M processes)
+
 ### SVA/BMC Updates
 
 - sv-tests Chapter-16 (BMC, `RISING_CLOCKS_ONLY=1`): 23/26 pass, 3 XFAIL, 0 FAIL
@@ -64,14 +81,73 @@ All test suites verified stable:
   `test/Conversion/ImportVerilog/sva-multiclock.sv`.
 - Added SV end-to-end multi-clock SVA BMC regression in
   `test/Tools/circt-bmc/sva-multiclock-e2e.sv`.
+- ImportVerilog now allows unconnected interface ports when instantiating
+  interfaces, unblocking UVM SVA tests that use interface instances without
+  explicit connections.
+- LLHD inline-calls pass now skips external functions (no bodies) to avoid
+  inliner crashes in `--ir-hw` pipelines; added regression in
+  `test/Dialect/LLHD/Transforms/inline-calls.mlir`.
+- LLHD inline-calls now skips UVM constructors (`uvm_pkg::*::new`) to avoid
+  recursive inlining errors in `--ir-hw` (regression in
+  `test/Dialect/LLHD/Transforms/inline-calls.mlir`).
+- ImportVerilog now ignores side-effecting sequence match-item system
+  subroutines during assertion lowering, unblocking sequence subroutine
+  patterns; regression in
+  `test/Conversion/ImportVerilog/sva-sequence-subroutine.sv`.
 - ImportVerilog now supports interface-scoped properties by resolving
   interface signals through virtual interface refs; regression in
   `test/Conversion/ImportVerilog/sva-interface-property.sv`.
+- Interface instance port connections now lower to interface signal assignments,
+  enabling interface-derived clocks in BMC; added
+  `test/Tools/circt-bmc/sva-interface-property-e2e.sv`.
+- Added LEC regression for interface property lowering in
+  `test/Tools/circt-lec/lec-interface-property.sv`.
+- `circt-lec` now strips LLHD interface signal storage so interface properties
+  can be checked end-to-end in LEC.
+- `circt-lec` now registers LLHD/LTL/Seq dialects needed for SVA LEC inputs.
 - Re-ran sv-tests/yosys/verilator BMC suites after the `|=>` fix: results
   unchanged (23/26 + 3 XFAIL; 14/14 + 2 VHDL skip; 17/17).
   Logs: `sv-tests-bmc-results.txt`, `verilator-verification-bmc-results.txt`.
+- Re-ran yosys SVA BMC with `RISING_CLOCKS_ONLY=1` (build-test):
+  14/14 pass, 2 VHDL skipped.
+- Re-ran sv-tests SVA BMC with `RISING_CLOCKS_ONLY=1` (build-test):
+  total=26 pass=23 xfail=3 error=0.
+- Re-ran verilator-verification BMC with `RISING_CLOCKS_ONLY=1` (build-test):
+  total=17 pass=17.
 - APB AVIP compiles with `build-test/bin/circt-verilog`
   (log: `avip-apb-circt-verilog.log`).
+- UVM SVA cases compile under `--ir-hw` with real UVM after inline-calls fixes:
+  `16.10--property-local-var-uvm.sv`,
+  `16.10--sequence-local-var-uvm.sv`,
+  `16.11--sequence-subroutine-uvm.sv`,
+  `16.13--sequence-multiclock-uvm.sv`.
+- Added end-to-end UVM property local-variable coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv` and
+  `test/Tools/circt-lec/lec-uvm-local-var.sv`.
+- Added end-to-end UVM sequence local-variable coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv` and
+  `test/Tools/circt-lec/lec-uvm-seq-local-var.sv`.
+- Added end-to-end UVM multi-clock SVA coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-multiclock-e2e.sv` and
+  `test/Tools/circt-lec/lec-uvm-multiclock.sv`.
+- `circt-bmc` now exposes `--allow-multi-clock` (passes through to
+  externalize-registers and lower-to-bmc); added regression in
+  `test/Tools/circt-bmc/circt-bmc-multiclock.mlir`.
+- sv-tests/verilator/yosys BMC harnesses now accept `ALLOW_MULTI_CLOCK=1` to
+  pass `--allow-multi-clock` to `circt-bmc`; added regression in
+  `test/Tools/circt-bmc/sv-tests-multiclock.mlir`.
+- BMC harness scripts now accept `CIRCT_BMC_ARGS` and `BMC_SMOKE_ONLY=1` to
+  support smoke testing without solver output; `sv-tests-multiclock` uses this
+  mode with `--emit-mlir`.
+- Added end-to-end UVM sequence subroutine coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv` and
+  `test/Tools/circt-lec/lec-uvm-seq-subroutine.sv`.
+- Added end-to-end UVM interface property coverage for BMC and LEC in
+  `test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv` and
+  `test/Tools/circt-lec/lec-uvm-interface-property.sv`.
+- sv-tests BMC harness now adds `--uvm-path` for UVM-tagged tests (defaulting
+  to `lib/Runtime/uvm`), with a regression in
+  `test/Tools/circt-bmc/sv-tests-uvm-path.mlir`.
 
 ### SVA/BMC Harness
 
