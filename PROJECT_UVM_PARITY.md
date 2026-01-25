@@ -6,8 +6,8 @@
 
 ## Current Status
 
-### sv-tests Coverage (717 tests, ~83% raw, ~95% effective)
-Note: 42 tests are negative tests expected to fail. Effective pass rate excludes these.
+### sv-tests Coverage (829 tests, 753 passing = 90%)
+Note: Some tests are negative tests expected to fail. Grand total verified in Iteration 175.
 
 | Chapter | Topic | Pass Rate | Status |
 |---------|-------|-----------|--------|
@@ -22,7 +22,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | 13 | Tasks and Functions | 13/15 (87%) | 2 negative tests |
 | 14 | Clocking Blocks | 4/5 (80%) | 1 error test failing |
 | 15 | Inter-Process Sync | 5/5 (100%) | Fixed in Iteration 145 |
-| 16 | Assertions | 52/53 (98%) | Improved from 26/53 (Iteration 174) |
+| 16 | Assertions | 53/53 (100%) | Complete (Iteration 175) |
 | 18 | Random Constraints | 119/134 (89%) | Improved from 56/134 (Iteration 174) |
 | 20 | Utility System Tasks | 47/47 (100%) | Complete |
 | 21 | I/O System Tasks | 29/29 (100%) | Complete |
