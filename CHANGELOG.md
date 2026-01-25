@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 170 - January 25, 2026
+
+### Baseline Verification
+
+**Unit Tests: 188/189 pass (99.5%)**
+- 1 persisting failure: `SampleFieldCoverageEnabled` - expects coverage > 0, gets 0
+- Root cause investigation needed: strdup() fix from Iteration 162 may be incomplete
+
+**verilator-verification: 17/17 pass (100%)**
+- BMC tests baseline confirmed stable
+
+### AVIP Simulation Progress
+
+**AHB AVIP:**
+- Simulation running 300+ seconds with HdlTop module
+- 6.8M+ delta cycles achieved before wall-clock timeout
+- BFM initialization confirmed: "HDL_TOP", "gent bfm: ENT BFM"
+
+**I3C AVIP:**
+- Simulation running with hdl_top module
+- BFM initialization confirmed: "HDL TOP", "controller Agent BFM", "target Agent BFM"
+
+### yosys SVA Test Investigation
+
+- circt-bmc requires `--top` flag (not `-t`) for module specification
+- basic00.sv tests need investigation for module name handling
+- Agent investigating command-line flag discrepancy
+
 ## Iteration 169 - January 25, 2026
 
 ### sv-tests Chapters 7, 12, 20 (BMC) Testing
