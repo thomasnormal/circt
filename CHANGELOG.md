@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 161 - January 25, 2026
+
+### Track J: Add moore.constraint.disable Op
+
+Implemented `moore.constraint.disable` operation for disabling named constraint
+blocks by symbol reference.
+
+**Problem:** `test/Dialect/Moore/classes.mlir` test was failing due to unknown
+`moore.constraint.disable` operation. This op is needed for SoftConstraints
+class patterns where a derived constraint can disable a base constraint.
+
+**Fix:** Added `ConstraintDisableOp` to MooreOps.td:
+- Takes a `SymbolRefAttr` to reference the constraint block to disable
+- Has parent constraint `HasParent<"ConstraintBlockOp">` to ensure valid context
+- Implements IEEE 1800-2017 Section 18.5.14 "Disabling constraints"
+
+**Files Modified:**
+- `include/circt/Dialect/Moore/MooreOps.td` (+26 lines)
+
+**Test Results:**
+- `test/Dialect/Moore/classes.mlir` now passes
+- verilator-verification: 17/17 BMC tests passing
+- yosys svtypes: 14/18 (78%) - existing failures, no regression
+
 ## Iteration 160 - January 25, 2026
 
 ### Track I: Vtable Covariance Fix
