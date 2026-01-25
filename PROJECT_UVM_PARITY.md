@@ -44,7 +44,7 @@ Note: 42 tests are negative tests expected to fail. Effective pass rate excludes
 | I3C | SUCCESS | Tested | ~1.9MB MLIR (Iteration 163), 100K cycles |
 | JTAG | Partial | - | AVIP code issue: bind targets used as virtual interfaces |
 | AXI4 | SUCCESS | Tested | 26K lines MLIR, 10K cycles, 0 errors |
-| AXI4-Lite | SUCCESS | - | Cover properties compile OK, needs full testbench |
+| AXI4-Lite | Partial | Tested | Cover props work; full AVIP has multi-import LRM issue |
 | I2C | N/A | - | Directory not found (uses I3C instead) |
 
 ### yosys Tests (SVA: 14/14, bind: 6/6, svtypes: 9/18)
