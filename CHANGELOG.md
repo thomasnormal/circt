@@ -142,6 +142,18 @@ All test suites verified stable:
 - Smoke-mode sv-tests/verilator harnesses now treat expected-fail cases as
   XFAIL to avoid XPASS reporting; regression in
   `test/Tools/circt-bmc/sv-tests-smoke-xfail.mlir`.
+- sv-tests BMC harness now supports `FORCE_BMC=1` to run BMC even for parsing-
+  only tests; regressions in
+  `test/Tools/circt-bmc/sv-tests-force-bmc.mlir` and
+  `test/Tools/circt-bmc/sv-tests-uvm-force-bmc.mlir`.
+- Added bare-property sv-tests mini fixtures and a smoke-mode harness regression
+  in `test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir` to cover
+  16.12 property pipelines without modeling assumptions.
+- Added `utils/run_sv_tests_circt_lec.sh` harness for sv-tests LEC smoke runs
+  (compare design to itself), with regression in
+  `test/Tools/circt-lec/sv-tests-lec-smoke.mlir`.
+- Added UVM LEC smoke regression in
+  `test/Tools/circt-lec/sv-tests-uvm-lec-smoke.mlir`.
 - Added end-to-end UVM sequence subroutine coverage for BMC and LEC in
   `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv` and
   `test/Tools/circt-lec/lec-uvm-seq-subroutine.sv`.
