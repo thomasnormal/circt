@@ -63,12 +63,25 @@ Note: 9 BMC tests are skipped (no BMC-checkable properties).
 - BMC active tests: 8/17 (47%) - 9 skipped without properties
 Build requirement: circt-verilog and circt-bmc must be built with `ninja circt-verilog circt-bmc`.
 
-### Unit Tests (1319/1321 pass, 99.8%)
-Full unit test suite coverage:
-- 633/635 MooreRuntimeTests pass (2 hanging: TryGetNextItemWithData, PeekNextItem)
-- All 18 UVM coverage tests pass (SampleFieldCoverageEnabled fixed)
-- 3 hanging tests in MooreRuntimeSequenceTest: TryGetNextItemWithData, PeekNextItem, HasItemsCheck
-- Other suites: ArcRuntime(6), Comb(1), HW(10), LLHD(6), OM(33), RTG(4), Synth(4), Sim(397), Support(187), Debug(24), VerilogLSP(15)
+### Unit Tests (All Verified Iteration 176)
+Full unit test suite coverage verified:
+
+| Suite | Pass/Total | Status |
+|-------|------------|--------|
+| Sim (incl UVM) | 397/397 | 100% |
+| MooreRuntime | 633/635 | 99.7% (2 hanging) |
+| Support | 187/187 | 100% |
+| OM | 33/33 | 100% |
+| Debug | 24/24 | 100% |
+| HW | 10/10 | 100% |
+| VerilogLSP | 8/8 | 100% |
+| LLHD | 6/6 | 100% |
+| ArcRuntime | 6/6 | 100% |
+| RTG | 4/4 | 100% |
+| Synth | 4/4 | 100% |
+| Comb | 1/1 | 100% |
+
+2 hanging tests: TryGetNextItemWithData, PeekNextItem (MooreRuntimeSequenceTest)
 
 | Category | Count | Details |
 |----------|-------|---------|
