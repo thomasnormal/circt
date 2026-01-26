@@ -50,6 +50,13 @@ SVA tests: 14/16 (87.5%)
 - 14 passing: basic00-03, counter, extnets, nested_clk_else, sva_not, sva_range, sva_throughout, value_change tests
 - 2 failures: basic04.sv, basic05.sv - bind statements referencing modules in same file
 
+### LEC Flattening for Extnets
+
+- LEC now flattens private HW modules by default to avoid dominance cycles from
+  cross-module ref nets (e.g., yosys `extnets.sv`).
+- Added regression test: `test/Tools/circt-lec/lec-extnets-cycle.mlir`.
+- Test: `TEST_FILTER=extnets LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh`.
+
 ### I2C AVIP Analysis
 
 - Simple I2C master: Compiles and simulates successfully
@@ -182,10 +189,15 @@ All test suites verified stable:
   `test/Tools/circt-lec/lec-interface-property.sv`.
 - `circt-lec` now strips LLHD interface signal storage so interface properties
   can be checked end-to-end in LEC.
+- `circt-lec` now folds simple LLHD signal drive/probe patterns after LLHD
+  process stripping, eliminating leftover module-level LLHD ops.
 - `circt-lec` now registers LLHD/LTL/Seq dialects needed for SVA LEC inputs.
 - `circt-lec` now lowers `llhd.ref` ports to value ports to unblock LLHD→core
   lowering in LEC (regression in
   `test/Tools/circt-lec/lec-lower-llhd-ref-ports.mlir`).
+- `circt-lec` now handles driven `llhd.ref` input ports by converting them into
+  value outputs and wiring through local signals (regression in
+  `test/Tools/circt-lec/lec-lower-llhd-ref-driven-input.mlir`).
 - Re-ran sv-tests/yosys/verilator BMC suites after the `|=>` fix: results
   unchanged (23/26 + 3 XFAIL; 14/14 + 2 VHDL skip; 17/17).
   Logs: `sv-tests-bmc-results.txt`, `verilator-verification-bmc-results.txt`.
