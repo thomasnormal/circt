@@ -23,17 +23,19 @@
   - Agent ace3a0d working on ~45 remaining test failures
   - Categories: ImportVerilog, MooreToCore, circt-bmc, circt-lec, circt-sim
 
-- **Track C (AVIP Testing)**: 🔄 **IN PROGRESS**
-  - APB AVIP ready to test with UVM_INFO/WARNING/ERROR output
-  - I2S AVIP ready to test
-  - I3C AVIP ready to test
-  - Expected: "Messages reported: 0" should now show actual UVM message counts
+- **Track C (AVIP Testing)**: ✅ **VERIFIED**
+  - APB AVIP now generates **452 `__moore_uvm_report` calls** (was 0 before fix)
+  - UVM report interception working end-to-end
+  - I2S and I3C AVIPs ready for testing
+  - **Fix**: Changed expected operand count from 5 to 7 to match actual UVM signature
 
 - **Track D (OpenTitan Expansion)**: ✅ **NEW TESTBENCH ADDED**
   - `tlul_adapter_reg` testbench added to OpenTitan test suite
   - TileLink-UL register adapter now has simulation coverage
   - circt-sim now maps `hw.instance` results to child `hw.output` operands for
     instance output evaluation; added `hw-instance-output` regression test
+  - circt-sim handles `hw.struct_inject` and process-result-driven continuous
+    assignments for OpenTitan LLHD lowering
 
 ### Key Achievements
 
@@ -49,12 +51,14 @@
 ### Implementation Details
 
 **Files Modified**:
-1. `lib/Conversion/MooreToCore/MooreToCore.cpp` (+133 lines)
+1. `lib/Conversion/MooreToCore/MooreToCore.cpp` (+155 lines)
    - Added `convertUvmReportCall()` method to `CallOpConversion`
-   - Checks for 5 operands: id, msg, verbosity, filename, line
+   - Handles 7 UVM operands: id, msg, verbosity, filename, line, context_name, report_enabled_checked
+   - Also handles 8-operand method versions (with 'self' parameter)
    - Extracts ptr/len from LLVM struct types using `ExtractValueOp`
    - Creates runtime function with 10-parameter signature
    - Handles all four UVM severity levels
+   - **FIX (late Iter 211)**: Changed expected operand count from 5 to 7 to match UVM signature
 
 2. `include/circt/Dialect/Sim/ProcessScheduler.h` (+22 lines)
    - Improved unknown-to-known signal edge detection
@@ -68,9 +72,11 @@
 
 **Signature Mapping**:
 ```cpp
-// UVM library: (id_struct, msg_struct, verbosity, filename_struct, line)
+// UVM library: (id, msg, verbosity, filename, line, context_name, report_enabled_checked)
+// UVM method:  (self, id, msg, verbosity, filename, line, context_name, report_enabled_checked)
 // Runtime:     (id_ptr, id_len, msg_ptr, msg_len, verbosity,
 //               filename_ptr, filename_len, line, context_ptr, context_len)
+// Note: context_name is extracted from operands; report_enabled_checked is ignored
 ```
 
 ### Test Results
@@ -207,6 +213,10 @@
   input summary when Z3 returns SAT
 - Clocked i1 assertions now lower via `ltl.clock` (posedge/negedge/both) to
   preserve edge sampling in BMC/LEC pipelines
+- LTLToCore now lowers clocked i1 sequences with a clocked NFA to keep the
+  sampling clock live (new regression in `test/Conversion/LTLToCore`)
+- LTLToCore now honors nested `ltl.clock` on sequences even when a default
+  clock is present, ensuring negedge clocking is preserved
 
 ### Files Modified
 
