@@ -169,12 +169,37 @@ public:
   /// Get the LSB (for single-bit edge detection).
   bool getLSB() const { return value[0]; }
 
-  /// Check if two values are equal.
+  /// Check if this value represents a 4-state X based on struct encoding.
+  /// 4-state values are encoded as {value: iN, unknown: iN} flattened to 2N bits.
+  /// When all unknown bits (upper half) are 1, the value is fully X.
+  /// Returns true if this appears to be a 4-state struct with all X bits.
+  bool isFourStateX() const {
+    if (isX)
+      return true;
+    uint32_t w = value.getBitWidth();
+    // 4-state structs have even width (N bits value + N bits unknown)
+    if (w < 2 || (w % 2) != 0)
+      return false;
+    uint32_t halfWidth = w / 2;
+    // Check if all unknown bits (upper half) are set
+    for (uint32_t i = halfWidth; i < w; ++i) {
+      if (!value[i])
+        return false;
+    }
+    return true;
+  }
+
+  /// Check if two values are equal (with 4-state X normalization).
   bool operator==(const SignalValue &other) const {
     if (isX && other.isX)
       return true;
     if (isX || other.isX)
       return false;
+    // Handle the special case where both values represent 4-state "fully X".
+    // In this case, they should be considered equal even if their underlying
+    // value bits differ (since the value bits are don't-care when unknown=1).
+    if (isFourStateX() && other.isFourStateX())
+      return true;
     return value == other.value;
   }
 
@@ -183,16 +208,24 @@ public:
   /// Detect edge between old and new values.
   static EdgeType detectEdge(const SignalValue &oldVal,
                              const SignalValue &newVal) {
-    // No edge if values are the same
+    // No edge if values are the same (includes 4-state X normalization)
     if (oldVal == newVal)
       return EdgeType::None;
 
+    // Check for 4-state X values using struct encoding
+    bool oldIsFourStateX = oldVal.isFourStateX();
+    bool newIsFourStateX = newVal.isFourStateX();
+
     // For unknown values, detect edges conservatively.
-    if (oldVal.isUnknown() || newVal.isUnknown()) {
-      if (oldVal.isUnknown() && newVal.isUnknown())
+    if (oldVal.isUnknown() || newVal.isUnknown() ||
+        oldIsFourStateX || newIsFourStateX) {
+      // X->X is no edge (already caught by == check above, but be explicit)
+      if ((oldVal.isUnknown() || oldIsFourStateX) &&
+          (newVal.isUnknown() || newIsFourStateX))
         return EdgeType::None;
-      if (oldVal.isUnknown()) {
-        if (!newVal.isUnknown() && newVal.getLSB())
+      // X->known or known->X is an edge
+      if (oldVal.isUnknown() || oldIsFourStateX) {
+        if (!newVal.isUnknown() && !newIsFourStateX && newVal.getLSB())
           return EdgeType::Posedge;
         return EdgeType::AnyEdge;
       }

@@ -120,6 +120,55 @@ TEST(SignalValue, DetectEdgeMultiBit) {
   EXPECT_EQ(SignalValue::detectEdge(b, c), EdgeType::AnyEdge);
 }
 
+TEST(SignalValue, FourStateXDetection) {
+  // Test 4-state struct encoding: {value: i1, unknown: i1} flattened to 2 bits
+  // Lower bit = value, upper bit = unknown
+  // 0b00 = 0 (known 0), 0b01 = 1 (known 1), 0b10 = X (unknown, value=0), 0b11 = X (unknown, value=1)
+
+  SignalValue known0(0b00, 2);  // Known 0
+  SignalValue known1(0b01, 2);  // Known 1
+  SignalValue x_val0(0b10, 2);  // X with underlying value=0
+  SignalValue x_val1(0b11, 2);  // X with underlying value=1
+
+  // isFourStateX should only be true when ALL unknown bits are set
+  EXPECT_FALSE(known0.isFourStateX());  // unknown=0
+  EXPECT_FALSE(known1.isFourStateX());  // unknown=0
+  EXPECT_TRUE(x_val0.isFourStateX());   // unknown=1
+  EXPECT_TRUE(x_val1.isFourStateX());   // unknown=1
+
+  // Two X values should be equal even with different underlying value bits
+  EXPECT_TRUE(x_val0 == x_val1);
+
+  // X to X should NOT trigger an edge
+  EXPECT_EQ(SignalValue::detectEdge(x_val0, x_val1), EdgeType::None);
+  EXPECT_EQ(SignalValue::detectEdge(x_val1, x_val0), EdgeType::None);
+
+  // Known to X or X to Known SHOULD trigger an edge
+  EXPECT_NE(SignalValue::detectEdge(known0, x_val0), EdgeType::None);
+  EXPECT_NE(SignalValue::detectEdge(x_val0, known0), EdgeType::None);
+  EXPECT_NE(SignalValue::detectEdge(known1, x_val1), EdgeType::None);
+  EXPECT_NE(SignalValue::detectEdge(x_val1, known1), EdgeType::None);
+
+  // Test wider 4-state values (4-bit value + 4-bit unknown = 8-bit total)
+  // All upper bits set = fully X
+  SignalValue wide_x1(0xF0, 8);  // unknown=0b1111, value=0b0000 -> all X
+  SignalValue wide_x2(0xFF, 8);  // unknown=0b1111, value=0b1111 -> all X
+  SignalValue wide_known(0x05, 8);  // unknown=0b0000, value=0b0101 -> known
+
+  EXPECT_TRUE(wide_x1.isFourStateX());
+  EXPECT_TRUE(wide_x2.isFourStateX());
+  EXPECT_FALSE(wide_known.isFourStateX());
+
+  // Two fully-X values should be equal
+  EXPECT_TRUE(wide_x1 == wide_x2);
+  EXPECT_EQ(SignalValue::detectEdge(wide_x1, wide_x2), EdgeType::None);
+
+  // Partially unknown values (not all unknown bits set) should NOT be treated as X
+  SignalValue partial_unknown(0x80, 8);  // unknown=0b1000, value=0b0000 -> only MSB is X
+  EXPECT_FALSE(partial_unknown.isFourStateX());
+  EXPECT_FALSE(partial_unknown == wide_x1);
+}
+
 //===----------------------------------------------------------------------===//
 // SensitivityList Tests
 //===----------------------------------------------------------------------===//
