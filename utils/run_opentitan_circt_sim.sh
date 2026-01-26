@@ -10,6 +10,7 @@ usage() {
   echo "  prim_count         - Hardened counter with testbench"
   echo "  gpio_no_alerts     - GPIO register block (minimal TL-UL testbench)"
   echo "  uart_reg_top       - UART register block (minimal TL-UL testbench)"
+  echo "  spi_host_reg_top   - SPI Host register block (TL-UL with window)"
   echo ""
   echo "Options:"
   echo "  --max-cycles=N     Maximum clock cycles to simulate (default: 1000)"
@@ -65,6 +66,7 @@ TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
 TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
 GPIO_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/gpio/rtl"
 UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
+SPI_HOST_RTL="$OPENTITAN_DIR/hw/ip/spi_host/rtl"
 
 # Testbench generation
 generate_testbench() {
@@ -457,6 +459,113 @@ endmodule
 EOF
       ;;
 
+    spi_host_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for spi_host_reg_top (TileLink-UL interface)
+// SPI Host has multiple register windows via tlul_socket_1n
+
+`include "prim_assert.sv"
+
+module spi_host_reg_top_tb;
+  import tlul_pkg::*;
+  import spi_host_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Register interfaces
+  spi_host_reg2hw_t reg2hw;
+  spi_host_hw2reg_t hw2reg;
+
+  // Window interfaces for FIFO access (not used in basic test)
+  tl_h2d_t tl_win_o [2];
+  tl_d2h_t tl_win_i [2];
+
+  // RACL interface
+  logic racl_policies_i;
+  logic racl_error_o;
+  logic intg_err_o;
+
+  spi_host_reg_top #(
+    .EnableRacl(0)
+  ) dut (
+    .clk_i,
+    .rst_ni,
+    .tl_i,
+    .tl_o,
+    .tl_win_o,
+    .tl_win_i,
+    .reg2hw,
+    .hw2reg,
+    .racl_policies_i('0),
+    .racl_error_o(),
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+    // Window interfaces return idle response
+    tl_win_i[0] = TL_D2H_DEFAULT;
+    tl_win_i[1] = TL_D2H_DEFAULT;
+  end
+
+  initial begin
+    $display("Starting spi_host_reg_top test...");
+
+    // Reset
+    rst_ni = 0;
+    #20;
+    rst_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (address 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;
+    tl_i.a_size = 2;  // 4 bytes
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(5) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response: data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(5) @(posedge clk_i);
+
+    $display("TEST PASSED: spi_host_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
     *)
       echo "No testbench defined for target: $target" >&2
       return 1
@@ -573,6 +682,55 @@ get_files_for_target() {
       echo "$UART_RTL/uart_reg_pkg.sv"
       echo "$UART_RTL/uart_reg_top.sv"
       ;;
+    spi_host_reg_top)
+      local SPI_HOST_RTL="$OPENTITAN_DIR/hw/ip/spi_host/rtl"
+      # Package dependencies (same as gpio_no_alerts)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket (for multi-window reg tops)
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # SPI Host packages
+      echo "$SPI_HOST_RTL/spi_host_reg_pkg.sv"
+      echo "$SPI_HOST_RTL/spi_host_reg_top.sv"
+      ;;
     *)
       echo "Unknown target: $TARGET" >&2
       return 1
@@ -610,6 +768,7 @@ COMPILE_CMD=(
   "-I" "$TOP_AUTOGEN"
   "-I" "$GPIO_RTL"
   "-I" "$UART_RTL"
+  "-I" "$SPI_HOST_RTL"
   "${SRC_FILES[@]}"
   "$TB_FILE"
   "-o" "$MLIR_FILE"

@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 183 - January 26, 2026
+
+### OpenTitan Simulation Support - spi_host_reg_top SIMULATES!
+
+Extended OpenTitan support to SPI Host register block - now GPIO, UART, and SPI Host TileLink-UL register interfaces simulate successfully!
+
+**spi_host_reg_top Simulation:**
+```
+[circt-sim] Found 4 LLHD processes, 0 seq.initial blocks, and 1 hw.instance ops (out of 178 ops)
+[circt-sim] Registered 67 LLHD signals and 16 LLHD processes/initial blocks
+TEST PASSED: spi_host_reg_top basic connectivity
+[circt-sim] Simulation finished successfully
+```
+
+**Added:**
+- `spi_host_reg_top` target to both verilog and sim scripts
+- TL-UL socket support: `tlul_socket_1n`, `tlul_fifo_sync`, `tlul_err_resp`
+- SPI Host testbench with multi-window register interface
+
+**Key Achievement:**
+- First register block using `tlul_socket_1n` router (multi-window access)
+- 50 HW modules generated (vs 32 for GPIO, 4 for UART)
+- Validates more complex TL-UL interconnect patterns
+
+---
+
 ## Iteration 182 - January 26, 2026
 
 ### OpenTitan Simulation Support - uart_reg_top SIMULATES!
