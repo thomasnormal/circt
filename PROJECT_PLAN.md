@@ -160,22 +160,24 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 ### New: OpenTitan Simulation Support
 - **Phase 1 Complete**: prim_fifo_sync, prim_count simulate in circt-sim
-- **Phase 2 MILESTONE**: gpio_reg_top SIMULATES via gpio_no_alerts (32 modules, 177 ops)
-- **Phase 2 Extended**: **uart_reg_top SIMULATES** (175 ops, 56 signals) - TileLink-UL UART register block
-- **Phase 2 Extended**: **spi_host_reg_top SIMULATES** (178 ops, 67 signals) - First with tlul_socket_1n router (50 modules)
+- **Phase 2 MILESTONE**: All 4 communication protocol register blocks simulate:
+  - `gpio_reg_top` (177 ops, 47 signals)
+  - `uart_reg_top` (175 ops, 56 signals)
+  - `spi_host_reg_top` (178 ops, 67 signals) - with tlul_socket_1n router
+  - `i2c_reg_top` (175 ops, 68 signals)
 - **Phase 3 Validated**: TileLink-UL protocol adapters work end-to-end (including tlul_socket_1n)
 - **Blocker**: `prim_diff_decode.sv` control flow bug (unit test: `test/Conversion/MooreToCore/nested-control-flow-bug.sv`)
 - **Scripts**: `utils/run_opentitan_circt_verilog.sh`, `utils/run_opentitan_circt_sim.sh`
 - **Tracking**: `PROJECT_OPENTITAN.md`
 
-### Current Test Suite Status (Iteration 183)
+### Current Test Suite Status (Iteration 184)
 - **sv-tests SVA BMC**: 9/26 pass, 3 xfail, 0 fail, 0 error (Verified 2026-01-26)
 - **sv-tests Chapters**: 821/831 (98%) - aggregate across all chapters
 - **verilator-verification BMC**: 8/8 active tests pass (Verified 2026-01-26)
 - **yosys SVA**: 14/16 (87.5%) (Verified 2026-01-26)
 - **AVIPs**: 1/10 compile (APB only) - REGRESSION from claimed 8/10 baseline
   - Root causes: bind/vif conflicts, UVM method signature mismatches, InOut interface ports
-- **OpenTitan**: gpio_reg_top + uart_reg_top + spi_host_reg_top SIMULATE (Phase 2), TL-UL + socket validated (Phase 3)
+- **OpenTitan**: 4 register blocks SIMULATE (gpio, uart, spi_host, i2c), TL-UL + socket validated (Phase 3)
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**
