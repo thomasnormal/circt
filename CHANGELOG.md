@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 182 - January 26, 2026
+
+### OpenTitan Simulation Support - uart_reg_top SIMULATES!
+
+Extended OpenTitan support to UART register block - now both GPIO and UART TileLink-UL register interfaces simulate successfully!
+
+**uart_reg_top Simulation:**
+```
+[circt-sim] Found 4 LLHD processes, 0 seq.initial blocks, and 1 hw.instance ops (out of 175 ops)
+[circt-sim] Registered 56 LLHD signals and 13 LLHD processes/initial blocks
+TEST PASSED: uart_reg_top basic connectivity
+[circt-sim] Simulation finished successfully
+```
+
+**Added:**
+- `uart_reg_top` target to `run_opentitan_circt_sim.sh`
+- UART include paths and file dependencies
+- TileLink-UL testbench for UART register block
+
+---
+
 ## Iteration 181 - January 26, 2026
 
 ### OpenTitan Simulation Support (Phase 2: gpio_reg_top SIMULATES!)
@@ -14,17 +35,19 @@ TEST PASSED: gpio_reg_top basic connectivity
 [circt-sim] Simulation finished successfully
 ```
 
-**Working Components (32 modules):**
+**Working Components (32+ modules):**
 - `gpio_reg_top.sv` - Full GPIO register block (**SIMULATES**)
+- `uart_reg_top.sv` - UART register block (**SIMULATES** - 175 ops, 56 signals)
 - `tlul_adapter_reg.sv`, `tlul_cmd_intg_chk.sv`, `tlul_rsp_intg_gen.sv` - TL-UL adapters
 - `prim_subreg*.sv` - All register primitives
 - `prim_secded_inv_*.sv` - ECC encode/decode
 - `prim_filter*.sv` - Input filtering
 
-**Blocker (Full GPIO):**
+**Blocker (Full GPIO/UART):**
 - `prim_diff_decode.sv` - Moore-to-Core lowering fails with control-flow bug:
   `error: branch has 7 operands for successor #0, but target block has 4`
-- Workaround: `gpio_no_alerts` target excludes `prim_alert_sender` dependency
+- Unit test: `test/Conversion/MooreToCore/nested-control-flow-bug.sv`
+- Workaround: `*_reg_top` targets exclude `prim_alert_sender` dependency
 
 **Phase 1 Complete:**
 - `prim_fifo_sync.sv`, `prim_count.sv` - Both simulate successfully

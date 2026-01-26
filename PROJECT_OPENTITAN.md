@@ -322,6 +322,7 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **uart_reg_top SIMULATES!** uart_reg_top testbench runs - 175 ops, 56 signals, 13 processes. TileLink-UL UART register block works end-to-end |
 | 2026-01-26 | **gpio_reg_top SIMULATES!** gpio_no_alerts testbench runs successfully - 177 ops, 47 signals, 13 processes. TileLink-UL register block works end-to-end |
 | 2026-01-26 | **Phase 2 Major Progress**: gpio_no_alerts subset (32 modules) lowers to HW dialect successfully! Full gpio.sv blocked only by prim_diff_decode.sv control-flow lowering bug |
 | 2026-01-26 | **Phase 2 Parsing Complete**: Added all 39 GPIO dependencies. Parsing to Moore dialect succeeds. HW lowering blocked by prim_diff_decode.sv (CIRCT control-flow bug) |
@@ -347,8 +348,8 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 **IPs Without Alert Dependency** (can be simulated now):
 - `tlul` - TileLink-UL adapters (VALIDATED)
 - `prim_*` - Primitive modules (SIMULATES)
-- `gpio_reg_top` - Register block only (SIMULATES via gpio_no_alerts)
-- `uart_reg_top` - UART register block (COMPILES - 4 modules)
+- `gpio_reg_top` - Register block only (**SIMULATES** via gpio_no_alerts)
+- `uart_reg_top` - UART register block (**SIMULATES** - 175 ops, 56 signals)
 
 ---
 
