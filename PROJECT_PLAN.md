@@ -217,18 +217,17 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **Workaround**: Use `--allow-virtual-iface-with-override` for JTAG bind/vif conflicts.
 
-### Remaining Limitations & Features to Build (Iteration 187)
+### Remaining Limitations & Features to Build (Iteration 189)
+
+**RESOLVED This Iteration:**
+1. ~~**circt-sim SignalValue 64-bit limit**~~: ✅ FIXED (Track Q) - Upgraded to APInt for arbitrary widths
+2. ~~**prim_diff_decode control flow bug**~~: ✅ FIXED (Mem2Reg deduplication) - Unblocks 7+ OpenTitan IPs
+3. ~~**Full OpenTitan IPs with Alerts**~~: ✅ VERIFIED (Track R) - prim_alert_sender compiles
 
 **Critical Blockers for Full UVM Parity:**
-1. **circt-sim SignalValue 64-bit limit** - Crashes on signals >64 bits (timer_core, structs)
-   - **Status**: Root cause found (Track N), fix in progress (Track Q)
-   - **Files**: ProcessScheduler.h, LLHDProcessInterpreter.h/cpp
-
-2. **Class Method Inlining** - Virtual method dispatch and class hierarchy not fully simulated
+1. **Class Method Inlining** - Virtual method dispatch and class hierarchy not fully simulated
    - **Impact**: Some UVM patterns may not work correctly at simulation time
-
-3. **Full OpenTitan IPs with Alerts** - prim_alert_sender now compiles (Mem2Reg fix)
-   - **Status**: Testing in progress (Track R)
+   - **Priority**: HIGH - Required for complex UVM factory/callback patterns
 
 **Medium Priority Enhancements:**
 1. **AVIP bind scope support** - Allow bind to reference parent module ports
@@ -285,11 +284,14 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 2. **SVA Sequence Tests** - 6 verilator-verification tests (Codex handling SVA)
 3. **Class Method Inlining** - Virtual method dispatch for complex UVM patterns
 4. **slang v10 patches** - Some v9.1 patches don't apply to v10.0 (bind-scope, bind-instantiation-def)
-5. **Moore-to-Core Control Flow** - Nested if-else in unique case causes CFG operand mismatch
-   - Affects: `prim_diff_decode.sv` → blocks `prim_alert_sender` → blocks most OpenTitan IPs
-   - Unit test: `test/Conversion/MooreToCore/nested-control-flow-bug.sv`
-6. **AVIP Regression** - Only 1/10 AVIPs compile (was claimed 8/10)
-   - bind/vif conflicts, UVM method signatures, InOut interface ports
+5. ~~**Moore-to-Core Control Flow**~~: ✅ FIXED (Iter 189) - Mem2Reg deduplication fix
+6. ~~**SignalValue 64-bit limit**~~: ✅ FIXED (Iter 189) - APInt upgrade
+
+**Features to Build Next (Priority Order)**:
+1. **Full OpenTitan IP simulation** - Test GPIO, UART, SPI with alerts now that prim_diff_decode fixed
+2. **More crypto IPs** - Add keymgr_reg_top, otbn_reg_top to expand coverage (targeting 12+ IPs)
+3. **Virtual method dispatch** - Improve class method inlining for UVM patterns
+4. **Clocking blocks** - Chapter 14 at 0% pass rate
 
 **New in Iteration 180**:
 - ✅ slang upgraded from v9.1 to v10.0
