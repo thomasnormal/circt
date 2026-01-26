@@ -348,6 +348,7 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 - `tlul` - TileLink-UL adapters (VALIDATED)
 - `prim_*` - Primitive modules (SIMULATES)
 - `gpio_reg_top` - Register block only (SIMULATES via gpio_no_alerts)
+- `uart_reg_top` - UART register block (COMPILES - 4 modules)
 
 ---
 
