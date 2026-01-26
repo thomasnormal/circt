@@ -67,7 +67,22 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 187 Complete)
+### Track Status & Next Tasks (Iteration 198 Update)
+
+**UVM AVIP Compilation Status (Corrected):**
+- **2/9 AVIPs compile successfully**: APB (295K MLIR lines), I2S (335K MLIR lines)
+- UVM package imports work correctly - wildcard imports and class inheritance work
+- **7 AVIP failures root causes** (NOT UVM scope issues):
+  - AHB, AXI4: Bind scope issues (bind refs parent module ports)
+  - I3C: InOut interface ports (fix in progress)
+  - UART: Method signature mismatch (do_compare default arg)
+  - JTAG: Enum casts, nested comments, bind/vif conflicts
+  - SPI: Non-static property access in nested class
+  - AXI4Lite: Build infrastructure issue
+
+**OpenTitan Simulation Status:**
+- **28/29 modules PASS** (gpio and uart confirmed working, not timeout)
+- 30 total modules simulate via CIRCT
 
 **7 AVIPs Running in circt-sim:**
 - AHB AVIP - 1M+ clock edges

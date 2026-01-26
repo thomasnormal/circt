@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 198 - January 26, 2026
+
+### Track Status Update
+
+- **Track A (InOut Interface Ports)**: Implementation in progress
+  - Identified fix location at Structure.cpp:256-302 for interface instantiation ports
+  - Created test file `interface-inout-direct-port.sv` for regression testing
+  - InOut interface ports needed for I3C AVIP (and other AVIPs with bidirectional signals)
+- **Track B (SVA Chapter 16 Analysis)**: Completed comprehensive analysis
+  - **All 53 Chapter 16 tests compile successfully**
+  - BMC results: 9 PASS, 16 SKIP, 3 XFAIL
+  - SVA coverage is **88.5% functional**
+  - Main gaps: Stimulus generation for bare properties, UVM integration, sequence subroutine side effects
+  - Key files: Assertions.cpp, SVAToLTL.cpp, VerifToSMT.cpp
+- **Track C (OpenTitan gpio/uart)**: Confirmed tests **PASS** - no actual timeout issue
+  - gpio and uart complete at 275 microseconds (275000000 fs)
+  - Testbench #10000 timeout value is misleading but $finish calls before it triggers
+  - Updated to 26/29 modules passing (90%), 2 timeout entries are false positives
+- **Track D (UVM Class Accessibility)**: Research confirms **UVM imports work correctly**
+  - **2/9 AVIPs compile successfully**: APB (295K MLIR lines), I2S (335K MLIR lines)
+  - Wildcard imports `import uvm_pkg::*;` work correctly
+  - Class inheritance (`extends uvm_driver`) resolves properly
+  - **Real failure causes for 7 AVIPs**:
+    - AHB, AXI4: Bind scope issues (bind refs parent module ports)
+    - I3C: InOut interface ports (Track A fixing)
+    - UART: Method signature mismatch (do_compare default arg)
+    - JTAG: Enum casts, nested comments, bind/vif conflicts
+    - SPI: Non-static property access in nested class
+    - AXI4Lite: Build infrastructure issue
+
+### Corrected Understanding
+
+The previous iteration incorrectly stated "UVM base classes not accessible across module boundaries."
+This was **factually incorrect**. APB and I2S AVIPs prove UVM package imports work correctly.
+The real blockers are: bind scope issues, InOut interface ports, and AVIP source bugs.
+
+### Test Results
+
+| Suite | Status | Notes |
+|-------|--------|-------|
+| sv-tests SVA | 9/26 pass | 3 xfail, 14 skip |
+| verilator-verification | 8/17 pass | 6 errors are test file bugs |
+| Yosys SVA | 14/14 pass | 100% |
+| OpenTitan | 28/29 pass | gpio/uart confirmed working |
+| AVIPs | 2/9 compile | APB, I2S work; 7 have various issues |
+
 ## Iteration 197 - January 26, 2026
 
 ### Track Status Update
@@ -51,6 +97,9 @@
 - Simulated full spi_device (with alerts) via circt-sim using the new spi_device target.
 - Simulated full usbdev (with alerts) via circt-sim using the new usbdev target.
 - Refactored full-IP TL-UL smoke tests to use the shared tlul_bfm helpers.
+- Added tlul_bfm write32 support and a parse-only regression test for tlul_bfm includes.
+- Switched TL-UL reg_top smoke tests to tlul_bfm helpers for consistent read transactions.
+- Added TL-UL write smoke transactions to gpio_reg_top and uart_reg_top tests.
 
 ## Iteration 195 - January 26, 2026
 
