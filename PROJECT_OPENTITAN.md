@@ -17,11 +17,11 @@ Simulate OpenTitan primitive modules, IP blocks, and eventually UVM testbenches 
 | 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN, entropy_src, edn, kmac, ascon) | **9 crypto IPs SIMULATE** |
 | 6 | Integration (Multiple IPs) | Not Started |
 
-**Summary**: 34 OpenTitan modules now simulate via CIRCT:
+**Summary**: 36 OpenTitan modules now simulate via CIRCT:
 - Communication: **gpio (full)**, **uart (full)**, **i2c (full)**, **spi_host (full)**, **spi_device (full)**, **usbdev (full)** (dual clock)
 - Timers: aon_timer, pwm, rv_timer, timer_core (full logic!)
 - Crypto: hmac, aes, csrng, keymgr, keymgr_dpe (full), otbn, entropy_src, edn, kmac, **ascon (full)**
-- Security: otp_ctrl, **lc_ctrl**, **flash_ctrl**
+- Security: otp_ctrl, **lc_ctrl**, **flash_ctrl**, **alert_handler (full)**, alert_handler_reg_top
 - Misc: dma (full), mbx (full), pattgen, rom_ctrl_regs, sram_ctrl_regs, sysrst_ctrl
 
 **Former Blocker (fixed)**: prim_diff_decode.sv control-flow lowering bug in Mem2Reg (prim_alert_sender now unblocked)
@@ -354,6 +354,8 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **alert_handler_reg_top SIMULATES!** TL-UL smoke test passes with shadowed reset; 235 ops, 128 signals, 22 processes. |
+| 2026-01-26 | **alert_handler full IP SIMULATES!** EDN/alert/esc stub TB passes basic TL-UL connectivity; 276 ops, 265 signals, 36 processes. |
 | 2026-01-26 | **LowerConcatRef read support added**: concat_ref reads now lower to moore.concat of reads, intended to unblock rv_dm compound concat assignments (requires rebuild). |
 | 2026-01-26 | **rv_dm blocked (compiler crash)**: circt-verilog aborts in `dm_csrs.sv` on `{dmcontrol_d.hartselhi, dmcontrol_d.hartsello} &= (2**$clog2(NrHarts))-1;` (moore.concat_ref crash). |
 | 2026-01-26 | **KeyMgr DPE full IP SIMULATES!** Added keymgr_dpe full-IP testbench + filelist (EDN/KMAC/OTP/ROM stubs). Basic TL-UL connectivity works with stubbed interfaces. |

@@ -139,6 +139,11 @@ static cl::opt<bool> allowMultiClock(
     cl::desc("Allow multiple explicit clock inputs by interleaving toggles"),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> pruneUnreachableSymbols(
+    "prune-unreachable-symbols",
+    cl::desc("Prune symbols not reachable from the entry module"),
+    cl::init(true), cl::cat(mainCategory));
+
 #ifdef CIRCT_BMC_ENABLE_JIT
 
 enum OutputFormat { OutputMLIR, OutputLLVM, OutputSMTLIB, OutputRunJIT };
@@ -287,6 +292,12 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
   pm.addPass(createSimpleCanonicalizerPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+
+  if (pruneUnreachableSymbols) {
+    StripUnreachableSymbolsOptions pruneOptions;
+    pruneOptions.entrySymbol = moduleName;
+    pm.addPass(createStripUnreachableSymbols(pruneOptions));
+  }
 
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB) {
     LowerSMTToZ3LLVMOptions options;

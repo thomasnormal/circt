@@ -15,6 +15,7 @@ usage() {
   echo "  uart_reg_top       - UART register block"
   echo "  uart               - Full UART IP with alerts"
   echo "  pattgen_reg_top    - Pattgen register block"
+  echo "  alert_handler_reg_top - Alert Handler register block"
   echo "  i2c                - Full I2C IP with alerts"
   echo "  rom_ctrl_regs_reg_top - ROM Controller register block"
   echo "  sram_ctrl_regs_reg_top - SRAM Controller register block"
@@ -46,6 +47,7 @@ usage() {
   echo ""
   echo "Targets (Full IP Logic - Experimental):"
   echo "  ascon              - Full Ascon IP with alerts (EDN/keymgr/lc stubs)"
+  echo "  alert_handler      - Full Alert Handler IP with alerts/esc/edn"
   echo "  mbx                - Full Mailbox IP with alerts (multi-port TL-UL)"
   echo "  rv_dm              - Full RISC-V Debug Module IP with alerts"
   echo "  timer_core         - RISC-V timer core logic (crashes on 64-bit values)"
@@ -103,6 +105,7 @@ TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
 TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
 TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
 GPIO_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/gpio/rtl"
+ALERT_HANDLER_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/alert_handler/rtl"
 UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
 PATTGEN_RTL="$OPENTITAN_DIR/hw/ip/pattgen/rtl"
 ROM_CTRL_RTL="$OPENTITAN_DIR/hw/ip/rom_ctrl/rtl"
@@ -1429,6 +1432,235 @@ module pattgen_reg_top_tb;
   // Timeout
   initial begin
     #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
+    alert_handler_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for alert_handler_reg_top (TileLink-UL interface)
+// Exercises reset and a basic TL-UL read/write.
+
+`include "prim_assert.sv"
+`include "tlul_bfm.sv"
+
+module alert_handler_reg_top_tb;
+  import tlul_pkg::*;
+  import tlul_bfm_pkg::*;
+  import alert_handler_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+  logic rst_shadowed_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+  logic [31:0] tlul_rdata;
+  logic tlul_err;
+
+  // Register interfaces
+  alert_handler_reg2hw_t reg2hw;
+  alert_handler_hw2reg_t hw2reg;
+
+  // Integrity/shadow errors
+  logic shadowed_storage_err_o;
+  logic shadowed_update_err_o;
+  logic intg_err_o;
+
+  alert_handler_reg_top dut (
+    .clk_i,
+    .rst_ni,
+    .rst_shadowed_ni,
+    .tl_i,
+    .tl_o,
+    .reg2hw,
+    .hw2reg,
+    .shadowed_storage_err_o(),
+    .shadowed_update_err_o(),
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tlul_init(tl_i);
+    hw2reg = '0;
+  end
+
+  initial begin
+    $display("Starting alert_handler_reg_top test...");
+
+    // Reset
+    rst_ni = 0;
+    rst_shadowed_ni = 0;
+    #20;
+    rst_ni = 1;
+    rst_shadowed_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    tlul_read32(clk_i, tl_i, tl_o, 32'(ALERT_HANDLER_INTR_STATE_OFFSET), tlul_rdata);
+    $display("Got TL response: data = 0x%08x", tlul_rdata);
+
+    tlul_write32(clk_i, tl_i, tl_o, 32'(ALERT_HANDLER_INTR_ENABLE_OFFSET),
+                 32'h0, 4'hF, tlul_err);
+    $display("Got TL write response: err = %b", tlul_err);
+
+    repeat(5) @(posedge clk_i);
+
+    $display("TEST PASSED: alert_handler_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
+    alert_handler)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for full alert_handler IP
+// Exercises reset, EDN handshake stub, and a basic TL-UL read/write.
+
+`include "prim_assert.sv"
+`include "tlul_bfm.sv"
+
+module alert_handler_tb;
+  import tlul_pkg::*;
+  import tlul_bfm_pkg::*;
+  import prim_alert_pkg::*;
+  import prim_esc_pkg::*;
+  import prim_mubi_pkg::*;
+  import edn_pkg::*;
+  import alert_handler_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+  logic rst_shadowed_ni = 0;
+  logic clk_edn_i = 0;
+  logic rst_edn_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+  logic [31:0] tlul_rdata;
+  logic tlul_err;
+
+  // Interrupts
+  logic intr_classa_o;
+  logic intr_classb_o;
+  logic intr_classc_o;
+  logic intr_classd_o;
+
+  // Low power group control
+  prim_mubi_pkg::mubi4_t [NLpg-1:0] lpg_cg_en_i;
+  prim_mubi_pkg::mubi4_t [NLpg-1:0] lpg_rst_en_i;
+
+  // Crashdump
+  alert_crashdump_t crashdump_o;
+
+  // EDN interface
+  edn_req_t edn_o;
+  edn_rsp_t edn_i;
+
+  // Alert/esc interfaces
+  prim_alert_pkg::alert_tx_t [NAlerts-1:0] alert_tx_i;
+  prim_alert_pkg::alert_rx_t [NAlerts-1:0] alert_rx_o;
+  prim_esc_pkg::esc_rx_t [N_ESC_SEV-1:0] esc_rx_i;
+  prim_esc_pkg::esc_tx_t [N_ESC_SEV-1:0] esc_tx_o;
+
+  alert_handler dut (
+    .clk_i,
+    .rst_ni,
+    .rst_shadowed_ni,
+    .clk_edn_i,
+    .rst_edn_ni,
+    .tl_i,
+    .tl_o,
+    .intr_classa_o,
+    .intr_classb_o,
+    .intr_classc_o,
+    .intr_classd_o,
+    .lpg_cg_en_i,
+    .lpg_rst_en_i,
+    .crashdump_o,
+    .edn_o,
+    .edn_i,
+    .alert_tx_i,
+    .alert_rx_o,
+    .esc_rx_i,
+    .esc_tx_o
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+  always #7 clk_edn_i = ~clk_edn_i;
+
+  // Initialize interfaces
+  initial begin
+    tlul_init(tl_i);
+    lpg_cg_en_i = '{default: MuBi4True};
+    lpg_rst_en_i = '{default: MuBi4True};
+    alert_tx_i = '{default: ALERT_TX_DEFAULT};
+    esc_rx_i = '{default: ESC_RX_DEFAULT};
+    edn_i = EDN_RSP_DEFAULT;
+  end
+
+  // Simple EDN responder: ack every request with fixed data.
+  always_comb begin
+    edn_i = EDN_RSP_DEFAULT;
+    edn_i.edn_ack = edn_o.edn_req;
+    edn_i.edn_bus = 32'h1234abcd;
+    edn_i.edn_fips = 1'b0;
+  end
+
+  initial begin
+    $display("Starting alert_handler full IP test...");
+
+    // Reset
+    rst_ni = 0;
+    rst_shadowed_ni = 0;
+    rst_edn_ni = 0;
+    #20;
+    rst_ni = 1;
+    rst_shadowed_ni = 1;
+    rst_edn_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    tlul_read32(clk_i, tl_i, tl_o,
+                32'(alert_handler_reg_pkg::ALERT_HANDLER_INTR_STATE_OFFSET), tlul_rdata);
+    $display("Got TL response: data = 0x%08x", tlul_rdata);
+
+    tlul_write32(clk_i, tl_i, tl_o,
+                 32'(alert_handler_reg_pkg::ALERT_HANDLER_INTR_ENABLE_OFFSET),
+                 32'h0, 4'hF, tlul_err);
+    $display("Got TL write response: err = %b", tlul_err);
+
+    repeat(10) @(posedge clk_i);
+
+    $display("TEST PASSED: alert_handler full IP basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #20000;
     $display("TEST TIMEOUT");
     $finish;
   end
@@ -4753,6 +4985,124 @@ get_files_for_target() {
       echo "$PATTGEN_RTL/pattgen_reg_pkg.sv"
       echo "$PATTGEN_RTL/pattgen_reg_top.sv"
       ;;
+    alert_handler_reg_top)
+      # Package dependencies (same as uart_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Alert handler register block
+      echo "$ALERT_HANDLER_RTL/alert_handler_reg_pkg.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_reg_top.sv"
+      ;;
+    alert_handler)
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$PRIM_RTL/prim_esc_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      # EDN/CSRNG packages
+      echo "$ENTROPY_SRC_RTL/entropy_src_pkg.sv"
+      echo "$CSRNG_RTL/csrng_reg_pkg.sv"
+      echo "$CSRNG_RTL/csrng_pkg.sv"
+      echo "$EDN_RTL/edn_pkg.sv"
+      # Alert handler packages
+      echo "$ALERT_HANDLER_RTL/alert_handler_reg_pkg.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      echo "$PRIM_RTL/prim_mubi4_sync.sv"
+      echo "$PRIM_RTL/prim_flop_macros.sv"
+      echo "$PRIM_RTL/prim_sparse_fsm_flop.sv"
+      echo "$PRIM_RTL/prim_lfsr.sv"
+      # Security anchor primitives
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      # Differential decode and alert/esc primitives
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_alert_receiver.sv"
+      echo "$PRIM_RTL/prim_esc_sender.sv"
+      echo "$PRIM_GENERIC_RTL/prim_xnor2.sv"
+      echo "$PRIM_GENERIC_RTL/prim_xor2.sv"
+      # Counters and LFSR
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_double_lfsr.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # EDN helper primitives
+      echo "$PRIM_RTL/prim_sync_reqack.sv"
+      echo "$PRIM_RTL/prim_sync_reqack_data.sv"
+      echo "$PRIM_RTL/prim_packer_fifo.sv"
+      echo "$PRIM_RTL/prim_edn_req.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Alert handler IP
+      echo "$ALERT_HANDLER_RTL/alert_handler_reg_top.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_reg_wrap.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_accu.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_class.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_esc_timer.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_lpg_ctrl.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler_ping_timer.sv"
+      echo "$ALERT_HANDLER_RTL/alert_handler.sv"
+      ;;
     rom_ctrl_regs_reg_top)
       # Package dependencies (same as uart_reg_top)
       echo "$PRIM_RTL/prim_util_pkg.sv"
@@ -6108,6 +6458,12 @@ elif [[ "$TARGET" == "usbdev" ]]; then
 elif [[ "$TARGET" == "dma" ]]; then
   # Explicit top module to avoid picking internal DMA submodules.
   EXTRA_FLAGS+=("--top=dma_tb")
+elif [[ "$TARGET" == "alert_handler_reg_top" ]]; then
+  # Explicit top module to avoid picking internal alert_handler reg submodules.
+  EXTRA_FLAGS+=("--top=alert_handler_reg_top_tb")
+elif [[ "$TARGET" == "alert_handler" ]]; then
+  # Explicit top module to avoid picking internal alert_handler submodules.
+  EXTRA_FLAGS+=("--top=alert_handler_tb")
 elif [[ "$TARGET" == "mbx" ]]; then
   # Explicit top module to avoid picking internal mailbox submodules.
   EXTRA_FLAGS+=("--top=mbx_tb")
@@ -6213,6 +6569,10 @@ elif [[ "$TARGET" == "ascon" ]]; then
   SIM_TOP="ascon_tb"
 elif [[ "$TARGET" == "dma" ]]; then
   SIM_TOP="dma_tb"
+elif [[ "$TARGET" == "alert_handler_reg_top" ]]; then
+  SIM_TOP="alert_handler_reg_top_tb"
+elif [[ "$TARGET" == "alert_handler" ]]; then
+  SIM_TOP="alert_handler_tb"
 elif [[ "$TARGET" == "mbx" ]]; then
   SIM_TOP="mbx_tb"
 elif [[ "$TARGET" == "keymgr_dpe" ]]; then

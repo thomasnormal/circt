@@ -897,18 +897,6 @@ struct LogicEquivalenceCheckingOpConversion
 
     auto hasNoResult = op.getNumResults() == 0;
 
-    if (firstOutputs->getNumOperands() == 0) {
-      // Trivially equivalent
-      if (hasNoResult) {
-        rewriter.eraseOp(op);
-      } else {
-        Value trueVal = arith::ConstantOp::create(rewriter, loc,
-                                                  rewriter.getBoolAttr(true));
-        rewriter.replaceOp(op, trueVal);
-      }
-      return success();
-    }
-
     // Solver will only return a result when it is used to check the returned
     // value.
     smt::SolverOp solver;
@@ -954,10 +942,13 @@ struct LogicEquivalenceCheckingOpConversion
     rewriter.eraseOp(secondOutputs);
 
     Value toAssert;
-    if (outputsDifferent.size() == 1)
+    if (outputsDifferent.empty()) {
+      toAssert = smt::BoolConstantOp::create(rewriter, loc, false);
+    } else if (outputsDifferent.size() == 1) {
       toAssert = outputsDifferent[0];
-    else
+    } else {
       toAssert = smt::OrOp::create(rewriter, loc, outputsDifferent);
+    }
 
     smt::AssertOp::create(rewriter, loc, toAssert);
 
