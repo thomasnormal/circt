@@ -26,8 +26,12 @@ usage() {
   echo "  hmac_reg_top       - HMAC crypto register block (with FIFO window)"
   echo "  aes_reg_top        - AES crypto register block (shadowed registers)"
   echo "  csrng_reg_top      - CSRNG crypto register block (random number generator)"
+  echo "  edn_reg_top        - EDN crypto register block (entropy distribution network)"
   echo "  keymgr_reg_top     - Key Manager crypto register block (shadowed registers)"
+  echo "  kmac_reg_top       - KMAC crypto register block (Keccak MAC with windows)"
   echo "  otbn_reg_top       - OTBN crypto register block (big number accelerator)"
+  echo "  otp_ctrl_reg_top   - OTP Controller register block (with window interface)"
+  echo "  entropy_src_reg_top - Entropy Source crypto register block (hardware RNG)"
   echo ""
   echo "Targets (Full IP - Working):"
   echo "  rv_timer_full      - Full rv_timer IP with alerts"
@@ -87,6 +91,10 @@ GPIO_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/gpio/rtl"
 # Additional OpenTitan paths
 UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
 CSRNG_RTL="$OPENTITAN_DIR/hw/ip/csrng/rtl"
+EDN_RTL="$OPENTITAN_DIR/hw/ip/edn/rtl"
+OTP_CTRL_RTL="$OPENTITAN_DIR/hw/ip/otp_ctrl/rtl"
+OTP_CTRL_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/otp_ctrl/rtl"
+ENTROPY_SRC_RTL="$OPENTITAN_DIR/hw/ip/entropy_src/rtl"
 
 # Base include paths
 INCLUDES=(
@@ -98,6 +106,10 @@ INCLUDES=(
   "-I" "$GPIO_AUTOGEN_RTL"
   "-I" "$UART_RTL"
   "-I" "$CSRNG_RTL"
+  "-I" "$EDN_RTL"
+  "-I" "$OTP_CTRL_RTL"
+  "-I" "$OTP_CTRL_AUTOGEN_RTL"
+  "-I" "$ENTROPY_SRC_RTL"
 )
 
 # Defines for assertion handling
@@ -701,6 +713,51 @@ get_files_for_target() {
       echo "$CSRNG_RTL/csrng_reg_pkg.sv"
       echo "$CSRNG_RTL/csrng_reg_top.sv"
       ;;
+    edn_reg_top)
+      # EDN register block (crypto IP - Entropy Distribution Network)
+      local EDN_RTL="$OPENTITAN_DIR/hw/ip/edn/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # EDN packages
+      echo "$EDN_RTL/edn_reg_pkg.sv"
+      echo "$EDN_RTL/edn_reg_top.sv"
+      ;;
     keymgr_reg_top)
       # Key Manager register block (crypto IP with shadowed registers)
       local KEYMGR_RTL="$OPENTITAN_DIR/hw/ip/keymgr/rtl"
@@ -745,6 +802,60 @@ get_files_for_target() {
       # Key Manager packages
       echo "$KEYMGR_RTL/keymgr_reg_pkg.sv"
       echo "$KEYMGR_RTL/keymgr_reg_top.sv"
+      ;;
+    kmac_reg_top)
+      # KMAC register block (crypto IP - Keccak Message Authentication Code)
+      # Features: shadowed registers, 2 window interfaces for message FIFO and state
+      local KMAC_RTL="$OPENTITAN_DIR/hw/ip/kmac/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket for window interface (KMAC has 2 windows)
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # KMAC packages
+      echo "$KMAC_RTL/kmac_reg_pkg.sv"
+      echo "$KMAC_RTL/kmac_reg_top.sv"
       ;;
     otbn_reg_top)
       # OTBN register block (crypto IP - Big Number Accelerator with window interface)
@@ -798,6 +909,116 @@ get_files_for_target() {
       # OTBN packages
       echo "$OTBN_RTL/otbn_reg_pkg.sv"
       echo "$OTBN_RTL/otbn_reg_top.sv"
+      ;;
+    entropy_src_reg_top)
+      # Entropy Source register block (crypto IP - Hardware Random Number Generator)
+      local ENTROPY_SRC_RTL="$OPENTITAN_DIR/hw/ip/entropy_src/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Entropy Source packages
+      echo "$ENTROPY_SRC_RTL/entropy_src_reg_pkg.sv"
+      echo "$ENTROPY_SRC_RTL/entropy_src_reg_top.sv"
+      ;;
+    otp_ctrl_reg_top)
+      # OTP Controller register block (with window interface)
+      # Note: Uses otp_ctrl_core_reg_top from autogenerated files
+      local OTP_CTRL_RTL="$OPENTITAN_DIR/hw/ip/otp_ctrl/rtl"
+      local OTP_CTRL_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/otp_ctrl/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # LC Controller packages (needed by otp_ctrl_pkg)
+      local LC_CTRL_RTL="$OPENTITAN_DIR/hw/ip/lc_ctrl/rtl"
+      echo "$LC_CTRL_RTL/lc_ctrl_reg_pkg.sv"
+      echo "$LC_CTRL_RTL/lc_ctrl_state_pkg.sv"
+      echo "$LC_CTRL_RTL/lc_ctrl_pkg.sv"
+      # OTP controller packages (needed before reg_top)
+      echo "$OTP_CTRL_RTL/otp_ctrl_pkg.sv"
+      echo "$OTP_CTRL_AUTOGEN_RTL/otp_ctrl_macro_pkg.sv"
+      echo "$OTP_CTRL_AUTOGEN_RTL/otp_ctrl_reg_pkg.sv"
+      echo "$OTP_CTRL_AUTOGEN_RTL/otp_ctrl_part_pkg.sv"
+      echo "$OTP_CTRL_AUTOGEN_RTL/otp_ctrl_top_specific_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket for window interface
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # OTP Controller core register top
+      echo "$OTP_CTRL_AUTOGEN_RTL/otp_ctrl_core_reg_top.sv"
       ;;
     rv_timer_full)
       # RV Timer full IP (register block + timer_core + alerts)

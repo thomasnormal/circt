@@ -14,13 +14,14 @@ Simulate OpenTitan primitive modules, IP blocks, and eventually UVM testbenches 
 | 2 | Simple IP (GPIO RTL) | **gpio_no_alerts SIMULATES** - Full GPIO blocked by prim_diff_decode |
 | 3 | Protocol Infrastructure (TileLink-UL) | **VALIDATED** (via gpio_no_alerts) |
 | 4 | DV Infrastructure (UVM Testbenches) | Not Started |
-| 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN) | **5 crypto IPs SIMULATE** |
+| 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN, entropy_src, edn, kmac) | **8 crypto IPs SIMULATE** |
 | 6 | Integration (Multiple IPs) | Not Started |
 
-**Summary**: 13 OpenTitan modules now simulate via CIRCT:
+**Summary**: 17 OpenTitan modules now simulate via CIRCT:
 - Communication: gpio, uart, spi_host, i2c
 - Timers: aon_timer, pwm, rv_timer, **timer_core** (full logic!)
-- Crypto: hmac, aes, csrng, **keymgr**, **otbn**
+- Crypto: hmac, aes, csrng, keymgr, otbn, **entropy_src**, **edn**, **kmac**
+- Security: **otp_ctrl** (register block with window interface)
 
 **Blocker for Full IPs**: prim_diff_decode.sv control-flow lowering bug prevents prim_alert_sender
 
@@ -331,6 +332,7 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **4 more crypto IPs SIMULATE!** 17 OpenTitan modules now. entropy_src_reg_top (173 ops, 73 signals), edn_reg_top (173 ops, 63 signals), kmac_reg_top (215 ops, 135 signals, 2 windows), otp_ctrl_reg_top (175 ops, 52 signals, required lc_ctrl deps) |
 | 2026-01-26 | **keymgr_reg_top + otbn_reg_top SIMULATE!** 5 crypto IPs now! 13 OpenTitan modules total. keymgr (212 ops, 111 signals) with shadowed registers for key protection. otbn (176 ops, 58 signals) with window interfaces for Big Number accelerator |
 | 2026-01-26 | **csrng_reg_top SIMULATES!** Third crypto IP! 10 OpenTitan register blocks now working! CSRNG testbench runs - 173 ops, 66 signals, 12 processes. Cryptographic secure random number generator |
 | 2026-01-26 | **aes_reg_top SIMULATES!** Second crypto IP! 9 OpenTitan register blocks now working! AES testbench runs - 212 ops, 86 signals, 14 processes. Shadowed registers for security |
@@ -383,6 +385,10 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 - `csrng_reg_top` - CSRNG crypto register block (**SIMULATES** - 173 ops, 66 signals, random number generator)
 - `keymgr_reg_top` - Key Manager crypto register block (**SIMULATES** - 212 ops, 111 signals, with shadowed registers)
 - `otbn_reg_top` - OTBN Big Number crypto register block (**SIMULATES** - 176 ops, 58 signals, with window interfaces)
+- `entropy_src_reg_top` - Entropy Source crypto register block (**SIMULATES** - 173 ops, 73 signals, hardware RNG)
+- `edn_reg_top` - Entropy Distribution Network register block (**SIMULATES** - 173 ops, 63 signals, entropy distribution)
+- `kmac_reg_top` - Keccak MAC crypto register block (**SIMULATES** - 215 ops, 135 signals, 2 window interfaces, shadowed registers)
+- `otp_ctrl_reg_top` - OTP Controller register block (**SIMULATES** - 175 ops, 52 signals, window interface, lifecycle controller deps)
 
 ---
 
@@ -435,5 +441,6 @@ Cannot lower to HW dialect due to prim_diff_decode control-flow bug in prim_aler
 1. **64-bit APInt bug FIXED**: SignalValue upgraded to llvm::APInt (commit f0c40886a) - timer_core simulates!
 2. **Fix prim_diff_decode bug**: File CIRCT issue with minimal reproducer
 3. ~~**Try more crypto IPs**: otbn_reg_top, keymgr_reg_top~~ **DONE** - All 5 crypto IPs (hmac, aes, csrng, keymgr, otbn) now simulate!
-4. **Phase 4 planning**: Investigate DV environment requirements
-5. **Explore more IPs**: entropy_src, edn, kmac, otp_ctrl register blocks
+4. ~~**Explore more IPs**: entropy_src, edn, kmac, otp_ctrl register blocks~~ **DONE** - All 4 compile and simulate! 17 modules total
+5. **Phase 4 planning**: Investigate DV environment requirements
+6. **Explore more IPs**: adc_ctrl, ascon, dma, flash_ctrl, lc_ctrl, mbx, pattgen, rom_ctrl, rv_dm, spi_device, sram_ctrl, sysrst_ctrl, usbdev
