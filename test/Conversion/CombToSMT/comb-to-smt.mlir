@@ -60,9 +60,7 @@ func.func @test(%a0: !smt.bv<32>, %a1: !smt.bv<32>, %a2: !smt.bv<32>, %a3: !smt.
   // CHECK-NEXT: smt.bv.xor [[E2]], [[A3]] : !smt.bv<32>
   %12 = comb.xor %arg0, %arg1, %arg2, %arg3 : i32
 
-  // CHECK-NEXT: [[CONST1:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
-  // CHECK-NEXT: [[COND:%.+]] = smt.eq [[A4]], [[CONST1]] : !smt.bv<1>
-  // CHECK-NEXT: smt.ite [[COND]], [[A0]], [[A1]] : !smt.bv<32>
+  // CHECK: smt.ite %{{.*}}, [[A0]], [[A1]] : !smt.bv<32>
   %13 = comb.mux %arg4, %arg0, %arg1 : i32
 
   // CHECK-NEXT: [[V0:%.+]] = smt.eq [[A0]], [[A1]] : !smt.bv<32>

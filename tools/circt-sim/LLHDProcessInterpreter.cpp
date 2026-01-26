@@ -3491,6 +3491,23 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     }
   }
 
+  // Handle case 3: No delay AND no observed signals (always @(*) semantics)
+  // This represents a wait that should resume on the next delta cycle when
+  // ANY signal changes. For now, we implement this as immediate delta-step
+  // resumption to prevent the process from hanging forever.
+  if (!waitOp.getDelay() && waitOp.getObserved().empty()) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Wait with no delay and no signals - scheduling "
+                  "immediate delta-step resumption (always @(*) semantics)\n");
+
+    // Schedule the process to resume on the next delta cycle.
+    // This ensures the process doesn't hang and implements @(*) behavior
+    // where the process re-evaluates on every delta cycle.
+    scheduler.getEventScheduler().scheduleNextDelta(
+        SchedulingRegion::Active,
+        Event([this, procId]() { resumeProcess(procId); }));
+  }
+
   return success();
 }
 

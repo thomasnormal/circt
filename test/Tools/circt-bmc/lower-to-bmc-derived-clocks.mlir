@@ -1,4 +1,4 @@
-// RUN: circt-opt --lower-to-bmc="top-module=derived2 bound=4" %s | FileCheck %s
+// RUN: circt-opt --lower-to-bmc="top-module=derived2 bound=4 allow-multi-clock=true" %s | FileCheck %s
 
 // CHECK: verif.bmc
 // CHECK: ^bb0([[CLK:%.+]]: !seq.clock, [[CLK_A:%.+]]: i1, [[CLK_B:%.+]]: i1):
