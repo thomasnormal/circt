@@ -13,10 +13,11 @@ usage() {
   echo "  prim_fifo_sync_cnt - FIFO counter logic"
   echo "  prim_fifo_sync     - Synchronous FIFO"
   echo ""
-  echo "Targets (Phase 2 - GPIO IP):"
+  echo "Targets (Phase 2 - Peripheral IPs):"
   echo "  tlul_pkg           - TileLink-UL package with dependencies"
   echo "  gpio               - GPIO IP (earlgrey autogen version)"
   echo "  gpio_no_alerts     - GPIO subset without alerts (for HW lowering test)"
+  echo "  uart_reg_top       - UART register block (no alerts)"
   echo ""
   echo "Targets (Phase 3 - TileLink Protocol):"
   echo "  tlul               - TileLink-UL adapter modules"
@@ -66,6 +67,9 @@ TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
 TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
 GPIO_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/gpio/rtl"
 
+# Additional OpenTitan paths
+UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
+
 # Base include paths
 INCLUDES=(
   "-I" "$PRIM_RTL"
@@ -74,6 +78,7 @@ INCLUDES=(
   "-I" "$TOP_RTL"
   "-I" "$TOP_AUTOGEN"
   "-I" "$GPIO_AUTOGEN_RTL"
+  "-I" "$UART_RTL"
 )
 
 # Defines for assertion handling
@@ -242,6 +247,51 @@ get_files_for_target() {
       echo "$GPIO_RTL/gpio_reg_pkg.sv"
       echo "$GPIO_RTL/gpio_reg_top.sv"
       # Note: gpio.sv requires prim_alert_sender which requires prim_diff_decode
+      ;;
+    uart_reg_top)
+      # UART register block (similar structure to GPIO)
+      local UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as gpio_no_alerts)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # UART packages
+      echo "$UART_RTL/uart_reg_pkg.sv"
+      echo "$UART_RTL/uart_reg_top.sv"
       ;;
     tlul)
       # Phase 3: TileLink-UL protocol modules
