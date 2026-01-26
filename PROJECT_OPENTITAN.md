@@ -322,6 +322,7 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **i2c_reg_top SIMULATES!** i2c_reg_top testbench runs - 175 ops, 68 signals, 13 processes. 4 communication protocol register blocks now working |
 | 2026-01-26 | **spi_host_reg_top SIMULATES!** spi_host_reg_top testbench runs - 178 ops, 67 signals, 16 processes. TL-UL with tlul_socket_1n router works end-to-end |
 | 2026-01-26 | **uart_reg_top SIMULATES!** uart_reg_top testbench runs - 175 ops, 56 signals, 13 processes. TileLink-UL UART register block works end-to-end |
 | 2026-01-26 | **gpio_reg_top SIMULATES!** gpio_no_alerts testbench runs successfully - 177 ops, 47 signals, 13 processes. TileLink-UL register block works end-to-end |
@@ -350,9 +351,10 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 - `tlul` - TileLink-UL adapters (VALIDATED)
 - `tlul_socket_1n` - TL-UL router (**SIMULATES** via spi_host_reg_top)
 - `prim_*` - Primitive modules (SIMULATES)
-- `gpio_reg_top` - Register block only (**SIMULATES** via gpio_no_alerts)
+- `gpio_reg_top` - Register block only (**SIMULATES** via gpio_no_alerts - 177 ops, 47 signals)
 - `uart_reg_top` - UART register block (**SIMULATES** - 175 ops, 56 signals)
 - `spi_host_reg_top` - SPI Host register block (**SIMULATES** - 178 ops, 67 signals)
+- `i2c_reg_top` - I2C register block (**SIMULATES** - 175 ops, 68 signals)
 
 ---
 
