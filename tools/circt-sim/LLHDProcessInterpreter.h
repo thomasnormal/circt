@@ -294,6 +294,19 @@ private:
   /// These drives need to re-execute when their input signals change.
   void registerContinuousAssignments(hw::HWModuleOp hwModule);
 
+  /// Register seq.firreg operations as simulated registers.
+  void registerFirRegs(hw::HWModuleOp hwModule);
+
+  /// Execute a single seq.firreg register update.
+  void executeFirReg(seq::FirRegOp regOp);
+
+  /// Resolve a signal ID from an arbitrary value.
+  SignalId resolveSignalId(mlir::Value value) const;
+
+  /// Collect signal IDs referenced by a value expression.
+  void collectSignalIds(mlir::Value value,
+                        llvm::SmallVectorImpl<SignalId> &signals) const;
+
   /// Execute a single continuous assignment (static module-level drive).
   void executeContinuousAssignment(llhd::DriveOp driveOp);
 
@@ -518,6 +531,15 @@ private:
 
   /// Static module-level drives (not connected to process results).
   llvm::SmallVector<llhd::DriveOp, 4> staticModuleDrives;
+
+  struct FirRegState {
+    SignalId signalId = 0;
+    InterpretedValue prevClock;
+    bool hasPrevClock = false;
+  };
+
+  /// Registered seq.firreg state keyed by op.
+  llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
 
   /// Callback for sim.terminate operation.
   std::function<void(bool, bool)> terminateCallback;
