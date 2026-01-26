@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 220 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Investigate infinite delta cycles in i2c_tb/alert_handler_tb
+- **Track B**: Enable more UVM XFAIL tests
+- **Track C**: Test AVIPs with extended times
+- **Track D**: Run external test suites
+
+### Track Completions
+
+- **Track A (Delta Cycles)**: 🔄 **ONGOING INVESTIGATION**
+  - i2c_tb hangs after "Starting i2c full IP test..." at time 0
+  - Both i2c_tb and spi_device_tb have prim_diff_decode, but only i2c hangs
+  - i2c_reg_top_tb (13 processes) works, i2c_tb (45 processes) does not
+
+- **Track B (UVM XFAILs)**: ✅ **ENABLED sva-assume-e2e.sv**
+  - Fixed 2 lit test failures (added prim_mubi_pkg package)
+  - Documented remaining XFAIL categories
+
+- **Track C (AVIP Testing)**: ⚠️ **100ms WORKS, 500ms FAILS**
+  - APB hdl_top with 100ms simulation time works
+  - Extended time tests fail silently with exit code 1
+
+- **Track D (External Tests)**: ✅ **ALL BASELINES MET**
+  - sv-tests: 23/26, verilator: 17/17 (100%), yosys: 14/14 (100%)
+  - Lit tests: 2842 pass, 41 XFAIL, 0 Failed
+
+### Updates
+
+- **TL-UL BFM debug logging**: Added rdata_q firreg logging for investigation
+
+---
+
 ## Iteration 219 - January 26, 2026
 
 ### Focus Areas
@@ -41,6 +75,9 @@
 - **TL-UL adapter readback**: Writes update `reg_q`, but read responses still
   return `0x0` despite `rdata_i` being correct; rdata capture path needs a
   targeted circt-sim repro.
+- **TL-UL readback investigation**: `rdata_q` goes X after write even with
+  known `a_ack`/`wr_req`/`err_internal`; `AccessLatency=1` and NBA firreg
+  scheduling did not resolve the issue.
 
 ---
 
