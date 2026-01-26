@@ -1487,6 +1487,7 @@ struct VerifBoundedModelCheckingOpConversion
       rewriter.eraseOp(opToErase);
     size_t numNonFinalChecks = nonFinalCheckValues.size();
     size_t numFinalChecks = finalCheckValues.size();
+    uint64_t boundValue = op.getBound();
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
@@ -1581,7 +1582,6 @@ struct VerifBoundedModelCheckingOpConversion
     bool delaySetupFailed = false;
 
     // First pass: collect all delay ops with meaningful temporal ranges.
-    uint64_t boundValue = op.getBound();
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
       if (delayOp.use_empty())
         return;
@@ -2084,6 +2084,13 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
+    bool checkFinalAtEnd = true;
+    if (!risingClocksOnly && clockIndexes.size() == 1 &&
+        (boundValue % 2 != 0)) {
+      // In non-rising mode, odd bounds end on a negedge; skip final-only checks.
+      checkFinalAtEnd = false;
+    }
+
     Value lowerBound =
         arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
     Value step =
@@ -2406,7 +2413,7 @@ struct VerifBoundedModelCheckingOpConversion
     // any final cover success.
     Value finalCheckViolated = constFalse;
     Value finalCoverHit = constFalse;
-    if (numFinalChecks > 0) {
+    if (numFinalChecks > 0 && checkFinalAtEnd) {
       auto results = forOp->getResults();
       size_t finalStart = results.size() - 1 - numFinalChecks;
       SmallVector<Value> finalAssertOutputs;
@@ -2636,12 +2643,10 @@ void ConvertVerifToSMTPass::runOnOperation() {
           int numCovers = 0;
           op->walk([&](Operation *curOp) {
             if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
-              if (!assertOp->hasAttr("bmc.final"))
-                numAssertions++;
+              numAssertions++;
             }
             if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
-              if (!coverOp->hasAttr("bmc.final"))
-                numCovers++;
+              numCovers++;
             }
             if (auto inst = dyn_cast<InstanceOp>(curOp))
               worklist.push_back(symbolTable.lookup(inst.getModuleName()));
@@ -2652,12 +2657,10 @@ void ConvertVerifToSMTPass::runOnOperation() {
             auto *module = worklist.pop_back_val();
             module->walk([&](Operation *curOp) {
               if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
-                if (!assertOp->hasAttr("bmc.final"))
-                  numAssertions++;
+                numAssertions++;
               }
               if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
-                if (!coverOp->hasAttr("bmc.final"))
-                  numCovers++;
+                numCovers++;
               }
               if (auto inst = dyn_cast<InstanceOp>(curOp))
                 worklist.push_back(symbolTable.lookup(inst.getModuleName()));
