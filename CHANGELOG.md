@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 204 - January 26, 2026
+
+### Track Completions
+
+- **Track A (sv-tests Script Fix)**: ✅ Fixed `run_sv_tests_circt_bmc.sh`
+  - Changed `NO_PROPERTY_AS_SKIP` default from 1 to 0
+  - Added explanatory comments about spurious warning
+  - sv-tests now reports correct 23/26 (88%) pass rate
+
+- **Track B (I3C AVIP Simulation)**: ⚠️ Interrupted (needs retry)
+
+- **Track C (OpenTitan Primitives)**: ✅ **All 4 modules PASS**
+  - `prim_arbiter_fixed` - 236 ops, 7 processes
+  - `prim_arbiter_ppc` - 174 ops, 3 processes, 1 hw.instance
+  - `prim_lfsr` - 64 ops
+  - `prim_fifo_sync` - 360 ops, 2 processes, 1 hw.instance
+  - **hw.instance continues to work** in hierarchical designs
+
+- **Track D (XFAIL Analysis)**: ✅ 3 XFAIL tests analyzed
+  - Fail due to **infrastructure limitations**, not assertion detection:
+    - 16.10 tests: SSA dominance error with local variables + delays
+    - 16.15 test: "async reset registers not yet supported"
+  - These are correctly marked XFAIL but for wrong reasons
+
+### Key Finding: Verilator Syntax Extension
+
+The 6 failing verilator-verification tests use `@posedge (clk)` syntax:
+- **Verilator**: Accepts this as a permissive extension
+- **slang**: Follows strict IEEE 1800 grammar requiring `@(posedge clk)`
+- **Action item**: Consider adding `--compat verilator` flag to slang
+
 ## Iteration 203 - January 26, 2026
 
 ### Track Completions
@@ -11,8 +42,9 @@
   - Chapter 18 is random constraints (not SVA)
 
 - **Track B (verilator-verification)**: 8/17 pass - failures categorized
-  - **6 tests fail due to non-standard syntax**: `@posedge (clk)` instead of `@(posedge clk)`
-  - This is an **upstream test bug**, NOT CIRCT limitation
+  - **6 tests use Verilator-specific syntax**: `@posedge (clk)` instead of IEEE `@(posedge clk)`
+  - Verilator accepts this extension; slang follows strict IEEE grammar
+  - **Potential fix**: Add `--compat verilator` flag to slang
   - Named sequences work correctly (confirmed)
   - 3 tests skipped (non-SVA tests)
 
@@ -27,6 +59,7 @@
   - Large FSMs work: `i2c_controller_fsm` (2293 ops, 9 processes)
   - `timer_core`, `uart_tx`, `uart_rx` all simulate
   - Blocker is compilation (deep dependency chains), not simulation
+  - Added **Ascon full IP** target with alert-enabled TB + prim_ascon_duplex wrapper
 
 ### Updated Test Suite Status
 
@@ -41,7 +74,7 @@
 | Previous Understanding | Reality |
 |------------------------|---------|
 | sv-tests at 35% pass | Actually **88%** - spurious warning |
-| verilator 6 failures = CIRCT bug | **Upstream syntax error** in tests |
+| verilator 6 failures = test bugs | **Verilator extension** - slang follows IEEE strictly |
 | hw.instance breaks simulation | **Works** for hierarchical designs |
 
 ## Iteration 202 - January 26, 2026
