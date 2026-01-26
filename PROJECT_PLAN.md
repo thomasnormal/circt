@@ -151,12 +151,29 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Next Tasks for Tracks (Iteration 118)
+### Next Tasks for Tracks (Iteration 181)
 
-**Track A**: Test AXI4 AVIP through circt-sim E2E
-**Track B**: UVM agent/driver infrastructure improvements
-**Track C**: sv-tests Chapter-9 complete ✅
-**Track D**: AXI4Lite AVIP E2E circt-sim testing
+**Track A**: OpenTitan Phase 2 - Resolve GPIO dependencies (prim_flop_2sync, secded, intr_hw)
+**Track B**: sv-tests baseline verification - run full suite, identify regressions
+**Track C**: AVIP simulation testing - verify 8+ AVIPs still run in circt-sim
+**Track D**: verilator-verification + yosys tests - maintain baselines
+
+### New: OpenTitan Simulation Support
+- **Phase 1 Complete**: prim_fifo_sync, prim_count simulate in circt-sim
+- **Phase 2 MILESTONE**: gpio_reg_top SIMULATES via gpio_no_alerts (32 modules, 177 ops)
+- **Phase 3 Validated**: TileLink-UL protocol adapters work end-to-end
+- **Blocker**: `prim_diff_decode.sv` control flow bug (unit test: `test/Conversion/MooreToCore/nested-control-flow-bug.sv`)
+- **Scripts**: `utils/run_opentitan_circt_verilog.sh`, `utils/run_opentitan_circt_sim.sh`
+- **Tracking**: `PROJECT_OPENTITAN.md`
+
+### Current Test Suite Status (Iteration 181)
+- **sv-tests SVA BMC**: 9/26 pass, 3 xfail, 0 fail, 0 error (Verified 2026-01-26)
+- **sv-tests Chapters**: 821/831 (98%) - aggregate across all chapters
+- **verilator-verification BMC**: 8/8 active tests pass (Verified 2026-01-26)
+- **yosys SVA**: 14/16 (87.5%) (Verified 2026-01-26)
+- **AVIPs**: 1/10 compile (APB only) - REGRESSION from claimed 8/10 baseline
+  - Root causes: bind/vif conflicts, UVM method signature mismatches, InOut interface ports
+- **OpenTitan**: gpio_reg_top SIMULATES (Phase 2), TL-UL validated (Phase 3)
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**
@@ -200,6 +217,17 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 1. **Sibling Hierarchical Refs** - extnets.sv (cross-module wire refs)
 2. **SVA Sequence Tests** - 6 verilator-verification tests (Codex handling SVA)
 3. **Class Method Inlining** - Virtual method dispatch for complex UVM patterns
+4. **slang v10 patches** - Some v9.1 patches don't apply to v10.0 (bind-scope, bind-instantiation-def)
+5. **Moore-to-Core Control Flow** - Nested if-else in unique case causes CFG operand mismatch
+   - Affects: `prim_diff_decode.sv` → blocks `prim_alert_sender` → blocks most OpenTitan IPs
+   - Unit test: `test/Conversion/MooreToCore/nested-control-flow-bug.sv`
+6. **AVIP Regression** - Only 1/10 AVIPs compile (was claimed 8/10)
+   - bind/vif conflicts, UVM method signatures, InOut interface ports
+
+**New in Iteration 180**:
+- ✅ slang upgraded from v9.1 to v10.0
+- ✅ --compat vcs flag for VCS compatibility mode
+- ✅ AllowVirtualIfaceWithOverride for Xcelium bind/vif compatibility
 
 **Active Workstreams (Iteration 105)**:
 1. **Track A: UVM Component Callbacks** - Hook phase methods to actual component code
@@ -407,7 +435,8 @@ circt-verilog --uvm-path ~/uvm-core/src \
 - ✅ LEC: `--run-smtlib` now scans stdout/stderr for SAT results, fixing empty
   token failures when z3 emits warnings.
 - ✅ LEC smoke: yosys `extnets` now passes by flattening private HW modules
-  before LEC; ref inout/multi-driver resolution is still missing.
+  before LEC; ref inout/multi-driver now abstracted to inputs (approx), full
+  resolution still missing.
 - ✅ LEC: interface fields with multiple stores now abstract to inputs to avoid
   hard failures; full multi-driver semantics still missing.
 - ✅ LEC smoke: verilator-verification now passes 17/17 after stripping LLHD
