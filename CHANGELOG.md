@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 209 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: UVM report function dispatchers (`__moore_uvm_report_*`)
+- **Track B**: Fix remaining lit test failures (59 remaining)
+- **Track C**: UVM output verification in circt-sim
+- **Track D**: Test suite stability
+
+### Track Completions
+
+- **Track A (UVM Report Dispatchers)**: ✅ **IMPLEMENTED**
+  - Added dispatchers in `LLHDProcessInterpreter::interpretLLVMCall()`:
+    - `__moore_uvm_report_info` - UVM_INFO messages
+    - `__moore_uvm_report_warning` - UVM_WARNING messages
+    - `__moore_uvm_report_error` - UVM_ERROR messages
+    - `__moore_uvm_report_fatal` - UVM_FATAL messages (simulation termination)
+    - `__moore_uvm_report_enabled` - verbosity filtering
+    - `__moore_uvm_report_summarize` - message count summary
+  - Helper lambda `resolvePointerToString` resolves addresses to global/malloc'd memory
+  - Fixed global string initialization to copy StringAttr content to memory blocks
+  - Unit tests: `uvm-report-minimal.mlir`, `uvm-report-simple.mlir`
+
+- **Track B (Lit Test Fixes)**: ✅ **4 failures fixed (59→55)**
+  - `dist-constraints.mlir` - updated `__moore_randomize_with_dist` signature (5 args)
+  - `construct-lec.mlir` - added `lec.input_names` attribute to CHECK patterns
+  - `generate-smtlib.mlir` - updated SMT output to use named variables (a, b)
+  - `sv-tests-rising-clocks-only.mlir` - updated test count expectation
+  - Commit: 0b7b93202
+
+- **Track C (UVM Output Verification)**: ✅ **VERIFIED**
+  - UVM_INFO message output verified in circt-sim unit test
+  - Message format: `UVM_INFO test.sv(10) @ 0: TEST [ctx] Hello UVM`
+  - Proper extraction of all 10 parameters (id, message, file, line, context, etc.)
+
+- **Track D (Test Suite Stability)**: ✅ **STABLE**
+  - verilator-verification: 17/17 (100%)
+  - yosys SVA: 14/14 (100%)
+  - sv-tests BMC: 23/26 effective (3 xfail)
+
+### Bug Fixes
+
+- Fixed process ID capture issue in `registerProcess` callbacks
+- Changed FirReg clock sensitivity from Posedge to AnyEdge for proper clock tracking
+- Fixed deprecated `value.dyn_cast` usage to `dyn_cast<mlir::BlockArgument>`
+
+### Files Modified
+
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - UVM dispatchers + fixes
+- `test/Tools/circt-sim/uvm-report-minimal.mlir` - new test
+- `test/Tools/circt-sim/uvm-report-simple.mlir` - new test
+- `test/Conversion/MooreToCore/dist-constraints.mlir` - CHECK update
+- `test/Tools/circt-lec/construct-lec.mlir` - CHECK update
+- `test/Tools/circt-lec/generate-smtlib.mlir` - CHECK update
+- `test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir` - CHECK update
+
+---
+
 ## Iteration 208 - January 26, 2026
 
 ### Focus Areas
@@ -57,6 +115,8 @@
     `test/Tools/circt-lec/lec-run-smtlib-print-output.mlir`
   - Verif assertion labels now emit SMT-LIB `:named` assertions:
     `test/Tools/circt-lec/lec-smtlib-assert-named.mlir`
+  - LEC SMT-LIB now preserves input names for solver symbols:
+    `test/Tools/circt-lec/lec-smtlib-input-names.mlir`
   - Yosys SVA LEC: 14/14 pass, 2 VHDL skips
   - sv-tests LEC: 23/23 pass (1013 skipped as non-LEC)
   - verilator-verification LEC: 17/17 pass
