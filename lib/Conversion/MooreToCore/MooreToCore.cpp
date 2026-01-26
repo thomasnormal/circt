@@ -8044,11 +8044,9 @@ struct CallOpConversion : public OpConversionPattern<func::CallOp> {
 
 private:
   /// Convert a UVM report function call to a runtime function call.
-  /// For free functions (isMethod=false):
-  ///   Expected signature: (id_struct, msg_struct, verbosity, filename_struct, line)
-  /// For class methods (isMethod=true):
-  ///   Expected signature: (self, id_struct, msg_struct, verbosity, filename_struct, line)
-  /// where *_struct is !llvm.struct<(ptr, i64)>
+  /// UVM signature: (id, message, verbosity, filename, line, context_name, report_enabled_checked)
+  /// For class methods, there's an additional 'self' parameter at the start.
+  /// where strings are !llvm.struct<(ptr, i64)>
   LogicalResult convertUvmReportCall(func::CallOp op, OpAdaptor adaptor,
                                       ConversionPatternRewriter &rewriter,
                                       StringRef callee, bool isMethod) const {
@@ -8057,7 +8055,9 @@ private:
     auto operands = adaptor.getOperands();
 
     // Verify we have the expected number of operands
-    size_t expectedOperands = isMethod ? 6 : 5;
+    // UVM signature: (id, message, verbosity, filename, line, context_name, report_enabled_checked)
+    // For methods: (self, id, message, verbosity, filename, line, context_name, report_enabled_checked)
+    size_t expectedOperands = isMethod ? 8 : 7;
     if (operands.size() != expectedOperands)
       return failure();
 
@@ -8093,25 +8093,25 @@ private:
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, runtimeFuncName, fnTy);
 
     // Extract ptr and len from each string struct
-    // For free functions:
+    // For free functions (7 args):
     //   operands[0] = id (!llvm.struct<(ptr, i64)>)
     //   operands[1] = msg (!llvm.struct<(ptr, i64)>)
     //   operands[2] = verbosity (i32)
     //   operands[3] = filename (!llvm.struct<(ptr, i64)>)
     //   operands[4] = line (i32)
-    // For class methods:
-    //   operands[0] = self (ptr)
-    //   operands[1] = id (!llvm.struct<(ptr, i64)>)
-    //   operands[2] = msg (!llvm.struct<(ptr, i64)>)
-    //   operands[3] = verbosity (i32)
-    //   operands[4] = filename (!llvm.struct<(ptr, i64)>)
-    //   operands[5] = line (i32)
+    //   operands[5] = context_name (!llvm.struct<(ptr, i64)>)
+    //   operands[6] = report_enabled_checked (i1) - ignored
+    // For class methods (8 args):
+    //   operands[0] = self (ptr) - ignored
+    //   operands[1..7] = same as above
     size_t offset = isMethod ? 1 : 0;
     Value idStruct = operands[offset + 0];
     Value msgStruct = operands[offset + 1];
     Value verbosity = operands[offset + 2];
     Value filenameStruct = operands[offset + 3];
     Value line = operands[offset + 4];
+    Value contextStruct = operands[offset + 5];
+    // operands[offset + 6] = report_enabled_checked (ignored)
 
     // Extract id ptr and len
     Value idPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, idStruct,
@@ -8131,9 +8131,11 @@ private:
     Value filenameLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, filenameStruct,
                                                       ArrayRef<int64_t>{1});
 
-    // Create empty context (null pointer and 0 length)
-    Value contextPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-    Value contextLen = hw::ConstantOp::create(rewriter, loc, i64Ty, 0);
+    // Extract context ptr and len from the context_name argument
+    Value contextPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, contextStruct,
+                                                     ArrayRef<int64_t>{0});
+    Value contextLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, contextStruct,
+                                                     ArrayRef<int64_t>{1});
 
     // Call the runtime function
     LLVM::CallOp::create(rewriter, loc, fn,
@@ -18250,11 +18252,31 @@ static void populateLegality(ConversionTarget &target,
 
   target.addLegalOp<debug::ScopeOp>();
 
-  target.addDynamicallyLegalOp<scf::YieldOp, func::CallOp, func::CallIndirectOp,
+  target.addDynamicallyLegalOp<scf::YieldOp, func::CallIndirectOp,
                                func::ReturnOp, func::ConstantOp, hw::OutputOp,
                                hw::InstanceOp, debug::ArrayOp, debug::StructOp,
                                debug::VariableOp>(
       [&](Operation *op) { return converter.isLegal(op); });
+
+  // func::CallOp needs special handling for UVM report function interception.
+  // Calls to uvm_pkg::uvm_report_* must be marked illegal so they get converted
+  // to runtime function calls.
+  target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
+    StringRef callee = op.getCallee();
+    // UVM report free functions
+    if (callee == "uvm_pkg::uvm_report_error" ||
+        callee == "uvm_pkg::uvm_report_warning" ||
+        callee == "uvm_pkg::uvm_report_info" ||
+        callee == "uvm_pkg::uvm_report_fatal")
+      return false;
+    // UVM report class methods
+    if (callee == "uvm_pkg::uvm_report_object::uvm_report_error" ||
+        callee == "uvm_pkg::uvm_report_object::uvm_report_warning" ||
+        callee == "uvm_pkg::uvm_report_object::uvm_report_info" ||
+        callee == "uvm_pkg::uvm_report_object::uvm_report_fatal")
+      return false;
+    return converter.isLegal(op);
+  });
 
   target.addDynamicallyLegalOp<UnrealizedConversionCastOp>(
       [&](UnrealizedConversionCastOp op) {
