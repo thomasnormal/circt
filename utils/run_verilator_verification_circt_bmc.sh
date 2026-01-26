@@ -13,7 +13,10 @@ CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
-NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-1}"
+# NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
+# warning is SPURIOUS for clocked assertions that are lowered later in the pipeline.
+# Setting this to 1 would cause false SKIP results for otherwise valid tests.
+NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-0}"
 TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
 OUT="${OUT:-$PWD/verilator-verification-bmc-results.txt}"

@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 206 - January 26, 2026
+
+### Track Completions
+
+- **Track A (APB AVIP Hang Investigation)**: ✅ **ROOT CAUSE FOUND**
+  - APB AVIP hangs (not exits with code 1) at time 0
+  - Bug: `interpretWait()` has no handler for `llhd.wait` with no delay AND no signals
+  - This represents `always @(*)` - process waits forever with no wakeup mechanism
+  - **Fix needed**: Add delta-step resumption or all-signal sensitivity
+
+- **Track B (verilator-verification Full)**: ✅ **17/17 compile (100%)**
+  - slang fix confirmed working
+  - 8/17 pass BMC verification (tests with assertions)
+  - 9/17 skip (syntax-only tests without assertions - expected)
+
+- **Track C (I2S AVIP Simulation)**: ✅ **hdlTop runs 130,000+ iterations!**
+  - 7 processes registered
+  - Runs clock generation, reset sequences, BFM instantiation
+  - Simulation time: 1.3ms (1,300,000,000,000 fs)
+  - hvlTop completes at time 0 (UVM limitation)
+
+- **Track D (Lit Tests)**: ⚠️ 90/2869 failures
+  - ImportVerilog/Slang SVA: 28 failures (stricter temporal syntax)
+  - BMC Tool: 29 failures (test infrastructure)
+  - LEC Tool: 13 failures
+  - Fixed missing include: `createSCFToControlFlowPass`
+
+### Key Findings
+
+| Issue | Root Cause | Fix |
+|-------|-----------|-----|
+| APB hang | `llhd.wait` no wakeup | Add delta-step or all-signal sensitivity |
+| verilator 100% | slang fix | ✅ Already done |
+| I2S simulation | Works! | No fix needed |
+
+- **Track E (Yosys SVA LEC)**: ✅ Full suite passes with Z3
+  - 14/14 pass, 2 VHDL skips (Z3: `/home/thomas-ahle/z3-install/bin/z3`)
+  - LEC harness now auto-detects local Z3 installs when `z3` is not in PATH
+
 ## Iteration 205 - January 26, 2026
 
 ### Track Completions
@@ -66,6 +105,17 @@
   - LTL→SMT materialization now stays within region scope (prevents cross-region `smt.eq`)
   - Added SMT relocation guard for isolated regions
   - Updated BMC regression tests (final checks, multiclock regs, delay_posedge, goto-repeat, error text)
+  - Yosys SVA smoke (`basic01`) passes with circt-bmc
+  - sv-tests SVA smoke (sequence goto/nonconsecutive repetition) passes
+  - verilator-verification BMC smoke (`sequence_delay_repetition`, default NO_PROPERTY_AS_SKIP=0) passes
+  - Defaulted verilator-verification BMC harness to NOT skip on spurious no-property warnings
+  - yosys SVA LEC smoke (`basic01`, emit-mlir) passes
+  - yosys SVA LEC (`basic02`, run-smtlib with z3) passes
+  - yosys SVA BMC (`basic02`, pass/fail) passes
+  - Defaulted yosys SVA BMC harness to NOT skip on spurious no-property warnings
+  - yosys SVA BMC smoke (`basic03`, pass/fail) passes
+  - sv-tests LEC smoke (sequence goto/nonconsecutive repetition, emit-mlir) passes
+  - verilator-verification LEC smoke (`sequence_delay_repetition`, emit-mlir) passes
 
 ### Key Finding: Verilator Syntax Extension
 
@@ -107,6 +157,7 @@ The 6 failing verilator-verification tests use `@posedge (clk)` syntax:
   - Added **MBX full IP** target with core/soc TL-UL + SRAM host port
   - Added **KeyMgr DPE full IP** target with EDN/KMAC/OTP/ROM stubs
   - rv_dm full IP compile currently crashes in `dm_csrs.sv` (concat_ref assignment); needs ImportVerilog fix
+  - Added concat_ref read lowering + regression test to unblock compound concat assignments (rv_dm)
 
 ### Updated Test Suite Status
 

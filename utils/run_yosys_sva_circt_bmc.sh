@@ -18,7 +18,11 @@ CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
-NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-1}"
+# NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
+# warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
+# assertions may be present but not lowered yet. Setting this to 1 can cause
+# false SKIP results.
+NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-0}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2

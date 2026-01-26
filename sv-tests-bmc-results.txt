@@ -1,3 +1,2 @@
-PASS	16.10--property-local-var	/home/thomas-ahle/sv-tests/tests/chapter-16/16.10--property-local-var.sv
-PASS	16.10--sequence-local-var	/home/thomas-ahle/sv-tests/tests/chapter-16/16.10--sequence-local-var.sv
-PASS	16.15--property-disable-iff	/home/thomas-ahle/sv-tests/tests/chapter-16/16.15--property-disable-iff.sv
+PASS	16.9--sequence-goto-repetition	/home/thomas-ahle/sv-tests/tests/chapter-16/16.9--sequence-goto-repetition.sv
+PASS	16.9--sequence-noncons-repetition	/home/thomas-ahle/sv-tests/tests/chapter-16/16.9--sequence-noncons-repetition.sv
