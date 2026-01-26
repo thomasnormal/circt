@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 215 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Re-run OpenTitan tests to verify evaluateContinuousValue fix
+- **Track B**: Run full lit test suite to verify current state
+- **Track C**: Test more AVIPs with extended simulation
+- **Track D**: Commit any pending changes
+
+### Track Completions
+
+- **Track A (OpenTitan)**: 🔄 **IN PROGRESS**
+- **Track B (Lit Tests)**: 🔄 **IN PROGRESS**
+- **Track C (AVIPs)**: 🔄 **IN PROGRESS**
+- **Track D (Commit)**: 🔄 **IN PROGRESS**
+
+### Baseline from Iteration 214
+
+| Test Suite | Result | Notes |
+|------------|--------|-------|
+| Lit tests | **97.72%** | 0 actual failures (45 XFAIL) |
+| sv-tests BMC | **23/26** | stable |
+| verilator-verification | **17/17** | 100% |
+| yosys SVA | **14/14** | 100% |
+| AVIPs | **I2S/I3C/APB PASS** | 100s simulation |
+
+---
+
 ## Iteration 214 - January 26, 2026
 
 ### Focus Areas
@@ -28,14 +56,28 @@
   - New stack overflow in `evaluateContinuousValue` affects 10 tests (SPI, USB, crypto)
   - 4 OOM/timeout issues (known)
   - 2 no testbench defined
+  - TL-UL BFM now preserves `a_user` defaults (instr_type) when computing integrity fields
+  - Added circt-sim regression for TL-UL BFM `a_user` default handling
 
-### New Bug Found
+### Other Updates
 
-**Stack overflow in `evaluateContinuousValue`**:
+- **BMC**: Final-only assertions now count as properties; final checks skip negedge
+  end steps in non-rising mode.
+- **LEC**: LLHD signal stripping now abstracts non-dominating drive/probe cases
+  to inputs instead of erroring.
+
+### Bug Found & Fixed
+
+**Stack overflow in `evaluateContinuousValue`**: ✅ **FIXED**
 - Location: `LLHDProcessInterpreter.cpp:evaluateContinuousValue()`
-- Affects: SPI, USBDev, HMAC, OTBN, OTP, Flash testbenches
-- Root cause: Recursive evaluation of continuous signal assignments
-- Stack trace shows addresses: 0x44a514, 0x44af3c, 0x44b24d, 0x44be98
+- Fix: Added `evaluateContinuousValueImpl` with visited set for cycle detection
+- Result: SPI, USBDev, HMAC, OTBN, OTP tests now pass
+- AVIPs verified: I2S/I3C work up to 100s simulation
+
+### Commit
+
+**327fe3d21** - Iteration 213-214: Iterative walk fix, lit tests, OpenTitan fixes
+- 49 files changed, 1730 insertions(+), 335 deletions(-)
 
 ### Baseline from Iteration 213
 

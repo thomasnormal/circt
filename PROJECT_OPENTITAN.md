@@ -354,6 +354,14 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **6 FULL COMMUNICATION IPs WITH ALERTS!** GPIO (267 ops, 87 signals), UART (191 ops, 178 signals), I2C (193 ops, 383 signals), SPI Host (194 ops, 260 signals), SPI Device (195 ops, 697 signals), USBDev (209 ops, 541 signals) all simulate successfully with full alert support via prim_alert_sender. |
+| 2026-01-26 | **prim_and2 added**: GPIO simulation required prim_and2 for prim_blanker dependency. |
+| 2026-01-26 | **Multi-top module support verified**: circt-sim --top hdl_top --top hvl_top works correctly for UVM testbenches. |
+| 2026-01-26 | **alert_handler shadowed writes**: Added double-write sequence; circt-sim requires MLIR round-trip via circt-opt to avoid parser crash on large lines. |
+| 2026-01-26 | **alert_handler regwen reads 0**: ping_timer_regwen and alert_regwen[0] read as 0, so shadowed writes appear gated; needs investigation. |
+| 2026-01-26 | **TLUL BFM timeouts**: alert_handler TLUL reads/writes report `d_valid` timeouts (no responses observed); verify TLUL handshake in circt-sim. |
+| 2026-01-26 | **TLUL BFM integrity update**: BFM now computes cmd/data integrity and waits for `a_ready`; re-run alert_handler to confirm d_valid responses. |
+| 2026-01-26 | **tlul_adapter_reg smoke**: new standalone TL-UL adapter TB shows `outstanding_q`/`a_ready` stuck at X after reset; likely async reset handling in circt-sim. |
 | 2026-01-26 | **alert_handler_reg_top SIMULATES!** TL-UL smoke test passes with shadowed reset; 235 ops, 128 signals, 22 processes. |
 | 2026-01-26 | **alert_handler full IP SIMULATES!** EDN/alert/esc stub TB passes basic TL-UL connectivity; 276 ops, 265 signals, 36 processes. |
 | 2026-01-26 | **LowerConcatRef read support added**: concat_ref reads now lower to moore.concat of reads, intended to unblock rv_dm compound concat assignments (requires rebuild). |
@@ -391,13 +399,15 @@ circt-verilog --ir-hw -DVERILATOR \
 
 ### prim_diff_decode.sv Control Flow Bug
 
-**Status**: Unit test created at `test/Conversion/MooreToCore/nested-control-flow-bug.sv`
+**Status**: ✅ **FIXED** (Iteration 189) - Mem2Reg predecessor deduplication
 
-The Moore-to-Core lowering fails when complex nested `if-else` chains exist inside `unique case` statements. This affects `prim_diff_decode.sv` which is a dependency of `prim_alert_sender.sv`.
+The Moore-to-Core lowering previously failed when complex nested `if-else` chains exist inside `unique case` statements. This affected `prim_diff_decode.sv` which is a dependency of `prim_alert_sender.sv`.
 
-**Impact**: Blocks full GPIO, UART, SPI, I2C, and most other OpenTitan IPs that use alerts.
+**Fix**: Commit 8116230df added deduplication in LLHD Mem2Reg.cpp `insertBlockArgs` function, resolving the control flow lowering issue. All 6 communication IPs with alerts (GPIO, UART, I2C, SPI Host, SPI Device, USBDev) now simulate successfully.
 
-**Workaround**: Use `*_no_alerts` targets that exclude `prim_alert_sender`.
+**Impact**: Previously blocked full GPIO, UART, SPI, I2C, and most other OpenTitan IPs that use alerts. Now all unblocked.
+
+**Workaround**: No longer needed - all IPs compile and simulate with alerts.
 
 **IPs Without Alert Dependency** (can be simulated now):
 - `tlul` - TileLink-UL adapters (VALIDATED)
