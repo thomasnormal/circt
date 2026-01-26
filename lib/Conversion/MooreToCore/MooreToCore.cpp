@@ -8162,7 +8162,7 @@ private:
 
 /// Conversion for func.call_indirect to handle type conversion.
 /// The callee function type must be converted to use the converted argument
-/// and result types.
+/// and result types. Also intercepts UVM report method calls via vtable dispatch.
 struct CallIndirectOpConversion
     : public OpConversionPattern<func::CallIndirectOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -8170,6 +8170,33 @@ struct CallIndirectOpConversion
   LogicalResult
   matchAndRewrite(func::CallIndirectOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Check if this is a UVM report method call via vtable dispatch.
+    // Trace back through the def-use chain to find the VTableLoadMethodOp.
+    Value origCallee = op.getCallee();
+
+    // Look through UnrealizedConversionCast ops to find the source
+    while (auto castOp = origCallee.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() == 1)
+        origCallee = castOp.getInputs()[0];
+      else
+        break;
+    }
+
+    // Check if the callee comes from a VTableLoadMethodOp
+    if (auto vtableLoadOp = origCallee.getDefiningOp<VTableLoadMethodOp>()) {
+      auto methodSym = vtableLoadOp.getMethodSym();
+      StringRef methodName = methodSym.getLeafReference();
+
+      // Check if this is a UVM report method
+      if (methodName == "uvm_report_info" || methodName == "uvm_report_warning" ||
+          methodName == "uvm_report_error" || methodName == "uvm_report_fatal") {
+        // Intercept this call and convert to runtime function
+        if (succeeded(convertUvmReportVtableCall(op, adaptor, rewriter, methodName)))
+          return success();
+        // Fall through to default handling if interception fails
+      }
+    }
+
     // Convert result types
     SmallVector<Type> convResTypes;
     if (typeConverter->convertTypes(op.getResultTypes(), convResTypes).failed())
@@ -8215,6 +8242,99 @@ struct CallIndirectOpConversion
 
     rewriter.replaceOpWithNewOp<func::CallIndirectOp>(op, castOp.getResult(0),
                                                       calleeOperands);
+    return success();
+  }
+
+private:
+  /// Convert a UVM report method call via vtable dispatch to a runtime function.
+  /// The call_indirect has signature: (self, id, message, verbosity, filename, line)
+  /// where strings are !llvm.struct<(ptr, i64)>
+  LogicalResult convertUvmReportVtableCall(func::CallIndirectOp op,
+                                            OpAdaptor adaptor,
+                                            ConversionPatternRewriter &rewriter,
+                                            StringRef methodName) const {
+    auto loc = op.getLoc();
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto calleeOperands = adaptor.getCalleeOperands();
+
+    // UVM method signature: (self, id, message, verbosity, filename, line)
+    // We expect 6 operands for class methods
+    if (calleeOperands.size() != 6)
+      return failure();
+
+    auto ctx = rewriter.getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = rewriter.getI32Type();
+    auto i64Ty = rewriter.getI64Type();
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Determine the runtime function name based on the method
+    std::string runtimeFuncName;
+    if (methodName == "uvm_report_error")
+      runtimeFuncName = "__moore_uvm_report_error";
+    else if (methodName == "uvm_report_warning")
+      runtimeFuncName = "__moore_uvm_report_warning";
+    else if (methodName == "uvm_report_info")
+      runtimeFuncName = "__moore_uvm_report_info";
+    else if (methodName == "uvm_report_fatal")
+      runtimeFuncName = "__moore_uvm_report_fatal";
+    else
+      return failure();
+
+    // Runtime function signature:
+    // void __moore_uvm_report_xxx(
+    //   const char *id, int64_t idLen,
+    //   const char *message, int64_t messageLen,
+    //   int32_t verbosity,
+    //   const char *filename, int64_t filenameLen,
+    //   int32_t line,
+    //   const char *context, int64_t contextLen)
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        voidTy, {ptrTy, i64Ty, ptrTy, i64Ty, i32Ty, ptrTy, i64Ty, i32Ty, ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, runtimeFuncName, fnTy);
+
+    // Extract operands:
+    //   calleeOperands[0] = self (ptr) - ignored for now
+    //   calleeOperands[1] = id (!llvm.struct<(ptr, i64)>)
+    //   calleeOperands[2] = msg (!llvm.struct<(ptr, i64)>)
+    //   calleeOperands[3] = verbosity (i32)
+    //   calleeOperands[4] = filename (!llvm.struct<(ptr, i64)>)
+    //   calleeOperands[5] = line (i32)
+    Value idStruct = calleeOperands[1];
+    Value msgStruct = calleeOperands[2];
+    Value verbosity = calleeOperands[3];
+    Value filenameStruct = calleeOperands[4];
+    Value line = calleeOperands[5];
+
+    // Extract id ptr and len
+    Value idPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, idStruct,
+                                                ArrayRef<int64_t>{0});
+    Value idLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, idStruct,
+                                                ArrayRef<int64_t>{1});
+
+    // Extract msg ptr and len
+    Value msgPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, msgStruct,
+                                                 ArrayRef<int64_t>{0});
+    Value msgLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, msgStruct,
+                                                 ArrayRef<int64_t>{1});
+
+    // Extract filename ptr and len
+    Value filenamePtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, filenameStruct,
+                                                      ArrayRef<int64_t>{0});
+    Value filenameLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, filenameStruct,
+                                                      ArrayRef<int64_t>{1});
+
+    // Provide default empty context (null pointer, zero length)
+    Value contextPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    Value contextLen = LLVM::ConstantOp::create(rewriter, loc, i64Ty, 0);
+
+    // Call the runtime function
+    LLVM::CallOp::create(rewriter, loc, fn,
+                         ValueRange{idPtr, idLen, msgPtr, msgLen, verbosity,
+                                    filenamePtr, filenameLen, line,
+                                    contextPtr, contextLen});
+
+    rewriter.eraseOp(op);
     return success();
   }
 };

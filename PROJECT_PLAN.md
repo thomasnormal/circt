@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 227 Update)
+### Track Status & Next Tasks (Iteration 228 Update)
+
+**Iteration 228 Results (COMPLETE):**
+- Track A: ✅ **UVM Vtable Fix** - Virtual method dispatch for UVM reports now intercepted
+- Track B: ✅ **OpenTitan: 4/6 PASS** - mbx, ascon, spi_host, usbdev work; i2c/alert_handler fail
+- Track C: ⚠️ **AVIP UVM Incomplete** - Simulation exits at time 0, UVM phases not running
+- Track D: ✅ **33 XFAIL Categorized** - 12 UVM, 3 BMC, 9 hierarchical, 9 other
+
+**Iteration 229 Focus (NEXT):**
+- Track A: 🔄 **Fix UVM phase execution** - UVM run_test() returns immediately
+- Track B: 🔄 **Fix alert_handler delta overflow** - Circular combinational in esc_timer
+- Track C: 🔄 **Enable errors-xfail.mlir** - Potentially fixed already
+- Track D: 🔄 **Fix comb.mux BMC legalization** - Blocks 10+ XFAIL tests
 
 **Iteration 227 Results (COMPLETE):**
 - Track A: ✅ **Instance Input Fix** - registerModuleDrive() now resolves inputValueMap block args
 - Track B: ✅ **i2c_tb PASSES** - No more infinite delta cycles, TEST PASSED
 - Track C: ✅ **External Tests** - sv-tests 23/26, verilator 17/17, yosys 14/14
 - Track D: ✅ **Unit Tests: 1317/1317 PASS**
-
-**Iteration 228 Focus (NEXT):**
-- Track A: 🔄 **Fix UVM report signature** - Update convertUvmReportCall for 5-6 args
-- Track B: 🔄 **Enable more XFAIL tests** - After fixing UVM runtime issues
-- Track C: 🔄 **Test full OpenTitan IPs** - Verify remaining 5 IPs work
-- Track D: 🔄 **External Test Suites** - Run all AVIPs with UVM output
 
 **Iteration 226 Results (COMPLETE):**
 - Track A: ✅ **Termination Timing Fixed** - circt-sim now reports correct $finish time
