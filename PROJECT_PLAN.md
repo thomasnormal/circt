@@ -67,18 +67,18 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 220 Update)
+### Track Status & Next Tasks (Iteration 221 Update)
 
-**Iteration 219 Results (COMPLETE):**
-- Track A: ✅ **3 UVM XFAIL Tests Enabled** - uvm_stubs.sv, uvm-report-infrastructure.sv, uvm-objection-test.sv
-- Track B: ✅ **llhd.halt Fix** - Yield operands now handled, spi_device_tb no longer crashes
-- Track C: ✅ **AVIP Multi-Top** - All pass up to 281ms (2^48 fs limit discovered)
-- Track D: ✅ **Lit Tests: 2841 pass, 42 XFAIL** (improved from 2836/45)
+**Iteration 220 Results (COMPLETE):**
+- Track A: 🔄 **Delta Cycle Investigation** - i2c_tb hangs at "Starting i2c full IP test...", i2c_reg_top_tb works
+- Track B: ✅ **sva-assume-e2e.sv Enabled** - Fixed prim_mubi_pkg issues, 2842 pass, 0 failed
+- Track C: ⚠️ **AVIP Extended Times** - 100ms works, 500ms fails silently
+- Track D: ✅ **Lit Tests: 2842 pass, 41 XFAIL** (improved from 2841/42)
 
-**Iteration 220 Focus (IN PROGRESS):**
-- Track A: 🔄 **Fix Infinite Delta Cycles** - i2c_tb, alert_handler_tb time 0 hangs
-- Track B: 🔄 **Enable More UVM XFAILs** - uvm-tlm-analysis-port.sv needs test fixes
-- Track C: 🔄 **Test Real-World Codebases** - Continue ~/mbit/*, OpenTitan testing
+**Iteration 221 Focus (IN PROGRESS):**
+- Track A: 🔄 **Deep Dive i2c_tb Delta Cycles** - Compare i2c_reg_top_tb (works) vs i2c_tb (hangs)
+- Track B: 🔄 **OpenTitan Process Analysis** - Analyze 45 vs 13 processes difference
+- Track C: 🔄 **AVIP Longer Simulations** - Fix 500ms+ timeout issue
 - Track D: 🔄 **External Test Suites** - Maintain 100% on verilator, yosys
 
 **Iteration 218 Results (COMPLETE):**
