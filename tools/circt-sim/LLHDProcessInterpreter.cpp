@@ -23,6 +23,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -1064,10 +1065,9 @@ void LLHDProcessInterpreter::collectProcessIds(
 void LLHDProcessInterpreter::collectSignalIdsFromCombinational(
     llhd::CombinationalOp combOp,
     llvm::SmallVectorImpl<SignalId> &signals) const {
-  combOp.walk([&](llhd::ProbeOp probeOp) {
-    SignalId sigId = getSignalId(probeOp.getSignal());
-    if (sigId != 0)
-      signals.push_back(sigId);
+  combOp.walk([&](Operation *op) {
+    for (Value operand : op->getOperands())
+      collectSignalIds(operand, signals);
   });
 }
 
@@ -1088,13 +1088,27 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
     valueToSignal[regOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
 
-    if (regOp.hasPresetValue()) {
+    bool initSet = false;
+    if (regOp.hasReset() && regOp.getIsAsync()) {
+      InterpretedValue resetVal = evaluateContinuousValue(regOp.getReset());
+      if (!resetVal.isX() && resetVal.getUInt64() != 0) {
+        InterpretedValue resetValue =
+            evaluateContinuousValue(regOp.getResetValue());
+        scheduler.updateSignal(sigId, resetValue.toSignalValue());
+        initSet = true;
+      }
+    }
+
+    if (!initSet && regOp.hasPresetValue()) {
       auto preset = regOp.getPresetAttr();
       if (preset) {
         SignalValue initVal(preset.getValue());
         scheduler.updateSignal(sigId, initVal);
+        initSet = true;
       }
-    } else {
+    }
+
+    if (!initSet) {
       scheduler.updateSignal(sigId, SignalValue::makeX(width));
     }
 
@@ -1105,6 +1119,10 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
     std::string procName = "firreg_" + name;
     ProcessId procId = scheduler.registerProcess(
         procName, [this, regOp]() { executeFirReg(regOp); });
+    if (auto *process = scheduler.getProcess(procId)) {
+      // Schedule firreg updates after combinational propagation in the time slot.
+      process->setPreferredRegion(SchedulingRegion::NBA);
+    }
 
     // Track any clock edge so we can update prevClock on negedges too.
     // The actual posedge detection is done inside executeFirReg.
@@ -1279,18 +1297,19 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
 /// state.
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     mlir::Value value) {
-  llvm::DenseSet<mlir::Value> visited;
-  return evaluateContinuousValueImpl(value, visited);
+  llvm::DenseSet<mlir::Value> inProgress;
+  return evaluateContinuousValueImpl(value, inProgress);
 }
 
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
-    mlir::Value value, llvm::DenseSet<mlir::Value> &visited) {
-  // Cycle detection: if we've already visited this value, return X
-  if (!visited.insert(value).second) {
+    mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress) {
+  // Cycle detection: if this value is already on the recursion stack, return X.
+  if (!inProgress.insert(value).second) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Warning: Cycle detected in evaluateContinuousValue\n");
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
   }
+  auto cleanup = llvm::make_scope_exit([&]() { inProgress.erase(value); });
 
   if (SignalId sigId = getSignalId(value)) {
     const SignalValue &sv = scheduler.getSignalValue(sigId);
@@ -1299,7 +1318,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   auto instIt = instanceOutputMap.find(value);
   if (instIt != instanceOutputMap.end())
-    return evaluateContinuousValueImpl(instIt->second, visited);
+    return evaluateContinuousValueImpl(instIt->second, inProgress);
 
   if (auto result = dyn_cast<OpResult>(value)) {
     if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
@@ -1319,7 +1338,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
     auto argIt = inputValueMap.find(arg);
     if (argIt != inputValueMap.end() && argIt->second != value)
-      return evaluateContinuousValueImpl(argIt->second, visited);
+      return evaluateContinuousValueImpl(argIt->second, inProgress);
     SignalId sigId = getSignalId(arg);
     if (sigId != 0) {
       const SignalValue &sv = scheduler.getSignalValue(sigId);
@@ -1346,11 +1365,11 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto toClockOp = value.getDefiningOp<seq::ToClockOp>()) {
-    return evaluateContinuousValueImpl(toClockOp.getInput(), visited);
+    return evaluateContinuousValueImpl(toClockOp.getInput(), inProgress);
   }
 
   if (auto fromClockOp = value.getDefiningOp<seq::FromClockOp>()) {
-    return evaluateContinuousValueImpl(fromClockOp.getInput(), visited);
+    return evaluateContinuousValueImpl(fromClockOp.getInput(), inProgress);
   }
 
   // Check if this is a probe operation - read from signal state
@@ -1376,7 +1395,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   // Handle struct extract
   if (auto extractOp = value.getDefiningOp<hw::StructExtractOp>()) {
-    InterpretedValue inputVal = evaluateContinuousValueImpl(extractOp.getInput(), visited);
+    InterpretedValue inputVal =
+        evaluateContinuousValueImpl(extractOp.getInput(), inProgress);
     if (inputVal.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
@@ -1416,7 +1436,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     unsigned bitOffset = totalWidth;
     for (size_t i = 0; i < createOp.getInput().size(); ++i) {
       InterpretedValue fieldVal =
-          evaluateContinuousValueImpl(createOp.getInput()[i], visited);
+          evaluateContinuousValueImpl(createOp.getInput()[i], inProgress);
       unsigned fieldWidth = getTypeWidth(elements[i].type);
       bitOffset -= fieldWidth;
 
@@ -1434,9 +1454,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto injectOp = value.getDefiningOp<hw::StructInjectOp>()) {
     InterpretedValue structVal =
-        evaluateContinuousValueImpl(injectOp.getInput(), visited);
+        evaluateContinuousValueImpl(injectOp.getInput(), inProgress);
     InterpretedValue newVal =
-        evaluateContinuousValueImpl(injectOp.getNewValue(), visited);
+        evaluateContinuousValueImpl(injectOp.getNewValue(), inProgress);
     unsigned totalWidth = getTypeWidth(injectOp.getType());
     if (structVal.isX() || newVal.isX())
       return InterpretedValue::makeX(totalWidth);
@@ -1474,8 +1494,10 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         return InterpretedValue::makeX(totalWidth);
       unsigned fieldIndex = fieldIndexAttr.getValue().getZExtValue();
       auto elements = structType.getElements();
-      InterpretedValue structVal = evaluateContinuousValueImpl(input, visited);
-      InterpretedValue newVal = evaluateContinuousValueImpl(newValue, visited);
+      InterpretedValue structVal =
+          evaluateContinuousValueImpl(input, inProgress);
+      InterpretedValue newVal =
+          evaluateContinuousValueImpl(newValue, inProgress);
       if (structVal.isX() || newVal.isX())
         return InterpretedValue::makeX(totalWidth);
 
@@ -1496,7 +1518,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   // Handle bitcast
   if (auto bitcastOp = value.getDefiningOp<hw::BitcastOp>()) {
-    InterpretedValue inputVal = evaluateContinuousValueImpl(bitcastOp.getInput(), visited);
+    InterpretedValue inputVal =
+        evaluateContinuousValueImpl(bitcastOp.getInput(), inProgress);
     unsigned outputWidth = getTypeWidth(bitcastOp.getType());
     if (inputVal.isX())
       return InterpretedValue::makeX(outputWidth);
@@ -1510,8 +1533,10 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   // Handle comb operations
   if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
-    InterpretedValue lhs = evaluateContinuousValueImpl(xorOp.getOperand(0), visited);
-    InterpretedValue rhs = evaluateContinuousValueImpl(xorOp.getOperand(1), visited);
+    InterpretedValue lhs =
+        evaluateContinuousValueImpl(xorOp.getOperand(0), inProgress);
+    InterpretedValue rhs =
+        evaluateContinuousValueImpl(xorOp.getOperand(1), inProgress);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     llvm::APInt lhsVal = lhs.getAPInt();
@@ -1526,7 +1551,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     llvm::APInt result(width, 0);
     result.setAllBits();
     for (Value operand : andOp.getOperands()) {
-      InterpretedValue opVal = evaluateContinuousValueImpl(operand, visited);
+      InterpretedValue opVal =
+          evaluateContinuousValueImpl(operand, inProgress);
       if (opVal.isX())
         return InterpretedValue::makeX(width);
       llvm::APInt opBits = opVal.getAPInt();
@@ -1543,7 +1569,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     unsigned width = getTypeWidth(value.getType());
     llvm::APInt result(width, 0);
     for (Value operand : orOp.getOperands()) {
-      InterpretedValue opVal = evaluateContinuousValueImpl(operand, visited);
+      InterpretedValue opVal =
+          evaluateContinuousValueImpl(operand, inProgress);
       if (opVal.isX())
         return InterpretedValue::makeX(width);
       llvm::APInt opBits = opVal.getAPInt();
@@ -1557,8 +1584,10 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
-    InterpretedValue lhs = evaluateContinuousValueImpl(icmpOp.getLhs(), visited);
-    InterpretedValue rhs = evaluateContinuousValueImpl(icmpOp.getRhs(), visited);
+    InterpretedValue lhs =
+        evaluateContinuousValueImpl(icmpOp.getLhs(), inProgress);
+    InterpretedValue rhs =
+        evaluateContinuousValueImpl(icmpOp.getRhs(), inProgress);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(1);
 
@@ -1596,12 +1625,13 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto muxOp = value.getDefiningOp<comb::MuxOp>()) {
-    InterpretedValue cond = evaluateContinuousValueImpl(muxOp.getCond(), visited);
+    InterpretedValue cond =
+        evaluateContinuousValueImpl(muxOp.getCond(), inProgress);
     if (cond.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     if (cond.getUInt64() != 0)
-      return evaluateContinuousValueImpl(muxOp.getTrueValue(), visited);
-    return evaluateContinuousValueImpl(muxOp.getFalseValue(), visited);
+      return evaluateContinuousValueImpl(muxOp.getTrueValue(), inProgress);
+    return evaluateContinuousValueImpl(muxOp.getFalseValue(), inProgress);
   }
 
   if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
@@ -1609,7 +1639,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     llvm::APInt result(totalWidth, 0);
     unsigned bitOffset = totalWidth;
     for (Value operand : concatOp.getOperands()) {
-      InterpretedValue opVal = evaluateContinuousValueImpl(operand, visited);
+      InterpretedValue opVal =
+          evaluateContinuousValueImpl(operand, inProgress);
       unsigned width = getTypeWidth(operand.getType());
       bitOffset -= width;
       if (opVal.isX())
@@ -1625,7 +1656,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto extractOp = value.getDefiningOp<comb::ExtractOp>()) {
-    InterpretedValue inputVal = evaluateContinuousValueImpl(extractOp.getInput(), visited);
+    InterpretedValue inputVal =
+        evaluateContinuousValueImpl(extractOp.getInput(), inProgress);
     unsigned width = getTypeWidth(value.getType());
     if (inputVal.isX())
       return InterpretedValue::makeX(width);
@@ -1636,8 +1668,10 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto addOp = value.getDefiningOp<comb::AddOp>()) {
-    InterpretedValue lhs = evaluateContinuousValueImpl(addOp.getOperand(0), visited);
-    InterpretedValue rhs = evaluateContinuousValueImpl(addOp.getOperand(1), visited);
+    InterpretedValue lhs =
+        evaluateContinuousValueImpl(addOp.getOperand(0), inProgress);
+    InterpretedValue rhs =
+        evaluateContinuousValueImpl(addOp.getOperand(1), inProgress);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     llvm::APInt lhsVal = lhs.getAPInt();
@@ -1648,8 +1682,10 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto subOp = value.getDefiningOp<comb::SubOp>()) {
-    InterpretedValue lhs = evaluateContinuousValueImpl(subOp.getOperand(0), visited);
-    InterpretedValue rhs = evaluateContinuousValueImpl(subOp.getOperand(1), visited);
+    InterpretedValue lhs =
+        evaluateContinuousValueImpl(subOp.getOperand(0), inProgress);
+    InterpretedValue rhs =
+        evaluateContinuousValueImpl(subOp.getOperand(1), inProgress);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     llvm::APInt lhsVal = lhs.getAPInt();
@@ -4308,6 +4344,31 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
 LogicalResult LLHDProcessInterpreter::interpretHalt(ProcessId procId,
                                                      llhd::HaltOp haltOp) {
   auto &state = processStates[procId];
+
+  // Handle yield operands - these become the process result values
+  // The yield values are immediately available to the llhd.drv operations
+  // that reference the process results.
+  auto yieldOperands = haltOp.getYieldOperands();
+  if (!yieldOperands.empty()) {
+    // Get the parent process operation
+    if (auto processOp = state.getProcessOp()) {
+      auto results = processOp.getResults();
+      for (auto [result, yieldOp] : llvm::zip(results, yieldOperands)) {
+        InterpretedValue yieldVal = getValue(procId, yieldOp);
+        // Store the yielded value so it can be accessed when evaluating
+        // the process results outside the process
+        state.valueMap[result] = yieldVal;
+        LLVM_DEBUG(llvm::dbgs() << "  Halt yield value for process result: "
+                                << (yieldVal.isX() ? "X"
+                                                    : std::to_string(yieldVal.getUInt64()))
+                                << "\n");
+      }
+    }
+
+    // Execute module-level drives that depend on this process's results
+    executeModuleDrives(procId);
+  }
+
   state.halted = true;
 
   LLVM_DEBUG(llvm::dbgs() << "  Process halted\n");
@@ -4913,6 +4974,29 @@ void LLHDProcessInterpreter::setValue(ProcessId procId, Value value,
   auto it = processStates.find(procId);
   if (it == processStates.end())
     return;
+
+  if (!val.isX()) {
+    if (auto structType = dyn_cast<hw::StructType>(value.getType())) {
+      auto elements = structType.getElements();
+      if (elements.size() == 2 &&
+          elements[0].name.getValue() == "value" &&
+          elements[1].name.getValue() == "unknown") {
+        auto valueType = dyn_cast<IntegerType>(elements[0].type);
+        auto unknownType = dyn_cast<IntegerType>(elements[1].type);
+        if (valueType && unknownType &&
+            valueType.getWidth() == unknownType.getWidth()) {
+          unsigned totalWidth = valueType.getWidth() + unknownType.getWidth();
+          llvm::APInt bits = val.getAPInt();
+          if (bits.getBitWidth() == totalWidth) {
+            llvm::APInt unknownMask =
+                llvm::APInt::getLowBitsSet(totalWidth, unknownType.getWidth());
+            bits &= ~unknownMask;
+            val = InterpretedValue(bits);
+          }
+        }
+      }
+    }
+  }
 
   it->second.valueMap[value] = val;
 }

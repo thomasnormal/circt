@@ -397,9 +397,9 @@ private:
   /// Evaluate a value for continuous assignments by reading from signal state.
   InterpretedValue evaluateContinuousValue(mlir::Value value);
 
-  /// Helper that tracks visited values to detect cycles.
+  /// Helper that tracks the recursion stack to detect cycles.
   InterpretedValue evaluateContinuousValueImpl(
-      mlir::Value value, llvm::DenseSet<mlir::Value> &visited);
+      mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress);
 
   /// Evaluate an llhd.combinational op and return its yielded values.
   bool evaluateCombinationalOp(llhd::CombinationalOp combOp,
