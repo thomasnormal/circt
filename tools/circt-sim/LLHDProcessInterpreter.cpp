@@ -173,11 +173,11 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
       std::string procName = instOp.getInstanceName().str() + ".llhd_process_" +
                              std::to_string(processStates.size());
 
-      ProcessExecutionState state(processOp);
-      ProcessId procId = scheduler.registerProcess(
-          procName, [this, procId = processStates.size() + 1]() {
-            executeProcess(procId);
-          });
+    ProcessExecutionState state(processOp);
+    ProcessId procId =
+        scheduler.registerProcess(procName, []() {});
+    if (auto *process = scheduler.getProcess(procId))
+      process->setCallback([this, procId]() { executeProcess(procId); });
 
       state.currentBlock = &processOp.getBody().front();
       state.currentOp = state.currentBlock->begin();
@@ -195,11 +195,11 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
       std::string initName = instOp.getInstanceName().str() + ".seq_initial_" +
                              std::to_string(processStates.size());
 
-      ProcessExecutionState state(initialOp);
-      ProcessId procId = scheduler.registerProcess(
-          initName, [this, procId = processStates.size() + 1]() {
-            executeProcess(procId);
-          });
+    ProcessExecutionState state(initialOp);
+    ProcessId procId =
+        scheduler.registerProcess(initName, []() {});
+    if (auto *process = scheduler.getProcess(procId))
+      process->setCallback([this, procId]() { executeProcess(procId); });
 
       state.currentBlock = initialOp.getBodyBlock();
       state.currentOp = state.currentBlock->begin();
@@ -601,11 +601,10 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
   // Create the execution state for this process
   ProcessExecutionState state(processOp);
 
-  // Register with the scheduler, providing a callback that executes this process
-  ProcessId procId = scheduler.registerProcess(
-      name, [this, procId = processStates.size() + 1]() {
-        executeProcess(procId);
-      });
+  // Register with the scheduler, then bind the callback to the real ID.
+  ProcessId procId = scheduler.registerProcess(name, []() {});
+  if (auto *process = scheduler.getProcess(procId))
+    process->setCallback([this, procId]() { executeProcess(procId); });
 
   // Store the state
   state.currentBlock = &processOp.getBody().front();
@@ -629,11 +628,10 @@ ProcessId LLHDProcessInterpreter::registerInitialBlock(seq::InitialOp initialOp)
   // Create the execution state for this initial block
   ProcessExecutionState state(initialOp);
 
-  // Register with the scheduler, providing a callback that executes this block
-  ProcessId procId = scheduler.registerProcess(
-      name, [this, procId = processStates.size() + 1]() {
-        executeProcess(procId);
-      });
+  // Register with the scheduler, then bind the callback to the real ID.
+  ProcessId procId = scheduler.registerProcess(name, []() {});
+  if (auto *process = scheduler.getProcess(procId))
+    process->setCallback([this, procId]() { executeProcess(procId); });
 
   // Store the state - initial blocks have a body with a single block
   state.currentBlock = initialOp.getBodyBlock();
@@ -905,10 +903,12 @@ void LLHDProcessInterpreter::registerFirRegs(hw::HWModuleOp hwModule) {
     ProcessId procId = scheduler.registerProcess(
         procName, [this, regOp]() { executeFirReg(regOp); });
 
+    // Track any clock edge so we can update prevClock on negedges too.
+    // The actual posedge detection is done inside executeFirReg.
     llvm::SmallVector<SignalId, 4> clkSignals;
     collectSignalIds(regOp.getClk(), clkSignals);
     for (SignalId sig : clkSignals)
-      scheduler.addSensitivity(procId, sig, EdgeType::Posedge);
+      scheduler.addSensitivity(procId, sig, EdgeType::AnyEdge);
 
     if (regOp.hasReset() && regOp.getIsAsync()) {
       llvm::SmallVector<SignalId, 4> rstSignals;
@@ -1032,7 +1032,7 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
 /// state.
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     mlir::Value value) {
-  if (auto arg = value.dyn_cast<mlir::BlockArgument>()) {
+  if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
     SignalId sigId = getSignalId(arg);
     if (sigId != 0) {
       const SignalValue &sv = scheduler.getSignalValue(sigId);
@@ -5249,6 +5249,131 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Helper lambda to resolve a pointer address to string data from global memory.
+    // Returns a StringRef to the string content, or empty StringRef if not found.
+    auto resolvePointerToString = [&](uint64_t addr, int64_t len) -> std::string {
+      if (addr == 0 || len <= 0)
+        return "";
+
+      // Search through global memory blocks for this address
+      for (auto &[globalName, globalAddr] : globalAddresses) {
+        auto blockIt = globalMemoryBlocks.find(globalName);
+        if (blockIt != globalMemoryBlocks.end()) {
+          MemoryBlock &block = blockIt->second;
+          uint64_t globalSize = block.size;
+          if (addr >= globalAddr && addr < globalAddr + globalSize) {
+            uint64_t offset = addr - globalAddr;
+            size_t availableLen = std::min(static_cast<size_t>(len),
+                                           block.data.size() - static_cast<size_t>(offset));
+            if (availableLen > 0 && block.initialized) {
+              return std::string(reinterpret_cast<const char*>(block.data.data() + offset),
+                                 availableLen);
+            }
+          }
+        }
+      }
+
+      // Check malloc'd blocks
+      for (auto &[blockAddr, block] : mallocBlocks) {
+        if (addr >= blockAddr && addr < blockAddr + block.size) {
+          uint64_t offset = addr - blockAddr;
+          size_t availableLen = std::min(static_cast<size_t>(len),
+                                         block.data.size() - static_cast<size_t>(offset));
+          if (availableLen > 0) {
+            return std::string(reinterpret_cast<const char*>(block.data.data() + offset),
+                               availableLen);
+          }
+        }
+      }
+
+      return "";
+    };
+
+    // Handle UVM report functions
+    if (calleeName == "__moore_uvm_report_info" ||
+        calleeName == "__moore_uvm_report_warning" ||
+        calleeName == "__moore_uvm_report_error" ||
+        calleeName == "__moore_uvm_report_fatal") {
+      // Signature: (id, idLen, message, messageLen, verbosity, filename, filenameLen, line, context, contextLen)
+      if (callOp.getNumOperands() >= 10) {
+        // Extract arguments
+        uint64_t idPtr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t idLen = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t msgPtr = getValue(procId, callOp.getOperand(2)).getUInt64();
+        int64_t msgLen = static_cast<int64_t>(getValue(procId, callOp.getOperand(3)).getUInt64());
+        int32_t verbosity = static_cast<int32_t>(getValue(procId, callOp.getOperand(4)).getUInt64());
+        uint64_t filePtr = getValue(procId, callOp.getOperand(5)).getUInt64();
+        int64_t fileLen = static_cast<int64_t>(getValue(procId, callOp.getOperand(6)).getUInt64());
+        int32_t line = static_cast<int32_t>(getValue(procId, callOp.getOperand(7)).getUInt64());
+        uint64_t ctxPtr = getValue(procId, callOp.getOperand(8)).getUInt64();
+        int64_t ctxLen = static_cast<int64_t>(getValue(procId, callOp.getOperand(9)).getUInt64());
+
+        // Resolve strings from memory
+        std::string idStr = resolvePointerToString(idPtr, idLen);
+        std::string msgStr = resolvePointerToString(msgPtr, msgLen);
+        std::string fileStr = resolvePointerToString(filePtr, fileLen);
+        std::string ctxStr = resolvePointerToString(ctxPtr, ctxLen);
+
+        // Call the appropriate runtime function
+        if (calleeName == "__moore_uvm_report_info") {
+          __moore_uvm_report_info(idStr.c_str(), idStr.size(),
+                                  msgStr.c_str(), msgStr.size(),
+                                  verbosity, fileStr.c_str(), fileStr.size(),
+                                  line, ctxStr.c_str(), ctxStr.size());
+        } else if (calleeName == "__moore_uvm_report_warning") {
+          __moore_uvm_report_warning(idStr.c_str(), idStr.size(),
+                                     msgStr.c_str(), msgStr.size(),
+                                     verbosity, fileStr.c_str(), fileStr.size(),
+                                     line, ctxStr.c_str(), ctxStr.size());
+        } else if (calleeName == "__moore_uvm_report_error") {
+          __moore_uvm_report_error(idStr.c_str(), idStr.size(),
+                                   msgStr.c_str(), msgStr.size(),
+                                   verbosity, fileStr.c_str(), fileStr.size(),
+                                   line, ctxStr.c_str(), ctxStr.size());
+        } else if (calleeName == "__moore_uvm_report_fatal") {
+          __moore_uvm_report_fatal(idStr.c_str(), idStr.size(),
+                                   msgStr.c_str(), msgStr.size(),
+                                   verbosity, fileStr.c_str(), fileStr.size(),
+                                   line, ctxStr.c_str(), ctxStr.size());
+        }
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: " << calleeName
+                                << "(id=\"" << idStr << "\", msg=\"" << msgStr << "\")\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_uvm_report_enabled
+    if (calleeName == "__moore_uvm_report_enabled") {
+      // Signature: (verbosity, severity, id, idLen) -> int32_t
+      if (callOp.getNumOperands() >= 4) {
+        int32_t verbosity = static_cast<int32_t>(getValue(procId, callOp.getOperand(0)).getUInt64());
+        int32_t severity = static_cast<int32_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t idPtr = getValue(procId, callOp.getOperand(2)).getUInt64();
+        int64_t idLen = static_cast<int64_t>(getValue(procId, callOp.getOperand(3)).getUInt64());
+
+        std::string idStr = resolvePointerToString(idPtr, idLen);
+        int32_t result = __moore_uvm_report_enabled(verbosity, severity,
+                                                     idStr.c_str(), idStr.size());
+
+        if (callOp.getNumResults() >= 1) {
+          setValue(procId, callOp.getResult(), InterpretedValue(result, 32));
+        }
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_report_enabled("
+                                << verbosity << ", " << severity << ", \"" << idStr
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_uvm_report_summarize
+    if (calleeName == "__moore_uvm_report_summarize") {
+      __moore_uvm_report_summarize();
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_report_summarize()\n");
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' is external (no body)\n");
     for (Value result : callOp.getResults()) {
@@ -5416,15 +5541,22 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
     MemoryBlock block(size, 64);
 
     // Check the initializer attribute
-    // Most globals are initialized with #llvm.zero or a constant value
-    // The MemoryBlock constructor already initializes data to 0, so we just
-    // need to mark it as initialized.
-    if (globalOp.getValueOrNull()) {
-      // Has an initializer - mark as initialized
-      // The data is already zeroed from the constructor, which is correct
-      // for #llvm.zero initializers
+    // Handle both #llvm.zero and string constant initializers
+    if (auto initAttr = globalOp.getValueOrNull()) {
       block.initialized = true;
-      LLVM_DEBUG(llvm::dbgs() << "    Initialized to zero\n");
+
+      // Check if this is a string initializer
+      if (auto strAttr = dyn_cast<StringAttr>(initAttr)) {
+        StringRef strContent = strAttr.getValue();
+        // Copy the string content to the memory block
+        size_t copyLen = std::min(strContent.size(), block.data.size());
+        std::memcpy(block.data.data(), strContent.data(), copyLen);
+        LLVM_DEBUG(llvm::dbgs() << "    Initialized with string: \""
+                                << strContent << "\" (" << copyLen << " bytes)\n");
+      } else {
+        // For #llvm.zero or other initializers, data is already zeroed
+        LLVM_DEBUG(llvm::dbgs() << "    Initialized to zero\n");
+      }
     }
 
     // Check if this is a vtable (has circt.vtable_entries attribute)
