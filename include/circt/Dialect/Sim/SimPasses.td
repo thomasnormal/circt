@@ -32,4 +32,13 @@ def LowerDPIFunc : Pass<"sim-lower-dpi-func", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect"];
 }
 
+def StripSim : Pass<"strip-sim", "mlir::ModuleOp"> {
+  let summary = "Strip simulation-only operations for non-simulation flows";
+  let dependentDialects = [
+    "circt::comb::CombDialect", "circt::hw::HWDialect",
+    "circt::seq::SeqDialect", "circt::verif::VerifDialect",
+    "mlir::cf::ControlFlowDialect"
+  ];
+}
+
 #endif // CIRCT_DIALECT_SIM_SEQPASSES

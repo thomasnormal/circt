@@ -387,6 +387,15 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
     return mlir::smt::BitVectorType::get(type.getContext(), width);
   });
 
+  auto ensureInsertionInValueRegion = [](OpBuilder &builder, Value input) {
+    if (auto *defOp = input.getDefiningOp()) {
+      builder.setInsertionPointAfter(defOp);
+      return;
+    }
+    if (auto *block = input.getParentBlock())
+      builder.setInsertionPointToStart(block);
+  };
+
   // Default target materialization to convert from illegal types to legal
   // types, e.g., at the boundary of an inlined child block.
   converter.addTargetMaterialization([&](OpBuilder &builder, Type resultType,
@@ -407,6 +416,9 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
 
     if (!isa<mlir::smt::BoolType>(inputs[0].getType()))
       return Value();
+
+    OpBuilder::InsertionGuard guard(builder);
+    ensureInsertionInValueRegion(builder, inputs[0]);
 
     unsigned width = resultType.getWidth();
     Value constZero = mlir::smt::BVConstantOp::create(builder, loc, 0, width);
@@ -435,6 +447,9 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
         if (!isa<mlir::smt::BoolType>(castOp.getInputs()[0].getType()))
           return Value();
 
+        OpBuilder::InsertionGuard guard(builder);
+        ensureInsertionInValueRegion(builder, inputs[0]);
+
         Value constZero = mlir::smt::BVConstantOp::create(builder, loc, 0, 1);
         Value constOne = mlir::smt::BVConstantOp::create(builder, loc, 1, 1);
         return mlir::smt::IteOp::create(builder, loc, castOp.getInputs()[0],
@@ -451,6 +466,9 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
         auto bvType = dyn_cast<mlir::smt::BitVectorType>(inputs[0].getType());
         if (!bvType || bvType.getWidth() != 1)
           return Value();
+
+        OpBuilder::InsertionGuard guard(builder);
+        ensureInsertionInValueRegion(builder, inputs[0]);
 
         Value constOne = mlir::smt::BVConstantOp::create(builder, loc, 1, 1);
         return mlir::smt::EqOp::create(builder, loc, inputs[0], constOne);

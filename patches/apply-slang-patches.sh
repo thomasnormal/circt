@@ -12,3 +12,5 @@ git apply --ignore-whitespace "$script_dir/slang-ifdef-expr.patch" || true
 # git apply --ignore-whitespace "$script_dir/slang-bind-scope.patch" || true
 # AllowVirtualIfaceWithOverride flag for Xcelium compatibility (bind/vif support)
 git apply --ignore-whitespace "$script_dir/slang-allow-virtual-iface-override.patch" || true
+git apply --ignore-whitespace "$script_dir/slang-relax-string-concat-byte.patch" || true
+git apply --ignore-whitespace "$script_dir/slang-allow-class-handle-format.patch" || true

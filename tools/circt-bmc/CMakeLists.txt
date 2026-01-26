@@ -37,6 +37,7 @@ target_link_libraries(circt-bmc
   CIRCTSimTransforms
   CIRCTSMTToZ3LLVM
   CIRCTSVAToLTL
+  CIRCTTransforms
   CIRCTSupport
   CIRCTVerif
   CIRCTVerifToSMT

@@ -11,19 +11,20 @@ Simulate OpenTitan primitive modules, IP blocks, and eventually UVM testbenches 
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Primitive Modules (prim_fifo_sync, prim_count) | **COMPLETE** |
-| 2 | Simple IP (GPIO RTL) | **gpio_no_alerts SIMULATES** - Full GPIO blocked by prim_diff_decode |
+| 2 | Simple IP (GPIO RTL) | **gpio + uart + i2c + spi_host + spi_device + usbdev SIMULATE** - Full GPIO/UART/I2C/SPI Host/SPI Device/USBDev with alerts work |
 | 3 | Protocol Infrastructure (TileLink-UL) | **VALIDATED** (via gpio_no_alerts) |
 | 4 | DV Infrastructure (UVM Testbenches) | Not Started |
-| 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN, entropy_src, edn, kmac) | **8 crypto IPs SIMULATE** |
+| 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN, entropy_src, edn, kmac, ascon) | **9 crypto IPs SIMULATE** |
 | 6 | Integration (Multiple IPs) | Not Started |
 
-**Summary**: 21 OpenTitan modules now simulate via CIRCT:
-- Communication: gpio, uart, spi_host, i2c, **spi_device**, **usbdev** (dual clock)
+**Summary**: 34 OpenTitan modules now simulate via CIRCT:
+- Communication: **gpio (full)**, **uart (full)**, **i2c (full)**, **spi_host (full)**, **spi_device (full)**, **usbdev (full)** (dual clock)
 - Timers: aon_timer, pwm, rv_timer, timer_core (full logic!)
-- Crypto: hmac, aes, csrng, keymgr, otbn, entropy_src, edn, kmac
+- Crypto: hmac, aes, csrng, keymgr, keymgr_dpe (full), otbn, entropy_src, edn, kmac, **ascon (full)**
 - Security: otp_ctrl, **lc_ctrl**, **flash_ctrl**
+- Misc: dma (full), mbx (full), pattgen, rom_ctrl_regs, sram_ctrl_regs, sysrst_ctrl
 
-**Blocker for Full IPs**: prim_diff_decode.sv control-flow lowering bug prevents prim_alert_sender
+**Former Blocker (fixed)**: prim_diff_decode.sv control-flow lowering bug in Mem2Reg (prim_alert_sender now unblocked)
 
 **Recent Fix**: SignalValue 64-bit limitation fixed with llvm::APInt (commit f0c40886a)
 
@@ -84,7 +85,7 @@ OpenTitan uses `prim_assert.sv` which includes different macro files based on to
 
 ## Phase 2: GPIO RTL
 
-### Status: **gpio_no_alerts SIMULATES** - Full GPIO Blocked by prim_diff_decode.sv
+### Status: **gpio + uart + i2c + spi_host + spi_device + usbdev SIMULATE** - Full GPIO/UART/I2C/SPI Host/SPI Device/USBDev with alerts work
 
 The `gpio_no_alerts` subset (without `prim_alert_sender`) now **compiles, lowers, and simulates successfully!**
 
@@ -105,7 +106,12 @@ TEST PASSED: gpio_reg_top basic connectivity
 | `gpio_pkg.sv` | PASS | PASS | N/A |
 | `gpio_reg_pkg.sv` | PASS | PASS | N/A |
 | `gpio_reg_top.sv` | PASS | PASS | **PASS** |
-| `gpio.sv` | PASS | BLOCKED | - |
+| `gpio.sv` | PASS | PASS | **PASS** |
+| `uart.sv` | PASS | PASS | **PASS** |
+| `i2c.sv` | PASS | PASS | **PASS** |
+| `spi_host.sv` | PASS | PASS | **PASS** |
+| `spi_device.sv` | PASS | PASS | **PASS** |
+| `usbdev.sv` | PASS | PASS | **PASS** |
 
 ### Dependencies Resolved
 
@@ -172,14 +178,14 @@ All GPIO dependencies have been added to the script. Full dependency tree (39 fi
 - `gpio_reg_top` - PASS
 - `gpio.sv` - PASS
 
-### Blocker: prim_diff_decode.sv
+### Former Blocker: prim_diff_decode.sv (fixed)
 
-The HW lowering fails in `prim_diff_decode.sv` at line 133 with:
+The HW lowering previously failed in `prim_diff_decode.sv` at line 133 with:
 ```
 error: branch has 7 operands for successor #0, but target block has 4
 ```
 
-This is a CIRCT Moore-to-Core lowering bug with complex nested `if-else` inside `unique case`. The error occurs in the async CDC path handling:
+This was a CIRCT Moore-to-Core lowering bug with complex nested `if-else` inside `unique case`. The error occurred in the async CDC path handling:
 ```systemverilog
 unique case (state_q)
   IsStd: begin
@@ -196,6 +202,8 @@ unique case (state_q)
     end
   end
 ```
+
+**Fix**: Mem2Reg predecessor deduplication (commit 8116230df) resolves this. The `gpio_no_alerts` target remains useful for minimal smoke testing.
 
 ### Workaround: gpio_no_alerts Target
 
@@ -270,6 +278,20 @@ TileLink-UL protocol adapters now work end-to-end through gpio_reg_top simulatio
 | `gpio_env_pkg.sv` | - | - |
 | `gpio_base_test.sv` | - | - |
 
+**Status update (initial bring-up, top_darjeeling):**
+- Generated `gpio_ral_pkg.sv` locally via `regtool -s` (needed by `gpio_env_pkg` import).
+- Parse-only compile of `gpio/dv/tb/tb.sv` progresses with DV package set + interfaces included, but
+  still blocked by:
+  - **Missing DV dependencies in compile set**: `prim_alert_pkg`, `prim_esc_pkg`, `push_pull_seq_list.sv`
+    (from push_pull_agent), and additional alert agent deps.
+  - **CIRCT limitations**:
+    - `str_utils_pkg.sv` and `dv_utils_pkg.sv`: string + byte concatenation rejected (slang patch added; requires rebuild).
+    - `csr_utils_pkg.sv`: `%d/%h` format specifiers reject class handles and `null` (slang patch added; requires rebuild).
+    - `dv_base_reg_pkg.sv`: macro-expanded field name (``gfn`) fails parsing.
+  - **Additional DV deps (compile set)**:
+    - `sec_cm_pkg`, `rst_shadowed_if`, and `cip_seq_list.sv` (via `cip_base_pkg`) still missing.
+    - With `-DUVM`, the `dv_base_reg_pkg` ``gfn` macro error no longer reproduces.
+
 ---
 
 ## Scripts
@@ -332,6 +354,11 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **rv_dm blocked (compiler crash)**: circt-verilog aborts in `dm_csrs.sv` on `{dmcontrol_d.hartselhi, dmcontrol_d.hartsello} &= (2**$clog2(NrHarts))-1;` (moore.concat_ref crash). |
+| 2026-01-26 | **KeyMgr DPE full IP SIMULATES!** Added keymgr_dpe full-IP testbench + filelist (EDN/KMAC/OTP/ROM stubs). Basic TL-UL connectivity works with stubbed interfaces. |
+| 2026-01-26 | **MBX full IP SIMULATES!** Added mailbox full-IP testbench + filelist (core/soc TL-UL + SRAM host port). Basic TL-UL connectivity works with stubbed host port. |
+| 2026-01-26 | **DMA full IP SIMULATES!** Added DMA full-IP testbench + filelist (multi-port TL-UL + SHA2). Basic TL-UL connectivity works with stubbed host/CTN/sys ports. |
+| 2026-01-26 | **Ascon full IP SIMULATES!** Added ascon full-IP testbench + filelist; prim_ascon_duplex wrapper provides flop macros; --compat vcs used for enum/mubi conversions. |
 | 2026-01-26 | **4 more IPs SIMULATE!** 21 OpenTitan modules now. spi_device_reg_top (178 ops, 85 signals), flash_ctrl_reg_top (179 ops, 90 signals), lc_ctrl_regs_reg_top (173 ops, 41 signals), usbdev_reg_top (193 ops, 117 signals, dual clock domain with CDC) |
 | 2026-01-26 | **4 more crypto IPs SIMULATE!** 17 OpenTitan modules now. entropy_src_reg_top (173 ops, 73 signals), edn_reg_top (173 ops, 63 signals), kmac_reg_top (215 ops, 135 signals, 2 windows), otp_ctrl_reg_top (175 ops, 52 signals, required lc_ctrl deps) |
 | 2026-01-26 | **keymgr_reg_top + otbn_reg_top SIMULATE!** 5 crypto IPs now! 13 OpenTitan modules total. keymgr (212 ops, 111 signals) with shadowed registers for key protection. otbn (176 ops, 58 signals) with window interfaces for Big Number accelerator |
@@ -443,9 +470,7 @@ Cannot lower to HW dialect due to prim_diff_decode control-flow bug in prim_aler
 
 ## Next Steps
 
-1. **64-bit APInt bug FIXED**: SignalValue upgraded to llvm::APInt (commit f0c40886a) - timer_core simulates!
-2. **Fix prim_diff_decode bug**: File CIRCT issue with minimal reproducer
-3. ~~**Try more crypto IPs**: otbn_reg_top, keymgr_reg_top~~ **DONE** - All 5 crypto IPs (hmac, aes, csrng, keymgr, otbn) now simulate!
-4. ~~**Explore more IPs**: entropy_src, edn, kmac, otp_ctrl register blocks~~ **DONE** - All 4 compile and simulate! 17 modules total
-5. **Phase 4 planning**: Investigate DV environment requirements
-6. **Explore more IPs**: adc_ctrl, ascon, dma, flash_ctrl, lc_ctrl, mbx, pattgen, rom_ctrl, rv_dm, spi_device, sram_ctrl, sysrst_ctrl, usbdev
+1. **Phase 4 planning**: define minimum DV environment for GPIO (CIP library + TL-UL agent stubs).
+2. **Phase 4 planning**: define minimum DV environment for GPIO (CIP library + TL-UL agent stubs).
+3. **Broaden OpenTitan IP coverage**: adc_ctrl, ascon, dma, mbx, rv_dm.
+4. **Integration**: multi-IP simulation with shared TL-UL fabric and cross-module references.

@@ -14,6 +14,7 @@
 #include "circt/Conversion/HWToSMT.h"
 #include "circt/Conversion/ImportVerilog.h"
 #include "circt/Conversion/LTLToCore.h"
+#include "circt/Conversion/MooreToCore.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
 #include "circt/Conversion/SVAToLTL.h"
 #include "circt/Conversion/VerifToSMT.h"
@@ -25,6 +26,7 @@
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
+#include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
 #include "circt/Dialect/LTL/LTLDialect.h"
 #include "circt/Dialect/Moore/MooreDialect.h"
 #include "circt/Dialect/OM/OMDialect.h"
@@ -32,11 +34,13 @@
 #include "circt/Dialect/Sim/SimDialect.h"
 #include "circt/Dialect/Sim/SimPasses.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
+#include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Dialect/Verif/VerifPasses.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
+#include "circt/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
@@ -129,6 +133,10 @@ static cl::opt<bool> risingClocksOnly(
     "rising-clocks-only",
     cl::desc("Only consider the circuit and property on rising clock edges"),
     cl::init(false), cl::cat(mainCategory));
+static cl::opt<bool> allowMultiClock(
+    "allow-multi-clock",
+    cl::desc("Allow multiple explicit clock inputs by interleaving toggles"),
+    cl::init(false), cl::cat(mainCategory));
 
 #ifdef CIRCT_BMC_ENABLE_JIT
 
@@ -202,8 +210,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
 
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
-  // TODO: Re-enable when createStripSim is implemented
-  // pm.addPass(sim::createStripSim());
+  pm.addPass(sim::createStripSim());
   pm.addPass(verif::createLowerTestsPass());
 
   bool hasLLHD = false;
@@ -215,9 +222,42 @@ static LogicalResult executeBMC(MLIRContext &context) {
 
   if (hasLLHD) {
     LlhdToCorePipelineOptions llhdOptions;
-    populateLlhdToCorePipeline(pm, llhdOptions);
-    // Strip LLHD processes after lowering - their results become symbolic inputs
+    pm.addNestedPass<hw::HWModuleOp>(llhd::createWrapProceduralOpsPass());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(llhd::createInlineCallsPass());
+    pm.addPass(createConvertMooreToCorePass());
+    pm.addPass(mlir::createSymbolDCEPass());
+
+    auto &llhdPrePM = pm.nest<hw::HWModuleOp>();
+    if (llhdOptions.sroa)
+      llhdPrePM.addPass(mlir::createSROA());
+    llhdPrePM.addPass(llhd::createMem2RegPass());
+    llhdPrePM.addPass(llhd::createHoistSignalsPass());
+    llhdPrePM.addPass(llhd::createDeseqPass());
+
+    // Hoist assertions before LLHD process lowering removes them.
     pm.addPass(createStripLLHDProcesses());
+
+    auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
+    llhdPostPM.addPass(llhd::createLowerProcessesPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(llhd::createUnrollLoopsPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(createMapArithToCombPass(true));
+    llhdPostPM.addPass(llhd::createCombineDrivesPass());
+    llhdPostPM.addPass(llhd::createSig2Reg());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    if (llhdOptions.detectMemories) {
+      llhdPostPM.addPass(seq::createRegOfVecToMem());
+      llhdPostPM.addPass(mlir::createCSEPass());
+      llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    }
   }
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
@@ -225,7 +265,11 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(hw::createFlattenModules());
-  pm.addPass(createExternalizeRegisters());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  ExternalizeRegistersOptions externalizeOptions;
+  externalizeOptions.allowMultiClock = allowMultiClock;
+  pm.addPass(createExternalizeRegisters(externalizeOptions));
   pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
   pm.addPass(hw::createHWConvertBitcasts());
   LowerToBMCOptions lowerToBMCOptions;
@@ -233,6 +277,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   lowerToBMCOptions.ignoreAssertionsUntil = ignoreAssertionsUntil;
   lowerToBMCOptions.topModule = moduleName;
   lowerToBMCOptions.risingClocksOnly = risingClocksOnly;
+  lowerToBMCOptions.allowMultiClock = allowMultiClock;
   pm.addPass(createLowerToBMC(lowerToBMCOptions));
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertCombToSMT());

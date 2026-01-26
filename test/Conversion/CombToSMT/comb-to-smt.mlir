@@ -71,6 +71,12 @@ func.func @test(%a0: !smt.bv<32>, %a1: !smt.bv<32>, %a2: !smt.bv<32>, %a3: !smt.
   // CHECK-NEXT: [[V0:%.+]] = smt.distinct [[A0]], [[A1]] : !smt.bv<32>
   // CHECK: smt.ite [[V0]]
   %15 = comb.icmp ne %arg0, %arg1 : i32
+  // CHECK-NEXT: [[V0:%.+]] = smt.eq [[A0]], [[A1]] : !smt.bv<32>
+  // CHECK: smt.ite [[V0]]
+  %16 = comb.icmp ceq %arg0, %arg1 : i32
+  // CHECK-NEXT: [[V0:%.+]] = smt.distinct [[A0]], [[A1]] : !smt.bv<32>
+  // CHECK: smt.ite [[V0]]
+  %17 = comb.icmp wne %arg0, %arg1 : i32
   // CHECK-NEXT: [[V0:%.+]] = smt.bv.cmp sle [[A0]], [[A1]] : !smt.bv<32>
   // CHECK: smt.ite [[V0]]
   %20 = comb.icmp sle %arg0, %arg1 : i32

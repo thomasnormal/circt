@@ -60,3 +60,15 @@ hw.module @test_event_wait_preserved(in %sig : !llhd.ref<i8>) {
   }
   hw.output
 }
+
+// Test that llhd.process ops with verif.assert are NOT removed
+hw.module @test_verif_assert_preserved(in %cond : i1) {
+  // CHECK-LABEL: @test_verif_assert_preserved
+  // CHECK: llhd.process
+  // CHECK: verif.assert
+  llhd.process {
+    verif.assert %cond : i1
+    llhd.halt
+  }
+  hw.output
+}

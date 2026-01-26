@@ -8,6 +8,10 @@
 // CHECK:         [[BVPOSEDGE:%.+]] = smt.bv.and [[OLDCLOCKLOW]], [[LOOP]]
 // CHECK:         [[ISPOSEDGE:%.+]] = smt.eq [[BVPOSEDGE]], [[BVTRUE]]
 // CHECK:         [[BUFNEXT:%.+]] = smt.ite [[ISPOSEDGE]]
+// CHECK-LABEL: func.func @bmc_circuit
+// CHECK:       [[TRUE:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
+// CHECK:       smt.eq %arg{{[0-9]+}}, [[TRUE]]
+// CHECK:       smt.eq %arg{{[0-9]+}}, [[TRUE]]
 
 func.func @delay_posedge() -> i1 {
   %bmc = verif.bmc bound 4 num_regs 0 initial_values []

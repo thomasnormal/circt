@@ -38,6 +38,24 @@ func.func @test_ltl_or(%a: i1, %b: i1) {
   return
 }
 
+// CHECK-LABEL: func.func @test_ltl_intersect
+// CHECK-DAG:   smt.bv.constant
+// CHECK-DAG:   builtin.unrealized_conversion_cast
+// CHECK-DAG:   builtin.unrealized_conversion_cast
+// CHECK:       smt.eq
+// CHECK:       smt.eq
+// CHECK:       smt.and
+// CHECK:       smt.ite
+// CHECK:       smt.eq
+// CHECK:       smt.not
+// CHECK:       smt.assert
+// CHECK:       return
+func.func @test_ltl_intersect(%a: i1, %b: i1) {
+  %prop = ltl.intersect %a, %b : i1, i1
+  verif.assert %prop : i1
+  return
+}
+
 // CHECK-LABEL: func.func @test_ltl_not
 // CHECK:       smt.bv.constant
 // CHECK:       builtin.unrealized_conversion_cast
@@ -80,6 +98,18 @@ func.func @test_ltl_implication(%a: i1, %b: i1) {
 // the BMC loop accumulates with OR over time steps
 func.func @test_ltl_eventually(%a: i1) {
   %prop = ltl.eventually %a : i1
+  verif.assert %prop : !ltl.property
+  return
+}
+
+// CHECK-LABEL: func.func @test_ltl_eventually_weak
+// CHECK:       smt.constant true
+// CHECK:       smt.not
+// CHECK:       smt.assert
+// CHECK:       return
+// Weak eventually is always satisfied in the SMT lowering.
+func.func @test_ltl_eventually_weak(%a: i1) {
+  %prop = ltl.eventually %a {ltl.weak} : i1
   verif.assert %prop : !ltl.property
   return
 }

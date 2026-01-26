@@ -33,10 +33,10 @@ moore.module @DeferredAssertions(in %cond : !moore.l1) {
     // CHECK: verif.assert %[[VAL1]] label "" : i1
     moore.assert observed %cond : l1
 
-    // Final deferred assertion (assert final)
-    // CHECK: %[[VAL2:.*]] = hw.struct_extract %cond["value"]
-    // CHECK: verif.assert %[[VAL2]] label "" : i1
-    moore.assert final %cond : l1
+  // Final deferred assertion (assert final)
+  // CHECK: %[[VAL2:.*]] = hw.struct_extract %cond["value"]
+  // CHECK: verif.assert %[[VAL2]] label "" {bmc.final} : i1
+  moore.assert final %cond : l1
 
     moore.return
   }
@@ -54,4 +54,3 @@ moore.module @DeferredAssertions(in %cond : !moore.l1) {
 //
 // The MooreToCore pass primarily handles moore.assert/assume/cover operations.
 // LTL and verif dialect operations are marked as legal and passed through.
-

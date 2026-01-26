@@ -21,6 +21,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/BackedgeBuilder.h"
+#include "circt/Support/LTLSequenceNFA.h"
 #include "circt/Support/Namespace.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -48,6 +49,9 @@ using namespace hw;
 //===----------------------------------------------------------------------===//
 
 namespace {
+constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
+
+using ltl::NFABuilder;
 struct HasBeenResetOpConversion : OpConversionPattern<verif::HasBeenResetOp> {
   using OpConversionPattern<verif::HasBeenResetOp>::OpConversionPattern;
 
@@ -96,390 +100,6 @@ struct HasBeenResetOpConversion : OpConversionPattern<verif::HasBeenResetOp> {
   }
 };
 
-struct NFABuilder {
-  struct Transition {
-    int condIndex;
-    int to;
-    bool isEpsilon;
-  };
-  struct State {
-    bool accepting;
-    SmallVector<Transition, 4> transitions;
-  };
-  struct Fragment {
-    int start;
-    SmallVector<int, 4> accepts;
-  };
-
-  NFABuilder(Value anyCondition) : anyCondition(anyCondition) {}
-
-  int addState(bool accepting = false) {
-    int id = states.size();
-    states.push_back(State{accepting, {}});
-    return id;
-  }
-
-  int getCondIndex(Value cond) {
-    auto it = condToIndex.find(cond);
-    if (it != condToIndex.end())
-      return it->second;
-    int index = conditions.size();
-    conditions.push_back(cond);
-    condToIndex[cond] = index;
-    return index;
-  }
-
-  Fragment makeEmpty() {
-    int start = addState(true);
-    return Fragment{start, {start}};
-  }
-
-  Fragment makeSymbol(Value cond) {
-    int start = addState(false);
-    int accept = addState(true);
-    int condIndex = getCondIndex(cond);
-    states[start].transitions.push_back(Transition{condIndex, accept, false});
-    return Fragment{start, {accept}};
-  }
-
-  Fragment makeAny() { return makeSymbol(anyCondition); }
-
-  void addEpsilon(int from, int to) {
-    states[from].transitions.push_back(Transition{-1, to, true});
-  }
-
-  Fragment concat(Fragment lhs, Fragment rhs) {
-    for (int accept : lhs.accepts) {
-      addEpsilon(accept, rhs.start);
-      states[accept].accepting = false;
-    }
-    return Fragment{lhs.start, rhs.accepts};
-  }
-
-  Fragment makeOr(Fragment lhs, Fragment rhs) {
-    int start = addState(false);
-    int accept = addState(true);
-    addEpsilon(start, lhs.start);
-    addEpsilon(start, rhs.start);
-    for (int s : lhs.accepts) {
-      addEpsilon(s, accept);
-      states[s].accepting = false;
-    }
-    for (int s : rhs.accepts) {
-      addEpsilon(s, accept);
-      states[s].accepting = false;
-    }
-    return Fragment{start, {accept}};
-  }
-
-  Fragment repeat(Fragment input, uint64_t minCount,
-                  std::optional<uint64_t> maxCount) {
-    if (minCount == 0 && maxCount.has_value() && *maxCount == 0)
-      return makeEmpty();
-
-    Fragment result;
-    bool initialized = false;
-    for (uint64_t i = 0; i < minCount; ++i) {
-      Fragment copy = cloneFragment(input);
-      if (!initialized) {
-        result = copy;
-        initialized = true;
-      } else {
-        result = concat(result, copy);
-      }
-    }
-
-    if (!maxCount.has_value()) {
-      Fragment loop = cloneFragment(input);
-      if (!initialized) {
-        result = makeEmpty();
-        initialized = true;
-      }
-      for (int accept : result.accepts)
-        addEpsilon(accept, loop.start);
-      for (int accept : loop.accepts)
-        addEpsilon(accept, loop.start);
-      result.accepts.append(loop.accepts.begin(), loop.accepts.end());
-      return result;
-    }
-
-    uint64_t maxVal = *maxCount;
-    if (!initialized)
-      result = makeEmpty();
-
-    for (uint64_t count = minCount; count < maxVal; ++count) {
-      Fragment copy = cloneFragment(input);
-      for (int accept : result.accepts)
-        addEpsilon(accept, copy.start);
-      result.accepts.append(copy.accepts.begin(), copy.accepts.end());
-    }
-    return result;
-  }
-
-  Fragment delay(Fragment input, uint64_t minDelay,
-                 std::optional<uint64_t> maxDelay) {
-    Fragment anyFrag = makeAny();
-    Fragment padding = repeat(anyFrag, minDelay, maxDelay);
-    return concat(padding, input);
-  }
-
-  Fragment makeAnyStar() {
-    Fragment anyFrag = makeAny();
-    return repeat(anyFrag, 0, std::nullopt);
-  }
-
-  Fragment gotoRepeat(Fragment input, uint64_t minCount, uint64_t maxCount) {
-    Fragment anyStar = makeAnyStar();
-    Fragment result;
-    bool initialized = false;
-    for (uint64_t i = 0; i < minCount; ++i) {
-      Fragment copy = cloneFragment(input);
-      if (!initialized) {
-        result = copy;
-        initialized = true;
-      } else {
-        result = concat(result, anyStar);
-        result = concat(result, copy);
-      }
-    }
-    for (uint64_t i = minCount; i < maxCount; ++i) {
-      Fragment copy = cloneFragment(input);
-      Fragment option = concat(anyStar, copy);
-      for (int accept : result.accepts)
-        addEpsilon(accept, option.start);
-      result.accepts.append(option.accepts.begin(), option.accepts.end());
-    }
-    return result;
-  }
-
-  Fragment nonConsecutiveRepeat(Fragment input, uint64_t minCount,
-                                uint64_t maxCount) {
-    Fragment result = gotoRepeat(input, minCount, maxCount);
-    Fragment anyStar = makeAnyStar();
-    return concat(result, anyStar);
-  }
-
-  static std::pair<NFABuilder, Fragment>
-  buildEpsilonFreeNFA(Value seq, Location loc, Value anyCondition,
-                      OpBuilder &builder) {
-    NFABuilder nfa(anyCondition);
-    auto fragment = nfa.build(seq, loc, builder);
-    nfa.eliminateEpsilon();
-    return {std::move(nfa), fragment};
-  }
-
-  static std::pair<NFABuilder, Fragment>
-  intersectNFAs(const NFABuilder &lhs, const Fragment &lhsFrag,
-                const NFABuilder &rhs, const Fragment &rhsFrag, OpBuilder &builder,
-                Location loc, Value anyCondition) {
-    NFABuilder result(anyCondition);
-    DenseMap<uint64_t, int> stateMap;
-    SmallVector<std::pair<int, int>, 8> worklist;
-
-    auto packKey = [](int a, int b) -> uint64_t {
-      return (static_cast<uint64_t>(static_cast<uint32_t>(a)) << 32) |
-             static_cast<uint32_t>(b);
-    };
-
-    auto getState = [&](int a, int b) -> int {
-      uint64_t key = packKey(a, b);
-      auto it = stateMap.find(key);
-      if (it != stateMap.end())
-        return it->second;
-      bool accepting = lhs.states[a].accepting && rhs.states[b].accepting;
-      int id = result.addState(accepting);
-      stateMap[key] = id;
-      worklist.push_back({a, b});
-      return id;
-    };
-
-    int start = getState(lhsFrag.start, rhsFrag.start);
-
-    while (!worklist.empty()) {
-      auto [a, b] = worklist.pop_back_val();
-      int from = stateMap[packKey(a, b)];
-      auto &lhsState = lhs.states[a];
-      auto &rhsState = rhs.states[b];
-      for (auto &lhsTr : lhsState.transitions) {
-        if (lhsTr.isEpsilon)
-          continue;
-        Value lhsCond = lhs.conditions[lhsTr.condIndex];
-        for (auto &rhsTr : rhsState.transitions) {
-          if (rhsTr.isEpsilon)
-            continue;
-          Value rhsCond = rhs.conditions[rhsTr.condIndex];
-          Value cond;
-          if (lhsCond == rhsCond) {
-            cond = lhsCond;
-          } else {
-            cond = comb::AndOp::create(builder, loc,
-                                       SmallVector<Value, 2>{lhsCond, rhsCond},
-                                       true);
-          }
-          int condIndex = result.getCondIndex(cond);
-          int to = getState(lhsTr.to, rhsTr.to);
-          result.states[from].transitions.push_back(
-              Transition{condIndex, to, false});
-        }
-      }
-    }
-
-    SmallVector<int, 4> accepts;
-    for (size_t i = 0; i < result.states.size(); ++i) {
-      if (result.states[i].accepting)
-        accepts.push_back(static_cast<int>(i));
-    }
-    return {std::move(result), Fragment{start, accepts}};
-  }
-
-  Fragment build(Value seq, Location loc, OpBuilder &builder) {
-    if (!seq)
-      return makeEmpty();
-    if (!isa<ltl::SequenceType>(seq.getType()))
-      return makeSymbol(seq);
-
-    if (auto delayOp = seq.getDefiningOp<ltl::DelayOp>()) {
-      auto input = build(delayOp.getInput(), loc, builder);
-      uint64_t minDelay = delayOp.getDelay();
-      std::optional<uint64_t> maxDelay;
-      if (auto length = delayOp.getLength())
-        maxDelay = minDelay + *length;
-      return delay(input, minDelay, maxDelay);
-    }
-    if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
-      auto inputs = concatOp.getInputs();
-      if (inputs.empty())
-        return makeEmpty();
-      Fragment result = build(inputs.front(), loc, builder);
-      for (auto input : inputs.drop_front())
-        result = concat(result, build(input, loc, builder));
-      return result;
-    }
-    if (auto repeatOp = seq.getDefiningOp<ltl::RepeatOp>()) {
-      auto input = build(repeatOp.getInput(), loc, builder);
-      std::optional<uint64_t> maxCount;
-      if (auto more = repeatOp.getMore())
-        maxCount = repeatOp.getBase() + *more;
-      return repeat(input, repeatOp.getBase(), maxCount);
-    }
-    if (auto gotoOp = seq.getDefiningOp<ltl::GoToRepeatOp>()) {
-      auto input = build(gotoOp.getInput(), loc, builder);
-      return gotoRepeat(input, gotoOp.getBase(),
-                        gotoOp.getBase() + gotoOp.getMore());
-    }
-    if (auto nonconOp = seq.getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
-      auto input = build(nonconOp.getInput(), loc, builder);
-      return nonConsecutiveRepeat(input, nonconOp.getBase(),
-                                  nonconOp.getBase() + nonconOp.getMore());
-    }
-    if (auto orOp = seq.getDefiningOp<ltl::OrOp>()) {
-      auto inputs = orOp.getInputs();
-      if (inputs.empty())
-        return makeEmpty();
-      Fragment result = build(inputs.front(), loc, builder);
-      for (auto input : inputs.drop_front())
-        result = makeOr(result, build(input, loc, builder));
-      return result;
-    }
-    if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
-      auto inputs = intersectOp.getInputs();
-      if (inputs.empty())
-        return makeEmpty();
-
-      auto [lhsBuilder, lhsFrag] =
-          buildEpsilonFreeNFA(inputs.front(), loc, anyCondition, builder);
-      for (auto input : inputs.drop_front()) {
-        auto [rhsBuilder, rhsFrag] =
-            buildEpsilonFreeNFA(input, loc, anyCondition, builder);
-        auto intersected = intersectNFAs(lhsBuilder, lhsFrag, rhsBuilder,
-                                         rhsFrag, builder, loc, anyCondition);
-        lhsBuilder = std::move(intersected.first);
-        lhsFrag = intersected.second;
-      }
-
-      *this = std::move(lhsBuilder);
-      return lhsFrag;
-    }
-    if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>()) {
-      Fragment inner = build(firstMatch.getInput(), loc, builder);
-      return inner;
-    }
-    seq.getDefiningOp()->emitError("unsupported sequence lowering");
-    return makeEmpty();
-  }
-
-  void eliminateEpsilon() {
-    SmallVector<SmallVector<int, 4>, 8> closure(states.size());
-    for (size_t i = 0; i < states.size(); ++i) {
-      SmallVector<int, 4> worklist;
-      SmallVector<int, 4> visited;
-      worklist.push_back(i);
-      while (!worklist.empty()) {
-        int s = worklist.pop_back_val();
-        if (llvm::is_contained(visited, s))
-          continue;
-        visited.push_back(s);
-        for (auto &tr : states[s].transitions) {
-          if (tr.isEpsilon)
-            worklist.push_back(tr.to);
-        }
-      }
-      closure[i] = visited;
-    }
-
-    SmallVector<State, 8> newStates;
-    newStates.resize(states.size());
-    for (size_t i = 0; i < states.size(); ++i) {
-      bool accepting = false;
-      SmallVector<Transition, 4> newTrans;
-      for (int s : closure[i]) {
-        if (states[s].accepting)
-          accepting = true;
-        for (auto &tr : states[s].transitions) {
-          if (tr.isEpsilon)
-            continue;
-          for (int dst : closure[tr.to]) {
-            newTrans.push_back(Transition{tr.condIndex, dst, false});
-          }
-        }
-      }
-      newStates[i] = State{accepting, newTrans};
-    }
-    states.swap(newStates);
-  }
-
-  Fragment cloneFragment(Fragment input) {
-    DenseMap<int, int> map;
-    SmallVector<int, 8> worklist;
-    worklist.push_back(input.start);
-    while (!worklist.empty()) {
-      int s = worklist.pop_back_val();
-      if (map.count(s))
-        continue;
-      int newId = addState(states[s].accepting);
-      map[s] = newId;
-      for (auto &tr : states[s].transitions)
-        worklist.push_back(tr.to);
-    }
-    for (auto [oldId, newId] : map) {
-      for (auto &tr : states[oldId].transitions) {
-        states[newId].transitions.push_back(
-            Transition{tr.condIndex, map[tr.to], tr.isEpsilon});
-      }
-    }
-    Fragment result;
-    result.start = map[input.start];
-    for (int accept : input.accepts)
-      result.accepts.push_back(map[accept]);
-    return result;
-  }
-
-  SmallVector<State, 8> states;
-  SmallVector<Value, 8> conditions;
-  DenseMap<Value, int> condToIndex;
-  Value anyCondition;
-};
-
 struct PropertyResult {
   Value safety;
   Value finalCheck;
@@ -491,6 +111,82 @@ struct LTLPropertyLowerer {
   OpBuilder &builder;
   Location loc;
   Value disable;
+  DenseMap<Value, Value> posedgeTicks;
+  DenseMap<Value, Value> negedgeTicks;
+  DenseMap<Value, Value> bothedgeTicks;
+
+  LTLPropertyLowerer(OpBuilder &builder, Location loc)
+      : builder(builder), loc(loc), disable() {}
+
+  Value getClockTick(Value clockSignal, ltl::ClockEdge edge, Value outerClock) {
+    if (!outerClock)
+      return {};
+
+    if (isa<seq::ClockType>(clockSignal.getType()))
+      clockSignal = seq::FromClockOp::create(builder, loc, clockSignal);
+
+    DenseMap<Value, Value> *cache = nullptr;
+    switch (edge) {
+    case ltl::ClockEdge::Pos:
+      cache = &posedgeTicks;
+      break;
+    case ltl::ClockEdge::Neg:
+      cache = &negedgeTicks;
+      break;
+    case ltl::ClockEdge::Both:
+      cache = &bothedgeTicks;
+      break;
+    }
+    if (auto it = cache->find(clockSignal); it != cache->end())
+      return it->second;
+
+    auto one = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+    if (auto toClock = outerClock.getDefiningOp<seq::ToClockOp>()) {
+      Value outerSignal = toClock.getInput();
+      if (edge == ltl::ClockEdge::Pos && outerSignal == clockSignal)
+        return one;
+      if (edge == ltl::ClockEdge::Neg) {
+        if (auto xorOp = outerSignal.getDefiningOp<comb::XorOp>()) {
+          auto inputs = xorOp.getInputs();
+          if (inputs.size() == 2) {
+            auto isOne = [](Value value) {
+              if (auto cst = value.getDefiningOp<hw::ConstantOp>())
+                return cst.getValue().isOne();
+              return false;
+            };
+            auto lhs = inputs[0];
+            auto rhs = inputs[1];
+            if ((lhs == clockSignal && isOne(rhs)) ||
+                (rhs == clockSignal && isOne(lhs)))
+              return one;
+          }
+        }
+      }
+    }
+    auto prev = shiftValue(clockSignal, 1, outerClock);
+    Value tick;
+    switch (edge) {
+    case ltl::ClockEdge::Pos: {
+      auto notPrev = comb::XorOp::create(builder, loc, prev, one);
+      tick = comb::AndOp::create(builder, loc,
+                                 SmallVector<Value, 2>{clockSignal, notPrev},
+                                 true);
+      break;
+    }
+    case ltl::ClockEdge::Neg: {
+      auto notSignal = comb::XorOp::create(builder, loc, clockSignal, one);
+      tick = comb::AndOp::create(builder, loc,
+                                 SmallVector<Value, 2>{notSignal, prev}, true);
+      break;
+    }
+    case ltl::ClockEdge::Both:
+      tick = comb::XorOp::create(builder, loc, clockSignal, prev);
+      break;
+    }
+
+    (*cache)[clockSignal] = tick;
+    return tick;
+  }
 
   std::optional<uint64_t> getSequenceMaxLength(Value seq) {
     if (!seq)
@@ -1040,12 +736,13 @@ struct LTLPropertyLowerer {
         eventuallyOp.emitError("eventually requires a clocked property");
         return {Value(), {}};
       }
-      auto seen = createStateRegister(input.safety, clock,
-                                      "ltl_eventually_seen");
       auto trueVal =
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-      PropertyResult result{trueVal, seen};
-      return result;
+      if (eventuallyOp->hasAttr(kWeakEventuallyAttr))
+        return {trueVal, trueVal};
+      auto seen =
+          createStateRegister(input.safety, clock, "ltl_eventually_seen");
+      return {trueVal, seen};
     }
 
     prop.getDefiningOp()->emitError("unsupported property lowering");
@@ -1061,8 +758,9 @@ struct LTLPropertyLowerer {
     if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>()) {
       auto normalizedClock =
           normalizeClock(clockOp.getClock(), clockOp.getEdge());
-      return lowerSequence(clockOp.getInput(), normalizedClock,
-                           clockOp.getEdge());
+      if (!clock)
+        return lowerSequence(clockOp.getInput(), normalizedClock,
+                             clockOp.getEdge());
     }
     if (auto pastOp = seq.getDefiningOp<ltl::PastOp>()) {
       if (!clock) {
@@ -1090,7 +788,11 @@ struct LTLPropertyLowerer {
 
     auto trueVal =
         hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-    NFABuilder nfa(trueVal);
+    auto clockPredicate = [this, clock](Value clockSignal,
+                                        ltl::ClockEdge edge) -> Value {
+      return getClockTick(clockSignal, edge, clock);
+    };
+    NFABuilder nfa(trueVal, clockPredicate);
     if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>()) {
       auto maxLen = getSequenceMaxLength(firstMatch.getInput());
       if (!maxLen) {
@@ -1167,6 +869,71 @@ struct LTLPropertyLowerer {
       return falseVal;
     Value match = comb::OrOp::create(builder, loc, accepting, true);
     return match;
+  }
+
+  Value lowerSequenceMatched(Value seq, Value clock, ltl::ClockEdge edge) {
+    return lowerSequence(seq, clock, edge);
+  }
+
+  Value lowerSequenceTriggered(Value seq, Value clock, ltl::ClockEdge edge) {
+    if (!seq)
+      return {};
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return seq;
+
+    if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>()) {
+      auto normalizedClock =
+          normalizeClock(clockOp.getClock(), clockOp.getEdge());
+      if (!clock)
+        return lowerSequenceTriggered(clockOp.getInput(), normalizedClock,
+                                      clockOp.getEdge());
+    }
+    if (auto pastOp = seq.getDefiningOp<ltl::PastOp>()) {
+      if (!clock) {
+        pastOp.emitError("ltl.past requires a clocked sequence");
+        return {};
+      }
+      auto triggered =
+          lowerSequenceTriggered(pastOp.getInput(), clock, edge);
+      if (!triggered)
+        return {};
+      return shiftValue(triggered, pastOp.getDelay(), clock);
+    }
+    if (!clock) {
+      seq.getDefiningOp()->emitError("sequence lowering requires a clock");
+      return {};
+    }
+
+    auto trueVal =
+        hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+    auto falseVal =
+        hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
+    auto clockPredicate = [this, clock](Value clockSignal,
+                                        ltl::ClockEdge edge) -> Value {
+      return getClockTick(clockSignal, edge, clock);
+    };
+    NFABuilder nfa(trueVal, clockPredicate);
+    auto fragment = nfa.build(seq, loc, builder);
+    nfa.eliminateEpsilon();
+    if (fragment.start < 0 ||
+        fragment.start >= static_cast<int>(nfa.states.size()))
+      return falseVal;
+
+    SmallVector<Value, 4> startConds;
+    for (auto &tr : nfa.states[fragment.start].transitions) {
+      if (tr.isEpsilon)
+        continue;
+      startConds.push_back(nfa.conditions[tr.condIndex]);
+    }
+
+    Value start;
+    if (startConds.empty()) {
+      start = nfa.states[fragment.start].accepting ? trueVal : falseVal;
+    } else {
+      start = comb::OrOp::create(builder, loc, startConds, true);
+    }
+
+    return shiftValue(start, 1, clock);
   }
 
   Value normalizeClock(Value clock, ltl::ClockEdge edge) {
@@ -1321,6 +1088,40 @@ void LowerLTLToCorePass::runOnOperation() {
           applyPartialConversion(getOperation(), target, std::move(patterns))))
     return signalPassFailure();
 
+  // Lower LTL sequence match helpers to plain i1 signals.
+  SmallVector<ltl::MatchedOp, 8> matchedOps;
+  SmallVector<ltl::TriggeredOp, 8> triggeredOps;
+  getOperation().walk([&](ltl::MatchedOp op) { matchedOps.push_back(op); });
+  getOperation().walk([&](ltl::TriggeredOp op) { triggeredOps.push_back(op); });
+
+  for (auto op : matchedOps) {
+    OpBuilder builder(op);
+    LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    auto match =
+        lowerer.lowerSequenceMatched(op.getInput(), getDefaultClock(),
+                                     ltl::ClockEdge::Pos);
+    if (!match) {
+      op.emitError("failed to lower ltl.matched");
+      return signalPassFailure();
+    }
+    op.replaceAllUsesWith(match);
+    op.erase();
+  }
+
+  for (auto op : triggeredOps) {
+    OpBuilder builder(op);
+    LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    auto triggered =
+        lowerer.lowerSequenceTriggered(op.getInput(), getDefaultClock(),
+                                       ltl::ClockEdge::Pos);
+    if (!triggered) {
+      op.emitError("failed to lower ltl.triggered");
+      return signalPassFailure();
+    }
+    op.replaceAllUsesWith(triggered);
+    op.erase();
+  }
+
   // Lower any remaining LTL properties in verif assertions to i1 signals.
   SmallVector<verif::AssertOp, 8> asserts;
   SmallVector<verif::AssumeOp, 8> assumes;
@@ -1340,7 +1141,8 @@ void LowerLTLToCorePass::runOnOperation() {
       return signalPassFailure();
     op.getPropertyMutable().assign(result.safety);
     auto finalAssert = verif::AssertOp::create(
-        builder, op.getLoc(), result.finalCheck, Value(), StringAttr{});
+        builder, op.getLoc(), result.finalCheck, op.getEnable(),
+        StringAttr{});
     finalAssert->setAttr("bmc.final", builder.getUnitAttr());
   }
 
@@ -1355,7 +1157,8 @@ void LowerLTLToCorePass::runOnOperation() {
       return signalPassFailure();
     op.getPropertyMutable().assign(result.safety);
     auto finalAssume = verif::AssumeOp::create(
-        builder, op.getLoc(), result.finalCheck, Value(), StringAttr{});
+        builder, op.getLoc(), result.finalCheck, op.getEnable(),
+        StringAttr{});
     finalAssume->setAttr("bmc.final", builder.getUnitAttr());
   }
 
@@ -1370,7 +1173,7 @@ void LowerLTLToCorePass::runOnOperation() {
       return signalPassFailure();
     op.getPropertyMutable().assign(result.safety);
     auto finalCover = verif::CoverOp::create(
-        builder, op.getLoc(), result.finalCheck, Value(), StringAttr{});
+        builder, op.getLoc(), result.finalCheck, op.getEnable(), StringAttr{});
     finalCover->setAttr("bmc.final", builder.getUnitAttr());
   }
 
@@ -1415,7 +1218,8 @@ void LowerLTLToCorePass::runOnOperation() {
     (void)verif::AssertOp::create(builder, op.getLoc(), property,
                                    Value(), op.getLabelAttr());
     auto finalAssert = verif::AssertOp::create(
-        builder, op.getLoc(), result.finalCheck, Value(), StringAttr{});
+        builder, op.getLoc(), result.finalCheck, op.getEnable(),
+        StringAttr{});
     finalAssert->setAttr("bmc.final", builder.getUnitAttr());
     op.erase();
   }
@@ -1449,7 +1253,8 @@ void LowerLTLToCorePass::runOnOperation() {
     (void)verif::AssumeOp::create(builder, op.getLoc(), property,
                                    Value(), op.getLabelAttr());
     auto finalAssume = verif::AssumeOp::create(
-        builder, op.getLoc(), result.finalCheck, Value(), StringAttr{});
+        builder, op.getLoc(), result.finalCheck, op.getEnable(),
+        StringAttr{});
     finalAssume->setAttr("bmc.final", builder.getUnitAttr());
     op.erase();
   }
@@ -1478,7 +1283,7 @@ void LowerLTLToCorePass::runOnOperation() {
     (void)verif::CoverOp::create(builder, op.getLoc(), property,
                                   Value(), op.getLabelAttr());
     auto finalCover = verif::CoverOp::create(
-        builder, op.getLoc(), result.finalCheck, Value(), StringAttr{});
+        builder, op.getLoc(), result.finalCheck, op.getEnable(), StringAttr{});
     finalCover->setAttr("bmc.final", builder.getUnitAttr());
     op.erase();
   }

@@ -40,7 +40,7 @@ module Assertions(input logic clk, rst, a, b);
   property changed_test;
     @(posedge clk) a |=> $changed(b);
   endproperty
-  // CHECK-DAG: moore.past
+  // CHECK-DAG: moore.past %{{[a-z0-9]+}} delay 1
   // CHECK-DAG: moore.case_eq
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (changed_test);
@@ -61,7 +61,7 @@ module Assertions(input logic clk, rst, a, b);
   property past_default;
     @(posedge clk) a |-> $past(b);
   endproperty
-  // The moore.past with delay 1 was already checked by $changed test above.
+  // CHECK: moore.past %{{[a-z0-9]+}} delay 1
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (past_default);
@@ -80,7 +80,8 @@ module Assertions(input logic clk, rst, a, b);
 
   //===--------------------------------------------------------------------===//
   // Test $sampled - returns the sampled value
-  // In assertion context, this is effectively a pass-through
+  // In assertion context, $sampled returns the current sampled value.
+  // CHECK: moore.past %{{[a-z0-9]+}} delay 0
   //===--------------------------------------------------------------------===//
   property sampled_prop;
     @(posedge clk) $sampled(a) |-> b;
@@ -129,4 +130,28 @@ module Assertions(input logic clk, rst, a, b);
   // Note: The specific moore.case_eq/not/and operations are checked
   // along with $rose above since they use similar patterns.
   assert property (fell_test);
+
+  //===--------------------------------------------------------------------===//
+  // Test assert final (deferred final assertion)
+  //===--------------------------------------------------------------------===//
+  // CHECK: moore.assert final
+  assert final (a);
+
+  //===--------------------------------------------------------------------===//
+  // Test expect (concurrent assertion)
+  //===--------------------------------------------------------------------===//
+  property expect_seq;
+    @(posedge clk) a ##1 b;
+  endproperty
+  // CHECK: verif.{{(clocked_)?}}assert
+  expect property (expect_seq);
+
+  //===--------------------------------------------------------------------===//
+  // Test assume property (concurrent assumption)
+  //===--------------------------------------------------------------------===//
+  property assume_seq;
+    @(posedge clk) a |-> b;
+  endproperty
+  // CHECK: verif.{{(clocked_)?}}assume
+  assume property (assume_seq);
 endmodule

@@ -76,6 +76,20 @@ a `verif.assert` operation. Calling
 emit `Bound reached with no violations!`, as the property holds over the 10
 cycles checked.
 
+### Smoke Harnesses (External Suites)
+
+To exercise the formal pipelines without a solver, use the suite harnesses in
+`utils/` with smoke mode enabled:
+
+- BMC (SMT-free): `BMC_SMOKE_ONLY=1 CIRCT_BMC_ARGS=--emit-mlir`
+  - `utils/run_sv_tests_circt_bmc.sh`
+  - `utils/run_verilator_verification_circt_bmc.sh`
+  - `utils/run_yosys_sva_circt_bmc.sh`
+- LEC (SMT-free): `LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir`
+  - `utils/run_sv_tests_circt_lec.sh`
+  - `utils/run_verilator_verification_circt_lec.sh`
+  - `utils/run_yosys_sva_circt_lec.sh`
+
 ## Infrastructure Overview
 
 This section provides and overview over the relevant dialects and passes for

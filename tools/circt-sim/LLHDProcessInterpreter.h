@@ -106,25 +106,18 @@ public:
   }
 
   /// Convert to SignalValue for use with ProcessScheduler.
-  /// Note: SignalValue only supports up to 64 bits, so wider values are
-  /// truncated to their lower 64 bits.
+  /// SignalValue now supports arbitrary widths using APInt.
   SignalValue toSignalValue() const {
     if (isUnknown)
-      return SignalValue::makeX(width > 64 ? 64 : width);
-    // For values wider than 64 bits, extract the lower 64 bits
-    uint64_t val64;
-    if (value.getBitWidth() > 64)
-      val64 = value.trunc(64).getZExtValue();
-    else
-      val64 = value.getZExtValue();
-    return SignalValue(val64, width > 64 ? 64 : width);
+      return SignalValue::makeX(width);
+    return SignalValue(value);
   }
 
   /// Create from a SignalValue.
   static InterpretedValue fromSignalValue(const SignalValue &sv) {
     if (sv.isUnknown())
       return makeX(sv.getWidth());
-    return InterpretedValue(sv.getValue(), sv.getWidth());
+    return InterpretedValue(sv.getAPInt());
   }
 
 private:

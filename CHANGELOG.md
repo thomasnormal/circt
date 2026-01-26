@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 205 - January 26, 2026
+
+### Track Completions
+
+- **Track A (Verilator Syntax Compat)**: ✅ **MAJOR: slang now accepts `@posedge (clk)`**
+  - Implemented support for Verilator-style sequence clocking syntax
+  - Modified `Parser_expressions.cpp` to handle edge keywords after `@`
+  - **All 6 previously failing verilator-verification tests now PASS**
+  - Added unit test: `test/Conversion/ImportVerilog/verilator-posedge-syntax.sv`
+
+- **Track B (I3C AVIP Simulation)**: ✅ **hdl_top simulates successfully**
+  - 7 LLHD processes registered
+  - Prints: "HDL TOP", "controller Agent BFM", debug messages
+  - hvl_top completes at time 0 (UVM runtime limitation)
+
+- **Track C (OpenTitan Primitives)**: ✅ **All 5 new modules PASS**
+  - `prim_alert_sender` - 2641 ops, 4 processes
+  - `prim_packer` - 2706 ops, 7 processes
+  - `prim_subreg` - 2025 ops (combinational)
+  - `prim_edge_detector` - 2064 ops, 1 process
+  - `prim_pulse_sync` - 2075 ops, 1 process
+
+- **Track D (APB AVIP Simulation)**: ⚠️ Partial success
+  - 8 processes registered, initial blocks execute
+  - Prints BFM messages (truncated to 8 chars due to i64 string limit)
+  - Exits with code 1 at time 0 (UVM runtime needs more work)
+
+### Updated Test Suite Status
+
+| Suite | Previous | Now | Change |
+|-------|----------|-----|--------|
+| verilator-verification | 8/17 (47%) | **14/17 (82%)** | +6 (slang fix) |
+| OpenTitan primitives | 7 | **12** | +5 new modules |
+
+### Key Achievement
+
+**verilator-verification improved from 47% to 82%** by adding Verilator syntax compatibility to slang.
+
 ## Iteration 204 - January 26, 2026
 
 ### Track Completions
@@ -23,6 +61,11 @@
     - 16.10 tests: SSA dominance error with local variables + delays
     - 16.15 test: "async reset registers not yet supported"
   - These are correctly marked XFAIL but for wrong reasons
+
+- **Track E (SVA BMC/LTL Lowering)**: ✅ Conversion legality restored
+  - LTL→SMT materialization now stays within region scope (prevents cross-region `smt.eq`)
+  - Added SMT relocation guard for isolated regions
+  - Updated BMC regression tests (final checks, multiclock regs, delay_posedge, goto-repeat, error text)
 
 ### Key Finding: Verilator Syntax Extension
 
@@ -60,6 +103,10 @@ The 6 failing verilator-verification tests use `@posedge (clk)` syntax:
   - `timer_core`, `uart_tx`, `uart_rx` all simulate
   - Blocker is compilation (deep dependency chains), not simulation
   - Added **Ascon full IP** target with alert-enabled TB + prim_ascon_duplex wrapper
+  - Added **DMA full IP** target with multi-port TL-UL + SHA2 dependencies
+  - Added **MBX full IP** target with core/soc TL-UL + SRAM host port
+  - Added **KeyMgr DPE full IP** target with EDN/KMAC/OTP/ROM stubs
+  - rv_dm full IP compile currently crashes in `dm_csrs.sv` (concat_ref assignment); needs ImportVerilog fix
 
 ### Updated Test Suite Status
 

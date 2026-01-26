@@ -16,7 +16,16 @@ usage() {
   echo "Targets (Phase 2 - Peripheral Register Blocks):"
   echo "  gpio_no_alerts     - GPIO register block (without alerts)"
   echo "  uart_reg_top       - UART register block"
+  echo "  uart               - Full UART IP with alerts"
+  echo "  i2c                - Full I2C IP with alerts"
+  echo "  pattgen_reg_top    - Pattgen register block"
+  echo "  spi_device         - Full SPI Device IP with alerts"
+  echo "  usbdev             - Full USB Device IP with alerts"
+  echo "  rom_ctrl_regs_reg_top - ROM Controller register block"
+  echo "  sram_ctrl_regs_reg_top - SRAM Controller register block"
+  echo "  sysrst_ctrl_reg_top - System Reset Controller register block (dual clock)"
   echo "  spi_host_reg_top   - SPI Host register block (with TL-UL socket)"
+  echo "  spi_host           - Full SPI Host IP with alerts"
   echo "  spi_device_reg_top - SPI Device register block (with 2 TL-UL windows)"
   echo "  i2c_reg_top        - I2C register block"
   echo "  aon_timer_reg_top  - AON Timer register block (dual clock)"
@@ -79,6 +88,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENTITAN_DIR="${OPENTITAN_DIR:-$HOME/opentitan}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 OUT_DIR="${OUT_DIR:-$PWD}"
@@ -94,6 +104,10 @@ GPIO_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/gpio/rtl"
 
 # Additional OpenTitan paths
 UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
+PATTGEN_RTL="$OPENTITAN_DIR/hw/ip/pattgen/rtl"
+ROM_CTRL_RTL="$OPENTITAN_DIR/hw/ip/rom_ctrl/rtl"
+SRAM_CTRL_RTL="$OPENTITAN_DIR/hw/ip/sram_ctrl/rtl"
+SYSRST_CTRL_RTL="$OPENTITAN_DIR/hw/ip/sysrst_ctrl/rtl"
 CSRNG_RTL="$OPENTITAN_DIR/hw/ip/csrng/rtl"
 EDN_RTL="$OPENTITAN_DIR/hw/ip/edn/rtl"
 OTP_CTRL_RTL="$OPENTITAN_DIR/hw/ip/otp_ctrl/rtl"
@@ -111,6 +125,10 @@ INCLUDES=(
   "-I" "$TOP_AUTOGEN"
   "-I" "$GPIO_AUTOGEN_RTL"
   "-I" "$UART_RTL"
+  "-I" "$PATTGEN_RTL"
+  "-I" "$ROM_CTRL_RTL"
+  "-I" "$SRAM_CTRL_RTL"
+  "-I" "$SYSRST_CTRL_RTL"
   "-I" "$CSRNG_RTL"
   "-I" "$EDN_RTL"
   "-I" "$OTP_CTRL_RTL"
@@ -125,6 +143,13 @@ DEFINES=()
 if [[ $ENABLE_ASSERTIONS -eq 0 ]]; then
   # Use dummy assertion macros (same as Verilator)
   DEFINES+=("-DVERILATOR")
+fi
+
+# Target-specific includes
+EXTRA_INCLUDES=()
+if [[ "$TARGET" == "usbdev" ]]; then
+  # Provide a minimal prim_assert shim to avoid macro parsing issues.
+  EXTRA_INCLUDES+=("-I" "$SCRIPT_DIR/opentitan_wrappers")
 fi
 
 # Function to collect files for a target
@@ -332,6 +357,329 @@ get_files_for_target() {
       echo "$UART_RTL/uart_reg_pkg.sv"
       echo "$UART_RTL/uart_reg_top.sv"
       ;;
+    uart)
+      # Full UART IP (includes UART core, alerts)
+      local UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as uart_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Security anchor primitives
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # Differential decode and alert sender
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      echo "$PRIM_RTL/prim_alert_sender.sv"
+      # FIFO primitives for UART core
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # UART packages and IP
+      echo "$UART_RTL/uart_reg_pkg.sv"
+      echo "$UART_RTL/uart_reg_top.sv"
+      echo "$UART_RTL/uart_rx.sv"
+      echo "$UART_RTL/uart_tx.sv"
+      echo "$UART_RTL/uart_core.sv"
+      echo "$UART_RTL/uart.sv"
+      ;;
+    i2c)
+      # Full I2C IP (includes I2C core, alerts)
+      local I2C_RTL="$OPENTITAN_DIR/hw/ip/i2c/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as i2c_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Security anchor primitives
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # Differential decode and alert sender
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      echo "$PRIM_RTL/prim_alert_sender.sv"
+      # FIFO primitives for I2C
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      # Arbitration and RAM primitives
+      echo "$PRIM_RTL/prim_arbiter_tree.sv"
+      echo "$PRIM_GENERIC_RTL/prim_ram_1p_pkg.sv"
+      echo "$PRIM_GENERIC_RTL/prim_ram_1p.sv"
+      echo "$PRIM_RTL/prim_ram_1p_adv.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # I2C packages and IP
+      echo "$I2C_RTL/i2c_pkg.sv"
+      echo "$I2C_RTL/i2c_reg_pkg.sv"
+      echo "$I2C_RTL/i2c_reg_top.sv"
+      echo "$I2C_RTL/i2c_fifo_sync_sram_adapter.sv"
+      echo "$I2C_RTL/i2c_fifos.sv"
+      echo "$I2C_RTL/i2c_bus_monitor.sv"
+      echo "$I2C_RTL/i2c_controller_fsm.sv"
+      echo "$I2C_RTL/i2c_target_fsm.sv"
+      echo "$I2C_RTL/i2c_core.sv"
+      echo "$I2C_RTL/i2c.sv"
+      ;;
+    pattgen_reg_top)
+      # Pattgen register block (pattern generator)
+      local PATTGEN_RTL="$OPENTITAN_DIR/hw/ip/pattgen/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as uart_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Pattgen packages
+      echo "$PATTGEN_RTL/pattgen_reg_pkg.sv"
+      echo "$PATTGEN_RTL/pattgen_reg_top.sv"
+      ;;
+    rom_ctrl_regs_reg_top)
+      # ROM Controller register block (simple register block)
+      local ROM_CTRL_RTL="$OPENTITAN_DIR/hw/ip/rom_ctrl/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # ROM Controller packages
+      echo "$ROM_CTRL_RTL/rom_ctrl_reg_pkg.sv"
+      echo "$ROM_CTRL_RTL/rom_ctrl_regs_reg_top.sv"
+      ;;
+    sram_ctrl_regs_reg_top)
+      # SRAM Controller register block (with RACL support)
+      local SRAM_CTRL_RTL="$OPENTITAN_DIR/hw/ip/sram_ctrl/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # SRAM Controller packages
+      echo "$SRAM_CTRL_RTL/sram_ctrl_reg_pkg.sv"
+      echo "$SRAM_CTRL_RTL/sram_ctrl_regs_reg_top.sv"
+      ;;
+    sysrst_ctrl_reg_top)
+      # System Reset Controller register block (dual clock domain: clk_i and clk_aon_i)
+      local SYSRST_CTRL_RTL="$OPENTITAN_DIR/hw/ip/sysrst_ctrl/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # CDC primitives for dual clock domain
+      echo "$PRIM_RTL/prim_pulse_sync.sv"
+      echo "$PRIM_RTL/prim_sync_reqack.sv"
+      echo "$PRIM_RTL/prim_sync_reqack_data.sv"
+      echo "$PRIM_RTL/prim_reg_cdc_arb.sv"
+      echo "$PRIM_RTL/prim_reg_cdc.sv"
+      # System Reset Controller packages
+      echo "$SYSRST_CTRL_RTL/sysrst_ctrl_reg_pkg.sv"
+      echo "$SYSRST_CTRL_RTL/sysrst_ctrl_reg_top.sv"
+      ;;
     spi_host_reg_top)
       # SPI Host register block (similar structure to GPIO/UART)
       local SPI_HOST_RTL="$OPENTITAN_DIR/hw/ip/spi_host/rtl"
@@ -384,6 +732,287 @@ get_files_for_target() {
       # SPI Host packages
       echo "$SPI_HOST_RTL/spi_host_reg_pkg.sv"
       echo "$SPI_HOST_RTL/spi_host_reg_top.sv"
+      ;;
+    spi_host)
+      # Full SPI Host IP (includes SPI Host core, alerts)
+      local SPI_HOST_RTL="$OPENTITAN_DIR/hw/ip/spi_host/rtl"
+      local SPI_DEVICE_RTL="$OPENTITAN_DIR/hw/ip/spi_device/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as spi_host_reg_top)
+      echo "$PRIM_RTL/prim_assert.sv"
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Security anchor primitives
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # Differential decode and alert sender
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_alert_sender.sv"
+      # FIFO primitives for SPI Host
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$PRIM_RTL/prim_packer_fifo.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_en.sv"
+      # RACL error arbiter
+      echo "$PRIM_RTL/prim_racl_error_arb.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      echo "$TLUL_RTL/tlul_adapter_racl.sv"
+      echo "$TLUL_RTL/tlul_adapter_sram.sv"
+      echo "$TLUL_RTL/tlul_sram_byte.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg_racl.sv"
+      echo "$TLUL_RTL/tlul_adapter_sram_racl.sv"
+      # TL-UL socket (for multi-window reg tops)
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # SPI packages and IP
+      echo "$SPI_DEVICE_RTL/spi_device_reg_pkg.sv"
+      echo "$SPI_DEVICE_RTL/spi_device_pkg.sv"
+      echo "$SPI_HOST_RTL/spi_host_cmd_pkg.sv"
+      echo "$SPI_HOST_RTL/spi_host_reg_pkg.sv"
+      echo "$SPI_HOST_RTL/spi_host_reg_top.sv"
+      echo "$SPI_HOST_RTL/spi_host_byte_merge.sv"
+      echo "$SPI_HOST_RTL/spi_host_byte_select.sv"
+      echo "$SPI_HOST_RTL/spi_host_command_queue.sv"
+      echo "$SPI_HOST_RTL/spi_host_data_fifos.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/spi_host_fsm_wrapper.sv"
+      echo "$SPI_HOST_RTL/spi_host_shift_register.sv"
+      echo "$SPI_HOST_RTL/spi_host_window.sv"
+      echo "$SPI_HOST_RTL/spi_host_core.sv"
+      echo "$SPI_HOST_RTL/spi_host.sv"
+      ;;
+    spi_device)
+      # Full SPI Device IP (includes SPI Device core, alerts)
+      local SPI_DEVICE_RTL="$OPENTITAN_DIR/hw/ip/spi_device/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as spi_device_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_en.sv"
+      # Clocking and reset primitives
+      echo "$PRIM_GENERIC_RTL/prim_clock_gating.sv"
+      echo "$PRIM_GENERIC_RTL/prim_clock_inv.sv"
+      echo "$PRIM_GENERIC_RTL/prim_clock_mux2.sv"
+      echo "$PRIM_GENERIC_RTL/prim_clock_buf.sv"
+      echo "$PRIM_GENERIC_RTL/prim_rst_sync.sv"
+      # Sync/edge primitives
+      echo "$PRIM_RTL/prim_edge_detector.sv"
+      echo "$PRIM_RTL/prim_pulse_sync.sv"
+      echo "$PRIM_RTL/prim_sync_reqack.sv"
+      echo "$PRIM_RTL/prim_sync_reqack_data.sv"
+      echo "$PRIM_RTL/prim_slicer.sv"
+      # Security anchor primitives
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # Differential decode and alert sender
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_alert_sender.sv"
+      # FIFO and SRAM primitives
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$PRIM_RTL/prim_fifo_async.sv"
+      echo "$PRIM_RTL/prim_fifo_async_sram_adapter.sv"
+      echo "$PRIM_RTL/prim_sram_arbiter.sv"
+      echo "$PRIM_RTL/prim_arbiter_ppc.sv"
+      echo "$PRIM_RTL/prim_leading_one_ppc.sv"
+      # RAM primitives
+      echo "$PRIM_GENERIC_RTL/prim_ram_2p_pkg.sv"
+      echo "$PRIM_GENERIC_RTL/prim_ram_2p.sv"
+      echo "$PRIM_RTL/prim_ram_2p_async_adv.sv"
+      echo "$PRIM_RTL/prim_ram_1r1w_async_adv.sv"
+      # MUBI sync
+      echo "$PRIM_RTL/prim_mubi4_sync.sv"
+      # RACL error arbiter
+      echo "$PRIM_RTL/prim_racl_error_arb.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      echo "$TLUL_RTL/tlul_adapter_racl.sv"
+      echo "$TLUL_RTL/tlul_adapter_sram.sv"
+      echo "$TLUL_RTL/tlul_sram_byte.sv"
+      echo "$TLUL_RTL/tlul_adapter_sram_racl.sv"
+      # TL-UL socket (for multi-window reg tops)
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # SPI device packages and IP
+      echo "$SPI_DEVICE_RTL/spi_device_reg_pkg.sv"
+      echo "$SPI_DEVICE_RTL/spi_device_pkg.sv"
+      echo "$SPI_DEVICE_RTL/spi_device_reg_top.sv"
+      echo "$SPI_DEVICE_RTL/spi_s2p.sv"
+      echo "$SPI_DEVICE_RTL/spi_p2s.sv"
+      echo "$SPI_DEVICE_RTL/spi_cmdparse.sv"
+      echo "$SPI_DEVICE_RTL/spi_readcmd.sv"
+      echo "$SPI_DEVICE_RTL/spi_passthrough.sv"
+      echo "$SPI_DEVICE_RTL/spi_tpm.sv"
+      echo "$SPI_DEVICE_RTL/spid_addr_4b.sv"
+      echo "$SPI_DEVICE_RTL/spid_csb_sync.sv"
+      echo "$SPI_DEVICE_RTL/spid_fifo2sram_adapter.sv"
+      echo "$SPI_DEVICE_RTL/spid_dpram.sv"
+      echo "$SPI_DEVICE_RTL/spid_jedec.sv"
+      echo "$SPI_DEVICE_RTL/spid_readbuffer.sv"
+      echo "$SPI_DEVICE_RTL/spid_readsram.sv"
+      echo "$SPI_DEVICE_RTL/spid_status.sv"
+      echo "$SPI_DEVICE_RTL/spid_upload.sv"
+      echo "$SPI_DEVICE_RTL/spi_device.sv"
+      ;;
+    usbdev)
+      # Full USB Device IP (includes USB core, alerts)
+      local USBDEV_RTL="$OPENTITAN_DIR/hw/ip/usbdev/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies (same as usbdev_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_en.sv"
+      # Filter/edge primitives
+      echo "$PRIM_RTL/prim_filter.sv"
+      echo "$PRIM_RTL/prim_filter_ctr.sv"
+      echo "$PRIM_RTL/prim_edge_detector.sv"
+      # Clock primitives
+      echo "$PRIM_GENERIC_RTL/prim_clock_mux2.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # Differential decode and alert sender
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_alert_sender.sv"
+      # FIFO primitives
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      # CDC primitives
+      echo "$PRIM_RTL/prim_reg_cdc.sv"
+      echo "$PRIM_RTL/prim_reg_cdc_arb.sv"
+      echo "$PRIM_RTL/prim_pulse_sync.sv"
+      echo "$PRIM_RTL/prim_sync_reqack.sv"
+      # RAM primitives
+      echo "$PRIM_GENERIC_RTL/prim_ram_1p_pkg.sv"
+      echo "$PRIM_GENERIC_RTL/prim_ram_1p.sv"
+      echo "$PRIM_RTL/prim_ram_1p_adv.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      echo "$TLUL_RTL/tlul_adapter_sram.sv"
+      echo "$TLUL_RTL/tlul_sram_byte.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # USB device packages and IP
+      echo "$USBDEV_RTL/usb_consts_pkg.sv"
+      echo "$USBDEV_RTL/usbdev_pkg.sv"
+      echo "$USBDEV_RTL/usbdev_reg_pkg.sv"
+      echo "$USBDEV_RTL/usbdev_reg_top.sv"
+      echo "$USBDEV_RTL/usbdev_counter.sv"
+      echo "$USBDEV_RTL/usbdev_iomux.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usbdev_linkstate_wrapper.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usbdev_aon_wake_wrapper.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usbdev_usbif_wrapper.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usb_fs_nb_in_pe_wrapper.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usb_fs_nb_out_pe_wrapper.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usb_fs_nb_pe_wrapper.sv"
+      echo "$USBDEV_RTL/usb_fs_rx.sv"
+      echo "$USBDEV_RTL/usb_fs_tx_mux.sv"
+      echo "$SCRIPT_DIR/opentitan_wrappers/usb_fs_tx_wrapper.sv"
+      echo "$USBDEV_RTL/usbdev.sv"
       ;;
     spi_device_reg_top)
       # SPI Device register block (with 2 window interfaces)
@@ -1398,6 +2027,7 @@ CMD+=("$IR_OUTPUT")
 CMD+=("--timescale=$TIMESCALE")
 CMD+=("--no-uvm-auto-include")  # Don't auto-include UVM
 CMD+=("${DEFINES[@]}")
+CMD+=("${EXTRA_INCLUDES[@]}")
 CMD+=("${INCLUDES[@]}")
 CMD+=("${FILES[@]}")
 

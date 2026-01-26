@@ -11,7 +11,7 @@ module sva_local_var(input logic clk, valid,
     int x;
     @(posedge clk) (valid, x = in) ##4 (out == x + 4);
   endsequence
-  // CHECK-DAG: moore.past {{%[a-z0-9]+}} delay 3
+  // CHECK-DAG: moore.past {{%[a-z0-9]+}} delay 4
   // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 3, 0 : i1
   assert property (seq);
 

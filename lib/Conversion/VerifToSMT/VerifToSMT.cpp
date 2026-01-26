@@ -8,7 +8,10 @@
 
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
+#include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWTypes.h"
+#include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
@@ -23,6 +26,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 
@@ -35,6 +39,32 @@ using namespace mlir;
 using namespace circt;
 using namespace hw;
 
+constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
+
+static Value gatePropertyWithEnable(Value property, Value enable, bool isCover,
+                                    OpBuilder &builder, Location loc) {
+  if (!enable)
+    return property;
+  if (isCover)
+    return ltl::AndOp::create(builder, loc,
+                              SmallVector<Value, 2>{enable, property})
+        .getResult();
+  auto notEnable = ltl::NotOp::create(builder, loc, enable);
+  return ltl::OrOp::create(builder, loc,
+                           SmallVector<Value, 2>{notEnable, property})
+      .getResult();
+}
+
+static Value gateSMTWithEnable(Value property, Value enable, bool isCover,
+                               OpBuilder &builder, Location loc) {
+  if (!enable)
+    return property;
+  if (isCover)
+    return smt::AndOp::create(builder, loc, enable, property);
+  auto notEnable = smt::NotOp::create(builder, loc, enable);
+  return smt::OrOp::create(builder, loc, notEnable, property);
+}
+
 //===----------------------------------------------------------------------===//
 // Conversion patterns
 //===----------------------------------------------------------------------===//
@@ -45,6 +75,32 @@ namespace {
 // LTL Operation Conversion Patterns
 //===----------------------------------------------------------------------===//
 
+static Value materializeSMTBool(Value input, const TypeConverter &converter,
+                                ConversionPatternRewriter &rewriter,
+                                Location loc) {
+  if (!input)
+    return Value();
+  if (isa<smt::BoolType>(input.getType()))
+    return input;
+  if (auto bvTy = dyn_cast<smt::BitVectorType>(input.getType());
+      bvTy && bvTy.getWidth() == 1) {
+    auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+    return smt::EqOp::create(rewriter, loc, input, one);
+  }
+  if (auto intTy = dyn_cast<IntegerType>(input.getType());
+      intTy && intTy.getWidth() == 1) {
+    auto bvTy = smt::BitVectorType::get(rewriter.getContext(), 1);
+    Value bv =
+        converter.materializeTargetConversion(rewriter, loc, bvTy, input);
+    if (!bv)
+      return Value();
+    auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+    return smt::EqOp::create(rewriter, loc, bv, one);
+  }
+  return converter.materializeTargetConversion(
+      rewriter, loc, smt::BoolType::get(rewriter.getContext()), input);
+}
+
 /// Convert ltl.and to smt.and
 struct LTLAndOpConversion : OpConversionPattern<ltl::AndOp> {
   using OpConversionPattern<ltl::AndOp>::OpConversionPattern;
@@ -52,10 +108,12 @@ struct LTLAndOpConversion : OpConversionPattern<ltl::AndOp> {
   LogicalResult
   matchAndRewrite(ltl::AndOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     SmallVector<Value, 4> smtOperands;
     for (Value input : adaptor.getInputs()) {
-      Value converted = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), smt::BoolType::get(getContext()), input);
+      Value converted = materializeSMTBool(input, *typeConverter, rewriter,
+                                           op.getLoc());
       if (!converted)
         return failure();
       smtOperands.push_back(converted);
@@ -76,10 +134,12 @@ struct LTLOrOpConversion : OpConversionPattern<ltl::OrOp> {
   LogicalResult
   matchAndRewrite(ltl::OrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     SmallVector<Value, 4> smtOperands;
     for (Value input : adaptor.getInputs()) {
-      Value converted = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), smt::BoolType::get(getContext()), input);
+      Value converted = materializeSMTBool(input, *typeConverter, rewriter,
+                                           op.getLoc());
       if (!converted)
         return failure();
       smtOperands.push_back(converted);
@@ -93,6 +153,32 @@ struct LTLOrOpConversion : OpConversionPattern<ltl::OrOp> {
   }
 };
 
+/// Convert ltl.intersect to smt.and
+struct LTLIntersectOpConversion : OpConversionPattern<ltl::IntersectOp> {
+  using OpConversionPattern<ltl::IntersectOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::IntersectOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    SmallVector<Value, 4> smtOperands;
+    for (Value input : adaptor.getInputs()) {
+      Value converted = materializeSMTBool(input, *typeConverter, rewriter,
+                                           op.getLoc());
+      if (!converted)
+        return failure();
+      smtOperands.push_back(converted);
+    }
+    if (smtOperands.size() == 1) {
+      rewriter.replaceOp(op, smtOperands[0]);
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<smt::AndOp>(op, smtOperands);
+    return success();
+  }
+};
+
 /// Convert ltl.not to smt.not
 struct LTLNotOpConversion : OpConversionPattern<ltl::NotOp> {
   using OpConversionPattern<ltl::NotOp>::OpConversionPattern;
@@ -100,9 +186,11 @@ struct LTLNotOpConversion : OpConversionPattern<ltl::NotOp> {
   LogicalResult
   matchAndRewrite(ltl::NotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value input = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getInput());
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Value input =
+        materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                           op.getLoc());
     if (!input)
       return failure();
     rewriter.replaceOpWithNewOp<smt::NotOp>(op, input);
@@ -117,12 +205,14 @@ struct LTLImplicationOpConversion : OpConversionPattern<ltl::ImplicationOp> {
   LogicalResult
   matchAndRewrite(ltl::ImplicationOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value antecedent = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getAntecedent());
-    Value consequent = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getConsequent());
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Value antecedent =
+        materializeSMTBool(adaptor.getAntecedent(), *typeConverter, rewriter,
+                           op.getLoc());
+    Value consequent =
+        materializeSMTBool(adaptor.getConsequent(), *typeConverter, rewriter,
+                           op.getLoc());
     if (!antecedent || !consequent)
       return failure();
     Value notAntecedent = smt::NotOp::create(rewriter, op.getLoc(), antecedent);
@@ -141,12 +231,18 @@ struct LTLEventuallyOpConversion : OpConversionPattern<ltl::EventuallyOp> {
   LogicalResult
   matchAndRewrite(ltl::EventuallyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    if (op->hasAttr(kWeakEventuallyAttr)) {
+      rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
+      return success();
+    }
     // For BMC: eventually(p) means p should hold at some point.
     // At each time step, we check if p holds. The BMC loop accumulates
     // these checks with OR. Here we convert the inner property.
-    Value input = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getInput());
+    Value input =
+        materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                           op.getLoc());
     if (!input)
       return failure();
     // The eventually property at this step is just the inner property value
@@ -167,12 +263,12 @@ struct LTLUntilOpConversion : OpConversionPattern<ltl::UntilOp> {
   LogicalResult
   matchAndRewrite(ltl::UntilOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value p = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getInput());
-    Value q = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getCondition());
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Value p = materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                                 op.getLoc());
+    Value q = materializeSMTBool(adaptor.getCondition(), *typeConverter,
+                                 rewriter, op.getLoc());
     if (!p || !q)
       return failure();
     // Weak until: the property q || p
@@ -190,6 +286,8 @@ struct LTLBooleanConstantOpConversion
   LogicalResult
   matchAndRewrite(ltl::BooleanConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, op.getValue());
     return success();
   }
@@ -235,14 +333,16 @@ struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
   LogicalResult
   matchAndRewrite(ltl::DelayOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     // Get the delay amount
     uint64_t delay = op.getDelay();
 
     if (delay == 0) {
       // No delay: just pass through the input sequence
-      Value input = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-          adaptor.getInput());
+      Value input =
+          materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                             op.getLoc());
       if (!input)
         return failure();
       rewriter.replaceOp(op, input);
@@ -272,13 +372,15 @@ struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
   LogicalResult
   matchAndRewrite(ltl::PastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     uint64_t delay = op.getDelay();
 
     if (delay == 0) {
       // past(x, 0) is just x - pass through the input
-      Value input = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-          adaptor.getInput());
+      Value input =
+          materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                             op.getLoc());
       if (!input)
         return failure();
       rewriter.replaceOp(op, input);
@@ -304,10 +406,12 @@ struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
   LogicalResult
   matchAndRewrite(ltl::ConcatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     SmallVector<Value, 4> smtOperands;
     for (Value input : adaptor.getInputs()) {
-      Value converted = typeConverter->materializeTargetConversion(
-          rewriter, op.getLoc(), smt::BoolType::get(getContext()), input);
+      Value converted = materializeSMTBool(input, *typeConverter, rewriter,
+                                           op.getLoc());
       if (!converted)
         return failure();
       smtOperands.push_back(converted);
@@ -344,6 +448,8 @@ struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
   LogicalResult
   matchAndRewrite(ltl::RepeatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     uint64_t base = op.getBase();
 
     if (base == 0) {
@@ -354,9 +460,9 @@ struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
 
     // For base >= 1: the sequence must match at least once
     // In BMC single-step semantics, this is just the input sequence value
-    Value input = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getInput());
+    Value input =
+        materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                           op.getLoc());
     if (!input)
       return failure();
 
@@ -382,6 +488,8 @@ struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
   LogicalResult
   matchAndRewrite(ltl::GoToRepeatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     uint64_t base = op.getBase();
 
     if (base == 0) {
@@ -391,9 +499,9 @@ struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
     }
 
     // For base >= 1: at a single step, the sequence must hold
-    Value input = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getInput());
+    Value input =
+        materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                           op.getLoc());
     if (!input)
       return failure();
 
@@ -414,6 +522,8 @@ struct LTLNonConsecutiveRepeatOpConversion
   LogicalResult
   matchAndRewrite(ltl::NonConsecutiveRepeatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     uint64_t base = op.getBase();
 
     if (base == 0) {
@@ -423,9 +533,9 @@ struct LTLNonConsecutiveRepeatOpConversion
     }
 
     // For base >= 1: at a single step, the sequence must hold
-    Value input = typeConverter->materializeTargetConversion(
-        rewriter, op.getLoc(), smt::BoolType::get(getContext()),
-        adaptor.getInput());
+    Value input =
+        materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                           op.getLoc());
     if (!input)
       return failure();
 
@@ -453,6 +563,15 @@ struct VerifAssertOpConversion : OpConversionPattern<verif::AssertOp> {
     Value cond = typeConverter->materializeTargetConversion(
         rewriter, op.getLoc(), smt::BoolType::get(getContext()),
         adaptor.getProperty());
+    Value enable = adaptor.getEnable();
+    if (enable) {
+      enable = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()), enable);
+      if (!enable)
+        return failure();
+      cond = gateSMTWithEnable(cond, enable, /*isCover=*/false, rewriter,
+                               op.getLoc());
+    }
     Value notCond = smt::NotOp::create(rewriter, op.getLoc(), cond);
     rewriter.replaceOpWithNewOp<smt::AssertOp>(op, notCond);
     return success();
@@ -473,6 +592,15 @@ struct VerifAssumeOpConversion : OpConversionPattern<verif::AssumeOp> {
     Value cond = typeConverter->materializeTargetConversion(
         rewriter, op.getLoc(), smt::BoolType::get(getContext()),
         adaptor.getProperty());
+    Value enable = adaptor.getEnable();
+    if (enable) {
+      enable = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()), enable);
+      if (!enable)
+        return failure();
+      cond = gateSMTWithEnable(cond, enable, /*isCover=*/false, rewriter,
+                               op.getLoc());
+    }
     rewriter.replaceOpWithNewOp<smt::AssertOp>(op, cond);
     return success();
   }
@@ -493,6 +621,15 @@ struct VerifCoverOpConversion : OpConversionPattern<verif::CoverOp> {
     Value cond = typeConverter->materializeTargetConversion(
         rewriter, op.getLoc(), smt::BoolType::get(getContext()),
         adaptor.getProperty());
+    Value enable = adaptor.getEnable();
+    if (enable) {
+      enable = typeConverter->materializeTargetConversion(
+          rewriter, op.getLoc(), smt::BoolType::get(getContext()), enable);
+      if (!enable)
+        return failure();
+      cond = gateSMTWithEnable(cond, enable, /*isCover=*/true, rewriter,
+                               op.getLoc());
+    }
     rewriter.replaceOpWithNewOp<smt::AssertOp>(op, cond);
     return success();
   }
@@ -507,10 +644,31 @@ struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
     if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
       return failure();
 
+    OpBuilder::InsertionGuard guard(rewriter);
+
     Value input = op.getInputs()[0];
     Type srcTy = input.getType();
     Type dstTy = op.getOutputs()[0].getType();
     Location loc = op.getLoc();
+
+    Region *inputRegion = input.getParentRegion();
+    Region *castRegion = op->getParentRegion();
+    if (inputRegion && castRegion && inputRegion != castRegion) {
+      auto allUsesInInputRegion = llvm::all_of(
+          op->getUsers(), [&](Operation *user) {
+            Region *userRegion = user->getParentRegion();
+            return userRegion == inputRegion ||
+                   inputRegion->isProperAncestor(userRegion);
+          });
+      if (!allUsesInInputRegion)
+        return failure();
+      if (auto *defOp = input.getDefiningOp())
+        rewriter.setInsertionPointAfter(defOp);
+      else if (auto *block = input.getParentBlock())
+        rewriter.setInsertionPointToStart(block);
+    } else {
+      rewriter.setInsertionPoint(op);
+    }
 
     auto dstBvTy = dyn_cast<smt::BitVectorType>(dstTy);
     if (dstBvTy && dstBvTy.getWidth() == 1) {
@@ -547,6 +705,111 @@ struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
     }
 
     return failure();
+  }
+};
+
+/// Move unrealized casts into the region that defines their input if the cast
+/// is used exclusively there. This avoids cross-region value uses.
+struct RelocateCastIntoInputRegion
+    : OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern<UnrealizedConversionCastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return failure();
+
+    Value input = op.getInputs()[0];
+    Region *inputRegion = input.getParentRegion();
+    Region *castRegion = op->getParentRegion();
+    if (!inputRegion || !castRegion || inputRegion == castRegion)
+      return failure();
+
+    auto allUsesInInputRegion = llvm::all_of(
+        op->getUsers(), [&](Operation *user) {
+          Region *userRegion = user->getParentRegion();
+          return userRegion == inputRegion ||
+                 inputRegion->isProperAncestor(userRegion);
+        });
+    if (!allUsesInInputRegion)
+      return failure();
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    if (auto *defOp = input.getDefiningOp()) {
+      rewriter.setInsertionPointAfter(defOp);
+    } else if (auto *block = input.getParentBlock()) {
+      rewriter.setInsertionPointToStart(block);
+    } else {
+      return failure();
+    }
+
+    auto relocated = UnrealizedConversionCastOp::create(
+        rewriter, op.getLoc(), op.getResultTypes(), input);
+    rewriter.replaceOp(op, relocated.getResults());
+    return success();
+  }
+};
+
+/// Move SMT equality ops into the region that defines their operands to avoid
+/// cross-region value uses. Constants are re-materialized in the target region.
+struct RelocateSMTEqIntoOperandRegion : OpRewritePattern<smt::EqOp> {
+  using OpRewritePattern<smt::EqOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(smt::EqOp op,
+                                PatternRewriter &rewriter) const override {
+    Value lhs = op.getOperand(0);
+    Value rhs = op.getOperand(1);
+    Region *opRegion = op->getParentRegion();
+    if (!opRegion)
+      return failure();
+
+    auto *lhsRegion = lhs.getParentRegion();
+    auto *rhsRegion = rhs.getParentRegion();
+
+    Region *targetRegion = nullptr;
+    if (lhsRegion && lhsRegion != opRegion)
+      targetRegion = lhsRegion;
+    else if (rhsRegion && rhsRegion != opRegion)
+      targetRegion = rhsRegion;
+    else
+      return failure();
+
+    auto allUsesInTarget = llvm::all_of(op->getUsers(), [&](Operation *user) {
+      Region *userRegion = user->getParentRegion();
+      return userRegion == targetRegion ||
+             targetRegion->isProperAncestor(userRegion);
+    });
+    if (!allUsesInTarget)
+      return failure();
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    if (auto *defOp = lhs.getDefiningOp())
+      rewriter.setInsertionPointAfter(defOp);
+    else if (auto *block = lhs.getParentBlock())
+      rewriter.setInsertionPointToStart(block);
+    else
+      return failure();
+
+    auto materializeInTarget = [&](Value input) -> Value {
+      if (input.getParentRegion() == targetRegion)
+        return input;
+      if (auto cst = input.getDefiningOp<smt::BVConstantOp>())
+        return smt::BVConstantOp::create(rewriter, op.getLoc(),
+                                         cst.getValue());
+      if (auto cst = input.getDefiningOp<smt::BoolConstantOp>())
+        return smt::BoolConstantOp::create(rewriter, op.getLoc(),
+                                           cst.getValue());
+      return Value();
+    };
+
+    Value newLhs = materializeInTarget(lhs);
+    Value newRhs = materializeInTarget(rhs);
+    if (!newLhs || !newRhs)
+      return failure();
+
+    auto relocated = smt::EqOp::create(rewriter, op.getLoc(), newLhs, newRhs);
+    rewriter.replaceOp(op, relocated.getResult());
+    return success();
   }
 };
 
@@ -950,6 +1213,141 @@ static void expandRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
   }
 }
 
+static Value buildSequenceConstant(OpBuilder &builder, Location loc,
+                                   bool value) {
+  auto cst = hw::ConstantOp::create(builder, loc, builder.getI1Type(),
+                                    value ? 1 : 0);
+  auto zero = builder.getI64IntegerAttr(0);
+  return ltl::DelayOp::create(builder, loc, cst, zero, zero).getResult();
+}
+
+static Value buildSequenceAnd(OpBuilder &builder, Location loc,
+                              ArrayRef<Value> inputs) {
+  if (inputs.empty())
+    return buildSequenceConstant(builder, loc, true);
+  if (inputs.size() == 1)
+    return inputs.front();
+  return ltl::AndOp::create(builder, loc, inputs).getResult();
+}
+
+static Value buildSequenceOr(OpBuilder &builder, Location loc,
+                             ArrayRef<Value> inputs) {
+  if (inputs.empty())
+    return buildSequenceConstant(builder, loc, false);
+  if (inputs.size() == 1)
+    return inputs.front();
+  return ltl::OrOp::create(builder, loc, inputs).getResult();
+}
+
+static bool exceedsCombinationLimit(uint64_t n, uint64_t k, uint64_t limit) {
+  if (k > n)
+    return false;
+  if (k > n - k)
+    k = n - k;
+  uint64_t count = 1;
+  for (uint64_t i = 1; i <= k; ++i) {
+    uint64_t numerator = n - k + i;
+    if (count > limit / numerator)
+      return true;
+    count *= numerator;
+    count /= i;
+    if (count > limit)
+      return true;
+  }
+  return count > limit;
+}
+
+static LogicalResult
+expandGotoRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
+                         RewriterBase &rewriter) {
+  auto &circuitBlock = bmcOp.getCircuit().front();
+  SmallVector<ltl::GoToRepeatOp> gotoOps;
+  SmallVector<ltl::NonConsecutiveRepeatOp> nonConsecOps;
+  circuitBlock.walk([&](ltl::GoToRepeatOp op) { gotoOps.push_back(op); });
+  circuitBlock.walk(
+      [&](ltl::NonConsecutiveRepeatOp op) { nonConsecOps.push_back(op); });
+  if (gotoOps.empty() && nonConsecOps.empty())
+    return success();
+
+  uint64_t boundValue = bmcOp.getBound();
+  uint64_t maxOffset = boundValue > 0 ? boundValue - 1 : 0;
+  constexpr uint64_t kMaxCombos = 16384;
+
+  auto expandOp = [&](auto op, bool requireCurrentMatch) -> LogicalResult {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Location loc = op.getLoc();
+    uint64_t base = op.getBase();
+    uint64_t maxCount = base + op.getMore();
+
+    auto delayZero = rewriter.getI64IntegerAttr(0);
+    Value input = op.getInput();
+    Value seqInput = input;
+    if (!isa<ltl::SequenceType>(input.getType()))
+      seqInput =
+          ltl::DelayOp::create(rewriter, loc, input, delayZero, delayZero)
+              .getResult();
+
+    SmallVector<Value> offsetValues;
+    offsetValues.reserve(maxOffset + 1);
+    offsetValues.push_back(seqInput);
+    for (uint64_t offset = 1; offset <= maxOffset; ++offset) {
+      offsetValues.push_back(ltl::DelayOp::create(rewriter, loc, seqInput,
+                                                 rewriter.getI64IntegerAttr(
+                                                     offset),
+                                                 delayZero)
+                                  .getResult());
+    }
+
+    SmallVector<Value> choices;
+    for (uint64_t count = base; count <= maxCount; ++count) {
+      if (count == 0) {
+        choices.push_back(buildSequenceConstant(rewriter, loc, true));
+        continue;
+      }
+      if (requireCurrentMatch && count > 0 && maxOffset + 1 < count)
+        continue;
+      if (!requireCurrentMatch && maxOffset + 1 < count)
+        continue;
+
+      uint64_t remaining = requireCurrentMatch ? count - 1 : count;
+      uint64_t available = requireCurrentMatch ? maxOffset : maxOffset + 1;
+      if (exceedsCombinationLimit(available, remaining, kMaxCombos))
+        return op.emitError("goto/non-consecutive repeat expansion too large; "
+                            "reduce the BMC bound or repetition range");
+
+      SmallVector<Value> current;
+      if (requireCurrentMatch)
+        current.push_back(offsetValues[0]);
+      auto buildCombos = [&](uint64_t start, uint64_t need,
+                             auto &&buildCombosRef) -> void {
+        if (need == 0) {
+          choices.push_back(buildSequenceAnd(rewriter, loc, current));
+          return;
+        }
+        for (uint64_t idx = start; idx + need <= maxOffset + 1; ++idx) {
+          current.push_back(offsetValues[idx]);
+          buildCombosRef(idx + 1, need - 1, buildCombosRef);
+          current.pop_back();
+        }
+      };
+      buildCombos(requireCurrentMatch ? 1 : 0, remaining, buildCombos);
+    }
+
+    Value replacement = buildSequenceOr(rewriter, loc, choices);
+    rewriter.replaceOp(op, replacement);
+    return success();
+  };
+
+  for (auto op : gotoOps)
+    if (failed(expandOp(op, /*requireCurrentMatch=*/true)))
+      return failure();
+  for (auto op : nonConsecOps)
+    if (failed(expandOp(op, /*requireCurrentMatch=*/false)))
+      return failure();
+  return success();
+}
+
 /// Lower a verif::BMCOp operation to an MLIR program that performs the bounded
 /// model check
 struct VerifBoundedModelCheckingOpConversion
@@ -984,6 +1382,10 @@ struct VerifBoundedModelCheckingOpConversion
     }
 
     auto &circuitBlock = op.getCircuit().front();
+    // Expand non-consecutive repetitions into bounded delay patterns so BMC
+    // can model them with delay buffers.
+    if (failed(expandGotoRepeatOpsInBMC(op, rewriter)))
+      return failure();
     // Expand repeat ops inside the BMC circuit before delay scanning so
     // delay buffers can be allocated for the resulting ltl.delay ops.
     expandRepeatOpsInBMC(op, rewriter);
@@ -1000,14 +1402,24 @@ struct VerifBoundedModelCheckingOpConversion
         if (coverOp->hasAttr("bmc.final"))
           return;
         nonFinalOps.push_back(coverOp);
-        checkProps.push_back(coverOp.getProperty());
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(coverOp);
+        checkProps.push_back(
+            gatePropertyWithEnable(coverOp.getProperty(), coverOp.getEnable(),
+                                   /*isCover=*/true, rewriter,
+                                   coverOp.getLoc()));
       });
     } else {
       circuitBlock.walk([&](verif::AssertOp assertOp) {
         if (assertOp->hasAttr("bmc.final"))
           return;
         nonFinalOps.push_back(assertOp);
-        checkProps.push_back(assertOp.getProperty());
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(assertOp);
+        checkProps.push_back(
+            gatePropertyWithEnable(assertOp.getProperty(), assertOp.getEnable(),
+                                   /*isCover=*/false, rewriter,
+                                   assertOp.getLoc()));
       });
     }
     SmallVector<Value> nonFinalCheckValues;
@@ -1026,25 +1438,44 @@ struct VerifBoundedModelCheckingOpConversion
         rewriter.eraseOp(opToErase);
     }
 
-    // Hoist any final-only asserts into circuit outputs so we can check them
+    // Hoist any final-only checks into circuit outputs so we can check them
     // only at the final step.
     SmallVector<Value> finalCheckValues;
+    SmallVector<bool> finalCheckIsCover;
     SmallVector<Operation *> opsToErase;
     circuitBlock.walk([&](Operation *curOp) {
       if (!curOp->hasAttr("bmc.final"))
         return;
       if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
-        finalCheckValues.push_back(assertOp.getProperty());
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(assertOp);
+        finalCheckValues.push_back(
+            gatePropertyWithEnable(assertOp.getProperty(), assertOp.getEnable(),
+                                   /*isCover=*/false, rewriter,
+                                   assertOp.getLoc()));
+        finalCheckIsCover.push_back(false);
         opsToErase.push_back(curOp);
         return;
       }
       if (auto assumeOp = dyn_cast<verif::AssumeOp>(curOp)) {
-        finalCheckValues.push_back(assumeOp.getProperty());
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(assumeOp);
+        finalCheckValues.push_back(
+            gatePropertyWithEnable(assumeOp.getProperty(), assumeOp.getEnable(),
+                                   /*isCover=*/false, rewriter,
+                                   assumeOp.getLoc()));
+        finalCheckIsCover.push_back(false);
         opsToErase.push_back(curOp);
         return;
       }
       if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
-        finalCheckValues.push_back(coverOp.getProperty());
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(coverOp);
+        finalCheckValues.push_back(
+            gatePropertyWithEnable(coverOp.getProperty(), coverOp.getEnable(),
+                                   /*isCover=*/true, rewriter,
+                                   coverOp.getLoc()));
+        finalCheckIsCover.push_back(true);
         opsToErase.push_back(curOp);
         return;
       }
@@ -1054,7 +1485,7 @@ struct VerifBoundedModelCheckingOpConversion
     for (auto *opToErase : opsToErase)
       rewriter.eraseOp(opToErase);
     size_t numNonFinalChecks = nonFinalCheckValues.size();
-    size_t numFinalAsserts = finalCheckValues.size();
+    size_t numFinalChecks = finalCheckValues.size();
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
@@ -1148,14 +1579,12 @@ struct VerifBoundedModelCheckingOpConversion
     size_t totalDelaySlots = 0;
     bool delaySetupFailed = false;
 
-    // First pass: collect all delay ops with delay > 0
+    // First pass: collect all delay ops with meaningful temporal ranges.
     uint64_t boundValue = op.getBound();
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
       if (delayOp.use_empty())
         return;
       uint64_t delay = delayOp.getDelay();
-      if (delay == 0)
-        return;
 
       uint64_t length = 0;
       if (auto lengthAttr = delayOp.getLengthAttr()) {
@@ -1170,6 +1599,8 @@ struct VerifBoundedModelCheckingOpConversion
 
       // NOTE: Unbounded delay (missing length) is approximated by the BMC
       // bound, bounded range is supported by widening the delay buffer.
+      if (delay == 0 && length == 0)
+        return;
       uint64_t bufferSize = delay + length;
       if (bufferSize == 0)
         return;
@@ -1247,19 +1678,71 @@ struct VerifBoundedModelCheckingOpConversion
         // For exact delay: use the oldest buffer entry (value from N steps ago).
         // For bounded range: OR over the window [delay, delay+length].
         Value inputSig = info.inputSignal;
-        Value delayedValue = bufferArgs[0];
-        if (info.length > 0) {
-          auto intTy = dyn_cast<IntegerType>(bufferElementType);
-          if (!intTy || intTy.getWidth() != 1) {
-            info.op.emitError("bounded delay in BMC requires i1 sequence input");
+        Value delayedValue;
+        auto toSequenceValue = [&](Value val) -> Value {
+          if (isa<ltl::SequenceType>(val.getType()))
+            return val;
+          if (isa<IntegerType>(val.getType())) {
+            auto zero = rewriter.getI64IntegerAttr(0);
+            return ltl::DelayOp::create(rewriter, loc, val, zero, zero)
+                .getResult();
+          }
+          return Value{};
+        };
+
+        if (info.delay == 0) {
+          // Range includes the current cycle, so OR the input with the buffer.
+          bool isI1 = false;
+          if (auto intTy = dyn_cast<IntegerType>(bufferElementType))
+            isI1 = intTy.getWidth() == 1;
+          if (!isI1 && !isa<ltl::SequenceType>(bufferElementType)) {
+            info.op.emitError(
+                "bounded delay in BMC requires i1 or ltl.sequence input");
             delaySetupFailed = true;
             continue;
           }
           OpBuilder::InsertionGuard guard(rewriter);
           rewriter.setInsertionPoint(info.op);
-          for (uint64_t i = 1; i <= info.length; ++i)
-            delayedValue = arith::OrIOp::create(rewriter, loc, delayedValue,
-                                                bufferArgs[i]);
+          delayedValue = toSequenceValue(inputSig);
+          if (!delayedValue) {
+            info.op.emitError(
+                "failed to build sequence value for bounded delay input");
+            delaySetupFailed = true;
+            continue;
+          }
+          for (auto arg : bufferArgs) {
+            delayedValue =
+                ltl::OrOp::create(rewriter, loc,
+                                  ValueRange{delayedValue, arg})
+                    .getResult();
+          }
+        } else {
+          delayedValue = toSequenceValue(bufferArgs[0]);
+          if (!delayedValue) {
+            info.op.emitError(
+                "failed to build sequence value for bounded delay input");
+            delaySetupFailed = true;
+            continue;
+          }
+          if (info.length > 0) {
+            bool isI1 = false;
+            if (auto intTy = dyn_cast<IntegerType>(bufferElementType))
+              isI1 = intTy.getWidth() == 1;
+            if (!isI1 && !isa<ltl::SequenceType>(bufferElementType)) {
+              info.op.emitError(
+                  "bounded delay in BMC requires i1 or ltl.sequence input");
+              delaySetupFailed = true;
+              continue;
+            }
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPoint(info.op);
+            for (uint64_t i = 1; i <= info.length; ++i) {
+              delayedValue =
+                  ltl::OrOp::create(rewriter, loc,
+                                    ValueRange{delayedValue, bufferArgs[i]})
+                      .getResult();
+            }
+          }
         }
         info.op.replaceAllUsesWith(delayedValue);
         delayOpsToErase.push_back(info.op);
@@ -1391,13 +1874,6 @@ struct VerifBoundedModelCheckingOpConversion
             op.getCircuit().front().back().getOperandTypes(), circuitOutputTy)))
       return failure();
 
-    if (failed(rewriter.convertRegionTypes(&op.getInit(), *typeConverter)))
-      return failure();
-    if (failed(rewriter.convertRegionTypes(&op.getLoop(), *typeConverter)))
-      return failure();
-    if (failed(rewriter.convertRegionTypes(&op.getCircuit(), *typeConverter)))
-      return failure();
-
     auto initFuncTy = rewriter.getFunctionType({}, initOutputTy);
     // Loop and init output types are necessarily the same, so just use init
     // output types
@@ -1415,15 +1891,24 @@ struct VerifBoundedModelCheckingOpConversion
                                         names.newName("bmc_init"), initFuncTy);
       rewriter.inlineRegionBefore(op.getInit(), initFuncOp.getFunctionBody(),
                                   initFuncOp.end());
+      if (failed(rewriter.convertRegionTypes(&initFuncOp.getFunctionBody(),
+                                             *typeConverter)))
+        return failure();
       loopFuncOp = func::FuncOp::create(rewriter, loc,
                                         names.newName("bmc_loop"), loopFuncTy);
       rewriter.inlineRegionBefore(op.getLoop(), loopFuncOp.getFunctionBody(),
                                   loopFuncOp.end());
+      if (failed(rewriter.convertRegionTypes(&loopFuncOp.getFunctionBody(),
+                                             *typeConverter)))
+        return failure();
       circuitFuncOp = func::FuncOp::create(
           rewriter, loc, names.newName("bmc_circuit"), circuitFuncTy);
       rewriter.inlineRegionBefore(op.getCircuit(),
                                   circuitFuncOp.getFunctionBody(),
                                   circuitFuncOp.end());
+      if (failed(rewriter.convertRegionTypes(&circuitFuncOp.getFunctionBody(),
+                                             *typeConverter)))
+        return failure();
       auto funcOps = {&initFuncOp, &loopFuncOp, &circuitFuncOp};
       // initOutputTy is the same as loop output types
       auto outputTys = {initOutputTy, initOutputTy, circuitOutputTy};
@@ -1506,14 +1991,23 @@ struct VerifBoundedModelCheckingOpConversion
             initialValues[curIndex - origCircuitArgsSize + numRegs];
         if (auto initIntAttr = dyn_cast<IntegerAttr>(initVal)) {
           const auto &cstInt = initIntAttr.getValue();
-          assert(cstInt.getBitWidth() ==
-                     cast<smt::BitVectorType>(newTy).getWidth() &&
-                 "Width mismatch between initial value and target type");
-          auto initVal =
-              smt::BVConstantOp::create(rewriter, loc, cstInt);
-          inputDecls.push_back(initVal);
-          maybeAssertKnown(oldTy, initVal, rewriter);
-          continue;
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
+            assert(cstInt.getBitWidth() == bvTy.getWidth() &&
+                   "Width mismatch between initial value and target type");
+            auto initVal = smt::BVConstantOp::create(rewriter, loc, cstInt);
+            inputDecls.push_back(initVal);
+            maybeAssertKnown(oldTy, initVal, rewriter);
+            continue;
+          }
+          if (isa<smt::BoolType>(newTy)) {
+            auto initVal =
+                smt::BoolConstantOp::create(rewriter, loc, !cstInt.isZero());
+            inputDecls.push_back(initVal);
+            maybeAssertKnown(oldTy, initVal, rewriter);
+            continue;
+          }
+          op.emitError("unsupported integer initial value in BMC conversion");
+          return failure();
         }
         if (auto initBoolAttr = dyn_cast<BoolAttr>(initVal)) {
           if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
@@ -1549,6 +2043,46 @@ struct VerifBoundedModelCheckingOpConversion
     for (; initIndex < initVals.size(); ++initIndex)
       inputDecls.push_back(initVals[initIndex]);
 
+    SmallVector<unsigned> regClockToLoopIndex;
+    bool usePerRegClocks =
+        !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
+    if (usePerRegClocks) {
+      auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
+      if (!regClocksAttr || regClocksAttr.size() != numRegs) {
+        op.emitError("multi-clock BMC requires bmc_reg_clocks with one entry "
+                     "per register");
+        return failure();
+      }
+      DenseMap<StringRef, unsigned> inputNameToIndex;
+      for (auto [idx, nameAttr] : llvm::enumerate(inputNamePrefixes)) {
+        if (nameAttr && !nameAttr.getValue().empty())
+          inputNameToIndex[nameAttr.getValue()] = idx;
+      }
+      regClockToLoopIndex.reserve(numRegs);
+      for (auto attr : regClocksAttr) {
+        auto nameAttr = dyn_cast<StringAttr>(attr);
+        if (!nameAttr || nameAttr.getValue().empty()) {
+          op.emitError("multi-clock BMC requires named clock entries in "
+                       "bmc_reg_clocks");
+          return failure();
+        }
+        auto nameIt = inputNameToIndex.find(nameAttr.getValue());
+        if (nameIt == inputNameToIndex.end()) {
+          op.emitError("bmc_reg_clocks entry does not match any input name");
+          return failure();
+        }
+        unsigned clockInputIndex = nameIt->second;
+        auto clockIt =
+            llvm::find(clockIndexes, static_cast<int>(clockInputIndex));
+        if (clockIt == clockIndexes.end()) {
+          op.emitError("bmc_reg_clocks entry does not name a clock input");
+          return failure();
+        }
+        regClockToLoopIndex.push_back(
+            static_cast<unsigned>(clockIt - clockIndexes.begin()));
+      }
+    }
+
     Value lowerBound =
         arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
     Value step =
@@ -1562,8 +2096,8 @@ struct VerifBoundedModelCheckingOpConversion
     // Initialize final check iter_args with false values matching their types
     // (these will be updated with circuit outputs). Types may be !smt.bv<1>
     // for i1 properties or !smt.bool for LTL properties.
-    for (size_t i = 0; i < numFinalAsserts; ++i) {
-      Type checkTy = circuitOutputTy[circuitOutputTy.size() - numFinalAsserts + i];
+    for (size_t i = 0; i < numFinalChecks; ++i) {
+      Type checkTy = circuitOutputTy[circuitOutputTy.size() - numFinalChecks + i];
       if (isa<smt::BoolType>(checkTy))
         inputDecls.push_back(smt::BoolConstantOp::create(rewriter, loc, false));
       else
@@ -1598,11 +2132,11 @@ struct VerifBoundedModelCheckingOpConversion
           //
           // Note: totalDelaySlots is captured from the outer scope
           ValueRange finalCheckOutputs =
-              numFinalAsserts == 0 ? ValueRange{}
-                                   : circuitCallOuts.take_back(numFinalAsserts);
+              numFinalChecks == 0 ? ValueRange{}
+                                  : circuitCallOuts.take_back(numFinalChecks);
           ValueRange beforeFinal =
-              numFinalAsserts == 0 ? circuitCallOuts
-                                   : circuitCallOuts.drop_back(numFinalAsserts);
+              numFinalChecks == 0 ? circuitCallOuts
+                                  : circuitCallOuts.drop_back(numFinalChecks);
           ValueRange nonFinalCheckOutputs =
               numNonFinalChecks == 0
                   ? ValueRange{}
@@ -1720,7 +2254,7 @@ struct VerifBoundedModelCheckingOpConversion
             loopCallInputs.push_back(iterArgs[index]);
           // Fetch state args to feed to loop
           for (auto stateArg :
-               iterArgs.drop_back(1 + numFinalAsserts).take_back(numStateArgs))
+               iterArgs.drop_back(1 + numFinalChecks).take_back(numStateArgs))
             loopCallInputs.push_back(stateArg);
           ValueRange loopVals =
               func::CallOp::create(builder, loc, loopFuncOp, loopCallInputs)
@@ -1760,10 +2294,12 @@ struct VerifBoundedModelCheckingOpConversion
 
           // Only update the registers on a clock posedge unless in rising
           // clocks only mode
-          // TODO: this will also need changing with multiple clocks - currently
-          // it only accounts for the one clock case.
+          // Multi-clock designs use per-register clock gating when available.
           Value isPosedge;
+          SmallVector<Value> posedges;
           bool usePosedge = !risingClocksOnly && clockIndexes.size() == 1;
+          bool usePerRegPosedge =
+              !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
           if (usePosedge) {
             auto clockIndex = clockIndexes[0];
             auto oldClock = iterArgs[clockIndex];
@@ -1776,26 +2312,56 @@ struct VerifBoundedModelCheckingOpConversion
             // Convert posedge bv<1> to bool
             auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
             isPosedge = smt::EqOp::create(builder, loc, isPosedgeBV, trueBV);
+          } else if (usePerRegPosedge) {
+            posedges.reserve(clockIndexes.size());
+            auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
+            for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
+              auto oldClock = iterArgs[clockIndex];
+              auto newClock = loopVals[idx];
+              auto oldClockLow =
+                  smt::BVNotOp::create(builder, loc, oldClock);
+              auto isPosedgeBV =
+                  smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
+              posedges.push_back(
+                  smt::EqOp::create(builder, loc, isPosedgeBV, trueBV));
+            }
           }
-          if (clockIndexes.size() == 1) {
+          if (clockIndexes.size() >= 1) {
             SmallVector<Value> regInputs = circuitOutputs.take_back(numRegs);
-            if (risingClocksOnly) {
-              // In rising clocks only mode we don't need to worry about whether
-              // there was a posedge
-              newDecls.append(regInputs);
-            } else {
+            if (risingClocksOnly || clockIndexes.size() == 1) {
+              if (risingClocksOnly) {
+                // In rising clocks only mode we don't need to worry about
+                // whether there was a posedge.
+                newDecls.append(regInputs);
+              } else {
+                auto regStates =
+                    iterArgs.take_front(circuitFuncOp.getNumArguments())
+                        .take_back(numRegs + totalDelaySlots)
+                        .drop_back(totalDelaySlots);
+                SmallVector<Value> nextRegStates;
+                for (auto [regState, regInput] :
+                     llvm::zip(regStates, regInputs)) {
+                  // Create an ITE to calculate the next reg state
+                  // TODO: we create a lot of ITEs here that will slow things down
+                  // - these could be avoided by making init/loop regions concrete
+                  nextRegStates.push_back(smt::IteOp::create(
+                      builder, loc, isPosedge, regInput, regState));
+                }
+                newDecls.append(nextRegStates);
+              }
+            } else if (usePerRegPosedge) {
               auto regStates =
                   iterArgs.take_front(circuitFuncOp.getNumArguments())
                       .take_back(numRegs + totalDelaySlots)
                       .drop_back(totalDelaySlots);
               SmallVector<Value> nextRegStates;
-              for (auto [regState, regInput] :
-                   llvm::zip(regStates, regInputs)) {
-                // Create an ITE to calculate the next reg state
-                // TODO: we create a lot of ITEs here that will slow things down
-                // - these could be avoided by making init/loop regions concrete
+              nextRegStates.reserve(numRegs);
+              for (auto [idx, pair] :
+                   llvm::enumerate(llvm::zip(regStates, regInputs))) {
+                auto [regState, regInput] = pair;
+                Value regPosedge = posedges[regClockToLoopIndex[idx]];
                 nextRegStates.push_back(smt::IteOp::create(
-                    builder, loc, isPosedge, regInput, regState));
+                    builder, loc, regPosedge, regInput, regState));
               }
               newDecls.append(nextRegStates);
             }
@@ -1825,9 +2391,8 @@ struct VerifBoundedModelCheckingOpConversion
 
           // Pass through finalCheckOutputs (already !smt.bv<1>) for next
           // iteration
-          for (auto finalVal : finalCheckOutputs) {
+          for (auto finalVal : finalCheckOutputs)
             newDecls.push_back(finalVal);
-          }
           newDecls.push_back(violated);
 
           scf::YieldOp::create(builder, loc, newDecls);
@@ -1836,42 +2401,87 @@ struct VerifBoundedModelCheckingOpConversion
     // Get the violation flag from the loop
     Value violated = forOp->getResults().back();
 
-    // If there are final checks, check if they can be violated
+    // If there are final checks, compute any final assertion violation and
+    // any final cover success.
     Value finalCheckViolated = constFalse;
-    if (numFinalAsserts > 0) {
-      // For each final check, assert its negation (we're looking for
-      // violations). If SAT, the check can be violated.
+    Value finalCoverHit = constFalse;
+    if (numFinalChecks > 0) {
       auto results = forOp->getResults();
-      size_t finalStart = results.size() - 1 - numFinalAsserts;
-      for (size_t i = 0; i < numFinalAsserts; ++i) {
-        // Results may be !smt.bv<1> or !smt.bool depending on source type
+      size_t finalStart = results.size() - 1 - numFinalChecks;
+      SmallVector<Value> finalAssertOutputs;
+      SmallVector<Value> finalCoverOutputs;
+      finalAssertOutputs.reserve(numFinalChecks);
+      finalCoverOutputs.reserve(numFinalChecks);
+      for (size_t i = 0; i < numFinalChecks; ++i) {
         Value finalVal = results[finalStart + i];
-        Value isTrue;
-        if (isa<smt::BoolType>(finalVal.getType())) {
-          // LTL properties are converted to !smt.bool, use directly
-          isTrue = finalVal;
-        } else {
-          // i1 properties are converted to !smt.bv<1>, compare with 1
-          auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
-          isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+        if (finalCheckIsCover[i])
+          finalCoverOutputs.push_back(finalVal);
+        else
+          finalAssertOutputs.push_back(finalVal);
+      }
+
+      if (!finalAssertOutputs.empty()) {
+        for (Value finalVal : finalAssertOutputs) {
+          Value isTrue;
+          if (isa<smt::BoolType>(finalVal.getType())) {
+            // LTL properties are converted to !smt.bool, use directly
+            isTrue = finalVal;
+          } else {
+            // i1 properties are converted to !smt.bv<1>, compare with 1
+            auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+            isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+          }
+          // Assert the negation: we're looking for cases where the check FAILS
+          Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
+          smt::AssertOp::create(rewriter, loc, isFalse);
         }
-        // Assert the negation: we're looking for cases where the check FAILS
-        Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
-        smt::AssertOp::create(rewriter, loc, isFalse);
+        // Now check if there's a satisfying assignment (i.e., a violation)
+        auto finalCheckOp =
+            smt::CheckOp::create(rewriter, loc, rewriter.getI1Type());
+        {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.createBlock(&finalCheckOp.getSatRegion());
+          smt::YieldOp::create(rewriter, loc, constTrue);
+          rewriter.createBlock(&finalCheckOp.getUnknownRegion());
+          smt::YieldOp::create(rewriter, loc, constTrue);
+          rewriter.createBlock(&finalCheckOp.getUnsatRegion());
+          smt::YieldOp::create(rewriter, loc, constFalse);
+        }
+        finalCheckViolated = finalCheckOp.getResult(0);
       }
-      // Now check if there's a satisfying assignment (i.e., a violation)
-      auto finalCheckOp =
-          smt::CheckOp::create(rewriter, loc, rewriter.getI1Type());
-      {
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.createBlock(&finalCheckOp.getSatRegion());
-        smt::YieldOp::create(rewriter, loc, constTrue);
-        rewriter.createBlock(&finalCheckOp.getUnknownRegion());
-        smt::YieldOp::create(rewriter, loc, constTrue);
-        rewriter.createBlock(&finalCheckOp.getUnsatRegion());
-        smt::YieldOp::create(rewriter, loc, constFalse);
+
+      if (!finalCoverOutputs.empty()) {
+        smt::PushOp::create(rewriter, loc, 1);
+        SmallVector<Value> coverTerms;
+        coverTerms.reserve(finalCoverOutputs.size());
+        for (Value finalVal : finalCoverOutputs) {
+          if (isa<smt::BoolType>(finalVal.getType())) {
+            coverTerms.push_back(finalVal);
+          } else {
+            auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+            coverTerms.push_back(
+                smt::EqOp::create(rewriter, loc, finalVal, trueBV));
+          }
+        }
+        Value anyCover =
+            coverTerms.size() == 1
+                ? coverTerms.front()
+                : smt::OrOp::create(rewriter, loc, coverTerms).getResult();
+        smt::AssertOp::create(rewriter, loc, anyCover);
+        auto finalCoverOp =
+            smt::CheckOp::create(rewriter, loc, rewriter.getI1Type());
+        {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.createBlock(&finalCoverOp.getSatRegion());
+          smt::YieldOp::create(rewriter, loc, constTrue);
+          rewriter.createBlock(&finalCoverOp.getUnknownRegion());
+          smt::YieldOp::create(rewriter, loc, constTrue);
+          rewriter.createBlock(&finalCoverOp.getUnsatRegion());
+          smt::YieldOp::create(rewriter, loc, constFalse);
+        }
+        smt::PopOp::create(rewriter, loc, 1);
+        finalCoverHit = finalCoverOp.getResult(0);
       }
-      finalCheckViolated = finalCheckOp.getResult(0);
     }
 
     // Combine results: true if no violations found
@@ -1879,7 +2489,7 @@ struct VerifBoundedModelCheckingOpConversion
     // For cover check: violated (we want to find a trace)
     Value res;
     if (isCoverCheck) {
-      res = violated;
+      res = arith::OrIOp::create(rewriter, loc, violated, finalCoverHit);
     } else {
       Value anyViolation =
           arith::OrIOp::create(rewriter, loc, violated, finalCheckViolated);
@@ -1910,18 +2520,24 @@ struct ConvertVerifToSMTPass
 };
 } // namespace
 
+static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
+                                               RewritePatternSet &patterns) {
+  patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLIntersectOpConversion,
+               LTLNotOpConversion, LTLImplicationOpConversion,
+               LTLEventuallyOpConversion, LTLUntilOpConversion,
+               LTLBooleanConstantOpConversion, LTLDelayOpConversion,
+               LTLPastOpConversion, LTLConcatOpConversion,
+               LTLRepeatOpConversion, LTLGoToRepeatOpConversion,
+               LTLNonConsecutiveRepeatOpConversion>(converter,
+                                                    patterns.getContext());
+}
+
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
   // Add LTL operation conversion patterns
-  patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLNotOpConversion,
-               LTLImplicationOpConversion, LTLEventuallyOpConversion,
-               LTLUntilOpConversion, LTLBooleanConstantOpConversion,
-               LTLDelayOpConversion, LTLPastOpConversion, LTLConcatOpConversion,
-               LTLRepeatOpConversion, LTLGoToRepeatOpConversion,
-               LTLNonConsecutiveRepeatOpConversion>(converter,
-                                                    patterns.getContext());
+  populateLTLToSMTConversionPatterns(converter, patterns);
 
   // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
@@ -1935,11 +2551,12 @@ void circt::populateVerifToSMTConversionPatterns(
 }
 
 void ConvertVerifToSMTPass::runOnOperation() {
-  ConversionTarget target(getContext());
-  target.addIllegalDialect<verif::VerifDialect>();
-  target.addLegalDialect<smt::SMTDialect, arith::ArithDialect, scf::SCFDialect,
-                         func::FuncDialect>();
-  target.addLegalOp<UnrealizedConversionCastOp>();
+  ConversionTarget verifTarget(getContext());
+  verifTarget.addIllegalDialect<verif::VerifDialect>();
+  verifTarget.addLegalDialect<smt::SMTDialect, arith::ArithDialect,
+                              scf::SCFDialect, func::FuncDialect,
+                              ltl::LTLDialect>();
+  verifTarget.addLegalOp<UnrealizedConversionCastOp>();
 
   // Check BMC ops contain only one assertion (done outside pattern to avoid
   // issues with whether assertions are/aren't lowered yet)
@@ -1992,9 +2609,26 @@ void ConvertVerifToSMTPass::runOnOperation() {
           // TODO: this can be removed once we have a way to associate reg
           // ins/outs with clocks
           if (numClockArgs > 1) {
-            op->emitError(
-                "only modules with one or zero clocks are currently supported");
-            return WalkResult::interrupt();
+            if (risingClocksOnly) {
+              op->emitError("multi-clock BMC is not supported with "
+                            "--rising-clocks-only");
+              return WalkResult::interrupt();
+            }
+            unsigned numRegs = bmcOp.getNumRegs();
+            auto regClocks =
+                bmcOp->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
+            if (numRegs > 0 &&
+                (!regClocks || regClocks.size() != numRegs)) {
+              op->emitError("multi-clock BMC requires bmc_reg_clocks with one "
+                            "entry per register");
+              return WalkResult::interrupt();
+            }
+            if (numRegs > 0 &&
+                !bmcOp->getAttrOfType<ArrayAttr>("bmc_input_names")) {
+              op->emitError(
+                  "multi-clock BMC requires bmc_input_names for clock mapping");
+              return WalkResult::interrupt();
+            }
           }
           SmallVector<mlir::Operation *> worklist;
           int numAssertions = 0;
@@ -2035,14 +2669,14 @@ void ConvertVerifToSMTPass::runOnOperation() {
                             "trivially find no violations.");
             propertylessBMCOps.push_back(bmcOp);
           }
-          if (numCovers > 1 || (numAssertions > 0 && numCovers > 0)) {
+          if (numAssertions > 0 && numCovers > 0) {
             op->emitError(
-                "bounded model checking problems with multiple properties are "
-                "not yet correctly handled - instead, check one property at a "
-                "time");
+                "bounded model checking problems with mixed assert/cover "
+                "properties are not yet correctly handled - instead, check one "
+                "kind at a time");
             return WalkResult::interrupt();
           }
-          if (numCovers == 1)
+          if (numCovers > 0)
             coverBMCOps.push_back(bmcOp);
         }
         return WalkResult::advance();
@@ -2063,30 +2697,68 @@ void ConvertVerifToSMTPass::runOnOperation() {
     return smt::BoolType::get(type.getContext());
   });
 
-  // Mark LTL operations as illegal so they get converted to SMT
-  // Note: ltl::PastOp is handled directly in the BMC conversion by replacing
-  // it with buffer arguments, so it's erased before pattern matching.
-  target.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::NotOp, ltl::ImplicationOp,
-                      ltl::EventuallyOp, ltl::UntilOp, ltl::BooleanConstantOp,
-                      ltl::DelayOp, ltl::ConcatOp, ltl::RepeatOp,
-                      ltl::GoToRepeatOp, ltl::NonConsecutiveRepeatOp,
-                      ltl::PastOp>();
+  // Keep assert/assume/cover legal inside BMC so the BMC conversion can handle
+  // them, and illegal elsewhere so they get lowered normally.
+  auto isInsideBMC = [](Operation *op) {
+    return op->getParentOfType<verif::BoundedModelCheckingOp>() != nullptr;
+  };
+  verifTarget.addDynamicallyLegalOp<verif::AssertOp>(
+      [&](verif::AssertOp op) { return isInsideBMC(op); });
+  verifTarget.addDynamicallyLegalOp<verif::AssumeOp>(
+      [&](verif::AssumeOp op) { return isInsideBMC(op); });
+  verifTarget.addDynamicallyLegalOp<verif::CoverOp>(
+      [&](verif::CoverOp op) { return isInsideBMC(op); });
 
   SymbolCache symCache;
   symCache.addDefinitions(getOperation());
   Namespace names;
   names.add(symCache);
 
-  populateVerifToSMTConversionPatterns(converter, patterns, names,
-                                       risingClocksOnly, propertylessBMCOps,
-                                       coverBMCOps);
+  // First phase: lower Verif operations, leaving LTL ops untouched.
+  patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
+               VerifCoverOpConversion, LogicEquivalenceCheckingOpConversion,
+               RefinementCheckingOpConversion>(converter,
+                                               patterns.getContext());
+  patterns.add<VerifBoundedModelCheckingOpConversion>(
+      converter, patterns.getContext(), names, risingClocksOnly,
+      propertylessBMCOps, coverBMCOps);
 
-  if (failed(mlir::applyPartialConversion(getOperation(), target,
+  if (failed(mlir::applyPartialConversion(getOperation(), verifTarget,
                                           std::move(patterns))))
+    return signalPassFailure();
+
+  // Second phase: lower remaining LTL operations to SMT.
+  ConversionTarget ltlTarget(getContext());
+  ltlTarget.addLegalDialect<smt::SMTDialect, arith::ArithDialect,
+                            scf::SCFDialect, func::FuncDialect,
+                            comb::CombDialect, hw::HWDialect, seq::SeqDialect,
+                            verif::VerifDialect>();
+  ltlTarget.addLegalOp<UnrealizedConversionCastOp>();
+  ltlTarget.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::IntersectOp, ltl::NotOp,
+                         ltl::ImplicationOp, ltl::EventuallyOp, ltl::UntilOp,
+                         ltl::BooleanConstantOp, ltl::DelayOp, ltl::ConcatOp,
+                         ltl::RepeatOp, ltl::GoToRepeatOp,
+                         ltl::NonConsecutiveRepeatOp, ltl::PastOp>();
+
+  RewritePatternSet ltlPatterns(&getContext());
+  populateLTLToSMTConversionPatterns(converter, ltlPatterns);
+  if (failed(mlir::applyPartialConversion(getOperation(), ltlTarget,
+                                          std::move(ltlPatterns))))
+    return signalPassFailure();
+
+  RewritePatternSet relocatePatterns(&getContext());
+  relocatePatterns.add<RelocateCastIntoInputRegion>(&getContext());
+  if (failed(applyPatternsGreedily(getOperation(),
+                                   std::move(relocatePatterns))))
     return signalPassFailure();
 
   RewritePatternSet postPatterns(&getContext());
   postPatterns.add<BoolBVCastOpRewrite>(&getContext());
   if (failed(applyPatternsGreedily(getOperation(), std::move(postPatterns))))
+    return signalPassFailure();
+
+  RewritePatternSet regionFixups(&getContext());
+  regionFixups.add<RelocateSMTEqIntoOperandRegion>(&getContext());
+  if (failed(applyPatternsGreedily(getOperation(), std::move(regionFixups))))
     return signalPassFailure();
 }
