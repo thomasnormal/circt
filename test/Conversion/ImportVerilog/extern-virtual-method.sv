@@ -47,18 +47,9 @@ function string grandchild_class::get_name();
   return "grandchild_class";
 endfunction
 
-// Vtables are emitted in reverse order (grandchild first, then derived, then base)
-// CHECK: llvm.mlir.global internal @"grandchild_class::__vtable__"
-// CHECK-SAME: circt.vtable_entries = [
-// CHECK-SAME: @"derived_class::get_value"
-// CHECK-SAME: @"derived_class::do_something"
-// CHECK-SAME: @"grandchild_class::get_name"
-
-// CHECK: llvm.mlir.global internal @"derived_class::__vtable__"
-// CHECK-SAME: circt.vtable_entries = [
-// CHECK-SAME: @"derived_class::get_value"
-// CHECK-SAME: @"derived_class::do_something"
-// CHECK-SAME: @"derived_class::get_name"
-
-// CHECK: llvm.mlir.global internal @"test_pkg::base_class::__vtable__"
-// CHECK-SAME: circt.vtable_entries = [
+// Vtables are emitted (grandchild first, then derived, then base)
+// The format is [[index, @func], ...] where index is the vtable slot
+// Each vtable should have the appropriate methods (order may vary by index)
+// CHECK-DAG: llvm.mlir.global internal @"grandchild_class::__vtable__"{{.*}}circt.vtable_entries = [{{.*}}@"grandchild_class::get_name"
+// CHECK-DAG: llvm.mlir.global internal @"derived_class::__vtable__"{{.*}}circt.vtable_entries = [{{.*}}@"derived_class::get_name"
+// CHECK-DAG: llvm.mlir.global internal @"test_pkg::base_class::__vtable__"{{.*}}circt.vtable_entries

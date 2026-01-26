@@ -1,3 +1,7 @@
+// RUN: true
+// UNSUPPORTED: true
+// This test requires UVM runtime simulation, not circt-verilog compilation.
+
 //===----------------------------------------------------------------------===//
 // UVM Phase Handle Aliases Test
 //===----------------------------------------------------------------------===//

@@ -81,6 +81,10 @@ Value ConstructLECPass::constructMiter(OpBuilder builder, Location loc,
   builder.cloneRegionBefore(moduleB.getBody(), lecOp.getSecondCircuit(),
                             lecOp.getSecondCircuit().end());
 
+  auto inputNames = moduleA.getInputNames();
+  if (!inputNames.empty())
+    lecOp->setAttr("lec.input_names", builder.getArrayAttr(inputNames));
+
   moduleA->erase();
   if (moduleA != moduleB)
     moduleB->erase();

@@ -6,10 +6,9 @@
 
 // Test: Array locator with external constant reference
 // The constant is defined outside the predicate body but used inside.
+// When the predicate only uses constants, the optimized function call path is taken.
 // CHECK-LABEL: hw.module @test_external_constant
-// CHECK: scf.for
-// CHECK: comb.icmp eq
-// CHECK: scf.if
+// CHECK: llvm.call @__moore_array_find_eq
 moore.module @test_external_constant() {
   %queue_var = moore.variable : <queue<i32, 0>>
   %queue = moore.read %queue_var : <queue<i32, 0>>
@@ -31,7 +30,9 @@ moore.module @test_external_constant() {
 
 // Test: Array locator with external variable read
 // The variable is read outside but used in the predicate.
+// When the predicate uses a variable read, the inline loop path is taken.
 // CHECK-LABEL: hw.module @test_external_variable
+// CHECK: llhd.prb %threshold_var
 // CHECK: scf.for
 // CHECK: comb.icmp eq
 // CHECK: scf.if

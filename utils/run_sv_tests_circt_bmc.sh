@@ -22,6 +22,7 @@ NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-0}"
 TAG_REGEX="${TAG_REGEX:-(^| )16\\.|(^| )9\\.4\\.4}"
 TEST_FILTER="${TEST_FILTER:-}"
 OUT="${OUT:-$PWD/sv-tests-bmc-results.txt}"
+mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

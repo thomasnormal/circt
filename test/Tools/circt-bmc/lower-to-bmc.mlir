@@ -40,8 +40,8 @@ hw.module @comb(in %in0: i32, in %in1: i32, out out: i32) attributes {num_regs =
 // CHECK1:      verif.yield [[INIT_CLK]]
 // CHECK1:    } loop {
 // CHECK1:    ^bb0([[CLK:%.+]]: !seq.clock):
-// CHECK1:      [[FROM_CLK:%.+]] = seq.from_clock [[CLK]]
 // CHECK1:      [[TRUE:%.+]] = hw.constant true
+// CHECK1:      [[FROM_CLK:%.+]] = seq.from_clock [[CLK]]
 // CHECK1:      [[NCLK:%.+]] = comb.xor [[FROM_CLK]], [[TRUE]]
 // CHECK1:      [[NEW_CLOCK:%.+]] = seq.to_clock [[NCLK]]
 // CHECK1:      verif.yield [[NEW_CLOCK]]
@@ -87,8 +87,8 @@ hw.module @seq(in %clk : !seq.clock, in %in0 : i32, in %in1 : i32, in %reg_state
 // CHECK2:      verif.yield [[INIT_CLK]]
 // CHECK2:    } loop {
 // CHECK2:    ^bb0([[CLK:%.+]]: !seq.clock):
-// CHECK2:      [[FROM_CLK:%.+]] = seq.from_clock [[CLK]]
 // CHECK2:      [[TRUE:%.+]] = hw.constant true
+// CHECK2:      [[FROM_CLK:%.+]] = seq.from_clock [[CLK]]
 // CHECK2:      [[NCLK:%.+]] = comb.xor [[FROM_CLK]], [[TRUE]]
 // CHECK2:      [[NEW_CLOCK:%.+]] = seq.to_clock [[NCLK]]
 // CHECK2:      verif.yield [[NEW_CLOCK]]

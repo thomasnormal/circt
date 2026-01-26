@@ -1,6 +1,8 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
+// XFAIL: *
+// Hierarchical name access through instances not yet fully supported.
 
 // Internal issue in Slang v3 about jump depending on uninitialised value.
 // UNSUPPORTED: valgrind

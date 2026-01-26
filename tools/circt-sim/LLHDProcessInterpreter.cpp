@@ -34,6 +34,9 @@ using namespace mlir;
 using namespace circt;
 using namespace circt::sim;
 
+static bool getSignalInitValue(Value initValue, unsigned width,
+                               llvm::APInt &outValue);
+
 //===----------------------------------------------------------------------===//
 // LLHDProcessInterpreter Implementation
 //===----------------------------------------------------------------------===//
@@ -51,29 +54,38 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Store the root module for symbol lookup
   rootModule = hwModule->getParentOfType<ModuleOp>();
 
-  // Register all signals first
-  if (failed(registerSignals(hwModule)))
+  // === STACK OVERFLOW FIX ===
+  // Use a single iterative pass to discover all operations instead of
+  // multiple recursive walk() calls. This prevents stack overflow on
+  // large designs (165k+ lines with deep nesting).
+  DiscoveredOps discoveredOps;
+  discoverOpsIteratively(hwModule, discoveredOps);
+
+  // Register all signals first (using pre-discovered ops)
+  if (failed(registerSignals(hwModule, discoveredOps)))
     return failure();
 
-  // Register seq.firreg operations before processes.
-  registerFirRegs(hwModule);
+  // Register seq.firreg operations before processes (using pre-discovered ops).
+  registerFirRegs(discoveredOps);
 
   // Export signals to MooreRuntime signal registry for DPI/VPI access
   exportSignalsToRegistry();
 
-  // Then register all processes
-  if (failed(registerProcesses(hwModule)))
+  // Then register all processes (using pre-discovered ops)
+  if (failed(registerProcesses(discoveredOps)))
+    return failure();
+
+  // Recursively process child module instances before registering
+  // continuous assignments so instance outputs are mapped.
+  // Note: initializeChildInstances does its own iterative discovery for each child
+  if (failed(initializeChildInstances(discoveredOps)))
     return failure();
 
   // Register combinational processes for static module-level drives
-  // (continuous assignments like port connections)
+  // (continuous assignments like port connections).
   registerContinuousAssignments(hwModule);
 
-  // Recursively process child module instances
-  if (failed(initializeChildInstances(hwModule)))
-    return failure();
-
-  // Initialize LLVM global variables (especially vtables)
+  // Initialize LLVM global variables (especially vtables) using iterative discovery
   if (failed(initializeGlobals()))
     return failure();
 
@@ -90,9 +102,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 }
 
 LogicalResult
-LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
-  // Find all hw.instance operations in this module
-  hwModule.walk([&](hw::InstanceOp instOp) {
+LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
+  // Process all pre-discovered hw.instance operations (no walk() needed)
+  for (hw::InstanceOp instOp : ops.instances) {
     // Get the referenced module name
     StringRef childModuleName = instOp.getReferencedModuleName();
 
@@ -102,7 +114,7 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
     // Look up the child module in the symbol table
     if (!rootModule) {
       LLVM_DEBUG(llvm::dbgs() << "    Warning: No root module for symbol lookup\n");
-      return;
+      continue;
     }
 
     auto childModule =
@@ -110,22 +122,40 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
     if (!childModule) {
       LLVM_DEBUG(llvm::dbgs() << "    Warning: Could not find module '"
                               << childModuleName << "'\n");
-      return;
+      continue;
+    }
+
+    // Map instance results to child module outputs for instance evaluation.
+    if (auto *bodyBlock = childModule.getBodyBlock()) {
+      if (auto outputOp =
+              dyn_cast<hw::OutputOp>(bodyBlock->getTerminator())) {
+        unsigned resultCount = instOp.getNumResults();
+        unsigned outputCount = outputOp.getNumOperands();
+        unsigned mapCount = std::min(resultCount, outputCount);
+        for (unsigned i = 0; i < mapCount; ++i)
+          instanceOutputMap[instOp.getResult(i)] = outputOp.getOperand(i);
+        if (resultCount != outputCount) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "    Warning: Instance output count mismatch for '"
+                     << instOp.getInstanceName() << "' (results="
+                     << resultCount << ", outputs=" << outputCount << ")\n");
+        }
+      }
     }
 
     // Skip if we've already processed this module (to handle multiple instances)
     if (processedModules.contains(childModuleName)) {
       LLVM_DEBUG(llvm::dbgs() << "    Skipping already processed module\n");
-      return;
+      continue;
     }
     processedModules.insert(childModuleName);
 
-    // Register signals and processes from the child module
-    // Note: We don't recursively call initialize() to avoid re-exporting signals
-    // and to maintain the current hierarchical context
+    // === Use iterative discovery for child module (stack overflow prevention) ===
+    DiscoveredOps childOps;
+    discoverOpsIteratively(childModule, childOps);
 
-    // Register signals from child module
-    childModule.walk([&](llhd::SignalOp sigOp) {
+    // Register signals from child module using pre-discovered ops
+    for (llhd::SignalOp sigOp : childOps.signals) {
       // Use hierarchical name for child signals
       std::string name = sigOp.getName().value_or("").str();
       if (name.empty()) {
@@ -140,9 +170,13 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
       valueToSignal[sigOp.getResult()] = sigId;
       signalIdToName[sigId] = hierName;
 
+      llvm::APInt initValue;
+      if (getSignalInitValue(sigOp.getInit(), width, initValue))
+        scheduler.updateSignal(sigId, SignalValue(initValue));
+
       LLVM_DEBUG(llvm::dbgs() << "    Registered child signal '" << hierName
                               << "' with ID " << sigId << "\n");
-    });
+    }
 
     // Map child module input block arguments to parent signals if possible.
     auto &childBody = childModule.getBody();
@@ -155,6 +189,7 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
           continue;
         Value childArg = childBody.getArgument(operandIdx);
         Value operand = instOp.getOperand(operandIdx);
+        inputValueMap.try_emplace(childArg, operand);
         SignalId sigId = resolveSignalId(operand);
         if (sigId != 0) {
           valueToSignal[childArg] = sigId;
@@ -165,19 +200,19 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
       }
     }
 
-    // Register seq.firreg operations for the child module.
-    registerFirRegs(childModule);
+    // Register seq.firreg operations for the child module using pre-discovered ops.
+    registerFirRegs(childOps);
 
-    // Register processes from child module
-    childModule.walk([&](llhd::ProcessOp processOp) {
+    // Register processes from child module using pre-discovered ops
+    for (llhd::ProcessOp processOp : childOps.processes) {
       std::string procName = instOp.getInstanceName().str() + ".llhd_process_" +
                              std::to_string(processStates.size());
 
-    ProcessExecutionState state(processOp);
-    ProcessId procId =
-        scheduler.registerProcess(procName, []() {});
-    if (auto *process = scheduler.getProcess(procId))
-      process->setCallback([this, procId]() { executeProcess(procId); });
+      ProcessExecutionState state(processOp);
+      ProcessId procId =
+          scheduler.registerProcess(procName, []() {});
+      if (auto *process = scheduler.getProcess(procId))
+        process->setCallback([this, procId]() { executeProcess(procId); });
 
       state.currentBlock = &processOp.getBody().front();
       state.currentOp = state.currentBlock->begin();
@@ -188,18 +223,23 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
                               << "' with ID " << procId << "\n");
 
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-    });
+    }
 
-    // Register seq.initial blocks from child module
-    childModule.walk([&](seq::InitialOp initialOp) {
+    // Register module-level llhd.drv operations using pre-discovered ops.
+    for (llhd::DriveOp driveOp : childOps.moduleDrives) {
+      registerModuleDrive(driveOp);
+    }
+
+    // Register seq.initial blocks from child module using pre-discovered ops
+    for (seq::InitialOp initialOp : childOps.initials) {
       std::string initName = instOp.getInstanceName().str() + ".seq_initial_" +
                              std::to_string(processStates.size());
 
-    ProcessExecutionState state(initialOp);
-    ProcessId procId =
-        scheduler.registerProcess(initName, []() {});
-    if (auto *process = scheduler.getProcess(procId))
-      process->setCallback([this, procId]() { executeProcess(procId); });
+      ProcessExecutionState state(initialOp);
+      ProcessId procId =
+          scheduler.registerProcess(initName, []() {});
+      if (auto *process = scheduler.getProcess(procId))
+        process->setCallback([this, procId]() { executeProcess(procId); });
 
       state.currentBlock = initialOp.getBodyBlock();
       state.currentOp = state.currentBlock->begin();
@@ -210,11 +250,14 @@ LLHDProcessInterpreter::initializeChildInstances(hw::HWModuleOp hwModule) {
                               << "' with ID " << procId << "\n");
 
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-    });
+    }
 
-    // Recursively process child module's instances
-    (void)initializeChildInstances(childModule);
-  });
+    // Recursively process child module's instances using discovered ops
+    (void)initializeChildInstances(childOps);
+
+    // Register combinational processes for static module-level drives in child.
+    registerContinuousAssignments(childModule);
+  }
 
   return success();
 }
@@ -279,6 +322,35 @@ static APInt flattenAggregateConstant(hw::AggregateConstantOp aggConstOp) {
   return result;
 }
 
+/// Extract an initial APInt value from a signal init operand if possible.
+/// Returns true if a constant value was found and normalized to the signal width.
+static bool getSignalInitValue(Value initValue, unsigned width,
+                               llvm::APInt &outValue) {
+  if (auto constOp = initValue.getDefiningOp<hw::ConstantOp>()) {
+    outValue = constOp.getValue();
+  } else if (auto aggConstOp =
+                 initValue.getDefiningOp<hw::AggregateConstantOp>()) {
+    outValue = flattenAggregateConstant(aggConstOp);
+  } else if (auto bitcastOp = initValue.getDefiningOp<hw::BitcastOp>()) {
+    if (auto constOp = bitcastOp.getInput().getDefiningOp<hw::ConstantOp>()) {
+      outValue = constOp.getValue();
+    } else if (auto aggConstOp = bitcastOp.getInput()
+                                     .getDefiningOp<hw::AggregateConstantOp>()) {
+      outValue = flattenAggregateConstant(aggConstOp);
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+
+  if (outValue.getBitWidth() < width)
+    outValue = outValue.zext(width);
+  else if (outValue.getBitWidth() > width)
+    outValue = outValue.trunc(width);
+  return true;
+}
+
 /// Normalize two APInt values to have the same bit width for binary operations.
 /// If the widths differ, both are extended/truncated to the target width.
 /// This prevents assertion failures in APInt binary operators that require
@@ -301,10 +373,118 @@ static void normalizeWidths(llvm::APInt &lhs, llvm::APInt &rhs,
 }
 
 //===----------------------------------------------------------------------===//
+// Iterative Operation Discovery (Stack Overflow Prevention)
+//===----------------------------------------------------------------------===//
+
+void LLHDProcessInterpreter::discoverOpsIteratively(hw::HWModuleOp hwModule,
+                                                     DiscoveredOps &ops) {
+  // Use an explicit worklist to traverse operations iteratively instead of
+  // using walk(), which is recursive and causes stack overflow on large designs.
+  // This single pass replaces 17+ separate walk() calls.
+
+  llvm::SmallVector<Operation *, 256> worklist;
+  llvm::SmallVector<Region *, 64> regionWorklist;
+
+  // Start with the module's body region
+  regionWorklist.push_back(&hwModule.getBody());
+
+  while (!regionWorklist.empty()) {
+    Region *region = regionWorklist.pop_back_val();
+
+    // Process all blocks in this region
+    for (Block &block : *region) {
+      // Process all operations in this block
+      for (Operation &op : block) {
+        // Classify the operation by type
+        if (auto instOp = dyn_cast<hw::InstanceOp>(&op)) {
+          ops.instances.push_back(instOp);
+        } else if (auto sigOp = dyn_cast<llhd::SignalOp>(&op)) {
+          ops.signals.push_back(sigOp);
+        } else if (auto outputOp = dyn_cast<llhd::OutputOp>(&op)) {
+          ops.outputs.push_back(outputOp);
+        } else if (auto processOp = dyn_cast<llhd::ProcessOp>(&op)) {
+          ops.processes.push_back(processOp);
+          // Don't recurse into process bodies for discovering module-level ops
+        } else if (auto combOp = dyn_cast<llhd::CombinationalOp>(&op)) {
+          ops.combinationals.push_back(combOp);
+          // Don't recurse into combinational bodies
+        } else if (auto initialOp = dyn_cast<seq::InitialOp>(&op)) {
+          ops.initials.push_back(initialOp);
+          // Don't recurse into initial bodies
+        } else if (auto driveOp = dyn_cast<llhd::DriveOp>(&op)) {
+          // Only collect module-level drives (not inside processes/initials)
+          if (!op.getParentOfType<llhd::ProcessOp>() &&
+              !op.getParentOfType<seq::InitialOp>()) {
+            ops.moduleDrives.push_back(driveOp);
+          }
+        } else if (auto firRegOp = dyn_cast<seq::FirRegOp>(&op)) {
+          ops.firRegs.push_back(firRegOp);
+        }
+
+        // Add nested regions to worklist (but skip process/initial/combinational bodies
+        // since we don't want to discover ops inside those as module-level)
+        if (!isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp>(&op)) {
+          for (Region &nestedRegion : op.getRegions()) {
+            regionWorklist.push_back(&nestedRegion);
+          }
+        }
+      }
+    }
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "  Iterative discovery found: "
+                          << ops.instances.size() << " instances, "
+                          << ops.signals.size() << " signals, "
+                          << ops.outputs.size() << " outputs, "
+                          << ops.processes.size() << " processes, "
+                          << ops.combinationals.size() << " combinationals, "
+                          << ops.initials.size() << " initials, "
+                          << ops.moduleDrives.size() << " module drives, "
+                          << ops.firRegs.size() << " firRegs\n");
+}
+
+void LLHDProcessInterpreter::discoverGlobalOpsIteratively(
+    DiscoveredGlobalOps &ops) {
+  if (!rootModule)
+    return;
+
+  // Use an explicit worklist to traverse operations iteratively
+  llvm::SmallVector<Region *, 64> regionWorklist;
+  regionWorklist.push_back(&rootModule.getBodyRegion());
+
+  while (!regionWorklist.empty()) {
+    Region *region = regionWorklist.pop_back_val();
+
+    for (Block &block : *region) {
+      for (Operation &op : block) {
+        // Classify global operations
+        if (auto globalOp = dyn_cast<LLVM::GlobalOp>(&op)) {
+          ops.globals.push_back(globalOp);
+        } else if (auto ctorsOp = dyn_cast<LLVM::GlobalCtorsOp>(&op)) {
+          ops.ctors.push_back(ctorsOp);
+        }
+
+        // Add nested regions (but skip hw.module bodies - we process those separately)
+        if (!isa<hw::HWModuleOp>(&op)) {
+          for (Region &nestedRegion : op.getRegions()) {
+            regionWorklist.push_back(&nestedRegion);
+          }
+        }
+      }
+    }
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "  Global discovery found: "
+                          << ops.globals.size() << " globals, "
+                          << ops.ctors.size() << " global ctors\n");
+}
+
+//===----------------------------------------------------------------------===//
 // Signal Registration
 //===----------------------------------------------------------------------===//
 
-LogicalResult LLHDProcessInterpreter::registerSignals(hw::HWModuleOp hwModule) {
+LogicalResult LLHDProcessInterpreter::registerSignals(
+    hw::HWModuleOp hwModule, const DiscoveredOps &ops) {
   // First, register module ports that are ref types (signal references)
   for (auto portInfo : hwModule.getPortList()) {
     if (auto refType = dyn_cast<llhd::RefType>(portInfo.type)) {
@@ -329,13 +509,13 @@ LogicalResult LLHDProcessInterpreter::registerSignals(hw::HWModuleOp hwModule) {
     }
   }
 
-  // Walk the module body to find all llhd.sig operations
-  hwModule.walk([&](llhd::SignalOp sigOp) {
+  // Register all pre-discovered llhd.sig operations (no walk() needed)
+  for (llhd::SignalOp sigOp : ops.signals) {
     registerSignal(sigOp);
-  });
+  }
 
-  // Also register signals from llhd.output operations
-  hwModule.walk([&](llhd::OutputOp outputOp) {
+  // Register all pre-discovered llhd.output operations (no walk() needed)
+  for (llhd::OutputOp outputOp : ops.outputs) {
     // llhd.output creates a signal implicitly
     std::string name = outputOp.getName().value_or("").str();
     if (name.empty()) {
@@ -352,7 +532,7 @@ LogicalResult LLHDProcessInterpreter::registerSignals(hw::HWModuleOp hwModule) {
     LLVM_DEBUG(llvm::dbgs() << "  Registered output signal '" << name
                             << "' with ID " << sigId << " (width=" << width
                             << ")\n");
-  });
+  }
 
   return success();
 }
@@ -376,32 +556,10 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
   valueToSignal[sigOp.getResult()] = sigId;
   signalIdToName[sigId] = name;
 
-  // Set the initial value if the init operand is a constant
-  if (auto constOp = sigOp.getInit().getDefiningOp<hw::ConstantOp>()) {
-    APInt initValue = constOp.getValue();
-    // SignalValue only supports up to 64 bits, truncate if wider
-    uint64_t val64 = initValue.getBitWidth() > 64
-                         ? initValue.trunc(64).getZExtValue()
-                         : initValue.getZExtValue();
-    unsigned svWidth = width > 64 ? 64 : width;
-    SignalValue sv(val64, svWidth);
-    scheduler.updateSignal(sigId, sv);
+  llvm::APInt initValue;
+  if (getSignalInitValue(sigOp.getInit(), width, initValue)) {
+    scheduler.updateSignal(sigId, SignalValue(initValue));
     LLVM_DEBUG(llvm::dbgs() << "  Set initial value to " << initValue << "\n");
-  } else if (auto aggConstOp =
-                 sigOp.getInit().getDefiningOp<hw::AggregateConstantOp>()) {
-    // Handle aggregate constant (struct/array) initialization
-    // For 4-state logic signals, the struct contains {value, unknown} fields
-    // We need to flatten the aggregate into a single APInt value
-    APInt initValue = flattenAggregateConstant(aggConstOp);
-    // SignalValue only supports up to 64 bits, truncate if wider
-    uint64_t val64 = initValue.getBitWidth() > 64
-                         ? initValue.trunc(64).getZExtValue()
-                         : initValue.getZExtValue();
-    unsigned svWidth = width > 64 ? 64 : width;
-    SignalValue sv(val64, svWidth);
-    scheduler.updateSignal(sigId, sv);
-    LLVM_DEBUG(llvm::dbgs() << "  Set aggregate initial value to " << initValue
-                            << "\n");
   }
 
   LLVM_DEBUG(llvm::dbgs() << "  Registered signal '" << name << "' with ID "
@@ -559,37 +717,30 @@ void LLHDProcessInterpreter::setupRegistryAccessors() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult
-LLHDProcessInterpreter::registerProcesses(hw::HWModuleOp hwModule) {
-  // Walk the module body to find all llhd.process operations
-  // Note: walk() visits operations in nested regions, so we need to ensure
-  // we're only registering top-level processes (not processes inside other
-  // processes, which shouldn't exist but let's be safe).
-  hwModule.walk([&](llhd::ProcessOp processOp) {
+LLHDProcessInterpreter::registerProcesses(const DiscoveredOps &ops) {
+  // Register all pre-discovered llhd.process operations (no walk() needed)
+  for (llhd::ProcessOp processOp : ops.processes) {
     LLVM_DEBUG(llvm::dbgs() << "  Found llhd.process op (numResults="
                             << processOp.getNumResults() << ")\n");
     registerProcess(processOp);
-  });
+  }
 
-  // Also handle llhd.combinational operations
-  hwModule.walk([&](llhd::CombinationalOp combOp) {
+  // Handle pre-discovered llhd.combinational operations
+  for (llhd::CombinationalOp combOp : ops.combinationals) {
     // TODO: Handle combinational processes in Phase 1B
     LLVM_DEBUG(llvm::dbgs() << "  Found combinational process (TODO)\n");
-  });
+  }
 
-  // Also handle seq.initial operations for $display/$finish support
-  hwModule.walk([&](seq::InitialOp initialOp) {
+  // Register all pre-discovered seq.initial operations (no walk() needed)
+  for (seq::InitialOp initialOp : ops.initials) {
     registerInitialBlock(initialOp);
-  });
+  }
 
-  // Handle module-level llhd.drv operations
-  // These are continuous assignments driven by process results
-  hwModule.getBody().walk([&](llhd::DriveOp driveOp) {
-    // Only handle drives at module level (not inside processes)
-    if (!driveOp->getParentOfType<llhd::ProcessOp>() &&
-        !driveOp->getParentOfType<seq::InitialOp>()) {
-      registerModuleDrive(driveOp);
-    }
-  });
+  // Handle pre-discovered module-level llhd.drv operations (no walk() needed)
+  // Note: The iterative discovery already filters for module-level drives
+  for (llhd::DriveOp driveOp : ops.moduleDrives) {
+    registerModuleDrive(driveOp);
+  }
 
   return success();
 }
@@ -741,6 +892,8 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
   // 3. The process evaluates the drive value and schedules the signal update
 
   for (llhd::DriveOp driveOp : staticModuleDrives) {
+    if (driveOp->getParentOfType<hw::HWModuleOp>() != hwModule)
+      continue;
     // Find the signal being driven
     SignalId targetSigId = getSignalId(driveOp.getSignal());
     if (targetSigId == 0) {
@@ -749,45 +902,20 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
       continue;
     }
 
-    // Find all source signals (signals that are probed to compute the value)
-    llvm::SmallVector<SignalId, 4> sourceSignals;
-
-    // Walk back from the drive value to find all llhd.prb operations
-    llvm::SmallVector<mlir::Value, 8> worklist;
-    llvm::DenseSet<mlir::Value> visited;
-    worklist.push_back(driveOp.getValue());
-
-    while (!worklist.empty()) {
-      mlir::Value val = worklist.pop_back_val();
-      if (!visited.insert(val).second)
-        continue;
-
-      // If this value comes from a probe, record the signal
-      if (auto probeOp = val.getDefiningOp<llhd::ProbeOp>()) {
-        SignalId srcSigId = getSignalId(probeOp.getSignal());
-        if (srcSigId != 0 && srcSigId != targetSigId) {
-          sourceSignals.push_back(srcSigId);
-        }
-        continue;
-      }
-
-      if (auto regOp = val.getDefiningOp<seq::FirRegOp>()) {
-        SignalId srcSigId = getSignalId(regOp.getResult());
-        if (srcSigId != 0 && srcSigId != targetSigId) {
-          sourceSignals.push_back(srcSigId);
-        }
-        continue;
-      }
-
-      // For other operations, add their operands to the worklist
-      if (Operation *defOp = val.getDefiningOp()) {
-        for (Value operand : defOp->getOperands()) {
-          worklist.push_back(operand);
-        }
-      }
+    llvm::SmallVector<ProcessId, 4> processIds;
+    collectProcessIds(driveOp.getValue(), processIds);
+    if (!processIds.empty()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Continuous assignment depends on "
+                 << processIds.size() << " process result(s)\n");
+      for (ProcessId procId : processIds)
+        moduleDrives.push_back({driveOp, procId});
     }
 
-    if (sourceSignals.empty()) {
+    llvm::SmallVector<SignalId, 4> sourceSignals;
+    collectSignalIds(driveOp.getValue(), sourceSignals);
+
+    if (sourceSignals.empty() && processIds.empty()) {
       // No source signals - this is a constant drive, execute once at init
       LLVM_DEBUG(llvm::dbgs()
                  << "  Constant continuous assignment to signal " << targetSigId
@@ -830,6 +958,9 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
 SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
   if (SignalId sigId = getSignalId(value))
     return sigId;
+  auto instIt = instanceOutputMap.find(value);
+  if (instIt != instanceOutputMap.end())
+    return resolveSignalId(instIt->second);
   if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
     return getSignalId(probeOp.getSignal());
   }
@@ -852,6 +983,20 @@ void LLHDProcessInterpreter::collectSignalIds(
       continue;
     }
 
+    if (auto arg = dyn_cast<mlir::BlockArgument>(val)) {
+      auto argIt = inputValueMap.find(arg);
+      if (argIt != inputValueMap.end()) {
+        worklist.push_back(argIt->second);
+        continue;
+      }
+    }
+
+    auto instIt = instanceOutputMap.find(val);
+    if (instIt != instanceOutputMap.end()) {
+      worklist.push_back(instIt->second);
+      continue;
+    }
+
     if (auto toClock = val.getDefiningOp<seq::ToClockOp>()) {
       worklist.push_back(toClock.getInput());
       continue;
@@ -862,6 +1007,11 @@ void LLHDProcessInterpreter::collectSignalIds(
       continue;
     }
 
+    if (auto combOp = val.getDefiningOp<llhd::CombinationalOp>()) {
+      collectSignalIdsFromCombinational(combOp, signals);
+      continue;
+    }
+
     if (Operation *defOp = val.getDefiningOp()) {
       for (Value operand : defOp->getOperands())
         worklist.push_back(operand);
@@ -869,10 +1019,63 @@ void LLHDProcessInterpreter::collectSignalIds(
   }
 }
 
-void LLHDProcessInterpreter::registerFirRegs(hw::HWModuleOp hwModule) {
-  hwModule.walk([&](seq::FirRegOp regOp) {
+void LLHDProcessInterpreter::collectProcessIds(
+    mlir::Value value, llvm::SmallVectorImpl<ProcessId> &processIds) const {
+  llvm::SmallVector<mlir::Value, 8> worklist;
+  llvm::DenseSet<mlir::Value> visited;
+  llvm::DenseSet<ProcessId> seen;
+  worklist.push_back(value);
+
+  while (!worklist.empty()) {
+    mlir::Value val = worklist.pop_back_val();
+    if (!visited.insert(val).second)
+      continue;
+
+    if (auto arg = dyn_cast<mlir::BlockArgument>(val)) {
+      auto argIt = inputValueMap.find(arg);
+      if (argIt != inputValueMap.end()) {
+        worklist.push_back(argIt->second);
+        continue;
+      }
+    }
+
+    auto instIt = instanceOutputMap.find(val);
+    if (instIt != instanceOutputMap.end()) {
+      worklist.push_back(instIt->second);
+      continue;
+    }
+
+    if (auto result = dyn_cast<OpResult>(val)) {
+      if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
+        auto procIt = opToProcessId.find(processOp.getOperation());
+        if (procIt != opToProcessId.end() && seen.insert(procIt->second).second)
+          processIds.push_back(procIt->second);
+        continue;
+      }
+    }
+
+    if (Operation *defOp = val.getDefiningOp()) {
+      for (Value operand : defOp->getOperands())
+        worklist.push_back(operand);
+    }
+  }
+}
+
+void LLHDProcessInterpreter::collectSignalIdsFromCombinational(
+    llhd::CombinationalOp combOp,
+    llvm::SmallVectorImpl<SignalId> &signals) const {
+  combOp.walk([&](llhd::ProbeOp probeOp) {
+    SignalId sigId = getSignalId(probeOp.getSignal());
+    if (sigId != 0)
+      signals.push_back(sigId);
+  });
+}
+
+void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
+  // Register all pre-discovered seq.firreg operations (no walk() needed)
+  for (seq::FirRegOp regOp : ops.firRegs) {
     if (firRegStates.contains(regOp.getOperation()))
-      return;
+      continue;
 
     std::string name;
     if (auto nameAttr = regOp.getNameAttr())
@@ -918,7 +1121,7 @@ void LLHDProcessInterpreter::registerFirRegs(hw::HWModuleOp hwModule) {
     }
 
     scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-  });
+  }
 }
 
 void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp) {
@@ -1028,11 +1231,82 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
       }));
 }
 
+bool LLHDProcessInterpreter::evaluateCombinationalOp(
+    llhd::CombinationalOp combOp,
+    llvm::SmallVectorImpl<InterpretedValue> &results) {
+  results.clear();
+
+  ProcessId tempProcId = nextTempProcId++;
+  while (processStates.count(tempProcId))
+    tempProcId = nextTempProcId++;
+
+  ProcessExecutionState tempState;
+  tempState.processOrInitialOp = combOp.getOperation();
+  tempState.currentBlock = &combOp.getBody().front();
+  tempState.currentOp = tempState.currentBlock->begin();
+  processStates[tempProcId] = std::move(tempState);
+
+  bool sawYield = false;
+  auto &state = processStates[tempProcId];
+  for (Operation &op : *state.currentBlock) {
+    if (auto yieldOp = dyn_cast<llhd::YieldOp>(&op)) {
+      for (Value operand : yieldOp.getOperands())
+        results.push_back(getValue(tempProcId, operand));
+      sawYield = true;
+      break;
+    }
+
+    if (failed(interpretOperation(tempProcId, &op))) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Warning: Failed to interpret combinational op\n");
+      break;
+    }
+  }
+
+  processStates.erase(tempProcId);
+
+  if (!sawYield) {
+    results.clear();
+    for (Type resultType : combOp.getResultTypes())
+      results.push_back(InterpretedValue::makeX(getTypeWidth(resultType)));
+    return false;
+  }
+
+  return true;
+}
+
 /// Evaluate a value for continuous assignments by reading from current signal
 /// state.
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     mlir::Value value) {
+  if (SignalId sigId = getSignalId(value)) {
+    const SignalValue &sv = scheduler.getSignalValue(sigId);
+    return InterpretedValue::fromSignalValue(sv);
+  }
+
+  auto instIt = instanceOutputMap.find(value);
+  if (instIt != instanceOutputMap.end())
+    return evaluateContinuousValue(instIt->second);
+
+  if (auto result = dyn_cast<OpResult>(value)) {
+    if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
+      auto procIt = opToProcessId.find(processOp.getOperation());
+      if (procIt != opToProcessId.end()) {
+        auto stateIt = processStates.find(procIt->second);
+        if (stateIt != processStates.end()) {
+          auto valIt = stateIt->second.valueMap.find(value);
+          if (valIt != stateIt->second.valueMap.end())
+            return valIt->second;
+        }
+      }
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+    }
+  }
+
   if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
+    auto argIt = inputValueMap.find(arg);
+    if (argIt != inputValueMap.end() && argIt->second != value)
+      return evaluateContinuousValue(argIt->second);
     SignalId sigId = getSignalId(arg);
     if (sigId != 0) {
       const SignalValue &sv = scheduler.getSignalValue(sigId);
@@ -1046,6 +1320,15 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
       const SignalValue &sv = scheduler.getSignalValue(sigId);
       return InterpretedValue::fromSignalValue(sv);
     }
+    return InterpretedValue::makeX(getTypeWidth(value.getType()));
+  }
+
+  if (auto combOp = value.getDefiningOp<llhd::CombinationalOp>()) {
+    llvm::SmallVector<InterpretedValue, 4> results;
+    (void)evaluateCombinationalOp(combOp, results);
+    auto result = dyn_cast<OpResult>(value);
+    if (result && result.getResultNumber() < results.size())
+      return results[result.getResultNumber()];
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
   }
 
@@ -1103,11 +1386,11 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     }
 
     // Extract the field value
-    uint64_t val = inputVal.getUInt64();
     // bitOffset is from the MSB, so we need to adjust
     unsigned shiftAmount = totalWidth - bitOffset - fieldWidth;
-    uint64_t fieldVal = (val >> shiftAmount) & ((1ULL << fieldWidth) - 1);
-    return InterpretedValue(fieldVal, fieldWidth);
+    llvm::APInt fieldVal =
+        inputVal.getAPInt().extractBits(fieldWidth, shiftAmount);
+    return InterpretedValue(fieldVal);
   }
 
   // Handle struct create
@@ -1125,10 +1408,90 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
       bitOffset -= fieldWidth;
 
       if (!fieldVal.isX()) {
-        APInt fieldBits(fieldWidth, fieldVal.getUInt64());
+        APInt fieldBits = fieldVal.getAPInt();
+        if (fieldBits.getBitWidth() < fieldWidth)
+          fieldBits = fieldBits.zext(fieldWidth);
+        else if (fieldBits.getBitWidth() > fieldWidth)
+          fieldBits = fieldBits.trunc(fieldWidth);
         result.insertBits(fieldBits, bitOffset);
       }
     }
+    return InterpretedValue(result);
+  }
+
+  if (auto injectOp = value.getDefiningOp<hw::StructInjectOp>()) {
+    InterpretedValue structVal =
+        evaluateContinuousValue(injectOp.getInput());
+    InterpretedValue newVal =
+        evaluateContinuousValue(injectOp.getNewValue());
+    unsigned totalWidth = getTypeWidth(injectOp.getType());
+    if (structVal.isX() || newVal.isX())
+      return InterpretedValue::makeX(totalWidth);
+
+    auto structType = cast<hw::StructType>(injectOp.getInput().getType());
+    auto fieldIndexOpt = structType.getFieldIndex(injectOp.getFieldName());
+    if (!fieldIndexOpt)
+      return InterpretedValue::makeX(totalWidth);
+    unsigned fieldIndex = *fieldIndexOpt;
+    auto elements = structType.getElements();
+
+    unsigned fieldOffset = 0;
+    for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+      fieldOffset += getTypeWidth(elements[i].type);
+
+    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+    llvm::APInt result = structVal.getAPInt();
+    llvm::APInt fieldValue = newVal.getAPInt();
+    if (fieldValue.getBitWidth() < fieldWidth)
+      fieldValue = fieldValue.zext(fieldWidth);
+    else if (fieldValue.getBitWidth() > fieldWidth)
+      fieldValue = fieldValue.trunc(fieldWidth);
+    result.insertBits(fieldValue, fieldOffset);
+    return InterpretedValue(result);
+  }
+
+  if (auto *defOp = value.getDefiningOp()) {
+    if (defOp->getName().getStringRef() == "hw.struct_inject") {
+      Value input = defOp->getOperand(0);
+      Value newValue = defOp->getOperand(1);
+      auto structType = cast<hw::StructType>(input.getType());
+      unsigned totalWidth = getTypeWidth(structType);
+      auto fieldIndexAttr = defOp->getAttrOfType<IntegerAttr>("fieldIndex");
+      if (!fieldIndexAttr)
+        return InterpretedValue::makeX(totalWidth);
+      unsigned fieldIndex = fieldIndexAttr.getValue().getZExtValue();
+      auto elements = structType.getElements();
+      InterpretedValue structVal = evaluateContinuousValue(input);
+      InterpretedValue newVal = evaluateContinuousValue(newValue);
+      if (structVal.isX() || newVal.isX())
+        return InterpretedValue::makeX(totalWidth);
+
+      unsigned fieldOffset = 0;
+      for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+        fieldOffset += getTypeWidth(elements[i].type);
+      unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+      llvm::APInt result = structVal.getAPInt();
+      llvm::APInt fieldValue = newVal.getAPInt();
+      if (fieldValue.getBitWidth() < fieldWidth)
+        fieldValue = fieldValue.zext(fieldWidth);
+      else if (fieldValue.getBitWidth() > fieldWidth)
+        fieldValue = fieldValue.trunc(fieldWidth);
+      result.insertBits(fieldValue, fieldOffset);
+      return InterpretedValue(result);
+    }
+  }
+
+  // Handle bitcast
+  if (auto bitcastOp = value.getDefiningOp<hw::BitcastOp>()) {
+    InterpretedValue inputVal = evaluateContinuousValue(bitcastOp.getInput());
+    unsigned outputWidth = getTypeWidth(bitcastOp.getType());
+    if (inputVal.isX())
+      return InterpretedValue::makeX(outputWidth);
+    llvm::APInt result = inputVal.getAPInt();
+    if (result.getBitWidth() < outputWidth)
+      result = result.zext(outputWidth);
+    else if (result.getBitWidth() > outputWidth)
+      result = result.trunc(outputWidth);
     return InterpretedValue(result);
   }
 
@@ -1138,32 +1501,46 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     InterpretedValue rhs = evaluateContinuousValue(xorOp.getOperand(1));
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
-    return InterpretedValue(lhs.getUInt64() ^ rhs.getUInt64(),
-                            lhs.getWidth());
+    llvm::APInt lhsVal = lhs.getAPInt();
+    llvm::APInt rhsVal = rhs.getAPInt();
+    unsigned width = getTypeWidth(value.getType());
+    normalizeWidths(lhsVal, rhsVal, width);
+    return InterpretedValue(lhsVal ^ rhsVal);
   }
 
   if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
-    uint64_t result = ~0ULL;
     unsigned width = getTypeWidth(value.getType());
+    llvm::APInt result(width, 0);
+    result.setAllBits();
     for (Value operand : andOp.getOperands()) {
       InterpretedValue opVal = evaluateContinuousValue(operand);
       if (opVal.isX())
         return InterpretedValue::makeX(width);
-      result &= opVal.getUInt64();
+      llvm::APInt opBits = opVal.getAPInt();
+      if (opBits.getBitWidth() < width)
+        opBits = opBits.zext(width);
+      else if (opBits.getBitWidth() > width)
+        opBits = opBits.trunc(width);
+      result &= opBits;
     }
-    return InterpretedValue(result, width);
+    return InterpretedValue(result);
   }
 
   if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
-    uint64_t result = 0;
     unsigned width = getTypeWidth(value.getType());
+    llvm::APInt result(width, 0);
     for (Value operand : orOp.getOperands()) {
       InterpretedValue opVal = evaluateContinuousValue(operand);
       if (opVal.isX())
         return InterpretedValue::makeX(width);
-      result |= opVal.getUInt64();
+      llvm::APInt opBits = opVal.getAPInt();
+      if (opBits.getBitWidth() < width)
+        opBits = opBits.zext(width);
+      else if (opBits.getBitWidth() > width)
+        opBits = opBits.trunc(width);
+      result |= opBits;
     }
-    return InterpretedValue(result, width);
+    return InterpretedValue(result);
   }
 
   if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
@@ -1173,8 +1550,10 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
       return InterpretedValue::makeX(1);
 
     bool result = false;
-    uint64_t lVal = lhs.getUInt64();
-    uint64_t rVal = rhs.getUInt64();
+    llvm::APInt lVal = lhs.getAPInt();
+    llvm::APInt rVal = rhs.getAPInt();
+    unsigned compareWidth = std::max(lVal.getBitWidth(), rVal.getBitWidth());
+    normalizeWidths(lVal, rVal, compareWidth);
 
     switch (icmpOp.getPredicate()) {
     case comb::ICmpPredicate::eq:
@@ -1184,16 +1563,16 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
       result = (lVal != rVal);
       break;
     case comb::ICmpPredicate::ult:
-      result = (lVal < rVal);
+      result = lVal.ult(rVal);
       break;
     case comb::ICmpPredicate::ule:
-      result = (lVal <= rVal);
+      result = lVal.ule(rVal);
       break;
     case comb::ICmpPredicate::ugt:
-      result = (lVal > rVal);
+      result = lVal.ugt(rVal);
       break;
     case comb::ICmpPredicate::uge:
-      result = (lVal >= rVal);
+      result = lVal.uge(rVal);
       break;
     default:
       // Signed comparisons would need sign extension handling
@@ -1222,7 +1601,11 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
       bitOffset -= width;
       if (opVal.isX())
         continue;
-      llvm::APInt bits(width, opVal.getUInt64());
+      llvm::APInt bits = opVal.getAPInt();
+      if (bits.getBitWidth() < width)
+        bits = bits.zext(width);
+      else if (bits.getBitWidth() > width)
+        bits = bits.trunc(width);
       result.insertBits(bits, bitOffset);
     }
     return InterpretedValue(result);
@@ -2756,6 +3139,81 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     return success();
   }
 
+  if (auto structInjectOp = dyn_cast<hw::StructInjectOp>(op)) {
+    InterpretedValue structVal = getValue(procId, structInjectOp.getInput());
+    InterpretedValue newVal = getValue(procId, structInjectOp.getNewValue());
+    auto structType = cast<hw::StructType>(structInjectOp.getInput().getType());
+    unsigned totalWidth = getTypeWidth(structType);
+    if (structVal.isX() || newVal.isX()) {
+      setValue(procId, structInjectOp.getResult(),
+               InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+
+    auto fieldIndexOpt = structType.getFieldIndex(structInjectOp.getFieldName());
+    if (!fieldIndexOpt) {
+      setValue(procId, structInjectOp.getResult(),
+               InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+    unsigned fieldIndex = *fieldIndexOpt;
+    auto elements = structType.getElements();
+
+    unsigned fieldOffset = 0;
+    for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+      fieldOffset += getTypeWidth(elements[i].type);
+
+    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+    APInt result = structVal.getAPInt();
+    APInt fieldValue = newVal.getAPInt();
+    if (fieldValue.getBitWidth() < fieldWidth)
+      fieldValue = fieldValue.zext(fieldWidth);
+    else if (fieldValue.getBitWidth() > fieldWidth)
+      fieldValue = fieldValue.trunc(fieldWidth);
+    result.insertBits(fieldValue, fieldOffset);
+
+    setValue(procId, structInjectOp.getResult(), InterpretedValue(result));
+    return success();
+  }
+
+  if (op->getName().getStringRef() == "hw.struct_inject") {
+    Value input = op->getOperand(0);
+    Value newValue = op->getOperand(1);
+    auto structType = cast<hw::StructType>(input.getType());
+    unsigned totalWidth = getTypeWidth(structType);
+    auto fieldIndexAttr = op->getAttrOfType<IntegerAttr>("fieldIndex");
+    if (!fieldIndexAttr) {
+      for (Value result : op->getResults())
+        setValue(procId, result, InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+    unsigned fieldIndex = fieldIndexAttr.getValue().getZExtValue();
+    auto elements = structType.getElements();
+    InterpretedValue structVal = getValue(procId, input);
+    InterpretedValue newVal = getValue(procId, newValue);
+    if (structVal.isX() || newVal.isX()) {
+      for (Value result : op->getResults())
+        setValue(procId, result, InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+
+    unsigned fieldOffset = 0;
+    for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+      fieldOffset += getTypeWidth(elements[i].type);
+    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+    APInt result = structVal.getAPInt();
+    APInt fieldValue = newVal.getAPInt();
+    if (fieldValue.getBitWidth() < fieldWidth)
+      fieldValue = fieldValue.zext(fieldWidth);
+    else if (fieldValue.getBitWidth() > fieldWidth)
+      fieldValue = fieldValue.trunc(fieldWidth);
+    result.insertBits(fieldValue, fieldOffset);
+
+    for (Value resultVal : op->getResults())
+      setValue(procId, resultVal, InterpretedValue(result));
+    return success();
+  }
+
   if (auto aggConstOp = dyn_cast<hw::AggregateConstantOp>(op)) {
     APInt value = flattenAggregateConstant(aggConstOp);
     setValue(procId, aggConstOp.getResult(), InterpretedValue(value));
@@ -3470,7 +3928,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                                                       llhd::ProbeOp probeOp) {
   // Get the signal ID for the probed signal
-  SignalId sigId = getSignalId(probeOp.getSignal());
+  SignalId sigId = resolveSignalId(probeOp.getSignal());
   if (sigId == 0) {
     // Check if this is a global variable access via UnrealizedConversionCastOp
     // This happens when static class properties are accessed - they're stored
@@ -3594,9 +4052,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         static_cast<uint8_t>(s1Attr.getValue()));
   }
 
-  // Generate a unique driver ID based on the DriveOp
-  // Use hash of operation pointer as driver ID
-  uint64_t driverId = reinterpret_cast<uint64_t>(driveOp.getOperation());
+  // Use a per-process, per-signal driver ID so multiple llhd.drv ops in the
+  // same process model a single driver rather than conflicting drivers.
+  uint64_t driverId =
+      (static_cast<uint64_t>(procId) << 32) | static_cast<uint64_t>(sigId);
 
   LLVM_DEBUG(llvm::dbgs() << "  Scheduling drive to signal " << sigId
                           << " at time " << targetTime.realTime << " fs"
@@ -3693,8 +4152,13 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     std::function<SignalId(Value, int)> traceToSignal;
     traceToSignal = [&](Value value, int depth) -> SignalId {
       // Limit recursion depth to prevent infinite loops
-      if (depth > 10)
+      if (depth > 32)
         return 0;
+
+      // Trace through instance results to child outputs.
+      auto instIt = instanceOutputMap.find(value);
+      if (instIt != instanceOutputMap.end())
+        return traceToSignal(instIt->second, depth + 1);
 
       // Direct probe case
       if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
@@ -3763,13 +4227,40 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         waitList.addLevel(sigId);
         LLVM_DEBUG(llvm::dbgs() << "  Waiting on signal " << sigId << "\n");
       } else {
-        LLVM_DEBUG(llvm::dbgs() << "  Warning: Could not find signal for "
-                                    "observed value (type: "
-                                << observed.getType() << ")\n");
+        llvm::SmallVector<SignalId, 4> fallbackSignals;
+        collectSignalIds(observed, fallbackSignals);
+        if (!fallbackSignals.empty()) {
+          for (SignalId fallbackId : fallbackSignals)
+            waitList.addLevel(fallbackId);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Waiting on "
+                     << fallbackSignals.size()
+                     << " fallback signal(s) for observed value\n");
+        } else {
+          LLVM_DEBUG(llvm::dbgs() << "  Warning: Could not find signal for "
+                                      "observed value (type: "
+                                  << observed.getType() << ")\n");
+        }
       }
     }
 
     // Register the wait sensitivity with the scheduler
+    if (waitList.empty()) {
+      if (auto processOp = state.getProcessOp()) {
+        processOp.walk([&](llhd::ProbeOp probeOp) {
+          SignalId sigId = getSignalId(probeOp.getSignal());
+          if (sigId != 0)
+            waitList.addLevel(sigId);
+        });
+      } else if (auto initialOp = state.getInitialOp()) {
+        initialOp.walk([&](llhd::ProbeOp probeOp) {
+          SignalId sigId = getSignalId(probeOp.getSignal());
+          if (sigId != 0)
+            waitList.addLevel(sigId);
+        });
+      }
+    }
+
     if (!waitList.empty()) {
       scheduler.suspendProcessForEvents(procId, waitList);
       LLVM_DEBUG(llvm::dbgs() << "  Registered for " << waitList.size()
@@ -4216,6 +4707,26 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (it == processStates.end())
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
+  if (SignalId sigId = getSignalId(value)) {
+    const SignalValue &sv = scheduler.getSignalValue(sigId);
+    InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
+    it->second.valueMap[value] = iv;
+    return iv;
+  }
+
+  auto instIt = instanceOutputMap.find(value);
+  if (instIt != instanceOutputMap.end())
+    return getValue(procId, instIt->second);
+
+  if (auto combOp = value.getDefiningOp<llhd::CombinationalOp>()) {
+    llvm::SmallVector<InterpretedValue, 4> results;
+    (void)evaluateCombinationalOp(combOp, results);
+    auto result = dyn_cast<OpResult>(value);
+    if (result && result.getResultNumber() < results.size())
+      return results[result.getResultNumber()];
+    return InterpretedValue::makeX(getTypeWidth(value.getType()));
+  }
+
   // Check the cache first. If a value has been explicitly set (e.g., by
   // interpretProbe when the probe operation was executed), use that cached
   // value. This is important for patterns like posedge detection where we
@@ -4298,6 +4809,21 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     }
     valueMap[value] = iv;
     return iv;
+  }
+
+  if (auto *defOp = value.getDefiningOp()) {
+    if (isa<hw::StructExtractOp, hw::StructCreateOp, hw::StructInjectOp,
+            comb::XorOp, comb::AndOp, comb::OrOp, comb::ICmpOp, comb::MuxOp,
+            comb::ConcatOp, comb::ExtractOp, comb::AddOp, comb::SubOp>(defOp)) {
+      InterpretedValue iv = evaluateContinuousValue(value);
+      valueMap[value] = iv;
+      return iv;
+    }
+    if (defOp->getName().getStringRef() == "hw.struct_inject") {
+      InterpretedValue iv = evaluateContinuousValue(value);
+      valueMap[value] = iv;
+      return iv;
+    }
   }
 
   // NOTE: Probe operations are handled at the top of this function
@@ -5289,7 +5815,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return "";
     };
 
-    // Handle UVM report functions
+    // Handle UVM report functions - intercept both runtime calls (__moore_uvm_report_*)
+    // and unconverted UVM package calls (uvm_pkg::uvm_report_*)
     if (calleeName == "__moore_uvm_report_info" ||
         calleeName == "__moore_uvm_report_warning" ||
         calleeName == "__moore_uvm_report_error" ||
@@ -5339,6 +5866,29 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: " << calleeName
                                 << "(id=\"" << idStr << "\", msg=\"" << msgStr << "\")\n");
+      }
+      return success();
+    }
+
+    // Handle unconverted UVM report calls with LLVM struct string arguments
+    // Signature: (id_struct, msg_struct, verbosity, filename_struct, line, context_struct, report_enabled_checked)
+    // where *_struct is {ptr, i64}
+    // Note: The struct values are tracked internally by the interpreter during llvm.call handling.
+    // When we encounter uvm_report calls, we look up the struct values in our value map
+    // and extract the ptr/len fields that were stored there.
+    if (calleeName == "uvm_pkg::uvm_report_info" ||
+        calleeName == "uvm_pkg::uvm_report_warning" ||
+        calleeName == "uvm_pkg::uvm_report_error" ||
+        calleeName == "uvm_pkg::uvm_report_fatal") {
+      if (callOp.getNumOperands() >= 7) {
+        // For now, print a placeholder message to indicate we intercepted the call
+        // Full struct field extraction requires tracking aggregate values in the interpreter
+        llvm::outs() << "UVM_INFO <intercepted> @ "
+                     << scheduler.getCurrentTime().realTime << " fs: "
+                     << "[" << calleeName << " call intercepted - struct args not yet extracted]\n";
+
+        LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
+                                << " intercepted (7 args, struct extraction pending)\n");
       }
       return success();
     }
@@ -5519,8 +6069,12 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing globals\n");
 
-  // Find all LLVM global operations in the module
-  rootModule.walk([&](LLVM::GlobalOp globalOp) {
+  // === Use iterative discovery for globals (stack overflow prevention) ===
+  DiscoveredGlobalOps globalOps;
+  discoverGlobalOpsIteratively(globalOps);
+
+  // Process all pre-discovered LLVM global operations (no walk() needed)
+  for (LLVM::GlobalOp globalOp : globalOps.globals) {
     StringRef globalName = globalOp.getSymName();
 
     LLVM_DEBUG(llvm::dbgs() << "  Found global: " << globalName << "\n");
@@ -5598,7 +6152,7 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
     }
 
     globalMemoryBlocks[globalName] = std::move(block);
-  });
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initialized "
                           << globalMemoryBlocks.size() << " globals, "
@@ -5614,10 +6168,14 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
   LLVM_DEBUG(llvm::dbgs()
              << "LLHDProcessInterpreter: Executing global constructors\n");
 
-  // Collect all constructor entries with their priorities
+  // === Use iterative discovery for global constructors (stack overflow prevention) ===
+  DiscoveredGlobalOps globalOps;
+  discoverGlobalOpsIteratively(globalOps);
+
+  // Collect all constructor entries with their priorities from pre-discovered ops
   SmallVector<std::pair<int32_t, StringRef>, 4> ctorEntries;
 
-  rootModule.walk([&](LLVM::GlobalCtorsOp ctorsOp) {
+  for (LLVM::GlobalCtorsOp ctorsOp : globalOps.ctors) {
     ArrayAttr ctors = ctorsOp.getCtors();
     ArrayAttr priorities = ctorsOp.getPriorities();
 
@@ -5628,7 +6186,7 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
       LLVM_DEBUG(llvm::dbgs() << "  Found constructor: " << ctorRef.getValue()
                               << " (priority " << priority << ")\n");
     }
-  });
+  }
 
   if (ctorEntries.empty()) {
     LLVM_DEBUG(llvm::dbgs() << "  No global constructors found\n");

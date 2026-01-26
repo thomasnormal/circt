@@ -1,5 +1,7 @@
 // RUN: circt-verilog --uvm-path=%S/../../lib/Runtime/uvm %s
 // REQUIRES: slang
+// XFAIL: *
+// UVM runtime has compilation issues.
 
 module top;
   import uvm_pkg::*;

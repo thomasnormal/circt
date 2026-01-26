@@ -202,16 +202,17 @@ module sva_sequence_ops_test(
   // CHECK: verif.{{(clocked_)?}}assert
   assert property(p_intersect);
 
-  // CHECK-DAG: ltl.repeat {{%[a-z0-9]+}}, 0 : i1
-  // CHECK-DAG: ltl.intersect
+  // CHECK: ltl.repeat {{%[a-z0-9]+}}, 2, 3 : i1
+  // CHECK: ltl.intersect
   // CHECK: verif.{{(clocked_)?}}assert
   assert property(p_throughout);
 
-  // CHECK-DAG: ltl.intersect
+  // CHECK: ltl.repeat {{%[a-z0-9]+}}, 0 : i1
+  // CHECK: ltl.intersect
   // CHECK: verif.{{(clocked_)?}}assert
   assert property(p_within);
 
-  // CHECK-DAG: ltl.first_match
+  // CHECK: ltl.first_match
   // CHECK: verif.{{(clocked_)?}}assert
   assert property(p_first_match);
 

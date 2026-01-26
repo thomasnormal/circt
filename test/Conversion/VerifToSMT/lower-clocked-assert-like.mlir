@@ -4,7 +4,8 @@
 // CHECK-LABEL: hw.module @test_clocked_assert
 hw.module @test_clocked_assert(in %clock : i1, in %prop : i1, in %enable : i1) {
   // CHECK-NOT: verif.clocked_assert
-  // CHECK: verif.assert %prop if %enable : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.assert %{{.*}} if %enable : !ltl.sequence
   verif.clocked_assert %prop if %enable, posedge %clock : i1
   hw.output
 }
@@ -15,7 +16,8 @@ hw.module @test_clocked_assert(in %clock : i1, in %prop : i1, in %enable : i1) {
 // CHECK-LABEL: hw.module @test_clocked_assert_no_enable
 hw.module @test_clocked_assert_no_enable(in %clock : i1, in %prop : i1) {
   // CHECK-NOT: verif.clocked_assert
-  // CHECK: verif.assert %prop : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.assert %{{.*}} : !ltl.sequence
   verif.clocked_assert %prop, posedge %clock : i1
   hw.output
 }
@@ -26,7 +28,8 @@ hw.module @test_clocked_assert_no_enable(in %clock : i1, in %prop : i1) {
 // CHECK-LABEL: hw.module @test_clocked_assert_label
 hw.module @test_clocked_assert_label(in %clock : i1, in %prop : i1) {
   // CHECK-NOT: verif.clocked_assert
-  // CHECK: verif.assert %prop label "my_assert" : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.assert %{{.*}} label "my_assert" : !ltl.sequence
   verif.clocked_assert %prop, posedge %clock label "my_assert" : i1
   hw.output
 }
@@ -37,7 +40,8 @@ hw.module @test_clocked_assert_label(in %clock : i1, in %prop : i1) {
 // CHECK-LABEL: hw.module @test_clocked_assume
 hw.module @test_clocked_assume(in %clock : i1, in %prop : i1, in %enable : i1) {
   // CHECK-NOT: verif.clocked_assume
-  // CHECK: verif.assume %prop if %enable : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.assume %{{.*}} if %enable : !ltl.sequence
   verif.clocked_assume %prop if %enable, posedge %clock : i1
   hw.output
 }
@@ -48,7 +52,8 @@ hw.module @test_clocked_assume(in %clock : i1, in %prop : i1, in %enable : i1) {
 // CHECK-LABEL: hw.module @test_clocked_assume_no_enable
 hw.module @test_clocked_assume_no_enable(in %clock : i1, in %prop : i1) {
   // CHECK-NOT: verif.clocked_assume
-  // CHECK: verif.assume %prop : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.assume %{{.*}} : !ltl.sequence
   verif.clocked_assume %prop, posedge %clock : i1
   hw.output
 }
@@ -59,7 +64,8 @@ hw.module @test_clocked_assume_no_enable(in %clock : i1, in %prop : i1) {
 // CHECK-LABEL: hw.module @test_clocked_cover
 hw.module @test_clocked_cover(in %clock : i1, in %prop : i1, in %enable : i1) {
   // CHECK-NOT: verif.clocked_cover
-  // CHECK: verif.cover %prop if %enable : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.cover %{{.*}} if %enable : !ltl.sequence
   verif.clocked_cover %prop if %enable, posedge %clock : i1
   hw.output
 }
@@ -70,7 +76,8 @@ hw.module @test_clocked_cover(in %clock : i1, in %prop : i1, in %enable : i1) {
 // CHECK-LABEL: hw.module @test_clocked_cover_no_enable
 hw.module @test_clocked_cover_no_enable(in %clock : i1, in %prop : i1) {
   // CHECK-NOT: verif.clocked_cover
-  // CHECK: verif.cover %prop : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.cover %{{.*}} : !ltl.sequence
   verif.clocked_cover %prop, posedge %clock : i1
   hw.output
 }
@@ -81,7 +88,8 @@ hw.module @test_clocked_cover_no_enable(in %clock : i1, in %prop : i1) {
 // CHECK-LABEL: hw.module @test_negedge
 hw.module @test_negedge(in %clock : i1, in %prop : i1) {
   // CHECK-NOT: verif.clocked_assert
-  // CHECK: verif.assert %prop : i1
+  // CHECK: ltl.clock %prop, negedge %clock
+  // CHECK: verif.assert %{{.*}} : !ltl.sequence
   verif.clocked_assert %prop, negedge %clock : i1
   hw.output
 }
@@ -92,7 +100,10 @@ hw.module @test_negedge(in %clock : i1, in %prop : i1) {
 // CHECK-LABEL: hw.module @test_edge
 hw.module @test_edge(in %clock : i1, in %prop : i1) {
   // CHECK-NOT: verif.clocked_assert
-  // CHECK: verif.assert %prop : i1
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: ltl.clock %prop, negedge %clock
+  // CHECK: ltl.or
+  // CHECK: verif.assert %{{.*}} : !ltl.sequence
   verif.clocked_assert %prop, edge %clock : i1
   hw.output
 }
@@ -105,9 +116,10 @@ hw.module @test_all_ops(in %clock : i1, in %prop : i1, in %enable : i1) {
   // CHECK-NOT: verif.clocked_assert
   // CHECK-NOT: verif.clocked_assume
   // CHECK-NOT: verif.clocked_cover
-  // CHECK-DAG: verif.assert %prop if %enable : i1
-  // CHECK-DAG: verif.assume %prop if %enable : i1
-  // CHECK-DAG: verif.cover %prop if %enable : i1
+  // CHECK-DAG: ltl.clock %prop, posedge %clock
+  // CHECK-DAG: verif.assert %{{.*}} if %enable : !ltl.sequence
+  // CHECK-DAG: verif.assume %{{.*}} if %enable : !ltl.sequence
+  // CHECK-DAG: verif.cover %{{.*}} if %enable : !ltl.sequence
   verif.clocked_assert %prop if %enable, posedge %clock : i1
   verif.clocked_assume %prop if %enable, posedge %clock : i1
   verif.clocked_cover %prop if %enable, posedge %clock : i1

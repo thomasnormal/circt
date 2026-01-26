@@ -23,6 +23,18 @@
 using namespace circt;
 using namespace circt::sim;
 
+namespace {
+SignalValue normalizeSignalValueWidth(const SignalValue &value,
+                                      uint32_t width) {
+  if (value.isUnknown())
+    return SignalValue::makeX(width);
+  const auto &apInt = value.getAPInt();
+  if (apInt.getBitWidth() == width)
+    return value;
+  return SignalValue(apInt.zextOrTrunc(width));
+}
+} // namespace
+
 // Static member initialization
 SignalValue ProcessScheduler::unknownSignal = SignalValue::makeX();
 
@@ -169,8 +181,11 @@ void ProcessScheduler::updateSignal(SignalId signalId,
     return;
   }
 
+  uint32_t signalWidth = it->second.getCurrentValue().getWidth();
+  SignalValue normalizedValue =
+      normalizeSignalValueWidth(newValue, signalWidth);
   SignalValue oldValue = it->second.getCurrentValue();
-  EdgeType edge = it->second.updateValue(newValue);
+  EdgeType edge = it->second.updateValue(normalizedValue);
 
   ++stats.signalUpdates;
 
@@ -178,7 +193,7 @@ void ProcessScheduler::updateSignal(SignalId signalId,
     ++stats.edgesDetected;
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
-    triggerSensitiveProcesses(signalId, oldValue, newValue);
+    triggerSensitiveProcesses(signalId, oldValue, normalizedValue);
   }
 }
 
@@ -194,35 +209,40 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
     return;
   }
 
+  uint32_t signalWidth = it->second.getCurrentValue().getWidth();
+  SignalValue normalizedValue =
+      normalizeSignalValueWidth(newValue, signalWidth);
   SignalValue oldValue = it->second.getCurrentValue();
 
   // Add/update the driver with its strength information
-  it->second.addOrUpdateDriver(driverId, newValue, strength0, strength1);
+  it->second.addOrUpdateDriver(driverId, normalizedValue, strength0, strength1);
 
   // Resolve all drivers to get the final signal value
   SignalValue resolvedValue = it->second.resolveDrivers();
+  SignalValue normalizedResolved =
+      normalizeSignalValueWidth(resolvedValue, signalWidth);
 
   // Update the signal with the resolved value
-  EdgeType edge = it->second.updateValue(resolvedValue);
+  EdgeType edge = it->second.updateValue(normalizedResolved);
 
   ++stats.signalUpdates;
 
   LLVM_DEBUG({
     llvm::dbgs() << "Signal " << signalId << " driver " << driverId
                  << " updated: value=";
-    if (newValue.isUnknown()) {
+    if (normalizedValue.isUnknown()) {
       llvm::dbgs() << "X";
     } else {
-      newValue.getAPInt().print(llvm::dbgs(), /*isSigned=*/false);
+      normalizedValue.getAPInt().print(llvm::dbgs(), /*isSigned=*/false);
     }
     llvm::dbgs() << " strength=(" << getDriveStrengthName(strength0) << ", "
                  << getDriveStrengthName(strength1) << ")";
     if (it->second.hasMultipleDrivers()) {
       llvm::dbgs() << " resolved=";
-      if (resolvedValue.isUnknown()) {
+      if (normalizedResolved.isUnknown()) {
         llvm::dbgs() << "X";
       } else {
-        resolvedValue.getAPInt().print(llvm::dbgs(), /*isSigned=*/false);
+        normalizedResolved.getAPInt().print(llvm::dbgs(), /*isSigned=*/false);
       }
     }
     llvm::dbgs() << "\n";
@@ -232,7 +252,7 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
     ++stats.edgesDetected;
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
-    triggerSensitiveProcesses(signalId, oldValue, resolvedValue);
+    triggerSensitiveProcesses(signalId, oldValue, normalizedResolved);
   }
 }
 

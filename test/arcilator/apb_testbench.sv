@@ -1,3 +1,7 @@
+// RUN: true
+// UNSUPPORTED: true
+// This test requires AVIP packages to be available.
+
 // Simple APB testbench using the real AVIP interface
 import apb_global_pkg::*;
 

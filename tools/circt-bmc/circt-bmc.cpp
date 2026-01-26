@@ -266,8 +266,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
     }
   }
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
-  pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(hw::createFlattenModules());

@@ -752,15 +752,16 @@ struct LTLPropertyLowerer {
   Value lowerSequence(Value seq, Value clock, ltl::ClockEdge edge) {
     if (!seq)
       return {};
-    if (!isa<ltl::SequenceType>(seq.getType()))
-      return seq;
+    if (!isa<ltl::SequenceType>(seq.getType())) {
+      if (!clock)
+        return seq;
+    }
 
     if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>()) {
       auto normalizedClock =
           normalizeClock(clockOp.getClock(), clockOp.getEdge());
-      if (!clock)
-        return lowerSequence(clockOp.getInput(), normalizedClock,
-                             clockOp.getEdge());
+      return lowerSequence(clockOp.getInput(), normalizedClock,
+                           clockOp.getEdge());
     }
     if (auto pastOp = seq.getDefiningOp<ltl::PastOp>()) {
       if (!clock) {
@@ -884,9 +885,8 @@ struct LTLPropertyLowerer {
     if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>()) {
       auto normalizedClock =
           normalizeClock(clockOp.getClock(), clockOp.getEdge());
-      if (!clock)
-        return lowerSequenceTriggered(clockOp.getInput(), normalizedClock,
-                                      clockOp.getEdge());
+      return lowerSequenceTriggered(clockOp.getInput(), normalizedClock,
+                                    clockOp.getEdge());
     }
     if (auto pastOp = seq.getDefiningOp<ltl::PastOp>()) {
       if (!clock) {

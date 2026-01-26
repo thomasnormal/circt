@@ -32,6 +32,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 // Forward declarations for SCF, Func, and LLVM dialects
 namespace mlir {
@@ -210,6 +211,66 @@ struct ProcessExecutionState {
 };
 
 //===----------------------------------------------------------------------===//
+// DiscoveredOps - Collected operations from iterative traversal
+//===----------------------------------------------------------------------===//
+
+/// Structure to hold operations discovered during a single iterative traversal.
+/// This replaces multiple recursive walk() calls with one pass over the IR,
+/// avoiding stack overflow on large designs (e.g., 165k+ line UVM testbenches).
+struct DiscoveredOps {
+  /// hw.instance operations found in the module.
+  llvm::SmallVector<hw::InstanceOp, 16> instances;
+
+  /// llhd.sig operations found in the module.
+  llvm::SmallVector<llhd::SignalOp, 64> signals;
+
+  /// llhd.output operations found in the module.
+  llvm::SmallVector<llhd::OutputOp, 16> outputs;
+
+  /// llhd.process operations found in the module.
+  llvm::SmallVector<llhd::ProcessOp, 32> processes;
+
+  /// llhd.combinational operations found in the module.
+  llvm::SmallVector<llhd::CombinationalOp, 16> combinationals;
+
+  /// seq.initial operations found in the module.
+  llvm::SmallVector<seq::InitialOp, 16> initials;
+
+  /// llhd.drv operations at module level (not inside processes/initials).
+  llvm::SmallVector<llhd::DriveOp, 32> moduleDrives;
+
+  /// seq.firreg operations found in the module.
+  llvm::SmallVector<seq::FirRegOp, 32> firRegs;
+
+  /// Clear all collected operations.
+  void clear() {
+    instances.clear();
+    signals.clear();
+    outputs.clear();
+    processes.clear();
+    combinationals.clear();
+    initials.clear();
+    moduleDrives.clear();
+    firRegs.clear();
+  }
+};
+
+/// Structure to hold operations discovered during global initialization.
+struct DiscoveredGlobalOps {
+  /// LLVM global operations.
+  llvm::SmallVector<mlir::LLVM::GlobalOp, 64> globals;
+
+  /// LLVM global constructor operations.
+  llvm::SmallVector<mlir::LLVM::GlobalCtorsOp, 4> ctors;
+
+  /// Clear all collected operations.
+  void clear() {
+    globals.clear();
+    ctors.clear();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // LLHDProcessInterpreter - Main interpreter class
 //===----------------------------------------------------------------------===//
 
@@ -231,10 +292,10 @@ public:
   /// including those in child module instances.
   mlir::LogicalResult initialize(hw::HWModuleOp hwModule);
 
-  /// Initialize child module instances recursively.
-  /// This finds hw.instance operations and registers signals/processes
-  /// from the referenced modules.
-  mlir::LogicalResult initializeChildInstances(hw::HWModuleOp hwModule);
+  /// Initialize child module instances using pre-discovered operations.
+  /// This uses the pre-discovered hw.instance operations and registers
+  /// signals/processes from the referenced modules iteratively.
+  mlir::LogicalResult initializeChildInstances(const DiscoveredOps &ops);
 
   /// Get the signal ID for an MLIR value (signal reference).
   SignalId getSignalId(mlir::Value signalRef) const;
@@ -262,11 +323,25 @@ public:
 
 private:
   //===--------------------------------------------------------------------===//
+  // Iterative Operation Discovery (Stack Overflow Prevention)
+  //===--------------------------------------------------------------------===//
+
+  /// Discover all operations in a module using an iterative worklist algorithm.
+  /// This replaces multiple recursive walk() calls with a single pass,
+  /// preventing stack overflow on large designs (165k+ lines).
+  void discoverOpsIteratively(hw::HWModuleOp hwModule, DiscoveredOps &ops);
+
+  /// Discover all global operations using an iterative worklist algorithm.
+  /// This replaces recursive walk() calls for global initialization.
+  void discoverGlobalOpsIteratively(DiscoveredGlobalOps &ops);
+
+  //===--------------------------------------------------------------------===//
   // Signal Registration
   //===--------------------------------------------------------------------===//
 
-  /// Register all signals from the module.
-  mlir::LogicalResult registerSignals(hw::HWModuleOp hwModule);
+  /// Register all signals from the module using pre-discovered operations.
+  mlir::LogicalResult registerSignals(hw::HWModuleOp hwModule,
+                                      const DiscoveredOps &ops);
 
   /// Register a single signal from an llhd.sig operation.
   SignalId registerSignal(llhd::SignalOp sigOp);
@@ -275,8 +350,8 @@ private:
   // Process Registration
   //===--------------------------------------------------------------------===//
 
-  /// Register all processes from the module.
-  mlir::LogicalResult registerProcesses(hw::HWModuleOp hwModule);
+  /// Register all processes from the module using pre-discovered operations.
+  mlir::LogicalResult registerProcesses(const DiscoveredOps &ops);
 
   /// Register a single process from an llhd.process operation.
   ProcessId registerProcess(llhd::ProcessOp processOp);
@@ -294,8 +369,8 @@ private:
   /// These drives need to re-execute when their input signals change.
   void registerContinuousAssignments(hw::HWModuleOp hwModule);
 
-  /// Register seq.firreg operations as simulated registers.
-  void registerFirRegs(hw::HWModuleOp hwModule);
+  /// Register seq.firreg operations using pre-discovered operations.
+  void registerFirRegs(const DiscoveredOps &ops);
 
   /// Execute a single seq.firreg register update.
   void executeFirReg(seq::FirRegOp regOp);
@@ -307,11 +382,28 @@ private:
   void collectSignalIds(mlir::Value value,
                         llvm::SmallVectorImpl<SignalId> &signals) const;
 
+  /// Collect process IDs that a value depends on (via llhd.process results).
+  void collectProcessIds(mlir::Value value,
+                         llvm::SmallVectorImpl<ProcessId> &processIds) const;
+
+  /// Collect signal IDs referenced inside an llhd.combinational op.
+  void collectSignalIdsFromCombinational(
+      llhd::CombinationalOp combOp,
+      llvm::SmallVectorImpl<SignalId> &signals) const;
+
   /// Execute a single continuous assignment (static module-level drive).
   void executeContinuousAssignment(llhd::DriveOp driveOp);
 
   /// Evaluate a value for continuous assignments by reading from signal state.
   InterpretedValue evaluateContinuousValue(mlir::Value value);
+
+  /// Helper that tracks visited values to detect cycles.
+  InterpretedValue evaluateContinuousValueImpl(
+      mlir::Value value, llvm::DenseSet<mlir::Value> &visited);
+
+  /// Evaluate an llhd.combinational op and return its yielded values.
+  bool evaluateCombinationalOp(llhd::CombinationalOp combOp,
+                               llvm::SmallVectorImpl<InterpretedValue> &results);
 
   //===--------------------------------------------------------------------===//
   // Process Execution
@@ -510,6 +602,12 @@ private:
   /// Map from MLIR signal values to signal IDs.
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;
 
+  /// Map from instance result values to child module output values.
+  llvm::DenseMap<mlir::Value, mlir::Value> instanceOutputMap;
+
+  /// Map from child module input block arguments to instance operand values.
+  llvm::DenseMap<mlir::Value, mlir::Value> inputValueMap;
+
   /// Map from signal IDs to signal names.
   llvm::DenseMap<SignalId, std::string> signalIdToName;
 
@@ -521,6 +619,9 @@ private:
 
   /// Map from process IDs to execution states.
   llvm::DenseMap<ProcessId, ProcessExecutionState> processStates;
+
+  /// Next temporary process ID used for combinational evaluation.
+  ProcessId nextTempProcId = 1ull << 60;
 
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
