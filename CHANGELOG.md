@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 221 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Compare i2c_reg_top_tb vs i2c_tb delta cycle hang
+- **Track B**: Analyze prim_diff_decode and OpenTitan modules
+- **Track C**: Debug AVIP 500ms simulation timeout
+- **Track D**: Run external test suites
+
+### Track Completions
+
+- **Track A (i2c Analysis)**: ✅ **ROOT CAUSE IDENTIFIED**
+  - i2c_tb has 45 processes vs 13 in i2c_reg_top_tb
+  - Extra modules: i2c_controller_fsm (9 proc), i2c_target_fsm (6 proc), i2c_bus_monitor (2 proc)
+  - Processes wait on computed i1 values that change every evaluation
+
+- **Track B (Module Analysis)**: ✅ **CULPRIT: i2c_bus_monitor**
+  - Edge detection logic with X values causes infinite delta cycles
+  - Start/stop detection samples SCL/SDA at time 0 when they're X
+  - prim_diff_decode is NOT the issue (identical in spi_device_tb which works)
+
+- **Track C (Time Limit)**: ✅ **CONFIRMED 2^48 fs LIMIT**
+  - Max safe simulation time: ~281.475 ms
+  - Working: 281.4757 ms, Failing: 281.4758 ms
+  - Silently exits with code 1 above this limit
+
+- **Track D (Regressions!)**: ⚠️ **19 TEST FAILURES DETECTED**
+  - Lit: 2823 pass (down from 2842), 41 XFAIL, 19 Failed
+  - 3 ImportVerilog: slang patches don't apply to v10.0
+  - 16 circt-sim: simulator runtime issues (continuous assignment propagation)
+  - sv-tests/verilator/yosys: All pass (23/26, 17/17, 14/14)
+
+### Updates
+
+- **i2c_bus_monitor edge detection**: Needs initialization guard before edge detection
+- **Simulation time limit**: Hard limit at 2^48 fs (~281ms) in LLHD
+- **Regression analysis**: slang patches need updating for v10.0
+
+---
+
 ## Iteration 220 - January 26, 2026
 
 ### Focus Areas

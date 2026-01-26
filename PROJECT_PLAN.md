@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 221 Update)
+### Track Status & Next Tasks (Iteration 222 Update)
+
+**Iteration 221 Results (COMPLETE):**
+- Track A: ✅ **i2c Delta Cycles Root Cause** - i2c_bus_monitor edge detection with X values
+- Track B: ✅ **Module Analysis** - i2c_bus_monitor SCL/SDA edge sampling causes infinite loops
+- Track C: ✅ **Time Limit Confirmed** - 2^48 fs (~281.475 ms) hard limit
+- Track D: ⚠️ **19 TEST FAILURES** - slang patches + circt-sim issues
+
+**Iteration 222 Focus (IN PROGRESS):**
+- Track A: 🔄 **Fix Lit Test Regressions** - Investigate 19 failed tests
+- Track B: 🔄 **Update slang Patches** - Fix patches for v10.0 compatibility
+- Track C: 🔄 **Fix circt-sim Issues** - Continuous assignment propagation bugs
+- Track D: 🔄 **Maintain External Baselines** - sv-tests/verilator/yosys still 100%
 
 **Iteration 220 Results (COMPLETE):**
-- Track A: 🔄 **Delta Cycle Investigation** - i2c_tb hangs at "Starting i2c full IP test...", i2c_reg_top_tb works
-- Track B: ✅ **sva-assume-e2e.sv Enabled** - Fixed prim_mubi_pkg issues, 2842 pass, 0 failed
+- Track A: 🔄 **Delta Cycle Investigation** - i2c_tb hangs at "Starting i2c full IP test..."
+- Track B: ✅ **sva-assume-e2e.sv Enabled** - Fixed prim_mubi_pkg issues
 - Track C: ⚠️ **AVIP Extended Times** - 100ms works, 500ms fails silently
-- Track D: ✅ **Lit Tests: 2842 pass, 41 XFAIL** (improved from 2841/42)
-
-**Iteration 221 Focus (IN PROGRESS):**
-- Track A: 🔄 **Deep Dive i2c_tb Delta Cycles** - Compare i2c_reg_top_tb (works) vs i2c_tb (hangs)
-- Track B: 🔄 **OpenTitan Process Analysis** - Analyze 45 vs 13 processes difference
-- Track C: 🔄 **AVIP Longer Simulations** - Fix 500ms+ timeout issue
-- Track D: 🔄 **External Test Suites** - Maintain 100% on verilator, yosys
+- Track D: ✅ **Lit Tests: 2842 pass, 41 XFAIL** (before regression)
 
 **Iteration 218 Results (COMPLETE):**
 - Track A: ✅ **3/9 AVIPs WORKING** - APB, I2S, I3C (with UVM messages)
