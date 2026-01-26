@@ -1,7 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
 // CHECK-DAG: llvm.func @__moore_randomize_basic(!llvm.ptr, i64) -> i32
-// CHECK-DAG: llvm.func @__moore_randomize_with_dist(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64) -> i64
+// CHECK-DAG: llvm.func @__moore_randomize_with_dist(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
 // CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
@@ -36,7 +36,7 @@ func.func @test_simple_dist(%obj: !moore.class<@SimpleDistClass>) -> i1 {
   // CHECK: llvm.alloca {{.*}} x !llvm.array<3 x i64>
   // CHECK: llvm.alloca {{.*}} x !llvm.array<3 x i64>
   // Store ranges and call dist function
-  // CHECK: llvm.call @__moore_randomize_with_dist({{.*}}, {{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64) -> i64
+  // CHECK: llvm.call @__moore_randomize_with_dist({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64) -> i64
   // CHECK: arith.trunci {{.*}} : i64 to i8
   // CHECK: llvm.store {{.*}} : i8, !llvm.ptr
   // CHECK: return %{{.*}} : i1

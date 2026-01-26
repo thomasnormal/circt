@@ -12,11 +12,11 @@ hw.module @foo2(in %a : i8, in %b : i8, out c : i8) {
 
 
 // CHECK:      ; solver scope 0
-// CHECK-NEXT: (declare-const [[TMP:.+]] (_ BitVec 8))
-// CHECK-NEXT: (declare-const [[TMP0:.+]] (_ BitVec 8))
-// CHECK-NEXT: (assert (let (([[TMP1:.+]] (bvadd [[TMP0]] [[TMP]])))
-// CHECK-NEXT:         (let (([[TMP2:.+]] (bvadd tmp [[TMP0]])))
-// CHECK-NEXT:         (let (([[TMP3:.+]] (distinct [[TMP2]] [[TMP1]])))
-// CHECK-NEXT:         [[TMP3]]))))
+// CHECK-NEXT: (declare-const a (_ BitVec 8))
+// CHECK-NEXT: (declare-const b (_ BitVec 8))
+// CHECK-NEXT: (assert (let ((tmp (bvadd b a)))
+// CHECK-NEXT:         (let ((tmp_0 (bvadd a b)))
+// CHECK-NEXT:         (let ((tmp_1 (distinct tmp_0 tmp)))
+// CHECK-NEXT:         tmp_1))))
 // CHECK-NEXT: (check-sat)
 // CHECK-NEXT: (reset)
