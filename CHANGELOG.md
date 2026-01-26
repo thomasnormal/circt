@@ -1,5 +1,92 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 212 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Verify UVM output working on AVIPs
+- **Track B**: Investigate lit test regression (~30 failures)
+- **Track C**: Verify OpenTitan IP test stability
+- **Track D**: Run external test suites (sv-tests, verilator, yosys)
+
+### Track Completions
+
+- **Track A (UVM Output)**: ✅ **WORKING**
+  - UVM messages now appear in circt-sim console output
+  - APB AVIP shows 3 UVM_INFO messages: `[UVM_INFO @ 0] HDL_TOP: HDL_TOP`
+  - I2S AVIP generates 900 `__moore_uvm_report` calls
+  - APB AVIP generates 898 `__moore_uvm_report` calls
+  - UVM report pipeline fully functional end-to-end
+
+- **Track B (Lit Tests)**: ⚠️ **~30 FAILURES**
+  - Root cause identified: slang v10 stricter SVA syntax requirements
+  - `eventually` operator now requires bounded range (slang v10 breaking change)
+  - Investigation ongoing for full categorization
+
+- **Track C (OpenTitan)**: ✅ **40/40 TESTS PASS**
+  - All 40 simulation output files show successful completion
+  - No regressions from any changes
+  - Test categories: primitives (2), peripherals (18), crypto (12), full IPs (5)
+
+- **Track D (External Tests)**: ✅ **ALL PASSING**
+  - sv-tests BMC: **23/26 passing** (3 expected failures)
+  - verilator-verification: **17/17 passing** (100%)
+  - yosys SVA: **14/14 passing** (100%)
+  - No regressions from UVM or other changes
+
+### Key Achievements
+
+1. **UVM Output Verified Working**
+   - APB AVIP shows UVM_INFO messages in console output
+   - I2S AVIP generates 900 UVM report calls
+   - Complete UVM report pipeline working: UVM library -> MooreToCore -> Runtime -> Console
+
+2. **CMake Build Fixed**
+   - Found and removed 290 corrupted directories with exponentially repeating names
+   - Build system restored to working state
+
+3. **External Test Suites All Passing**
+   - sv-tests: 23/26 (3 expected failures)
+   - verilator-verification: 17/17 (100%)
+   - yosys SVA: 14/14 (100%)
+
+4. **OpenTitan Fully Stable**
+   - All 40 tests pass consistently
+   - Including: gpio, uart, i2c, spi_host, spi_device, usbdev, aes, ascon, hmac, kmac, keymgr, otbn
+
+### Bug Found
+
+**Stack Overflow on Large UVM Testbenches**:
+- circt-sim crashes on large UVM testbenches
+- 165k lines MLIR causes stack overflow
+- 15k lines MLIR works fine
+- Likely related to deep call hierarchies in large UVM code
+- Needs investigation for future fix
+
+### Test Results
+
+| Test Suite | Result | Notes |
+|------------|--------|-------|
+| sv-tests BMC | **23/26** | 3 expected failures |
+| verilator-verification | **17/17** | 100% |
+| yosys SVA | **14/14** | 100% |
+| OpenTitan | **40/40** | All passing |
+| Lit tests | ~30 failures | slang v10 SVA changes |
+
+### Remaining Issues
+
+1. **Lit Test Failures (~30)** - Related to slang v10 stricter SVA syntax requirements
+2. **Stack Overflow Bug** - Large MLIR files (165k lines) cause crash
+
+### Next Steps for Iteration 213
+
+1. Investigate and fix lit test failures related to slang v10
+2. Investigate stack overflow on large MLIR files
+3. Continue AVIP testing with verified UVM output
+4. Expand test coverage
+
+---
+
 ## Iteration 211 - January 26, 2026
 
 ### Focus Areas
@@ -36,6 +123,9 @@
     instance output evaluation; added `hw-instance-output` regression test
   - circt-sim handles `hw.struct_inject` and process-result-driven continuous
     assignments for OpenTitan LLHD lowering
+  - sim scheduler normalizes signal update widths to avoid APInt width mismatch
+  - circt-sim traces instance outputs when building wait sensitivities to avoid
+    missing signal triggers in OpenTitan testbenches
 
 ### Key Achievements
 

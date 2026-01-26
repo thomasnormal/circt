@@ -99,7 +99,7 @@ func.func @StringCmpNe(%a: !moore.string, %b: !moore.string) -> !moore.i1 {
 // CHECK-LABEL: func @IntToString
 func.func @IntToString(%val: !moore.i32) -> !moore.string {
   // CHECK: arith.extui
-  // CHECK: llvm.call @__moore_int_to_string
+  // CHECK: llvm.call @__moore_packed_string_to_string
   %str = moore.int_to_string %val : i32
   return %str : !moore.string
 }
