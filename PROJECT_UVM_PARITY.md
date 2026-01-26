@@ -183,14 +183,17 @@ All sequence tests now pass (TryGetNextItemWithData, PeekNextItem fixed in Itera
     - Fixed by using `strdup()` to copy names and `free()` in destroy function
     - Fixed `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test failure
 
-## Next Steps (Iteration 177)
+## Next Steps (Iteration 180)
 
 ### Priority Tasks
-1. ~~**Fix hanging sequence tests**~~ **FIXED** (Iteration 176) - try_get_next_item/peek_next_item handshake
-2. **Multi-file package imports** - yosys verilog tests need cross-file package resolution
-3. **Size cast bitwidth mismatch** - hw.bitcast fails for packed struct type casts
-4. **wand/tri1 net types** - LLHD lowering doesn't support wired-AND/tri-state nets
-5. **JTAG AVIP blockers** - bind directive + virtual interface conflicts
+1. **sv-tests remaining 10 failures** - Ch-6 (2), Ch-11 (1), Ch-18 (2), others
+2. **yosys svtypes 4 failures** - enum cast, out-of-bounds, $size, forward ref
+3. **Flaky unit test fix** - SampleFieldCoverageEnabled global state cleanup
+4. **verilator-verification imports** - signal strength (wand/tri1), UVM testbenches
+5. **JTAG AVIP blockers** - Works with xrun, needs CIRCT/slang compatibility fixes:
+   - Bind target case sensitivity (lowercase instance vs TYPE)
+   - Hierarchical refs in bind port connections
+   - Interface with interface port as virtual interface
 
 ### Remaining Limitations for UVM Parity
 
@@ -200,20 +203,31 @@ All sequence tests now pass (TryGetNextItemWithData, PeekNextItem fixed in Itera
 4. **pre/post_randomize** - Signature validation too strict in slang
 5. **JTAG AVIP** - bind directive with virtual interface creates conflicts
 
-### Track Status (Iteration 177)
+### Track Status (Iteration 180)
 
 | Track | Focus | Current Status | Next Task |
 |-------|-------|----------------|-----------|
-| A: sv-tests | Compilation coverage | 98% (821/831) | Target Ch-6,11 remaining failures |
-| B: AVIP Simulation | circt-sim runtime | 8/10 simulate | Fix JTAG bind/vif issues |
-| C: BMC/SVA | Formal verification | 17/17 (100%) | Maintain baselines |
-| D: Unit Tests | Runtime stability | 100% (635/635 MooreRuntime) | Add tests for new features |
+| A: sv-tests | Compilation coverage | 98% (821/831) | Fix Ch-6 (2), Ch-11 (1), Ch-18 (2) failures |
+| B: yosys tests | svtypes coverage | 78% (14/18) | Fix 4 remaining svtypes failures |
+| C: Unit Tests | Runtime stability | 99.9% (1354/1355) | Fix flaky SampleFieldCoverageEnabled test |
+| D: verilator | Import coverage | 79% (122/154) | Fix signal strength, UVM testbench imports |
+
+**Note**: JTAG AVIP blocked by AVIP code issues (not CIRCT). 8/10 AVIPs simulate successfully.
 
 ### Baselines to Maintain
 - verilator-verification BMC: 8/8 active (9 SKIP without assertions)
 - yosys SVA: 14/16 (87.5%)
 - Chapter-16 BMC: 23/26 PASS + 3 XFAIL
 - Unit tests: Sim 397, MooreRuntime 635, Support 187
+
+### Iteration 180 Findings
+- **JTAG AVIP Investigation Complete** - Found code bugs in AVIP, not CIRCT issues:
+  1. Wrong bind target case: `bind jtagControllerDeviceMonitorBfm` uses lowercase (instance) instead of uppercase (TYPE)
+  2. Hierarchical refs in bind: `(.clk(jtagIf.clk))` violates LRM §25.9
+  3. Interface port on interface: `JtagTargetDeviceMonitorBfm(JtagIf jtagIf)` - LRM violation
+  4. Enum type casts: Several conversion issues unrelated to bind/vif
+- **Conclusion**: JTAG AVIP requires code fixes to comply with IEEE 1800-2017
+- **All baselines maintained**: yosys SVA 14/16, sv-tests 821/831
 
 ### Iteration 179 Findings
 - **All baselines verified and maintained**:
