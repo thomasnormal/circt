@@ -209,15 +209,21 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
 
   LLVM_DEBUG({
     llvm::dbgs() << "Signal " << signalId << " driver " << driverId
-                 << " updated: value=" << (newValue.isUnknown()
-                                               ? "X"
-                                               : std::to_string(newValue.getValue()))
-                 << " strength=(" << getDriveStrengthName(strength0) << ", "
+                 << " updated: value=";
+    if (newValue.isUnknown()) {
+      llvm::dbgs() << "X";
+    } else {
+      newValue.getAPInt().print(llvm::dbgs(), /*isSigned=*/false);
+    }
+    llvm::dbgs() << " strength=(" << getDriveStrengthName(strength0) << ", "
                  << getDriveStrengthName(strength1) << ")";
     if (it->second.hasMultipleDrivers()) {
-      llvm::dbgs() << " resolved=" << (resolvedValue.isUnknown()
-                                           ? "X"
-                                           : std::to_string(resolvedValue.getValue()));
+      llvm::dbgs() << " resolved=";
+      if (resolvedValue.isUnknown()) {
+        llvm::dbgs() << "X";
+      } else {
+        resolvedValue.getAPInt().print(llvm::dbgs(), /*isSigned=*/false);
+      }
     }
     llvm::dbgs() << "\n";
   });
