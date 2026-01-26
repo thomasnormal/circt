@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 223 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Fix i2c_bus_monitor infinite delta cycles
+- **Track B**: Investigate 2^48 fs simulation time limit
+- **Track C**: Enable more XFAIL tests
+- **Track D**: Test OpenTitan IPs
+
+### Track Completions
+
+- **Track A (4-State Fix)**: ✅ **ROOT CAUSE DETAILED**
+  - 4-state struct encoding `{value, unknown}` causes X→X spurious edges
+  - `StructCreateOp` doesn't properly propagate X through struct fields
+  - Fix needed in `SignalValue::detectEdge` or `updateSignal`
+
+- **Track B (Time Limit)**: ✅ **ANALYSIS COMPLETE**
+  - Likely slang's double precision time handling
+  - Not a simple 48-bit truncation; investigation ongoing
+
+- **Track C (XFAILs)**: ✅ **0 OF 39 READY TO ENABLE**
+  - UVM runtime issues: ~15 tests
+  - Hierarchical names: ~5 tests
+  - Various features: ~19 tests
+
+- **Track D (OpenTitan)**: ✅ **COMPREHENSIVE TESTING**
+  - **28/28 reg_top TBs pass (100%)**
+  - **9/14 full TBs pass (64%)**
+  - 3 stuck: i2c, alert_handler, mbx (delta cycle issue)
+  - 3 wrong module: ascon, spi_host, usbdev (need --top fix)
+
+### OpenTitan IP Status
+
+| Category | Count | Status |
+|----------|-------|--------|
+| reg_top TBs | 28/28 | 100% PASS |
+| full TBs | 9/14 | 64% PASS |
+| Stuck (delta cycle) | 3 | i2c, alert_handler, mbx |
+| Wrong module | 3 | ascon, spi_host, usbdev |
+
+---
+
 ## Iteration 222 - January 26, 2026
 
 ### Focus Areas
