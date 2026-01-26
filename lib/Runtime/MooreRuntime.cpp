@@ -15137,6 +15137,17 @@ extern "C" int32_t __moore_sequencer_get_next_item(MooreSequencerHandle sequence
 
   std::unique_lock<std::mutex> seqrLock(seqr->mutex);
 
+  // If there's already an active item (from peek), return it
+  if (seqr->hasActiveItem && seqr->activeItem) {
+    auto &data = seqr->activeItem->data;
+    if (data.size() <= static_cast<size_t>(itemSize)) {
+      std::memcpy(item, data.data(), data.size());
+    } else {
+      std::memcpy(item, data.data(), itemSize);
+    }
+    return 1;
+  }
+
   // Wait for a sequence to be waiting
   seqr->cv.wait(seqrLock, [&seqr]() {
     return !seqr->waitingSequences.empty() || !seqr->running;
@@ -15219,46 +15230,74 @@ __moore_sequencer_try_get_next_item(MooreSequencerHandle sequencer, void *item,
   if (!seqr || !item || itemSize <= 0)
     return 0;
 
-  std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+  MooreSequenceHandle selectedSeq;
 
-  if (seqr->waitingSequences.empty())
-    return 0;
+  // Non-blocking check: return immediately if no sequences waiting
+  {
+    std::unique_lock<std::mutex> seqrLock(seqr->mutex);
 
-  // Check if any sequence has an item ready
-  for (auto seqHandle : seqr->waitingSequences) {
-    auto *seq = registry.getSequence(seqHandle);
-    if (!seq)
-      continue;
+    if (seqr->waitingSequences.empty())
+      return 0;
 
-    std::lock_guard<std::mutex> seqLock(seq->mutex);
-    if (seq->currentItem && seq->currentItem->itemReady) {
-      // Found a ready item - signal driver ready (like get_next_item does)
-      seq->driverReady = true;
-      auto pendingItem = seq->currentItem;
+    // Arbitrate to select which sequence gets access (like get_next_item)
+    selectedSeq = arbitrateSequence(seqr);
+    if (selectedSeq == MOORE_SEQUENCE_INVALID_HANDLE)
+      return 0;
 
-      // Remove from waiting list
-      auto it = std::find(seqr->waitingSequences.begin(),
-                          seqr->waitingSequences.end(), seqHandle);
-      if (it != seqr->waitingSequences.end()) {
-        seqr->waitingSequences.erase(it);
-      }
-
-      seqr->activeSequence = seqHandle;
-      seqr->activeItem = pendingItem;
-      seqr->hasActiveItem = true;
-
-      // Copy item
-      if (pendingItem->data.size() <= static_cast<size_t>(itemSize)) {
-        std::memcpy(item, pendingItem->data.data(), pendingItem->data.size());
-      } else {
-        std::memcpy(item, pendingItem->data.data(), itemSize);
-      }
-
-      return 1;
+    // Remove from waiting list
+    auto it = std::find(seqr->waitingSequences.begin(),
+                        seqr->waitingSequences.end(), selectedSeq);
+    if (it != seqr->waitingSequences.end()) {
+      seqr->waitingSequences.erase(it);
     }
+
+    seqr->activeSequence = selectedSeq;
   }
 
-  return 0;
+  // Get the sequence and signal driver ready (like get_next_item)
+  auto *seq = registry.getSequence(selectedSeq);
+  if (!seq)
+    return 0;
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    seq->driverReady = true;
+  }
+  seq->cv.notify_all();
+
+  // Wait for item to be ready (after finish_item is called)
+  std::shared_ptr<PendingItem> pendingItem;
+  {
+    std::unique_lock<std::mutex> seqLock(seq->mutex);
+    seq->cv.wait(seqLock, [&seq]() {
+      return (seq->currentItem && seq->currentItem->itemReady) ||
+             seq->stopRequested;
+    });
+
+    if (seq->stopRequested)
+      return 0;
+
+    pendingItem = seq->currentItem;
+  }
+
+  if (!pendingItem)
+    return 0;
+
+  // Copy item to driver's buffer
+  if (pendingItem->data.size() <= static_cast<size_t>(itemSize)) {
+    std::memcpy(item, pendingItem->data.data(), pendingItem->data.size());
+  } else {
+    std::memcpy(item, pendingItem->data.data(), itemSize);
+  }
+
+  // Store active item for item_done
+  {
+    std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+    seqr->activeItem = pendingItem;
+    seqr->hasActiveItem = true;
+  }
+
+  return 1;
 }
 
 extern "C" void __moore_sequencer_item_done(MooreSequencerHandle sequencer) {
@@ -15355,28 +15394,11 @@ __moore_sequencer_peek_next_item(MooreSequencerHandle sequencer, void *item,
   if (!seqr || !item || itemSize <= 0)
     return 0;
 
-  std::lock_guard<std::mutex> seqrLock(seqr->mutex);
-
-  // Check active item first
-  if (seqr->hasActiveItem && seqr->activeItem) {
-    auto &data = seqr->activeItem->data;
-    if (data.size() <= static_cast<size_t>(itemSize)) {
-      std::memcpy(item, data.data(), data.size());
-    } else {
-      std::memcpy(item, data.data(), itemSize);
-    }
-    return 1;
-  }
-
-  // Check waiting sequences for ready items
-  for (auto seqHandle : seqr->waitingSequences) {
-    auto *seq = registry.getSequence(seqHandle);
-    if (!seq)
-      continue;
-
-    std::lock_guard<std::mutex> seqLock(seq->mutex);
-    if (seq->currentItem && seq->currentItem->itemReady) {
-      auto &data = seq->currentItem->data;
+  // Check active item first (no lock needed for read)
+  {
+    std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+    if (seqr->hasActiveItem && seqr->activeItem) {
+      auto &data = seqr->activeItem->data;
       if (data.size() <= static_cast<size_t>(itemSize)) {
         std::memcpy(item, data.data(), data.size());
       } else {
@@ -15384,9 +15406,82 @@ __moore_sequencer_peek_next_item(MooreSequencerHandle sequencer, void *item,
       }
       return 1;
     }
+
+    // No active item and no waiting sequences
+    if (seqr->waitingSequences.empty())
+      return 0;
   }
 
-  return 0;
+  // A sequence is waiting - trigger handshake to peek at item
+  // Use same logic as try_get_next_item but store as active so peek can be
+  // followed by get
+  MooreSequenceHandle selectedSeq;
+
+  {
+    std::unique_lock<std::mutex> seqrLock(seqr->mutex);
+
+    if (seqr->waitingSequences.empty())
+      return 0;
+
+    // Arbitrate to select which sequence gets access
+    selectedSeq = arbitrateSequence(seqr);
+    if (selectedSeq == MOORE_SEQUENCE_INVALID_HANDLE)
+      return 0;
+
+    // Remove from waiting list
+    auto it = std::find(seqr->waitingSequences.begin(),
+                        seqr->waitingSequences.end(), selectedSeq);
+    if (it != seqr->waitingSequences.end()) {
+      seqr->waitingSequences.erase(it);
+    }
+
+    seqr->activeSequence = selectedSeq;
+  }
+
+  // Signal driver ready to unblock sequence
+  auto *seq = registry.getSequence(selectedSeq);
+  if (!seq)
+    return 0;
+
+  {
+    std::lock_guard<std::mutex> seqLock(seq->mutex);
+    seq->driverReady = true;
+  }
+  seq->cv.notify_all();
+
+  // Wait for item to be ready
+  std::shared_ptr<PendingItem> pendingItem;
+  {
+    std::unique_lock<std::mutex> seqLock(seq->mutex);
+    seq->cv.wait(seqLock, [&seq]() {
+      return (seq->currentItem && seq->currentItem->itemReady) ||
+             seq->stopRequested;
+    });
+
+    if (seq->stopRequested)
+      return 0;
+
+    pendingItem = seq->currentItem;
+  }
+
+  if (!pendingItem)
+    return 0;
+
+  // Copy item data
+  if (pendingItem->data.size() <= static_cast<size_t>(itemSize)) {
+    std::memcpy(item, pendingItem->data.data(), pendingItem->data.size());
+  } else {
+    std::memcpy(item, pendingItem->data.data(), itemSize);
+  }
+
+  // Store as active item (so subsequent get returns same item)
+  {
+    std::lock_guard<std::mutex> seqrLock(seqr->mutex);
+    seqr->activeItem = pendingItem;
+    seqr->hasActiveItem = true;
+  }
+
+  return 1;
 }
 
 extern "C" int32_t __moore_sequencer_has_items(MooreSequencerHandle sequencer) {
