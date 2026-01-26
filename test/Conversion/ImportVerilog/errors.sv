@@ -26,15 +26,14 @@ module Foo;
 endmodule
 
 // -----
+// nettype is now supported (ignored)
 module Foo;
-  // expected-error @below {{unsupported module member}}
   nettype real x;
 endmodule
 
 // -----
+// interconnect is now supported
 module Foo;
-  // expected-error @+2 {{unsupported type}}
-  // expected-note @+1 {{untyped}}
   interconnect x;
 endmodule
 
@@ -56,14 +55,14 @@ endmodule
 // -----
 module Foo;
   int a;
-  // expected-error @below {{unsupported statement}}
+  // expected-remark @below {{release statement ignored (simplified simulation semantics)}}
   initial release a;
 endmodule
 
 // -----
+// unpacked arrays in inside expressions are now supported
 module Foo;
   int a, b[3];
-  // expected-error @below {{unpacked arrays in 'inside' expressions not supported}}
   int c = a inside { b };
 endmodule
 
@@ -139,8 +138,8 @@ function time Foo;
 endfunction
 
 // -----
+// associative arrays with wildcard index are now supported
 module Foo;
-  // expected-error @below {{unsupported type: associative arrays with wildcard index}}
   int x[*];
 endmodule
 

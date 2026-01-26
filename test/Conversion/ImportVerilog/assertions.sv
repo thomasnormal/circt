@@ -138,13 +138,15 @@ module Assertions(input logic clk, rst, a, b);
   assert final (a);
 
   //===--------------------------------------------------------------------===//
-  // Test expect (concurrent assertion)
+  // Test expect (concurrent assertion - must be in procedural context)
   //===--------------------------------------------------------------------===//
   property expect_seq;
     @(posedge clk) a ##1 b;
   endproperty
   // CHECK: verif.{{(clocked_)?}}assert
-  expect property (expect_seq);
+  initial begin
+    expect(expect_seq);
+  end
 
   //===--------------------------------------------------------------------===//
   // Test assume property (concurrent assumption)

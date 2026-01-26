@@ -69,10 +69,10 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 ### Track Status & Next Tasks (Iteration 212 Update)
 
-**Iteration 212 Results (COMPLETE):**
+**Iteration 212 Results (UPDATED):**
 - Track A: ✅ **UVM OUTPUT WORKING** - APB/I2S AVIPs show UVM_INFO messages in console
-- Track B: ⚠️ ~30 lit test failures (slang v10 stricter SVA syntax requirements)
-- Track C: ✅ **OPENTITAN: 40/40 TESTS PASS** - All simulations complete successfully
+- Track B: ⚠️ **43 lit test failures** (96.96% pass rate) - fixed basic.sv, ongoing work
+- Track C: ⚠️ **OPENTITAN: 35/40 TESTS PASS** - 5 regressions (resource issues, crash)
 - Track D: ✅ **EXTERNAL TESTS ALL PASSING** - sv-tests 23/26, verilator 17/17, yosys 14/14
 
 **Key Findings from Iteration 212:**
@@ -80,18 +80,21 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
   - APB AVIP shows 3 UVM_INFO messages: "[UVM_INFO @ 0] HDL_TOP: HDL_TOP"
   - I2S AVIP generates 900 `__moore_uvm_report` calls
   - APB AVIP generates 898 `__moore_uvm_report` calls
-- OpenTitan test suite fully stable (40/40 simulations pass)
-- **CMake Build Fixed**: Found and removed 290 corrupted directories with exponentially repeating names
-- **Stack Overflow Bug**: circt-sim crashes on large UVM testbenches (165k lines MLIR causes stack overflow, 15k lines works fine)
+- **Stack Overflow Root Cause Identified**: 17 recursive walk() calls in LLHDProcessInterpreter
+  - Proposed fix: Single-pass iterative discovery using explicit worklist
+- **CMake Build Fixed**: Removed 290 corrupted directories
+- **Lit Tests**: 2805/2893 passing (96.96%)
 
 **Resolved in Iteration 212:**
 1. ✅ **UVM Console Output** - UVM messages now appear in circt-sim output
 2. ✅ **External Test Suites** - All passing (no regressions)
-3. ✅ **OpenTitan Stability** - 40/40 simulations pass
+3. ✅ **basic.sv Fixed** - CHECK patterns updated for variable emission order
+4. ✅ **Stack Overflow Diagnosed** - 17 recursive walk() calls identified
 
 **Remaining Issues:**
-1. **Lit Test Failures (~30)** - Likely related to slang v10 stricter SVA syntax (eventually requires bounded range)
-2. **Stack Overflow on Large MLIR** - 165k lines causes crash, needs investigation
+1. **Lit Test Failures (43)** - slang v10 syntax, CHECK pattern mismatches, procedural expect
+2. **Stack Overflow** - Root cause known, fix planned (iterative walk)
+3. **OpenTitan Regressions (5)** - i2c/spi_device/alert_handler (resource), rv_dm (crash), gpio_no_alerts (compile)
 
 **Iteration 211 Results (COMPLETE):**
 - Track A: ✅ **UVM REPORT INTERCEPTION WORKING** - MooreToCore converts uvm_report_* to __moore_uvm_report_*
