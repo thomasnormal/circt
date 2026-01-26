@@ -109,11 +109,12 @@ static llvm::cl::opt<std::string>
                    llvm::cl::value_desc("filename"), llvm::cl::init("-"),
                    llvm::cl::cat(mainCategory));
 
-// Top module selection
-static llvm::cl::opt<std::string>
-    topModule("top", llvm::cl::desc("Name of the top module"),
-              llvm::cl::value_desc("name"), llvm::cl::init(""),
-              llvm::cl::cat(mainCategory));
+// Top module selection - supports multiple top modules for UVM testbenches
+// (e.g., --top hdl_top --top hvl_top)
+static llvm::cl::list<std::string>
+    topModules("top", llvm::cl::desc("Name of the top module (can be repeated)"),
+               llvm::cl::value_desc("name"),
+               llvm::cl::cat(mainCategory));
 
 // Simulation control options
 static llvm::cl::opt<uint64_t>
@@ -315,8 +316,10 @@ public:
     }
   }
 
-  /// Initialize the simulation from an MLIR module.
-  LogicalResult initialize(mlir::ModuleOp module, const std::string &top);
+  /// Initialize the simulation from an MLIR module with multiple top modules.
+  /// This is the primary interface for UVM testbenches (hdl_top + hvl_top).
+  LogicalResult initialize(mlir::ModuleOp module,
+                           const llvm::SmallVector<std::string, 4> &tops);
 
   /// Run the simulation.
   LogicalResult run();
@@ -364,24 +367,52 @@ private:
   char nextVCDId = '!';
 
   // Module information
-  std::string topModuleName;
+  llvm::SmallVector<std::string, 4> topModuleNames;
   mlir::ModuleOp rootModule;
 
   // LLHD Process interpreter
   std::unique_ptr<LLHDProcessInterpreter> llhdInterpreter;
 };
 
-LogicalResult SimulationContext::initialize(mlir::ModuleOp module,
-                                            const std::string &top) {
+LogicalResult SimulationContext::initialize(
+    mlir::ModuleOp module,
+    const llvm::SmallVector<std::string, 4> &tops) {
   rootModule = module;
 
-  // Find the top module
-  auto hwModule = findTopModule(module, top);
-  if (!hwModule) {
-    return failure();
+  // Collect all top modules to simulate
+  llvm::SmallVector<hw::HWModuleOp, 4> hwModules;
+
+  if (tops.empty()) {
+    // No top modules specified - find the last module (typically the top)
+    auto hwModule = findTopModule(module, "");
+    if (!hwModule) {
+      return failure();
+    }
+    hwModules.push_back(hwModule);
+    topModuleNames.push_back(hwModule.getName().str());
+  } else {
+    // Find all specified top modules
+    for (const auto &top : tops) {
+      auto hwModule = findTopModule(module, top);
+      if (!hwModule) {
+        return failure();
+      }
+      hwModules.push_back(hwModule);
+      topModuleNames.push_back(hwModule.getName().str());
+    }
   }
 
-  topModuleName = hwModule.getName().str();
+  // Report what we're simulating
+  if (topModuleNames.size() > 1) {
+    llvm::outs() << "[circt-sim] Simulating " << topModuleNames.size()
+                 << " top modules: ";
+    for (size_t i = 0; i < topModuleNames.size(); ++i) {
+      if (i > 0)
+        llvm::outs() << ", ";
+      llvm::outs() << topModuleNames[i];
+    }
+    llvm::outs() << "\n";
+  }
 
   // Set up waveform tracing if requested
   if (failed(setupWaveformTracing()))
@@ -391,9 +422,13 @@ LogicalResult SimulationContext::initialize(mlir::ModuleOp module,
   if (failed(setupProfiling()))
     return failure();
 
-  // Build the simulation model
-  if (failed(buildSimulationModel(hwModule)))
-    return failure();
+  // Build the simulation model for all top modules
+  // All modules share the same scheduler and interpreter, so signals and
+  // processes from all modules run together in the same simulation timeline.
+  for (auto hwModule : hwModules) {
+    if (failed(buildSimulationModel(hwModule)))
+      return failure();
+  }
 
   // Set up parallel simulation if multiple threads requested
   if (numThreads > 1) {
@@ -509,24 +544,28 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
   // instances (instances may contain processes in submodules that need
   // recursive initialization)
   if (hasLLHDProcesses || hasSeqInitial || hasInstances) {
-    // Use the LLHD process interpreter for modules with LLHD processes
-    // or seq.initial blocks (the interpreter handles both)
-    llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
+    // Create the interpreter if it doesn't exist yet (supports multiple top
+    // modules - the interpreter accumulates signals and processes across calls)
+    if (!llhdInterpreter) {
+      llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
+
+      // Set up terminate callback to signal SimulationControl (only once)
+      llhdInterpreter->setTerminateCallback(
+          [this](bool success, bool verbose) {
+            if (verbose) {
+              llvm::outs() << "[circt-sim] Simulation "
+                           << (success ? "finished" : "failed") << " at time "
+                           << scheduler.getCurrentTime().realTime << " fs\n";
+            }
+            control.finish(success ? 0 : 1);
+          });
+    }
+
+    // Initialize this module (will add to existing signals and processes)
     if (failed(llhdInterpreter->initialize(hwModule))) {
       llvm::errs() << "Error: Failed to initialize LLHD process interpreter\n";
       return failure();
     }
-
-    // Set up terminate callback to signal SimulationControl
-    llhdInterpreter->setTerminateCallback(
-        [this](bool success, bool verbose) {
-          if (verbose) {
-            llvm::outs() << "[circt-sim] Simulation "
-                         << (success ? "finished" : "failed") << " at time "
-                         << scheduler.getCurrentTime().realTime << " fs\n";
-          }
-          control.finish(success ? 0 : 1);
-        });
 
     llvm::outs() << "[circt-sim] Registered " << llhdInterpreter->getNumSignals()
                  << " LLHD signals and " << llhdInterpreter->getNumProcesses()
@@ -616,7 +655,12 @@ void SimulationContext::recordValueChange(SignalId signal,
 LogicalResult SimulationContext::run() {
   // Write VCD header
   if (vcdWriter) {
-    vcdWriter->writeHeader(topModuleName);
+    // Use combined name for multiple top modules
+    std::string vcdTopName = topModuleNames.empty() ? "top" : topModuleNames[0];
+    if (topModuleNames.size() > 1) {
+      vcdTopName = "multi_top";  // Indicate multi-top simulation
+    }
+    vcdWriter->writeHeader(vcdTopName);
     vcdWriter->endHeader();
     vcdWriter->writeTime(0);
     // Write initial unknown values
@@ -804,8 +848,14 @@ static LogicalResult processInput(MLIRContext &context,
   }
 
   // Create and initialize simulation context
+  // Convert topModules from cl::list to SmallVector
+  llvm::SmallVector<std::string, 4> tops;
+  for (const auto &top : topModules) {
+    tops.push_back(top);
+  }
+
   SimulationContext simContext;
-  if (failed(simContext.initialize(*module, topModule))) {
+  if (failed(simContext.initialize(*module, tops))) {
     return failure();
   }
 
