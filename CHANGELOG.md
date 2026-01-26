@@ -1,6 +1,35 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 212 - January 26, 2026
+## Iteration 212 (Updated) - January 26, 2026
+
+### Updated Results
+
+**Lit Tests**: **2805/2893 passing (96.96%)**
+- Fixed basic.sv CHECK pattern mismatches (variable emission order changed)
+- 43 failures remaining (improved from ~50)
+- Most failures are slang v10 syntax changes and CHECK pattern mismatches
+
+**Stack Overflow Root Cause Identified**:
+- **17 recursive walk() calls** in LLHDProcessInterpreter initialization
+- Each walk recursively traverses the entire MLIR IR
+- 165k lines + deep nesting = 10,000+ stack frames per walk
+- MLIR's walk() is inherently recursive (has TODO comment to make iterative)
+- Proposed fix: Single-pass iterative discovery using explicit worklist
+
+**OpenTitan**: **35/40 passing** (5 regressions from resource issues)
+- i2c (timeout), spi_device (OOM), alert_handler (timeout), rv_dm (crash), gpio_no_alerts (compile)
+
+### Test Summary Table
+
+| Test Suite | Result | Notes |
+|------------|--------|-------|
+| Lit tests | **2805/2893** | 96.96% pass rate |
+| sv-tests BMC | **23/26** | 3 expected failures |
+| verilator-verification | **17/17** | 100% |
+| yosys SVA | **14/14** | 100% |
+| OpenTitan | **35/40** | 5 regressions (resource issues) |
+
+---
 
 ### Focus Areas
 
@@ -18,15 +47,13 @@
   - APB AVIP generates 898 `__moore_uvm_report` calls
   - UVM report pipeline fully functional end-to-end
 
-- **Track B (Lit Tests)**: ⚠️ **~30 FAILURES**
-  - Root cause identified: slang v10 stricter SVA syntax requirements
-  - `eventually` operator now requires bounded range (slang v10 breaking change)
-  - Investigation ongoing for full categorization
+- **Track B (Lit Tests)**: ⚠️ **43 FAILURES REMAINING**
+  - Root cause: slang v10 stricter SVA syntax requirements
+  - Fixed basic.sv CHECK patterns for variable emission order
+  - 96.96% pass rate achieved
 
-- **Track C (OpenTitan)**: ✅ **40/40 TESTS PASS**
-  - All 40 simulation output files show successful completion
-  - No regressions from any changes
-  - Test categories: primitives (2), peripherals (18), crypto (12), full IPs (5)
+- **Track C (OpenTitan)**: ⚠️ **35/40 TESTS PASS**
+  - 5 regressions: i2c, spi_device, alert_handler (resource issues), rv_dm (crash), gpio_no_alerts (compile)
 
 - **Track D (External Tests)**: ✅ **ALL PASSING**
   - sv-tests BMC: **23/26 passing** (3 expected failures)
@@ -50,40 +77,35 @@
    - verilator-verification: 17/17 (100%)
    - yosys SVA: 14/14 (100%)
 
-4. **OpenTitan Fully Stable**
-   - All 40 tests pass consistently
-   - Including: gpio, uart, i2c, spi_host, spi_device, usbdev, aes, ascon, hmac, kmac, keymgr, otbn
+4. **Stack Overflow Root Cause Identified**
+   - 17 recursive walk() calls in LLHDProcessInterpreter
+   - Proposed fix: Single-pass iterative discovery
 
-### Bug Found
+5. **LEC Counterexample Formatting Improved**
+   - SMT-LIB model values now normalized for bitvectors in `circt-lec`
+   - Counterexample summaries report concise `N'hXX` style values
+   - Wide `(_ bvN W)` literals no longer truncate in model parsing
+
+### Bug Found & Analyzed
 
 **Stack Overflow on Large UVM Testbenches**:
-- circt-sim crashes on large UVM testbenches
-- 165k lines MLIR causes stack overflow
-- 15k lines MLIR works fine
-- Likely related to deep call hierarchies in large UVM code
-- Needs investigation for future fix
-
-### Test Results
-
-| Test Suite | Result | Notes |
-|------------|--------|-------|
-| sv-tests BMC | **23/26** | 3 expected failures |
-| verilator-verification | **17/17** | 100% |
-| yosys SVA | **14/14** | 100% |
-| OpenTitan | **40/40** | All passing |
-| Lit tests | ~30 failures | slang v10 SVA changes |
+- Root cause: **17 recursive walk() calls** in LLHDProcessInterpreter initialization
+- 165k lines MLIR + deep nesting = 10,000+ stack frames per walk
+- Proposed fix: Single-pass iterative discovery using explicit worklist
+- Would reduce 17 walks to 1 iterative traversal
 
 ### Remaining Issues
 
-1. **Lit Test Failures (~30)** - Related to slang v10 stricter SVA syntax requirements
-2. **Stack Overflow Bug** - Large MLIR files (165k lines) cause crash
+1. **Lit Test Failures (43)** - slang v10 SVA syntax changes, CHECK pattern mismatches
+2. **Stack Overflow Bug** - Root cause identified, fix planned
+3. **OpenTitan Regressions (5)** - Resource issues and compiler crash
 
 ### Next Steps for Iteration 213
 
-1. Investigate and fix lit test failures related to slang v10
-2. Investigate stack overflow on large MLIR files
-3. Continue AVIP testing with verified UVM output
-4. Expand test coverage
+1. Fix remaining lit test failures (assertions.sv, other CHECK pattern issues)
+2. Implement iterative walk fix for stack overflow
+3. Investigate OpenTitan regressions
+4. Continue AVIP testing
 
 ---
 
@@ -126,6 +148,11 @@
   - sim scheduler normalizes signal update widths to avoid APInt width mismatch
   - circt-sim traces instance outputs when building wait sensitivities to avoid
     missing signal triggers in OpenTitan testbenches
+  - circt-sim falls back to probed signals when waits cannot trace sensitivities
+  - circt-sim uses APInt-aware struct extract/create for wide aggregates in
+    continuous assignments
+  - circt-sim evaluates comb/struct ops defined outside processes when
+    computing process values
 
 ### Key Achievements
 

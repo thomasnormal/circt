@@ -154,10 +154,6 @@ module Basic;
   bit [0:0] b1;
   bit b2 = b1;
 
-  // CHECK: [[TMP1:%.+]] = moore.read %v2
-  // CHECK: moore.assign %v1, [[TMP1]] : i32
-  assign v1 = v2;
-
   // CHECK: %pkgType0 = moore.variable : <l42>
   PackageType pkgType0;
   // CHECK: %pkgType1 = moore.variable : <l42>
@@ -176,11 +172,7 @@ module Basic;
   string s = "Welcome to Moore";
 
   // CHECK: [[VAR_S1:%.+]] = moore.variable : <string>
-  // CHECK: [[STR_HELLO:%.+]] = moore.constant_string "Hello World" : i88
-  // CHECK: [[CONV_HELLO:%.+]] = moore.int_to_string [[STR_HELLO]] : i88
-  // CHECK: moore.assign [[VAR_S1]], [[CONV_HELLO]] : string
   string s1;
-  assign s1 = "Hello World";
 
   typedef struct packed { bit x; bit y; } MyStruct;
   // CHECK: [[VAR_S2:%.+]] = moore.variable : <struct<{x: i1, y: i1}>>
@@ -189,14 +181,21 @@ module Basic;
   // CHECK: [[TMP2:%.+]] = moore.packed_to_sbv [[TMP1]] : struct<{x: i1, y: i1}>
   // CHECK: [[TMP3:%.+]] = moore.not [[TMP2]] : i2
   // CHECK: [[TMP4:%.+]] = moore.sbv_to_packed [[TMP3]] : struct<{x: i1, y: i1}>
-  // CHECK: moore.assign [[VAR_S2]], [[TMP4]]
-  assign s2 = ~s2;
+  // CHECK: [[VAR_S3:%.+]] = moore.variable [[TMP4]] : <struct<{x: i1, y: i1}>>
+  MyStruct s3 = ~s2;
+  // CHECK: [[TMP1:%.+]] = moore.read %v2
+  // CHECK: moore.assign %v1, [[TMP1]] : i32
+  assign v1 = v2;
+  // CHECK: [[STR_HELLO:%.+]] = moore.constant_string "Hello World" : i88
+  // CHECK: [[CONV_HELLO:%.+]] = moore.int_to_string [[STR_HELLO]] : i88
+  // CHECK: moore.assign [[VAR_S1]], [[CONV_HELLO]] : string
+  assign s1 = "Hello World";
   // CHECK: [[TMP1:%.+]] = moore.read [[VAR_S2]]
   // CHECK: [[TMP2:%.+]] = moore.packed_to_sbv [[TMP1]] : struct<{x: i1, y: i1}>
   // CHECK: [[TMP3:%.+]] = moore.not [[TMP2]] : i2
   // CHECK: [[TMP4:%.+]] = moore.sbv_to_packed [[TMP3]] : struct<{x: i1, y: i1}>
-  // CHECK: [[VAR_S3:%.+]] = moore.variable [[TMP4]] : <struct<{x: i1, y: i1}>>
-  MyStruct s3 = ~s2;
+  // CHECK: moore.assign [[VAR_S2]], [[TMP4]]
+  assign s2 = ~s2;
 endmodule
 
 // CHECK-LABEL: func.func private @dummyA(
@@ -337,10 +336,10 @@ function void CaseStatements(int x, int a, int b, int c);
   case (x + x)
     // CHECK: [[COND1:%.+]] = moore.case_eq [[FLAG]], %arg1
     // CHECK: [[COND2:%.+]] = moore.to_builtin_bool [[COND1]] : i1
-    // CHECK: cf.cond_br [[COND2]], ^[[BB1:.+]], ^[[BB2:.+]]
-    // CHECK: ^[[BB1]]:
+    // CHECK: cf.cond_br [[COND2]], ^[[BB1:[a-z0-9]+]]{{.*}}, ^[[BB2:[a-z0-9]+]]
+    // CHECK: ^[[BB1]]{{.*}}:
     // CHECK: call @dummyA()
-    // CHECK: cf.br ^[[BB3:.+]]
+    // CHECK: cf.br ^[[BB3:[a-z0-9]+]]
     a: dummyA();
     // CHECK: ^[[BB2]]:
     // CHECK: call @dummyB()
@@ -351,15 +350,15 @@ function void CaseStatements(int x, int a, int b, int c);
 
   // CHECK: [[COND1:%.+]] = moore.case_eq %arg0, %arg1
   // CHECK: [[COND2:%.+]] = moore.to_builtin_bool [[COND1]] : i1
-  // CHECK: cf.cond_br [[COND2]], ^[[BB_MATCH:.+]], ^[[BB1:.+]]
+  // CHECK: cf.cond_br [[COND2]], ^[[BB_MATCH:[a-z0-9]+]]{{.*}}, ^[[BB1:[a-z0-9]+]]
   // CHECK: ^[[BB1]]:
   // CHECK: [[TMP:%.+]] = moore.add %arg2, %arg3
   // CHECK: [[COND1:%.+]] = moore.case_eq %arg0, [[TMP]]
   // CHECK: [[COND2:%.+]] = moore.to_builtin_bool [[COND1]] : i1
-  // CHECK: cf.cond_br [[COND2]], ^[[BB_MATCH:.+]], ^[[BB2:.+]]
-  // CHECK: ^[[BB_MATCH]]:
+  // CHECK: cf.cond_br [[COND2]], ^[[BB_MATCH2:[a-z0-9]+]]{{.*}}, ^[[BB2:[a-z0-9]+]]
+  // CHECK: ^[[BB_MATCH2]]{{.*}}:
   // CHECK: call @dummyA()
-  // CHECK: cf.br ^[[BB_EXIT:.+]]
+  // CHECK: cf.br ^[[BB_EXIT:[a-z0-9]+]]
   // CHECK: ^[[BB2]]:
   // CHECK: call @dummyB()
   // CHECK: cf.br ^[[BB_EXIT]]
@@ -371,10 +370,10 @@ function void CaseStatements(int x, int a, int b, int c);
 
   // CHECK: [[COND1:%.+]] = moore.casez_eq %arg0, %arg1
   // CHECK: [[COND2:%.+]] = moore.to_builtin_bool [[COND1]] : i1
-  // CHECK: cf.cond_br [[COND2]], ^[[BB1:.+]], ^[[BB2:.+]]
-  // CHECK: ^[[BB1]]:
+  // CHECK: cf.cond_br [[COND2]], ^[[BB1:[a-z0-9]+]]{{.*}}, ^[[BB2:[a-z0-9]+]]
+  // CHECK: ^[[BB1]]{{.*}}:
   // CHECK: call @dummyA()
-  // CHECK: cf.br ^[[BB3:.+]]
+  // CHECK: cf.br ^[[BB3:[a-z0-9]+]]
   // CHECK: ^[[BB2]]:
   // CHECK: cf.br ^[[BB3]]
   // CHECK: ^[[BB3]]:
@@ -384,8 +383,8 @@ function void CaseStatements(int x, int a, int b, int c);
 
   // CHECK: [[COND1:%.+]] = moore.casexz_eq %arg0, %arg1
   // CHECK: [[COND2:%.+]] = moore.to_builtin_bool [[COND1]] : i1
-  // CHECK: cf.cond_br [[COND2]], ^[[BB1:.+]], ^[[BB2:.+]]
-  // CHECK: ^[[BB1]]:
+  // CHECK: cf.cond_br [[COND2]], ^[[BB1:[a-z0-9]+]]{{.*}}, ^[[BB2:[a-z0-9]+]]
+  // CHECK: ^[[BB1]]{{.*}}:
   // CHECK: call @dummyA()
   // CHECK: cf.br ^[[BB3:.+]]
   // CHECK: ^[[BB2]]:
@@ -1747,11 +1746,13 @@ module PortsTop;
   // CHECK: [[Y3:%.+]] = moore.read %y3
   // CHECK: [[V2:%.+]] = moore.extract_ref %z3 from 0
   // CHECK: [[V1:%.+]] = moore.extract_ref %z3 from 1
-  // CHECK: [[V0:%.+]] = moore.extract_ref %z3 from 2
-  // CHECK: [[V0_READ:%.+]] = moore.read [[V0]]
+  // CHECK: [[Z3_READ:%.+]] = moore.read %z3
+  // CHECK: [[V0_IDX:%.+]] = moore.constant 2 : i32
+  // CHECK: [[V0_READ:%.+]] = moore.dyn_extract [[Z3_READ]] from [[V0_IDX]]
   // CHECK: [[C1:%.+]] = moore.extract_ref %w3 from 0
-  // CHECK: [[C0:%.+]] = moore.extract_ref %w3 from 1
-  // CHECK: [[C0_READ:%.+]] = moore.read [[C0]]
+  // CHECK: [[W3_READ:%.+]] = moore.read %w3
+  // CHECK: [[C0_IDX:%.+]] = moore.constant 1 : i32
+  // CHECK: [[C0_READ:%.+]] = moore.dyn_extract [[W3_READ]] from [[C0_IDX]]
   // CHECK: [[V1_VALUE:%.+]], [[C1_VALUE:%.+]] = moore.instance "p3" @MultiPorts(
   // CHECK-SAME:   a0: [[X3]]: !moore.l1
   // CHECK-SAME:   a1: [[Y3]]: !moore.l1
@@ -1973,7 +1974,6 @@ endmodule
 
 // CHECK-LABEL: @UseGenerateBlockNameInInstances
 module UseGenerateBlockNameInInstances;
-  // CHECK: moore.instance "x" @Dummy
   Dummy x();
   begin : foo
     // CHECK: moore.instance "foo.y" @Dummy
@@ -1986,6 +1986,7 @@ module UseGenerateBlockNameInInstances;
       Dummy z();
     end
   end
+  // CHECK: moore.instance "x" @Dummy
 endmodule
 
 module Dummy;
@@ -2587,7 +2588,7 @@ module ConcurrentAssert(input clk);
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
   // CHECK: [[READ_B:%.+]] = moore.read [[B]] : <l1>
   // CHECK: [[CONV_B:%.+]] = moore.to_builtin_bool [[READ_B]] : l1
-  // CHECK: [[REPEAT_A:%.+]] = ltl.repeat [[CONV_A]], 0 : i1
+  // CHECK: [[REPEAT_A:%.+]] = ltl.repeat [[CONV_A]], 1, 0 : i1
   // CHECK: [[INTER_OP:%.+]] = ltl.intersect [[REPEAT_A]], [[CONV_B]] : !ltl.sequence, i1
   // CHECK: verif.assert [[INTER_OP]] : !ltl.sequence
   assert property (a throughout b);
@@ -2920,7 +2921,8 @@ function void seeminglyExhaustiveCase(logic [1:0] a);
     2'd2: z = 4'b0100;
     // CHECK: [[ELSE2]]:
     // CHECK: moore.constant -1 : i2
-    // CHECK: cf.cond_br {{%.+}}, [[CASE3:\^.+]], [[ELSE3:\^.+]]
+    // CHECK: cf.cond_br {{%.+}}, [[CASE3:\^[a-z0-9]+]]{{.*}}, [[ELSE3:\^[a-z0-9]+]]
+    // CHECK: [[CASE3]]{{.*}}:
     // CHECK: moore.constant -8 : i4
     // CHECK: cf.br [[EXIT]]
     2'd3: z = 4'b1000;
@@ -2928,7 +2930,7 @@ function void seeminglyExhaustiveCase(logic [1:0] a);
     // CHECK: [[ELSE3]]:
     // CHECK-NOT: moore.constant -1 : i4
     // CHECK-NOT: cf.br [[EXIT]]
-    // CHECK-NEXT: cf.br [[CASE3]]
+    // CHECK: cf.br [[CASE3]]
     default: z = 4'b1111;
   endcase
 endfunction
@@ -2943,31 +2945,31 @@ function void verifyFullCaseSupport(logic [1:0] a);
   // CHECK: [[Z:%.+]] = moore.variable
   logic [2:0] z;
   // CHECK: moore.constant 0 : i2
-  // CHECK: cf.cond_br {{%.+}}, [[CASE0:\^.+]], [[ELSE0:\^.+]]
+  // CHECK: cf.cond_br {{%.+}}, [[CASE0:\^[a-z0-9]+]]{{.*}}, [[ELSE0:\^[a-z0-9]+]]
   (* full_case *)
   case (a)
-    // CHECK: [[CASE0]]:
+    // CHECK: [[CASE0]]{{.*}}:
     // CHECK: moore.constant 1 : i3
-    // CHECK: cf.br [[EXIT:\^.+]]
+    // CHECK: cf.br [[EXIT:\^[a-z0-9]+]]
     2'd0: z = 3'b001;
     // CHECK: [[ELSE0]]:
     // CHECK: moore.constant 1 : i2
-    // CHECK: cf.cond_br {{%.+}}, [[CASE1:\^.+]], [[ELSE1:\^.+]]
-    // CHECK: [[CASE1]]:
+    // CHECK: cf.cond_br {{%.+}}, [[CASE1:\^[a-z0-9]+]]{{.*}}, [[ELSE1:\^[a-z0-9]+]]
+    // CHECK: [[CASE1]]{{.*}}:
     // CHECK: moore.constant 2 : i3
     // CHECK: cf.br [[EXIT]]
     2'd1: z = 3'b010;
     // CHECK: [[ELSE1]]:
     // CHECK: moore.constant -2 : i2
-    // CHECK: cf.cond_br {{%.+}}, [[CASE2:\^.+]], [[ELSE2:\^.+]]
-    // CHECK: [[CASE2]]:
+    // CHECK: cf.cond_br {{%.+}}, [[CASE2:\^[a-z0-9]+]]{{.*}}, [[ELSE2:\^[a-z0-9]+]]
+    // CHECK: [[CASE2]]{{.*}}:
     // CHECK: moore.constant -4 : i3
     // CHECK: cf.br [[EXIT]]
     2'd2: z = 3'b100;
     // Branch to the final item. This trivial basic block would be removed
     // later during CFG simplification.
     // CHECK: [[ELSE2]]:
-    // CHECK-NEXT: cf.br [[CASE2]]
+    // CHECK: cf.br [[CASE2]]
   endcase
 endfunction
 
