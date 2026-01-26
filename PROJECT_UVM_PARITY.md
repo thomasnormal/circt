@@ -6,7 +6,7 @@
 
 ## Current Status
 
-### sv-tests Coverage (829 tests, 784 passing = 95%)
+### sv-tests Coverage (830 tests, 796 passing = 96%)
 Note: Some tests are negative tests expected to fail. Grand total verified in Iteration 176.
 
 | Chapter | Topic | Pass Rate | Status |

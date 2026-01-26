@@ -15232,7 +15232,8 @@ __moore_sequencer_try_get_next_item(MooreSequencerHandle sequencer, void *item,
 
     std::lock_guard<std::mutex> seqLock(seq->mutex);
     if (seq->currentItem && seq->currentItem->itemReady) {
-      // Found a ready item
+      // Found a ready item - signal driver ready (like get_next_item does)
+      seq->driverReady = true;
       auto pendingItem = seq->currentItem;
 
       // Remove from waiting list
