@@ -67,22 +67,27 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 198 Update)
+### Track Status & Next Tasks (Iteration 202 Update)
 
-**UVM AVIP Compilation Status (Corrected):**
-- **2/9 AVIPs compile successfully**: APB (295K MLIR lines), I2S (335K MLIR lines)
-- UVM package imports work correctly - wildcard imports and class inheritance work
-- **7 AVIP failures root causes** (NOT UVM scope issues):
-  - AHB, AXI4: Bind scope issues (bind refs parent module ports)
-  - I3C: InOut interface ports (fix in progress)
-  - UART: Method signature mismatch (do_compare default arg)
-  - JTAG: Enum casts, nested comments, bind/vif conflicts
-  - SPI: Non-static property access in nested class
-  - AXI4Lite: Build infrastructure issue
+**Key Corrections from Iteration 201:**
+- Named sequences ✅ **Already work** - verilator test failures are syntax bugs
+- `--allow-virtual-iface-with-override` does NOT help AHB/AXI4 (different errors)
+- AVIP compilation needs proper file ordering (not just hvl_top)
+
+**Current Iteration 202 Tracks:**
+- Track A: Investigating proper AVIP file list discovery
+- Track B: Testing APB AVIP full compilation
+- Track C: OpenTitan prim_count X-value investigation
+- Track D: AHB forward declaration analysis
+
+**UVM AVIP Compilation Status:**
+- Needs re-verification with correct file ordering
+- Previous "3/9 compile" was based on different commands
+- Working to establish correct compilation procedures
 
 **OpenTitan Simulation Status:**
-- **28/29 modules PASS** (gpio and uart confirmed working, not timeout)
-- 30 total modules simulate via CIRCT
+- **33/33 modules simulate** (gpio, uart confirmed working)
+- prim_count shows X values (being investigated)
 
 **7 AVIPs Running in circt-sim:**
 - AHB AVIP - 1M+ clock edges

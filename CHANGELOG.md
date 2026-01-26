@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 202 - January 26, 2026
+
+### Track Completions
+
+- **Track A (AVIP File Lists)**: Discovered all 9 AVIPs have `.f` compile files
+  - APB: `sim/apb_compile.f` - **COMPILES** ✅
+  - I2S: `sim/I2sCompile.f` - **COMPILES** ✅
+  - AHB: `sim/ahb_compile.f` - Bind scope error
+  - AXI4Lite: Uses env vars (complex setup)
+
+- **Track B (APB Full Test)**: **19,706 lines MLIR, exit code 0** ✅
+  - Full HDL+HVL testbench compiles
+  - Interface arrays, generate blocks, virtual interfaces all work
+  - Documentation: `avip-apb-circt-verilog-run.txt`
+
+- **Track C (prim_count X-values)**: **Root cause identified** ⚠️
+  - `hw.instance` outputs cannot be evaluated by `evaluateContinuousValue()`
+  - When `llhd.drv` drives from hw.instance result, returns X
+  - **Fundamental circt-sim limitation** - needs interpreter extension
+
+- **Track D (AHB Analysis)**: **Bind scope semantics bug** (not forward declarations)
+  - AHB source incorrectly refs `ahbInterface` from parent scope in bind
+  - IEEE 1800 specifies bind expressions resolve in **target** scope
+  - slang is correct; VCS/Xcelium accept due to relaxed checking
+  - Fix: Use port names directly (`hclk` not `ahbInterface.hclk`)
+
+### Updated AVIP Status: 2/9 Verified
+
+| AVIP | Status | Issue | Fix |
+|------|--------|-------|-----|
+| APB | ✅ | - | - |
+| I2S | ✅ | - | - |
+| AHB | ❌ | Bind scope | Fix AVIP source |
+| SPI | ❌ | TBD | TBD |
+| UART | ❌ | do_compare | Fix AVIP source |
+| I3C | ⚠️ | InOut ports | Already fixed |
+| JTAG | ❌ | Multiple | Fix AVIP source |
+| AXI4 | ❌ | Bind scope | Fix AVIP source |
+| AXI4Lite | ❌ | Env vars | Fix build scripts |
+
+### Test Suite Status
+
+| Suite | Status |
+|-------|--------|
+| sv-tests SVA | 9/26 pass |
+| verilator-verification | 8/17 pass |
+| Yosys SVA | 14/14 pass (100%) |
+| OpenTitan | 33/33 simulate |
+
 ## Iteration 201 - January 26, 2026
 
 ### Key Findings (Critical Corrections)
@@ -217,6 +266,7 @@
 - Added TL-UL write smoke transactions to pattgen/rom_ctrl_regs/sram_ctrl_regs/sysrst_ctrl/usbdev register blocks.
 - Started OpenTitan GPIO DV parse-only bring-up; blockers include missing DV packages (prim_mubi/prim_secded/str_utils) in the compile set and CIRCT limitations in string+byte concatenation and format specifiers for class handles.
 - Extended GPIO DV parse-only compile set (top_darjeeling) and surfaced additional blockers: missing prim_alert/prim_esc/push_pull seq files plus CIRCT limitations in string+byte concatenation, format specifiers with class handles/null, and macro-expanded field names.
+- Added a slang patch and regression test to allow byte-sized integral operands in string concatenations under `--compat vcs`.
 
 ## Iteration 195 - January 26, 2026
 
