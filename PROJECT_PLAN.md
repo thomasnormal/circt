@@ -202,17 +202,31 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - **Track R (prim_alert_sender)**: ✅ VERIFIED - Mem2Reg fix works, 7+ IPs unblocked (gpio, uart, spi, i2c, timers)
 - **Track S (test suite)**: ✅ VERIFIED - No regressions (sv-tests 9+3xfail, verilator 8/8, yosys 14/16)
 
-**Active Tracks (Iteration 209):**
-- **Track A**: Implement UVM report function dispatchers (`__moore_uvm_report_*`)
-- **Track B**: Fix remaining lit test failures (~76 remaining)
-- **Track C**: Test AVIPs with stack overflow fix - verify UVM output works
-- **Track D**: Run comprehensive test suites (sv-tests, verilator, yosys, opentitan)
+**Iteration 209 Results (COMPLETE):**
+- Track A: ✅ **UVM REPORT DISPATCHERS IMPLEMENTED** - `__moore_uvm_report_info/warning/error/fatal` now work
+- Track B: ✅ 4 lit test failures fixed (59→55), commit 0b7b93202
+- Track C: ✅ UVM_INFO output verified working in circt-sim unit test
+- Track D: ✅ Test suites stable: verilator 100%, yosys 100%, sv-tests 23/26
+
+**Key Achievements from Iteration 209:**
+- UVM report functions now dispatch to C++ runtime (UVM_INFO/WARNING/ERROR/FATAL)
+- Global string initialization fixed - string constants properly copied to memory blocks
+- Added unit tests: `uvm-report-minimal.mlir`, `uvm-report-simple.mlir`
+- Fixed 4 lit test CHECK patterns for updated output formats
+
+**Active Tracks (Iteration 210):**
+- **Track A**: Test UVM output on real AVIPs (APB, I3C, I2S)
+- **Track B**: Fix remaining lit test failures (~55 remaining)
+- **Track C**: Address llhd.process canonicalization (processes without signals getting removed)
+- **Track D**: Run comprehensive test suites and verify UVM messages appear
 
 **Remaining Limitations for UVM Parity:**
 1. ~~**UVM Code Stack Overflow**~~ ✅ FIXED (Iter 208) - Call depth tracking added
-2. **UVM Output Silent from hvl_top** - `__moore_uvm_report_*` C++ functions not dispatched
-   - Root cause: Only `__moore_packed_string_to_string` and `malloc` have handlers
-   - Fix: Add dispatch handlers for UVM report functions in LLHDProcessInterpreter
+2. ~~**UVM Output Silent from hvl_top**~~ ✅ FIXED (Iter 209) - UVM report dispatchers implemented
+   - `__moore_uvm_report_info/warning/error/fatal` now call C++ runtime functions
+   - `__moore_uvm_report_enabled`, `__moore_uvm_report_summarize` also implemented
+3. **llhd.process Canonicalization** - Processes without signal drives get removed as dead code
+   - Workaround: Add a signal drive to processes that would otherwise be empty
 3. **~76 Lit Test Failures** - Various categories: ImportVerilog, circt-bmc, circt-lec, circt-sim
 4. **InOut Interface Ports** - I3C AVIP blocked (SCL port)
 5. **AVIP Source Bugs** - 6/9 AVIPs have source-level issues (not CIRCT bugs)
