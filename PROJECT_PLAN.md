@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 224 Update)
+### Track Status & Next Tasks (Iteration 225 Update)
+
+**Iteration 224 Results (COMPLETE):**
+- Track A: ✅ **4-State Fix Implemented** - isFourStateX() added, X→X now returns no edge
+- Track B: ✅ **AVIPs Run** - All 3 compile/run, UVM macros don't produce output
+- Track C: ✅ **UVM Runtime Root Cause** - Signature mismatch in convertUvmReportCall
+- Track D: ✅ **Lit: 2845 pass, 39 XFAIL, 0 Failed** (up from 2844)
+
+**Iteration 225 Focus (NEXT):**
+- Track A: 🔄 **Test 4-state fix on i2c_tb** - Verify delta cycle hang is fixed
+- Track B: 🔄 **Fix UVM report signature** - Update convertUvmReportCall for 5-6 args
+- Track C: 🔄 **Enable UVM XFAIL tests** - After fixing runtime issue
+- Track D: 🔄 **External Test Suites** - Maintain baselines
 
 **Iteration 223 Results (COMPLETE):**
-- Track A: ✅ **4-State Edge Detection** - Fix needed in SignalValue::detectEdge for struct encoding
-- Track B: ✅ **Time Limit Analysis** - slang double precision, not simple truncation
-- Track C: ✅ **XFAIL Analysis** - 0/39 ready (UVM ~15, hierarchical ~5, features ~19)
-- Track D: ✅ **OpenTitan: 28/28 reg_top, 9/14 full** - 3 stuck, 3 wrong module
-
-**Iteration 224 Focus (NEXT):**
-- Track A: 🔄 **Implement 4-state edge fix** - Modify updateSignal for X→X detection
-- Track B: 🔄 **Test more AVIPs** - APB, I2S, I3C with full UVM
-- Track C: 🔄 **Fix UVM runtime** - Address uvm_report_error legalization
-- Track D: 🔄 **External Test Suites** - Maintain baselines
+- Track A: ✅ **4-State Edge Detection** - Fix needed in SignalValue::detectEdge
+- Track B: ✅ **Time Limit Analysis** - slang double precision issue
+- Track C: ✅ **XFAIL Analysis** - 0/39 ready (UVM blocks ~15)
+- Track D: ✅ **OpenTitan: 28/28 reg_top, 9/14 full**
 
 **Iteration 222 Results (COMPLETE):**
 - Track A: ✅ **False Alarm** - Tests actually pass (stale build artifacts)

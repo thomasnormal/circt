@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 224 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Implement 4-state edge detection fix
+- **Track B**: Test AVIPs with full UVM
+- **Track C**: Investigate UVM runtime legalization
+- **Track D**: Run external test suites
+
+### Track Completions
+
+- **Track A (4-State Fix)**: ✅ **IMPLEMENTED AND TESTED**
+  - Added `isFourStateX()` method to `SignalValue` class
+  - Updated `operator==` and `detectEdge()` for X→X normalization
+  - Added comprehensive unit test (FourStateXDetection)
+  - All 2845 lit tests pass, 39 XFAIL
+
+- **Track B (AVIP Testing)**: ✅ **ALL 3 COMPILE AND RUN**
+  - APB: Runs to max time, 10M+ process executions
+  - I2S: Runs, outputs "HDL TOP" and BFM messages
+  - I3C: Runs, controller/target BFM created
+  - UVM macros don't produce output (report infrastructure issue)
+
+- **Track C (UVM Runtime)**: ✅ **ROOT CAUSE FOUND**
+  - Signature mismatch: MooreToCore expects 7-8 args, stubs have 5-6
+  - Fix path: Update `convertUvmReportCall` to handle both signatures
+
+- **Track D (External Tests)**: ✅ **ALL BASELINES MET**
+  - Lit: 2845 pass, 39 XFAIL, 0 Failed
+  - sv-tests: 23/26, verilator: 17/17, yosys: 14/14, LEC: 23/23
+
+### Code Changes
+
+- `include/circt/Dialect/Sim/ProcessScheduler.h`: Added `isFourStateX()` and 4-state edge handling
+- `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`: Added FourStateXDetection test
+
+---
+
 ## Iteration 223 - January 26, 2026
 
 ### Focus Areas
