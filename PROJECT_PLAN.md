@@ -67,40 +67,38 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 204 Update)
+### Track Status & Next Tasks (Iteration 205 Update)
 
-**Iteration 203 Results (COMPLETE):**
-- Track A: ✅ sv-tests Chapter 16 SVA **23/26 pass (88%)** - NOT 35%!
-- Track B: ✅ verilator-verification 8/17 - 6 failures are upstream syntax bugs
-- Track C: ✅ Yosys SVA 14/14 pass (100%) verified stable
-- Track D: ✅ hw.instance **WORKS** for hierarchical designs (prim_flop_2sync)
+**Iteration 204 Results (COMPLETE):**
+- Track A: ✅ Fixed sv-tests script (`NO_PROPERTY_AS_SKIP=0`)
+- Track B: ⚠️ I3C AVIP simulation interrupted (retry needed)
+- Track C: ✅ 4 more OpenTitan primitives PASS (arbiter_fixed, arbiter_ppc, lfsr, fifo_sync)
+- Track D: ✅ XFAIL tests fail for infrastructure reasons (SSA dominance, async reset)
 
-**Key Corrections from Iteration 203:**
-- sv-tests "no property" warning was causing **false SKIPs** - actual pass rate is 88%
-- verilator-verification `@posedge (clk)` syntax is **upstream bug** in tests
-- hw.instance simulation WORKS - only continuous assignment evaluation has issues
-- Large OpenTitan FSMs (2000+ ops, 9 processes) simulate correctly
+**Key Correction from Iteration 204:**
+- verilator-verification `@posedge (clk)` is a **Verilator extension**, not upstream bug
+- slang follows strict IEEE grammar; consider `--compat verilator` flag
 
-**Current Iteration 204 Tracks:**
-- Track A: Fix sv-tests script to not skip on spurious warnings
-- Track B: Try I3C AVIP simulation (compiles successfully)
-- Track C: More OpenTitan FSM simulation testing
-- Track D: Investigate remaining 3 sv-tests failures
+**Current Iteration 205 Tracks:**
+- Track A: Retry I3C AVIP simulation
+- Track B: Add slang `--compat verilator` support for sequence syntax
+- Track C: Test more OpenTitan IPs (prim_ram, prim_alert)
+- Track D: Investigate async reset support in BMC
 
 **UVM AVIP Compilation Status (VERIFIED):**
 - **3/9 compile successfully** (APB, I2S, I3C) - 33%
 - 5/9 have source code bugs (AHB, SPI, UART, JTAG, AXI4)
 - 1/9 has complex build setup (AXI4Lite with env vars)
 
-**Test Suite Status (Updated Iteration 203):**
-- sv-tests SVA: **23/26 pass (88%)** - up from reported 35%
-- verilator-verification: 8/17 pass (6 upstream syntax bugs)
+**Test Suite Status (Updated Iteration 204):**
+- sv-tests SVA: **23/26 pass (88%)** - script fixed
+- verilator-verification: 8/17 pass (6 need `--compat verilator`)
 - Yosys SVA: **14/14 pass (100%)** - stable
 
 **OpenTitan Simulation Status:**
 - **33/33 reg_top modules simulate**
+- **7 primitives**: prim_flop_2sync, arbiter_fixed/ppc, lfsr, fifo_sync, timer_core, uart_tx/rx
 - **Large FSMs work**: i2c_controller_fsm (2293 ops, 9 processes)
-- **hw.instance hierarchies work**: prim_flop_2sync
 
 **7 AVIPs Running in circt-sim:**
 - AHB AVIP - 1M+ clock edges
