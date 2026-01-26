@@ -326,10 +326,10 @@ TEST(SignalState, UpdateValue) {
   SignalValue zero(0, 1);
   SignalValue one(1, 1);
 
-  // Initial update from X to 0
+  // Initial update from X to 0 - per IEEE 1800, X->0 is negedge
   EdgeType edge1 = state.updateValue(zero);
   EXPECT_EQ(state.getCurrentValue(), zero);
-  EXPECT_EQ(edge1, EdgeType::AnyEdge); // X to anything is a change
+  EXPECT_EQ(edge1, EdgeType::Negedge);
 
   // Update from 0 to 1 - posedge
   EdgeType edge2 = state.updateValue(one);
@@ -620,9 +620,9 @@ TEST(EdgeDetector, RecordValue) {
   SignalValue zero(0, 1);
   SignalValue one(1, 1);
 
-  // First value from unknown
+  // First value from unknown - per IEEE 1800, X->0 is negedge
   EdgeType edge1 = detector.recordValue(zero);
-  EXPECT_EQ(edge1, EdgeType::AnyEdge);
+  EXPECT_EQ(edge1, EdgeType::Negedge);
 
   // 0 -> 1 posedge
   EdgeType edge2 = detector.recordValue(one);

@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 225 Update)
+### Track Status & Next Tasks (Iteration 226 Update)
+
+**Iteration 226 Results (COMPLETE):**
+- Track A: ✅ **Termination Timing Fixed** - circt-sim now reports correct $finish time
+- Track B: ✅ **IEEE 1800 Edge Detection** - X→1 is posedge, X→0 is negedge
+- Track C: ✅ **Compilation Fixes** - DenseSet, missing includes resolved
+- Track D: ✅ **44/44 circt-sim tests, 399/399 unit tests PASS**
+
+**Iteration 227 Focus (NEXT):**
+- Track A: 🔄 **Fix llhd-process-result-instance-input.mlir** - Instance input probe value issue
+- Track B: 🔄 **Test i2c_tb with fixes** - Verify delta cycle hang resolved
+- Track C: 🔄 **Fix UVM report signature** - Update convertUvmReportCall for 5-6 args
+- Track D: 🔄 **External Test Suites** - Run all AVIPs, OpenTitan, sv-tests
 
 **Iteration 224 Results (COMPLETE):**
 - Track A: ✅ **4-State Fix Implemented** - isFourStateX() added, X→X now returns no edge
 - Track B: ✅ **AVIPs Run** - All 3 compile/run, UVM macros don't produce output
 - Track C: ✅ **UVM Runtime Root Cause** - Signature mismatch in convertUvmReportCall
 - Track D: ✅ **Lit: 2845 pass, 39 XFAIL, 0 Failed** (up from 2844)
-
-**Iteration 225 Focus (NEXT):**
-- Track A: 🔄 **Test 4-state fix on i2c_tb** - Verify delta cycle hang is fixed
-- Track B: 🔄 **Fix UVM report signature** - Update convertUvmReportCall for 5-6 args
-- Track C: 🔄 **Enable UVM XFAIL tests** - After fixing runtime issue
-- Track D: 🔄 **External Test Suites** - Maintain baselines
 
 **Iteration 223 Results (COMPLETE):**
 - Track A: ✅ **4-State Edge Detection** - Fix needed in SignalValue::detectEdge

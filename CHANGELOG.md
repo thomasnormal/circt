@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 226 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Fix simulation termination timing
+- **Track B**: Fix posedge detection with 4-state X
+- **Track C**: Fix compilation issues
+- **Track D**: Run comprehensive test suites
+
+### Track Completions
+
+- **Track A (Termination Timing)**: ✅ **FIXED**
+  - Root cause: simulation loop advanced time before checking shouldContinue()
+  - When $finish called at 5ns, reported 10ns (next scheduled event)
+  - Fix: Added `if (!control.shouldContinue()) break;` before `scheduler.advanceTime()`
+  - `llhd-process-posedge-bit.mlir` now passes
+
+- **Track B (4-State Edge Detection)**: ✅ **IEEE 1800 COMPLIANT**
+  - Updated `detectEdge()` for proper X→value transitions
+  - X→1 is Posedge, X→0 is Negedge (per IEEE 1800)
+  - Enhanced `isFourStateX()` to detect struct-encoded X values
+  - Updated unit tests for IEEE 1800 behavior
+
+- **Track C (Compilation Fixes)**: ✅ **RESOLVED**
+  - Fixed `SmallDenseSet` not found error (use `DenseSet` instead)
+  - Added missing includes to ProcessScheduler.cpp
+  - All 399 unit tests pass
+
+- **Track D (Test Suites)**: ✅ **ALL PASSING**
+  - circt-sim: 44/44 tests pass
+  - Unit tests: 399/399 pass
+  - 1 pre-existing failure: llhd-process-result-instance-input.mlir
+
+### Code Changes
+
+- `tools/circt-sim/circt-sim.cpp`: Check `control.shouldContinue()` before `scheduler.advanceTime()` to report correct termination time
+- `include/circt/Dialect/Sim/ProcessScheduler.h`: Updated `detectEdge()` for IEEE 1800 X handling, use DenseSet instead of SmallDenseSet
+- `lib/Dialect/Sim/ProcessScheduler.cpp`: Added missing includes (`SmallString.h`, `StringRef.h`, `raw_ostream.h`)
+- `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`: Updated tests to expect Negedge for X→0 (IEEE 1800 correct)
+
+---
+
 ## Iteration 224 - January 26, 2026
 
 ### Focus Areas
@@ -36,6 +78,12 @@
 
 - `include/circt/Dialect/Sim/ProcessScheduler.h`: Added `isFourStateX()` and 4-state edge handling
 - `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`: Added FourStateXDetection test
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Avoid double-scheduling module drives that depend on process results; added regression in `test/Tools/circt-sim/module-drive-process-result-comb.mlir`
+- `tools/circt-sim/circt-sim.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`: Dump process states on delta/timeout overflow; added `test/Tools/circt-sim/delta-overflow-process-dump.mlir`
+- `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/circt-sim.cpp`: Dump last-delta changed signals on delta/timeout overflow; updated `test/Tools/circt-sim/delta-overflow-process-dump.mlir`
+- `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/circt-sim.cpp`: Dump last-delta executed processes on delta/timeout overflow; updated `test/Tools/circt-sim/delta-overflow-process-dump.mlir`
+- `include/circt/Dialect/Sim/ProcessScheduler.h`, `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/circt-sim.cpp`: Respect `--max-deltas` in the scheduler's per-time-step limit
+- `tools/circt-sim/circt-sim.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add `--max-process-steps` guard with regression `test/Tools/circt-sim/process-step-overflow.mlir`
 
 ---
 
