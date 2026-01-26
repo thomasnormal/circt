@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 192 - January 26, 2026
+
+### 4 More IPs Added - 21 OpenTitan Modules Total
+
+**New OpenTitan IPs (Tracks AB, AC, AD, AE):**
+
+| IP | Status | Stats | Notes |
+|----|--------|-------|-------|
+| spi_device_reg_top | **SIMULATES** | 178 ops, 85 signals, 16 processes | SPI Device with 2 window interfaces |
+| flash_ctrl_reg_top | **SIMULATES** | 179 ops, 90 signals, 17 processes | Flash controller with 2 window interfaces |
+| lc_ctrl_regs_reg_top | **SIMULATES** | 173 ops, 41 signals, 12 processes | Lifecycle controller (security critical) |
+| usbdev_reg_top | **SIMULATES** | 193 ops, 117 signals, 21 processes | USB Device with dual clock domain (CDC) |
+
+**Technical Details:**
+- **spi_device**: SPI Device register block - 19,123 lines MLIR (1.7 MB)
+- **flash_ctrl**: Flash controller register block - 16,605 lines MLIR (1.4 MB)
+- **lc_ctrl**: Lifecycle controller register block - 5,634 lines MLIR (330 KB)
+- **usbdev**: USB Device with dual clock domain (clk_i/clk_aon_i) - 8,041 lines MLIR (1.1 MB), uses prim_reg_cdc for CDC
+
+**OpenTitan Coverage Summary:**
+- 21 OpenTitan modules now simulate via CIRCT
+- 8 crypto IPs: hmac, aes, csrng, keymgr, otbn, entropy_src, edn, kmac
+- 6 communication IPs: gpio, uart, spi_host, i2c, spi_device, usbdev
+- 4 timer IPs: aon_timer, pwm, rv_timer, timer_core
+- 3 security IPs: otp_ctrl, lc_ctrl, flash_ctrl
+
+**Files Modified:**
+- `utils/run_opentitan_circt_verilog.sh` - Added 4 new compilation targets
+- `utils/run_opentitan_circt_sim.sh` - Added 4 new simulation testbenches
+- `PROJECT_OPENTITAN.md` - Updated to 21 modules
+
+---
+
 ## Iteration 191 - January 26, 2026
 
 ### 4 More Crypto/Security IPs Added - 17 OpenTitan Modules Total
@@ -163,6 +196,8 @@
 - Hoist LLHD assertions before process lowering in `circt-bmc` and `circt-lec`
 - BMC/LEC runner scripts now emit `--ir-llhd` to keep immediate assertions
 - Strip LLHD clocked assertions/assumptions/covers before process lowering
+- Strip LLHD assertions from entry blocks without predecessors
+- Preserve attributes like `bmc.final` when hoisting LLHD assertions
 
 **New Bug Found - timer_core 64-bit crash:**
 - timer_core compiles successfully to HW dialect

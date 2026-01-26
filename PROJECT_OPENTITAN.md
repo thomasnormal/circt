@@ -17,11 +17,11 @@ Simulate OpenTitan primitive modules, IP blocks, and eventually UVM testbenches 
 | 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN, entropy_src, edn, kmac) | **8 crypto IPs SIMULATE** |
 | 6 | Integration (Multiple IPs) | Not Started |
 
-**Summary**: 17 OpenTitan modules now simulate via CIRCT:
-- Communication: gpio, uart, spi_host, i2c
-- Timers: aon_timer, pwm, rv_timer, **timer_core** (full logic!)
-- Crypto: hmac, aes, csrng, keymgr, otbn, **entropy_src**, **edn**, **kmac**
-- Security: **otp_ctrl** (register block with window interface)
+**Summary**: 21 OpenTitan modules now simulate via CIRCT:
+- Communication: gpio, uart, spi_host, i2c, **spi_device**, **usbdev** (dual clock)
+- Timers: aon_timer, pwm, rv_timer, timer_core (full logic!)
+- Crypto: hmac, aes, csrng, keymgr, otbn, entropy_src, edn, kmac
+- Security: otp_ctrl, **lc_ctrl**, **flash_ctrl**
 
 **Blocker for Full IPs**: prim_diff_decode.sv control-flow lowering bug prevents prim_alert_sender
 
@@ -332,6 +332,7 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **4 more IPs SIMULATE!** 21 OpenTitan modules now. spi_device_reg_top (178 ops, 85 signals), flash_ctrl_reg_top (179 ops, 90 signals), lc_ctrl_regs_reg_top (173 ops, 41 signals), usbdev_reg_top (193 ops, 117 signals, dual clock domain with CDC) |
 | 2026-01-26 | **4 more crypto IPs SIMULATE!** 17 OpenTitan modules now. entropy_src_reg_top (173 ops, 73 signals), edn_reg_top (173 ops, 63 signals), kmac_reg_top (215 ops, 135 signals, 2 windows), otp_ctrl_reg_top (175 ops, 52 signals, required lc_ctrl deps) |
 | 2026-01-26 | **keymgr_reg_top + otbn_reg_top SIMULATE!** 5 crypto IPs now! 13 OpenTitan modules total. keymgr (212 ops, 111 signals) with shadowed registers for key protection. otbn (176 ops, 58 signals) with window interfaces for Big Number accelerator |
 | 2026-01-26 | **csrng_reg_top SIMULATES!** Third crypto IP! 10 OpenTitan register blocks now working! CSRNG testbench runs - 173 ops, 66 signals, 12 processes. Cryptographic secure random number generator |
@@ -389,6 +390,10 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 - `edn_reg_top` - Entropy Distribution Network register block (**SIMULATES** - 173 ops, 63 signals, entropy distribution)
 - `kmac_reg_top` - Keccak MAC crypto register block (**SIMULATES** - 215 ops, 135 signals, 2 window interfaces, shadowed registers)
 - `otp_ctrl_reg_top` - OTP Controller register block (**SIMULATES** - 175 ops, 52 signals, window interface, lifecycle controller deps)
+- `spi_device_reg_top` - SPI Device register block (**SIMULATES** - 178 ops, 85 signals, 2 window interfaces)
+- `flash_ctrl_reg_top` - Flash Controller register block (**SIMULATES** - 179 ops, 90 signals, 2 window interfaces)
+- `lc_ctrl_regs_reg_top` - Lifecycle Controller register block (**SIMULATES** - 173 ops, 41 signals, security critical)
+- `usbdev_reg_top` - USB Device register block (**SIMULATES** - 193 ops, 117 signals, dual clock domain with prim_reg_cdc)
 
 ---
 
