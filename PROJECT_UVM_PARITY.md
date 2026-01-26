@@ -183,23 +183,31 @@ All sequence tests now pass (TryGetNextItemWithData, PeekNextItem fixed in Itera
     - Fixed by using `strdup()` to copy names and `free()` in destroy function
     - Fixed `MooreRuntimeUvmCoverageTest.SampleFieldCoverageEnabled` test failure
 
-## Next Steps (Iteration 175)
+## Next Steps (Iteration 177)
 
 ### Priority Tasks
-1. ~~**Fix circt-sim stack overflow**~~ **FIXED** (Iteration 173) - Added maxCallDepth=100 + maxOps=100000
-2. **Investigate hanging sequence tests** - 2 tests in MooreRuntimeSequenceTest hang (TryGetNextItemWithData, PeekNextItem)
-3. **Multi-file package imports** - yosys verilog tests need cross-file package resolution
-4. **Size cast bitwidth mismatch** - hw.bitcast fails for packed struct type casts
-5. **Chapter-22 preprocessor** - pragma, line, resetall directives need work (51/75)
+1. ~~**Fix hanging sequence tests**~~ **FIXED** (Iteration 176) - try_get_next_item/peek_next_item handshake
+2. **Multi-file package imports** - yosys verilog tests need cross-file package resolution
+3. **Size cast bitwidth mismatch** - hw.bitcast fails for packed struct type casts
+4. **wand/tri1 net types** - LLHD lowering doesn't support wired-AND/tri-state nets
+5. **JTAG AVIP blockers** - bind directive + virtual interface conflicts
 
-### Track Status (Iteration 175)
+### Remaining Limitations for UVM Parity
+
+1. **Signal strength modeling** - wand/wor/tri0/tri1 not supported in LLHD lowering
+2. **Full UVM runtime** - uvm_root singleton initialization via static variables
+3. **Covergroup get_coverage()** - Returns 0 at runtime (compiles correctly)
+4. **pre/post_randomize** - Signature validation too strict in slang
+5. **JTAG AVIP** - bind directive with virtual interface creates conflicts
+
+### Track Status (Iteration 177)
 
 | Track | Focus | Current Status | Next Task |
 |-------|-------|----------------|-----------|
-| A: sv-tests | Compilation coverage | 79% overall | Target Chapter-22 (68%) improvements |
-| B: AVIP Simulation | circt-sim runtime | 8/10 simulate | Fix APB slowness, investigate JTAG |
-| C: BMC/SVA | Formal verification | 17/17, 23/26 | Maintain baselines |
-| D: Unit Tests | Runtime stability | 97%+ pass | Fix 2 hanging sequence tests |
+| A: sv-tests | Compilation coverage | 96% (796/830) | Target Ch-6,11 remaining failures |
+| B: AVIP Simulation | circt-sim runtime | 8/10 simulate | Fix JTAG bind/vif issues |
+| C: BMC/SVA | Formal verification | 8/17 active BMC | Maintain baselines |
+| D: Unit Tests | Runtime stability | 100% all suites | Add tests for new features |
 
 ### Baselines to Maintain
 - verilator-verification: 17/17 (100%)
