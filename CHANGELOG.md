@@ -1,5 +1,67 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 187 - January 26, 2026
+
+### prim_diff_decode Bug Fixed + AVIP/circt-sim Analysis Complete
+
+**FIXED: prim_diff_decode control flow bug (Track H):**
+- Root cause: LLHD Mem2Reg.cpp added duplicate predecessors when `cf.cond_br` has both branches targeting the same block
+- `getSuccessors()` returns the target block twice, causing block arguments to be appended multiple times
+- **Fix**: Added `SmallDenseSet<BlockExit *> processedPredecessors` deduplication in `insertBlockArgs` function
+- Location: `lib/Dialect/LLHD/Transforms/Mem2Reg.cpp` lines 1728-1746
+- This unblocks `prim_alert_sender` and many OpenTitan IPs
+
+**AVIP Compilation Analysis Complete (Track O):**
+- **4/9 AVIPs compile successfully:** APB, I2S, AHB, I3C
+- Remaining failures are AVIP source code bugs, NOT CIRCT bugs:
+  - AXI4: Bind scope references parent module ports (AVIP bug)
+  - JTAG: Multiple issues - bind scope, range OOB, enum casts (AVIP bugs)
+  - SPI: Nested comments, empty args, class property access (AVIP bugs)
+  - UART: do_compare default argument mismatch (strict LRM compliance)
+- Workaround available: `--allow-virtual-iface-with-override` for JTAG
+
+**circt-sim 64-bit Bug Root Cause Found (Track N):**
+- `SignalValue` class only stores 64-bit values using `uint64_t`
+- Crashes when handling signals >64 bits (e.g., 128-bit structs in timer_core)
+- Fix requires upgrading `SignalValue` to use `llvm::APInt` instead of `uint64_t`
+- Files to modify: ProcessScheduler.h, ProcessScheduler.cpp, LLHDProcessInterpreter.h/cpp
+
+**Crypto IPs Discovered (Track M):**
+- 4 more crypto IPs parse successfully: CSRNG, keymgr, KMAC, OTBN
+- CSRNG recommended as next to add (well-documented, standalone entropy source)
+
+---
+
+## Iteration 186 - January 26, 2026
+
+### AES Crypto Register Block + Test Suite Verification
+
+**New OpenTitan IP - aes_reg_top:**
+- AES crypto register block now parses and simulates (212 ops, 86 signals, 14 processes)
+- Features: shadowed registers for security, separate shadow reset domain
+- 9 OpenTitan register blocks now simulate via circt-sim
+
+**AVIP Diagnostic (Track J):**
+- 2/9 AVIPs now compile (APB, I2S) - up from 1/9
+- Fixed I2S by improving script to handle file paths mistakenly used in +incdir+
+- Remaining failures: AVIP source bugs, slang LRM enforcement, CIRCT limitations
+
+**Test Suite Baselines Verified (Track K):**
+- sv-tests BMC: 9 pass + 3 xfail, 0 regressions
+- verilator-verification BMC: 8/8 pass, 6 sequence errors (known)
+- yosys SVA: 14/16 pass (2 VHDL skipped)
+
+**SVA BMC Improvements:**
+- Added `bmc_reg_clocks` propagation for explicit-clock registers
+- Multi-clock BMC now gates register updates per clock in VerifToSMT
+
+**New Bug Found - timer_core 64-bit crash:**
+- timer_core compiles successfully to HW dialect
+- circt-sim crashes with APInt bit extraction assertion on 64-bit mtime/mtimecmp comparisons
+- Root cause: SignalValue 64-bit limitation (analyzed in Track N)
+
+---
+
 ## Iteration 185 - January 26, 2026
 
 ### OpenTitan Simulation Support - 8 Register Blocks Now Working!
