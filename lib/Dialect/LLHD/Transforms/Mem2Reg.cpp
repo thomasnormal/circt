@@ -1728,7 +1728,17 @@ bool Promoter::insertBlockArgs(BlockEntry *node) {
   }
 
   // Add successor operands to the predecessor terminators.
+  // Note: The same predecessor can appear multiple times in node->predecessors
+  // when a branch has multiple successors pointing to this block (e.g.,
+  // cf.cond_br where both true and false go to the same destination).
+  // We must process each unique predecessor only once to avoid appending
+  // args multiple times.
+  SmallDenseSet<BlockExit *> processedPredecessors;
   for (auto *predecessor : node->predecessors) {
+    // Skip if we've already processed this predecessor.
+    if (!processedPredecessors.insert(predecessor).second)
+      continue;
+
     // Collect the interesting reaching definitions in the predecessor.
     SmallVector<Value> args;
     for (auto [slot, which] : neededSlots) {
