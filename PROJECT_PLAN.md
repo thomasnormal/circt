@@ -151,38 +151,39 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Current Track Status (Iteration 187)
+### Current Track Status (Iteration 189)
 
 **Completed Tracks:**
 - **Track H (prim_diff_decode)**: ✅ FIXED - Mem2Reg predecessor deduplication, committed 8116230df
 - **Track M (crypto IPs)**: ✅ DONE - Found CSRNG, keymgr, KMAC, OTBN parse; CSRNG recommended next
 - **Track N (64-bit bug)**: ✅ ROOT CAUSE FOUND - SignalValue uses uint64_t, crashes on >64-bit signals
 - **Track O (AVIP analysis)**: ✅ DONE - 4/9 compile (APB, I2S, AHB, I3C); rest are AVIP source bugs
+- **Track P (CSRNG crypto IP)**: ✅ DONE - 10th OpenTitan IP simulates (173 ops, 66 signals, 12 processes)
+- **Track Q (SignalValue 64-bit)**: ✅ FIXED - Upgraded to APInt, test/Tools/circt-sim/signal-value-wide.mlir
+- **Track R (prim_alert_sender)**: ✅ VERIFIED - Mem2Reg fix works, 7+ IPs unblocked (gpio, uart, spi, i2c, timers)
+- **Track S (test suite)**: ✅ VERIFIED - No regressions (sv-tests 9+3xfail, verilator 8/8, yosys 14/16)
 
 **Active Tracks:**
-- **Track P**: Add CSRNG crypto IP to simulation (in progress)
-- **Track Q**: Fix SignalValue 64-bit limitation - upgrade to APInt (in progress)
-- **Track R**: Test prim_alert_sender with Mem2Reg fix (in progress)
-- **Track S**: Test suite regression check after Mem2Reg fix (in progress)
+- (None - launching new tracks)
 
 **Next Track Priorities:**
-1. **SignalValue 64-bit fix (Track Q)** - Blocks timer_core and other large-signal IPs
-2. **CSRNG crypto IP (Track P)** - Expand crypto IP coverage
-3. **prim_alert_sender validation (Track R)** - Unblocks full OpenTitan IPs with alerts
-4. **Continue real-world testing** - sv-tests, verilator, yosys, AVIPs, OpenTitan
+1. **Test full GPIO IP with alerts** - Now that prim_diff_decode is fixed, test gpio.sv (not gpio_no_alerts)
+2. **Test timer_core with SignalValue fix** - Should now work with APInt-based SignalValue
+3. **Try keymgr_reg_top or otbn_reg_top** - Expand crypto IP coverage
+4. **Continue AVIP testing** - Verify remaining AVIPs compile and run
 
 ### New: OpenTitan Simulation Support
 - **Phase 1 Complete**: prim_fifo_sync, prim_count simulate in circt-sim
-- **Phase 2 MILESTONE**: 9 register blocks simulate:
+- **Phase 2 MILESTONE**: 10 register blocks simulate:
   - Communication: `gpio_reg_top`, `uart_reg_top`, `spi_host_reg_top`, `i2c_reg_top`
   - Timers (CDC): `aon_timer_reg_top`, `pwm_reg_top`, `rv_timer_reg_top`
-  - Crypto: `hmac_reg_top`, `aes_reg_top` (shadowed registers, dual reset)
+  - Crypto: `hmac_reg_top`, `aes_reg_top`, `csrng_reg_top` (shadowed registers, dual reset)
 - **Phase 3 Validated**: TileLink-UL protocol adapters (including tlul_socket_1n router) and CDC primitives work
 - **FIXED**: `prim_diff_decode.sv` control flow bug - deduplication added in LLHD Mem2Reg.cpp `insertBlockArgs` function
-- **Known Limitation**: circt-sim SignalValue 64-bit limit crashes on >64-bit signals (timer_core)
+- **FIXED**: circt-sim SignalValue 64-bit limit - upgraded to APInt for arbitrary-width signals
 - **AVIP Analysis Complete**: 4/9 AVIPs compile (APB, I2S, AHB, I3C); remaining failures are AVIP source bugs
 - **Crypto IPs Parseable**: CSRNG, keymgr, KMAC, OTBN all parse successfully
-- **New Bug**: timer_core 64-bit APInt crash in circt-sim (simulation-time assertion)
+- **timer_core**: Should now work with APInt-based SignalValue (ready to test)
 - **Scripts**: `utils/run_opentitan_circt_verilog.sh`, `utils/run_opentitan_circt_sim.sh`
 - **Tracking**: `PROJECT_OPENTITAN.md`
 
