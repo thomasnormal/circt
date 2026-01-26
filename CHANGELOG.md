@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 201 - January 26, 2026
+
+### Key Findings (Critical Corrections)
+
+- **Track A (AHB/AXI4 with override flag)**: ❌ **Does NOT help**
+  - `--allow-virtual-iface-with-override` flag doesn't fix AHB/AXI4
+  - Failures are due to **forward declarations** and **missing packages**, not bind scope
+  - Need different approach for these AVIPs
+
+- **Track B (Named Sequences)**: ✅ **Already Supported!**
+  - Named sequence declarations work correctly in CIRCT
+  - verilator-verification failures are due to **non-standard test syntax**:
+    - `@posedge (clk)` instead of standard `@(posedge clk)`
+    - Missing semicolons in sequence expressions
+  - These are test file bugs, not CIRCT limitations
+
+- **Track C (AVIP Compilation Order)**: ⚠️ **Critical Discovery**
+  - All 9 AVIPs fail when compiling just hvl_top files
+  - **Root cause**: Missing test packages and improper file ordering
+  - Previous "3/9 compile" status was based on different compilation commands
+  - Need to investigate proper file lists for each AVIP
+
+- **Track D (sv-tests Stability)**: ✅ Stable at 9/26 pass
+
+### Updated Understanding
+
+| Previous Belief | Reality |
+|----------------|---------|
+| Named sequences unsupported | ✅ Work correctly |
+| 3/9 AVIPs compile | Need verification with correct file lists |
+| Bind scope is main blocker | Forward declarations and missing packages are issues |
+
+### Test Suite Status (Stable)
+
+| Suite | Status |
+|-------|--------|
+| sv-tests SVA | 9/26 pass |
+| verilator-verification | 8/17 pass |
+| Yosys SVA | 14/14 pass (100%) |
+| OpenTitan | 33/33 simulate |
+
 ## Iteration 200 - January 26, 2026
 
 ### Verified Results (from Iteration 199 follow-up tracks)
@@ -175,6 +216,7 @@
 - Added TL-UL write smoke transactions to csrng_reg_top, keymgr_reg_top, and otbn_reg_top tests.
 - Added TL-UL write smoke transactions to pattgen/rom_ctrl_regs/sram_ctrl_regs/sysrst_ctrl/usbdev register blocks.
 - Started OpenTitan GPIO DV parse-only bring-up; blockers include missing DV packages (prim_mubi/prim_secded/str_utils) in the compile set and CIRCT limitations in string+byte concatenation and format specifiers for class handles.
+- Extended GPIO DV parse-only compile set (top_darjeeling) and surfaced additional blockers: missing prim_alert/prim_esc/push_pull seq files plus CIRCT limitations in string+byte concatenation, format specifiers with class handles/null, and macro-expanded field names.
 
 ## Iteration 195 - January 26, 2026
 
