@@ -2,7 +2,7 @@
 
 **Goal**: Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-**Last Updated**: January 26, 2026 (Iteration 178)
+**Last Updated**: January 26, 2026 (Iteration 179)
 
 ## Current Status
 
@@ -214,6 +214,19 @@ All sequence tests now pass (TryGetNextItemWithData, PeekNextItem fixed in Itera
 - yosys SVA: 14/16 (87.5%)
 - Chapter-16 BMC: 23/26 PASS + 3 XFAIL
 - Unit tests: Sim 397, MooreRuntime 635, Support 187
+
+### Iteration 179 Findings
+- **All baselines verified and maintained**:
+  - verilator-verification BMC: 8/8 active tests pass (9 SKIP)
+  - yosys SVA: 14/16 (87.5%)
+  - yosys svtypes: 14/18 (78%)
+- **Unit tests**: 1354/1355 pass (99.9%)
+  - 1 flaky test: `SampleFieldCoverageEnabled` - test ordering issue in sharded execution
+  - Test passes in isolation but fails when run after other tests in shard
+  - Indicates global coverage state cleanup issue between tests
+- **I3C AVIP**: Simulates successfully with circt-sim (1 delta cycle, 0 errors)
+- **sv-tests baseline**: 821/831 (98%) maintained
+- **No regressions detected**
 
 ### Iteration 178 Findings
 - **verilator-verification clarified**: 8/8 active BMC tests pass (100%)
