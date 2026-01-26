@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 184 - January 26, 2026
+
+### OpenTitan Simulation Support - All Communication Protocol Register Blocks Work!
+
+Extended OpenTitan support to I2C register block - now all 4 common communication protocol register blocks simulate successfully!
+
+**i2c_reg_top Simulation:**
+```
+[circt-sim] Found 4 LLHD processes, 0 seq.initial blocks, and 1 hw.instance ops (out of 175 ops)
+[circt-sim] Registered 68 LLHD signals and 13 LLHD processes/initial blocks
+TEST PASSED: i2c_reg_top basic connectivity
+[circt-sim] Simulation finished successfully
+```
+
+**All 4 Communication Register Blocks Now Working:**
+| IP | Ops | Signals | Status |
+|----|-----|---------|--------|
+| gpio_reg_top | 177 | 47 | SIMULATES |
+| uart_reg_top | 175 | 56 | SIMULATES |
+| spi_host_reg_top | 178 | 67 | SIMULATES (with tlul_socket_1n) |
+| i2c_reg_top | 175 | 68 | SIMULATES |
+
+This validates that CIRCT's TileLink-UL infrastructure works correctly for OpenTitan's common communication protocol register blocks.
+
+---
+
 ## Iteration 183 - January 26, 2026
 
 ### OpenTitan Simulation Support - spi_host_reg_top SIMULATES!
