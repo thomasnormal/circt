@@ -26,19 +26,19 @@
   - slang is correct; VCS/Xcelium accept due to relaxed checking
   - Fix: Use port names directly (`hclk` not `ahbInterface.hclk`)
 
-### Updated AVIP Status: 2/9 Verified
+### Updated AVIP Status: 3/9 Verified ✅
 
 | AVIP | Status | Issue | Fix |
 |------|--------|-------|-----|
 | APB | ✅ | - | - |
 | I2S | ✅ | - | - |
-| AHB | ❌ | Bind scope | Fix AVIP source |
-| SPI | ❌ | TBD | TBD |
-| UART | ❌ | do_compare | Fix AVIP source |
-| I3C | ⚠️ | InOut ports | Already fixed |
-| JTAG | ❌ | Multiple | Fix AVIP source |
-| AXI4 | ❌ | Bind scope | Fix AVIP source |
-| AXI4Lite | ❌ | Env vars | Fix build scripts |
+| I3C | ✅ | - | - |
+| AHB | ❌ | Bind scope | Fix AVIP source (IEEE 1800 violation) |
+| SPI | ❌ | Nested comments, empty args | Fix AVIP source |
+| UART | ❌ | do_compare default args | Fix AVIP source |
+| JTAG | ❌ | Bind scope + enum casts | Fix AVIP source |
+| AXI4 | ❌ | Bind scope (`intf` undeclared) | Fix AVIP source |
+| AXI4Lite | ⏭️ | Env vars in paths | Complex setup needed |
 
 ### Test Suite Status
 
@@ -267,6 +267,7 @@
 - Started OpenTitan GPIO DV parse-only bring-up; blockers include missing DV packages (prim_mubi/prim_secded/str_utils) in the compile set and CIRCT limitations in string+byte concatenation and format specifiers for class handles.
 - Extended GPIO DV parse-only compile set (top_darjeeling) and surfaced additional blockers: missing prim_alert/prim_esc/push_pull seq files plus CIRCT limitations in string+byte concatenation, format specifiers with class handles/null, and macro-expanded field names.
 - Added a slang patch and regression test to allow byte-sized integral operands in string concatenations under `--compat vcs`.
+- Added a slang patch and regression test to allow class handles/null in numeric format specifiers under `--compat vcs`.
 
 ## Iteration 195 - January 26, 2026
 

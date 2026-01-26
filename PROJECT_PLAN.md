@@ -67,23 +67,29 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 202 Update)
+### Track Status & Next Tasks (Iteration 203 Update)
 
-**Key Corrections from Iteration 201:**
-- Named sequences ✅ **Already work** - verilator test failures are syntax bugs
-- `--allow-virtual-iface-with-override` does NOT help AHB/AXI4 (different errors)
-- AVIP compilation needs proper file ordering (not just hvl_top)
+**Iteration 202 Results (COMPLETE):**
+- Track A: ✅ AVIP file lists found - **3/9 compile** (APB, I2S, I3C)
+- Track B: ✅ APB full testbench compiles - 19,706 lines MLIR
+- Track C: ✅ prim_count X-values root cause - `hw.instance` evaluation limitation
+- Track D: ✅ AHB bind scope analysis - IEEE 1800 violation in source
 
-**Current Iteration 202 Tracks:**
-- Track A: Investigating proper AVIP file list discovery
-- Track B: Testing APB AVIP full compilation
-- Track C: OpenTitan prim_count X-value investigation
-- Track D: AHB forward declaration analysis
+**Key Findings from Iteration 202:**
+- All AVIPs have `.f` compile files with proper ordering
+- Bind scope errors (AHB, JTAG, AXI4) are AVIP source bugs, not CIRCT issues
+- circt-sim cannot evaluate hw.instance combinational outputs (returns X)
 
-**UVM AVIP Compilation Status:**
-- Needs re-verification with correct file ordering
-- Previous "3/9 compile" was based on different commands
-- Working to establish correct compilation procedures
+**Current Iteration 203 Tracks:**
+- Track A: Test chapter 18 sv-tests (complex SVA)
+- Track B: Verilator-verification test coverage
+- Track C: Yosys SVA comprehensive testing
+- Track D: OpenTitan larger IP simulation
+
+**UVM AVIP Compilation Status (VERIFIED):**
+- **3/9 compile successfully** (APB, I2S, I3C) - 33%
+- 5/9 have source code bugs (AHB, SPI, UART, JTAG, AXI4)
+- 1/9 has complex build setup (AXI4Lite with env vars)
 
 **OpenTitan Simulation Status:**
 - **33/33 modules simulate** (gpio, uart confirmed working)
