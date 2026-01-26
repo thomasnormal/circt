@@ -172,6 +172,38 @@ struct ExtractRefFromConcatRefLowering
   }
 };
 
+struct ReadConcatRefLowering : public OpConversionPattern<ReadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ReadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto concatRef = op.getInput().getDefiningOp<ConcatRefOp>();
+    if (!concatRef)
+      return failure();
+
+    SmallVector<Value, 4> operands;
+    collectOperands(concatRef, operands);
+
+    SmallVector<Value, 4> values;
+    values.reserve(operands.size());
+    for (auto operand : operands)
+      values.push_back(ReadOp::create(rewriter, op.getLoc(), operand));
+
+    if (values.empty())
+      return failure();
+
+    if (values.size() == 1) {
+      rewriter.replaceOp(op, values.front());
+      return success();
+    }
+
+    auto concat = ConcatOp::create(rewriter, op.getLoc(), values);
+    rewriter.replaceOp(op, concat.getResult());
+    return success();
+  }
+};
+
 struct LowerConcatRefPass
     : public circt::moore::impl::LowerConcatRefBase<LowerConcatRefPass> {
   void runOnOperation() override;
@@ -194,13 +226,17 @@ void LowerConcatRefPass::runOnOperation() {
   target.addDynamicallyLegalOp<ExtractRefOp>([](ExtractRefOp op) {
     return !op.getInput().getDefiningOp<ConcatRefOp>();
   });
+  target.addDynamicallyLegalOp<ReadOp>([](ReadOp op) {
+    return !op.getInput().getDefiningOp<ConcatRefOp>();
+  });
 
   target.addLegalDialect<MooreDialect>();
   RewritePatternSet patterns(&context);
   patterns.add<ConcatRefLowering<ContinuousAssignOp>,
                ConcatRefLowering<BlockingAssignOp>,
                ConcatRefLowering<NonBlockingAssignOp>,
-               ExtractRefFromConcatRefLowering>(&context);
+               ExtractRefFromConcatRefLowering, ReadConcatRefLowering>(
+      &context);
 
   if (failed(
           applyPartialConversion(getOperation(), target, std::move(patterns))))

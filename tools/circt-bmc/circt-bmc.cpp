@@ -19,6 +19,7 @@
 #include "circt/Conversion/SVAToLTL.h"
 #include "circt/Conversion/VerifToSMT.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"

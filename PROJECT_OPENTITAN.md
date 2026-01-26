@@ -354,6 +354,7 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **LowerConcatRef read support added**: concat_ref reads now lower to moore.concat of reads, intended to unblock rv_dm compound concat assignments (requires rebuild). |
 | 2026-01-26 | **rv_dm blocked (compiler crash)**: circt-verilog aborts in `dm_csrs.sv` on `{dmcontrol_d.hartselhi, dmcontrol_d.hartsello} &= (2**$clog2(NrHarts))-1;` (moore.concat_ref crash). |
 | 2026-01-26 | **KeyMgr DPE full IP SIMULATES!** Added keymgr_dpe full-IP testbench + filelist (EDN/KMAC/OTP/ROM stubs). Basic TL-UL connectivity works with stubbed interfaces. |
 | 2026-01-26 | **MBX full IP SIMULATES!** Added mailbox full-IP testbench + filelist (core/soc TL-UL + SRAM host port). Basic TL-UL connectivity works with stubbed host port. |
