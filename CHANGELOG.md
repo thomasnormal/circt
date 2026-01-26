@@ -2,18 +2,20 @@
 
 ## Iteration 176 - January 25, 2026
 
-### Hanging Sequence Tests Root Cause Found
+### Hanging Sequence Tests FIXED
 
-Root cause of 2 hanging tests (TryGetNextItemWithData, PeekNextItem) identified:
-- `try_get_next_item` and `peek_next_item` look for `itemReady == true`
-- But sequences are blocked in `start_item` waiting for `driverReady`
-- Only `get_next_item` sets `driverReady` (lib/Runtime/MooreRuntime.cpp:15170)
-- **Deadlock**: sequence waits for driverReady, try_get waits for itemReady
+Fixed 2 hanging tests (TryGetNextItemWithData, PeekNextItem):
 
-**Fix**: Make `try_get_next_item` perform full handshake like `get_next_item`:
-1. Check if waitingSequences is not empty (non-blocking part)
-2. If sequence waiting: set driverReady, wait for itemReady, return item
-3. This matches UVM standard `try_get_next_item()` behavior
+**Root Cause**: `try_get_next_item` and `peek_next_item` checked `itemReady` without
+first setting `driverReady`. Sequences block in `start_item` waiting for `driverReady`,
+so `itemReady` could never be set - causing a deadlock.
+
+**Fixes Applied** (Commit 6457aaf32):
+1. `try_get_next_item`: Non-blocking initial check, then full handshake if sequence waiting
+2. `peek_next_item`: Same handshake logic, stores as activeItem for subsequent get
+3. `get_next_item`: Added check for hasActiveItem to support peek-then-get pattern
+
+**Result**: All 635 MooreRuntimeTests now pass (was 633/635 with 2 hanging)
 
 ### AXI4-Lite AVIP Simulation Verified
 
@@ -55,7 +57,9 @@ SVA tests: 14/16 (87.5%)
 - LEC now flattens private HW modules by default to avoid dominance cycles from
   cross-module ref nets (e.g., yosys `extnets.sv`).
 - Added regression test: `test/Tools/circt-lec/lec-extnets-cycle.mlir`.
-- Test: `TEST_FILTER=extnets LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh`.
+- Tests:
+  - `TEST_FILTER=extnets LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh`
+  - `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh` (14/14 pass, 2 VHDL skip)
 
 ### I2C AVIP Analysis
 

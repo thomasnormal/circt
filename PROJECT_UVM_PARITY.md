@@ -69,7 +69,7 @@ Full unit test suite coverage verified:
 | Suite | Pass/Total | Status |
 |-------|------------|--------|
 | Sim (incl UVM) | 397/397 | 100% |
-| MooreRuntime | 633/635 | 99.7% (2 hanging) |
+| MooreRuntime | 635/635 | 100% (fixed Iteration 176) |
 | Support | 187/187 | 100% |
 | OM | 33/33 | 100% |
 | Debug | 24/24 | 100% |
@@ -81,7 +81,7 @@ Full unit test suite coverage verified:
 | Synth | 4/4 | 100% |
 | Comb | 1/1 | 100% |
 
-2 hanging tests: TryGetNextItemWithData, PeekNextItem (MooreRuntimeSequenceTest)
+All sequence tests now pass (TryGetNextItemWithData, PeekNextItem fixed in Iteration 176)
 
 | Category | Count | Details |
 |----------|-------|---------|
