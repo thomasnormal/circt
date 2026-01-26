@@ -8055,10 +8055,13 @@ private:
     auto operands = adaptor.getOperands();
 
     // Verify we have the expected number of operands
-    // UVM signature: (id, message, verbosity, filename, line, context_name, report_enabled_checked)
-    // For methods: (self, id, message, verbosity, filename, line, context_name, report_enabled_checked)
-    size_t expectedOperands = isMethod ? 8 : 7;
-    if (operands.size() != expectedOperands)
+    // Full UVM signature: (id, message, verbosity, filename, line, context_name, report_enabled_checked)
+    // Minimal UVM signature: (id, message, verbosity, filename, line)
+    // For methods, there's an additional 'self' parameter at the start.
+    // Our stubs use the minimal 5-arg signature, while real UVM may use 7 args.
+    size_t minOperands = isMethod ? 6 : 5;
+    size_t maxOperands = isMethod ? 8 : 7;
+    if (operands.size() < minOperands || operands.size() > maxOperands)
       return failure();
 
     auto ctx = rewriter.getContext();
@@ -8093,25 +8096,26 @@ private:
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, runtimeFuncName, fnTy);
 
     // Extract ptr and len from each string struct
-    // For free functions (7 args):
+    // For free functions (5-7 args):
     //   operands[0] = id (!llvm.struct<(ptr, i64)>)
     //   operands[1] = msg (!llvm.struct<(ptr, i64)>)
     //   operands[2] = verbosity (i32)
     //   operands[3] = filename (!llvm.struct<(ptr, i64)>)
     //   operands[4] = line (i32)
-    //   operands[5] = context_name (!llvm.struct<(ptr, i64)>)
-    //   operands[6] = report_enabled_checked (i1) - ignored
-    // For class methods (8 args):
+    //   operands[5] = context_name (!llvm.struct<(ptr, i64)>) - optional
+    //   operands[6] = report_enabled_checked (i1) - optional, ignored
+    // For class methods (6-8 args):
     //   operands[0] = self (ptr) - ignored
-    //   operands[1..7] = same as above
+    //   operands[1..] = same as above
     size_t offset = isMethod ? 1 : 0;
     Value idStruct = operands[offset + 0];
     Value msgStruct = operands[offset + 1];
     Value verbosity = operands[offset + 2];
     Value filenameStruct = operands[offset + 3];
     Value line = operands[offset + 4];
-    Value contextStruct = operands[offset + 5];
-    // operands[offset + 6] = report_enabled_checked (ignored)
+
+    // Check if context_name is provided (6+ args for free funcs, 7+ for methods)
+    bool hasContext = operands.size() > offset + 5;
 
     // Extract id ptr and len
     Value idPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, idStruct,
@@ -8131,11 +8135,19 @@ private:
     Value filenameLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, filenameStruct,
                                                       ArrayRef<int64_t>{1});
 
-    // Extract context ptr and len from the context_name argument
-    Value contextPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, contextStruct,
-                                                     ArrayRef<int64_t>{0});
-    Value contextLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, contextStruct,
-                                                     ArrayRef<int64_t>{1});
+    // Extract context ptr and len, or use null/zero defaults if not provided
+    Value contextPtr, contextLen;
+    if (hasContext) {
+      Value contextStruct = operands[offset + 5];
+      contextPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, contextStruct,
+                                                 ArrayRef<int64_t>{0});
+      contextLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, contextStruct,
+                                                 ArrayRef<int64_t>{1});
+    } else {
+      // Provide default empty context (null pointer, zero length)
+      contextPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      contextLen = LLVM::ConstantOp::create(rewriter, loc, i64Ty, 0);
+    }
 
     // Call the runtime function
     LLVM::CallOp::create(rewriter, loc, fn,
