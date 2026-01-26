@@ -21,7 +21,7 @@
 //   "no implicit conversion from 'int' to 'state_t'"
 // With --compat vcs, the RelaxEnumConversions flag allows this.
 
-// CHECK-LABEL: moore.module @TestEnumConversion
+// CHECK-LABEL: moore.module {{(private )?}}@TestEnumConversion
 module TestEnumConversion;
   typedef enum logic [1:0] {
     STATE_IDLE = 2'b00,
@@ -45,7 +45,7 @@ endmodule
 // Test 2: String conversion relaxation
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: moore.module @TestStringConversion
+// CHECK-LABEL: moore.module {{(private )?}}@TestStringConversion
 module TestStringConversion;
   string str;
 
@@ -60,7 +60,7 @@ endmodule
 // Test 3: Module with standard ANSI ports (baseline)
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: moore.module @TestAnsiPorts
+// CHECK-LABEL: moore.module {{(private )?}}@TestAnsiPorts
 module TestAnsiPorts(
   input logic clk,
   input logic rst_n,
@@ -74,7 +74,7 @@ endmodule
 // Test 4: Self-determined streaming concatenation
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: moore.module @TestStreamConcat
+// CHECK-LABEL: moore.module {{(private )?}}@TestStreamConcat
 module TestStreamConcat;
   logic [31:0] data;
   logic [7:0] bytes [4];

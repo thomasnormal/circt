@@ -48,7 +48,8 @@ struct LowerToBMCPass : public circt::impl::LowerToBMCBase<LowerToBMCPass> {
 };
 } // namespace
 
-static void inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
+static LogicalResult
+inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
   SmallVector<llhd::CombinationalOp> combinationalOps;
   bmcOp.getCircuit().walk([&](llhd::CombinationalOp op) {
     combinationalOps.push_back(op);
@@ -58,14 +59,14 @@ static void inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
     if (!op.getBody().hasOneBlock()) {
       op.emitError("llhd.combinational with control flow must be flattened "
                    "before lower-to-bmc");
-      return;
+      return failure();
     }
     auto *parentBlock = op->getBlock();
     auto &bodyBlock = op.getBody().front();
     auto yieldOp = dyn_cast<llhd::YieldOp>(bodyBlock.getTerminator());
     if (!yieldOp) {
       op.emitError("llhd.combinational missing llhd.yield terminator");
-      return;
+      return failure();
     }
 
     SmallVector<Value> yieldedValues(yieldOp.getYieldOperands().begin(),
@@ -82,6 +83,15 @@ static void inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
 
     op.erase();
   }
+
+  for (Block &block : bmcOp.getCircuit()) {
+    if (!sortTopologically(&block)) {
+      bmcOp.emitError(
+          "could not resolve cycles after inlining llhd.combinational");
+      return failure();
+    }
+  }
+  return success();
 }
 
 namespace {
@@ -656,7 +666,8 @@ void LowerToBMCPass::runOnOperation() {
 
   if (failed(lowerLlhdForBMC(bmcOp)))
     return signalPassFailure();
-  inlineLlhdCombinationalOps(bmcOp);
+  if (failed(inlineLlhdCombinationalOps(bmcOp)))
+    return signalPassFailure();
 
   // Define global string constants to print on success/failure
   auto createUniqueStringGlobal = [&](StringRef str) -> FailureOr<Value> {

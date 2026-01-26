@@ -187,9 +187,20 @@ public:
     if (oldVal == newVal)
       return EdgeType::None;
 
-    // For unknown values, we can detect edges conservatively
-    bool oldBit = oldVal.isUnknown() ? false : oldVal.getLSB();
-    bool newBit = newVal.isUnknown() ? false : newVal.getLSB();
+    // For unknown values, detect edges conservatively.
+    if (oldVal.isUnknown() || newVal.isUnknown()) {
+      if (oldVal.isUnknown() && newVal.isUnknown())
+        return EdgeType::None;
+      if (oldVal.isUnknown()) {
+        if (!newVal.isUnknown() && newVal.getLSB())
+          return EdgeType::Posedge;
+        return EdgeType::AnyEdge;
+      }
+      return EdgeType::AnyEdge;
+    }
+
+    bool oldBit = oldVal.getLSB();
+    bool newBit = newVal.getLSB();
 
     if (!oldBit && newBit)
       return EdgeType::Posedge;
@@ -359,6 +370,11 @@ public:
   void execute() {
     if (callback)
       callback();
+  }
+
+  /// Update the process callback.
+  void setCallback(ExecuteCallback newCallback) {
+    callback = std::move(newCallback);
   }
 
   /// Check if this is a combinational process (auto-inferred sensitivity).

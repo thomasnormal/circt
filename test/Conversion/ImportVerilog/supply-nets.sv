@@ -13,7 +13,7 @@ module test_supply_nets(output wire o);
   supply1 vcc;
 
   // Use the supply nets so they are not optimized away
-  // CORE: hw.constant 0 : i2
-  // CORE: hw.constant -1 : i2
+  // CORE-DAG: hw.constant 0 : i2
+  // CORE-DAG: hw.constant -1 : i2
   assign o = gnd ^ vcc;
 endmodule

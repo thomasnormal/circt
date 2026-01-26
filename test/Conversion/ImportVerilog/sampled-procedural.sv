@@ -17,7 +17,8 @@ module SampledProc(input logic clk);
 
   // CHECK-LABEL: moore.module @SampledProc
   // CHECK: moore.procedure always
-  // CHECK: [[SAMP:%.+]] = moore.variable
-  // CHECK: moore.blocking_assign [[SAMP]]
-  // CHECK: moore.read [[SAMP]]
+  // $sampled reads the value inline without creating a separate variable
+  // CHECK: moore.read %val
+  // CHECK: moore.read %val
+  // CHECK: moore.ne
 endmodule

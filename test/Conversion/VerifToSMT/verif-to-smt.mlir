@@ -104,7 +104,7 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
   // CHECK:   }
   // CHECK: }
 
-  // CHECK: return %{{.*}}, %{{.*}}, %true
+  // CHECK: return %{{.*}}, %{{.*}}, %{{.*}} : i1, i1, i1
   return %1, %2, %3 : i1, i1, i1
 }
 
@@ -123,12 +123,12 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK-DAG:  [[ARRAYFUN:%.+]] = smt.declare_fun : !smt.array<[!smt.bv<1> -> !smt.bv<32>]>
 // CHECK:      [[FOR:%.+]]:7 = scf.for [[ARG0:%.+]] = [[C0_I32]] to [[C10_I32]] step [[C1_I32]] iter_args([[ARG1:%.+]] = [[INIT]]#0, [[ARG2:%.+]] = [[F0]], [[ARG3:%.+]] = [[F1]], [[ARG4:%.+]] = [[C42_BV32]], [[ARG5:%.+]] = [[ARRAYFUN]], [[ARG6:%.+]] = [[INIT]]#1, [[ARG7:%.+]] = [[FALSE]])
 // CHECK:        [[CIRCUIT:%.+]]:5 = func.call @bmc_circuit([[ARG1]], [[ARG2]], [[ARG3]], [[ARG4]], [[ARG5]])
+// CHECK:        [[EQ:%.+]] = smt.eq [[CIRCUIT]]#4, [[CNEG1]] : !smt.bv<1>
 // CHECK:        [[LSB:%.+]] = arith.andi [[ARG0]], {{%.+}} : i32
 // CHECK:        [[ISEVEN:%.+]] = arith.cmpi eq, [[LSB]], {{%.+}} : i32
 // CHECK:        [[IF:%.+]] = scf.if [[ISEVEN]] -> (i1) {
 // CHECK:          scf.yield [[ARG7]] : i1
 // CHECK:        } else {
-// CHECK:          [[EQ:%.+]] = smt.eq [[CIRCUIT]]#4, [[CNEG1]] : !smt.bv<1>
 // CHECK:          [[NOT:%.+]] = smt.not [[EQ]]
 // CHECK:          smt.push 1
 // CHECK:          smt.assert [[NOT]]
@@ -277,7 +277,11 @@ func.func @test_refines_noreturn() -> () {
     verif.yield %arg1 : i32
   }
 
-  // CHECK-NOT: smt.solver
+  // Trivial refines now also generates an smt.solver with false assertion
+  // CHECK:       smt.solver
+  // CHECK:       smt.constant false
+  // CHECK:       smt.assert
+  // CHECK:       smt.check sat
   // CHECK:     return
   verif.refines first {
   ^bb0():
@@ -326,9 +330,12 @@ func.func @test_refines_withreturn() -> i1 {
 
 // CHECK-LABEL: func.func @test_refines_trivialreturn
 
-// CHECK-NOT: smt.solver
-// CHECK: [[CST:%.+]] = arith.constant true
-// CHECK: return [[CST]] : i1
+// Trivial refines with return now generates an smt.solver with false assertion
+// CHECK: [[SOLVER:%.+]] = smt.solver
+// CHECK:   smt.constant false
+// CHECK:   smt.assert
+// CHECK:   smt.check sat
+// CHECK: return [[SOLVER]] : i1
 
 func.func @test_refines_trivialreturn() -> i1 {
   %0 = verif.refines : i1 first {

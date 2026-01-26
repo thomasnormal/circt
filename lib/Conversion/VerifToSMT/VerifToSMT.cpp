@@ -573,7 +573,9 @@ struct VerifAssertOpConversion : OpConversionPattern<verif::AssertOp> {
                                op.getLoc());
     }
     Value notCond = smt::NotOp::create(rewriter, op.getLoc(), cond);
-    rewriter.replaceOpWithNewOp<smt::AssertOp>(op, notCond);
+    auto assertOp = rewriter.replaceOpWithNewOp<smt::AssertOp>(op, notCond);
+    if (auto label = op.getLabelAttr())
+      assertOp->setAttr("smtlib.name", label);
     return success();
   }
 };
@@ -601,7 +603,9 @@ struct VerifAssumeOpConversion : OpConversionPattern<verif::AssumeOp> {
       cond = gateSMTWithEnable(cond, enable, /*isCover=*/false, rewriter,
                                op.getLoc());
     }
-    rewriter.replaceOpWithNewOp<smt::AssertOp>(op, cond);
+    auto assertOp = rewriter.replaceOpWithNewOp<smt::AssertOp>(op, cond);
+    if (auto label = op.getLabelAttr())
+      assertOp->setAttr("smtlib.name", label);
     return success();
   }
 };
@@ -916,9 +920,15 @@ struct LogicEquivalenceCheckingOpConversion
       return failure();
 
     // Second, create the symbolic values we replace the block arguments with
+    ArrayAttr inputNames = op->getAttrOfType<ArrayAttr>("lec.input_names");
     SmallVector<Value> inputs;
-    for (auto arg : adaptor.getFirstCircuit().getArguments())
-      inputs.push_back(smt::DeclareFunOp::create(rewriter, loc, arg.getType()));
+    for (auto arg : adaptor.getFirstCircuit().getArguments()) {
+      StringAttr namePrefix;
+      if (inputNames && arg.getArgNumber() < inputNames.size())
+        namePrefix = dyn_cast<StringAttr>(inputNames[arg.getArgNumber()]);
+      inputs.push_back(
+          smt::DeclareFunOp::create(rewriter, loc, arg.getType(), namePrefix));
+    }
 
     // Third, inline the blocks
     // Note: the argument value replacement does not happen immediately, but

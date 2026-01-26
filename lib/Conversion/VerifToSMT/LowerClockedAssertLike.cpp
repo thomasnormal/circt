@@ -6,23 +6,23 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This pass lowers clocked assertions (verif.clocked_assert, verif.clocked_assume,
-// verif.clocked_cover) with i1 properties to their unclocked equivalents
-// (verif.assert, verif.assume, verif.cover). This is useful for BMC where
-// the clocked assertions with simple boolean properties need to be converted
-// to unclocked form before VerifToSMT conversion.
-//
-// The transformation drops the clock and edge information since for BMC the
-// circuit is already being evaluated at each time step.
+// This pass lowers clocked assertions (verif.clocked_assert,
+// verif.clocked_assume, verif.clocked_cover) with i1 properties to their
+// unclocked equivalents (verif.assert, verif.assume, verif.cover) by wrapping
+// the property in an ltl.clock so LTLToCore can preserve edge sampling.
+// For edge-triggered checks, we produce a clocked sequence and rely on the
+// LTL lowering to model the tick semantics.
 //
 //===----------------------------------------------------------------------===//
 
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/LTL/LTLTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace circt {
 #define GEN_PASS_DEF_LOWERCLOCKEDASSERTLIKE
@@ -38,6 +38,25 @@ using namespace circt;
 
 namespace {
 
+static Value buildClockedProperty(OpBuilder &builder, Location loc, Value prop,
+                                  verif::ClockEdge edge, Value clock) {
+  auto makeClocked = [&](ltl::ClockEdge ltlEdge) {
+    return ltl::ClockOp::create(builder, loc, prop, ltlEdge, clock).getResult();
+  };
+  switch (edge) {
+  case verif::ClockEdge::Pos:
+    return makeClocked(ltl::ClockEdge::Pos);
+  case verif::ClockEdge::Neg:
+    return makeClocked(ltl::ClockEdge::Neg);
+  case verif::ClockEdge::Both: {
+    Value pos = makeClocked(ltl::ClockEdge::Pos);
+    Value neg = makeClocked(ltl::ClockEdge::Neg);
+    return ltl::OrOp::create(builder, loc, ValueRange{pos, neg}).getResult();
+  }
+  }
+  llvm_unreachable("unknown clock edge");
+}
+
 /// Convert verif.clocked_assert with i1 property to verif.assert
 struct ClockedAssertOpConversion
     : OpConversionPattern<verif::ClockedAssertOp> {
@@ -50,8 +69,12 @@ struct ClockedAssertOpConversion
     if (isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       return failure();
 
-    rewriter.replaceOpWithNewOp<verif::AssertOp>(
-        op, adaptor.getProperty(), adaptor.getEnable(), op.getLabelAttr());
+    Value clockedProp = buildClockedProperty(
+        rewriter, op.getLoc(), adaptor.getProperty(), op.getEdge(),
+        adaptor.getClock());
+    rewriter.replaceOpWithNewOp<verif::AssertOp>(op, clockedProp,
+                                                 adaptor.getEnable(),
+                                                 op.getLabelAttr());
     return success();
   }
 };
@@ -68,8 +91,12 @@ struct ClockedAssumeOpConversion
     if (isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       return failure();
 
-    rewriter.replaceOpWithNewOp<verif::AssumeOp>(
-        op, adaptor.getProperty(), adaptor.getEnable(), op.getLabelAttr());
+    Value clockedProp = buildClockedProperty(
+        rewriter, op.getLoc(), adaptor.getProperty(), op.getEdge(),
+        adaptor.getClock());
+    rewriter.replaceOpWithNewOp<verif::AssumeOp>(op, clockedProp,
+                                                 adaptor.getEnable(),
+                                                 op.getLabelAttr());
     return success();
   }
 };
@@ -86,8 +113,12 @@ struct ClockedCoverOpConversion
     if (isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       return failure();
 
-    rewriter.replaceOpWithNewOp<verif::CoverOp>(
-        op, adaptor.getProperty(), adaptor.getEnable(), op.getLabelAttr());
+    Value clockedProp = buildClockedProperty(
+        rewriter, op.getLoc(), adaptor.getProperty(), op.getEdge(),
+        adaptor.getClock());
+    rewriter.replaceOpWithNewOp<verif::CoverOp>(op, clockedProp,
+                                                adaptor.getEnable(),
+                                                op.getLabelAttr());
     return success();
   }
 };
@@ -113,6 +144,7 @@ void LowerClockedAssertLikePass::runOnOperation() {
   // illegal
   target.addLegalDialect<verif::VerifDialect>();
   target.addLegalDialect<hw::HWDialect>();
+  target.addLegalDialect<ltl::LTLDialect>();
 
   // Mark clocked assertions with i1 properties as illegal
   target.addDynamicallyLegalOp<verif::ClockedAssertOp>(

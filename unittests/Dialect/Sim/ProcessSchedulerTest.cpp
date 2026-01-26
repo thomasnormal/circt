@@ -8,6 +8,7 @@
 
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "gtest/gtest.h"
+#include "llvm/ADT/APInt.h"
 #include <vector>
 
 using namespace circt;
@@ -362,6 +363,23 @@ TEST(ProcessScheduler, UpdateSignal) {
   const SignalValue &val = scheduler.getSignalValue(id);
   EXPECT_FALSE(val.isUnknown());
   EXPECT_EQ(val.getValue(), 42u);
+}
+
+TEST(ProcessScheduler, UpdateSignalNormalizesWidth) {
+  ProcessScheduler scheduler;
+
+  SignalId id = scheduler.registerSignal("data", 8);
+  scheduler.updateSignal(id, SignalValue(llvm::APInt(16, 0x1234)));
+
+  const SignalValue &wideVal = scheduler.getSignalValue(id);
+  EXPECT_EQ(wideVal.getWidth(), 8u);
+  EXPECT_EQ(wideVal.getValue(), 0x34u);
+
+  scheduler.updateSignal(id, SignalValue(llvm::APInt(4, 0xA)));
+
+  const SignalValue &narrowVal = scheduler.getSignalValue(id);
+  EXPECT_EQ(narrowVal.getWidth(), 8u);
+  EXPECT_EQ(narrowVal.getValue(), 0x0Au);
 }
 
 //===----------------------------------------------------------------------===//

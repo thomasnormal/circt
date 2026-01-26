@@ -103,23 +103,23 @@ moore.module @test_array_locator_indices() {
 // CHECK-LABEL: hw.module @test_array_locator_packed_struct
 moore.module @test_array_locator_packed_struct() {
   // Queue of packed structs
-  %queue_var = moore.variable : <queue<packed_struct<{x: i32, y: i32}>, 0>>
-  %queue = moore.read %queue_var : <queue<packed_struct<{x: i32, y: i32}>, 0>>
+  %queue_var = moore.variable : <queue<struct<{x: i32, y: i32}>, 0>>
+  %queue = moore.read %queue_var : <queue<struct<{x: i32, y: i32}>, 0>>
 
   // Array locator with field access on packed struct
   // The predicate accesses item.x which requires proper handling of packed struct types
   // CHECK: scf.for
   // CHECK: llvm.load
   // CHECK: llvm.extractvalue
-  %result = moore.array.locator first, elements %queue : queue<packed_struct<{x: i32, y: i32}>, 0> -> <packed_struct<{x: i32, y: i32}>, 0> {
-  ^bb0(%item: !moore.packed_struct<{x: i32, y: i32}>):
-    %x_field = moore.struct_extract %item, "x" : packed_struct<{x: i32, y: i32}> -> i32
+  %result = moore.array.locator first, elements %queue : queue<struct<{x: i32, y: i32}>, 0> -> <struct<{x: i32, y: i32}>, 0> {
+  ^bb0(%item: !moore.struct<{x: i32, y: i32}>):
+    %x_field = moore.struct_extract %item, "x" : struct<{x: i32, y: i32}> -> i32
     %one = moore.constant 1 : i32
     %cond = moore.eq %x_field, %one : i32 -> i1
     moore.array.locator.yield %cond : i1
   }
 
-  %result_var = moore.variable : <queue<packed_struct<{x: i32, y: i32}>, 0>>
-  moore.blocking_assign %result_var, %result : queue<packed_struct<{x: i32, y: i32}>, 0>
+  %result_var = moore.variable : <queue<struct<{x: i32, y: i32}>, 0>>
+  moore.blocking_assign %result_var, %result : queue<struct<{x: i32, y: i32}>, 0>
   moore.output
 }

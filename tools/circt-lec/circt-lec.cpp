@@ -16,8 +16,10 @@
 #include "circt/Conversion/DatapathToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
 #include "circt/Conversion/ImportVerilog.h"
+#include "circt/Conversion/LTLToCore.h"
 #include "circt/Conversion/MooreToCore.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
+#include "circt/Conversion/SVAToLTL.h"
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Datapath/DatapathDialect.h"
@@ -32,6 +34,7 @@
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/Sim/SimDialect.h"
 #include "circt/Dialect/Sim/SimPasses.h"
+#include "circt/Dialect/SVA/SVADialect.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
@@ -61,6 +64,10 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/SMTLIB/ExportSMTLIB.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -73,6 +80,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include <array>
+#include <cctype>
 
 #ifdef CIRCT_LEC_ENABLE_JIT
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -120,6 +128,13 @@ static cl::opt<bool>
     verbosePassExecutions("verbose-pass-executions",
                           cl::desc("Log executions of toplevel module passes"),
                           cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool> printSolverOutput(
+    "print-solver-output",
+    cl::desc("Print the output (counterexample or proof) produced by the "
+             "solver on each invocation and the assertion set that they "
+             "prove/disprove."),
+    cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<bool> flattenHWModules(
     "flatten-hw",
@@ -233,6 +248,183 @@ parseAndMergeModules(MLIRContext &context, TimingScope &ts) {
   return module;
 }
 
+static void skipWhitespace(StringRef text, size_t &pos) {
+  while (pos < text.size() &&
+         isspace(static_cast<unsigned char>(text[pos])))
+    ++pos;
+}
+
+static bool parseAtom(StringRef text, size_t &pos, StringRef &out) {
+  skipWhitespace(text, pos);
+  if (pos >= text.size())
+    return false;
+  if (text[pos] == '|') {
+    size_t end = text.find('|', pos + 1);
+    if (end == StringRef::npos)
+      return false;
+    out = text.slice(pos, end + 1);
+    pos = end + 1;
+    return true;
+  }
+  size_t start = pos;
+  while (pos < text.size()) {
+    char c = text[pos];
+    if (isspace(static_cast<unsigned char>(c)) || c == '(' || c == ')')
+      break;
+    ++pos;
+  }
+  if (pos == start)
+    return false;
+  out = text.slice(start, pos);
+  return true;
+}
+
+static bool parseExpr(StringRef text, size_t &pos, StringRef &out) {
+  skipWhitespace(text, pos);
+  if (pos >= text.size())
+    return false;
+  if (text[pos] != '(')
+    return parseAtom(text, pos, out);
+
+  size_t start = pos;
+  unsigned depth = 0;
+  while (pos < text.size()) {
+    char c = text[pos];
+    if (c == '(')
+      ++depth;
+    else if (c == ')') {
+      if (depth == 0)
+        break;
+      --depth;
+      if (depth == 0) {
+        ++pos;
+        out = text.slice(start, pos);
+        return true;
+      }
+    }
+    ++pos;
+  }
+  return false;
+}
+
+static bool parseDefineFun(StringRef text, size_t &pos, StringRef &name,
+                           StringRef &value) {
+  size_t localPos = pos;
+  skipWhitespace(text, localPos);
+  if (localPos >= text.size() || text[localPos] != '(')
+    return false;
+  ++localPos;
+  StringRef keyword;
+  if (!parseAtom(text, localPos, keyword) || keyword != "define-fun")
+    return false;
+  if (!parseAtom(text, localPos, name))
+    return false;
+  StringRef params;
+  if (!parseExpr(text, localPos, params))
+    return false;
+  StringRef sort;
+  if (!parseExpr(text, localPos, sort))
+    return false;
+  if (!parseExpr(text, localPos, value))
+    return false;
+  skipWhitespace(text, localPos);
+  if (localPos < text.size() && text[localPos] == ')')
+    ++localPos;
+  pos = localPos;
+  return true;
+}
+
+static std::string formatBitVectorValue(const llvm::APInt &value,
+                                        unsigned width) {
+  if (width == 0)
+    return "0";
+  if (width % 4 == 0) {
+    llvm::SmallString<64> hexStr;
+    value.toString(hexStr, 16, /*Signed=*/false);
+    std::string hex(hexStr.begin(), hexStr.end());
+    size_t digits = width / 4;
+    if (hex.size() < digits)
+      hex.insert(0, digits - hex.size(), '0');
+    return (Twine(width) + "'h" + hex).str();
+  }
+  llvm::SmallString<64> decStr;
+  value.toString(decStr, 10, /*Signed=*/false);
+  return (Twine(width) + "'d" + StringRef(decStr)).str();
+}
+
+static std::optional<std::string> tryFormatBitVector(StringRef value) {
+  StringRef work = value.trim();
+  if (work.consume_front("#b")) {
+    if (work.empty() || work.find_first_not_of("01") != StringRef::npos)
+      return std::nullopt;
+    unsigned width = work.size();
+    llvm::APInt ap(width, work, 2);
+    return formatBitVectorValue(ap, width);
+  }
+  if (work.consume_front("#x")) {
+    if (work.empty() ||
+        work.find_first_not_of("0123456789abcdefABCDEF") != StringRef::npos)
+      return std::nullopt;
+    unsigned width = work.size() * 4;
+    llvm::APInt ap(width, work, 16);
+    return formatBitVectorValue(ap, width);
+  }
+  if (!work.consume_front("(_ bv"))
+    return std::nullopt;
+  size_t numEnd = work.find_first_not_of("0123456789");
+  if (numEnd == StringRef::npos)
+    return std::nullopt;
+  StringRef numStr = work.take_front(numEnd);
+  work = work.drop_front(numEnd).ltrim();
+  size_t widthEnd = work.find_first_not_of("0123456789");
+  if (widthEnd == StringRef::npos)
+    return std::nullopt;
+  StringRef widthStr = work.take_front(widthEnd);
+  work = work.drop_front(widthEnd).ltrim();
+  if (!work.consume_front(")"))
+    return std::nullopt;
+  if (!work.trim().empty())
+    return std::nullopt;
+  unsigned width = 0;
+  if (widthStr.getAsInteger(10, width))
+    return std::nullopt;
+  if (width == 0)
+    return "0";
+  llvm::APInt ap(width, numStr, 10);
+  return formatBitVectorValue(ap, width);
+}
+
+static std::string normalizeModelValue(StringRef value) {
+  value = value.trim();
+  if (value == "true" || value == "false")
+    return value.str();
+  if (auto formatted = tryFormatBitVector(value))
+    return *formatted;
+  return value.str();
+}
+
+static llvm::StringMap<std::string> parseZ3Model(StringRef text) {
+  llvm::StringMap<std::string> values;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t start = text.find("(define-fun", pos);
+    if (start == StringRef::npos)
+      break;
+    size_t parsePos = start;
+    StringRef name;
+    StringRef value;
+    if (parseDefineFun(text, parsePos, name, value)) {
+      if (name.size() >= 2 && name.front() == '|' && name.back() == '|')
+        name = name.drop_front().drop_back();
+      values[name] = normalizeModelValue(value);
+      pos = parsePos;
+    } else {
+      pos = start + 1;
+    }
+  }
+  return values;
+}
+
 /// This functions initializes the various components of the tool and
 /// orchestrates the work to be done.
 static LogicalResult executeLEC(MLIRContext &context) {
@@ -246,6 +438,17 @@ static LogicalResult executeLEC(MLIRContext &context) {
     return failure();
 
   OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
+
+  SmallVector<std::string> lecInputNames;
+  if (outputFormat == OutputRunSMTLIB && printSolverOutput) {
+    if (auto moduleA =
+            module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
+      for (auto name : moduleA.getInputNames())
+        if (auto strAttr = dyn_cast<StringAttr>(name))
+          if (!strAttr.getValue().empty())
+            lecInputNames.push_back(strAttr.getValue().str());
+    }
+  }
 
   // Create the output directory or output file depending on our mode.
   std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
@@ -321,6 +524,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
     }
   }
   pm.addPass(createStripLLHDInterfaceSignals());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   ExternalizeRegistersOptions externalizeOptions;
   pm.addPass(createExternalizeRegisters(externalizeOptions));
   pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
@@ -341,7 +547,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
       outputFormat != OutputRunSMTLIB) {
-    pm.addPass(createLowerSMTToZ3LLVM());
+    LowerSMTToZ3LLVMOptions options;
+    options.debug = printSolverOutput;
+    pm.addPass(createLowerSMTToZ3LLVM(options));
     pm.addPass(createCSEPass());
     pm.addPass(createSimpleCanonicalizerPass());
     pm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
@@ -425,6 +633,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
     SmallVector<StringRef, 4> args;
     args.push_back(*z3Program);
+    if (printSolverOutput)
+      args.push_back("-model");
     args.push_back(smtPath);
     std::string errMsg;
     std::array<std::optional<StringRef>, 3> redirects = {
@@ -450,6 +660,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
       combinedOutput.append("\n");
       combinedOutput.append(errBuffer.get()->getBuffer().str());
     }
+    if (printSolverOutput) {
+      llvm::errs() << "z3 output:\n" << combinedOutput << "\n";
+    }
 
     auto findResultToken = [](StringRef text) -> std::optional<StringRef> {
       StringRef remaining = text;
@@ -469,10 +682,55 @@ static LogicalResult executeLEC(MLIRContext &context) {
     };
 
     auto token = findResultToken(combinedOutput);
+    auto maybePrintCounterexample = [&](StringRef result) {
+      if (!printSolverOutput)
+        return;
+      if (result != "sat" && result != "unknown")
+        return;
+      if (lecInputNames.empty())
+        return;
+
+      auto modelValues = parseZ3Model(combinedOutput);
+      if (modelValues.empty())
+        return;
+
+      auto findValue = [&](StringRef inputName) -> std::optional<StringRef> {
+        if (auto it = modelValues.find(inputName); it != modelValues.end())
+          return it->second;
+        StringRef candidate;
+        for (const auto &entry : modelValues) {
+          if (!entry.getKey().starts_with(inputName))
+            continue;
+          if (entry.getKey().size() == inputName.size())
+            continue;
+          if (entry.getKey()[inputName.size()] != '_')
+            continue;
+          if (!candidate.empty())
+            return std::nullopt;
+          candidate = entry.getKey();
+        }
+        if (!candidate.empty())
+          return modelValues.find(candidate)->second;
+        return std::nullopt;
+      };
+
+      bool printed = false;
+      for (const auto &name : lecInputNames) {
+        auto value = findValue(name);
+        if (!value)
+          continue;
+        if (!printed) {
+          llvm::errs() << "counterexample inputs:\n";
+          printed = true;
+        }
+        llvm::errs() << "  " << name << " = " << *value << "\n";
+      }
+    };
     if (token && *token == "unsat") {
       outputFile.value()->os() << "c1 == c2\n";
     } else if (token && (*token == "sat" || *token == "unknown")) {
       outputFile.value()->os() << "c1 != c2\n";
+      maybePrintCounterexample(*token);
     } else {
       llvm::errs() << "unexpected z3 output: " << combinedOutput << "\n";
       return failure();
@@ -595,6 +853,7 @@ int main(int argc, char **argv) {
     circt::llhd::LLHDDialect,
     circt::om::OMDialect,
     circt::sim::SimDialect,
+    circt::sva::SVADialect,
     circt::seq::SeqDialect,
     mlir::smt::SMTDialect,
     circt::verif::VerifDialect,

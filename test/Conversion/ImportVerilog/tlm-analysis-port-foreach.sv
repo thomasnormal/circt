@@ -47,7 +47,7 @@ class analysis_port;
   endfunction
 endclass
 
-// CHECK: func.func private @analysis_port::write
+// CHECK: func.func private @"analysis_port::write"
 // CHECK-SAME: %arg0: !moore.class<@analysis_port>
 // CHECK-SAME: %arg1: !moore.i32
 

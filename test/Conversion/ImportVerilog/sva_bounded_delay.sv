@@ -52,7 +52,8 @@ module BoundedDelay(input logic clk, req, ack, data, valid);
     @(posedge clk) req ##[1:2] data ##[1:3] ack;
   endproperty
   // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 0, 0 : i1
-  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 1, 1 : i1
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 0, 1 : i1
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 0, 2 : i1
   // CHECK: ltl.concat
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (chained_bounded);

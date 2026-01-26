@@ -615,10 +615,13 @@ endfunction
 /// Check pure virtual forward declarations
 
 // CHECK-LABEL:  moore.class.classdecl @virtualFunctionClass {
-// CHECK:    moore.class.methoddecl @subroutine : (!moore.class<@virtualFunctionClass>)
+// CHECK:    moore.class.methoddecl @subroutine -> @subroutine : () -> ()
+// CHECK:  }
+// CHECK:  func.func private @subroutine() {
+// CHECK:    return
 // CHECK:  }
 // CHECK:  moore.class.classdecl @realFunctionClass implements [@virtualFunctionClass] {
-// CHECK:    moore.class.methoddecl @subroutine -> @"realFunctionClass::subroutine" : (!moore.class<@realFunctionClass>)
+// CHECK:    moore.class.methoddecl @subroutine -> @"realFunctionClass::subroutine" : (!moore.class<@realFunctionClass>) -> ()
 // CHECK:  }
 // CHECK:  func.func private @"realFunctionClass::subroutine"(%arg0: !moore.class<@realFunctionClass>) {
 // CHECK:    return
@@ -1278,8 +1281,12 @@ endclass
 // CHECK: moore.procedure initial {
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@CopyableClass>
 // CHECK:    moore.blocking_assign [[OBJ0]], [[NEW]] : class<@CopyableClass>
-// CHECK:    [[OBJ0_READ:%.+]] = moore.read [[OBJ0]] : <class<@CopyableClass>>
-// CHECK:    [[COPY:%.*]] = moore.class.copy [[OBJ0_READ]] : <@CopyableClass>
+// CHECK:    [[OBJ0_READ1:%.+]] = moore.read [[OBJ0]] : <class<@CopyableClass>>
+// CHECK:    [[VALUE_REF:%.+]] = moore.class.property_ref [[OBJ0_READ1]][@value]
+// CHECK:    [[CONST42:%.+]] = moore.constant 42 : i32
+// CHECK:    moore.blocking_assign [[VALUE_REF]], [[CONST42]] : i32
+// CHECK:    [[OBJ0_READ2:%.+]] = moore.read [[OBJ0]] : <class<@CopyableClass>>
+// CHECK:    [[COPY:%.*]] = moore.class.copy [[OBJ0_READ2]] : <@CopyableClass>
 // CHECK:    moore.blocking_assign [[OBJ1]], [[COPY]] : class<@CopyableClass>
 // CHECK:    moore.return
 // CHECK: }
@@ -1304,13 +1311,13 @@ class ParameterizedClass #(parameter int VALUE = 10);
 endclass
 
 // CHECK-LABEL: moore.module @testClassParameter() {
-// CHECK: [[CONST:%.*]] = moore.constant 42 : l32
 // CHECK: [[OBJ:%.*]] = moore.variable : <class<@ParameterizedClass>>
 // CHECK: [[RESULT:%.*]] = moore.variable : <i32>
 // CHECK: moore.procedure initial {
 // CHECK:    [[NEW:%.*]] = moore.class.new : <@ParameterizedClass>
 // CHECK:    moore.blocking_assign [[OBJ]], [[NEW]] : class<@ParameterizedClass>
-// CHECK:    moore.blocking_assign [[RESULT]], [[CONST]] : l32
+// CHECK:    [[CONST:%.*]] = moore.constant 42 : i32
+// CHECK:    moore.blocking_assign [[RESULT]], [[CONST]] : i32
 // CHECK:    moore.return
 // CHECK: }
 // CHECK: moore.output

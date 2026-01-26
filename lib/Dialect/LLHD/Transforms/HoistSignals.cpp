@@ -244,9 +244,17 @@ struct DriveValue {
   bool operator!=(const DriveValue &other) const { return data != other.data; }
 
   bool isDontCare() const { return isa<Type>(data); }
-  explicit operator bool() const { return bool(data); }
+  bool isNull() const {
+    // Check if this is a null DriveValue. A null Value stored in the
+    // PointerUnion is used to represent "null".
+    if (data.is<Value>() && !data.get<Value>())
+      return true;
+    return false;
+  }
+  explicit operator bool() const { return !isNull(); }
 
   Type getType() const {
+    assert(!isNull() && "cannot get type of null DriveValue");
     return TypeSwitch<Data, Type>(data)
         .Case<Value, IntegerAttr, TimeAttr>([](auto x) { return x.getType(); })
         .Case<Type>([](auto type) { return type; });
@@ -279,7 +287,7 @@ struct DriveSet {
 
 static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
                                      const DriveValue &dv) {
-  if (!dv.data)
+  if (dv.isNull())
     os << "null";
   else
     TypeSwitch<DriveValue::Data>(dv.data)
@@ -447,9 +455,9 @@ void DriveHoister::collectDriveSets() {
     }
   }
 
-  // Remove slots we've found to be unhoistable.
+  // Remove slots we've found to be unhoistable or that have no drive sets.
   slots.remove_if([&](auto slot) {
-    if (unhoistableSlots.contains(slot)) {
+    if (unhoistableSlots.contains(slot) || !driveSets.contains(slot)) {
       driveSets.erase(slot);
       return true;
     }
@@ -499,7 +507,7 @@ void DriveHoister::finalizeDriveSets() {
     // may change at different times than the current process executes and
     // updates its results.
     auto clearIfNonConst = [&](DriveValue &driveValue) {
-      if (isa_and_nonnull<Value>(driveValue.data))
+      if (!driveValue.isNull() && driveValue.data.is<Value>())
         driveValue = DriveValue();
     };
     clearIfNonConst(driveSet.uniform.value);
@@ -546,6 +554,7 @@ void DriveHoister::hoistDrives() {
   SmallDenseMap<Attribute, Value> materializedConstants;
 
   auto materialize = [&](DriveValue driveValue) -> Value {
+    assert(!driveValue.isNull() && "cannot materialize null DriveValue");
     OpBuilder builder(processOp);
     return TypeSwitch<DriveValue::Data, Value>(driveValue.data)
         .Case<Value>([](auto value) { return value; })

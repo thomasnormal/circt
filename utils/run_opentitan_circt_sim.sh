@@ -11,6 +11,7 @@ usage() {
   echo ""
   echo "Targets (Peripheral Register Blocks):"
   echo "  gpio_no_alerts     - GPIO register block (minimal TL-UL testbench)"
+  echo "  tlul_adapter_reg   - TL-UL adapter register interface smoke test"
   echo "  gpio               - Full GPIO IP with alerts"
   echo "  uart_reg_top       - UART register block"
   echo "  uart               - Full UART IP with alerts"
@@ -95,6 +96,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIRCT_DIR="${CIRCT_DIR:-$(dirname "$SCRIPT_DIR")}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_DIR/build/bin/circt-verilog}"
 CIRCT_SIM="${CIRCT_SIM:-$CIRCT_DIR/build/bin/circt-sim}"
+CIRCT_OPT="${CIRCT_OPT:-$CIRCT_DIR/build/bin/circt-opt}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 OPENTITAN_DIR="${OPENTITAN_DIR:-$HOME/opentitan}"
 
@@ -152,7 +154,7 @@ module prim_fifo_sync_tb;
   parameter Depth = 4;
 
   logic clk_i = 0;
-  logic rst_ni = 0;
+  logic rst_ni = 1;
   logic clr_i = 0;
   logic wvalid_i = 0;
   logic wready_o;
@@ -330,17 +332,133 @@ endmodule
 EOF
       ;;
 
+    tlul_adapter_reg)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for tlul_adapter_reg (TL-UL interface + register interface)
+// Exercises TL-UL read/write handshake.
+
+`include "prim_assert.sv"
+`include "tlul_bfm.sv"
+
+module tlul_adapter_reg_tb;
+  import tlul_pkg::*;
+  import tlul_bfm_pkg::*;
+  import prim_mubi_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+
+  // TL-UL interface
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+  logic [31:0] tlul_rdata;
+  logic tlul_err;
+
+  // Register interface
+  logic re_o;
+  logic we_o;
+  logic [7:0] addr_o;
+  logic [31:0] wdata_o;
+  logic [3:0] be_o;
+  logic busy_i;
+  logic [31:0] rdata_i;
+  logic error_i;
+  prim_mubi_pkg::mubi4_t en_ifetch_i;
+  logic intg_error_o;
+
+  logic [31:0] reg_q;
+
+  tlul_adapter_reg #(
+    .RegAw(8),
+    .RegDw(32),
+    .AccessLatency(0)
+  ) dut (
+    .clk_i,
+    .rst_ni,
+    .tl_i,
+    .tl_o,
+    .en_ifetch_i,
+    .intg_error_o,
+    .re_o,
+    .we_o,
+    .addr_o,
+    .wdata_o,
+    .be_o,
+    .busy_i,
+    .rdata_i,
+    .error_i
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Simple register model
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      reg_q <= 32'h0;
+    end else if (we_o && (addr_o == 8'h00)) begin
+      for (int i = 0; i < 4; i++) begin
+        if (be_o[i]) begin
+          reg_q[i*8 +: 8] <= wdata_o[i*8 +: 8];
+        end
+      end
+    end
+  end
+
+  always_comb begin
+    rdata_i = (addr_o == 8'h00) ? reg_q : 32'h0;
+    error_i = 1'b0;
+    busy_i = 1'b0;
+    en_ifetch_i = MuBi4True;
+  end
+
+  initial begin
+    tlul_init(tl_i);
+  end
+
+  initial begin
+    $display("Starting tlul_adapter_reg test...");
+
+    rst_ni = 1;
+    #1;
+    rst_ni = 0;
+    #20;
+    rst_ni = 1;
+    $display("Reset released");
+
+    repeat(5) @(posedge clk_i);
+    $display("rst_ni=%b outstanding_q=%b busy_i=%b a_ready=%b d_valid=%b intg_error_o=%b",
+             rst_ni, dut.outstanding_q, busy_i, tl_o.a_ready, tl_o.d_valid, intg_error_o);
+
+    tlul_write32(clk_i, tl_i, tl_o, 32'h0, 32'hdeadbeef, 4'hF, tlul_err);
+    $display("Write response err=%b", tlul_err);
+    tlul_read32(clk_i, tl_i, tl_o, 32'h0, tlul_rdata);
+    $display("Read response data=0x%08x", tlul_rdata);
+
+    if (tlul_rdata !== 32'hdeadbeef) begin
+      $display("TEST FAILED: unexpected readback");
+    end else begin
+      $display("TEST PASSED: tlul_adapter_reg read/write");
+    end
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
     gpio_no_alerts)
       cat > "$tb_file" << 'EOF'
 // Minimal testbench for gpio_reg_top (TileLink-UL interface)
 // Just exercises reset and basic connectivity
 
 `include "prim_assert.sv"
-`include "tlul_bfm.sv"
-`include "tlul_bfm.sv"
-`include "tlul_bfm.sv"
-`include "tlul_bfm.sv"
-`include "tlul_bfm.sv"
 `include "tlul_bfm.sv"
 
 module gpio_reg_top_tb;
@@ -1507,6 +1625,10 @@ module alert_handler_reg_top_tb;
     // Wait a few cycles
     repeat(10) @(posedge clk_i);
 
+    $display("rst_ni=%b rst_shadowed_ni=%b reg_busy=%b shadow_busy=%b rst_done=%b shadow_rst_done=%b a_ready=%b d_valid=%b",
+             rst_ni, rst_shadowed_ni, dut.reg_busy, dut.shadow_busy,
+             dut.rst_done, dut.shadow_rst_done, tl_o.a_ready, tl_o.d_valid);
+
     tlul_read32(clk_i, tl_i, tl_o, 32'(ALERT_HANDLER_INTR_STATE_OFFSET), tlul_rdata);
     $display("Got TL response: data = 0x%08x", tlul_rdata);
 
@@ -1643,6 +1765,21 @@ module alert_handler_tb;
     // Wait a few cycles
     repeat(10) @(posedge clk_i);
 
+    $display("rst_ni=%b rst_shadowed_ni=%b reg_busy=%b shadow_busy=%b rst_done=%b shadow_rst_done=%b a_ready=%b d_valid=%b",
+             rst_ni, rst_shadowed_ni, dut.u_reg_wrap.u_reg.reg_busy,
+             dut.u_reg_wrap.u_reg.shadow_busy, dut.u_reg_wrap.u_reg.rst_done,
+             dut.u_reg_wrap.u_reg.shadow_rst_done, tl_o.a_ready, tl_o.d_valid);
+
+    tlul_read32(clk_i, tl_i, tl_o,
+                32'(alert_handler_reg_pkg::ALERT_HANDLER_PING_TIMER_REGWEN_OFFSET),
+                tlul_rdata);
+    $display("Ping timer regwen: 0x%08x", tlul_rdata);
+
+    tlul_read32(clk_i, tl_i, tl_o,
+                32'(alert_handler_reg_pkg::ALERT_HANDLER_ALERT_REGWEN_0_OFFSET),
+                tlul_rdata);
+    $display("Alert regwen[0]: 0x%08x", tlul_rdata);
+
     tlul_read32(clk_i, tl_i, tl_o,
                 32'(alert_handler_reg_pkg::ALERT_HANDLER_INTR_STATE_OFFSET), tlul_rdata);
     $display("Got TL response: data = 0x%08x", tlul_rdata);
@@ -1652,9 +1789,32 @@ module alert_handler_tb;
                  32'h0, 4'hF, tlul_err);
     $display("Got TL write response: err = %b", tlul_err);
 
+    // Shadowed register programming requires two matching writes.
+    tlul_write32(clk_i, tl_i, tl_o,
+                 32'(alert_handler_reg_pkg::ALERT_HANDLER_PING_TIMER_EN_SHADOWED_OFFSET),
+                 32'h1, 4'hF, tlul_err);
+    tlul_write32(clk_i, tl_i, tl_o,
+                 32'(alert_handler_reg_pkg::ALERT_HANDLER_PING_TIMER_EN_SHADOWED_OFFSET),
+                 32'h1, 4'hF, tlul_err);
+    tlul_read32(clk_i, tl_i, tl_o,
+                32'(alert_handler_reg_pkg::ALERT_HANDLER_PING_TIMER_EN_SHADOWED_OFFSET),
+                tlul_rdata);
+    $display("Ping timer enable readback: 0x%08x", tlul_rdata);
+
+    tlul_write32(clk_i, tl_i, tl_o,
+                 32'(alert_handler_reg_pkg::ALERT_HANDLER_ALERT_EN_SHADOWED_0_OFFSET),
+                 32'h1, 4'hF, tlul_err);
+    tlul_write32(clk_i, tl_i, tl_o,
+                 32'(alert_handler_reg_pkg::ALERT_HANDLER_ALERT_EN_SHADOWED_0_OFFSET),
+                 32'h1, 4'hF, tlul_err);
+    tlul_read32(clk_i, tl_i, tl_o,
+                32'(alert_handler_reg_pkg::ALERT_HANDLER_ALERT_EN_SHADOWED_0_OFFSET),
+                tlul_rdata);
+    $display("Alert enable readback: 0x%08x", tlul_rdata);
+
     repeat(10) @(posedge clk_i);
 
-    $display("TEST PASSED: alert_handler full IP basic connectivity");
+    $display("TEST PASSED: alert_handler full IP basic connectivity + shadowed writes");
     $finish;
   end
 
@@ -4395,6 +4555,16 @@ get_files_for_target() {
       echo "$PRIM_GENERIC_RTL/prim_flop.sv"
       echo "$PRIM_RTL/prim_count.sv"
       ;;
+    tlul_adapter_reg)
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      ;;
     gpio_no_alerts)
       # Package dependencies (in order)
       echo "$PRIM_RTL/prim_util_pkg.sv"
@@ -4483,6 +4653,7 @@ get_files_for_target() {
       echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
       echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
       echo "$PRIM_RTL/prim_alert_sender.sv"
+      echo "$PRIM_GENERIC_RTL/prim_and2.sv"
       echo "$PRIM_RTL/prim_blanker.sv"
       echo "$PRIM_RTL/prim_sparse_fsm_flop.sv"
       echo "$PRIM_RTL/prim_flop_macros.sv"
@@ -6461,6 +6632,9 @@ elif [[ "$TARGET" == "dma" ]]; then
 elif [[ "$TARGET" == "alert_handler_reg_top" ]]; then
   # Explicit top module to avoid picking internal alert_handler reg submodules.
   EXTRA_FLAGS+=("--top=alert_handler_reg_top_tb")
+elif [[ "$TARGET" == "tlul_adapter_reg" ]]; then
+  # Explicit top module for TL-UL adapter smoke test.
+  EXTRA_FLAGS+=("--top=tlul_adapter_reg_tb")
 elif [[ "$TARGET" == "alert_handler" ]]; then
   # Explicit top module to avoid picking internal alert_handler submodules.
   EXTRA_FLAGS+=("--top=alert_handler_tb")
@@ -6552,6 +6726,16 @@ else
   fi
 fi
 
+# Workaround for circt-sim parser crashes on large MLIR lines.
+if [[ "$TARGET" == "alert_handler" && -x "$CIRCT_OPT" ]]; then
+  CANON_MLIR_FILE="${MLIR_FILE%.mlir}.canon.mlir"
+  if "$CIRCT_OPT" "$MLIR_FILE" -o "$CANON_MLIR_FILE"; then
+    MLIR_FILE="$CANON_MLIR_FILE"
+  else
+    echo "Warning: circt-opt failed to canonicalize MLIR; using original file" >&2
+  fi
+fi
+
 # Build simulation command
 SIM_CMD=(
   "$CIRCT_SIM"
@@ -6571,6 +6755,8 @@ elif [[ "$TARGET" == "dma" ]]; then
   SIM_TOP="dma_tb"
 elif [[ "$TARGET" == "alert_handler_reg_top" ]]; then
   SIM_TOP="alert_handler_reg_top_tb"
+elif [[ "$TARGET" == "tlul_adapter_reg" ]]; then
+  SIM_TOP="tlul_adapter_reg_tb"
 elif [[ "$TARGET" == "alert_handler" ]]; then
   SIM_TOP="alert_handler_tb"
 elif [[ "$TARGET" == "mbx" ]]; then
