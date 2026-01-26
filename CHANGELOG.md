@@ -16,6 +16,7 @@
   - Updated `operator==` and `detectEdge()` for X→X normalization
   - Added comprehensive unit test (FourStateXDetection)
   - All 2845 lit tests pass, 39 XFAIL
+  - ⚠️ i2c_tb still hangs (different root cause, not fully-X values)
 
 - **Track B (AVIP Testing)**: ✅ **ALL 3 COMPILE AND RUN**
   - APB: Runs to max time, 10M+ process executions
@@ -234,6 +235,9 @@
 - **TL-UL readback investigation**: `rdata_q` goes X after write even with
   known `a_ack`/`wr_req`/`err_internal`; `AccessLatency=1` and NBA firreg
   scheduling did not resolve the issue.
+- **TL-UL readback fix**: Resolve X on `error_i`/`rdata_q` by mapping child
+  block arguments to instance operands in `getValue`, so `llhd.process` results
+  can drive instance inputs; added `llhd-process-result-instance-input.mlir`.
 
 ---
 
