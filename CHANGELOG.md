@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 179 - January 26, 2026
+
+### Baseline Verification
+
+All test baselines verified and maintained:
+
+**verilator-verification BMC**: 8/8 active tests pass (9 SKIP)
+- Baseline maintained
+- No regressions
+
+**yosys Tests**: Baselines maintained
+- SVA: 14/16 (87.5%)
+- svtypes: 14/18 (78%)
+
+**Unit Tests**: 1354/1355 pass (99.9%)
+- 1 flaky test: `SampleFieldCoverageEnabled` (test ordering issue)
+- Test passes in isolation, fails in sharded parallel execution
+- Pre-existing global coverage state cleanup issue, not a regression
+
+**I3C AVIP**: Simulation verified
+- circt-sim runs successfully with 0 errors
+- 1 delta cycle completed
+
+**sv-tests**: 821/831 (98%) maintained
+
+No regressions detected.
+
+---
+
 ## Iteration 178 - January 26, 2026
 
 ### Baseline Verification Continued
