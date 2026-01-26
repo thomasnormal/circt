@@ -13,6 +13,7 @@ usage() {
   echo "  gpio_no_alerts     - GPIO register block (minimal TL-UL testbench)"
   echo "  uart_reg_top       - UART register block"
   echo "  spi_host_reg_top   - SPI Host register block (TL-UL with window)"
+  echo "  spi_device_reg_top - SPI Device register block (TL-UL with 2 windows)"
   echo "  i2c_reg_top        - I2C register block"
   echo "  aon_timer_reg_top  - AON Timer register block (dual clock domain)"
   echo "  pwm_reg_top        - PWM register block (dual clock domain)"
@@ -26,6 +27,9 @@ usage() {
   echo "  kmac_reg_top       - KMAC crypto register block (Keccak MAC with windows)"
   echo "  otbn_reg_top       - OTBN crypto register block (big number accelerator)"
   echo "  otp_ctrl_reg_top   - OTP Controller register block (with window interface)"
+  echo "  lc_ctrl_regs_reg_top - LC Controller register block (lifecycle controller)"
+  echo "  flash_ctrl_reg_top - Flash Controller register block (with 2 TL-UL windows)"
+  echo "  usbdev_reg_top     - USB Device register block (dual clock, window interface)"
   echo ""
   echo "Targets (Full IP Logic - Experimental):"
   echo "  timer_core         - RISC-V timer core logic (crashes on 64-bit values)"
@@ -97,6 +101,7 @@ KMAC_RTL="$OPENTITAN_DIR/hw/ip/kmac/rtl"
 OTBN_RTL="$OPENTITAN_DIR/hw/ip/otbn/rtl"
 OTP_CTRL_RTL="$OPENTITAN_DIR/hw/ip/otp_ctrl/rtl"
 OTP_CTRL_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/otp_ctrl/rtl"
+USBDEV_RTL="$OPENTITAN_DIR/hw/ip/usbdev/rtl"
 
 # Testbench generation
 generate_testbench() {
@@ -583,6 +588,113 @@ module spi_host_reg_top_tb;
     repeat(5) @(posedge clk_i);
 
     $display("TEST PASSED: spi_host_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
+    spi_device_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for spi_device_reg_top (TileLink-UL interface)
+// SPI Device has 2 window interfaces via tlul_socket_1n
+
+`include "prim_assert.sv"
+
+module spi_device_reg_top_tb;
+  import tlul_pkg::*;
+  import spi_device_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Register interfaces
+  spi_device_reg2hw_t reg2hw;
+  spi_device_hw2reg_t hw2reg;
+
+  // Window interfaces (2 windows for SRAM access)
+  tl_h2d_t tl_win_o [2];
+  tl_d2h_t tl_win_i [2];
+
+  // RACL interface
+  logic racl_policies_i;
+  logic racl_error_o;
+  logic intg_err_o;
+
+  spi_device_reg_top #(
+    .EnableRacl(0)
+  ) dut (
+    .clk_i,
+    .rst_ni,
+    .tl_i,
+    .tl_o,
+    .tl_win_o,
+    .tl_win_i,
+    .reg2hw,
+    .hw2reg,
+    .racl_policies_i('0),
+    .racl_error_o(),
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+    // Window interfaces return idle response
+    tl_win_i[0] = TL_D2H_DEFAULT;
+    tl_win_i[1] = TL_D2H_DEFAULT;
+  end
+
+  initial begin
+    $display("Starting spi_device_reg_top test...");
+
+    // Reset
+    rst_ni = 0;
+    #20;
+    rst_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (address 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;
+    tl_i.a_size = 2;  // 4 bytes
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(5) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response: data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(5) @(posedge clk_i);
+
+    $display("TEST PASSED: spi_device_reg_top basic connectivity");
     $finish;
   end
 
@@ -1748,6 +1860,98 @@ endmodule
 EOF
       ;;
 
+    lc_ctrl_regs_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for lc_ctrl_regs_reg_top (TileLink-UL interface)
+// LC Controller - Lifecycle Controller register block
+
+`include "prim_assert.sv"
+
+module lc_ctrl_regs_reg_top_tb;
+  import tlul_pkg::*;
+  import lc_ctrl_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Register interfaces
+  lc_ctrl_regs_reg2hw_t reg2hw;
+  lc_ctrl_regs_hw2reg_t hw2reg;
+
+  // Integrity error
+  logic intg_err_o;
+
+  lc_ctrl_regs_reg_top dut (
+    .clk_i,
+    .rst_ni,
+    .tl_i,
+    .tl_o,
+    .reg2hw,
+    .hw2reg,
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+  end
+
+  initial begin
+    $display("Starting lc_ctrl_regs_reg_top test...");
+
+    // Reset
+    rst_ni = 0;
+    #20;
+    rst_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (ALERT_TEST register at offset 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;  // ALERT_TEST register
+    tl_i.a_size = 2;
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(5) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response (ALERT_TEST): data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(5) @(posedge clk_i);
+
+    $display("TEST PASSED: lc_ctrl_regs_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
     otp_ctrl_reg_top)
       cat > "$tb_file" << 'EOF'
 // Minimal testbench for otp_ctrl_core_reg_top (TileLink-UL interface)
@@ -1841,6 +2045,227 @@ module otp_ctrl_core_reg_top_tb;
   // Timeout
   initial begin
     #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
+    flash_ctrl_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for flash_ctrl_core_reg_top (TileLink-UL interface)
+// Flash Controller - flash memory controller register block
+// Features: 2 window interfaces for prog/rd FIFOs
+
+`include "prim_assert.sv"
+
+module flash_ctrl_core_reg_top_tb;
+  import tlul_pkg::*;
+  import flash_ctrl_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+  logic rst_shadowed_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Window interfaces for prog/rd FIFOs (2 windows)
+  tl_h2d_t tl_win_o [2];
+  tl_d2h_t tl_win_i [2];
+
+  // Register interfaces
+  flash_ctrl_core_reg2hw_t reg2hw;
+  flash_ctrl_core_hw2reg_t hw2reg;
+
+  // Error signals
+  logic shadowed_storage_err_o;
+  logic shadowed_update_err_o;
+  logic intg_err_o;
+
+  flash_ctrl_core_reg_top dut (
+    .clk_i,
+    .rst_ni,
+    .rst_shadowed_ni,
+    .tl_i,
+    .tl_o,
+    .tl_win_o,
+    .tl_win_i,
+    .reg2hw,
+    .hw2reg,
+    .shadowed_storage_err_o(),
+    .shadowed_update_err_o(),
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+    tl_win_i[0] = TL_D2H_DEFAULT;
+    tl_win_i[1] = TL_D2H_DEFAULT;
+  end
+
+  initial begin
+    $display("Starting flash_ctrl_core_reg_top test...");
+
+    // Reset
+    rst_ni = 0;
+    rst_shadowed_ni = 0;
+    #20;
+    rst_ni = 1;
+    rst_shadowed_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (INTR_STATE register at offset 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;  // INTR_STATE register
+    tl_i.a_size = 2;
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(5) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response (INTR_STATE): data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(5) @(posedge clk_i);
+
+    $display("TEST PASSED: flash_ctrl_core_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
+    usbdev_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for usbdev_reg_top (TileLink-UL interface)
+// USB Device controller register block with dual clock domain
+// Features: dual clock (clk_i/clk_aon_i), window interface for buffer memory
+
+`include "prim_assert.sv"
+
+module usbdev_reg_top_tb;
+  import tlul_pkg::*;
+  import usbdev_reg_pkg::*;
+
+  // Main clock domain
+  logic clk_i = 0;
+  logic rst_ni = 0;
+
+  // Always-on clock domain (for wake detection)
+  logic clk_aon_i = 0;
+  logic rst_aon_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Window interface for buffer memory access
+  tl_h2d_t tl_win_o;
+  tl_d2h_t tl_win_i;
+
+  // Register interfaces
+  usbdev_reg2hw_t reg2hw;
+  usbdev_hw2reg_t hw2reg;
+
+  // Integrity error
+  logic intg_err_o;
+
+  usbdev_reg_top dut (
+    .clk_i,
+    .rst_ni,
+    .clk_aon_i,
+    .rst_aon_ni,
+    .tl_i,
+    .tl_o,
+    .tl_win_o,
+    .tl_win_i,
+    .reg2hw,
+    .hw2reg,
+    .intg_err_o()
+  );
+
+  // Main clock generation (10ns period = 100MHz)
+  always #5 clk_i = ~clk_i;
+
+  // AON clock generation (slower - 50ns period = 20MHz for simulation speed)
+  always #25 clk_aon_i = ~clk_aon_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+    tl_win_i = TL_D2H_DEFAULT;
+  end
+
+  initial begin
+    $display("Starting usbdev_reg_top test...");
+
+    // Reset both clock domains
+    rst_ni = 0;
+    rst_aon_ni = 0;
+    #100;  // Wait for both clocks to have several edges
+    rst_ni = 1;
+    rst_aon_ni = 1;
+    $display("Reset released (dual clock domain)");
+
+    // Wait a few cycles
+    repeat(20) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (INTR_STATE register at offset 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;  // INTR_STATE register
+    tl_i.a_size = 2;
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(10) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response (INTR_STATE): data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(10) @(posedge clk_i);
+
+    $display("TEST PASSED: usbdev_reg_top basic connectivity (dual clock domain)");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #20000;  // Longer timeout for dual clock domain
     $display("TEST TIMEOUT");
     $finish;
   end
@@ -2012,6 +2437,55 @@ get_files_for_target() {
       # SPI Host packages
       echo "$SPI_HOST_RTL/spi_host_reg_pkg.sv"
       echo "$SPI_HOST_RTL/spi_host_reg_top.sv"
+      ;;
+    spi_device_reg_top)
+      local SPI_DEVICE_RTL="$OPENTITAN_DIR/hw/ip/spi_device/rtl"
+      # Package dependencies (same as spi_host_reg_top)
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket (for multi-window reg tops)
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # SPI Device packages
+      echo "$SPI_DEVICE_RTL/spi_device_reg_pkg.sv"
+      echo "$SPI_DEVICE_RTL/spi_device_reg_top.sv"
       ;;
     i2c_reg_top)
       # Package dependencies (same as gpio_no_alerts)
@@ -2460,6 +2934,48 @@ get_files_for_target() {
       # This is the core timer logic without any register interface
       echo "$RV_TIMER_RTL/timer_core.sv"
       ;;
+    lc_ctrl_regs_reg_top)
+      # LC Controller register block (lifecycle controller)
+      local LC_CTRL_RTL="$OPENTITAN_DIR/hw/ip/lc_ctrl/rtl"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # LC Controller packages
+      echo "$LC_CTRL_RTL/lc_ctrl_reg_pkg.sv"
+      echo "$LC_CTRL_RTL/lc_ctrl_regs_reg_top.sv"
+      ;;
     otp_ctrl_reg_top)
       # Package dependencies
       echo "$PRIM_RTL/prim_util_pkg.sv"
@@ -2518,6 +3034,110 @@ get_files_for_target() {
       # OTP Controller core register top
       echo "$OTP_CTRL_AUTOGEN_RTL/otp_ctrl_core_reg_top.sv"
       ;;
+    flash_ctrl_reg_top)
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket for window interface (flash_ctrl has 2 windows)
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # Flash Controller packages
+      local FLASH_CTRL_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/flash_ctrl/rtl"
+      echo "$FLASH_CTRL_AUTOGEN_RTL/flash_ctrl_reg_pkg.sv"
+      echo "$FLASH_CTRL_AUTOGEN_RTL/flash_ctrl_core_reg_top.sv"
+      ;;
+    usbdev_reg_top)
+      local USBDEV_RTL="$OPENTITAN_DIR/hw/ip/usbdev/rtl"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket for window interface
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # CDC primitives for dual clock domain
+      echo "$PRIM_RTL/prim_pulse_sync.sv"
+      echo "$PRIM_RTL/prim_sync_reqack.sv"
+      echo "$PRIM_RTL/prim_sync_reqack_data.sv"
+      echo "$PRIM_RTL/prim_reg_cdc_arb.sv"
+      echo "$PRIM_RTL/prim_reg_cdc.sv"
+      # USB Device packages
+      echo "$USBDEV_RTL/usbdev_reg_pkg.sv"
+      echo "$USBDEV_RTL/usbdev_reg_top.sv"
+      ;;
     *)
       echo "Unknown target: $TARGET" >&2
       return 1
@@ -2568,6 +3188,7 @@ COMPILE_CMD=(
   "-I" "$OTBN_RTL"
   "-I" "$OTP_CTRL_RTL"
   "-I" "$OTP_CTRL_AUTOGEN_RTL"
+  "-I" "$USBDEV_RTL"
   "-I" "$OPENTITAN_DIR/hw/ip/lc_ctrl/rtl"
   "${SRC_FILES[@]}"
   "$TB_FILE"
