@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 223 Update)
+### Track Status & Next Tasks (Iteration 224 Update)
+
+**Iteration 223 Results (COMPLETE):**
+- Track A: ✅ **4-State Edge Detection** - Fix needed in SignalValue::detectEdge for struct encoding
+- Track B: ✅ **Time Limit Analysis** - slang double precision, not simple truncation
+- Track C: ✅ **XFAIL Analysis** - 0/39 ready (UVM ~15, hierarchical ~5, features ~19)
+- Track D: ✅ **OpenTitan: 28/28 reg_top, 9/14 full** - 3 stuck, 3 wrong module
+
+**Iteration 224 Focus (NEXT):**
+- Track A: 🔄 **Implement 4-state edge fix** - Modify updateSignal for X→X detection
+- Track B: 🔄 **Test more AVIPs** - APB, I2S, I3C with full UVM
+- Track C: 🔄 **Fix UVM runtime** - Address uvm_report_error legalization
+- Track D: 🔄 **External Test Suites** - Maintain baselines
 
 **Iteration 222 Results (COMPLETE):**
-- Track A: ✅ **False Alarm** - Tests actually pass (stale build artifacts caused report)
-- Track B: ✅ **slang Patches Fixed** - 4 patches updated for v10.0 compatibility
+- Track A: ✅ **False Alarm** - Tests actually pass (stale build artifacts)
+- Track B: ✅ **slang Patches Fixed** - 4 patches updated for v10.0
 - Track C: ✅ **2 Tests Enabled** - bind-nested-definition.sv, string-concat-byte.sv
-- Track D: ✅ **Lit Tests: 2844 pass, 39 XFAIL, 0 Failed** (up from 2842/41)
-
-**Iteration 223 Focus (NEXT):**
-- Track A: 🔄 **Fix i2c_bus_monitor delta cycles** - Guard X values in edge detection
-- Track B: 🔄 **Increase 2^48 fs time limit** - Extend simulation time beyond 281ms
-- Track C: 🔄 **Enable more UVM tests** - Continue reducing XFAIL count
-- Track D: 🔄 **Test OpenTitan IPs** - Focus on i2c_tb and alert_handler_tb
+- Track D: ✅ **Lit Tests: 2844 pass, 39 XFAIL, 0 Failed**
 
 **Iteration 221 Results (COMPLETE):**
 - Track A: ✅ **i2c Delta Cycles Root Cause** - i2c_bus_monitor edge detection with X values
