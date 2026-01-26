@@ -8005,11 +8005,33 @@ struct CallOpConversion : public OpConversionPattern<func::CallOp> {
   matchAndRewrite(func::CallOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-
-    // Note: run_test interception disabled - using pure SV implementation
-    // The SV uvm_root::run_test() now handles phase execution directly.
-    // This allows the SV factory and component hierarchy to work natively.
     StringRef callee = op.getCallee();
+
+    // Intercept UVM report function calls and redirect to runtime functions.
+    // There are two variants:
+    // 1. Free functions (5 args): uvm_pkg::uvm_report_xxx(id, msg, verbosity, filename, line)
+    // 2. Class methods (6 args): uvm_pkg::uvm_report_object::uvm_report_xxx(self, id, msg, verbosity, filename, line)
+    // The runtime functions have this signature:
+    //   __moore_uvm_report_xxx(id_ptr, id_len, msg_ptr, msg_len, verbosity,
+    //                          filename_ptr, filename_len, line,
+    //                          context_ptr, context_len)
+    if (callee == "uvm_pkg::uvm_report_error" ||
+        callee == "uvm_pkg::uvm_report_warning" ||
+        callee == "uvm_pkg::uvm_report_info" ||
+        callee == "uvm_pkg::uvm_report_fatal") {
+      if (succeeded(convertUvmReportCall(op, adaptor, rewriter, callee, /*isMethod=*/false)))
+        return success();
+      // Fall through to default handling if interception fails
+    }
+    // Handle class method versions
+    if (callee == "uvm_pkg::uvm_report_object::uvm_report_error" ||
+        callee == "uvm_pkg::uvm_report_object::uvm_report_warning" ||
+        callee == "uvm_pkg::uvm_report_object::uvm_report_info" ||
+        callee == "uvm_pkg::uvm_report_object::uvm_report_fatal") {
+      if (succeeded(convertUvmReportCall(op, adaptor, rewriter, callee, /*isMethod=*/true)))
+        return success();
+      // Fall through to default handling if interception fails
+    }
 
     // Default handling for other calls
     SmallVector<Type> convResTypes;
@@ -8017,6 +8039,109 @@ struct CallOpConversion : public OpConversionPattern<func::CallOp> {
       return failure();
     rewriter.replaceOpWithNewOp<func::CallOp>(
         op, adaptor.getCallee(), convResTypes, adaptor.getOperands());
+    return success();
+  }
+
+private:
+  /// Convert a UVM report function call to a runtime function call.
+  /// For free functions (isMethod=false):
+  ///   Expected signature: (id_struct, msg_struct, verbosity, filename_struct, line)
+  /// For class methods (isMethod=true):
+  ///   Expected signature: (self, id_struct, msg_struct, verbosity, filename_struct, line)
+  /// where *_struct is !llvm.struct<(ptr, i64)>
+  LogicalResult convertUvmReportCall(func::CallOp op, OpAdaptor adaptor,
+                                      ConversionPatternRewriter &rewriter,
+                                      StringRef callee, bool isMethod) const {
+    auto loc = op.getLoc();
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto operands = adaptor.getOperands();
+
+    // Verify we have the expected number of operands
+    size_t expectedOperands = isMethod ? 6 : 5;
+    if (operands.size() != expectedOperands)
+      return failure();
+
+    auto ctx = rewriter.getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = rewriter.getI32Type();
+    auto i64Ty = rewriter.getI64Type();
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Determine the runtime function name based on the callee
+    std::string runtimeFuncName;
+    if (callee.contains("report_error"))
+      runtimeFuncName = "__moore_uvm_report_error";
+    else if (callee.contains("report_warning"))
+      runtimeFuncName = "__moore_uvm_report_warning";
+    else if (callee.contains("report_info"))
+      runtimeFuncName = "__moore_uvm_report_info";
+    else if (callee.contains("report_fatal"))
+      runtimeFuncName = "__moore_uvm_report_fatal";
+    else
+      return failure();
+
+    // Runtime function signature:
+    // void __moore_uvm_report_xxx(
+    //   const char *id, int64_t idLen,
+    //   const char *message, int64_t messageLen,
+    //   int32_t verbosity,
+    //   const char *filename, int64_t filenameLen,
+    //   int32_t line,
+    //   const char *context, int64_t contextLen)
+    auto fnTy = LLVM::LLVMFunctionType::get(
+        voidTy, {ptrTy, i64Ty, ptrTy, i64Ty, i32Ty, ptrTy, i64Ty, i32Ty, ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, runtimeFuncName, fnTy);
+
+    // Extract ptr and len from each string struct
+    // For free functions:
+    //   operands[0] = id (!llvm.struct<(ptr, i64)>)
+    //   operands[1] = msg (!llvm.struct<(ptr, i64)>)
+    //   operands[2] = verbosity (i32)
+    //   operands[3] = filename (!llvm.struct<(ptr, i64)>)
+    //   operands[4] = line (i32)
+    // For class methods:
+    //   operands[0] = self (ptr)
+    //   operands[1] = id (!llvm.struct<(ptr, i64)>)
+    //   operands[2] = msg (!llvm.struct<(ptr, i64)>)
+    //   operands[3] = verbosity (i32)
+    //   operands[4] = filename (!llvm.struct<(ptr, i64)>)
+    //   operands[5] = line (i32)
+    size_t offset = isMethod ? 1 : 0;
+    Value idStruct = operands[offset + 0];
+    Value msgStruct = operands[offset + 1];
+    Value verbosity = operands[offset + 2];
+    Value filenameStruct = operands[offset + 3];
+    Value line = operands[offset + 4];
+
+    // Extract id ptr and len
+    Value idPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, idStruct,
+                                                ArrayRef<int64_t>{0});
+    Value idLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, idStruct,
+                                                ArrayRef<int64_t>{1});
+
+    // Extract msg ptr and len
+    Value msgPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, msgStruct,
+                                                 ArrayRef<int64_t>{0});
+    Value msgLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, msgStruct,
+                                                 ArrayRef<int64_t>{1});
+
+    // Extract filename ptr and len
+    Value filenamePtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, filenameStruct,
+                                                      ArrayRef<int64_t>{0});
+    Value filenameLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, filenameStruct,
+                                                      ArrayRef<int64_t>{1});
+
+    // Create empty context (null pointer and 0 length)
+    Value contextPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+    Value contextLen = hw::ConstantOp::create(rewriter, loc, i64Ty, 0);
+
+    // Call the runtime function
+    LLVM::CallOp::create(rewriter, loc, fn,
+                         ValueRange{idPtr, idLen, msgPtr, msgLen, verbosity,
+                                    filenamePtr, filenameLen, line,
+                                    contextPtr, contextLen});
+
+    rewriter.eraseOp(op);
     return success();
   }
 };
