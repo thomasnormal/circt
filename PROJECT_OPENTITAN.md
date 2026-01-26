@@ -27,6 +27,10 @@ Simulate OpenTitan primitive modules, IP blocks, and eventually UVM testbenches 
 **Former Blocker (fixed)**: prim_diff_decode.sv control-flow lowering bug in Mem2Reg (prim_alert_sender now unblocked)
 
 **Recent Fix**: SignalValue 64-bit limitation fixed with llvm::APInt (commit f0c40886a)
+**Recent Fix**: TL-UL BFM preserves `a_user` defaults while recomputing integrity fields
+
+**Current Blocker**:
+- TL-UL adapter reset/handshake still unstable under 4-state modeling: `outstanding_q` can remain X, which holds `a_ready` low and stalls reads/writes in `tlul_adapter_reg` testbench.
 
 ---
 
