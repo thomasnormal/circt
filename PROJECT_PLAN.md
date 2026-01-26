@@ -67,36 +67,45 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 206 Update)
+### Track Status & Next Tasks (Iteration 208 Update)
 
-**Iteration 205 Results (COMPLETE):**
-- Track A: ✅ **MAJOR: slang now accepts `@posedge (clk)`** - 6 tests fixed!
-- Track B: ✅ I3C AVIP hdl_top simulates (7 processes)
-- Track C: ✅ 5 more OpenTitan primitives PASS (alert_sender, packer, subreg, edge_detector, pulse_sync)
-- Track D: ⚠️ APB AVIP partial - starts but exits at time 0
+**Iteration 207 Results (COMPLETE):**
+- Track A: ✅ **BUG FIXED** - `llhd.wait` delta-step resumption for `always @(*)`
+- Track B: ✅ Multiple lit test fixes (externalize-registers, derived-clocks, etc.)
+- Track C: ✅ **APB AVIP: 100K+ iterations** (was hanging, now works!)
+- Track D: ✅ **40/40 OpenTitan crypto primitives** (prim_secded_*, gf_mult, etc.)
 
-**Key Achievement from Iteration 205:**
-- verilator-verification: **47% → 82%** (+6 tests) by adding Verilator syntax compat
+**Key Achievements from Iteration 207:**
+- APB AVIP simulation unblocked - runs 100K+ iterations
+- OpenTitan primitives: 12 → **52** (+40 crypto)
+- llhd.wait hang bug fixed
 
-**Current Iteration 206 Tracks:**
-- Track A: Investigate APB AVIP exit code 1 issue
-- Track B: Test full verilator-verification BMC suite
-- Track C: Test I2S AVIP simulation
-- Track D: More OpenTitan primitive coverage
+**Iteration 208 Results (COMPLETE):**
+- Track A: ✅ **Multi-top module support VERIFIED** - `--top hdl_top --top hvl_top` works correctly
+- Track B: ⚠️ 76 lit test failures remaining (fixed slang v10 version check, lec-extnets-cycle.mlir)
+- Track C: ✅ **UVM STACK OVERFLOW FIXED** - Added call depth tracking to `func.call` and `func.call_indirect`
+- Track D: ✅ **6 Full OpenTitan IPs with Alerts SIMULATE** (GPIO, UART, I2C, SPI Host, SPI Device, USBDev)
+- Track I: 🔍 **UVM OUTPUT ROOT CAUSE FOUND** - External C++ runtime functions not dispatched in interpreter
+
+**Key Achievements from Iteration 208:**
+- UVM stack overflow fixed - full AVIP with hvl_top no longer crashes
+- Root cause for silent UVM output: `__moore_uvm_report_*` functions need dispatcher handlers
+- Test suites improved: sv-tests BMC 23/26 (+14), verilator-verification 17/17 (100%)
+- OpenTitan: **39 testbenches pass** (12 full IPs + 26 reg_top + 1 fsm)
 
 **UVM AVIP Compilation Status (VERIFIED):**
 - **3/9 compile successfully** (APB, I2S, I3C) - 33%
 - 5/9 have source code bugs (AHB, SPI, UART, JTAG, AXI4)
 - 1/9 has complex build setup (AXI4Lite with env vars)
 
-**Test Suite Status (Updated Iteration 205):**
+**Test Suite Status (Updated Iteration 207):**
 - sv-tests SVA: **23/26 pass (88%)**
-- verilator-verification: **14/17 pass (82%)** ⬆️ +6 from slang fix
+- verilator-verification: **17/17 compile (100%)** ✅ All compile now
 - Yosys SVA: **14/14 pass (100%)** - stable
 
 **OpenTitan Simulation Status:**
 - **33/33 reg_top modules simulate**
-- **12 primitives**: flop_2sync, arbiter_fixed/ppc, lfsr, fifo_sync, timer_core, uart_tx/rx, alert_sender, packer, subreg, edge_detector, pulse_sync
+- **52+ primitives**: flop_2sync, arbiter_fixed/ppc, lfsr, fifo_sync, timer_core, uart_tx/rx, alert_sender, packer, subreg, edge_detector, pulse_sync, + 40 crypto (secded, gf_mult, present, prince, subst_perm)
 - **Large FSMs work**: i2c_controller_fsm (2293 ops, 9 processes)
 
 **7 AVIPs Running in circt-sim:**
@@ -193,14 +202,30 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - **Track R (prim_alert_sender)**: ✅ VERIFIED - Mem2Reg fix works, 7+ IPs unblocked (gpio, uart, spi, i2c, timers)
 - **Track S (test suite)**: ✅ VERIFIED - No regressions (sv-tests 9+3xfail, verilator 8/8, yosys 14/16)
 
-**Active Tracks:**
-- (None - launching new tracks)
+**Active Tracks (Iteration 209):**
+- **Track A**: Implement UVM report function dispatchers (`__moore_uvm_report_*`)
+- **Track B**: Fix remaining lit test failures (~76 remaining)
+- **Track C**: Test AVIPs with stack overflow fix - verify UVM output works
+- **Track D**: Run comprehensive test suites (sv-tests, verilator, yosys, opentitan)
 
-**Next Track Priorities:**
-1. **Test full GPIO IP with alerts** - Now that prim_diff_decode is fixed, test gpio.sv (not gpio_no_alerts)
-2. **Test timer_core with SignalValue fix** - Should now work with APInt-based SignalValue
-3. **Try keymgr_reg_top or otbn_reg_top** - Expand crypto IP coverage
-4. **Continue AVIP testing** - Verify remaining AVIPs compile and run
+**Remaining Limitations for UVM Parity:**
+1. ~~**UVM Code Stack Overflow**~~ ✅ FIXED (Iter 208) - Call depth tracking added
+2. **UVM Output Silent from hvl_top** - `__moore_uvm_report_*` C++ functions not dispatched
+   - Root cause: Only `__moore_packed_string_to_string` and `malloc` have handlers
+   - Fix: Add dispatch handlers for UVM report functions in LLHDProcessInterpreter
+3. **~76 Lit Test Failures** - Various categories: ImportVerilog, circt-bmc, circt-lec, circt-sim
+4. **InOut Interface Ports** - I3C AVIP blocked (SCL port)
+5. **AVIP Source Bugs** - 6/9 AVIPs have source-level issues (not CIRCT bugs)
+
+**Completed (Iteration 208):**
+1. ✅ **Multi-top module support** - `--top hdl_top --top hvl_top` verified working
+2. ✅ **6 Full OpenTitan IPs with Alerts** - GPIO, UART, I2C, SPI Host, SPI Device, USBDev
+3. ✅ **slang v10 version check** - Fixed commandline.sv test
+4. ✅ **UVM stack overflow fix** - Call depth tracking in func.call/func.call_indirect
+5. ✅ **Unit test** - test/Tools/circt-sim/call-depth-protection.mlir
+6. ✅ **sv-tests BMC** - 23/26 pass (+14 improvement from 9)
+7. ✅ **verilator-verification BMC** - 17/17 (100%)
+8. ✅ **39 OpenTitan testbenches** - 12 full IPs + 26 reg_top + 1 fsm
 
 ### New: OpenTitan Simulation Support
 - **Phase 1 Complete**: prim_fifo_sync, prim_count simulate in circt-sim
