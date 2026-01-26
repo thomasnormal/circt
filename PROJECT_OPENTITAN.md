@@ -322,6 +322,10 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **hmac_reg_top SIMULATES!** First crypto IP! 8 OpenTitan register blocks now working! HMAC testbench runs - 175 ops, 100 signals, 15 processes. Crypto with FIFO window |
+| 2026-01-26 | **rv_timer_reg_top SIMULATES!** 7 OpenTitan register blocks now working! rv_timer testbench runs - 175 ops, 48 signals, 13 processes. Single clock domain |
+| 2026-01-26 | **pwm_reg_top SIMULATES!** 6 OpenTitan register blocks now working! PWM testbench runs - 191 ops, 154 signals, 16 processes. Dual clock domain (clk_i + clk_core_i) |
+| 2026-01-26 | **aon_timer_reg_top SIMULATES!** First CDC IP! aon_timer_reg_top testbench runs - 193 ops, 165 signals, 28 processes. Dual clock domain (clk_i + clk_aon_i) with prim_reg_cdc works end-to-end |
 | 2026-01-26 | **i2c_reg_top SIMULATES!** i2c_reg_top testbench runs - 175 ops, 68 signals, 13 processes. 4 communication protocol register blocks now working |
 | 2026-01-26 | **spi_host_reg_top SIMULATES!** spi_host_reg_top testbench runs - 178 ops, 67 signals, 16 processes. TL-UL with tlul_socket_1n router works end-to-end |
 | 2026-01-26 | **uart_reg_top SIMULATES!** uart_reg_top testbench runs - 175 ops, 56 signals, 13 processes. TileLink-UL UART register block works end-to-end |
@@ -351,16 +355,21 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 - `tlul` - TileLink-UL adapters (VALIDATED)
 - `tlul_socket_1n` - TL-UL router (**SIMULATES** via spi_host_reg_top)
 - `prim_*` - Primitive modules (SIMULATES)
+- `prim_reg_cdc` - CDC primitives (**SIMULATES** via aon_timer_reg_top)
 - `gpio_reg_top` - Register block only (**SIMULATES** via gpio_no_alerts - 177 ops, 47 signals)
 - `uart_reg_top` - UART register block (**SIMULATES** - 175 ops, 56 signals)
 - `spi_host_reg_top` - SPI Host register block (**SIMULATES** - 178 ops, 67 signals)
 - `i2c_reg_top` - I2C register block (**SIMULATES** - 175 ops, 68 signals)
+- `aon_timer_reg_top` - AON Timer register block (**SIMULATES** - 193 ops, 165 signals, dual clock domain)
+- `pwm_reg_top` - PWM register block (**SIMULATES** - 191 ops, 154 signals, dual clock domain)
+- `rv_timer_reg_top` - RV Timer register block (**SIMULATES** - 175 ops, 48 signals)
+- `hmac_reg_top` - HMAC crypto register block (**SIMULATES** - 175 ops, 100 signals, with FIFO window)
 
 ---
 
 ## Next Steps
 
 1. **Fix prim_diff_decode bug**: File CIRCT issue with minimal reproducer
-2. **Enhance gpio_no_alerts testbench**: Add write/read TL-UL transactions
-3. **Try UART/SPI reg_top**: Create *_no_alerts variants for other IPs
+2. **Try more reg_top IPs**: pwm_reg_top, hmac_reg_top, aes_reg_top
+3. **Simulate full IP logic**: Try aon_timer.sv (not just register top)
 4. **Phase 4 planning**: Investigate DV environment requirements
