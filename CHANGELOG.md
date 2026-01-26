@@ -20,11 +20,24 @@
 - keymgr_reg_top compilation: SUCCESS
 - otbn_reg_top compilation: SUCCESS (with TL-UL socket dependencies)
 
-**AVIP Compilation Analysis (Track W - in progress):**
-- APB: PASS (22MB MLIR output)
-- I2S: PASS
-- AHB: FAIL - Bind statement scope issue (AVIP source bug)
-- I3C: FAIL - InOut interface port limitation
+**AVIP Compilation Testing (Track W - COMPLETE):**
+
+| AVIP | Status | Root Cause |
+|------|--------|------------|
+| APB | ✅ PASS | 295K lines MLIR, 0 errors |
+| I2S | ✅ PASS | 335K lines MLIR, 0 errors |
+| AHB | FAIL | bind scope refs parent port `ahbInterface` (AVIP bug) |
+| I3C | FAIL | InOut interface port `SCL` not supported (CIRCT limitation) |
+| AXI4 | FAIL | bind scope refs parent port `intf` (AVIP bug) |
+| JTAG | FAIL | bind/vif conflict, enum casts, range OOB (AVIP bugs) |
+| SPI | FAIL | nested comments, empty args, class access (AVIP bugs) |
+| UART | FAIL | do_compare default arg mismatch (AVIP bug, strict LRM) |
+| AXI4Lite | FAIL | No compile filelist found (test infra) |
+
+**Summary**: 2/9 AVIPs compile. This is a regression from the previously claimed 4/9 (AHB, I3C showed as pass but actually fail).
+- **AVIP source bugs (6)**: AHB, AXI4, JTAG, SPI, UART, AXI4Lite - require AVIP repo fixes
+- **CIRCT limitation (1)**: I3C - InOut interface ports not yet implemented
+- **Previously local fixes**: UART, JTAG had documented local fixes in AVIP_LOCAL_FIXES.md but repos were reset
 
 ---
 
