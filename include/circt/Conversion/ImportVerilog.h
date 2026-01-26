@@ -109,6 +109,16 @@ struct ImportVerilogOptions {
   /// If true, ignore errors about unknown modules.
   std::optional<bool> ignoreUnknownModules;
 
+  /// Compatibility mode to mimic behavior of other tools. Valid values are
+  /// "vcs" for Synopsys VCS compatibility or "all" for all compatibility
+  /// options.
+  std::optional<std::string> compat;
+
+  /// If true, allow interface instances that are bind/defparam targets to be
+  /// assigned to virtual interfaces. This violates IEEE 1800-2017 but matches
+  /// behavior of commercial tools like Cadence Xcelium.
+  std::optional<bool> allowVirtualIfaceWithOverride;
+
   /// If non-empty, specifies the list of modules that should serve as the top
   /// modules in the design. If empty, this will be automatically determined
   /// based on which modules are unreferenced elsewhere.

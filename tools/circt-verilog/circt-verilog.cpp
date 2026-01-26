@@ -238,6 +238,19 @@ struct CLOptions {
                "interface, and programs."),
       cl::init(false), cl::cat(cat)};
 
+  cl::opt<std::string> compat{
+      "compat",
+      cl::desc("Attempt to increase compatibility with the specified tool. "
+               "Valid values are 'vcs' for Synopsys VCS or 'all' for all "
+               "compatibility options."),
+      cl::value_desc("tool"), cl::cat(cat)};
+
+  cl::opt<bool> allowVirtualIfaceWithOverride{
+      "allow-virtual-iface-with-override",
+      cl::desc("Allow interface instances that are bind/defparam targets to "
+               "be assigned to virtual interfaces (matches Xcelium behavior)."),
+      cl::init(false), cl::cat(cat)};
+
   cl::opt<bool> ignoreTimingControls{
       "ignore-timing-controls",
       cl::desc("Ignore timing controls (event/delay waits) during lowering"),
@@ -466,6 +479,9 @@ static LogicalResult executeWithSources(MLIRContext *context,
     options.timeScale = opts.timeScale;
   options.allowUseBeforeDeclare = opts.allowUseBeforeDeclare;
   options.ignoreUnknownModules = opts.ignoreUnknownModules;
+  if (opts.compat.getNumOccurrences() > 0)
+    options.compat = opts.compat;
+  options.allowVirtualIfaceWithOverride = opts.allowVirtualIfaceWithOverride;
   options.ignoreTimingControls = opts.ignoreTimingControls;
   options.allowNonProceduralDynamic = opts.allowNonProceduralDynamic;
   if (opts.loweringMode != LoweringMode::OnlyLint)
