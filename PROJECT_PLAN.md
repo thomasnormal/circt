@@ -107,13 +107,13 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - verilator-verification: **80.8%** (114/141 passing) ✅ **CORRECTED COUNT (Iter 113)**
 
 **UVM AVIP Status:**
-- **9 AVIPs compile through full pipeline:** APB, SPI, UART, AHB, I2S, I3C, JTAG, AXI4, AXI4Lite ✅
-- **I3C AVIP:** E2E circt-sim (112 executions, 107 cycles, array.contains fix, Iter 117) ✅ **NEW**
-- **UART AVIP:** E2E circt-sim (20K+ executions, 500MHz clock, Iter 117) ✅ **NEW**
+- **2/9 AVIPs compile from fresh SV source:** APB, I2S (rest have AVIP source bugs or CIRCT limitations)
+- **7 AVIPs run in circt-sim with pre-compiled MLIR:** APB, AHB, SPI, UART, I3C, I2S, AXI4 (historical MLIR from when local fixes were applied)
+- **I3C AVIP:** E2E circt-sim (112 executions, 107 cycles, array.contains fix, Iter 117) ✅
+- **UART AVIP:** E2E circt-sim (20K+ executions, 500MHz clock, Iter 117) ✅
 - **SPI AVIP:** E2E circt-sim (111 executions, 107 cycles, no fixes needed, Iter 116) ✅
 - **AHB AVIP:** E2E circt-sim (clock/reset work, 107 process executions, Iter 115) ✅
 - **APB AVIP:** E2E circt-sim (clock/reset work, 56 process executions, Iter 114) ✅
-- **6 AVIPs run in circt-sim:** APB, AHB, SPI, UART, I3C, I2S ✅
 
 ### Remaining Limitations (Updated Iteration 117)
 
@@ -2669,6 +2669,18 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+
+### Iteration 194
+- **Track B completed**: Analyzed all 6 verilator-verification errors - they are due to non-standard `@posedge (clk)` syntax in test files (not CIRCT bugs)
+  - Standard syntax: `@(posedge clk)`, non-standard: `@posedge (clk)`
+  - These tests also missing terminating semicolons in sequences
+  - Recommendation: Mark as XFAIL or report upstream
+- **Track D completed**: Created unit tests for new compat mode features:
+  - `test/Conversion/ImportVerilog/compat-vcs.sv` - Tests VCS compatibility flags
+  - `test/Conversion/ImportVerilog/virtual-iface-bind-override.sv` - Tests AllowVirtualIfaceWithOverride flag
+- Test status:
+  - sv-tests SVA: 9/26 pass (xfail=3)
+  - verilator-verification: 8/17 pass (6 errors are test file bugs)
 
 ### Iteration 180
 - **Upgraded slang from v9.1 to v10.0** for better SystemVerilog support

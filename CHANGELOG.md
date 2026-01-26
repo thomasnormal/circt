@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 196 - January 26, 2026
+
+### Testing & Analysis
+
+- **Track B completed**: Analyzed all 6 verilator-verification errors - they are due to non-standard `@posedge (clk)` syntax in test files (not CIRCT bugs)
+  - Standard syntax: `@(posedge clk)`, non-standard: `@posedge (clk)`
+  - Missing terminating semicolons in sequence expressions
+  - Recommendation: Mark as XFAIL or report upstream to verilator-verification repo
+- **Track D completed**: Created unit tests for new compat mode features:
+  - `test/Conversion/ImportVerilog/compat-vcs.sv` - Tests VCS compatibility flags (RelaxEnumConversions, etc.)
+  - `test/Conversion/ImportVerilog/virtual-iface-bind-override.sv` - Tests AllowVirtualIfaceWithOverride flag
+- Test status:
+  - sv-tests SVA: 9/26 pass (xfail=3)
+  - verilator-verification: 8/17 pass (6 errors are test file syntax bugs, not CIRCT issues)
+
+## Iteration 195 - January 26, 2026
+
+### OpenTitan
+
+- Added pattgen/rom_ctrl/sram_ctrl/sysrst_ctrl targets to OpenTitan run scripts, with matching TL-UL smoke-test benches.
+- Simulated pattgen_reg_top, rom_ctrl_regs_reg_top, sram_ctrl_regs_reg_top, and sysrst_ctrl_reg_top with basic TL-UL reads.
+- Simulated full gpio (with alerts) via circt-sim using the new gpio target.
+- Simulated full uart (with alerts) via circt-sim using the new uart target.
+- Simulated full i2c (with alerts) via circt-sim using the new i2c target.
+- Simulated full spi_host (with alerts) via circt-sim using the new spi_host target.
+- Simulated full spi_device (with alerts) via circt-sim using the new spi_device target.
+- Simulated full usbdev (with alerts) via circt-sim using the new usbdev target.
+- Refactored full-IP TL-UL smoke tests to use the shared tlul_bfm helpers.
+
+## Iteration 195 - January 26, 2026
+
+### SVA BMC/LEC
+
+- Propagate `if` enables onto `bmc.final` checks in LTLToCore for assert/assume/cover (including clocked forms).
+- VerifToSMT now honors `if` enables for assert/assume/cover, including BMC final checks.
+- Added regression tests for enable-gated final checks (assert/assume/cover, clocked/unclocked) and VerifToSMT enable lowering.
+
+## Iteration 194 - January 26, 2026
+
+### SVA BMC/LEC
+
+- VerifToSMT now treats `ltl.eventually` with `ltl.weak` as always true to match LTLToCore semantics.
+- `circt-lec` links `CIRCTTransforms` so the LLHD pipeline can use `MapArithToComb`.
+- Added a VerifToSMT regression test for weak eventual lowering.
+
 ## Iteration 193 - January 26, 2026
 
 ### Strategic Status Update: UVM Parity Assessment
