@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 197 - January 26, 2026
+
+### Track Status Update
+
+- **Track A (AVIP Testing)**: All 9 AVIPs fail even with `--compat vcs` - root cause is UVM base classes (uvm_driver, uvm_object, etc.) not accessible across module boundaries even when uvm_pkg.sv is included
+- **Track B (Yosys SVA)**: 14/14 tests pass (100%), comprehensive SVA test coverage achieved
+  - sv-tests BMC: 9/26 pass (3 xfail, 14 skip)
+  - verilator-verification BMC: 8/17 pass (6 errors, 3 skip)
+  - Key blockers: Named sequence declarations, cycle delay ranges `##[m:n]`
+- **Track C (OpenTitan)**: 26/29 modules PASSED (90%), 2 timeout (gpio, uart)
+  - 33 total simulation logs generated
+  - Shadow errors detected in aes_reg_top, keymgr_reg_top, kmac_reg_top (warnings)
+- **Track D (InOut Interface Research)**: I3C AVIP error identified
+  - Error: `unsupported interface port 'SCL' (InOut)` at Structure.cpp:227-229
+  - Fix: Add `ArgumentDirection::InOut` handling alongside existing In/Out cases
+  - Effort: 2-4 hours, low risk
+
+### Priority Features to Implement
+
+1. **InOut interface ports** - Unblocks I3C AVIP (2-4 hours)
+2. **Named sequence declarations** - Unblocks 6 verilator tests (medium effort)
+3. **Cycle delay ranges `##[m:n]`** - Part of sequence support (medium effort)
+
 ## Iteration 196 - January 26, 2026
 
 ### Testing & Analysis
