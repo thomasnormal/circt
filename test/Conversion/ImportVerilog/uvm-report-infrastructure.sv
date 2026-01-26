@@ -1,8 +1,6 @@
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
 // RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s --check-prefix=MOORE
 // REQUIRES: slang
-// XFAIL: *
-// UVM runtime has compilation issues affecting class declarations.
 
 //===----------------------------------------------------------------------===//
 // Test UVM Reporting Infrastructure Classes
@@ -193,10 +191,10 @@ module test_report_infrastructure;
   end
 endmodule
 
-// MOORE-DAG: moore.class @"uvm_pkg::uvm_report_server"
-// MOORE-DAG: moore.class @"uvm_pkg::uvm_report_handler"
-// MOORE-DAG: moore.class @"uvm_pkg::uvm_report_message"
-// MOORE-DAG: moore.class @"uvm_pkg::uvm_report_catcher"
+// MOORE-DAG: moore.class.classdecl @"uvm_pkg::uvm_report_server"
+// MOORE-DAG: moore.class.classdecl @"uvm_pkg::uvm_report_handler"
+// MOORE-DAG: moore.class.classdecl @"uvm_pkg::uvm_report_message"
+// MOORE-DAG: moore.class.classdecl @"uvm_pkg::uvm_report_catcher"
 // MOORE-DAG: moore.class.methoddecl @dump_server_state
 // MOORE-DAG: moore.class.methoddecl @get_info_count
 // MOORE-DAG: moore.class.methoddecl @get_warning_count

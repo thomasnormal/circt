@@ -1,7 +1,5 @@
 // RUN: circt-verilog --ir-moore %S/../../../lib/Runtime/uvm/uvm_pkg.sv %s -I %S/../../../lib/Runtime/uvm 2>&1 | FileCheck %s
 // REQUIRES: slang
-// XFAIL: *
-// UVM stub package has compilation issues affecting class ordering.
 
 // This test verifies that the UVM stub package can be successfully imported
 // and that basic UVM patterns compile correctly.
@@ -166,7 +164,7 @@ endclass
 // Test sequence
 //===----------------------------------------------------------------------===//
 
-// CHECK: moore.class.classdecl @my_sequence extends @"uvm_pkg::uvm_sequence_64"
+// CHECK: moore.class.classdecl @my_sequence extends @"uvm_pkg::uvm_sequence_63"
 class my_sequence extends uvm_sequence #(my_transaction);
   `uvm_object_utils(my_sequence)
 

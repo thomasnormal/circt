@@ -67,19 +67,31 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 218 Update)
+### Track Status & Next Tasks (Iteration 220 Update)
+
+**Iteration 219 Results (COMPLETE):**
+- Track A: ✅ **3 UVM XFAIL Tests Enabled** - uvm_stubs.sv, uvm-report-infrastructure.sv, uvm-objection-test.sv
+- Track B: ✅ **llhd.halt Fix** - Yield operands now handled, spi_device_tb no longer crashes
+- Track C: ✅ **AVIP Multi-Top** - All pass up to 281ms (2^48 fs limit discovered)
+- Track D: ✅ **Lit Tests: 2841 pass, 42 XFAIL** (improved from 2836/45)
+
+**Iteration 220 Focus (IN PROGRESS):**
+- Track A: 🔄 **Fix Infinite Delta Cycles** - i2c_tb, alert_handler_tb time 0 hangs
+- Track B: 🔄 **Enable More UVM XFAILs** - uvm-tlm-analysis-port.sv needs test fixes
+- Track C: 🔄 **Test Real-World Codebases** - Continue ~/mbit/*, OpenTitan testing
+- Track D: 🔄 **External Test Suites** - Maintain 100% on verilator, yosys
+
+**Iteration 218 Results (COMPLETE):**
+- Track A: ✅ **3/9 AVIPs WORKING** - APB, I2S, I3C (with UVM messages)
+- Track B: ✅ **External Tests** - sv-tests 23/26, verilator 17/17, yosys 14/14
+- Track C: ✅ **3/4 UVM Tests Enableable** - CHECK patterns need updates
+- Track D: ✅ **OpenTitan 31/34 PASS** - 3 full IP crashes identified
 
 **Iteration 217 Results (COMPLETE):**
 - Track A: ✅ **Lit Tests: 97.73%** (2836 pass, 45 XFAIL, 0 failures)
 - Track B: ✅ **Multi-Top AVIPs Working** - APB/I2S HDL+HVL simulations, 100k+ delta cycles
 - Track C: ✅ **45 XFAILs Analyzed** - ~35% UVM-related, ~15 BMC lowering
 - Track D: ✅ **System Verified Healthy** - sv-tests 21/26, verilator 17/17
-
-**Iteration 218 Focus (IN PROGRESS):**
-- Track A: 🔄 **UVM Class Method Support** - Enable more XFAIL tests
-- Track B: 🔄 **Test Real-World AVIPs** - Continue ~/mbit/* testing
-- Track C: 🔄 **BMC Feature Completion** - expect/assume lowering
-- Track D: 🔄 **Hierarchical Names** - Interface/module name resolution
 
 **Remaining Limitations for UVM Parity (Updated Iteration 217):**
 1. **UVM Class Support** (~35% of XFAILs) - Class method lowering, ordering, virtual dispatch
