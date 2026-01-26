@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 203 - January 26, 2026
+
+### Track Completions
+
+- **Track A (sv-tests Chapter 16 SVA)**: **23/26 pass (88%)** - NOT 9/26!
+  - Spurious "no property provided" warning was causing 14 false SKIPs
+  - Setting `NO_PROPERTY_AS_SKIP=0` reveals true pass rate
+  - 3 tests are XFAIL (intentionally failing assertions)
+  - Chapter 18 is random constraints (not SVA)
+
+- **Track B (verilator-verification)**: 8/17 pass - failures categorized
+  - **6 tests fail due to non-standard syntax**: `@posedge (clk)` instead of `@(posedge clk)`
+  - This is an **upstream test bug**, NOT CIRCT limitation
+  - Named sequences work correctly (confirmed)
+  - 3 tests skipped (non-SVA tests)
+
+- **Track C (Yosys SVA)**: ✅ **14/14 pass (100%)** - verified
+  - circt-bmc: 14/14 pass
+  - circt-lec: 14/14 pass
+  - All advanced SVA patterns work: `|->`, `|=>`, `##N`, `$past`, `$rose`, `$fell`, `until`, `throughout`, etc.
+  - 2 VHDL mixed-language tests correctly skipped
+
+- **Track D (OpenTitan Full IP)**: ✅ **hw.instance WORKS for hierarchical designs!**
+  - `prim_flop_2sync` with 2 hw.instance calls simulates correctly
+  - Large FSMs work: `i2c_controller_fsm` (2293 ops, 9 processes)
+  - `timer_core`, `uart_tx`, `uart_rx` all simulate
+  - Blocker is compilation (deep dependency chains), not simulation
+
+### Updated Test Suite Status
+
+| Suite | Previous | Now | Notes |
+|-------|----------|-----|-------|
+| sv-tests SVA | 9/26 (35%) | **23/26 (88%)** | Fixed false SKIP |
+| verilator-verification | 8/17 (47%) | 8/17 (47%) | 6 upstream syntax bugs |
+| Yosys SVA | 14/14 (100%) | 14/14 (100%) | Verified stable |
+
+### Key Corrections
+
+| Previous Understanding | Reality |
+|------------------------|---------|
+| sv-tests at 35% pass | Actually **88%** - spurious warning |
+| verilator 6 failures = CIRCT bug | **Upstream syntax error** in tests |
+| hw.instance breaks simulation | **Works** for hierarchical designs |
+
 ## Iteration 202 - January 26, 2026
 
 ### Track Completions
@@ -268,6 +312,7 @@
 - Extended GPIO DV parse-only compile set (top_darjeeling) and surfaced additional blockers: missing prim_alert/prim_esc/push_pull seq files plus CIRCT limitations in string+byte concatenation, format specifiers with class handles/null, and macro-expanded field names.
 - Added a slang patch and regression test to allow byte-sized integral operands in string concatenations under `--compat vcs`.
 - Added a slang patch and regression test to allow class handles/null in numeric format specifiers under `--compat vcs`.
+- Extended GPIO DV parse-only compile (with -DUVM and more DV deps); now blocked on remaining DV packages (`sec_cm_pkg`, `rst_shadowed_if`, `cip_seq_list.sv`) plus pending slang patches for string+byte concat and format specifiers.
 
 ## Iteration 195 - January 26, 2026
 
