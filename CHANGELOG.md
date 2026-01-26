@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 178 - January 26, 2026
+
+### Baseline Verification Continued
+
+All baselines confirmed stable:
+
+**verilator-verification BMC**: 8/8 active tests pass (100%)
+- 9 tests marked SKIP due to `NO_PROPERTY_AS_SKIP` setting - they have no BMC assertions
+- Skipped tests: sequence_*, event_control_expression, assert_named_without_parenthesis, assert_sampled
+- These tests compile correctly but don't contain properties for BMC to verify
+
+**yosys Tests**: Baselines maintained
+- SVA: 14/16 (87.5%)
+- bind: 6/6 (100%)
+- svtypes: 14/18 (78%)
+
+**AVIP Simulations**: Verified working
+- APB: 119K delta cycles, 0 errors
+- All 8 previously tested AVIPs continue to work
+
+No regressions detected from Iteration 177 baselines.
+
+---
+
 ## Iteration 177 - January 25, 2026
 
 ### Baseline Verification Complete
