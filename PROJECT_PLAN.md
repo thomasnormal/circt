@@ -157,7 +157,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - **Track H (prim_diff_decode)**: ✅ FIXED - Mem2Reg predecessor deduplication, committed 8116230df
 - **Track M (crypto IPs)**: ✅ DONE - Found CSRNG, keymgr, KMAC, OTBN parse; CSRNG recommended next
 - **Track N (64-bit bug)**: ✅ ROOT CAUSE FOUND - SignalValue uses uint64_t, crashes on >64-bit signals
-- **Track O (AVIP analysis)**: ✅ DONE - 4/9 compile (APB, I2S, AHB, I3C); rest are AVIP source bugs
+- **Track O (AVIP analysis)**: ✅ DONE - 2/9 compile (APB, I2S); rest are AVIP bugs/CIRCT limitations
 - **Track P (CSRNG crypto IP)**: ✅ DONE - 10th OpenTitan IP simulates (173 ops, 66 signals, 12 processes)
 - **Track Q (SignalValue 64-bit)**: ✅ FIXED - Upgraded to APInt, test/Tools/circt-sim/signal-value-wide.mlir
 - **Track R (prim_alert_sender)**: ✅ VERIFIED - Mem2Reg fix works, 7+ IPs unblocked (gpio, uart, spi, i2c, timers)
@@ -181,7 +181,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - **Phase 3 Validated**: TileLink-UL protocol adapters (including tlul_socket_1n router) and CDC primitives work
 - **FIXED**: `prim_diff_decode.sv` control flow bug - deduplication added in LLHD Mem2Reg.cpp `insertBlockArgs` function
 - **FIXED**: circt-sim SignalValue 64-bit limit - upgraded to APInt for arbitrary-width signals
-- **AVIP Analysis Complete**: 4/9 AVIPs compile (APB, I2S, AHB, I3C); remaining failures are AVIP source bugs
+- **AVIP Analysis Complete**: 2/9 AVIPs compile (APB, I2S); remaining failures are AVIP source bugs or CIRCT limitations
 - **Crypto IPs Parseable**: CSRNG, keymgr, KMAC, OTBN all parse successfully
 - **timer_core**: Should now work with APInt-based SignalValue (ready to test)
 - **Scripts**: `utils/run_opentitan_circt_verilog.sh`, `utils/run_opentitan_circt_sim.sh`
@@ -197,25 +197,28 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
   - Fixed I2S by handling file paths in +incdir+ gracefully (script fix)
 - **OpenTitan**: 8 register blocks SIMULATE (communication + timers + crypto), TL-UL + CDC primitives validated
 
-### AVIP Analysis Complete (Track O - Iteration 187)
+### AVIP Analysis Complete (Track W - Iteration 190)
 
-**Summary**: 4/9 AVIPs compile via `./utils/run_avip_circt_verilog.sh`. The remaining 5 failures are AVIP source code bugs, NOT CIRCT bugs.
+**Summary**: 2/9 AVIPs compile via `./utils/run_avip_circt_verilog.sh`. The remaining failures are AVIP source bugs, CIRCT limitations, or test infrastructure issues.
 
 | AVIP | Status | Root Cause | Fix Responsibility |
 |------|--------|------------|-------------------|
 | APB | ✅ PASS | - | - |
 | I2S | ✅ PASS | - | - |
-| AHB | ✅ PASS* | Test infra | Script invocation |
-| I3C | ✅ PASS* | Test infra | Script invocation |
-| AXI4 | FAIL | bind scope refs parent module ports | AVIP source bug |
-| JTAG | FAIL | bind scope + range OOB + enum casts | AVIP source bugs |
+| AHB | FAIL | bind scope refs parent module ports (`ahbInterface`) | AVIP source bug |
+| I3C | FAIL | InOut interface port (`SCL`) not supported | CIRCT limitation |
+| AXI4 | FAIL | bind scope refs parent module ports (`intf`) | AVIP source bug |
+| JTAG | FAIL | bind/vif conflict, enum casts, range OOB | AVIP source bugs |
 | SPI | FAIL | nested comments, empty args, class access | AVIP source bugs |
-| UART | FAIL | do_compare default arg mismatch | Strict LRM (AVIP fix) |
-| AXI4Lite | FAIL | No compile filelist found | Test infra |
+| UART | FAIL | do_compare default arg mismatch with UVM base | AVIP source bug (strict LRM) |
+| AXI4Lite | FAIL | No compile filelist found (needs env vars) | Test infra |
 
-*Compiles with correct invocation; previously reported as failing due to test infrastructure.
+**Error Categories:**
+- **AVIP source bugs (6)**: AHB, AXI4, JTAG, SPI, UART, AXI4Lite - require AVIP repo fixes
+- **CIRCT limitation (1)**: I3C - InOut interface ports not yet supported
+- **Previously documented local fixes**: UART (do_compare), JTAG (enum casts) were fixed locally but repos were reset
 
-**Workaround**: Use `--allow-virtual-iface-with-override` for JTAG bind/vif conflicts.
+**Workaround**: Use `--allow-virtual-iface-with-override` for JTAG bind/vif conflicts (does not fix all errors).
 
 ### Remaining Limitations & Features to Build (Iteration 189)
 
