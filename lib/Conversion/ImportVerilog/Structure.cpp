@@ -12,6 +12,7 @@
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/TimingControl.h"
 #include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/expressions/SelectExpressions.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
@@ -38,18 +39,271 @@ static void guessNamespacePrefix(const slang::ast::Symbol &symbol,
   }
 }
 
-static bool shouldCacheInterfaceInstance(
-    const slang::ast::InstanceSymbol &instSym) {
+static const slang::ast::InstanceBodySymbol *
+getInstanceBodyParent(const slang::ast::InstanceSymbol &instSym) {
   auto *parentScope = instSym.getParentScope();
   if (!parentScope)
-    return true;
+    return nullptr;
   if (auto *parentBody =
-          parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+          parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>())
+    return parentBody;
+  if (auto *parentArray =
+          parentScope->asSymbol().as_if<slang::ast::InstanceArraySymbol>()) {
+    auto *arrayParent = parentArray->getParentScope();
+    if (!arrayParent)
+      return nullptr;
+    return arrayParent->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+  }
+  return nullptr;
+}
+
+static std::optional<int64_t>
+getInterfaceArrayIndex(const slang::ast::InstanceSymbol &instSym) {
+  if (instSym.arrayPath.empty())
+    return std::nullopt;
+  slang::SmallVector<slang::ConstantRange, 4> dimensions;
+  instSym.getArrayDimensions(dimensions);
+  if (dimensions.empty())
+    return std::nullopt;
+  const auto &range = dimensions[0];
+  int32_t relIndex = static_cast<int32_t>(instSym.arrayPath[0]);
+  int32_t actualIndex =
+      range.isLittleEndian() ? range.lower() + relIndex
+                             : range.upper() - relIndex;
+  return actualIndex;
+}
+
+static bool
+getInterfaceArrayIndices(const slang::ast::InstanceSymbol &instSym,
+                          SmallVectorImpl<int64_t> &indices) {
+  if (instSym.arrayPath.empty())
+    return false;
+  slang::SmallVector<slang::ConstantRange, 4> dimensions;
+  instSym.getArrayDimensions(dimensions);
+  auto dimCount = std::min(dimensions.size(), instSym.arrayPath.size());
+  if (dimCount == 0)
+    return false;
+  indices.clear();
+  indices.reserve(dimCount);
+  for (size_t i = 0; i < dimCount; ++i) {
+    const auto &range = dimensions[i];
+    int64_t relIndex = static_cast<int64_t>(instSym.arrayPath[i]);
+    int64_t actualIndex =
+        range.isLittleEndian() ? range.lower() + relIndex
+                               : range.upper() - relIndex;
+    indices.push_back(actualIndex);
+  }
+  return true;
+}
+
+static bool
+matchInterfaceArrayIndices(const slang::ast::InstanceSymbol &lhs,
+                            const slang::ast::InstanceSymbol &rhs) {
+  SmallVector<int64_t, 4> lhsIndices;
+  SmallVector<int64_t, 4> rhsIndices;
+  bool lhsIsArray = getInterfaceArrayIndices(lhs, lhsIndices);
+  bool rhsIsArray = getInterfaceArrayIndices(rhs, rhsIndices);
+  if (lhsIsArray != rhsIsArray)
+    return false;
+  if (lhsIsArray && lhsIndices != rhsIndices)
+    return false;
+  return true;
+}
+
+static const slang::ast::InstanceSymbol *findInterfaceArrayElement(
+    const slang::ast::InstanceArraySymbol &arraySym, int64_t index) {
+  for (const auto *elementSym : arraySym.elements) {
+    if (!elementSym)
+      continue;
+    auto *element = elementSym->as_if<slang::ast::InstanceSymbol>();
+    if (!element)
+      continue;
+    auto actualIndex = getInterfaceArrayIndex(*element);
+    if (actualIndex && *actualIndex == index)
+      return element;
+  }
+  return nullptr;
+}
+
+static bool shouldCacheInterfaceInstance(
+    const slang::ast::InstanceSymbol &instSym) {
+  if (auto *parentBody = getInstanceBodyParent(instSym)) {
     if (parentBody->getDefinition().definitionKind ==
         slang::ast::DefinitionKind::Interface)
       return false;
   }
   return true;
+}
+
+static LogicalResult emitInterfacePortConnections(
+    Context &context, Location loc, const slang::ast::InstanceSymbol &instNode,
+    Value instRef) {
+  using slang::ast::ArgumentDirection;
+  using slang::ast::AssignmentExpression;
+  using slang::ast::MultiPortSymbol;
+  using slang::ast::PortSymbol;
+
+  if (instNode.getPortConnections().empty())
+    return success();
+
+  OpBuilder &builder = context.builder;
+  Value ifaceValue;
+  auto getIfaceValue = [&]() -> Value {
+    if (!ifaceValue)
+      ifaceValue = moore::ReadOp::create(builder, loc, instRef);
+    return ifaceValue;
+  };
+
+  auto getIfaceSignalRef = [&](StringRef name, Type portType) -> Value {
+    auto unpackedType = dyn_cast<moore::UnpackedType>(portType);
+    if (!unpackedType)
+      return {};
+    auto signalSym = mlir::FlatSymbolRefAttr::get(builder.getContext(), name);
+    auto refTy = moore::RefType::get(unpackedType);
+    return moore::VirtualInterfaceSignalRefOp::create(builder, loc, refTy,
+                                                      getIfaceValue(),
+                                                      signalSym);
+  };
+
+  auto connectInputPort = [&](const PortSymbol &port,
+                              Value rhs) -> LogicalResult {
+    auto portType = context.convertType(port.getType());
+    if (!portType)
+      return failure();
+    auto signalRef = getIfaceSignalRef(port.name, portType);
+    if (!signalRef)
+      return mlir::emitError(loc)
+             << "unsupported interface port type for `" << port.name << "`";
+    rhs = context.materializeConversion(portType, rhs, false, loc);
+    if (!rhs)
+      return failure();
+    moore::ContinuousAssignOp::create(builder, loc, signalRef, rhs);
+    return success();
+  };
+
+  auto connectOutputPort = [&](const PortSymbol &port,
+                               Value lhs) -> LogicalResult {
+    auto portType = context.convertType(port.getType());
+    if (!portType)
+      return failure();
+    auto signalRef = getIfaceSignalRef(port.name, portType);
+    if (!signalRef)
+      return mlir::emitError(loc)
+             << "unsupported interface port type for `" << port.name << "`";
+    Value rhs = moore::ReadOp::create(builder, loc, signalRef);
+    auto dstType = cast<moore::RefType>(lhs.getType()).getNestedType();
+    rhs = context.materializeConversion(dstType, rhs, false, loc);
+    if (!rhs)
+      return failure();
+    moore::ContinuousAssignOp::create(builder, loc, lhs, rhs);
+    return success();
+  };
+
+  // Connect an inout interface port by creating bidirectional assignments
+  // between the external signal and the interface signal.
+  auto connectInOutPort = [&](const PortSymbol &port,
+                              Value externalRef) -> LogicalResult {
+    auto portType = context.convertType(port.getType());
+    if (!portType)
+      return failure();
+    auto signalRef = getIfaceSignalRef(port.name, portType);
+    if (!signalRef)
+      return mlir::emitError(loc)
+             << "unsupported interface port type for `" << port.name << "`";
+    // For inout ports, we connect the external signal to the interface signal.
+    // Read the external value and assign to interface signal.
+    Value externalValue = moore::ReadOp::create(builder, loc, externalRef);
+    externalValue =
+        context.materializeConversion(portType, externalValue, false, loc);
+    if (!externalValue)
+      return failure();
+    moore::ContinuousAssignOp::create(builder, loc, signalRef, externalValue);
+    // Also connect interface signal back to external (bidirectional).
+    Value ifaceValue = moore::ReadOp::create(builder, loc, signalRef);
+    auto dstType = cast<moore::RefType>(externalRef.getType()).getNestedType();
+    ifaceValue = context.materializeConversion(dstType, ifaceValue, false, loc);
+    if (!ifaceValue)
+      return failure();
+    moore::ContinuousAssignOp::create(builder, loc, externalRef, ifaceValue);
+    return success();
+  };
+
+  for (const auto *con : instNode.getPortConnections()) {
+    const auto *portSymbol = &con->port;
+    const auto *expr = con->getExpression();
+
+    if (!expr) {
+      // Unconnected interface ports are allowed; leave them undriven.
+      continue;
+    }
+
+    if (const auto *assign = expr->as_if<AssignmentExpression>())
+      expr = &assign->left();
+
+    if (auto *port = portSymbol->as_if<PortSymbol>()) {
+      if (port->direction == ArgumentDirection::In) {
+        auto rhs = context.convertRvalueExpression(*expr);
+        if (!rhs || failed(connectInputPort(*port, rhs)))
+          return failure();
+        continue;
+      }
+      if (port->direction == ArgumentDirection::Out) {
+        auto lhs = context.convertLvalueExpression(*expr);
+        if (!lhs || failed(connectOutputPort(*port, lhs)))
+          return failure();
+        continue;
+      }
+      if (port->direction == ArgumentDirection::InOut) {
+        auto lhs = context.convertLvalueExpression(*expr);
+        if (!lhs || failed(connectInOutPort(*port, lhs)))
+          return failure();
+        continue;
+      }
+      return mlir::emitError(loc)
+             << "unsupported interface port `" << port->name << "` ("
+             << slang::ast::toString(port->direction) << ")";
+    }
+
+    if (const auto *multiPort = portSymbol->as_if<MultiPortSymbol>()) {
+      auto value = context.convertLvalueExpression(*expr);
+      if (!value)
+        return failure();
+      unsigned offset = 0;
+      for (const auto *port : llvm::reverse(multiPort->ports)) {
+        unsigned width = port->getType().getBitWidth();
+        auto portType = context.convertType(port->getType());
+        if (!portType)
+          return failure();
+        auto sliceType =
+            moore::RefType::get(cast<moore::UnpackedType>(portType));
+        Value slice =
+            moore::ExtractRefOp::create(builder, loc, sliceType, value, offset);
+        if (port->direction == ArgumentDirection::In) {
+          Value rhs = moore::ReadOp::create(builder, loc, slice);
+          if (failed(connectInputPort(*port, rhs)))
+            return failure();
+        } else if (port->direction == ArgumentDirection::Out) {
+          if (failed(connectOutputPort(*port, slice)))
+            return failure();
+        } else if (port->direction == ArgumentDirection::InOut) {
+          if (failed(connectInOutPort(*port, slice)))
+            return failure();
+        } else {
+          return mlir::emitError(loc)
+                 << "unsupported interface port `" << port->name << "` ("
+                 << slang::ast::toString(port->direction) << ")";
+        }
+        offset += width;
+      }
+      continue;
+    }
+
+    return mlir::emitError(loc)
+           << "unsupported interface port `" << portSymbol->name << "` ("
+           << slang::ast::toString(portSymbol->kind) << ")";
+  }
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -458,6 +712,10 @@ struct ModuleVisitor : public BaseVisitor {
         }
       }
 
+      if (!instNode.getPortConnections().empty())
+        context.pendingInterfacePortConnections.push_back(
+            {&instNode, instOp.getResult(), loc});
+
       return success();
     }
 
@@ -498,6 +756,18 @@ struct ModuleVisitor : public BaseVisitor {
         }
         Value ifaceValue;
         if (auto *expr = con->getExpression()) {
+          if (auto symRef = expr->getSymbolReference()) {
+            if (auto *instSym =
+                    symRef->as_if<slang::ast::InstanceSymbol>()) {
+              ifaceValue = context.resolveInterfaceInstance(instSym, loc);
+            } else if (auto *ifacePortSym =
+                           symRef
+                               ->as_if<slang::ast::InterfacePortSymbol>()) {
+              if (auto it = context.interfacePortValues.find(ifacePortSym);
+                  it != context.interfacePortValues.end())
+                ifaceValue = it->second;
+            }
+          }
           if (auto *arb =
                   expr->as_if<slang::ast::ArbitrarySymbolExpression>()) {
             ifaceValue = context.resolveInterfaceInstance(arb->hierRef, loc);
@@ -505,6 +775,43 @@ struct ModuleVisitor : public BaseVisitor {
                          expr->as_if<
                              slang::ast::HierarchicalValueExpression>()) {
             ifaceValue = context.resolveInterfaceInstance(hier->ref, loc);
+          } else if (auto *elemSel =
+                         expr->as_if<slang::ast::ElementSelectExpression>()) {
+            auto getArraySym =
+                [&](const slang::ast::Expression &valueExpr)
+                -> const slang::ast::InstanceArraySymbol * {
+              if (auto symRef = valueExpr.getSymbolReference())
+                return symRef->as_if<slang::ast::InstanceArraySymbol>();
+              if (auto *hier =
+                      valueExpr
+                          .as_if<slang::ast::HierarchicalValueExpression>()) {
+                if (!hier->ref.path.empty())
+                  return hier->ref.path.back()
+                      .symbol->as_if<slang::ast::InstanceArraySymbol>();
+              }
+              if (auto *arb =
+                      valueExpr
+                          .as_if<slang::ast::ArbitrarySymbolExpression>()) {
+                if (!arb->hierRef.path.empty())
+                  return arb->hierRef.path.back()
+                      .symbol->as_if<slang::ast::InstanceArraySymbol>();
+              }
+              return nullptr;
+            };
+
+            if (auto *arraySym = getArraySym(elemSel->value())) {
+              auto constIndex = context.evaluateConstant(elemSel->selector());
+              if (constIndex.isInteger()) {
+                auto index = constIndex.integer().as<int64_t>();
+                if (index) {
+                  if (auto *element =
+                          findInterfaceArrayElement(*arraySym, *index)) {
+                    ifaceValue =
+                        context.resolveInterfaceInstance(element, loc);
+                  }
+                }
+              }
+            }
           }
         }
         if (!ifaceValue) {
@@ -2112,6 +2419,13 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   interfaceInstances.clear();
   auto interfaceInstancesGuard = llvm::make_scope_exit(
       [&] { interfaceInstances = std::move(prevInterfaceInstances); });
+  auto prevPendingInterfacePortConnections =
+      std::move(pendingInterfacePortConnections);
+  pendingInterfacePortConnections.clear();
+  auto pendingInterfacePortConnectionsGuard = llvm::make_scope_exit([&] {
+    pendingInterfacePortConnections =
+        std::move(prevPendingInterfacePortConnections);
+  });
 
   ValueSymbolScope scope(valueSymbols);
   SmallVector<const slang::ast::InterfacePortSymbol *> ifacePortSymbols;
@@ -2233,6 +2547,14 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     }
     return failure();
   }
+
+  for (const auto &pendingConn : pendingInterfacePortConnections) {
+    if (failed(emitInterfacePortConnections(*this, pendingConn.loc,
+                                            *pendingConn.instSym,
+                                            pendingConn.instRef)))
+      return failure();
+  }
+  pendingInterfacePortConnections.clear();
 
   // Final pass: convert procedural blocks and continuous assigns after
   // instances so hierarchical outputs are available.
@@ -2639,17 +2961,43 @@ Value Context::resolveInterfaceInstance(
   if (!instSym)
     return {};
 
+  auto findArrayAlias = [&]() -> Value {
+    Value match;
+    auto *targetParent = getInstanceBodyParent(*instSym);
+    for (const auto &entry : interfaceInstances) {
+      const auto *candidate = entry.first;
+      if (candidate->name != instSym->name)
+        continue;
+      if (&candidate->getDefinition() != &instSym->getDefinition())
+        continue;
+      if (!matchInterfaceArrayIndices(*candidate, *instSym))
+        continue;
+      if (targetParent &&
+          getInstanceBodyParent(*candidate) != targetParent)
+        continue;
+      if (match)
+        return {};
+      match = entry.second;
+    }
+    return match;
+  };
+
   if (shouldCacheInterfaceInstance(*instSym)) {
     if (auto it = interfaceInstances.find(instSym);
         it != interfaceInstances.end()) {
       if (!currentScope)
         return it->second;
-      if (auto *scope = instSym->getParentScope()) {
-        if (auto *body =
-                scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
-          if (body == currentScope)
-            return it->second;
-        }
+      if (auto *body = getInstanceBodyParent(*instSym)) {
+        if (body == currentScope)
+          return it->second;
+      }
+    }
+    if (auto alias = findArrayAlias()) {
+      if (!currentScope)
+        return alias;
+      if (auto *body = getInstanceBodyParent(*instSym)) {
+        if (body == currentScope)
+          return alias;
       }
     }
   }
@@ -2692,7 +3040,8 @@ Value Context::resolveInterfaceInstance(
       return {};
     if (auto *sym = currentScope->find(target->name)) {
       if (auto *inst = sym->as_if<slang::ast::InstanceSymbol>()) {
-        if (&inst->getDefinition() == &target->getDefinition()) {
+        if (&inst->getDefinition() == &target->getDefinition() &&
+            matchInterfaceArrayIndices(*inst, *target)) {
           if (auto it = interfaceInstances.find(inst);
               it != interfaceInstances.end())
             return it->second;
@@ -2705,11 +3054,9 @@ Value Context::resolveInterfaceInstance(
         continue;
       if (&candidate->getDefinition() != &target->getDefinition())
         continue;
-      auto *scope = candidate->getParentScope();
-      if (!scope)
+      if (!matchInterfaceArrayIndices(*candidate, *target))
         continue;
-      auto *body =
-          scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+      auto *body = getInstanceBodyParent(*candidate);
       if (body != currentScope)
         continue;
       return entry.second;
@@ -2722,12 +3069,10 @@ Value Context::resolveInterfaceInstance(
         continue;
       if (&candidate->getDefinition() != &target->getDefinition())
         continue;
-      // Check if the candidate is in an ancestor scope of currentScope.
-      auto *candidateScope = candidate->getParentScope();
-      if (!candidateScope)
+      if (!matchInterfaceArrayIndices(*candidate, *target))
         continue;
-      auto *candidateBody =
-          candidateScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+      // Check if the candidate is in an ancestor scope of currentScope.
+      auto *candidateBody = getInstanceBodyParent(*candidate);
       if (!candidateBody)
         continue;
       // Walk up from currentScope looking for candidateBody.
