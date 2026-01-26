@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 177 - January 25, 2026
+
+### Baseline Verification Complete
+
+All test suites verified after hanging sequence test fix:
+
+**Unit Tests**: 100% pass rate (all 635 MooreRuntimeTests)
+- TryGetNextItemWithData: FIXED (was hanging)
+- PeekNextItem: FIXED (was hanging)
+- SampleFieldCoverageEnabled: PASS (verified)
+
+**sv-tests**: 821/831 (98%)
+- Chapter-5: 50/50 (100%)
+- Chapter-6: 82/84 (97%)
+- Chapter-7: 103/103 (100%)
+- Chapter-11: 87/88 (99%)
+- Chapter-13: 15/15 (100%)
+- Chapter-18: 132/134 (98%)
+
+**verilator-verification BMC**: 17/17 (100%)
+- All assert/sequence/event-control tests pass
+- Baseline confirmed
+
+**AVIP Simulations**: 8/10 simulate successfully
+- APB, AHB, UART, SPI, I2S, I3C, AXI4, AXI4-Lite all work
+- JTAG: bind/vif conflict blocks compilation
+- I2C: Uses I3C directory instead
+
+---
+
 ## Iteration 176 - January 25, 2026
 
 ### Hanging Sequence Tests FIXED
@@ -57,9 +87,21 @@ SVA tests: 14/16 (87.5%)
 - LEC now flattens private HW modules by default to avoid dominance cycles from
   cross-module ref nets (e.g., yosys `extnets.sv`).
 - Added regression test: `test/Tools/circt-lec/lec-extnets-cycle.mlir`.
+- LEC now strips `llhd.combinational` by inlining simple bodies or abstracting
+  to inputs, unblocking verilator LEC smoke (17/17 pass).
+- Added regression test: `test/Tools/circt-lec/lec-strip-llhd-combinational.mlir`.
+- Added regression test: `test/Tools/circt-lec/lec-strip-llhd-combinational-multi.mlir`.
+- `circt-lec --run-smtlib` now scans stdout/stderr for the SAT result token,
+  avoiding failures when z3 emits warnings; added regression
+  `test/Tools/circt-lec/lec-run-smtlib-warning.mlir`.
+- LEC now abstracts interface fields with multiple stores or missing dominance
+  to fresh inputs instead of failing; added regression
+  `test/Tools/circt-lec/lec-strip-llhd-interface-multistore.mlir`.
 - Tests:
   - `TEST_FILTER=extnets LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh`
   - `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh` (14/14 pass, 2 VHDL skip)
+  - `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh` (17/17 pass)
+  - `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh` (23/23 pass, 1013 skip)
 
 ### I2C AVIP Analysis
 
@@ -67,6 +109,18 @@ SVA tests: 14/16 (87.5%)
 - Interface support: Compiles to Moore IR, may hang in simulation
 - Unsupported: `wand`, `tri1` net types fail during LLHD lowering
 - Cadence I2C VIP: Requires UVM infrastructure
+
+### AXI4 AVIP (circt-verilog)
+
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/axi4_avip` fails in
+  `axi4_slave_agent_bfm.sv` (`intf` undeclared) and rejects a virtual interface
+  with hierarchical references; log in `avip-circt-verilog.log`.
+
+### AHB AVIP (circt-verilog)
+
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/ahb_avip` fails in
+  `AhbMasterAgentBFM.sv` (`ahbInterface` undeclared in bind statements); log in
+  `avip-circt-verilog.log`.
 
 ### Chapter-22 Major Improvement
 
@@ -186,6 +240,9 @@ All test suites verified stable:
 - ImportVerilog now supports interface-scoped properties by resolving
   interface signals through virtual interface refs; regression in
   `test/Conversion/ImportVerilog/sva-interface-property.sv`.
+- Added ImportVerilog regression for bind directives that reference interface
+  ports in the bind scope, in
+  `test/Conversion/ImportVerilog/bind-interface-port.sv`.
 - Interface instance port connections now lower to interface signal assignments,
   enabling interface-derived clocks in BMC; added
   `test/Tools/circt-bmc/sva-interface-property-e2e.sv`.
