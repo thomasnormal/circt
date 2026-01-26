@@ -14,15 +14,17 @@ Simulate OpenTitan primitive modules, IP blocks, and eventually UVM testbenches 
 | 2 | Simple IP (GPIO RTL) | **gpio_no_alerts SIMULATES** - Full GPIO blocked by prim_diff_decode |
 | 3 | Protocol Infrastructure (TileLink-UL) | **VALIDATED** (via gpio_no_alerts) |
 | 4 | DV Infrastructure (UVM Testbenches) | Not Started |
-| 5 | Crypto IP (AES, HMAC, CSRNG) | **aes_reg_top + hmac_reg_top + csrng_reg_top SIMULATE** |
+| 5 | Crypto IP (AES, HMAC, CSRNG, keymgr, OTBN) | **5 crypto IPs SIMULATE** |
 | 6 | Integration (Multiple IPs) | Not Started |
 
-**Summary**: 10 OpenTitan register blocks now simulate via CIRCT:
+**Summary**: 13 OpenTitan modules now simulate via CIRCT:
 - Communication: gpio, uart, spi_host, i2c
-- Timers: aon_timer, pwm, rv_timer
-- Crypto: hmac, aes, csrng
+- Timers: aon_timer, pwm, rv_timer, **timer_core** (full logic!)
+- Crypto: hmac, aes, csrng, **keymgr**, **otbn**
 
 **Blocker for Full IPs**: prim_diff_decode.sv control-flow lowering bug prevents prim_alert_sender
+
+**Recent Fix**: SignalValue 64-bit limitation fixed with llvm::APInt (commit f0c40886a)
 
 ---
 
@@ -329,8 +331,10 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-26 | **keymgr_reg_top + otbn_reg_top SIMULATE!** 5 crypto IPs now! 13 OpenTitan modules total. keymgr (212 ops, 111 signals) with shadowed registers for key protection. otbn (176 ops, 58 signals) with window interfaces for Big Number accelerator |
 | 2026-01-26 | **csrng_reg_top SIMULATES!** Third crypto IP! 10 OpenTitan register blocks now working! CSRNG testbench runs - 173 ops, 66 signals, 12 processes. Cryptographic secure random number generator |
 | 2026-01-26 | **aes_reg_top SIMULATES!** Second crypto IP! 9 OpenTitan register blocks now working! AES testbench runs - 212 ops, 86 signals, 14 processes. Shadowed registers for security |
+| 2026-01-26 | **timer_core SIMULATES! 64-bit APInt fix works!**: After fixing SignalValue to use llvm::APInt (commit f0c40886a), timer_core with 64-bit mtime/mtimecmp values now simulates successfully without crashes |
 | 2026-01-26 | **timer_core compiles but hits simulator bug**: Full timer_core logic compiles to HW dialect. Simulation crashes with APInt bit extraction assertion on 64-bit timer values |
 | 2026-01-26 | **rv_timer_full blocked by prim_diff_decode**: Confirmed full rv_timer.sv cannot lower due to prim_alert_sender dependency |
 | 2026-01-26 | **hmac_reg_top SIMULATES!** First crypto IP! 8 OpenTitan register blocks now working! HMAC testbench runs - 175 ops, 100 signals, 15 processes. Crypto with FIFO window |
@@ -377,14 +381,16 @@ The Moore-to-Core lowering fails when complex nested `if-else` chains exist insi
 - `hmac_reg_top` - HMAC crypto register block (**SIMULATES** - 175 ops, 100 signals, with FIFO window)
 - `aes_reg_top` - AES crypto register block (**SIMULATES** - 212 ops, 86 signals, with shadowed registers)
 - `csrng_reg_top` - CSRNG crypto register block (**SIMULATES** - 173 ops, 66 signals, random number generator)
+- `keymgr_reg_top` - Key Manager crypto register block (**SIMULATES** - 212 ops, 111 signals, with shadowed registers)
+- `otbn_reg_top` - OTBN Big Number crypto register block (**SIMULATES** - 176 ops, 58 signals, with window interfaces)
 
 ---
 
 ## Full IP Exploration
 
-### timer_core (First Full Logic Module Attempted)
+### timer_core (First Full Logic Module - 64-bit FIXED)
 
-**Status**: Compiles to HW dialect, simulation crashes on 64-bit values
+**Status**: SIMULATES SUCCESSFULLY after SignalValue APInt fix
 
 The `timer_core.sv` module is a simple RISC-V timer counter with minimal dependencies:
 - No TL-UL interface (pure logic)
@@ -393,12 +399,22 @@ The `timer_core.sv` module is a simple RISC-V timer counter with minimal depende
 
 **Compilation**: SUCCESS - timer_core.sv compiles without any package dependencies
 
-**Simulation**: FAILS - circt-sim crashes with:
+**Simulation**: SUCCESS - after fixing SignalValue to use llvm::APInt (commit f0c40886a)
+```
+Simulating timer_core...
+[circt-sim] Registered 14 LLHD signals and 4 LLHD processes/initial blocks
+Starting timer_core test...
+Reset released
+Timer activated
+[circt-sim] Simulation finished successfully
+```
+
+**Historical Note**: Previously crashed with APInt assertion:
 ```
 APInt.cpp:483: Assertion `bitPosition < BitWidth && (numBits + bitPosition) <= BitWidth && "Illegal bit extraction"' failed
 ```
 
-This appears to be a circt-sim bug with 64-bit values when comparing mtime >= mtimecmp.
+The fix upgraded SignalValue from uint64_t to llvm::APInt for arbitrary-width signal support.
 
 ### rv_timer (Full Timer IP with Alerts)
 
@@ -416,7 +432,8 @@ Cannot lower to HW dialect due to prim_diff_decode control-flow bug in prim_aler
 
 ## Next Steps
 
-1. **Fix circt-sim 64-bit bug**: Report APInt assertion failure on 64-bit comparisons
+1. **64-bit APInt bug FIXED**: SignalValue upgraded to llvm::APInt (commit f0c40886a) - timer_core simulates!
 2. **Fix prim_diff_decode bug**: File CIRCT issue with minimal reproducer
-3. **Try more crypto IPs**: otbn_reg_top, keymgr_reg_top (csrng_reg_top ✓ DONE)
+3. ~~**Try more crypto IPs**: otbn_reg_top, keymgr_reg_top~~ **DONE** - All 5 crypto IPs (hmac, aes, csrng, keymgr, otbn) now simulate!
 4. **Phase 4 planning**: Investigate DV environment requirements
+5. **Explore more IPs**: entropy_src, edn, kmac, otp_ctrl register blocks

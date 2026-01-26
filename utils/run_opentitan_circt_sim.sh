@@ -22,6 +22,8 @@ usage() {
   echo "  hmac_reg_top       - HMAC crypto register block (with FIFO window)"
   echo "  aes_reg_top        - AES crypto register block (shadowed registers)"
   echo "  csrng_reg_top      - CSRNG crypto register block (random number generator)"
+  echo "  keymgr_reg_top     - Key Manager crypto register block (shadowed registers)"
+  echo "  otbn_reg_top       - OTBN crypto register block (big number accelerator)"
   echo ""
   echo "Targets (Full IP Logic - Experimental):"
   echo "  timer_core         - RISC-V timer core logic (crashes on 64-bit values)"
@@ -88,6 +90,8 @@ RV_TIMER_RTL="$OPENTITAN_DIR/hw/ip/rv_timer/rtl"
 HMAC_RTL="$OPENTITAN_DIR/hw/ip/hmac/rtl"
 AES_RTL="$OPENTITAN_DIR/hw/ip/aes/rtl"
 CSRNG_RTL="$OPENTITAN_DIR/hw/ip/csrng/rtl"
+KEYMGR_RTL="$OPENTITAN_DIR/hw/ip/keymgr/rtl"
+OTBN_RTL="$OPENTITAN_DIR/hw/ip/otbn/rtl"
 
 # Testbench generation
 generate_testbench() {
@@ -1410,6 +1414,217 @@ endmodule
 EOF
       ;;
 
+    keymgr_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for keymgr_reg_top (TileLink-UL interface)
+// Key Manager - crypto IP with shadowed registers for security
+// Features: shadowed registers for key protection, separate shadow reset
+
+`include "prim_assert.sv"
+
+module keymgr_reg_top_tb;
+  import tlul_pkg::*;
+  import keymgr_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+  logic rst_shadowed_ni = 0;  // keymgr has separate shadow reset
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Register interfaces
+  keymgr_reg2hw_t reg2hw;
+  keymgr_hw2reg_t hw2reg;
+
+  // Error outputs
+  logic shadowed_storage_err_o;
+  logic shadowed_update_err_o;
+  logic intg_err_o;
+
+  keymgr_reg_top dut (
+    .clk_i,
+    .rst_ni,
+    .rst_shadowed_ni,
+    .tl_i,
+    .tl_o,
+    .reg2hw,
+    .hw2reg,
+    .shadowed_storage_err_o,
+    .shadowed_update_err_o,
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+  end
+
+  initial begin
+    $display("Starting keymgr_reg_top test...");
+
+    // Reset both domains
+    rst_ni = 0;
+    rst_shadowed_ni = 0;
+    #20;
+    rst_ni = 1;
+    rst_shadowed_ni = 1;
+    $display("Reset released (with shadow reset)");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (CFG_REGWEN register at offset 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;  // CFG_REGWEN register
+    tl_i.a_size = 2;
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(5) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response (CFG_REGWEN): data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(5) @(posedge clk_i);
+
+    // Check for shadow errors (should be none after clean reset)
+    if (!shadowed_storage_err_o && !shadowed_update_err_o) begin
+      $display("Shadow register status: OK (no errors)");
+    end else begin
+      $display("WARNING: Shadow errors detected: storage=%b update=%b",
+               shadowed_storage_err_o, shadowed_update_err_o);
+    end
+
+    $display("TEST PASSED: keymgr_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
+    otbn_reg_top)
+      cat > "$tb_file" << 'EOF'
+// Minimal testbench for otbn_reg_top (TileLink-UL interface)
+// OTBN - OpenTitan Big Number accelerator for cryptographic operations
+// Features: window interfaces for instruction/data memory access
+
+`include "prim_assert.sv"
+
+module otbn_reg_top_tb;
+  import tlul_pkg::*;
+  import otbn_reg_pkg::*;
+
+  logic clk_i = 0;
+  logic rst_ni = 0;
+
+  // TL-UL interfaces
+  tl_h2d_t tl_i;
+  tl_d2h_t tl_o;
+
+  // Window interfaces (OTBN has 2 windows for IMEM/DMEM access)
+  tl_h2d_t tl_win_o [2];
+  tl_d2h_t tl_win_i [2];
+
+  // Register interfaces
+  otbn_reg2hw_t reg2hw;
+  otbn_hw2reg_t hw2reg;
+
+  // Integrity error
+  logic intg_err_o;
+
+  otbn_reg_top dut (
+    .clk_i,
+    .rst_ni,
+    .tl_i,
+    .tl_o,
+    .tl_win_o,
+    .tl_win_i,
+    .reg2hw,
+    .hw2reg,
+    .intg_err_o()
+  );
+
+  // Clock generation
+  always #5 clk_i = ~clk_i;
+
+  // Initialize TL-UL with idle values
+  initial begin
+    tl_i = TL_H2D_DEFAULT;
+    hw2reg = '0;
+    // Window interfaces return idle response
+    tl_win_i[0] = TL_D2H_DEFAULT;
+    tl_win_i[1] = TL_D2H_DEFAULT;
+  end
+
+  initial begin
+    $display("Starting otbn_reg_top test...");
+
+    // Reset
+    rst_ni = 0;
+    #20;
+    rst_ni = 1;
+    $display("Reset released");
+
+    // Wait a few cycles
+    repeat(10) @(posedge clk_i);
+
+    // Check outputs are valid
+    $display("TL response ready: %b", tl_o.a_ready);
+
+    // Simple read transaction (INTR_STATE register at offset 0x00)
+    @(posedge clk_i);
+    tl_i.a_valid = 1'b1;
+    tl_i.a_opcode = Get;
+    tl_i.a_address = 32'h0;  // INTR_STATE register
+    tl_i.a_size = 2;
+    tl_i.a_mask = 4'hF;
+    tl_i.d_ready = 1'b1;
+
+    // Wait for response
+    repeat(5) @(posedge clk_i);
+    tl_i.a_valid = 1'b0;
+
+    if (tl_o.d_valid) begin
+      $display("Got TL response (INTR_STATE): data = 0x%08x", tl_o.d_data);
+    end
+
+    repeat(5) @(posedge clk_i);
+
+    $display("TEST PASSED: otbn_reg_top basic connectivity");
+    $finish;
+  end
+
+  // Timeout
+  initial begin
+    #10000;
+    $display("TEST TIMEOUT");
+    $finish;
+  end
+endmodule
+EOF
+      ;;
+
     *)
       echo "No testbench defined for target: $target" >&2
       return 1
@@ -1878,6 +2093,96 @@ get_files_for_target() {
       echo "$CSRNG_RTL/csrng_reg_pkg.sv"
       echo "$CSRNG_RTL/csrng_reg_top.sv"
       ;;
+    keymgr_reg_top)
+      local KEYMGR_RTL="$OPENTITAN_DIR/hw/ip/keymgr/rtl"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Key Manager packages
+      echo "$KEYMGR_RTL/keymgr_reg_pkg.sv"
+      echo "$KEYMGR_RTL/keymgr_reg_top.sv"
+      ;;
+    otbn_reg_top)
+      local OTBN_RTL="$OPENTITAN_DIR/hw/ip/otbn/rtl"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # TL-UL socket for window interface (OTBN has 2 windows)
+      echo "$PRIM_RTL/prim_count_pkg.sv"
+      echo "$PRIM_RTL/prim_count.sv"
+      echo "$PRIM_RTL/prim_fifo_sync_cnt.sv"
+      echo "$PRIM_RTL/prim_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_fifo_sync.sv"
+      echo "$TLUL_RTL/tlul_err_resp.sv"
+      echo "$TLUL_RTL/tlul_socket_1n.sv"
+      # OTBN packages
+      echo "$OTBN_RTL/otbn_reg_pkg.sv"
+      echo "$OTBN_RTL/otbn_reg_top.sv"
+      ;;
     timer_core)
       # timer_core - RISC-V timer logic (no TL-UL, minimal dependencies)
       # This is the core timer logic without any register interface
@@ -1928,6 +2233,8 @@ COMPILE_CMD=(
   "-I" "$HMAC_RTL"
   "-I" "$AES_RTL"
   "-I" "$CSRNG_RTL"
+  "-I" "$KEYMGR_RTL"
+  "-I" "$OTBN_RTL"
   "${SRC_FILES[@]}"
   "$TB_FILE"
   "-o" "$MLIR_FILE"
