@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 228 Update)
+### Track Status & Next Tasks (Iteration 229 Update)
+
+**Iteration 229 Results (COMPLETE):**
+- Track A: ✅ **UVM Phases Root Cause** - fork/join + __moore_delay NOT implemented in interpreter
+- Track B: ✅ **Alert Handler Root Cause** - Sensitivity list includes process outputs (simulator limit)
+- Track C: ✅ **errors-xfail.mlir Ready** - Issue fixed, can remove XFAIL marker
+- Track D: ✅ **comb.mux Root Cause** - LLVM struct types not handled by CombToSMT
+
+**Iteration 230 Focus (NEXT):**
+- Track A: 🔄 **Implement SimForkOp handler** - Enable fork/join for UVM phases
+- Track B: 🔄 **Implement __moore_delay** - Enable delays in class methods
+- Track C: 🔄 **Fix always_comb sensitivity** - Exclude process outputs from sensitivity lists
+- Track D: 🔄 **Exclude LLVM types from comb.mux** - Fix BMC for string operations
 
 **Iteration 228 Results (COMPLETE):**
 - Track A: ✅ **UVM Vtable Fix** - Virtual method dispatch for UVM reports now intercepted
 - Track B: ✅ **OpenTitan: 4/6 PASS** - mbx, ascon, spi_host, usbdev work; i2c/alert_handler fail
 - Track C: ⚠️ **AVIP UVM Incomplete** - Simulation exits at time 0, UVM phases not running
 - Track D: ✅ **33 XFAIL Categorized** - 12 UVM, 3 BMC, 9 hierarchical, 9 other
-
-**Iteration 229 Focus (NEXT):**
-- Track A: 🔄 **Fix UVM phase execution** - UVM run_test() returns immediately
-- Track B: 🔄 **Fix alert_handler delta overflow** - Circular combinational in esc_timer
-- Track C: 🔄 **Enable errors-xfail.mlir** - Potentially fixed already
-- Track D: 🔄 **Fix comb.mux BMC legalization** - Blocks 10+ XFAIL tests
 
 **Iteration 227 Results (COMPLETE):**
 - Track A: ✅ **Instance Input Fix** - registerModuleDrive() now resolves inputValueMap block args

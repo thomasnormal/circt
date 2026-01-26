@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 229 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Investigate UVM phase execution
+- **Track B**: Investigate alert_handler delta overflow
+- **Track C**: Check errors-xfail.mlir fix
+- **Track D**: Investigate comb.mux BMC legalization
+
+### Track Completions
+
+- **Track A (UVM Phases)**: ✅ **ROOT CAUSE FOUND**
+  - `fork/join` operations (SimForkOp) NOT implemented in LLHDProcessInterpreter
+  - `__moore_delay` runtime function NOT implemented
+  - UVM `run_test()` uses fork...join_none to spawn phases - these are ignored
+  - Fix requires: Add SimForkOp/WaitForkOp handlers + __moore_delay implementation
+
+- **Track B (Alert Handler)**: ✅ **ROOT CAUSE FOUND**
+  - Simulator limitation, not RTL bug
+  - LLHD lowering creates sensitivity lists including process's own outputs
+  - For `always_comb`, the FSM drives cnt_clr/cnt_en which re-triggers itself
+  - Fix: Exclude process outputs from always_comb sensitivity lists
+
+- **Track C (errors-xfail.mlir)**: ✅ **READY TO ENABLE**
+  - The expected error "could not determine domain-type" is no longer produced
+  - Pass completes successfully - underlying issue fixed
+  - Action: Remove XFAIL marker and update test
+
+- **Track D (comb.mux BMC)**: ✅ **ROOT CAUSE FOUND**
+  - LLVM struct types (`!llvm.struct<(ptr, i64)>` for strings) go through comb.mux
+  - CombToSMT type converter doesn't handle LLVM types
+  - Fix: Exclude LLVM types from arith.select→comb.mux conversion
+
+### Key Findings Summary
+
+**Missing Runtime Features for UVM:**
+- `sim::SimForkOp` - Not interpreted (MooreToCore.cpp:1698-1767)
+- `sim::SimWaitForkOp` - Not interpreted
+- `sim::SimDisableForkOp` - Not interpreted
+- `__moore_delay(int64_t)` - Not implemented
+
+**Files Needing Implementation:**
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Add fork/join handlers
+- `lib/Runtime/MooreRuntime.cpp` - Add __moore_delay
+
+---
+
 ## Iteration 228 - January 26, 2026
 
 ### Focus Areas
@@ -57,6 +104,11 @@
   - Fix: Add `inputValueMap` lookup in `registerModuleDrive()` before checking for ProcessOp
   - `llhd-process-result-instance-input.mlir` now passes (proc_in=1)
 
+- **Track A (Module Drive Mixed Dependencies)**: ✅ **FIXED**
+  - Module-level drives that depend on process results and other signals now register a combinational sensitivity process
+  - Continuous assignment evaluation resolves `llhd.process` results via cached yield values
+  - Added regression: `module-drive-process-result-signal.mlir`
+
 - **Track B (i2c_tb)**: ✅ **PASSES**
   - i2c_tb simulation completes successfully
   - No more infinite delta cycles
@@ -74,6 +126,8 @@
 ### Code Changes
 
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add `inputValueMap` lookup in `registerModuleDrive()` to resolve child module inputs mapped to parent process results
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Evaluate `llhd.process` results in continuous assignments; allow mixed process-result + signal dependencies
+- `test/Tools/circt-sim/module-drive-process-result-signal.mlir`: New regression for mixed dependencies in module-level drives
 
 ---
 
