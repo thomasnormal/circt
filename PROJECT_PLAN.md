@@ -100,10 +100,10 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - sv-tests Chapter-26: **2/2** (100%) ✅
 
 **Other Chapters:**
-- sv-tests Chapter-9: **45/46** (97.8%) - 1 SVA sequence event test (Codex scope)
+- sv-tests Chapter-9: **46/46** (100%) ✅
 
 **External Test Suites:**
-- Yosys SVA BMC: **12/14 passing** (86%) ✅
+- Yosys SVA BMC: **14/14 passing** (100%) ✅
 - verilator-verification: **80.8%** (114/141 passing) ✅ **CORRECTED COUNT (Iter 113)**
 
 **UVM AVIP Status:**
@@ -139,9 +139,9 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 19. ~~**Structure/variable patterns**~~: ✅ IMPLEMENTED (Iter 117) - Pattern matching for matches operator
 
 **For sv-tests Completion:**
-1. **Chapter-9 (97%)**:
+1. **Chapter-9 (100%)**:
    - ~~4 process class tests~~: ✅ FIXED (Iter 111)
-   - 1 SVA sequence event test (clear error now - Codex agent scope)
+   - ~~1 SVA sequence event test~~: ✅ FIXED
 2. **10 Chapters at 100%:** 7, 10, 13, 14, 20, 21, 23, 24, 25, 26
 
 **For verilator-verification (80.8%):**
@@ -155,7 +155,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 **Track A**: Test AXI4 AVIP through circt-sim E2E
 **Track B**: UVM agent/driver infrastructure improvements
-**Track C**: sv-tests Chapter-9 remaining tests
+**Track C**: sv-tests Chapter-9 complete ✅
 **Track D**: AXI4Lite AVIP E2E circt-sim testing
 
 **Infrastructure:**
@@ -400,9 +400,21 @@ circt-verilog --uvm-path ~/uvm-core/src \
 - New: local circt-bmc harnesses for `~/sv-tests` and `~/verilator-verification`
   to drive test-driven SVA progress (see `utils/run_sv_tests_circt_bmc.sh` and
   `utils/run_verilator_verification_circt_bmc.sh`).
-- ✅ Progress: LLHD desequencing now treats 4-state clock probes as boolean
-  triggers and recognizes wait-block arguments as past values, allowing
-  `llhd.process` to lower for clocked always blocks (basic03 pipeline unblocked).
+- New: LEC smoke harnesses for `~/sv-tests`, `~/verilator-verification`, and
+  `~/yosys/tests/sva` (see `utils/run_sv_tests_circt_lec.sh`,
+  `utils/run_verilator_verification_circt_lec.sh`, and
+  `utils/run_yosys_sva_circt_lec.sh`).
+- ✅ LEC: `--run-smtlib` now scans stdout/stderr for SAT results, fixing empty
+  token failures when z3 emits warnings.
+- ✅ LEC smoke: yosys `extnets` now passes by flattening private HW modules
+  before LEC; ref inout/multi-driver resolution is still missing.
+- ✅ LEC: interface fields with multiple stores now abstract to inputs to avoid
+  hard failures; full multi-driver semantics still missing.
+- ✅ LEC smoke: verilator-verification now passes 17/17 after stripping LLHD
+  combinational/signal ops in the LEC pipeline.
+- ✅ BMC: LowerToBMC now defers probe replacement for nested combinational
+  regions so probes see driven values; verilator-verification asserts pass
+  (17/17).
 - ✅ Progress: HWToSMT now lowers `hw.struct_create/extract/explode` to SMT
   bitvector concat/extract, unblocking BMC when LowerToBMC emits 4-state
   structs.
@@ -410,8 +422,9 @@ circt-verilog --uvm-path ~/uvm-core/src \
   explicit SMT ops, eliminating Z3 sort errors in yosys `basic03.sv`.
 - ✅ Verified end-to-end BMC pipeline with yosys `basic03.sv`
   (pass/fail cases both clean).
-- In progress: constrain derived `seq.to_clock` inputs to the generated BMC
-  clock (LowerToBMC) to fix sampled-clock misalignment; re-run `basic03`.
+- ✅ FIXED: constrain equivalent derived `seq.to_clock` inputs to the generated
+  BMC clock (LowerToBMC), including use-before-def cases; `basic03` and the full
+  yosys SVA suite now pass (2 VHDL skips remain).
 - In progress: gate BMC checks to posedge iterations when not in
   `rising-clocks-only` mode to prevent falling-edge false violations.
 - In progress: gate BMC delay/past buffer updates on posedge so history
@@ -438,6 +451,9 @@ circt-verilog --uvm-path ~/uvm-core/src \
 - `TEST_FILTER=... utils/run_yosys_sva_circt_bmc.sh` (per-feature gating).
 - `utils/run_sv_tests_circt_bmc.sh` for sv-tests SVA coverage.
 - `utils/run_verilator_verification_circt_bmc.sh` for verilator-verification.
+- `utils/run_sv_tests_circt_lec.sh` for sv-tests LEC smoke coverage.
+- `utils/run_verilator_verification_circt_lec.sh` for verilator LEC smoke coverage.
+- `utils/run_yosys_sva_circt_lec.sh` for yosys SVA LEC smoke coverage.
 - Manual AVIP spot checks in `~/mbit/*avip*` with targeted properties.
 
 ### Feature Completion Matrix
@@ -1513,7 +1529,7 @@ ninja -C build check-circt-unit
 - ✅ Repeat (`[*N]`) expansion in BMC (bounded by BMC depth; uses delay buffers)
 - ✅ Added end-to-end BMC tests for repeat fail cases
 - ⚠️ Repeat pass cases still fail due to LTLToCore implication semantics (needs fix)
-- ⛔ Goto/non-consecutive repeat still single-step in BMC
+- ✅ Goto/non-consecutive repeat expanded in BMC (bounded by BMC depth)
 - ✅ Added local yosys SVA harness script for circt-bmc runs
 - ✅ Import now preserves concurrent assertions with action blocks (`else $error`)
 - ✅ yosys `basic00.sv`, `basic01.sv`, `basic02.sv` pass in circt-bmc harness
@@ -2552,6 +2568,16 @@ ninja -C build circt-verilog
 ---
 
 ## Recent Commits
+
+### Iteration 180
+- **Upgraded slang from v9.1 to v10.0** for better SystemVerilog support
+- Added `--compat vcs` and `--allow-virtual-iface-with-override` options to circt-verilog
+- Added `AllowVirtualIfaceWithOverride` compilation flag to slang for Xcelium compatibility
+  - Allows interface instances that are bind/defparam targets to be assigned to virtual interfaces
+  - This violates IEEE 1800-2017 but matches behavior of commercial tools like Cadence Xcelium
+- Fixed VCS compatibility mode to set flags directly (bypasses slang's addStandardArgs() requirement)
+- Updated slang patch scripts for v10.0 compatibility
+- sv-tests SVA: 9/26 pass (xfail=3)
 
 ### Iteration 29
 - VerifToSMT `bmc.final` fixes - proper assertion hoisting and final-only checking

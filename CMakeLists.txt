@@ -561,9 +561,9 @@ if(CIRCT_SLANG_FRONTEND_ENABLED)
     FetchContent_Declare(
       slang
       GIT_REPOSITORY https://github.com/MikePopoloski/slang.git
-      GIT_TAG v9.1
+      GIT_TAG v10.0
       GIT_SHALLOW ON
-      PATCH_COMMAND git apply --ignore-whitespace ${CMAKE_CURRENT_SOURCE_DIR}/patches/slang-class-handle-bool-conversion.patch || true
+      PATCH_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/patches/apply-slang-patches.sh
     )
     set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE "NEVER")
 
@@ -608,7 +608,7 @@ if(CIRCT_SLANG_FRONTEND_ENABLED)
     set_property(GLOBAL APPEND PROPERTY CIRCT_EXPORTS slang_slang)
     install(TARGETS slang_slang EXPORT CIRCTTargets)
   else()
-    find_package(slang 9.1 REQUIRED)
+    find_package(slang 10.0 REQUIRED)
   endif()
 endif()
 

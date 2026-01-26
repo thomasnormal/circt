@@ -242,6 +242,45 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::IgnoreUnknownModules,
       options.ignoreUnknownModules);
+  // Handle compat option - set VCS compatibility flags directly
+  // We don't use slang's native compat mode because CIRCT bypasses
+  // addStandardArgs() which initializes the flags map
+  if (options.compat.has_value()) {
+    auto compatStr = *options.compat;
+    if (compatStr == "vcs" || compatStr == "all") {
+      // VCS compatibility flags (from slang's VCS_COMP_FLAGS)
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowHierarchicalConst, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::RelaxEnumConversions, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowUseBeforeDeclare, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::RelaxStringConversions, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowRecursiveImplicitCall, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowBareValParamAssignment, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowSelfDeterminedStreamConcat, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowMergingAnsiPorts, true);
+      // Also enable AllowVirtualIfaceWithOverride for Xcelium compatibility
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride, true);
+    }
+    if (compatStr == "all") {
+      // Additional flags for "all" compat mode
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowTopLevelIfacePorts, true);
+      driver.options.compilationFlags.emplace(
+          slang::ast::CompilationFlags::AllowUnnamedGenerate, true);
+    }
+  }
+  // Explicit flag for virtual interface with override
+  driver.options.compilationFlags.emplace(
+      slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride,
+      options.allowVirtualIfaceWithOverride);
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::LintMode,
       options.mode == ImportVerilogOptions::Mode::OnlyLint);
