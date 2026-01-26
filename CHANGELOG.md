@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 191 - January 26, 2026
+
+### 4 More Crypto/Security IPs Added - 17 OpenTitan Modules Total
+
+**New OpenTitan IPs (Tracks X, Y, Z, AA):**
+
+| IP | Status | Stats | Notes |
+|----|--------|-------|-------|
+| entropy_src_reg_top | **SIMULATES** | 173 ops, 73 signals, 12 processes | Hardware RNG entropy source |
+| edn_reg_top | **SIMULATES** | 173 ops, 63 signals, 12 processes | Entropy distribution network |
+| kmac_reg_top | **SIMULATES** | 215 ops, 135 signals, 19 processes | Keccak MAC with 2 window interfaces, shadowed registers |
+| otp_ctrl_reg_top | **SIMULATES** | 175 ops, 52 signals, 15 processes | OTP controller, required lc_ctrl_pkg dependencies |
+
+**Technical Details:**
+- **entropy_src**: Cryptographic entropy source (hardware RNG) - 5,978 lines MLIR
+- **edn**: Entropy distribution network - 3,291 lines MLIR
+- **kmac**: Keccak-based MAC with MSG_FIFO and STATE window interfaces - 7,565 lines MLIR (60 modules)
+- **otp_ctrl**: OTP controller required lifecycle controller package dependencies (lc_ctrl_reg_pkg, lc_ctrl_state_pkg, lc_ctrl_pkg)
+
+**OpenTitan Coverage Summary:**
+- 17 OpenTitan modules now simulate via CIRCT
+- 8 crypto IPs: hmac, aes, csrng, keymgr, otbn, entropy_src, edn, kmac
+- 4 communication IPs: gpio, uart, spi_host, i2c
+- 4 timer IPs: aon_timer, pwm, rv_timer, timer_core
+- 1 security IP: otp_ctrl
+
+**Files Modified:**
+- `utils/run_opentitan_circt_verilog.sh` - Added 4 new compilation targets
+- `utils/run_opentitan_circt_sim.sh` - Added 4 new simulation testbenches
+- `PROJECT_OPENTITAN.md` - Updated to 17 modules
+
+---
+
 ## Iteration 190 - January 26, 2026
 
 ### Full GPIO IP with Alerts Simulates + timer_core 64-bit Verified
@@ -129,6 +162,7 @@
 - Preserve `verif.assert`/`assume`/`cover` inside `llhd.process` during canonicalize
 - Hoist LLHD assertions before process lowering in `circt-bmc` and `circt-lec`
 - BMC/LEC runner scripts now emit `--ir-llhd` to keep immediate assertions
+- Strip LLHD clocked assertions/assumptions/covers before process lowering
 
 **New Bug Found - timer_core 64-bit crash:**
 - timer_core compiles successfully to HW dialect
