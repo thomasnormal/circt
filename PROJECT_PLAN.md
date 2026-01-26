@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 226 Update)
+### Track Status & Next Tasks (Iteration 227 Update)
+
+**Iteration 227 Results (COMPLETE):**
+- Track A: ✅ **Instance Input Fix** - registerModuleDrive() now resolves inputValueMap block args
+- Track B: ✅ **i2c_tb PASSES** - No more infinite delta cycles, TEST PASSED
+- Track C: ✅ **External Tests** - sv-tests 23/26, verilator 17/17, yosys 14/14
+- Track D: ✅ **Unit Tests: 1317/1317 PASS**
+
+**Iteration 228 Focus (NEXT):**
+- Track A: 🔄 **Fix UVM report signature** - Update convertUvmReportCall for 5-6 args
+- Track B: 🔄 **Enable more XFAIL tests** - After fixing UVM runtime issues
+- Track C: 🔄 **Test full OpenTitan IPs** - Verify remaining 5 IPs work
+- Track D: 🔄 **External Test Suites** - Run all AVIPs with UVM output
 
 **Iteration 226 Results (COMPLETE):**
 - Track A: ✅ **Termination Timing Fixed** - circt-sim now reports correct $finish time
 - Track B: ✅ **IEEE 1800 Edge Detection** - X→1 is posedge, X→0 is negedge
 - Track C: ✅ **Compilation Fixes** - DenseSet, missing includes resolved
 - Track D: ✅ **44/44 circt-sim tests, 399/399 unit tests PASS**
-
-**Iteration 227 Focus (NEXT):**
-- Track A: 🔄 **Fix llhd-process-result-instance-input.mlir** - Instance input probe value issue
-- Track B: 🔄 **Test i2c_tb with fixes** - Verify delta cycle hang resolved
-- Track C: 🔄 **Fix UVM report signature** - Update convertUvmReportCall for 5-6 args
-- Track D: 🔄 **External Test Suites** - Run all AVIPs, OpenTitan, sv-tests
 
 **Iteration 224 Results (COMPLETE):**
 - Track A: ✅ **4-State Fix Implemented** - isFourStateX() added, X→X now returns no edge

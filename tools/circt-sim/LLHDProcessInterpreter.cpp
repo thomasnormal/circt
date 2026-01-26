@@ -45,6 +45,28 @@ static bool getSignalInitValue(Value initValue, unsigned width,
 LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     : scheduler(scheduler) {}
 
+void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
+  os << "[circt-sim] Process states:\n";
+  for (const auto &entry : processStates) {
+    ProcessId procId = entry.first;
+    const ProcessExecutionState &state = entry.second;
+    const Process *proc = scheduler.getProcess(procId);
+    os << "  proc " << procId;
+    if (proc)
+      os << " '" << proc->getName() << "'";
+    os << " type=" << (state.isInitialBlock ? "initial" : "process");
+    if (proc)
+      os << " state=" << getProcessStateName(proc->getState());
+    os << " waiting=" << (state.waiting ? "1" : "0")
+       << " halted=" << (state.halted ? "1" : "0")
+       << " steps=" << state.totalSteps;
+    if (state.lastOp)
+      os << " lastOp=" << state.lastOp->getName().getStringRef();
+    os << "\n";
+  }
+  os.flush();
+}
+
 LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing for module '"
                           << hwModule.getName() << "'\n");
@@ -812,6 +834,16 @@ void LLHDProcessInterpreter::registerModuleDrive(llhd::DriveOp driveOp) {
 
   Value driveValue = driveOp.getValue();
 
+  // Resolve the drive value through inputValueMap if it's a block argument.
+  // This handles the case where a child module's input is mapped to a parent's
+  // process result, e.g.: hw.instance @child(in: %proc_val) where %proc_val is
+  // the result of an llhd.process in the parent module.
+  if (auto arg = dyn_cast<mlir::BlockArgument>(driveValue)) {
+    auto argIt = inputValueMap.find(arg);
+    if (argIt != inputValueMap.end())
+      driveValue = argIt->second;
+  }
+
   // Check if the drive value comes from a process result
   if (auto processOp = driveValue.getDefiningOp<llhd::ProcessOp>()) {
     // Find the process ID for this process
@@ -835,10 +867,27 @@ void LLHDProcessInterpreter::registerModuleDrive(llhd::DriveOp driveOp) {
 }
 
 void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
+  // Recursion guard - prevent re-entrant calls during value evaluation
+  static thread_local llvm::DenseSet<ProcessId> inProgress;
+  if (!inProgress.insert(procId).second) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "Skipping recursive executeModuleDrives for proc "
+               << procId << "\n");
+    return;
+  }
+  auto cleanup = llvm::make_scope_exit([&]() { inProgress.erase(procId); });
+
+  LLVM_DEBUG(llvm::dbgs() << "executeModuleDrives proc " << procId
+                          << " moduleDrives=" << moduleDrives.size() << "\n");
+
   // Execute all module-level drives connected to this process
+  size_t drivesProcessed = 0;
+  size_t driveIdx = 0;
   for (auto &[driveOp, driveProcId] : moduleDrives) {
+    ++driveIdx;
     if (driveProcId != procId)
       continue;
+    ++drivesProcessed;
 
     // Get the signal ID
     SignalId sigId = getSignalId(driveOp.getSignal());
@@ -877,12 +926,18 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
 
     // Schedule the signal update
     SignalValue newVal = driveVal.toSignalValue();
+    if (scheduler.getSignalValue(sigId) == newVal) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Module drive unchanged for signal " << sigId << "\n");
+      continue;
+    }
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::NBA,
         Event([this, sigId, newVal]() {
           scheduler.updateSignal(sigId, newVal);
         }));
   }
+  (void)drivesProcessed;
 }
 
 void LLHDProcessInterpreter::registerContinuousAssignments(
@@ -909,8 +964,18 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
       LLVM_DEBUG(llvm::dbgs()
                  << "  Continuous assignment depends on "
                  << processIds.size() << " process result(s)\n");
-      for (ProcessId procId : processIds)
-        moduleDrives.push_back({driveOp, procId});
+      for (ProcessId procId : processIds) {
+        bool alreadyRegistered = false;
+        for (const auto &entry : moduleDrives) {
+          if (entry.first == driveOp && entry.second == procId) {
+            alreadyRegistered = true;
+            break;
+          }
+        }
+        if (!alreadyRegistered)
+          moduleDrives.push_back({driveOp, procId});
+      }
+      continue;
     }
 
     llvm::SmallVector<SignalId, 4> sourceSignals;
@@ -1242,6 +1307,12 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
 
   // Schedule the signal update
   SignalValue newVal = driveVal.toSignalValue();
+  if (scheduler.getSignalValue(targetSigId) == newVal) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Continuous assignment unchanged for signal "
+               << targetSigId << "\n");
+    return;
+  }
   scheduler.getEventScheduler().schedule(
       targetTime, SchedulingRegion::Active,
       Event([this, targetSigId, newVal]() {
@@ -1753,7 +1824,32 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                           << procId << "\n");
 
   // Execute operations until we suspend or halt
+  size_t stepCount = 0;
   while (!state.halted && !state.waiting) {
+    ++stepCount;
+    LLVM_DEBUG({
+      if (stepCount <= 10 || stepCount % 1000 == 0) {
+        llvm::dbgs() << "[executeProcess] proc " << procId << " step "
+                     << stepCount;
+        if (state.currentOp != state.currentBlock->end())
+          llvm::dbgs() << " op: " << state.currentOp->getName().getStringRef();
+        llvm::dbgs() << "\n";
+      }
+    });
+    if (maxProcessSteps > 0 && stepCount > maxProcessSteps) {
+      llvm::errs() << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW): process "
+                   << procId;
+      if (auto *proc = scheduler.getProcess(procId))
+        llvm::errs() << " '" << proc->getName() << "'";
+      llvm::errs() << " exceeded " << maxProcessSteps << " steps";
+      if (state.lastOp)
+        llvm::errs() << " (lastOp=" << state.lastOp->getName().getStringRef()
+                     << ")";
+      llvm::errs() << "\n";
+      state.halted = true;
+      scheduler.terminateProcess(procId);
+      break;
+    }
     if (!executeStep(procId))
       break;
   }
@@ -1776,6 +1872,8 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
 
   Operation *op = &*state.currentOp;
   ++state.currentOp;
+  state.lastOp = op;
+  ++state.totalSteps;
 
   LLVM_DEBUG(llvm::dbgs() << "  Executing: " << *op << "\n");
 
@@ -4293,6 +4391,39 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       }
     }
 
+    // Avoid self-triggering on signals driven by this process when other
+    // sensitivities exist (prevents zero-delta feedback loops).
+    if (!waitList.empty()) {
+      llvm::DenseSet<SignalId> selfDrivenSignals;
+      if (auto processOp = state.getProcessOp()) {
+        processOp.walk([&](llhd::DriveOp driveOp) {
+          SignalId drivenId = getSignalId(driveOp.getSignal());
+          if (drivenId != 0)
+            selfDrivenSignals.insert(drivenId);
+        });
+      }
+
+      if (!selfDrivenSignals.empty()) {
+        bool hasNonSelf = false;
+        for (const auto &entry : waitList.getEntries()) {
+          if (!selfDrivenSignals.count(entry.signalId)) {
+            hasNonSelf = true;
+            break;
+          }
+        }
+
+        if (hasNonSelf) {
+          SensitivityList filtered;
+          for (const auto &entry : waitList.getEntries()) {
+            if (selfDrivenSignals.count(entry.signalId))
+              continue;
+            filtered.addEdge(entry.signalId, entry.edge);
+          }
+          waitList = std::move(filtered);
+        }
+      }
+    }
+
     // Register the wait sensitivity with the scheduler
     if (waitList.empty()) {
       if (auto processOp = state.getProcessOp()) {
@@ -4323,19 +4454,40 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
 
   // Handle case 3: No delay AND no observed signals (always @(*) semantics)
   // This represents a wait that should resume on the next delta cycle when
-  // ANY signal changes. For now, we implement this as immediate delta-step
-  // resumption to prevent the process from hanging forever.
+  // ANY signal changes. Prefer a sensitivity list derived from probes, falling
+  // back to immediate delta resumption only when no signals can be found.
   if (!waitOp.getDelay() && waitOp.getObserved().empty()) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Wait with no delay and no signals - scheduling "
-                  "immediate delta-step resumption (always @(*) semantics)\n");
+    SensitivityList waitList;
+    if (auto processOp = state.getProcessOp()) {
+      processOp.walk([&](llhd::ProbeOp probeOp) {
+        SignalId sigId = getSignalId(probeOp.getSignal());
+        if (sigId != 0)
+          waitList.addLevel(sigId);
+      });
+    } else if (auto initialOp = state.getInitialOp()) {
+      initialOp.walk([&](llhd::ProbeOp probeOp) {
+        SignalId sigId = getSignalId(probeOp.getSignal());
+        if (sigId != 0)
+          waitList.addLevel(sigId);
+      });
+    }
 
-    // Schedule the process to resume on the next delta cycle.
-    // This ensures the process doesn't hang and implements @(*) behavior
-    // where the process re-evaluates on every delta cycle.
-    scheduler.getEventScheduler().scheduleNextDelta(
-        SchedulingRegion::Active,
-        Event([this, procId]() { resumeProcess(procId); }));
+    if (!waitList.empty()) {
+      scheduler.suspendProcessForEvents(procId, waitList);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Wait with no delay/no signals - derived "
+                 << waitList.size() << " probe signal(s)\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Wait with no delay and no signals - scheduling "
+                    "immediate delta-step resumption (always @(*) fallback)\n");
+
+      // Schedule the process to resume on the next delta cycle.
+      // This ensures the process doesn't hang when no signals are detected.
+      scheduler.getEventScheduler().scheduleNextDelta(
+          SchedulingRegion::Active,
+          Event([this, procId]() { resumeProcess(procId); }));
+    }
   }
 
   return success();
@@ -4791,6 +4943,33 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   auto instIt = instanceOutputMap.find(value);
   if (instIt != instanceOutputMap.end())
     return getValue(procId, instIt->second);
+
+  // Handle block arguments that are mapped via inputValueMap (child module
+  // inputs mapped to parent values). This is needed when a child module's input
+  // is used in a drive and the parent passes a process result as the input.
+  if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
+    auto argIt = inputValueMap.find(arg);
+    if (argIt != inputValueMap.end() && argIt->second != value)
+      return getValue(procId, argIt->second);
+  }
+
+  // Handle process results. When a value is the result of an llhd::ProcessOp,
+  // look up the yielded value from that process's valueMap.
+  if (auto result = dyn_cast<OpResult>(value)) {
+    if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
+      auto procIt = opToProcessId.find(processOp.getOperation());
+      if (procIt != opToProcessId.end()) {
+        auto stateIt = processStates.find(procIt->second);
+        if (stateIt != processStates.end()) {
+          auto valIt = stateIt->second.valueMap.find(value);
+          if (valIt != stateIt->second.valueMap.end())
+            return valIt->second;
+        }
+      }
+      // Process result not yet computed - return X
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+    }
+  }
 
   if (auto combOp = value.getDefiningOp<llhd::CombinationalOp>()) {
     llvm::SmallVector<InterpretedValue, 4> results;

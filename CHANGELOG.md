@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 227 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Fix instance input probe for process results
+- **Track B**: Verify i2c_tb delta cycle fix
+- **Track C**: Test external test suites
+- **Track D**: Run comprehensive test verification
+
+### Track Completions
+
+- **Track A (Instance Input Fix)**: ✅ **FIXED**
+  - Root cause: `registerModuleDrive()` didn't resolve block arguments via `inputValueMap`
+  - When child module input is mapped to parent's process result, the drive wasn't registered
+  - Fix: Add `inputValueMap` lookup in `registerModuleDrive()` before checking for ProcessOp
+  - `llhd-process-result-instance-input.mlir` now passes (proc_in=1)
+
+- **Track B (i2c_tb)**: ✅ **PASSES**
+  - i2c_tb simulation completes successfully
+  - No more infinite delta cycles
+  - TEST PASSED message appears
+
+- **Track C (External Tests)**: ✅ **BASELINES MET**
+  - sv-tests: 23/26
+  - verilator: 17/17 (100%)
+  - yosys: 14/14 (100%)
+
+- **Track D (Test Verification)**: ✅ **ALL PASS**
+  - Unit tests: 1317/1317 pass
+  - circt-sim tests: All pass
+
+### Code Changes
+
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add `inputValueMap` lookup in `registerModuleDrive()` to resolve child module inputs mapped to parent process results
+
+---
+
 ## Iteration 226 - January 26, 2026
 
 ### Focus Areas
@@ -82,6 +119,8 @@
 - `tools/circt-sim/circt-sim.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`: Dump process states on delta/timeout overflow; added `test/Tools/circt-sim/delta-overflow-process-dump.mlir`
 - `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/circt-sim.cpp`: Dump last-delta changed signals on delta/timeout overflow; updated `test/Tools/circt-sim/delta-overflow-process-dump.mlir`
 - `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/circt-sim.cpp`: Dump last-delta executed processes on delta/timeout overflow; updated `test/Tools/circt-sim/delta-overflow-process-dump.mlir`
+- `lib/Dialect/Sim/ProcessScheduler.cpp`: Annotate last-delta process dump with trigger source (signal/time) for delta-loop diagnosis
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Filter self-driven signals from wait sensitivity when other signals exist to avoid zero-delta feedback loops; added `test/Tools/circt-sim/self-driven-sensitivity-filter.mlir`
 - `include/circt/Dialect/Sim/ProcessScheduler.h`, `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/circt-sim.cpp`: Respect `--max-deltas` in the scheduler's per-time-step limit
 - `tools/circt-sim/circt-sim.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add `--max-process-steps` guard with regression `test/Tools/circt-sim/process-step-overflow.mlir`
 
