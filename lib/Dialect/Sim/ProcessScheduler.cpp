@@ -13,10 +13,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Dialect/Sim/ProcessScheduler.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
+
+using llvm::StringRef;
 
 #define DEBUG_TYPE "sim-process-scheduler"
 
@@ -172,6 +176,10 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
   return id;
 }
 
+void ProcessScheduler::setMaxDeltaCycles(size_t maxDeltaCycles) {
+  config.maxDeltaCycles = maxDeltaCycles;
+}
+
 void ProcessScheduler::updateSignal(SignalId signalId,
                                     const SignalValue &newValue) {
   auto it = signalStates.find(signalId);
@@ -194,6 +202,7 @@ void ProcessScheduler::updateSignal(SignalId signalId,
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
     triggerSensitiveProcesses(signalId, oldValue, normalizedValue);
+    recordSignalChange(signalId);
   }
 }
 
@@ -253,6 +262,61 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
     triggerSensitiveProcesses(signalId, oldValue, normalizedResolved);
+    recordSignalChange(signalId);
+  }
+}
+
+void ProcessScheduler::recordSignalChange(SignalId signalId) {
+  if (signalsChangedThisDeltaSet.insert(signalId).second)
+    signalsChangedThisDelta.push_back(signalId);
+}
+
+void ProcessScheduler::dumpLastDeltaSignals(llvm::raw_ostream &os) const {
+  os << "[circt-sim] Signals changed in last delta:\n";
+  if (lastDeltaSignals.empty()) {
+    os << "  (none)\n";
+    return;
+  }
+
+  for (SignalId signalId : lastDeltaSignals) {
+    auto nameIt = signalNames.find(signalId);
+    llvm::StringRef name = nameIt == signalNames.end()
+                               ? llvm::StringRef("<unknown>")
+                               : llvm::StringRef(nameIt->second);
+    auto stateIt = signalStates.find(signalId);
+    if (stateIt == signalStates.end()) {
+      os << "  " << name << " (id=" << signalId << "): <missing>\n";
+      continue;
+    }
+
+    const SignalValue &value = stateIt->second.getCurrentValue();
+    if (value.isUnknown() || value.isFourStateX()) {
+      os << "  " << name << " (id=" << signalId << ", w=" << value.getWidth()
+         << "): X\n";
+      continue;
+    }
+
+    llvm::SmallString<32> buf;
+    value.getAPInt().toString(buf, 16, false);
+    os << "  " << name << " (id=" << signalId << ", w=" << value.getWidth()
+       << "): 0x" << buf << "\n";
+  }
+}
+
+void ProcessScheduler::dumpLastDeltaProcesses(llvm::raw_ostream &os) const {
+  os << "[circt-sim] Processes executed in last delta:\n";
+  if (lastDeltaProcesses.empty()) {
+    os << "  (none)\n";
+    return;
+  }
+
+  for (ProcessId procId : lastDeltaProcesses) {
+    auto procIt = processes.find(procId);
+    if (procIt == processes.end()) {
+      os << "  proc " << procId << ": <missing>\n";
+      continue;
+    }
+    os << "  proc " << procId << " '" << procIt->second->getName() << "'\n";
   }
 }
 
@@ -423,6 +487,9 @@ bool ProcessScheduler::executeDeltaCycle() {
 
   bool anyExecuted = false;
   currentDeltaCount = 0;
+  signalsChangedThisDelta.clear();
+  signalsChangedThisDeltaSet.clear();
+  processesExecutedThisDelta.clear();
 
   // Process all regions in order
   for (size_t regionIdx = 0;
@@ -436,6 +503,8 @@ bool ProcessScheduler::executeDeltaCycle() {
   if (anyExecuted) {
     ++stats.deltaCyclesExecuted;
     ++currentDeltaCount;
+    lastDeltaSignals = signalsChangedThisDelta;
+    lastDeltaProcesses = processesExecutedThisDelta;
 
     // Check for infinite loop
     if (currentDeltaCount >= config.maxDeltaCycles) {
@@ -476,6 +545,7 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
     proc->execute();
     ++stats.processesExecuted;
     ++executed;
+    processesExecutedThisDelta.push_back(id);
 
     // If process didn't suspend or terminate, mark as suspended
     // (waiting for next sensitivity trigger)
@@ -492,6 +562,10 @@ size_t ProcessScheduler::executeCurrentTime() {
 
   while (executeDeltaCycle()) {
     ++totalDeltas;
+    if (totalDeltas % 1000 == 0) {
+      LLVM_DEBUG(llvm::dbgs() << "  [ProcessScheduler] Delta cycle " << totalDeltas
+                              << ", processes executed: " << stats.processesExecuted << "\n");
+    }
     if (totalDeltas >= config.maxDeltaCycles) {
       LLVM_DEBUG(llvm::dbgs() << "Max delta cycles reached at current time\n");
       break;
@@ -580,6 +654,14 @@ SimTime ProcessScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
   return getCurrentTime();
 }
 
+bool ProcessScheduler::hasReadyProcesses() const {
+  for (const auto &queue : readyQueues) {
+    if (!queue.empty())
+      return true;
+  }
+  return false;
+}
+
 bool ProcessScheduler::isComplete() const {
   // Check if any processes are ready
   for (const auto &queue : readyQueues) {
@@ -631,6 +713,11 @@ void ProcessScheduler::reset() {
   // Reset flags
   initialized = false;
   currentDeltaCount = 0;
+  signalsChangedThisDelta.clear();
+  signalsChangedThisDeltaSet.clear();
+  lastDeltaSignals.clear();
+  processesExecutedThisDelta.clear();
+  lastDeltaProcesses.clear();
 
   LLVM_DEBUG(llvm::dbgs() << "ProcessScheduler reset\n");
 }

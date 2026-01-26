@@ -18,8 +18,10 @@
 #include "circt/Dialect/Sim/EventQueue.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -169,19 +171,22 @@ public:
   /// Get the LSB (for single-bit edge detection).
   bool getLSB() const { return value[0]; }
 
-  /// Check if this value represents a 4-state X based on struct encoding.
-  /// 4-state values are encoded as {value: iN, unknown: iN} flattened to 2N bits.
-  /// When all unknown bits (upper half) are 1, the value is fully X.
-  /// Returns true if this appears to be a 4-state struct with all X bits.
+  /// Check if this is a 4-state X value using struct encoding.
+  /// 4-state encoding uses {value: iN, unknown: iN} flattened to 2N bits:
+  /// - Lower N bits: value bits
+  /// - Upper N bits: unknown flags (1 = unknown/X)
+  /// Returns true if ALL unknown bits are set (fully X value).
   bool isFourStateX() const {
+    // First check the explicit isX flag
     if (isX)
       return true;
+    // Check for 4-state struct encoding
     uint32_t w = value.getBitWidth();
-    // 4-state structs have even width (N bits value + N bits unknown)
+    // Must have even width >= 2 for 4-state encoding
     if (w < 2 || (w % 2) != 0)
       return false;
+    // Check if all upper-half bits (unknown flags) are set
     uint32_t halfWidth = w / 2;
-    // Check if all unknown bits (upper half) are set
     for (uint32_t i = halfWidth; i < w; ++i) {
       if (!value[i])
         return false;
@@ -189,46 +194,68 @@ public:
     return true;
   }
 
-  /// Check if two values are equal (with 4-state X normalization).
+  /// Check if two values are equal.
+  /// Handles both explicit isX and 4-state struct encoding.
   bool operator==(const SignalValue &other) const {
-    if (isX && other.isX)
+    // Check if either value is X (explicit flag or 4-state encoding)
+    bool thisIsX = isX || isFourStateXInternal();
+    bool otherIsX = other.isX || other.isFourStateXInternal();
+    // Two X values are equal
+    if (thisIsX && otherIsX)
       return true;
-    if (isX || other.isX)
+    // X and non-X are not equal
+    if (thisIsX || otherIsX)
       return false;
-    // Handle the special case where both values represent 4-state "fully X".
-    // In this case, they should be considered equal even if their underlying
-    // value bits differ (since the value bits are don't-care when unknown=1).
-    if (isFourStateX() && other.isFourStateX())
-      return true;
+    // Both are known values, compare directly
     return value == other.value;
   }
+
+private:
+  /// Internal helper to check 4-state encoding without checking isX flag.
+  /// Used by operator== to avoid double-checking isX.
+  bool isFourStateXInternal() const {
+    uint32_t w = value.getBitWidth();
+    // Must have even width >= 2 for 4-state encoding
+    if (w < 2 || (w % 2) != 0)
+      return false;
+    // Check if all upper-half bits (unknown flags) are set
+    uint32_t halfWidth = w / 2;
+    for (uint32_t i = halfWidth; i < w; ++i) {
+      if (!value[i])
+        return false;
+    }
+    return true;
+  }
+
+public:
 
   bool operator!=(const SignalValue &other) const { return !(*this == other); }
 
   /// Detect edge between old and new values.
+  /// Handles both explicit isX and 4-state struct encoding.
   static EdgeType detectEdge(const SignalValue &oldVal,
                              const SignalValue &newVal) {
-    // No edge if values are the same (includes 4-state X normalization)
+    // No edge if values are the same (handles X==X via operator==)
     if (oldVal == newVal)
       return EdgeType::None;
 
-    // Check for 4-state X values using struct encoding
-    bool oldIsFourStateX = oldVal.isFourStateX();
-    bool newIsFourStateX = newVal.isFourStateX();
+    // Check for unknown values using both explicit flag and 4-state encoding
+    bool oldIsX = oldVal.isUnknown() || oldVal.isFourStateX();
+    bool newIsX = newVal.isUnknown() || newVal.isFourStateX();
 
-    // For unknown values, detect edges conservatively.
-    if (oldVal.isUnknown() || newVal.isUnknown() ||
-        oldIsFourStateX || newIsFourStateX) {
-      // X->X is no edge (already caught by == check above, but be explicit)
-      if ((oldVal.isUnknown() || oldIsFourStateX) &&
-          (newVal.isUnknown() || newIsFourStateX))
+    // For unknown values, detect edges conservatively per IEEE 1800.
+    if (oldIsX || newIsX) {
+      if (oldIsX && newIsX)
         return EdgeType::None;
-      // X->known or known->X is an edge
-      if (oldVal.isUnknown() || oldIsFourStateX) {
-        if (!newVal.isUnknown() && !newIsFourStateX && newVal.getLSB())
+      if (oldIsX) {
+        // X -> known: check if going to 1 (posedge) or 0 (negedge)
+        if (!newIsX && newVal.getLSB())
           return EdgeType::Posedge;
+        if (!newIsX && !newVal.getLSB())
+          return EdgeType::Negedge;
         return EdgeType::AnyEdge;
       }
+      // known -> X: use AnyEdge since we can't determine direction
       return EdgeType::AnyEdge;
     }
 
@@ -729,6 +756,9 @@ public:
   /// Register a signal for tracking.
   SignalId registerSignal(const std::string &name, uint32_t width = 1);
 
+  /// Set the maximum delta cycles to execute at a single time.
+  void setMaxDeltaCycles(size_t maxDeltaCycles);
+
   /// Update a signal value, triggering sensitive processes.
   void updateSignal(SignalId signalId, const SignalValue &newValue);
 
@@ -788,6 +818,9 @@ public:
   /// Returns false if there are no more events or processes to run.
   bool advanceTime();
 
+  /// Check if any processes are ready to run.
+  bool hasReadyProcesses() const;
+
   /// Run the simulation until completion or time limit.
   SimTime runUntil(uint64_t maxTimeFemtoseconds);
 
@@ -822,6 +855,12 @@ public:
 
   const Statistics &getStatistics() const { return stats; }
 
+  /// Dump signals that changed in the last executed delta cycle.
+  void dumpLastDeltaSignals(llvm::raw_ostream &os) const;
+
+  /// Dump processes executed in the last delta cycle.
+  void dumpLastDeltaProcesses(llvm::raw_ostream &os) const;
+
   /// Reset the scheduler to initial state.
   void reset();
 
@@ -829,6 +868,9 @@ private:
   /// Schedule processes triggered by a signal change.
   void triggerSensitiveProcesses(SignalId signalId, const SignalValue &oldVal,
                                  const SignalValue &newVal);
+
+  /// Record a signal change for delta-cycle diagnostics.
+  void recordSignalChange(SignalId signalId);
 
   /// Execute processes in the ready queue for a specific region.
   size_t executeReadyProcesses(SchedulingRegion region);
@@ -870,6 +912,14 @@ private:
 
   // Current delta cycle count (for infinite loop detection)
   size_t currentDeltaCount = 0;
+
+  // Signals updated during the current delta cycle.
+  llvm::SmallVector<SignalId, 32> signalsChangedThisDelta;
+  llvm::DenseSet<SignalId> signalsChangedThisDeltaSet;
+  llvm::SmallVector<SignalId, 32> lastDeltaSignals;
+
+  llvm::SmallVector<ProcessId, 32> processesExecutedThisDelta;
+  llvm::SmallVector<ProcessId, 32> lastDeltaProcesses;
 
   // Static signal for unknown values
   static SignalValue unknownSignal;

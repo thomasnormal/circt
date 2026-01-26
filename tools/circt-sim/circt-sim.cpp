@@ -133,6 +133,11 @@ static llvm::cl::opt<uint64_t>
               llvm::cl::init(10000), llvm::cl::cat(simCategory));
 
 static llvm::cl::opt<uint64_t>
+    maxProcessSteps("max-process-steps",
+                    llvm::cl::desc("Maximum operations per process activation (0 = no limit)"),
+                    llvm::cl::init(50000), llvm::cl::cat(simCategory));
+
+static llvm::cl::opt<uint64_t>
     timeout("timeout",
             llvm::cl::desc("Wall-clock timeout in seconds (0 = no timeout)"),
             llvm::cl::init(0), llvm::cl::cat(simCategory));
@@ -324,6 +329,28 @@ public:
   /// Run the simulation.
   LogicalResult run();
 
+  /// Configure the maximum delta cycles per time step.
+  void setMaxDeltaCycles(size_t maxDeltaCycles) {
+    scheduler.setMaxDeltaCycles(maxDeltaCycles);
+  }
+
+  /// Configure the maximum operations per process activation.
+  void setMaxProcessSteps(size_t maxSteps) {
+    maxProcessSteps = maxSteps;
+    if (llhdInterpreter)
+      llhdInterpreter->setMaxProcessSteps(maxSteps);
+  }
+
+  /// Dump signals that changed in the last delta cycle.
+  void dumpLastDeltaSignals(llvm::raw_ostream &os) const {
+    scheduler.dumpLastDeltaSignals(os);
+  }
+
+  /// Dump processes executed in the last delta cycle.
+  void dumpLastDeltaProcesses(llvm::raw_ostream &os) const {
+    scheduler.dumpLastDeltaProcesses(os);
+  }
+
   /// Print statistics.
   void printStatistics(llvm::raw_ostream &os) const;
 
@@ -357,6 +384,7 @@ private:
   std::unique_ptr<PerformanceProfiler> profiler;
   std::unique_ptr<VCDWriter> vcdWriter;
   std::unique_ptr<ParallelScheduler> parallelScheduler;
+  size_t maxProcessSteps = 50000;
 
   // Maps from MLIR values to simulation signals
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;
@@ -548,6 +576,7 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     // modules - the interpreter accumulates signals and processes across calls)
     if (!llhdInterpreter) {
       llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
+      llhdInterpreter->setMaxProcessSteps(maxProcessSteps);
 
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
@@ -682,12 +711,27 @@ LogicalResult SimulationContext::run() {
   scheduler.initialize();
 
   llvm::outs() << "[circt-sim] Starting simulation\n";
+  llvm::outs().flush();
 
   // Main simulation loop
   uint64_t lastVCDTime = 0;
+  uint64_t loopIterations = 0;
   auto startWallTime = std::chrono::steady_clock::now();
 
+  // Track consecutive zero-delta iterations at the same time for loop detection
+  uint64_t lastSimTime = 0;
+  uint64_t zeroIterationsAtSameTime = 0;
+  uint64_t deltaCyclesAtSameTime = 0;
+  constexpr uint64_t maxZeroIterations = 1000;
+
   while (control.shouldContinue()) {
+    ++loopIterations;
+    if (verbosity >= 3 && loopIterations <= 10) {
+      llvm::outs() << "[circt-sim] Loop iteration " << loopIterations
+                   << " at time " << scheduler.getCurrentTime().realTime << " fs\n";
+      llvm::outs().flush();
+    }
+
     // Check wall-clock timeout
     if (timeout > 0) {
       auto now = std::chrono::steady_clock::now();
@@ -695,6 +739,8 @@ LogicalResult SimulationContext::run() {
           std::chrono::duration_cast<std::chrono::seconds>(now - startWallTime);
       if (static_cast<uint64_t>(elapsed.count()) >= timeout) {
         control.warning("TIMEOUT", "Wall-clock timeout reached");
+        if (llhdInterpreter)
+          llhdInterpreter->dumpProcessStates(llvm::errs());
         break;
       }
     }
@@ -706,16 +752,100 @@ LogicalResult SimulationContext::run() {
     }
 
     // Execute delta cycles
+    if (verbosity >= 3) {
+      llvm::outs() << "[circt-sim] Calling executeCurrentTime()...\n";
+      llvm::outs().flush();
+    }
     size_t deltasExecuted;
     if (parallelScheduler) {
       deltasExecuted = parallelScheduler->executeCurrentTimeParallel();
     } else {
       deltasExecuted = scheduler.executeCurrentTime();
     }
+    if (verbosity >= 3) {
+      llvm::outs() << "[circt-sim] executeCurrentTime() returned "
+                   << deltasExecuted << " delta cycles\n";
+      llvm::outs().flush();
+    }
+
+    bool hasReadyProcesses = scheduler.hasReadyProcesses();
 
     if (deltasExecuted == 0) {
+      // Track zero-delta iterations at the same time for loop detection
+      if (currentTime.realTime == lastSimTime) {
+        ++zeroIterationsAtSameTime;
+        if (zeroIterationsAtSameTime >= maxZeroIterations) {
+          // Print diagnostic information
+          llvm::errs() << "[circt-sim] WARNING: Possible infinite loop detected!\n";
+          llvm::errs() << "[circt-sim] " << maxZeroIterations
+                       << " iterations with 0 delta cycles at time "
+                       << currentTime.realTime << " fs\n";
+
+          // Get scheduler statistics
+          const auto &stats = scheduler.getStatistics();
+          llvm::errs() << "[circt-sim] Processes registered: "
+                       << stats.processesRegistered << "\n";
+          llvm::errs() << "[circt-sim] Processes executed: "
+                       << stats.processesExecuted << "\n";
+          llvm::errs() << "[circt-sim] Total delta cycles: "
+                       << stats.deltaCyclesExecuted << "\n";
+
+          control.error("ZERO_DELTA_LOOP",
+                        "Too many zero-delta iterations at same time - "
+                        "possible infinite loop with no progress");
+          if (llhdInterpreter)
+            llhdInterpreter->dumpProcessStates(llvm::errs());
+          dumpLastDeltaSignals(llvm::errs());
+          dumpLastDeltaProcesses(llvm::errs());
+          control.finish(1);
+          break;
+        }
+      } else {
+        lastSimTime = currentTime.realTime;
+        zeroIterationsAtSameTime = 0;
+      }
+    } else {
+      if (currentTime.realTime == lastSimTime) {
+        deltaCyclesAtSameTime += deltasExecuted;
+      } else {
+        deltaCyclesAtSameTime = deltasExecuted;
+      }
+
+      if (deltaCyclesAtSameTime > maxDeltas) {
+        control.error("DELTA_OVERFLOW",
+                      "Too many delta cycles at same time - possible infinite loop");
+        if (llhdInterpreter)
+          llhdInterpreter->dumpProcessStates(llvm::errs());
+        dumpLastDeltaSignals(llvm::errs());
+        dumpLastDeltaProcesses(llvm::errs());
+        control.finish(1);
+        break;
+      }
+
+      // Reset counter when we actually execute deltas
+      zeroIterationsAtSameTime = 0;
+      lastSimTime = currentTime.realTime;
+    }
+
+    if (!hasReadyProcesses) {
+      // Check if simulation should stop before advancing time.
+      // This ensures we report the correct termination time when $finish
+      // is called (rather than advancing to the next scheduled event first).
+      if (!control.shouldContinue())
+        break;
+
       // No more events at current time, advance to next event
       if (!scheduler.advanceTime()) {
+        // Print diagnostic information about why simulation can't advance
+        if (verbosity >= 2) {
+          llvm::outs() << "[circt-sim] advanceTime() returned false at time "
+                       << currentTime.realTime << " fs\n";
+          const auto &stats = scheduler.getStatistics();
+          llvm::outs() << "[circt-sim] Processes registered: "
+                       << stats.processesRegistered << "\n";
+          llvm::outs() << "[circt-sim] Delta cycles executed: "
+                       << stats.deltaCyclesExecuted << "\n";
+        }
         // No more events
         break;
       }
@@ -725,6 +855,10 @@ LogicalResult SimulationContext::run() {
     if (deltasExecuted > maxDeltas) {
       control.error("DELTA_OVERFLOW",
                     "Too many delta cycles - possible infinite loop");
+      if (llhdInterpreter)
+        llhdInterpreter->dumpProcessStates(llvm::errs());
+      dumpLastDeltaSignals(llvm::errs());
+      dumpLastDeltaProcesses(llvm::errs());
       control.finish(1);
       break;
     }
@@ -855,6 +989,8 @@ static LogicalResult processInput(MLIRContext &context,
   }
 
   SimulationContext simContext;
+  simContext.setMaxDeltaCycles(maxDeltas);
+  simContext.setMaxProcessSteps(maxProcessSteps);
   if (failed(simContext.initialize(*module, tops))) {
     return failure();
   }
