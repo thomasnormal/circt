@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 193 - January 26, 2026
+
+### Strategic Status Update: UVM Parity Assessment
+
+**Current State:**
+- **OpenTitan**: 21 modules simulate (register blocks for gpio, uart, spi_host, i2c, spi_device, usbdev, aon_timer, pwm, rv_timer, timer_core, hmac, aes, csrng, keymgr, otbn, entropy_src, edn, kmac, otp_ctrl, lc_ctrl, flash_ctrl)
+- **AVIPs**: 2/9 compile from fresh source (APB, I2S); 7 AVIPs run with pre-compiled MLIR
+- **sv-tests**: 821/831 (98%) - excellent baseline
+- **verilator-verification**: 122/154 (79%) imports, 8/8 active BMC tests
+
+**Key Blockers Identified (from Tracks J, O, W):**
+
+| Issue | Impact | Category | Fix Path |
+|-------|--------|----------|----------|
+| bind scope refs parent port | AHB, AXI4, JTAG AVIPs | AVIP bug | AVIP source fixes |
+| InOut interface ports | I3C AVIP | CIRCT limitation | Implement in ImportVerilog |
+| do_compare default arg | UART, JTAG AVIPs | Strict LRM | slang relaxation flag or AVIP fix |
+| nested comments | SPI AVIP | AVIP bug | AVIP source fix |
+| prim_diff_decode control flow | Full OpenTitan IPs | CIRCT bug | MooreToCore lowering fix |
+
+**Priority Actions for UVM Parity:**
+1. **InOut interface ports** (I3C AVIP) - CIRCT feature needed
+2. **prim_diff_decode fix** (OpenTitan full IPs) - CIRCT bug fix
+3. **AVIP source fixes** (AHB, AXI4, SPI, UART, JTAG) - upstream contributions needed
+4. **Test more OpenTitan IPs** - pattgen, rom_ctrl, sram_ctrl, sysrst_ctrl
+
+---
+
 ## Iteration 192 - January 26, 2026
 
 ### 4 More IPs Added - 21 OpenTitan Modules Total
