@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 181 - January 26, 2026
+
+### OpenTitan Simulation Support (Phase 2: gpio_reg_top SIMULATES!)
+
+Major milestone: OpenTitan GPIO register block with TileLink-UL interface now compiles and simulates end-to-end!
+
+**Phase 2 Achievement - gpio_no_alerts Simulates:**
+```
+[circt-sim] Found 4 LLHD processes, 0 seq.initial blocks, and 1 hw.instance ops (out of 177 ops)
+[circt-sim] Registered 47 LLHD signals and 13 LLHD processes/initial blocks
+TEST PASSED: gpio_reg_top basic connectivity
+[circt-sim] Simulation finished successfully
+```
+
+**Working Components (32 modules):**
+- `gpio_reg_top.sv` - Full GPIO register block (**SIMULATES**)
+- `tlul_adapter_reg.sv`, `tlul_cmd_intg_chk.sv`, `tlul_rsp_intg_gen.sv` - TL-UL adapters
+- `prim_subreg*.sv` - All register primitives
+- `prim_secded_inv_*.sv` - ECC encode/decode
+- `prim_filter*.sv` - Input filtering
+
+**Blocker (Full GPIO):**
+- `prim_diff_decode.sv` - Moore-to-Core lowering fails with control-flow bug:
+  `error: branch has 7 operands for successor #0, but target block has 4`
+- Workaround: `gpio_no_alerts` target excludes `prim_alert_sender` dependency
+
+**Phase 1 Complete:**
+- `prim_fifo_sync.sv`, `prim_count.sv` - Both simulate successfully
+
+**Key Findings:**
+- Use `-DVERILATOR` for dummy assertion macros
+- Use `--no-uvm-auto-include` and `--ir-hw` for circt-sim
+- TileLink-UL infrastructure is fully functional in CIRCT
+
+---
+
+## Iteration 180 - January 26, 2026
+
+### SVA BMC
+
+Handled `##[0:n]` delay ranges in BMC by including the current sample in the
+delay buffer window and added conversion coverage for zero-delay ranges.
+Expanded goto/non-consecutive repetition in BMC with bounded delay patterns
+and added conversion coverage plus a guard for oversized expansions.
+Allowed multiple BMC cover properties to be combined (OR) and added a
+conversion regression test.
+Final-only cover checks now contribute to BMC cover results, with conversion
+coverage for bmc.final cover handling.
+Bounded delay ranges in BMC now support `ltl.sequence` inputs (using LTL OR),
+with a regression covering sequence-typed delay buffers.
+
+### LEC
+
+Abstracted internally and externally driven LLHD ref outputs to inputs to keep
+LEC lowering running and added a regression for multi-driven ref port handling.
+
+---
+
 ## Iteration 179 - January 26, 2026
 
 ### Baseline Verification
@@ -8796,3 +8854,34 @@ All 9 AVIPs tested through CIRCT pipeline:
 ## Previous Iterations
 
 See PROJECT_PLAN.md for complete history of iterations 1-20.
+
+---
+
+## Iteration 180 - January 26, 2026
+
+### JTAG AVIP Investigation Complete
+
+Investigated JTAG AVIP compilation failures. Found **code bugs in the AVIP**, not CIRCT issues:
+
+**Issue 1: Wrong bind target case (Controller)**
+- `bind jtagControllerDeviceMonitorBfm` uses lowercase, resolving to local INSTANCE
+- Should use `bind JtagControllerDeviceMonitorBfm` (uppercase) to target TYPE
+- This is a case-sensitivity issue in the AVIP code
+
+**Issue 2: Hierarchical references in bind (Target)**
+- `bind JtagTargetDeviceMonitorBfm ... (.clk(jtagIf.clk), ...)`
+- LRM §25.9: Interfaces with hierarchical refs in bind cannot be virtual interfaces
+
+**Issue 3: Interface port on interface**
+- `JtagTargetDeviceMonitorBfm(JtagIf jtagIf)` takes interface as port
+- LRM: Interfaces with interface ports cannot be used as virtual interfaces
+
+**Issue 4: Enum type casts (unrelated)**
+- Several `reg[4:0]` to `JtagInstructionOpcodeEnum` conversion issues
+
+**Conclusion**: JTAG AVIP requires code fixes to comply with IEEE 1800-2017.
+CIRCT/slang correctly enforces LRM restrictions.
+
+### Test Baselines Verified
+- yosys SVA BMC: 14/16 (87.5%) - maintained
+- All other baselines from Iteration 179 maintained
