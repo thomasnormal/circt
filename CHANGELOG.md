@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 200 - January 26, 2026
+
+### Verified Results (from Iteration 199 follow-up tracks)
+
+- **Track A (I3C AVIP Full Test)**: **VERIFIED** ✅
+  - I3C AVIP compiles successfully with InOut fix: 21,674 lines MLIR, 0 errors
+  - Test validates real I3C interface pattern with bidirectional scl/sda
+- **Track B (slang Patch Applied)**: **COMPLETED** ✅
+  - Applied `slang-allow-virtual-iface-override.patch` for Xcelium compatibility
+  - New flag: `--allow-virtual-iface-with-override`
+- **Track C (OpenTitan Verification)**: **33/33 modules simulate** ✅
+  - prim_fifo_sync, gpio, all reg_top modules operational
+- **Track D (AVIP Documentation)**: Comprehensive docs created
+  - AVIP_STATUS.md, AVIP_QUICK_REFERENCE.md, AVIP_FIXES_DETAILED.md
+
+### Current AVIP Status: 3/9 Compile (33%)
+
+| AVIP | Status | Blocker | Next Action |
+|------|--------|---------|-------------|
+| APB | ✅ | - | - |
+| I2S | ✅ | - | - |
+| I3C | ✅ | - | Verified working |
+| AHB | ❌ | Bind scope | Test with `--allow-virtual-iface-with-override` |
+| AXI4 | ❌ | Bind scope | Test with `--allow-virtual-iface-with-override` |
+| UART | ❌ | do_compare | Requires AVIP source fix |
+| JTAG | ❌ | Multiple | Requires AVIP source fixes |
+| SPI | ❌ | Nested class | Requires AVIP source fix |
+| AXI4Lite | ❌ | Build infra | Missing filelist |
+
+### Remaining Limitations for UVM Parity
+
+1. **Named sequence declarations** - Blocks 6 verilator-verification tests
+2. **Cycle delay ranges `##[m:n]`** - SVA feature needed
+3. **AVIP source bugs** - 5 AVIPs need upstream fixes
+
+### Test Suite Status (All Stable)
+
+| Suite | Status |
+|-------|--------|
+| sv-tests SVA | 9/26 pass |
+| verilator-verification | 8/17 pass |
+| Yosys SVA | 14/14 pass (100%) |
+| OpenTitan | 33/33 simulate |
+
 ## Iteration 199 - January 26, 2026
 
 ### Track Completions
@@ -130,6 +174,7 @@
 - Added TL-UL write smoke transactions to otp_ctrl_core_reg_top and flash_ctrl_core_reg_top tests.
 - Added TL-UL write smoke transactions to csrng_reg_top, keymgr_reg_top, and otbn_reg_top tests.
 - Added TL-UL write smoke transactions to pattgen/rom_ctrl_regs/sram_ctrl_regs/sysrst_ctrl/usbdev register blocks.
+- Started OpenTitan GPIO DV parse-only bring-up; blockers include missing DV packages (prim_mubi/prim_secded/str_utils) in the compile set and CIRCT limitations in string+byte concatenation and format specifiers for class handles.
 
 ## Iteration 195 - January 26, 2026
 
