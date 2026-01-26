@@ -56,5 +56,34 @@ def ConstructLEC : Pass<"construct-lec", "::mlir::ModuleOp"> {
   ];
 }
 
-#endif // CIRCT_TOOLS_CIRCT_LEC_PASSES_TD
+def StripLLHDInterfaceSignals
+    : Pass<"strip-llhd-interface-signals", "::mlir::ModuleOp"> {
+  let summary = "Strip LLHD interface signal storage for LEC";
+  let description = [{
+    Convert interface-backed LLHD signal storage patterns into direct SSA
+    values so that LEC can run on HW/Comb/Verif without LLHD/LLVM ops.
+  }];
 
+  let dependentDialects = [
+    "circt::hw::HWDialect",
+    "circt::llhd::LLHDDialect",
+    "mlir::LLVM::LLVMDialect"
+  ];
+}
+
+def LowerLLHDRefPorts
+    : Pass<"lower-llhd-ref-ports", "::mlir::ModuleOp"> {
+  let summary = "Lower LLHD ref ports to value ports for LEC";
+  let description = [{
+    Convert `llhd.ref` ports to value ports by reclassifying externally-driven
+    ref outputs as inputs and rewriting instance connections. This enables
+    subsequent LLHD-to-core lowering to eliminate LLHD ops in formal flows.
+  }];
+
+  let dependentDialects = [
+    "circt::hw::HWDialect",
+    "circt::llhd::LLHDDialect"
+  ];
+}
+
+#endif // CIRCT_TOOLS_CIRCT_LEC_PASSES_TD

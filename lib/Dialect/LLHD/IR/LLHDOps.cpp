@@ -11,6 +11,7 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Support/CustomDirectiveImpl.h"
+#include "circt/Dialect/Verif/VerifOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -663,6 +664,7 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
   // Side effects we preserve:
   // - DriveOp: signal assignments
   // - WaitOp with observed operands: event-based waits (sensitivity list)
+  // - verif.assert/assume/cover: verification checks
   // - sim.proc.print: $display output
   // - sim.terminate: $finish simulation control
   // - Any operation with memory write effects
@@ -671,6 +673,13 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
     op.walk([&](Operation *innerOp) {
       // Check for DriveOp (signal assignment)
       if (isa<DriveOp>(innerOp)) {
+        hasSideEffect = true;
+        return WalkResult::interrupt();
+      }
+      // Keep verification checks.
+      if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp,
+              verif::ClockedAssertOp, verif::ClockedAssumeOp,
+              verif::ClockedCoverOp>(innerOp)) {
         hasSideEffect = true;
         return WalkResult::interrupt();
       }

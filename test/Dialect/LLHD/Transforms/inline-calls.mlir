@@ -152,3 +152,27 @@ func.func private @"uvm_pkg::uvm_get_report_object"() -> i32 {
   %c1 = hw.constant 1 : i32
   return %c1 : i32
 }
+
+// Test that UVM constructors (`::new`) are not inlined to avoid recursion.
+// CHECK-LABEL: @UvmPhaseNew
+hw.module @UvmPhaseNew(out out0 : i32) {
+  // CHECK: call @"uvm_pkg::uvm_phase::new"
+  %val = func.call @"uvm_pkg::uvm_phase::new"() : () -> i32
+  hw.output %val : i32
+}
+
+func.func private @"uvm_pkg::uvm_phase::new"() -> i32 {
+  %c1 = hw.constant 1 : i32
+  return %c1 : i32
+}
+
+// Test that external functions are not inlined (no body to inline).
+// CHECK-LABEL: @ExternalCall
+hw.module @ExternalCall(out out0 : i32) {
+  %c0 = hw.constant 0 : i32
+  // CHECK: call @ext
+  %val = func.call @ext(%c0) : (i32) -> i32
+  hw.output %val : i32
+}
+
+func.func private @ext(%arg0: i32) -> i32

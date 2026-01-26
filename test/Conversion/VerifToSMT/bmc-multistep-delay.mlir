@@ -125,6 +125,61 @@ func.func @test_delay_unbounded() -> i1 {
 }
 
 // =============================================================================
+// Test case 2d: ##[0:2] delay range (0 to 2 cycles)
+// For delay=0 length=2, we need 2 buffer slots
+// =============================================================================
+
+// CHECK-LABEL: func.func @test_delay_range_zero
+// Single delay buffer constant initialized to 0 (used multiple times)
+// CHECK:         smt.bv.constant #smt.bv<0> : !smt.bv<1>
+// CHECK:         scf.for
+// Circuit takes 4 args (start, done, buf0, buf1)
+// Returns: orig outputs + delay buffers + non-final check
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
+func.func @test_delay_range_zero() -> i1 {
+  %bmc = verif.bmc bound 5 num_regs 0 initial_values []
+  init {
+  }
+  loop {
+  }
+  circuit {
+  ^bb0(%start: i1, %done: i1):
+    %delayed_done = ltl.delay %done, 0, 2 : i1
+    %prop = ltl.implication %start, %delayed_done : i1, !ltl.sequence
+    verif.assert %prop : !ltl.property
+    verif.yield %start, %done : i1, i1
+  }
+  func.return %bmc : i1
+}
+
+// =============================================================================
+// Test case 2e: ##[0:2] delay range on ltl.sequence input
+// Ensures bounded delay ranges handle sequence-typed buffers.
+// =============================================================================
+
+// CHECK-LABEL: func.func @test_delay_range_sequence
+// CHECK:         scf.for
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bool, !smt.bool) -> (!smt.bv<1>, !smt.bool, !smt.bool, !smt.bool)
+func.func @test_delay_range_sequence() -> i1 {
+  %bmc = verif.bmc bound 5 num_regs 0 initial_values []
+  init {
+  }
+  loop {
+  }
+  circuit {
+  ^bb0(%sig: i1):
+    %seq = ltl.delay %sig, 0, 0 : i1
+    %delayed_seq = ltl.delay %seq, 0, 2 : !ltl.sequence
+    %prop = ltl.implication %sig, %delayed_seq : i1, !ltl.sequence
+    verif.assert %prop : !ltl.property
+    verif.yield %sig : i1
+  }
+  func.return %bmc : i1
+}
+
+// =============================================================================
 // Test case 3: No delay ops - with assert (verifies non-delay paths work)
 // =============================================================================
 

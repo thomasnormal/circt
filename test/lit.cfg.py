@@ -82,6 +82,11 @@ if config.verilator_path != "":
   tools.append('verilator')
   config.available_features.add('verilator')
 
+if config.z3_path:
+  llvm_config.with_environment('PATH', config.z3_path, append_path=True)
+  config.available_features.add('z3')
+  config.substitutions.append(('%z3', os.path.join(config.z3_path, 'z3')))
+
 if config.zlib == "1":
   config.available_features.add('zlib')
 

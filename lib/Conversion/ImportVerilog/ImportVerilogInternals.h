@@ -30,6 +30,8 @@ namespace slang {
 namespace ast {
 class LocalAssertionVarSymbol;
 class Pattern;
+class InstanceSymbol;
+class HierarchicalReference;
 enum class CaseStatementCondition;
 } // namespace ast
 } // namespace slang
@@ -72,6 +74,12 @@ struct ClassLowering {
 // Interface lowering information.
 struct InterfaceLowering {
   circt::moore::InterfaceDeclOp op;
+};
+
+struct PendingInterfacePortConnection {
+  const slang::ast::InstanceSymbol *instSym;
+  Value instRef;
+  Location loc;
 };
 
 // Covergroup lowering information.
@@ -157,6 +165,10 @@ struct Context {
   InterfaceLowering *
   convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface);
   LogicalResult convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface);
+  Value resolveInterfaceInstance(const slang::ast::InstanceSymbol *instSym,
+                                 Location loc);
+  Value resolveInterfaceInstance(const slang::ast::HierarchicalReference &ref,
+                                 Location loc);
 
   /// Convert covergroup declarations
   LogicalResult convertCovergroup(const slang::ast::CovergroupType &covergroup);
@@ -496,6 +508,8 @@ struct Context {
   /// instance symbol.
   DenseMap<const slang::ast::InstanceSymbol *, Value> interfaceInstances;
   DenseMap<const slang::ast::InterfacePortSymbol *, Value> interfacePortValues;
+  SmallVector<PendingInterfacePortConnection, 4>
+      pendingInterfacePortConnections;
 
   /// A stack of assignment left-hand side values. Each assignment will push its
   /// lowered left-hand side onto this stack before lowering its right-hand
@@ -573,6 +587,9 @@ struct Context {
 
   /// The current clocking event for assertions within a timed statement.
   const slang::ast::SignalEventControl *currentAssertionClock = nullptr;
+
+  /// The current timing control for clocked assertion expressions.
+  const slang::ast::TimingControl *currentAssertionTimingControl = nullptr;
 
   /// The current interface body being processed (if any). This is used when
   /// converting tasks/functions defined inside an interface to determine

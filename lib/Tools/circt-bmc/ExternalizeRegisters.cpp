@@ -20,6 +20,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -59,7 +60,69 @@ static bool isConstantInt(Value value, bool wantAllOnes) {
   return false;
 }
 
+static bool traceClockRoot(Value value, Value &root);
+static StringAttr getClockPortName(HWModuleOp module, Value clock) {
+  auto arg = dyn_cast<BlockArgument>(clock);
+  if (!arg || arg.getOwner() != module.getBodyBlock())
+    return StringAttr::get(module.getContext(), "");
+  if (!isa<seq::ClockType>(arg.getType()))
+    return StringAttr::get(module.getContext(), "");
+  auto inputNames = module.getInputNames();
+  if (arg.getArgNumber() >= inputNames.size())
+    return StringAttr::get(module.getContext(), "");
+  if (auto name = dyn_cast<StringAttr>(inputNames[arg.getArgNumber()]))
+    return name;
+  return StringAttr::get(module.getContext(), "");
+}
+
+static bool traceClockRootFromMemory(Value addr, Value &root) {
+  SmallVector<Value, 8> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(addr);
+
+  bool foundStore = false;
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+
+    if (auto cast = current.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+        worklist.push_back(cast->getOperand(0));
+    }
+    if (auto bitcast = current.getDefiningOp<LLVM::BitcastOp>())
+      worklist.push_back(bitcast.getArg());
+    if (auto addrSpaceCast = current.getDefiningOp<LLVM::AddrSpaceCastOp>())
+      worklist.push_back(addrSpaceCast.getArg());
+
+    for (auto *user : current.getUsers()) {
+      if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+        foundStore = true;
+        if (!traceClockRoot(store.getValue(), root))
+          return false;
+        continue;
+      }
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user))
+        worklist.push_back(bitcast.getResult());
+      if (auto addrSpaceCast = dyn_cast<LLVM::AddrSpaceCastOp>(user))
+        worklist.push_back(addrSpaceCast.getResult());
+      if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
+        if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+          worklist.push_back(cast->getResult(0));
+      }
+    }
+  }
+
+  return foundStore;
+}
+
 static bool traceClockRoot(Value value, Value &root) {
+  if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+    if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+      return traceClockRoot(cast->getOperand(0), root);
+  }
+  if (auto bitcast = value.getDefiningOp<LLVM::BitcastOp>())
+    return traceClockRoot(bitcast.getArg(), root);
   if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
     return traceClockRoot(toClock.getInput(), root);
   if (auto arg = dyn_cast<BlockArgument>(value)) {
@@ -80,16 +143,39 @@ static bool traceClockRoot(Value value, Value &root) {
     return traceClockRoot(bitcast.getInput(), root);
   if (auto probe = value.getDefiningOp<llhd::ProbeOp>()) {
     Value signal = probe.getSignal();
+    bool sawDrive = false;
     for (auto *user : signal.getUsers()) {
       if (auto drive = dyn_cast<llhd::DriveOp>(user)) {
+        sawDrive = true;
         if (traceClockRoot(drive.getValue(), root))
           return true;
       }
     }
-    return false;
+    if (sawDrive)
+      return false;
+    return traceClockRootFromMemory(signal, root);
   }
   if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
     for (auto operand : andOp.getOperands())
+      if (!traceClockRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
+    for (auto operand : orOp.getOperands())
+      if (!traceClockRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto muxOp = value.getDefiningOp<comb::MuxOp>()) {
+    return traceClockRoot(muxOp.getCond(), root) &&
+           traceClockRoot(muxOp.getTrueValue(), root) &&
+           traceClockRoot(muxOp.getFalseValue(), root);
+  }
+  if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
+    return traceClockRoot(extractOp.getInput(), root);
+  if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
+    for (auto operand : concatOp.getOperands())
       if (!traceClockRoot(operand, root))
         return false;
     return true;
@@ -118,6 +204,7 @@ private:
   DenseMap<StringAttr, SmallVector<Type>> addedOutputs;
   DenseMap<StringAttr, SmallVector<StringAttr>> addedOutputNames;
   DenseMap<StringAttr, SmallVector<Attribute>> initialValues;
+  DenseMap<StringAttr, SmallVector<StringAttr>> regClockNames;
 
   LogicalResult externalizeReg(HWModuleOp module, Operation *op, Twine regName,
                                Value clock, Attribute initState, Value reset,
@@ -151,7 +238,7 @@ void ExternalizeRegistersPass::runOnOperation() {
       bool foundClk = false;
       for (auto ty : module.getInputTypes()) {
         if (isa<seq::ClockType>(ty)) {
-          if (foundClk) {
+          if (foundClk && !allowMultiClock) {
             module.emitError("modules with multiple clocks not yet supported");
             return signalPassFailure();
           }
@@ -225,6 +312,8 @@ void ExternalizeRegistersPass::runOnOperation() {
               addedOutputs[instanceOp.getModuleNameAttr().getAttr()];
           auto newOutputNames =
               addedOutputNames[instanceOp.getModuleNameAttr().getAttr()];
+          auto childClockNames =
+              regClockNames[instanceOp.getModuleNameAttr().getAttr()];
           addedInputs[module.getSymNameAttr()].append(newInputs);
           addedInputNames[module.getSymNameAttr()].append(newInputNames);
           addedOutputs[module.getSymNameAttr()].append(newOutputs);
@@ -235,6 +324,34 @@ void ExternalizeRegistersPass::runOnOperation() {
               instanceOp.getInputNames().getValue());
           SmallVector<Attribute> resultNames(
               instanceOp.getOutputNames().getValue());
+
+          SmallVector<StringAttr> mappedClockNames;
+          mappedClockNames.reserve(childClockNames.size());
+          auto inputNamesAttr = instanceOp.getInputNames().getValue();
+          auto lookupInputIndex = [&](StringAttr name)
+              -> std::optional<size_t> {
+            for (auto [idx, attr] : llvm::enumerate(inputNamesAttr)) {
+              if (attr == name)
+                return idx;
+            }
+            return std::nullopt;
+          };
+          for (auto clockName : childClockNames) {
+            if (!clockName || clockName.getValue().empty()) {
+              mappedClockNames.push_back(
+                  StringAttr::get(module.getContext(), ""));
+              continue;
+            }
+            auto inputIdx = lookupInputIndex(clockName);
+            if (!inputIdx) {
+              mappedClockNames.push_back(
+                  StringAttr::get(module.getContext(), ""));
+              continue;
+            }
+            Value operand = instanceOp.getOperand(*inputIdx);
+            mappedClockNames.push_back(getClockPortName(module, operand));
+          }
+          regClockNames[module.getSymNameAttr()].append(mappedClockNames);
 
           for (auto [input, name] : zip_equal(newInputs, newInputNames)) {
             instanceOp.getInputsMutable().append(
@@ -272,6 +389,15 @@ void ExternalizeRegistersPass::runOnOperation() {
       module->setAttr("initial_values",
                       ArrayAttr::get(&getContext(),
                                      initialValues[module.getSymNameAttr()]));
+      if (!regClockNames[module.getSymNameAttr()].empty()) {
+        SmallVector<Attribute> clockAttrs;
+        clockAttrs.reserve(regClockNames[module.getSymNameAttr()].size());
+        for (auto clockName : regClockNames[module.getSymNameAttr()])
+          clockAttrs.push_back(clockName);
+        module->setAttr(
+            "bmc_reg_clocks",
+            ArrayAttr::get(&getContext(), clockAttrs));
+      }
     }
   }
 }
@@ -312,6 +438,8 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   // Replace the register with newInput and newOutput
   auto newInput = module.appendInput(newInputName, regType).second;
   result.replaceAllUsesWith(newInput);
+  regClockNames[module.getSymNameAttr()].push_back(
+      getClockPortName(module, clock));
   if (reset) {
     if (isAsync) {
       // Async reset

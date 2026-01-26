@@ -15,13 +15,16 @@
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Support/LLVM.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Support/LLVM.h"
 #include "slang/ast/SystemSubroutine.h"
 #include "llvm/ADT/APInt.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
+#include <variant>
 
 using namespace circt;
 using namespace ImportVerilog;
@@ -29,6 +32,7 @@ using namespace ImportVerilog;
 // NOLINTBEGIN(misc-no-recursion)
 namespace {
 constexpr const char kDisableIffAttr[] = "sva.disable_iff";
+constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
 
 static Value createUnknownOrZeroConstant(Context &context, Location loc,
                                          moore::IntType type) {
@@ -108,10 +112,10 @@ static Value lowerSampledValueFunctionWithClocking(
     else
       module = parentOp->getParentOfType<moore::SVModuleOp>();
   }
-  if (!module || !isa<moore::SVModuleOp>(parentOp)) {
+  if (!module) {
     mlir::emitWarning(loc)
         << funcName
-        << " with explicit clocking is only supported at module scope; "
+        << " with explicit clocking is only supported within a module; "
            "returning 0 as a placeholder";
     auto resultType =
         moore::IntType::get(builder.getContext(), 1, moore::Domain::FourValued);
@@ -223,6 +227,144 @@ static Value lowerSampledValueFunctionWithClocking(
   return moore::ReadOp::create(builder, loc, resultVar);
 }
 
+static Value lowerPastWithClocking(Context &context,
+                                   const slang::ast::Expression &valueExpr,
+                                   const slang::ast::TimingControl &timingCtrl,
+                                   int64_t delay,
+                                   const slang::ast::Expression *enableExpr,
+                                   Location loc) {
+  auto &builder = context.builder;
+  auto *insertionBlock = builder.getInsertionBlock();
+  if (!insertionBlock)
+    return {};
+  auto *parentOp = insertionBlock->getParentOp();
+  moore::SVModuleOp module;
+  if (parentOp) {
+    if (auto direct = dyn_cast<moore::SVModuleOp>(parentOp))
+      module = direct;
+    else
+      module = parentOp->getParentOfType<moore::SVModuleOp>();
+  }
+  if (!module) {
+    mlir::emitWarning(loc)
+        << "$past with explicit clocking is only supported within a module; "
+           "returning 0 as a placeholder";
+    auto resultType =
+        moore::IntType::get(builder.getContext(), 1, moore::Domain::FourValued);
+    return moore::ConstantOp::create(builder, loc, resultType, 0);
+  }
+  if (delay < 0) {
+    mlir::emitError(loc) << "$past delay must be non-negative";
+    return {};
+  }
+
+  auto valueType = context.convertType(*valueExpr.type);
+  auto intType = dyn_cast_or_null<moore::IntType>(valueType);
+  if (!intType) {
+    mlir::emitError(loc)
+        << "unsupported $past value type with explicit clocking";
+    return {};
+  }
+
+  int64_t historyDepth = std::max<int64_t>(delay, 1);
+  Value init = createUnknownOrZeroConstant(context, loc, intType);
+  if (!init)
+    return {};
+
+  SmallVector<Value, 4> historyVars;
+  Value resultVar;
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    auto *moduleBlock = module.getBody();
+    if (moduleBlock->mightHaveTerminator()) {
+      if (auto *terminator = moduleBlock->getTerminator())
+        builder.setInsertionPoint(terminator);
+      else
+        builder.setInsertionPointToEnd(moduleBlock);
+    } else {
+      builder.setInsertionPointToEnd(moduleBlock);
+    }
+
+    for (int64_t i = 0; i < historyDepth; ++i) {
+      historyVars.push_back(moore::VariableOp::create(
+          builder, loc, moore::RefType::get(intType), StringAttr{}, init));
+    }
+    resultVar = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(intType), StringAttr{}, init);
+
+    auto proc =
+        moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
+    builder.setInsertionPointToEnd(&proc.getBody().emplaceBlock());
+    if (failed(context.convertTimingControl(timingCtrl)))
+      return {};
+
+    Value current = context.convertRvalueExpression(valueExpr);
+    if (!current)
+      return {};
+    auto currentType = dyn_cast<moore::IntType>(current.getType());
+    if (!currentType) {
+      mlir::emitError(loc)
+          << "unsupported $past value type with explicit clocking";
+      return {};
+    }
+    if (current.getType() != intType)
+      current =
+          context.materializeConversion(intType, current, /*isSigned=*/false,
+                                         loc);
+
+    Value enable;
+    bool hasEnable = false;
+    if (enableExpr) {
+      enable = context.convertRvalueExpression(*enableExpr);
+      if (!enable)
+        return {};
+      enable = context.convertToBool(enable);
+      if (!enable)
+        return {};
+      hasEnable = true;
+    }
+
+    auto selectWithEnable = [&](Value onTrue, Value onFalse) -> Value {
+      if (!hasEnable)
+        return onTrue;
+      auto conditional =
+          moore::ConditionalOp::create(builder, loc, onTrue.getType(), enable);
+      auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+      auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+      {
+        OpBuilder::InsertionGuard g(builder);
+        builder.setInsertionPointToStart(&trueBlock);
+        moore::YieldOp::create(builder, loc, onTrue);
+        builder.setInsertionPointToStart(&falseBlock);
+        moore::YieldOp::create(builder, loc, onFalse);
+      }
+      return conditional.getResult();
+    };
+
+    Value pastValue = current;
+    if (delay > 0)
+      pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
+    Value disabledValue = createUnknownOrZeroConstant(context, loc, intType);
+    if (!disabledValue)
+      return {};
+    Value resultValue = selectWithEnable(pastValue, disabledValue);
+    moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
+
+    for (int64_t i = historyDepth - 1; i > 0; --i) {
+      Value prev = moore::ReadOp::create(builder, loc, historyVars[i]);
+      Value prevPrev = moore::ReadOp::create(builder, loc, historyVars[i - 1]);
+      Value next = selectWithEnable(prevPrev, prev);
+      moore::BlockingAssignOp::create(builder, loc, historyVars[i], next);
+    }
+    Value prev0 = moore::ReadOp::create(builder, loc, historyVars[0]);
+    Value next0 = selectWithEnable(current, prev0);
+    moore::BlockingAssignOp::create(builder, loc, historyVars[0], next0);
+    moore::ReturnOp::create(builder, loc);
+  }
+
+  return moore::ReadOp::create(builder, loc, resultVar);
+}
+
 struct AssertionExprVisitor {
   Context &context;
   Location loc;
@@ -318,7 +460,19 @@ struct AssertionExprVisitor {
         break;
       }
       case slang::ast::ExpressionKind::Call: {
-        if (!context.convertRvalueExpression(*item))
+        auto &call = item->as<slang::ast::CallExpression>();
+        if (auto *sysInfo =
+                std::get_if<slang::ast::CallExpression::SystemCallInfo>(
+                    &call.subroutine)) {
+          auto callLoc = context.convertLocation(call.sourceRange);
+          mlir::emitRemark(callLoc)
+              << "ignoring system subroutine `" << sysInfo->subroutine->name
+              << "` in assertion match items";
+          // Sequence match-item subroutine calls are side-effect only; formal
+          // lowering ignores them.
+          break;
+        }
+        if (!context.convertRvalueExpression(call))
           return failure();
         break;
       }
@@ -423,12 +577,19 @@ struct AssertionExprVisitor {
       // delay is relative to the sequence start and should not be adjusted.
       uint32_t minDelay = concatElement.delay.min;
       std::optional<uint32_t> maxDelay = concatElement.delay.max;
-      uint32_t offsetDelay = minDelay;
-      if (it != expr.elements.begin() && minDelay > 0) {
-        --minDelay;
-        if (maxDelay.has_value() && maxDelay.value() > 0)
-          --maxDelay.value();
+      uint32_t ltlMinDelay = minDelay;
+      std::optional<uint32_t> ltlMaxDelay = maxDelay;
+      if (it != expr.elements.begin() && ltlMinDelay > 0) {
+        --ltlMinDelay;
+        if (ltlMaxDelay.has_value() && ltlMaxDelay.value() > 0)
+          --ltlMaxDelay.value();
       }
+      // Sequence offsets track the effective cycle position of each element.
+      // Concat always advances one cycle between elements, so ##0 still moves
+      // by one in the lowered LTL; reflect that when computing local-var pasts.
+      uint32_t offsetDelay = minDelay;
+      if (it != expr.elements.begin() && offsetDelay == 0)
+        offsetDelay = 1;
       currentOffset += offsetDelay;
       context.setAssertionSequenceOffset(currentOffset);
 
@@ -449,7 +610,8 @@ struct AssertionExprVisitor {
         return {};
       }
 
-      auto [delayMin, delayRange] = convertRangeToAttrs(minDelay, maxDelay);
+      auto [delayMin, delayRange] =
+          convertRangeToAttrs(ltlMinDelay, ltlMaxDelay);
       auto delayedSequence = ltl::DelayOp::create(builder, loc, sequenceValue,
                                                   delayMin, delayRange);
       sequenceElements.push_back(delayedSequence);
@@ -480,11 +642,31 @@ struct AssertionExprVisitor {
       return ltl::NotOp::create(builder, loc, value);
     case UnaryAssertionOperator::SEventually:
       if (expr.range.has_value()) {
-        mlir::emitError(loc, "Strong eventually with range not supported");
-        return {};
-      } else {
-        return ltl::EventuallyOp::create(builder, loc, value);
+        auto minDelay = builder.getI64IntegerAttr(expr.range.value().min);
+        auto lengthAttr = mlir::IntegerAttr{};
+        if (expr.range.value().max.has_value()) {
+          lengthAttr = builder.getI64IntegerAttr(
+              expr.range.value().max.value() - expr.range.value().min);
+        }
+        return ltl::DelayOp::create(builder, loc, value, minDelay,
+                                    lengthAttr);
       }
+      return ltl::EventuallyOp::create(builder, loc, value);
+    case UnaryAssertionOperator::Eventually: {
+      if (expr.range.has_value()) {
+        auto minDelay = builder.getI64IntegerAttr(expr.range.value().min);
+        auto lengthAttr = mlir::IntegerAttr{};
+        if (expr.range.value().max.has_value()) {
+          lengthAttr = builder.getI64IntegerAttr(
+              expr.range.value().max.value() - expr.range.value().min);
+        }
+        return ltl::DelayOp::create(builder, loc, value, minDelay,
+                                    lengthAttr);
+      }
+      auto eventually = ltl::EventuallyOp::create(builder, loc, value);
+      eventually->setAttr(kWeakEventuallyAttr, builder.getUnitAttr());
+      return eventually;
+    }
     case UnaryAssertionOperator::Always: {
       std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
           builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
@@ -497,18 +679,40 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::NextTime: {
       auto minRepetitions = builder.getI64IntegerAttr(1);
+      auto lengthAttr = builder.getI64IntegerAttr(0);
       if (expr.range.has_value()) {
         minRepetitions = builder.getI64IntegerAttr(expr.range.value().min);
+        if (expr.range.value().max.has_value()) {
+          lengthAttr = builder.getI64IntegerAttr(expr.range.value().max.value() -
+                                                 expr.range.value().min);
+        }
       }
       return ltl::DelayOp::create(builder, loc, value, minRepetitions,
-                                  builder.getI64IntegerAttr(0));
+                                  lengthAttr);
     }
-    case UnaryAssertionOperator::Eventually:
-    case UnaryAssertionOperator::SNextTime:
-    case UnaryAssertionOperator::SAlways:
-      mlir::emitError(loc, "unsupported unary operator: ")
-          << slang::ast::toString(expr.op);
-      return {};
+    case UnaryAssertionOperator::SNextTime: {
+      auto minRepetitions = builder.getI64IntegerAttr(1);
+      auto lengthAttr = builder.getI64IntegerAttr(0);
+      if (expr.range.has_value()) {
+        minRepetitions = builder.getI64IntegerAttr(expr.range.value().min);
+        if (expr.range.value().max.has_value()) {
+          lengthAttr = builder.getI64IntegerAttr(expr.range.value().max.value() -
+                                                 expr.range.value().min);
+        }
+      }
+      return ltl::DelayOp::create(builder, loc, value, minRepetitions,
+                                  lengthAttr);
+    }
+    case UnaryAssertionOperator::SAlways: {
+      std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
+          builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
+      if (expr.range.has_value()) {
+        attr =
+            convertRangeToAttrs(expr.range.value().min, expr.range.value().max);
+      }
+      return ltl::RepeatOp::create(builder, loc, value, attr.first,
+                                   attr.second);
+    }
     }
     llvm_unreachable("All enum values handled in switch");
   }
@@ -691,6 +895,10 @@ struct AssertionExprVisitor {
   }
 
   Value visit(const slang::ast::ClockingAssertionExpr &expr) {
+    auto *previousTiming = context.currentAssertionTimingControl;
+    auto timingGuard = llvm::make_scope_exit(
+        [&] { context.currentAssertionTimingControl = previousTiming; });
+    context.currentAssertionTimingControl = &expr.clocking;
     auto assertionExpr =
         context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!assertionExpr)
@@ -788,9 +996,8 @@ FailureOr<Value> Context::convertAssertionSystemCallArity1(
                 [&]() -> Value {
                   return {};
                 })
-          // $sampled(x) in assertion context returns the sampled value, which
-          // is effectively the current value since assertions use sampled semantics.
-          .Case("$sampled", [&]() -> Value { return value; })
+          // $sampled is handled in convertAssertionCallExpression.
+          .Case("$sampled", [&]() -> Value { return {}; })
           // Note: $past is handled separately in convertAssertionCallExpression
           // using moore::PastOp to preserve the type for comparisons.
           .Default([&]() -> Value { return {}; });
@@ -838,10 +1045,20 @@ Value Context::convertAssertionCallExpression(
     }
 
     if (subroutine.name == "$stable" || subroutine.name == "$changed") {
-      auto past =
-          moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
+      Value sampled = value;
+      Value past;
+      if (inAssertionExpr) {
+        // Sampled-value semantics: compare the sampled value at this edge with
+        // the sampled value from the previous edge.
+        sampled = value;
+        past =
+            moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
+      } else {
+        past =
+            moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
+      }
       auto stable =
-          moore::CaseEqOp::create(builder, loc, value, past).getResult();
+          moore::CaseEqOp::create(builder, loc, sampled, past).getResult();
       Value resultVal = stable;
       if (subroutine.name == "$changed")
         resultVal = moore::NotOp::create(builder, loc, stable).getResult();
@@ -851,17 +1068,26 @@ Value Context::convertAssertionCallExpression(
     Value current = value;
     if (valueType.getBitSize() != 1)
       current = moore::ReduceOrOp::create(builder, loc, value).getResult();
-    auto past =
-        moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
+    Value sampled = current;
+    Value past;
+    if (inAssertionExpr) {
+      // Sampled-value semantics: use the sampled current value and sampled past.
+      sampled = current;
+      past =
+          moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
+    } else {
+      past =
+          moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
+    }
     auto currentTy = cast<moore::IntType>(current.getType());
     auto zero = moore::ConstantOp::create(builder, loc, currentTy, 0);
     auto one = moore::ConstantOp::create(builder, loc, currentTy, 1);
     auto currentIsOne =
-        moore::CaseEqOp::create(builder, loc, current, one).getResult();
+        moore::CaseEqOp::create(builder, loc, sampled, one).getResult();
     auto pastIsOne =
         moore::CaseEqOp::create(builder, loc, past, one).getResult();
     auto currentIsZero =
-        moore::CaseEqOp::create(builder, loc, current, zero).getResult();
+        moore::CaseEqOp::create(builder, loc, sampled, zero).getResult();
     auto pastIsZero =
         moore::CaseEqOp::create(builder, loc, past, zero).getResult();
     Value resultVal;
@@ -884,27 +1110,73 @@ Value Context::convertAssertionCallExpression(
   // Handle $past specially - it returns the past value with preserved type
   // so that comparisons like `$past(val) == 0` work correctly.
   if (subroutine.name == "$past") {
+    // Get the delay (numTicks) from the second argument if present.
+    // Default to 1 if empty or not provided.
+    int64_t delay = 1;
+    const slang::ast::TimingControl *clockingCtrl = nullptr;
+    const slang::ast::Expression *enableExpr = nullptr;
+    if (args.size() > 1 &&
+        args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
+      if (args[1]->kind == slang::ast::ExpressionKind::ClockingEvent) {
+        if (auto *clockExpr =
+                args[1]->as_if<slang::ast::ClockingEventExpression>())
+          clockingCtrl = &clockExpr->timingControl;
+      } else {
+        auto cv = evaluateConstant(*args[1]);
+        if (cv.isInteger()) {
+          auto intVal = cv.integer().as<int64_t>();
+          if (intVal)
+            delay = *intVal;
+        }
+      }
+    }
+    if (!clockingCtrl && args.size() > 2 &&
+        args[2]->kind != slang::ast::ExpressionKind::EmptyArgument) {
+      if (args[2]->kind == slang::ast::ExpressionKind::ClockingEvent) {
+        if (auto *clockExpr =
+                args[2]->as_if<slang::ast::ClockingEventExpression>())
+          clockingCtrl = &clockExpr->timingControl;
+      } else {
+        enableExpr = args[2];
+      }
+    }
+    if (args.size() > 3 &&
+        args[3]->kind != slang::ast::ExpressionKind::EmptyArgument) {
+      if (args[3]->kind == slang::ast::ExpressionKind::ClockingEvent) {
+        if (clockingCtrl) {
+          mlir::emitError(loc) << "multiple $past clocking events";
+          return {};
+        }
+        if (auto *clockExpr =
+                args[3]->as_if<slang::ast::ClockingEventExpression>())
+          clockingCtrl = &clockExpr->timingControl;
+      } else if (!enableExpr) {
+        enableExpr = args[3];
+      } else {
+        mlir::emitError(loc) << "too many $past arguments";
+        return {};
+      }
+    }
+    if (!clockingCtrl && enableExpr && currentAssertionClock)
+      clockingCtrl = currentAssertionClock;
+    if (!clockingCtrl && enableExpr && currentAssertionTimingControl)
+      clockingCtrl = currentAssertionTimingControl;
+    if (clockingCtrl)
+      return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
+                                   enableExpr, loc);
+    if (enableExpr) {
+      mlir::emitError(loc)
+          << "unsupported $past enable expression without explicit clocking";
+      return {};
+    }
+
     value = this->convertRvalueExpression(*args[0]);
     if (!value)
       return {};
 
-    // Get the delay (numTicks) from the second argument if present.
-    // Default to 1 if empty or not provided.
-    int64_t delay = 1;
-    if (args.size() > 1 &&
-        args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
-      auto cv = evaluateConstant(*args[1]);
-      if (cv.isInteger()) {
-        auto intVal = cv.integer().as<int64_t>();
-        if (intVal)
-          delay = *intVal;
-      }
-    }
-
     // Always use moore::PastOp to preserve the type for comparisons.
-    // $past(val) returns the past value with the same type as val, so that
-    // comparisons like `$past(val) == 0` work correctly. LTL-specific temporal
-    // operators like $rose/$fell/$stable/$changed use ltl ops internally.
+    // $past(val) returns the sampled past value with the same type as val, so
+    // that comparisons like `$past(val) == 0` work correctly.
     return moore::PastOp::create(builder, loc, value, delay).getResult();
   }
 
@@ -912,11 +1184,13 @@ Value Context::convertAssertionCallExpression(
   case (1):
     value = this->convertRvalueExpression(*args[0]);
 
-    // $sampled returns the sampled value of the expression. In procedural
-    // context (outside assertions), we return the original value to preserve
-    // its type for comparisons.
-    if (subroutine.name == "$sampled")
+    // $sampled returns the sampled value of the expression.
+    if (subroutine.name == "$sampled") {
+      if (inAssertionExpr)
+        return moore::PastOp::create(builder, loc, value, /*delay=*/0)
+            .getResult();
       return value;
+    }
 
     boolVal = builder.createOrFold<moore::ToBuiltinBoolOp>(loc, value);
     if (!boolVal)

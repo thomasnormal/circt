@@ -1167,9 +1167,20 @@ struct RvalueExprVisitor : public ExprVisitor {
     // When we're inside an interface task/function, signal references
     // should use the implicit interface argument.
     if (context.currentInterfaceArg) {
+      StringRef signalName;
       auto it = context.interfaceSignalNames.find(&expr.symbol);
       if (it != context.interfaceSignalNames.end()) {
-        // This is an interface signal access from within an interface method.
+        signalName = it->second;
+      } else if (auto *scope = expr.symbol.getParentScope()) {
+        if (auto *body =
+                scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+          if (body == context.currentInterfaceBody)
+            signalName = expr.symbol.name;
+        }
+      }
+
+      if (!signalName.empty()) {
+        // This is an interface signal access from within an interface context.
         // Use VirtualInterfaceSignalRefOp to access the signal through the
         // implicit interface argument.
         auto type = context.convertType(*expr.type);
@@ -1177,7 +1188,7 @@ struct RvalueExprVisitor : public ExprVisitor {
           return {};
 
         auto signalSym =
-            mlir::FlatSymbolRefAttr::get(builder.getContext(), it->second);
+            mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
         auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
         Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
             builder, loc, refTy, context.currentInterfaceArg, signalSym);
@@ -5487,6 +5498,131 @@ struct RvalueExprVisitor : public ExprVisitor {
   Value visit(const slang::ast::AssertionInstanceExpression &expr) {
     // Defaults apply at the outer assertion; avoid double-applying default
     // clocking/disable when instantiating a named property.
+    auto *parentScope = expr.symbol.getParentScope();
+    auto *instBody =
+        parentScope ? parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()
+                    : nullptr;
+    if (instBody && instBody->getDefinition().definitionKind ==
+                        slang::ast::DefinitionKind::Interface) {
+      Value interfaceInstance;
+
+      // Try to extract the interface instance from the syntax tree.
+      if (expr.syntax && context.currentScope) {
+        const slang::syntax::ExpressionSyntax *ifaceExprSyntax = nullptr;
+        if (auto *invocation =
+                expr.syntax->as_if<slang::syntax::InvocationExpressionSyntax>()) {
+          if (auto *memberAccess = invocation->left->as_if<
+                  slang::syntax::MemberAccessExpressionSyntax>()) {
+            ifaceExprSyntax = memberAccess->left;
+          } else if (auto *scopedName =
+                         invocation->left->as_if<slang::syntax::ScopedNameSyntax>()) {
+            ifaceExprSyntax = scopedName->left;
+          }
+        } else if (auto *memberAccess =
+                       expr.syntax->as_if<
+                           slang::syntax::MemberAccessExpressionSyntax>()) {
+          ifaceExprSyntax = memberAccess->left;
+        } else if (auto *scopedName =
+                       expr.syntax->as_if<slang::syntax::ScopedNameSyntax>()) {
+          ifaceExprSyntax = scopedName->left;
+        }
+
+        if (ifaceExprSyntax) {
+          slang::ast::ASTContext astContext(*context.currentScope,
+                                            slang::ast::LookupLocation::max);
+          const auto &ifaceExpr =
+              slang::ast::Expression::bind(*ifaceExprSyntax, astContext);
+          if (!ifaceExpr.bad())
+            interfaceInstance = context.convertRvalueExpression(ifaceExpr);
+        }
+      }
+
+      // If we're already inside an interface method, reuse the implicit arg.
+      if (!interfaceInstance && context.currentInterfaceArg &&
+          context.currentInterfaceBody == instBody)
+        interfaceInstance = context.currentInterfaceArg;
+
+      // Fall back to a matching tracked interface instance.
+      if (!interfaceInstance) {
+        for (const auto &[instSym, instValue] : context.interfaceInstances) {
+          if (&instSym->body == instBody) {
+            interfaceInstance = instValue;
+            break;
+          }
+        }
+      }
+
+      if (!interfaceInstance) {
+        mlir::emitError(loc)
+            << "interface property instantiation requires interface instance "
+               "for interface '"
+            << instBody->getDefinition().name << "'";
+        return {};
+      }
+
+      if (auto refTy =
+              dyn_cast<moore::RefType>(interfaceInstance.getType())) {
+        interfaceInstance = moore::ReadOp::create(builder, loc, interfaceInstance);
+      }
+
+      auto prevInterfaceArg = context.currentInterfaceArg;
+      auto prevInterfaceBody = context.currentInterfaceBody;
+      auto prevSignalNames = std::move(context.interfaceSignalNames);
+      context.currentInterfaceArg = interfaceInstance;
+      context.currentInterfaceBody = instBody;
+      context.interfaceSignalNames.clear();
+      auto restore = llvm::make_scope_exit([&] {
+        context.currentInterfaceArg = prevInterfaceArg;
+        context.currentInterfaceBody = prevInterfaceBody;
+        context.interfaceSignalNames = std::move(prevSignalNames);
+      });
+
+      llvm::DenseSet<const slang::ast::Symbol *> portInternalSymbols;
+      for (auto *symbol : instBody->getPortList()) {
+        if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+          if (port->internalSymbol) {
+            portInternalSymbols.insert(port->internalSymbol);
+            context.interfaceSignalNames[port->internalSymbol] = port->name;
+          }
+          context.interfaceSignalNames[port] = port->name;
+        } else if (const auto *multiPort =
+                       symbol->as_if<slang::ast::MultiPortSymbol>()) {
+          for (auto *port : multiPort->ports) {
+            if (port->internalSymbol) {
+              portInternalSymbols.insert(port->internalSymbol);
+              context.interfaceSignalNames[port->internalSymbol] = port->name;
+            }
+            context.interfaceSignalNames[port] = port->name;
+          }
+        }
+      }
+
+      for (auto &member : instBody->members()) {
+        if (member.as_if<slang::ast::PortSymbol>() ||
+            member.as_if<slang::ast::MultiPortSymbol>())
+          continue;
+        if (portInternalSymbols.count(&member))
+          continue;
+        if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
+          context.interfaceSignalNames[var] = var->name;
+          continue;
+        }
+        if (auto *net = member.as_if<slang::ast::NetSymbol>()) {
+          context.interfaceSignalNames[net] = net->name;
+          continue;
+        }
+        if (auto *inst = member.as_if<slang::ast::InstanceSymbol>()) {
+          if (inst->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface) {
+            context.interfaceSignalNames[inst] = inst->name;
+          }
+        }
+      }
+
+      return context.convertAssertionExpression(expr.body, loc,
+                                                /*applyDefaults=*/false);
+    }
+
     return context.convertAssertionExpression(expr.body, loc,
                                               /*applyDefaults=*/false);
   }
@@ -6062,9 +6198,20 @@ struct LvalueExprVisitor : public ExprVisitor {
     // When we're inside an interface task/function, signal references
     // should use the implicit interface argument.
     if (context.currentInterfaceArg) {
+      StringRef signalName;
       auto it = context.interfaceSignalNames.find(&expr.symbol);
       if (it != context.interfaceSignalNames.end()) {
-        // This is an interface signal access from within an interface method.
+        signalName = it->second;
+      } else if (auto *scope = expr.symbol.getParentScope()) {
+        if (auto *body =
+                scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+          if (body == context.currentInterfaceBody)
+            signalName = expr.symbol.name;
+        }
+      }
+
+      if (!signalName.empty()) {
+        // This is an interface signal access from within an interface context.
         // Use VirtualInterfaceSignalRefOp to access the signal through the
         // implicit interface argument.
         auto type = context.convertType(*expr.type);
@@ -6072,7 +6219,7 @@ struct LvalueExprVisitor : public ExprVisitor {
           return {};
 
         auto signalSym =
-            mlir::FlatSymbolRefAttr::get(builder.getContext(), it->second);
+            mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
         auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
         return moore::VirtualInterfaceSignalRefOp::create(
             builder, loc, refTy, context.currentInterfaceArg, signalSym);

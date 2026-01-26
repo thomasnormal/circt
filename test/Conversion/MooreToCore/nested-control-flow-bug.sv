@@ -1,19 +1,15 @@
 // RUN: circt-verilog --ir-hw %s 2>&1 | FileCheck %s
 
-// This test reproduces a Moore-to-Core lowering bug found in OpenTitan's
-// prim_diff_decode.sv. The pattern involves a unique case statement with
-// nested if-else chains that assign to the same variables.
+// This test reproduces a Moore-to-Core lowering bug that was found in
+// OpenTitan's prim_diff_decode.sv. The pattern involves a unique case statement
+// with nested if-else chains that assign to the same variables.
 //
-// The bug manifests as a CFG mismatch where cf.cond_br passes more
-// operands to a successor block than the block expects as arguments.
-//
-// Original error from prim_diff_decode.sv:
-//   error: branch has 7 operands for successor #0, but target block has 4
-// This reproducer triggers:
-//   error: branch has 5 operands for successor #0, but target block has 3
+// The bug was caused by the llhd-mem2reg pass appending successor operands
+// multiple times when the same predecessor block appears multiple times in
+// node->predecessors (which happens when a cf.cond_br has both true and false
+// branches going to the same block).
 
-// XFAIL: *
-// CHECK: error: branch has {{[0-9]+}} operands for successor #0, but target block has {{[0-9]+}}
+// CHECK: hw.module @nested_control_flow_bug
 
 module nested_control_flow_bug (
   input  logic clk_i,

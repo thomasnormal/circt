@@ -92,6 +92,40 @@ hw.module @test_sequence_ops(in %clk: i1, in %a: i1, in %b: i1, in %c: i1) {
   %seq_intersect = sva.seq.intersect %seq7, %seq8 : !sva.sequence, !sva.sequence
 
   //===--------------------------------------------------------------------===//
+  // Sequence Throughout
+  //===--------------------------------------------------------------------===//
+
+  // CHECK: [[THROUGH_SEQ:%[a-z0-9_]+]] = ltl.repeat %a, 0 : i1
+  // CHECK: ltl.intersect [[THROUGH_SEQ]], [[THROUGH_BASE:%[a-z0-9_]+]] : !ltl.sequence, !ltl.sequence
+  %seq_through_base = sva.seq.delay %b, 2 : i1
+  %seq_through = sva.seq.throughout %a, %seq_through_base : i1, !sva.sequence
+
+  //===--------------------------------------------------------------------===//
+  // Sequence Within
+  //===--------------------------------------------------------------------===//
+
+  // CHECK: [[WITH_TRUE:%[a-z0-9_]+]] = hw.constant true
+  // CHECK: [[WITH_REP:%[a-z0-9_]+]] = ltl.repeat [[WITH_TRUE]], 0 : i1
+  // CHECK: [[WITH_REP_DELAY:%[a-z0-9_]+]] = ltl.delay [[WITH_REP]], 1, 0 : !ltl.sequence
+  // CHECK: [[WITH_INNER_DELAY:%[a-z0-9_]+]] = ltl.delay [[WITH_INNER:%[a-z0-9_]+]], 1, 0 : !ltl.sequence
+  // CHECK: [[WITH_COMBINED:%[a-z0-9_]+]] = ltl.concat [[WITH_REP_DELAY]], [[WITH_INNER_DELAY]], [[WITH_TRUE]] : !ltl.sequence, !ltl.sequence, i1
+  // CHECK: ltl.intersect [[WITH_COMBINED]], [[WITH_OUTER:%[a-z0-9_]+]] : !ltl.sequence, !ltl.sequence
+  %seq_within_inner = sva.seq.delay %a, 1 : i1
+  %seq_within_outer = sva.seq.delay %c, 2 : i1
+  %seq_within = sva.seq.within %seq_within_inner, %seq_within_outer : !sva.sequence, !sva.sequence
+
+  //===--------------------------------------------------------------------===//
+  // Sequence Matched / Triggered
+  //===--------------------------------------------------------------------===//
+
+  // CHECK: [[MATCH_SRC:%[a-z0-9_]+]] = ltl.delay %c, 0, 0 : i1
+  // CHECK: ltl.matched [[MATCH_SRC]] : !ltl.sequence -> i1
+  // CHECK: ltl.triggered [[MATCH_SRC]] : !ltl.sequence -> i1
+  %seq_match_src = sva.seq.delay %c, 0, 0 : i1
+  %seq_matched = sva.seq.matched %seq_match_src : !sva.sequence -> i1
+  %seq_triggered = sva.seq.triggered %seq_match_src : !sva.sequence -> i1
+
+  //===--------------------------------------------------------------------===//
   // Sequence Clock
   //===--------------------------------------------------------------------===//
 

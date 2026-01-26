@@ -8,7 +8,7 @@ Some general advice:
 - Follow the project plan, and update the changelog regularly.
 - What limitations do we still have? What features should we build?
 - Don't shy away from ambitious and complicated tasks. Focus on what we need long term.
-- Test on ~/mbit/*avip* and ~/sv-tests/ and ~/verilator-verification/ and ~/yosys/tests/ regularly.
+- Test on ~/mbit/*avip* and ~/sv-tests/ and ~/verilator-verification/ and ~/yosys/tests/ and ~/opentitan/ regularly.
 - Make unit tests for every bug you fix or new feature you implement
 - Commit regularly and merge with upstream main.
 - Don't be worried if some files are changed without your knowledge. It might just be other agents working on the project.

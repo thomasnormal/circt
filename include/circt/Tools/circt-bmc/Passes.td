@@ -34,6 +34,9 @@ def LowerToBMC : Pass<"lower-to-bmc", "::mlir::ModuleOp"> {
     Option<"risingClocksOnly", "rising-clocks-only", "bool",
            /*default=*/"false",
            "Only consider the circuit and property on rising clock edges.">,
+    Option<"allowMultiClock", "allow-multi-clock", "bool",
+           /*default=*/"false",
+           "Allow multiple explicit clock inputs by interleaving toggles.">,
   ];
 
   let dependentDialects = [
@@ -44,6 +47,11 @@ def LowerToBMC : Pass<"lower-to-bmc", "::mlir::ModuleOp"> {
 
 def ExternalizeRegisters : Pass<"externalize-registers", "::mlir::ModuleOp"> {
   let summary = "Removes registers and adds corresponding input and output ports";
+  let options = [
+    Option<"allowMultiClock", "allow-multi-clock", "bool",
+           /*default=*/"false",
+           "Allow registers with multiple explicit clock inputs.">
+  ];
 
   let dependentDialects = [
     "circt::seq::SeqDialect", "circt::hw::HWDialect"
@@ -58,5 +66,14 @@ def StripLLHDProcesses : Pass<"strip-llhd-processes", "::mlir::ModuleOp"> {
   ];
 }
 
-#endif // CIRCT_TOOLS_CIRCT_BMC_PASSES_TD
+def StripUnreachableSymbols : Pass<"strip-unreachable-symbols",
+                                   "::mlir::ModuleOp"> {
+  let summary = "Remove symbol ops not reachable from the entry symbol";
+  let options = [
+    Option<"entrySymbol", "entry-symbol", "std::string",
+           /*default=*/"",
+           "Name of the entry symbol to preserve.">
+  ];
+}
 
+#endif // CIRCT_TOOLS_CIRCT_BMC_PASSES_TD

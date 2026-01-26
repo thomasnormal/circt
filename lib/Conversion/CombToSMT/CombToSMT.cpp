@@ -51,23 +51,23 @@ struct IcmpOpConversion : OpConversionPattern<ICmpOp> {
   LogicalResult
   matchAndRewrite(ICmpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getPredicate() == ICmpPredicate::weq ||
-        adaptor.getPredicate() == ICmpPredicate::ceq ||
-        adaptor.getPredicate() == ICmpPredicate::wne ||
-        adaptor.getPredicate() == ICmpPredicate::cne)
-      return rewriter.notifyMatchFailure(op,
-                                         "comparison predicate not supported");
+    // SMT lowering is 2-state; treat case/wild equality as eq/ne.
+    auto predicate = adaptor.getPredicate();
+    if (predicate == ICmpPredicate::weq || predicate == ICmpPredicate::ceq)
+      predicate = ICmpPredicate::eq;
+    if (predicate == ICmpPredicate::wne || predicate == ICmpPredicate::cne)
+      predicate = ICmpPredicate::ne;
 
     Value result;
-    if (adaptor.getPredicate() == ICmpPredicate::eq) {
+    if (predicate == ICmpPredicate::eq) {
       result = smt::EqOp::create(rewriter, op.getLoc(), adaptor.getLhs(),
                                  adaptor.getRhs());
-    } else if (adaptor.getPredicate() == ICmpPredicate::ne) {
+    } else if (predicate == ICmpPredicate::ne) {
       result = smt::DistinctOp::create(rewriter, op.getLoc(), adaptor.getLhs(),
                                        adaptor.getRhs());
     } else {
       smt::BVCmpPredicate pred;
-      switch (adaptor.getPredicate()) {
+      switch (predicate) {
       case ICmpPredicate::sge:
         pred = smt::BVCmpPredicate::sge;
         break;

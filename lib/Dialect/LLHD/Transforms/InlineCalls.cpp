@@ -161,6 +161,14 @@ static bool isUvmInitializationFunction(StringRef funcName) {
   return false;
 }
 
+/// Check if a function is a UVM constructor (`::new`), which can recurse
+/// through package initialization and should not be inlined in --ir-hw.
+static bool isUvmConstructorFunction(StringRef funcName) {
+  if (!funcName.contains("uvm_pkg"))
+    return false;
+  return funcName.contains("::new");
+}
+
 /// Get or create the __moore_component_get_full_name runtime function
 /// declaration in the module.
 static LLVM::LLVMFuncOp
@@ -410,6 +418,11 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
         d.attachNote(calledOp->getLoc()) << "call target defined here";
         return failure();
       }
+      if (funcOp.isExternal()) {
+        LLVM_DEBUG(llvm::dbgs() << "- Skipping external function "
+                                << funcOp.getSymName() << "\n");
+        continue;
+      }
 
       // Check if this is a UVM initialization function with guarded recursion.
       // These functions are part of UVM's initialization cycle and have runtime
@@ -421,6 +434,12 @@ LogicalResult InlineCallsPass::runOnRegion(Region &region,
                    << "- Skipping UVM init function " << funcName
                    << " (not inlining to avoid recursion)\n");
         // Don't inline - leave as function call for runtime resolution
+        continue;
+      }
+      if (isUvmConstructorFunction(funcName)) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "- Skipping UVM constructor " << funcName
+                   << " (not inlining to avoid recursion)\n");
         continue;
       }
 

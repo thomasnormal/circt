@@ -1,155 +1,17 @@
-# verilator-verification Test Results (2026-01-23, Updated)
-
-## Summary
-
-### Pass Rate: 80.8% (114/141 tests)
-Previously: 73.4% (113/154 tests) - note: test count changed due to UVM subdirectory structure
-
-**Note**: The test count of 141 represents standalone .sv files. The uvm-cookbook, uvm-1.2-testbenches,
-and uvm-testbenches directories contain subdirectories with test configs rather than direct .sv files.
-
-**IMPROVEMENT**: The `--allow-nonprocedural-dynamic` flag is now **enabled by default**,
-increasing the pass rate significantly for tests that use continuous assignments with class members.
-
-### Test Results Breakdown
-
-| Category | Passing | Total | Notes |
-|----------|---------|-------|-------|
-| asserts/ | 10 | 10 | All passing |
-| class/ | 5 | 5 | All passing |
-| class-params/ | 13 | 13 | All passing |
-| event-control-expression/ | 1 | 1 | All passing |
-| extra-uvm-features/ | 12 | 13 | 1 fail (pkg_using_dollar_unit_item - LRM restriction) |
-| functional-coverage/ | 14 | 15 | 1 fail (cover_iff - missing parentheses in test) |
-| randomize/ | 2 | 2 | All passing |
-| randomize-constraints/ | 18 | 19 | 1 fail (constraint_enum - slang enum-in-inside limitation) |
-| random-variables/ | 3 | 5 | 2 fail (pre/post_randomize - test file missing void) |
-| rand-types/ | 4 | 4 | All passing |
-| sequences/ | 0 | 6 | All fail (non-standard @posedge syntax in tests) |
-| signal-strengths/ | 18 | 21 | 3 fail (parameter without default value in tests) |
-| signal-strengths-should-fail/ | 0 | 4 | Expected failures - tests for invalid code |
-| test-plusargs-variable/ | 1 | 1 | All passing |
-| unpacked-structs/ | 2 | 2 | All passing |
-| unsupported-signal-strengths/ | 8 | 16 | 8 fail (non-standard 1'z syntax in tests) |
-| uvm-tests/ | 0 | 1 | Requires UVM library |
-| virtual-interfaces/ | 2 | 2 | All passing |
-| wildcard-associative/ | 1 | 1 | All passing |
-
-## Failure Categories
-
-### 1. Non-standard Test File Syntax (14 tests)
-
-These failures are due to non-LRM-compliant syntax in the test files themselves:
-
-**a) Non-standard `1'z` and `1'1` literals (8 tests in unsupported-signal-strengths)**
-- Error: `expected ')'` at `1'z`
-- Standard syntax: `1'bz` or `1'b1` (require explicit base specifier)
-- Affected: highz0.sv, highz1.sv, nor.sv, display_strength.sv, etc.
-
-**b) Non-standard `@posedge (clk)` in sequences (6 tests)**
-- Error: `expected identifier`
-- Standard syntax: `@(posedge clk)` (posedge inside the event expression)
-- Affected: All tests in sequences/
-
-### 2. Missing Parameter Default Values (3 tests)
-
-Error: "parameter declaration is missing an initializer"
-
-Per IEEE 1800-2017, interface/module parameters require default values unless overridden at instantiation.
-Test files use `parameter W;` without an initializer.
-
-**Affected Tests**:
-- assigns_in_parameterized_interface.sv
-- assigns_in_parameterized_interface_with_cond.sv
-- assigns_in_parameterized_submodule.sv
-
-### 3. Missing `void` Return Type (2 tests)
-
-Error: "override for 'pre_randomize' should be a public non-static function that returns void"
-
-Test files use `function pre_randomize();` instead of `function void pre_randomize();`.
-
-**Affected Tests**: pre_randomize.sv, post_randomize.sv
-
-### 4. Missing Parentheses in `iff` (1 test)
-
-Error: `expected '('` at `iff enable`
-
-The test uses `coverpoint bar iff enable` but the `iff` condition requires parentheses per LRM:
-`coverpoint bar iff (enable)`
-
-**Affected Test**: cover_iff.sv
-
-### 5. Enum Type in Inside Expression (1 test)
-
-Error: "'vals_e' cannot be used in an expression"
-
-Slang does not allow typedef enum names in `inside` expressions. While IEEE 1800-2017 Section 11.4.13
-permits `val inside {enum_type}` to match any enum member, slang requires explicit enum values.
-
-**Workaround**: Use `val inside {ON, OFF}` instead of `val inside {vals_e}`
-
-**Affected Test**: constraint_enum.sv
-
-### 6. $unit Reference from Package (1 test)
-
-Error: "cannot reference compilation unit item from within a package"
-
-This is a valid IEEE 1800-2017 restriction. Packages cannot reference items declared at $unit scope.
-
-**Affected Test**: pkg_using_dollar_unit_item.sv
-
-### 7. Expected Failures (4 tests)
-
-The signal-strengths-should-fail/ tests are DESIGNED to fail - they test that invalid
-SystemVerilog code is correctly rejected. These should NOT be counted as failures.
-
-### 8. UVM Library Required (1 test)
-
-Error: "use of undeclared identifier 'uvm_*'"
-
-**Affected Test**: uvm_test.sv (requires full UVM library)
-
-## Technical Details
-
-### What --allow-nonprocedural-dynamic Does
-
-1. **Slang Level**: Downgrades `DynamicNotProcedural` from error to warning
-2. **CIRCT Level**: When a continuous assignment references a dynamic type member,
-   CIRCT re-binds the expression in a procedural context and generates an
-   `always_comb` block instead of a `moore.continuous_assign` op.
-
-### Supply Net Support (Previously Added)
-
-`supply0` and `supply1` net types are fully supported:
-- `supply0` nets are initialized to all zeros (ground)
-- `supply1` nets are initialized to all ones (power)
-
-### String Methods in Array Locator Predicates (Previously Added)
-
-String methods like `tolower()` and `toupper()` now work in array locator predicates:
-```systemverilog
-string_qv = string_q.find_last(s) with (s.tolower() == "a");
-```
-
-## Recommendations
-
-1. **Test file fixes needed**: Many test files have non-LRM-compliant syntax that could be fixed
-2. **For strict LRM compliance**: Use `--allow-nonprocedural-dynamic=false`
-3. **For UVM tests**: Provide UVM library path with `--uvm-path`
-
-## Summary of Fixable vs Non-fixable Failures
-
-| Category | Count | Fixable in CIRCT? |
-|----------|-------|-------------------|
-| Non-standard 1'z syntax | 8 | No - test file issue |
-| Non-standard @posedge | 6 | No - test file issue |
-| Missing param defaults | 3 | No - test file issue |
-| Missing void return | 2 | No - test file issue |
-| Missing iff parentheses | 1 | No - test file issue |
-| Enum in inside (slang) | 1 | Would need slang change |
-| $unit from package | 1 | No - LRM restriction |
-| Should-fail tests | 4 | N/A - expected |
-| UVM library needed | 1 | No - needs UVM |
-
-**Total**: 27 failing tests, of which 21 are due to test file issues or expected behavior.
+ERROR	sequence_cycle_delay	/home/thomas-ahle/verilator-verification/tests/sequences/sequence_cycle_delay.sv
+ERROR	sequence_delay_indefinite	/home/thomas-ahle/verilator-verification/tests/sequences/sequence_delay_indefinite.sv
+ERROR	sequence_delay_ranges	/home/thomas-ahle/verilator-verification/tests/sequences/sequence_delay_ranges.sv
+ERROR	sequence_delay_repetition	/home/thomas-ahle/verilator-verification/tests/sequences/sequence_delay_repetition.sv
+ERROR	sequence_named	/home/thomas-ahle/verilator-verification/tests/sequences/sequence_named.sv
+ERROR	sequence_variable	/home/thomas-ahle/verilator-verification/tests/sequences/sequence_variable.sv
+PASS	assert_changed	/home/thomas-ahle/verilator-verification/tests/asserts/assert_changed.sv
+PASS	assert_fell	/home/thomas-ahle/verilator-verification/tests/asserts/assert_fell.sv
+PASS	assert_named	/home/thomas-ahle/verilator-verification/tests/asserts/assert_named.sv
+PASS	assert_named_typed	/home/thomas-ahle/verilator-verification/tests/asserts/assert_named_typed.sv
+PASS	assert_not	/home/thomas-ahle/verilator-verification/tests/asserts/assert_not.sv
+PASS	assert_past	/home/thomas-ahle/verilator-verification/tests/asserts/assert_past.sv
+PASS	assert_rose	/home/thomas-ahle/verilator-verification/tests/asserts/assert_rose.sv
+PASS	assert_stable	/home/thomas-ahle/verilator-verification/tests/asserts/assert_stable.sv
+SKIP	assert_named_without_parenthesis	/home/thomas-ahle/verilator-verification/tests/asserts/assert_named_without_parenthesis.sv
+SKIP	assert_sampled	/home/thomas-ahle/verilator-verification/tests/asserts/assert_sampled.sv
+SKIP	event_control_expression	/home/thomas-ahle/verilator-verification/tests/event-control-expression/event_control_expression.sv

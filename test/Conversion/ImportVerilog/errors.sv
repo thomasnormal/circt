@@ -173,16 +173,3 @@ module TimeTypeConversion2;
   // expected-error @below {{contains a time type}}
   assign a = b;
 endmodule
-
-// -----
-// Sequence event controls are not yet supported (IEEE 1800-2017 § 9.4.2.4)
-module SequenceEventControl;
-  logic clk, a, b;
-  sequence seq;
-    @(posedge clk) a ##1 b;
-  endsequence
-  initial begin
-    // expected-error @below {{sequence/property event controls are not yet supported}}
-    @seq;
-  end
-endmodule

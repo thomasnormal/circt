@@ -143,7 +143,7 @@ hw.module @TwoAssertions(in %x: i1, in %y: i1) {
 // -----
 
 func.func @multiple_clocks() -> (i1) {
-  // expected-error @below {{only modules with one or zero clocks are currently supported}}
+  // expected-error @below {{multi-clock BMC requires bmc_reg_clocks with one entry per register}}
   %bmc = verif.bmc bound 10 num_regs 1 initial_values [unit]
   init {
     %c0_i1 = hw.constant 0 : i1
@@ -167,7 +167,8 @@ func.func @multiple_clocks() -> (i1) {
 // -----
 
 func.func @multiple_clocks() -> (i1) {
-  // expected-error @below {{initial values are currently only supported for registers with integer types}}
+  // expected-error @below {{unsupported integer initial value in BMC conversion}}
+  // expected-error @below {{failed to legalize operation 'verif.bmc' that was explicitly marked illegal}}
   %bmc = verif.bmc bound 10 num_regs 1 initial_values [0]
   init {
     %c0_i1 = hw.constant 0 : i1
@@ -190,7 +191,7 @@ func.func @multiple_clocks() -> (i1) {
 // -----
 
 func.func @wrong_initial_type() -> (i1) {
-  // expected-error @below {{type of initial value does not match type of initialized register}}
+  // expected-error @below {{bit width of initial value does not match register}}
   %bmc = verif.bmc bound 10 num_regs 1 initial_values [-1 : i7]
   init {
     %c0_i1 = hw.constant 0 : i1

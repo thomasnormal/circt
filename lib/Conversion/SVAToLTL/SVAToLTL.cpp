@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Conversion/SVAToLTL.h"
+#include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LTL/LTLDialect.h"
 #include "circt/Dialect/LTL/LTLOps.h"
@@ -29,6 +30,8 @@ namespace circt {
 using namespace mlir;
 using namespace circt;
 using namespace sva;
+
+constexpr const char kDisableIffAttr[] = "sva.disable_iff";
 
 //===----------------------------------------------------------------------===//
 // Type Conversion
@@ -128,6 +131,54 @@ struct SequenceFirstMatchOpConversion
   }
 };
 
+struct SequenceWithinOpConversion : public OpConversionPattern<SequenceWithinOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SequenceWithinOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto one =
+        hw::ConstantOp::create(rewriter, op.getLoc(), rewriter.getI1Type(), 1);
+    auto repeatOne = ltl::RepeatOp::create(rewriter, op.getLoc(), one,
+                                           rewriter.getI64IntegerAttr(0),
+                                           mlir::IntegerAttr{});
+    auto repeatDelay = ltl::DelayOp::create(rewriter, op.getLoc(), repeatOne,
+                                            rewriter.getI64IntegerAttr(1),
+                                            rewriter.getI64IntegerAttr(0));
+    auto innerDelay =
+        ltl::DelayOp::create(rewriter, op.getLoc(), adaptor.getInner(),
+                             rewriter.getI64IntegerAttr(1),
+                             rewriter.getI64IntegerAttr(0));
+    auto combined = ltl::ConcatOp::create(
+        rewriter, op.getLoc(),
+        SmallVector<Value, 3>{repeatDelay, innerDelay, one});
+    auto intersect = ltl::IntersectOp::create(
+        rewriter, op.getLoc(),
+        SmallVector<Value, 2>{combined, adaptor.getOuter()});
+    rewriter.replaceOp(op, intersect.getResult());
+    return success();
+  }
+};
+
+struct SequenceThroughoutOpConversion
+    : public OpConversionPattern<SequenceThroughoutOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SequenceThroughoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto repeated = ltl::RepeatOp::create(rewriter, op.getLoc(),
+                                          adaptor.getSignal(),
+                                          rewriter.getI64IntegerAttr(0),
+                                          mlir::IntegerAttr{});
+    auto intersect = ltl::IntersectOp::create(
+        rewriter, op.getLoc(),
+        SmallVector<Value, 2>{repeated, adaptor.getSequence()});
+    rewriter.replaceOp(op, intersect.getResult());
+    return success();
+  }
+};
+
 struct SequenceConcatOpConversion
     : public OpConversionPattern<SequenceConcatOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -208,6 +259,30 @@ struct SequenceClockOpConversion
   }
 };
 
+struct SequenceMatchedOpConversion
+    : public OpConversionPattern<SequenceMatchedOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SequenceMatchedOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<ltl::MatchedOp>(op, adaptor.getSequence());
+    return success();
+  }
+};
+
+struct SequenceTriggeredOpConversion
+    : public OpConversionPattern<SequenceTriggeredOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SequenceTriggeredOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<ltl::TriggeredOp>(op, adaptor.getSequence());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Property Operation Conversions
 //===----------------------------------------------------------------------===//
@@ -263,18 +338,52 @@ struct PropertyImplicationOpConversion
     Value antecedent = adaptor.getAntecedent();
     Value consequent = adaptor.getConsequent();
 
-    // For non-overlapping implication (|=>), we need to add a delay of 1 cycle
-    // to the consequent
+    // For non-overlapping implication (|=>), we need to delay the antecedent
+    // by one cycle so the consequent is checked starting after the antecedent.
     if (!op.getOverlapping()) {
       auto ltlSeqType = ltl::SequenceType::get(op.getContext());
-      consequent = ltl::DelayOp::create(
-          rewriter, op.getLoc(), ltlSeqType, consequent,
+      antecedent = ltl::DelayOp::create(
+          rewriter, op.getLoc(), ltlSeqType, antecedent,
           rewriter.getI64IntegerAttr(1),
           rewriter.getI64IntegerAttr(0));
     }
 
     rewriter.replaceOpWithNewOp<ltl::ImplicationOp>(op, ltlPropType, antecedent,
                                                      consequent);
+    return success();
+  }
+};
+
+struct PropertyIfElseOpConversion
+    : public OpConversionPattern<PropertyIfElseOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PropertyIfElseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ltlPropType = ltl::PropertyType::get(op.getContext());
+    Value condition = adaptor.getCondition();
+    Value thenProp = adaptor.getThenProperty();
+
+    auto thenImpl = ltl::ImplicationOp::create(
+        rewriter, op.getLoc(), ltlPropType, condition, thenProp);
+
+    if (!adaptor.getElseProperty()) {
+      rewriter.replaceOp(op, thenImpl.getResult());
+      return success();
+    }
+
+    auto one = hw::ConstantOp::create(rewriter, op.getLoc(),
+                                      rewriter.getI1Type(), 1);
+    auto notCond =
+        comb::XorOp::create(rewriter, op.getLoc(), condition, one);
+    auto elseImpl = ltl::ImplicationOp::create(
+        rewriter, op.getLoc(), ltlPropType, notCond,
+        adaptor.getElseProperty());
+    auto combined = ltl::AndOp::create(
+        rewriter, op.getLoc(),
+        SmallVector<Value, 2>{thenImpl.getResult(), elseImpl.getResult()});
+    rewriter.replaceOp(op, combined.getResult());
     return success();
   }
 };
@@ -293,6 +402,24 @@ struct PropertyEventuallyOpConversion
   }
 };
 
+struct PropertyAlwaysOpConversion
+    : public OpConversionPattern<PropertyAlwaysOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PropertyAlwaysOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ltlPropType = ltl::PropertyType::get(op.getContext());
+    auto notInput =
+        ltl::NotOp::create(rewriter, op.getLoc(), adaptor.getInput());
+    auto eventually = ltl::EventuallyOp::create(
+        rewriter, op.getLoc(), ltlPropType, notInput);
+    auto always = ltl::NotOp::create(rewriter, op.getLoc(), eventually);
+    rewriter.replaceOp(op, always.getResult());
+    return success();
+  }
+};
+
 struct PropertyUntilOpConversion : public OpConversionPattern<PropertyUntilOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -300,11 +427,44 @@ struct PropertyUntilOpConversion : public OpConversionPattern<PropertyUntilOp> {
   matchAndRewrite(PropertyUntilOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ltlPropType = ltl::PropertyType::get(op.getContext());
-    // Note: LTL's until is weak; for strong until we would need additional
-    // handling
-    rewriter.replaceOpWithNewOp<ltl::UntilOp>(op, ltlPropType,
-                                               adaptor.getInput(),
-                                               adaptor.getCondition());
+    auto untilOp = ltl::UntilOp::create(rewriter, op.getLoc(), ltlPropType,
+                                        adaptor.getInput(),
+                                        adaptor.getCondition());
+    if (!op.getStrongAttr()) {
+      rewriter.replaceOp(op, untilOp.getResult());
+      return success();
+    }
+    auto eventuallyOp = ltl::EventuallyOp::create(
+        rewriter, op.getLoc(), ltlPropType, adaptor.getCondition());
+    auto combined = ltl::AndOp::create(
+        rewriter, op.getLoc(),
+        SmallVector<Value, 2>{untilOp.getResult(), eventuallyOp.getResult()});
+    rewriter.replaceOp(op, combined.getResult());
+    return success();
+  }
+};
+
+struct PropertyNextTimeOpConversion
+    : public OpConversionPattern<PropertyNextTimeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PropertyNextTimeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ltlPropType = ltl::PropertyType::get(op.getContext());
+    auto ltlSeqType = ltl::SequenceType::get(op.getContext());
+    int64_t delay = 1;
+    if (auto count = op.getCount())
+      delay = *count;
+    auto delayAttr = rewriter.getI64IntegerAttr(delay);
+    auto lengthAttr = rewriter.getI64IntegerAttr(0);
+    auto trueConst =
+        hw::ConstantOp::create(rewriter, op.getLoc(), rewriter.getI1Type(), 1);
+    auto shifted = ltl::DelayOp::create(rewriter, op.getLoc(), ltlSeqType,
+                                        trueConst, delayAttr, lengthAttr);
+    auto nexttime = ltl::ImplicationOp::create(
+        rewriter, op.getLoc(), ltlPropType, shifted, adaptor.getInput());
+    rewriter.replaceOp(op, nexttime.getResult());
     return success();
   }
 };
@@ -333,6 +493,21 @@ struct PropertyClockOpConversion
     rewriter.replaceOpWithNewOp<ltl::ClockOp>(op, ltlPropType,
                                                adaptor.getInput(), ltlEdge,
                                                adaptor.getClock());
+    return success();
+  }
+};
+
+struct DisableIffOpConversion : public OpConversionPattern<DisableIffOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(DisableIffOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto orOp = ltl::OrOp::create(
+        rewriter, op.getLoc(),
+        SmallVector<Value, 2>{adaptor.getCondition(), adaptor.getProperty()});
+    orOp->setAttr(kDisableIffAttr, rewriter.getUnitAttr());
+    rewriter.replaceOp(op, orOp.getResult());
     return success();
   }
 };
@@ -375,6 +550,19 @@ struct CoverPropertyOpConversion
   matchAndRewrite(CoverPropertyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<verif::CoverOp>(
+        op, adaptor.getProperty(), adaptor.getEnable(), op.getLabelAttr());
+    return success();
+  }
+};
+
+struct ExpectPropertyOpConversion
+    : public OpConversionPattern<ExpectPropertyOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ExpectPropertyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<verif::AssertOp>(
         op, adaptor.getProperty(), adaptor.getEnable(), op.getLabelAttr());
     return success();
   }
@@ -476,6 +664,7 @@ struct LowerSVAToLTLPass
 
 void LowerSVAToLTLPass::runOnOperation() {
   ConversionTarget target(getContext());
+  target.addLegalDialect<comb::CombDialect>();
   target.addLegalDialect<ltl::LTLDialect>();
   target.addLegalDialect<verif::VerifDialect>();
   target.addLegalDialect<hw::HWDialect>();
@@ -495,7 +684,9 @@ void LowerSVAToLTLPass::runOnOperation() {
   patterns.add<SequenceDelayOpConversion, SequenceRepeatOpConversion,
                SequenceGotoRepeatOpConversion,
                SequenceNonConsecutiveRepeatOpConversion,
-               SequenceFirstMatchOpConversion,
+               SequenceFirstMatchOpConversion, SequenceWithinOpConversion,
+               SequenceThroughoutOpConversion,
+               SequenceMatchedOpConversion, SequenceTriggeredOpConversion,
                SequenceConcatOpConversion, SequenceOrOpConversion,
                SequenceAndOpConversion, SequenceIntersectOpConversion,
                SequenceClockOpConversion>(typeConverter, &getContext());
@@ -503,12 +694,16 @@ void LowerSVAToLTLPass::runOnOperation() {
   // Add property conversions
   patterns.add<PropertyNotOpConversion, PropertyAndOpConversion,
                PropertyOrOpConversion, PropertyImplicationOpConversion,
-               PropertyEventuallyOpConversion, PropertyUntilOpConversion,
-               PropertyClockOpConversion>(typeConverter, &getContext());
+               PropertyIfElseOpConversion, PropertyEventuallyOpConversion,
+               PropertyAlwaysOpConversion, PropertyUntilOpConversion,
+               PropertyNextTimeOpConversion, PropertyClockOpConversion>(
+      typeConverter, &getContext());
+  patterns.add<DisableIffOpConversion>(typeConverter, &getContext());
 
   // Add assertion directive conversions
   patterns.add<AssertPropertyOpConversion, AssumePropertyOpConversion,
-               CoverPropertyOpConversion, ClockedAssertPropertyOpConversion,
+               CoverPropertyOpConversion, ExpectPropertyOpConversion,
+               ClockedAssertPropertyOpConversion,
                ClockedAssumePropertyOpConversion,
                ClockedCoverPropertyOpConversion>(typeConverter, &getContext());
 

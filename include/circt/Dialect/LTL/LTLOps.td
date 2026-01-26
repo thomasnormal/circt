@@ -263,6 +263,34 @@ def FirstMatchOp : LTLOp<"first_match", [Pure]> {
   }];
 }
 
+def MatchedOp : LTLOp<"matched", [Pure]> {
+  let arguments = (ins LTLSequenceType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input) `->` type($result)
+  }];
+
+  let summary = "Return true if a sequence matched.";
+  let description = [{
+    Returns true if the `$input` sequence matched in the current cycle.
+    This is intended for bridging sequence endpoints to boolean logic.
+  }];
+}
+
+def TriggeredOp : LTLOp<"triggered", [Pure]> {
+  let arguments = (ins LTLSequenceType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input) `->` type($result)
+  }];
+
+  let summary = "Return true if a sequence was triggered.";
+  let description = [{
+    Returns true if the `$input` sequence started matching at the previous
+    clock tick.
+  }];
+}
+
 
 //===----------------------------------------------------------------------===//
 // Properties
@@ -358,6 +386,9 @@ def EventuallyOp : LTLOp<"eventually", [Pure]> {
     is strong: it requires that the `$input` holds after a *finite* number of
     cycles. The operator does *not* hold if the `$input` can't hold in the
     future.
+
+    If the op carries a `ltl.weak` unit attribute, the eventual requirement is
+    treated as weak: finite traces are not required to witness `$input`.
   }];
 }
 

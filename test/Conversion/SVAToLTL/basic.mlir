@@ -25,9 +25,9 @@ hw.module @test(in %clk: i1, in %req: i1, in %gnt: i1) {
   // CHECK: ltl.implication %req, %gnt : i1, i1
   %prop1 = sva.prop.implication %req, %gnt overlapping : i1, i1
 
-  // Test property implication conversion (non-overlapping - adds delay)
-  // CHECK: ltl.delay %gnt, 1, 0 : i1
-  // CHECK: ltl.implication %req, {{%.+}} : i1, !ltl.sequence
+  // Test property implication conversion (non-overlapping - delays antecedent)
+  // CHECK: ltl.delay %req, 1, 0 : i1
+  // CHECK: ltl.implication {{%.+}}, %gnt : !ltl.sequence, i1
   %prop2 = sva.prop.implication %req, %gnt : i1, i1
 
   // Test property eventually conversion

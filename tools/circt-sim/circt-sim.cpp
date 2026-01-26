@@ -474,11 +474,14 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     }
   }
 
-  // Check if this module contains LLHD processes or seq.initial blocks
+  // Check if this module contains LLHD processes, seq.initial blocks, or
+  // hw.instance ops (which may contain processes in submodules)
   bool hasLLHDProcesses = false;
   bool hasSeqInitial = false;
+  bool hasInstances = false;
   size_t llhdProcessCount = 0;
   size_t seqInitialCount = 0;
+  size_t instanceCount = 0;
   size_t totalOpsCount = 0;
 
   // Walk all operations in the module body
@@ -491,14 +494,21 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     } else if (isa<seq::InitialOp>(op)) {
       hasSeqInitial = true;
       seqInitialCount++;
+    } else if (isa<hw::InstanceOp>(op)) {
+      hasInstances = true;
+      instanceCount++;
     }
   });
 
   llvm::outs() << "[circt-sim] Found " << llhdProcessCount << " LLHD processes"
-               << " and " << seqInitialCount << " seq.initial blocks"
+               << ", " << seqInitialCount << " seq.initial blocks"
+               << ", and " << instanceCount << " hw.instance ops"
                << " (out of " << totalOpsCount << " total ops) in module\n";
 
-  if (hasLLHDProcesses || hasSeqInitial) {
+  // Initialize the interpreter if we have processes, initial blocks, or
+  // instances (instances may contain processes in submodules that need
+  // recursive initialization)
+  if (hasLLHDProcesses || hasSeqInitial || hasInstances) {
     // Use the LLHD process interpreter for modules with LLHD processes
     // or seq.initial blocks (the interpreter handles both)
     llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);

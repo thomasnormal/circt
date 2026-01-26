@@ -28,6 +28,10 @@ be selected.
 - `-debug` turns on printing debug information
 - `-debug-only=<component list>` only prints debug information for the specified
   components (among `lec-exporter`, `lec-solver`, `lec-circuit`)
+- `--run-smtlib` runs equivalence checking by exporting SMT-LIB and invoking
+  the `z3` binary from PATH (useful when JIT is unavailable)
+- `--z3-path=<path>` selects a specific `z3` binary for `--run-smtlib`
+- `--flatten-hw[=true|false]` inlines private HW modules before LEC (default on)
 
 #### Development
 ##### Regression testing

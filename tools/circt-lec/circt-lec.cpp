@@ -15,6 +15,8 @@
 #include "circt/Conversion/CombToSMT.h"
 #include "circt/Conversion/DatapathToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
+#include "circt/Conversion/ImportVerilog.h"
+#include "circt/Conversion/MooreToCore.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Dialect/Comb/CombDialect.h"
@@ -22,16 +24,29 @@
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWPasses.h"
+#include "circt/Dialect/LTL/LTLOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
 #include "circt/Dialect/OM/OMDialect.h"
 #include "circt/Dialect/OM/OMPasses.h"
+#include "circt/Dialect/Sim/SimDialect.h"
+#include "circt/Dialect/Sim/SimPasses.h"
+#include "circt/Dialect/Seq/SeqDialect.h"
+#include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/Version.h"
+#include "circt/Tools/circt-bmc/Passes.h"
 #include "circt/Tools/circt-lec/Passes.h"
+#include "circt/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/Diagnostics.h"
@@ -47,10 +62,16 @@
 #include "mlir/Transforms/Passes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Process.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include <array>
 
 #ifdef CIRCT_LEC_ENABLE_JIT
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -99,14 +120,33 @@ static cl::opt<bool>
                           cl::desc("Log executions of toplevel module passes"),
                           cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> flattenHWModules(
+    "flatten-hw",
+    cl::desc("Inline private hw.modules before equivalence checking"),
+    cl::init(true), cl::cat(mainCategory));
+
+static cl::opt<std::string>
+    z3PathOpt("z3-path",
+              cl::desc("Path to the z3 binary for --run-smtlib"),
+              cl::value_desc("filename"), cl::init(""),
+              cl::cat(mainCategory));
+
 #ifdef CIRCT_LEC_ENABLE_JIT
 
-enum OutputFormat { OutputMLIR, OutputLLVM, OutputSMTLIB, OutputRunJIT };
+enum OutputFormat {
+  OutputMLIR,
+  OutputLLVM,
+  OutputSMTLIB,
+  OutputRunSMTLIB,
+  OutputRunJIT
+};
 static cl::opt<OutputFormat> outputFormat(
     cl::desc("Specify output format"),
     cl::values(clEnumValN(OutputMLIR, "emit-mlir", "Emit LLVM MLIR dialect"),
                clEnumValN(OutputLLVM, "emit-llvm", "Emit LLVM"),
                clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit object file"),
+               clEnumValN(OutputRunSMTLIB, "run-smtlib",
+                          "Run equivalence checking via SMT-LIB + z3"),
                clEnumValN(OutputRunJIT, "run",
                           "Perform LEC and output result")),
     cl::init(OutputRunJIT), cl::cat(mainCategory));
@@ -117,12 +157,14 @@ static cl::list<std::string> sharedLibs{
 
 #else
 
-enum OutputFormat { OutputMLIR, OutputLLVM, OutputSMTLIB };
+enum OutputFormat { OutputMLIR, OutputLLVM, OutputSMTLIB, OutputRunSMTLIB };
 static cl::opt<OutputFormat> outputFormat(
     cl::desc("Specify output format"),
     cl::values(clEnumValN(OutputMLIR, "emit-mlir", "Emit LLVM MLIR dialect"),
                clEnumValN(OutputLLVM, "emit-llvm", "Emit LLVM"),
-               clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit object file")),
+               clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit object file"),
+               clEnumValN(OutputRunSMTLIB, "run-smtlib",
+                          "Run equivalence checking via SMT-LIB + z3")),
     cl::init(OutputLLVM), cl::cat(mainCategory));
 
 #endif
@@ -214,6 +256,13 @@ static LogicalResult executeLEC(MLIRContext &context) {
     return failure();
   }
 
+  bool hasLLHD = false;
+  module->walk([&](Operation *op) {
+    if (auto *dialect = op->getDialect())
+      if (dialect->getNamespace() == "llhd")
+        hasLLHD = true;
+  });
+
   PassManager pm(&context);
   pm.enableVerifier(verifyPasses);
   pm.enableTiming(ts);
@@ -225,13 +274,61 @@ static LogicalResult executeLEC(MLIRContext &context) {
         std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
             "circt-lec"));
 
+  if (flattenHWModules)
+    pm.addPass(hw::createFlattenModules());
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
+  pm.addPass(sim::createStripSim());
+  if (hasLLHD) {
+    pm.addPass(createLowerLLHDRefPorts());
+    LlhdToCorePipelineOptions llhdOptions;
+    pm.addNestedPass<hw::HWModuleOp>(llhd::createWrapProceduralOpsPass());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(llhd::createInlineCallsPass());
+    pm.addPass(createConvertMooreToCorePass());
+    pm.addPass(mlir::createSymbolDCEPass());
+
+    auto &llhdPrePM = pm.nest<hw::HWModuleOp>();
+    if (llhdOptions.sroa)
+      llhdPrePM.addPass(mlir::createSROA());
+    llhdPrePM.addPass(llhd::createMem2RegPass());
+    llhdPrePM.addPass(llhd::createHoistSignalsPass());
+    llhdPrePM.addPass(llhd::createDeseqPass());
+
+    // Hoist assertions before LLHD process lowering removes them.
+    pm.addPass(createStripLLHDProcesses());
+
+    auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
+    llhdPostPM.addPass(llhd::createLowerProcessesPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(llhd::createUnrollLoopsPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(createMapArithToCombPass(true));
+    llhdPostPM.addPass(llhd::createCombineDrivesPass());
+    llhdPostPM.addPass(llhd::createSig2Reg());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    if (llhdOptions.detectMemories) {
+      llhdPostPM.addPass(seq::createRegOfVecToMem());
+      llhdPostPM.addPass(mlir::createCSEPass());
+      llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    }
+  }
+  pm.addPass(createStripLLHDInterfaceSignals());
+  ExternalizeRegistersOptions externalizeOptions;
+  pm.addPass(createExternalizeRegisters(externalizeOptions));
+  pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
+  pm.addPass(hw::createHWConvertBitcasts());
   {
     ConstructLECOptions opts;
     opts.firstModule = firstModuleName;
     opts.secondModule = secondModuleName;
-    if (outputFormat == OutputSMTLIB)
+    if (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB)
       opts.insertMode = lec::InsertAdditionalModeEnum::None;
     pm.addPass(createConstructLEC(opts));
   }
@@ -241,7 +338,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.addPass(createConvertVerifToSMT());
   pm.addPass(createSimpleCanonicalizerPass());
 
-  if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB) {
+  if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
+      outputFormat != OutputRunSMTLIB) {
     pm.addPass(createLowerSMTToZ3LLVM());
     pm.addPass(createCSEPass());
     pm.addPass(createSimpleCanonicalizerPass());
@@ -263,6 +361,121 @@ static LogicalResult executeLEC(MLIRContext &context) {
     auto timer = ts.nest("Print SMT-LIB output");
     if (failed(smt::exportSMTLIB(module.get(), outputFile.value()->os())))
       return failure();
+    outputFile.value()->keep();
+    return success();
+  }
+
+  if (outputFormat == OutputRunSMTLIB) {
+    auto timer = ts.nest("Run SMT-LIB via z3");
+    std::optional<std::string> z3Program;
+    if (!z3PathOpt.empty()) {
+      if (!llvm::sys::fs::exists(z3PathOpt)) {
+        llvm::errs() << "z3 not found at '" << z3PathOpt << "'\n";
+        return failure();
+      }
+      z3Program = z3PathOpt;
+    } else {
+      auto z3Path = llvm::sys::findProgramByName("z3");
+      if (!z3Path) {
+        llvm::errs() << "z3 not found in PATH; cannot run SMT-LIB\n";
+        return failure();
+      }
+      z3Program = *z3Path;
+    }
+
+    SmallString<128> smtPath;
+    int smtFd = -1;
+    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-lec", "smt2",
+                                                     smtFd, smtPath)) {
+      llvm::errs() << "failed to create temporary SMT file: "
+                   << ec.message() << "\n";
+      return failure();
+    }
+    llvm::FileRemover smtRemover(smtPath);
+    {
+      llvm::raw_fd_ostream smtStream(smtFd, true);
+      if (failed(smt::exportSMTLIB(module.get(), smtStream)))
+        return failure();
+    }
+
+    SmallString<128> outPath;
+    int outFd = -1;
+    if (auto ec =
+            llvm::sys::fs::createTemporaryFile("circt-lec", "out", outFd,
+                                               outPath)) {
+      llvm::errs() << "failed to create temporary output file: "
+                   << ec.message() << "\n";
+      return failure();
+    }
+    llvm::FileRemover outRemover(outPath);
+    llvm::sys::Process::SafelyCloseFileDescriptor(outFd);
+
+    SmallString<128> errPath;
+    int errFd = -1;
+    if (auto ec =
+            llvm::sys::fs::createTemporaryFile("circt-lec", "err", errFd,
+                                               errPath)) {
+      llvm::errs() << "failed to create temporary error file: "
+                   << ec.message() << "\n";
+      return failure();
+    }
+    llvm::FileRemover errRemover(errPath);
+    llvm::sys::Process::SafelyCloseFileDescriptor(errFd);
+
+    SmallVector<StringRef, 4> args;
+    args.push_back(*z3Program);
+    args.push_back(smtPath);
+    std::string errMsg;
+    std::array<std::optional<StringRef>, 3> redirects = {
+        std::nullopt, outPath.str(), errPath.str()};
+    int result = llvm::sys::ExecuteAndWait(*z3Program, args, std::nullopt,
+                                           redirects, 0, 0, &errMsg);
+    if (result != 0 || !errMsg.empty()) {
+      llvm::errs() << "z3 invocation failed";
+      if (!errMsg.empty())
+        llvm::errs() << ": " << errMsg;
+      llvm::errs() << "\n";
+      return failure();
+    }
+
+    auto outBuffer = llvm::MemoryBuffer::getFile(outPath);
+    if (!outBuffer) {
+      llvm::errs() << "failed to read z3 output\n";
+      return failure();
+    }
+    auto errBuffer = llvm::MemoryBuffer::getFile(errPath);
+    std::string combinedOutput = outBuffer.get()->getBuffer().str();
+    if (errBuffer && !errBuffer.get()->getBuffer().empty()) {
+      combinedOutput.append("\n");
+      combinedOutput.append(errBuffer.get()->getBuffer().str());
+    }
+
+    auto findResultToken = [](StringRef text) -> std::optional<StringRef> {
+      StringRef remaining = text;
+      std::optional<StringRef> result;
+      while (!remaining.empty()) {
+        remaining = remaining.ltrim(" \t\r\n");
+        if (remaining.empty())
+          break;
+        StringRef token =
+            remaining.take_until([](char c) { return c == ' ' || c == '\t' ||
+                                                     c == '\r' || c == '\n'; });
+        if (token == "sat" || token == "unsat" || token == "unknown")
+          result = token;
+        remaining = remaining.drop_front(token.size());
+      }
+      return result;
+    };
+
+    auto token = findResultToken(combinedOutput);
+    if (token && *token == "unsat") {
+      outputFile.value()->os() << "c1 == c2\n";
+    } else if (token && (*token == "sat" || *token == "unknown")) {
+      outputFile.value()->os() << "c1 != c2\n";
+    } else {
+      llvm::errs() << "unexpected z3 output: " << combinedOutput << "\n";
+      return failure();
+    }
     outputFile.value()->keep();
     return success();
   }
@@ -377,16 +590,23 @@ int main(int argc, char **argv) {
     circt::datapath::DatapathDialect,
     circt::emit::EmitDialect,
     circt::hw::HWDialect,
+    circt::ltl::LTLDialect,
+    circt::llhd::LLHDDialect,
     circt::om::OMDialect,
+    circt::sim::SimDialect,
+    circt::seq::SeqDialect,
     mlir::smt::SMTDialect,
     circt::verif::VerifDialect,
     mlir::arith::ArithDialect,
+    mlir::cf::ControlFlowDialect,
     mlir::BuiltinDialect,
     mlir::func::FuncDialect,
+    mlir::scf::SCFDialect,
     mlir::LLVM::LLVMDialect
   >();
   // clang-format on
   mlir::func::registerInlinerExtension(registry);
+  mlir::LLVM::registerInlinerInterface(registry);
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
   MLIRContext context(registry);

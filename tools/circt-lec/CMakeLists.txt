@@ -25,12 +25,18 @@ target_link_libraries(circt-lec
   CIRCTCombToSMT
   CIRCTDatapath
   CIRCTDatapathToSMT
+  CIRCTBMCTransforms
   CIRCTEmitTransforms
   CIRCTHW
+  CIRCTHWTransforms
   CIRCTHWToSMT
+  CIRCTImportVerilog
   CIRCTLECTransforms
   CIRCTOMTransforms
+  CIRCTSim
+  CIRCTSimTransforms
   CIRCTSMTToZ3LLVM
+  CIRCTTransforms
   CIRCTSupport
   CIRCTVerif
   CIRCTVerifToSMT

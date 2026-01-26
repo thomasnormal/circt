@@ -67,37 +67,36 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 205 Update)
+### Track Status & Next Tasks (Iteration 206 Update)
 
-**Iteration 204 Results (COMPLETE):**
-- Track A: ✅ Fixed sv-tests script (`NO_PROPERTY_AS_SKIP=0`)
-- Track B: ⚠️ I3C AVIP simulation interrupted (retry needed)
-- Track C: ✅ 4 more OpenTitan primitives PASS (arbiter_fixed, arbiter_ppc, lfsr, fifo_sync)
-- Track D: ✅ XFAIL tests fail for infrastructure reasons (SSA dominance, async reset)
+**Iteration 205 Results (COMPLETE):**
+- Track A: ✅ **MAJOR: slang now accepts `@posedge (clk)`** - 6 tests fixed!
+- Track B: ✅ I3C AVIP hdl_top simulates (7 processes)
+- Track C: ✅ 5 more OpenTitan primitives PASS (alert_sender, packer, subreg, edge_detector, pulse_sync)
+- Track D: ⚠️ APB AVIP partial - starts but exits at time 0
 
-**Key Correction from Iteration 204:**
-- verilator-verification `@posedge (clk)` is a **Verilator extension**, not upstream bug
-- slang follows strict IEEE grammar; consider `--compat verilator` flag
+**Key Achievement from Iteration 205:**
+- verilator-verification: **47% → 82%** (+6 tests) by adding Verilator syntax compat
 
-**Current Iteration 205 Tracks:**
-- Track A: Retry I3C AVIP simulation
-- Track B: Add slang `--compat verilator` support for sequence syntax
-- Track C: Test more OpenTitan IPs (prim_ram, prim_alert)
-- Track D: Investigate async reset support in BMC
+**Current Iteration 206 Tracks:**
+- Track A: Investigate APB AVIP exit code 1 issue
+- Track B: Test full verilator-verification BMC suite
+- Track C: Test I2S AVIP simulation
+- Track D: More OpenTitan primitive coverage
 
 **UVM AVIP Compilation Status (VERIFIED):**
 - **3/9 compile successfully** (APB, I2S, I3C) - 33%
 - 5/9 have source code bugs (AHB, SPI, UART, JTAG, AXI4)
 - 1/9 has complex build setup (AXI4Lite with env vars)
 
-**Test Suite Status (Updated Iteration 204):**
-- sv-tests SVA: **23/26 pass (88%)** - script fixed
-- verilator-verification: 8/17 pass (6 need `--compat verilator`)
+**Test Suite Status (Updated Iteration 205):**
+- sv-tests SVA: **23/26 pass (88%)**
+- verilator-verification: **14/17 pass (82%)** ⬆️ +6 from slang fix
 - Yosys SVA: **14/14 pass (100%)** - stable
 
 **OpenTitan Simulation Status:**
 - **33/33 reg_top modules simulate**
-- **7 primitives**: prim_flop_2sync, arbiter_fixed/ppc, lfsr, fifo_sync, timer_core, uart_tx/rx
+- **12 primitives**: flop_2sync, arbiter_fixed/ppc, lfsr, fifo_sync, timer_core, uart_tx/rx, alert_sender, packer, subreg, edge_detector, pulse_sync
 - **Large FSMs work**: i2c_controller_fsm (2293 ops, 9 processes)
 
 **7 AVIPs Running in circt-sim:**

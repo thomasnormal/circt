@@ -11,4 +11,5 @@ module {
 }
 
 // CHECK: hw.module @test
-// CHECK: seq.compreg sym @ltl_past
+// CHECK: seq.compreg sym @ltl_implication_seen
+// CHECK-NOT: sym @ltl_past
