@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 190 - January 26, 2026
+
+### Full GPIO IP with Alerts Simulates + timer_core 64-bit Verified
+
+**Full GPIO IP with Alerts (Track T):**
+- GPIO now compiles and simulates with full alert protocol support
+- 81 LLHD signals, 13 processes, 4251 lines MLIR
+- RV Timer full IP also compiles (rv_timer_full target, 3637 lines MLIR)
+- prim_diff_decode and prim_alert_sender now work end-to-end
+
+**timer_core 64-bit Fix Verified (Track U):**
+- timer_core with 64-bit mtime/mtimecmp simulates successfully
+- Confirms SignalValue APInt fix (commit f0c40886a) is working
+- VCD trace generation works
+- 11 OpenTitan modules now simulate (added timer_core full logic)
+
+**keymgr/OTBN Crypto IPs (Track V - in progress):**
+- keymgr_reg_top compilation: SUCCESS
+- otbn_reg_top compilation: SUCCESS (with TL-UL socket dependencies)
+
+**AVIP Compilation Analysis (Track W - in progress):**
+- APB: PASS (22MB MLIR output)
+- I2S: PASS
+- AHB: FAIL - Bind statement scope issue (AVIP source bug)
+- I3C: FAIL - InOut interface port limitation
+
+---
+
 ## Iteration 189 - January 26, 2026
 
 ### SignalValue 64-bit Fix + CSRNG Crypto IP + Mem2Reg Fix Verified
@@ -85,6 +113,9 @@
 **SVA BMC Improvements:**
 - Added `bmc_reg_clocks` propagation for explicit-clock registers
 - Multi-clock BMC now gates register updates per clock in VerifToSMT
+- Preserve `verif.assert`/`assume`/`cover` inside `llhd.process` during canonicalize
+- Hoist LLHD assertions before process lowering in `circt-bmc` and `circt-lec`
+- BMC/LEC runner scripts now emit `--ir-llhd` to keep immediate assertions
 
 **New Bug Found - timer_core 64-bit crash:**
 - timer_core compiles successfully to HW dialect
