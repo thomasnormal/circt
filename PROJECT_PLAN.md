@@ -160,12 +160,11 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 
 ### New: OpenTitan Simulation Support
 - **Phase 1 Complete**: prim_fifo_sync, prim_count simulate in circt-sim
-- **Phase 2 MILESTONE**: All 4 communication protocol register blocks simulate:
-  - `gpio_reg_top` (177 ops, 47 signals)
-  - `uart_reg_top` (175 ops, 56 signals)
-  - `spi_host_reg_top` (178 ops, 67 signals) - with tlul_socket_1n router
-  - `i2c_reg_top` (175 ops, 68 signals)
-- **Phase 3 Validated**: TileLink-UL protocol adapters work end-to-end (including tlul_socket_1n)
+- **Phase 2 MILESTONE**: 8 register blocks simulate:
+  - Communication: `gpio_reg_top`, `uart_reg_top`, `spi_host_reg_top`, `i2c_reg_top`
+  - Timers (CDC): `aon_timer_reg_top`, `pwm_reg_top`, `rv_timer_reg_top`
+  - Crypto: `hmac_reg_top` (first crypto IP!)
+- **Phase 3 Validated**: TileLink-UL protocol adapters (including tlul_socket_1n router) and CDC primitives work
 - **Blocker**: `prim_diff_decode.sv` control flow bug (unit test: `test/Conversion/MooreToCore/nested-control-flow-bug.sv`)
 - **Scripts**: `utils/run_opentitan_circt_verilog.sh`, `utils/run_opentitan_circt_sim.sh`
 - **Tracking**: `PROJECT_OPENTITAN.md`
@@ -177,7 +176,7 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - **yosys SVA**: 14/16 (87.5%) (Verified 2026-01-26)
 - **AVIPs**: 1/10 compile (APB only) - REGRESSION from claimed 8/10 baseline
   - Root causes: bind/vif conflicts, UVM method signature mismatches, InOut interface ports
-- **OpenTitan**: 4 register blocks SIMULATE (gpio, uart, spi_host, i2c), TL-UL + socket validated (Phase 3)
+- **OpenTitan**: 8 register blocks SIMULATE (communication + timers + crypto), TL-UL + CDC primitives validated
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**

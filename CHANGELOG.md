@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 185 - January 26, 2026
+
+### OpenTitan Simulation Support - 8 Register Blocks Now Working!
+
+Extended OpenTitan support with 4 additional register blocks - now supports timer, PWM, and crypto IPs!
+
+**New Register Blocks Simulating:**
+| IP | Type | Ops | Signals | Features |
+|----|------|-----|---------|----------|
+| aon_timer_reg_top | Timer (CDC) | 193 | 165 | Dual clock domain (clk_i + clk_aon_i) |
+| pwm_reg_top | PWM (CDC) | 191 | 154 | Dual clock domain (clk_i + clk_core_i) |
+| rv_timer_reg_top | RISC-V Timer | 175 | 48 | Single clock domain |
+| hmac_reg_top | Crypto | 175 | 100 | HMAC with FIFO window |
+
+**Key Achievements:**
+- First CDC (Clock Domain Crossing) IPs: aon_timer and pwm use prim_reg_cdc primitives
+- First crypto IP: hmac_reg_top with FIFO window interface
+- Validated prim_pulse_sync, prim_sync_reqack, prim_reg_cdc primitives
+
+**All 8 OpenTitan Register Blocks Now Working:**
+1. gpio_reg_top - 177 ops, 47 signals
+2. uart_reg_top - 175 ops, 56 signals
+3. spi_host_reg_top - 178 ops, 67 signals (with tlul_socket_1n)
+4. i2c_reg_top - 175 ops, 68 signals
+5. aon_timer_reg_top - 193 ops, 165 signals (dual clock)
+6. pwm_reg_top - 191 ops, 154 signals (dual clock)
+7. rv_timer_reg_top - 175 ops, 48 signals
+8. hmac_reg_top - 175 ops, 100 signals (crypto with FIFO)
+
+---
+
 ## Iteration 184 - January 26, 2026
 
 ### OpenTitan Simulation Support - All Communication Protocol Register Blocks Work!
@@ -23,6 +54,13 @@ TEST PASSED: i2c_reg_top basic connectivity
 | i2c_reg_top | 175 | 68 | SIMULATES |
 
 This validates that CIRCT's TileLink-UL infrastructure works correctly for OpenTitan's common communication protocol register blocks.
+
+### SVA BMC
+
+Lowered `sva.prop.until` with the `strong` modifier to a strong-until LTL form
+(`ltl.until` AND `ltl.eventually`) and added SVAToLTL conversion coverage.
+Added VerifToSMT lowering for `ltl.intersect` to SMT conjunction, with
+conversion coverage.
 
 ---
 
