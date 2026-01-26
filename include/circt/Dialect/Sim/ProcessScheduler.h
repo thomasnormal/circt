@@ -16,6 +16,7 @@
 #define CIRCT_DIALECT_SIM_PROCESSSCHEDULER_H
 
 #include "circt/Dialect/Sim/EventQueue.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -124,34 +125,49 @@ inline EdgeType parseEdgeType(llvm::StringRef str) {
 
 /// Represents a signal value that can track changes for edge detection.
 /// Supports multi-bit values with special handling for single-bit edge detection.
+/// Uses llvm::APInt to support arbitrary bit widths beyond 64 bits.
 class SignalValue {
 public:
   /// Default constructor creates an X (unknown) value.
-  SignalValue() : value(0), width(1), isX(true) {}
+  SignalValue() : value(1, 0), isX(true) {}
 
-  /// Construct from an integer value.
+  /// Construct from an integer value (for widths ≤ 64 bits).
   explicit SignalValue(uint64_t val, uint32_t w = 1)
-      : value(val), width(w), isX(false) {}
+      : value(w, val), isX(false) {}
+
+  /// Construct from an APInt value (for arbitrary widths).
+  explicit SignalValue(llvm::APInt val)
+      : value(std::move(val)), isX(false) {}
 
   /// Construct an X (unknown) value of the given width.
   static SignalValue makeX(uint32_t w = 1) {
     SignalValue sv;
-    sv.width = w;
+    sv.value = llvm::APInt(w, 0);
     sv.isX = true;
     return sv;
   }
 
-  /// Get the numeric value.
-  uint64_t getValue() const { return value; }
+  /// Get the numeric value as uint64_t.
+  /// For values wider than 64 bits, returns the lower 64 bits.
+  /// Prefer getAPInt() for arbitrary-width values.
+  uint64_t getValue() const {
+    if (value.getBitWidth() <= 64)
+      return value.getZExtValue();
+    // For values wider than 64 bits, extract the lower 64 bits
+    return value.trunc(64).getZExtValue();
+  }
+
+  /// Get the numeric value as APInt (supports arbitrary widths).
+  const llvm::APInt &getAPInt() const { return value; }
 
   /// Get the bit width.
-  uint32_t getWidth() const { return width; }
+  uint32_t getWidth() const { return value.getBitWidth(); }
 
   /// Check if the value is unknown (X).
   bool isUnknown() const { return isX; }
 
   /// Get the LSB (for single-bit edge detection).
-  bool getLSB() const { return (value & 1) != 0; }
+  bool getLSB() const { return value[0]; }
 
   /// Check if two values are equal.
   bool operator==(const SignalValue &other) const {
@@ -159,7 +175,7 @@ public:
       return true;
     if (isX || other.isX)
       return false;
-    return value == other.value && width == other.width;
+    return value == other.value;
   }
 
   bool operator!=(const SignalValue &other) const { return !(*this == other); }
@@ -183,8 +199,7 @@ public:
   }
 
 private:
-  uint64_t value;
-  uint32_t width;
+  llvm::APInt value;
   bool isX;
 };
 

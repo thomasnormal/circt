@@ -13,14 +13,28 @@ usage() {
   echo "  prim_fifo_sync_cnt - FIFO counter logic"
   echo "  prim_fifo_sync     - Synchronous FIFO"
   echo ""
-  echo "Targets (Phase 2 - Peripheral IPs):"
-  echo "  tlul_pkg           - TileLink-UL package with dependencies"
-  echo "  gpio               - GPIO IP (earlgrey autogen version)"
-  echo "  gpio_no_alerts     - GPIO subset without alerts (for HW lowering test)"
-  echo "  uart_reg_top       - UART register block (no alerts)"
+  echo "Targets (Phase 2 - Peripheral Register Blocks):"
+  echo "  gpio_no_alerts     - GPIO register block (without alerts)"
+  echo "  uart_reg_top       - UART register block"
+  echo "  spi_host_reg_top   - SPI Host register block (with TL-UL socket)"
+  echo "  i2c_reg_top        - I2C register block"
+  echo "  aon_timer_reg_top  - AON Timer register block (dual clock)"
+  echo "  pwm_reg_top        - PWM register block (dual clock)"
+  echo "  rv_timer_reg_top   - RV Timer register block"
   echo ""
-  echo "Targets (Phase 3 - TileLink Protocol):"
+  echo "Targets (Phase 5 - Crypto IPs):"
+  echo "  hmac_reg_top       - HMAC crypto register block (with FIFO window)"
+  echo "  aes_reg_top        - AES crypto register block (shadowed registers)"
+  echo "  csrng_reg_top      - CSRNG crypto register block (random number generator)"
+  echo ""
+  echo "Targets (Full IP - Experimental):"
+  echo "  rv_timer_full      - Full rv_timer IP (blocked by prim_diff_decode)"
+  echo "  rv_timer_no_alerts - RV Timer without alerts (timer_core + reg_top)"
+  echo ""
+  echo "Targets (TileLink Protocol):"
+  echo "  tlul_pkg           - TileLink-UL package with dependencies"
   echo "  tlul               - TileLink-UL adapter modules"
+  echo "  gpio               - GPIO IP with alerts (blocked by prim_diff_decode)"
   echo ""
   echo "Options:"
   echo "  --enable-assertions  Enable assertions (default: disabled)"
@@ -69,6 +83,7 @@ GPIO_AUTOGEN_RTL="$OPENTITAN_DIR/hw/top_earlgrey/ip_autogen/gpio/rtl"
 
 # Additional OpenTitan paths
 UART_RTL="$OPENTITAN_DIR/hw/ip/uart/rtl"
+CSRNG_RTL="$OPENTITAN_DIR/hw/ip/csrng/rtl"
 
 # Base include paths
 INCLUDES=(
@@ -79,6 +94,7 @@ INCLUDES=(
   "-I" "$TOP_AUTOGEN"
   "-I" "$GPIO_AUTOGEN_RTL"
   "-I" "$UART_RTL"
+  "-I" "$CSRNG_RTL"
 )
 
 # Defines for assertion handling
@@ -591,6 +607,204 @@ get_files_for_target() {
       # HMAC packages
       echo "$HMAC_RTL/hmac_reg_pkg.sv"
       echo "$HMAC_RTL/hmac_reg_top.sv"
+      ;;
+    aes_reg_top)
+      # AES register block (crypto IP with shadowed registers)
+      local AES_RTL="$OPENTITAN_DIR/hw/ip/aes/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # AES packages
+      echo "$AES_RTL/aes_reg_pkg.sv"
+      echo "$AES_RTL/aes_reg_top.sv"
+      ;;
+    csrng_reg_top)
+      # CSRNG register block (crypto IP - Cryptographic Secure Random Number Generator)
+      local CSRNG_RTL="$OPENTITAN_DIR/hw/ip/csrng/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # CSRNG packages
+      echo "$CSRNG_RTL/csrng_reg_pkg.sv"
+      echo "$CSRNG_RTL/csrng_reg_top.sv"
+      ;;
+    rv_timer_full)
+      # RV Timer full IP (register block + timer_core + alerts)
+      # Note: Requires prim_alert_sender which depends on prim_diff_decode
+      local RV_TIMER_RTL="$OPENTITAN_DIR/hw/ip/rv_timer/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Interrupt primitive
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # Alert sender and dependencies (blocked by prim_diff_decode)
+      echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+      echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+      echo "$PRIM_RTL/prim_filter.sv"
+      echo "$PRIM_RTL/prim_filter_ctr.sv"
+      echo "$PRIM_RTL/prim_diff_decode.sv"
+      echo "$PRIM_RTL/prim_alert_sender.sv"
+      # RV Timer packages and modules
+      echo "$RV_TIMER_RTL/rv_timer_reg_pkg.sv"
+      echo "$RV_TIMER_RTL/rv_timer_reg_top.sv"
+      echo "$RV_TIMER_RTL/timer_core.sv"
+      echo "$RV_TIMER_RTL/rv_timer.sv"
+      ;;
+    rv_timer_no_alerts)
+      # RV Timer without prim_alert_sender (workaround for prim_diff_decode bug)
+      # Includes timer_core but needs modified rv_timer.sv or stub
+      local RV_TIMER_RTL="$OPENTITAN_DIR/hw/ip/rv_timer/rtl"
+      local TLUL_RTL="$OPENTITAN_DIR/hw/ip/tlul/rtl"
+      local TOP_RTL="$OPENTITAN_DIR/hw/top_earlgrey/rtl"
+      local TOP_AUTOGEN="$OPENTITAN_DIR/hw/top_earlgrey/rtl/autogen"
+      # Package dependencies
+      echo "$PRIM_RTL/prim_util_pkg.sv"
+      echo "$PRIM_RTL/prim_mubi_pkg.sv"
+      echo "$PRIM_RTL/prim_secded_pkg.sv"
+      echo "$TOP_RTL/top_pkg.sv"
+      echo "$TLUL_RTL/tlul_pkg.sv"
+      echo "$PRIM_RTL/prim_alert_pkg.sv"
+      echo "$TOP_AUTOGEN/top_racl_pkg.sv"
+      echo "$PRIM_RTL/prim_subreg_pkg.sv"
+      # Core primitives
+      echo "$PRIM_GENERIC_RTL/prim_flop.sv"
+      echo "$PRIM_GENERIC_RTL/prim_buf.sv"
+      echo "$PRIM_RTL/prim_cdc_rand_delay.sv"
+      echo "$PRIM_GENERIC_RTL/prim_flop_2sync.sv"
+      # Subreg primitives
+      echo "$PRIM_RTL/prim_subreg.sv"
+      echo "$PRIM_RTL/prim_subreg_ext.sv"
+      echo "$PRIM_RTL/prim_subreg_arb.sv"
+      echo "$PRIM_RTL/prim_subreg_shadow.sv"
+      # Onehot and register check primitives
+      echo "$PRIM_RTL/prim_onehot_check.sv"
+      echo "$PRIM_RTL/prim_reg_we_check.sv"
+      # ECC primitives
+      echo "$PRIM_RTL/prim_secded_inv_64_57_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_64_57_enc.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_dec.sv"
+      echo "$PRIM_RTL/prim_secded_inv_39_32_enc.sv"
+      # TL-UL integrity modules
+      echo "$TLUL_RTL/tlul_data_integ_dec.sv"
+      echo "$TLUL_RTL/tlul_data_integ_enc.sv"
+      # TL-UL adapters
+      echo "$TLUL_RTL/tlul_cmd_intg_chk.sv"
+      echo "$TLUL_RTL/tlul_rsp_intg_gen.sv"
+      echo "$TLUL_RTL/tlul_err.sv"
+      echo "$TLUL_RTL/tlul_adapter_reg.sv"
+      # Interrupt primitive (for timer interrupts)
+      echo "$PRIM_RTL/prim_intr_hw.sv"
+      # RV Timer packages and logic (no alert_sender)
+      echo "$RV_TIMER_RTL/rv_timer_reg_pkg.sv"
+      echo "$RV_TIMER_RTL/rv_timer_reg_top.sv"
+      echo "$RV_TIMER_RTL/timer_core.sv"
+      # Note: Cannot include rv_timer.sv directly as it requires prim_alert_sender
+      # Would need a modified version without alerts for full IP testing
       ;;
     tlul)
       # Phase 3: TileLink-UL protocol modules

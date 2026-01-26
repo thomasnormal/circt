@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 189 - January 26, 2026
+
+### SignalValue 64-bit Fix + CSRNG Crypto IP + Mem2Reg Fix Verified
+
+**FIXED: SignalValue 64-bit Limitation (Track Q):**
+- Upgraded `SignalValue` class from `uint64_t` to `llvm::APInt` for arbitrary-width signals
+- Files modified: ProcessScheduler.h, ProcessScheduler.cpp, LLHDProcessInterpreter.h
+- Added `getAPInt()` method for full arbitrary-width access
+- Created test: `test/Tools/circt-sim/signal-value-wide.mlir` for 128-bit signals
+- All 397 unit tests pass, no regression
+
+**New OpenTitan IP - CSRNG crypto (Track P):**
+- Cryptographic Secure Random Number Generator register block now simulates
+- 173 ops, 66 signals, 12 processes
+- 10th OpenTitan IP to successfully simulate via circt-sim
+- Added csrng_reg_top target to run_opentitan_circt_sim.sh
+
+**Mem2Reg Fix Verified (Track R):**
+- prim_diff_decode.sv: PASS - Compiles to HW dialect (956.7 KB output)
+- prim_alert_sender.sv: PASS - Dual prim_diff_decode instances work
+- prim_count.sv: PASS - No regression in existing functionality
+- **7+ OpenTitan IPs unblocked**: gpio, uart, spi_host, i2c, aon_timer, pwm, rv_timer
+
+**Test Suite Verification (Track S):**
+- sv-tests BMC: 9 pass + 3 xfail, no regression
+- verilator-verification: 8/8 pass
+- yosys SVA: 14/16 pass (2 VHDL skipped)
+- AVIP APB: Compiles successfully (295K lines MLIR)
+
+---
+
 ## Iteration 187 - January 26, 2026
 
 ### prim_diff_decode Bug Fixed + AVIP/circt-sim Analysis Complete
