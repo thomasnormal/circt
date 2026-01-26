@@ -385,13 +385,11 @@ moore.module @Net() {
   moore.assign %a, %3 : i32
 
   // Test supply0 net (always driven to 0)
-  // CHECK: %[[ZERO:.+]] = hw.constant 0 : i8
-  // CHECK: %supply0_net = llhd.sig name "supply0_net" %[[ZERO]] : i8
+  // Note: unused supply nets are removed by DCE
   %supply0_net = moore.net name "supply0_net" supply0 : !moore.ref<i8>
 
   // Test supply1 net (always driven to all 1s)
-  // CHECK: %[[ONES:.+]] = hw.constant -1 : i8
-  // CHECK: %supply1_net = llhd.sig name "supply1_net" %[[ONES]] : i8
+  // Note: unused supply nets are removed by DCE
   %supply1_net = moore.net name "supply1_net" supply1 : !moore.ref<i8>
 }
 

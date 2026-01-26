@@ -2505,9 +2505,9 @@ module ConcurrentAssert(input clk);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
-  // CHECK: [[WEAK_EVEN:%.+]] = ltl.eventually [[CONV_A]] {ltl.weak} : i1
-  // CHECK: verif.assert [[WEAK_EVEN]] : !ltl.property
-  assert property (eventually a);
+  // CHECK: [[EVEN_OP:%.+]] = ltl.delay [[CONV_A]], 2, 1 : i1
+  // CHECK: verif.assert [[EVEN_OP]] : !ltl.sequence
+  assert property (eventually [2:3] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
@@ -2517,9 +2517,9 @@ module ConcurrentAssert(input clk);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
-  // CHECK: [[REPEAT_OP:%.+]] = ltl.repeat [[CONV_A]], 0 : i1
+  // CHECK: [[REPEAT_OP:%.+]] = ltl.repeat [[CONV_A]], 2, 1 : i1
   // CHECK: verif.assert [[REPEAT_OP]] : !ltl.sequence
-  assert property (s_always a);
+  assert property (s_always [2:3] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
@@ -2547,15 +2547,15 @@ module ConcurrentAssert(input clk);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
-  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 2, 1 : i1
+  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 2, 0 : i1
   // CHECK: verif.assert [[DELAY_OP]] : !ltl.sequence
-  assert property (nexttime [2:3] a);
+  assert property (nexttime [2] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
-  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 2, 1 : i1
+  // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 2, 0 : i1
   // CHECK: verif.assert [[DELAY_OP]] : !ltl.sequence
-  assert property (s_nexttime [2:3] a);
+  assert property (s_nexttime [2] a);
 
   // Binary
   // CHECK-NOT: moore.procedure always
