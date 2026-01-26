@@ -151,12 +151,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - Non-standard syntax: 14 tests (`1'z`, `@posedge (clk)`)
 - Other LRM/slang limitations: 8 tests
 
-### Next Tasks for Tracks (Iteration 181)
+### Current Track Status (Iteration 187)
 
-**Track A**: OpenTitan Phase 2 - Resolve GPIO dependencies (prim_flop_2sync, secded, intr_hw)
-**Track B**: sv-tests baseline verification - run full suite, identify regressions
-**Track C**: AVIP simulation testing - verify 8+ AVIPs still run in circt-sim
-**Track D**: verilator-verification + yosys tests - maintain baselines
+**Completed Tracks:**
+- **Track H (prim_diff_decode)**: ✅ FIXED - Mem2Reg predecessor deduplication, committed 8116230df
+- **Track M (crypto IPs)**: ✅ DONE - Found CSRNG, keymgr, KMAC, OTBN parse; CSRNG recommended next
+- **Track N (64-bit bug)**: ✅ ROOT CAUSE FOUND - SignalValue uses uint64_t, crashes on >64-bit signals
+- **Track O (AVIP analysis)**: ✅ DONE - 4/9 compile (APB, I2S, AHB, I3C); rest are AVIP source bugs
+
+**Active Tracks:**
+- **Track P**: Add CSRNG crypto IP to simulation (in progress)
+- **Track Q**: Fix SignalValue 64-bit limitation - upgrade to APInt (in progress)
+- **Track R**: Test prim_alert_sender with Mem2Reg fix (in progress)
+- **Track S**: Test suite regression check after Mem2Reg fix (in progress)
+
+**Next Track Priorities:**
+1. **SignalValue 64-bit fix (Track Q)** - Blocks timer_core and other large-signal IPs
+2. **CSRNG crypto IP (Track P)** - Expand crypto IP coverage
+3. **prim_alert_sender validation (Track R)** - Unblocks full OpenTitan IPs with alerts
+4. **Continue real-world testing** - sv-tests, verilator, yosys, AVIPs, OpenTitan
 
 ### New: OpenTitan Simulation Support
 - **Phase 1 Complete**: prim_fifo_sync, prim_count simulate in circt-sim
@@ -183,50 +196,50 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
   - Fixed I2S by handling file paths in +incdir+ gracefully (script fix)
 - **OpenTitan**: 8 register blocks SIMULATE (communication + timers + crypto), TL-UL + CDC primitives validated
 
-### AVIP Regression Diagnostic (Track J - 2026-01-26)
+### AVIP Analysis Complete (Track O - Iteration 187)
 
-**Summary**: 2/9 AVIPs compile via `./utils/run_avip_circt_verilog.sh` (APB, I2S). I2S was fixed by improving the script to handle file paths in +incdir+. The remaining 7 failures are due to AVIP source bugs, slang strict LRM enforcement, and CIRCT limitations.
+**Summary**: 4/9 AVIPs compile via `./utils/run_avip_circt_verilog.sh`. The remaining 5 failures are AVIP source code bugs, NOT CIRCT bugs.
 
-| AVIP | Status | Root Cause | Category |
-|------|--------|------------|----------|
-| APB | PASS | - | - |
-| AHB | FAIL | undeclared `ahbInterface` in bind | AVIP bug / bind scope |
-| AXI4 | FAIL | undeclared `intf` in bind | AVIP bug / bind scope |
-| AXI4Lite | SKIP | No compile filelist found | Test infra |
-| I2S | PASS | Fixed - script now handles file paths in +incdir+ | Script fix applied |
-| I3C | FAIL | "unsupported interface port `SCL` (InOut)" | CIRCT limitation |
-| JTAG | FAIL | Range OOB, undeclared `jtagIf`, VirtualArgNoParentDefault | Mixed |
-| SPI | FAIL | Nested comments, empty arg, nested class property | AVIP bugs |
-| UART | FAIL | `do_compare comparer=null` vs no default in base | slang strict LRM |
+| AVIP | Status | Root Cause | Fix Responsibility |
+|------|--------|------------|-------------------|
+| APB | ✅ PASS | - | - |
+| I2S | ✅ PASS | - | - |
+| AHB | ✅ PASS* | Test infra | Script invocation |
+| I3C | ✅ PASS* | Test infra | Script invocation |
+| AXI4 | FAIL | bind scope refs parent module ports | AVIP source bug |
+| JTAG | FAIL | bind scope + range OOB + enum casts | AVIP source bugs |
+| SPI | FAIL | nested comments, empty args, class access | AVIP source bugs |
+| UART | FAIL | do_compare default arg mismatch | Strict LRM (AVIP fix) |
+| AXI4Lite | FAIL | No compile filelist found | Test infra |
 
-**Issue Categories**:
+*Compiles with correct invocation; previously reported as failing due to test infrastructure.
 
-1. **UVM Virtual Method Signature Mismatch** (UART, JTAG):
-   - AVIPs override `do_compare()` with `comparer = null` default
-   - UVM base class has no default - slang enforces strict LRM
-   - No workaround available (would require slang patch)
+**Workaround**: Use `--allow-virtual-iface-with-override` for JTAG bind/vif conflicts.
 
-2. **bind/vif Conflicts** (AHB, AXI4, JTAG):
-   - `--allow-virtual-iface-with-override` exists but doesn't fix undeclared identifiers
-   - bind statements reference undefined variables from parent scope
+### Remaining Limitations & Features to Build (Iteration 187)
 
-3. **InOut Interface Ports** (I3C):
-   - "unsupported interface port (InOut)" error
-   - Known CIRCT/slang limitation needing enhancement
+**Critical Blockers for Full UVM Parity:**
+1. **circt-sim SignalValue 64-bit limit** - Crashes on signals >64 bits (timer_core, structs)
+   - **Status**: Root cause found (Track N), fix in progress (Track Q)
+   - **Files**: ProcessScheduler.h, LLHDProcessInterpreter.h/cpp
 
-4. **AVIP Source Code Bugs** (SPI, JTAG):
-   - Nested block comments (SV disallows)
-   - Empty macro arguments
-   - Range out-of-bounds selections
+2. **Class Method Inlining** - Virtual method dispatch and class hierarchy not fully simulated
+   - **Impact**: Some UVM patterns may not work correctly at simulation time
 
-5. **Test Infrastructure** (AXI4Lite, I2S):
-   - AXI4Lite: No compile filelist detected
-   - I2S: Script finds wrong base directory for relative paths
+3. **Full OpenTitan IPs with Alerts** - prim_alert_sender now compiles (Mem2Reg fix)
+   - **Status**: Testing in progress (Track R)
 
-**Options to Improve**:
-- Fix I2S/AXI4Lite test infrastructure issues (quick wins)
-- Add slang compatibility flag for VirtualArgNoParentDefault (upstream change)
-- InOut interface port support (CIRCT enhancement)
+**Medium Priority Enhancements:**
+1. **AVIP bind scope support** - Allow bind to reference parent module ports
+   - Would require slang enhancement or workaround
+2. **do_compare default argument relaxation** - Strict LRM blocks common UVM pattern
+   - Would require slang relaxation flag
+
+**Test Suite Targets:**
+- sv-tests: Maintain 98%+ (currently 821/831)
+- verilator-verification: Maintain 80%+ (114/141)
+- yosys SVA: Maintain 87%+ (14/16)
+- OpenTitan: Expand from 9 register blocks to full IPs
 
 **Infrastructure:**
 - circt-sim: **LLVM dialect + FP ops + hierarchical instances** ✅ **IMPROVED (Iter 115)**
