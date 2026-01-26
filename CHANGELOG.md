@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 228 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Fix UVM report vtable dispatch
+- **Track B**: Test OpenTitan full IPs
+- **Track C**: Test AVIPs with UVM output
+- **Track D**: Analyze XFAIL tests
+
+### Track Completions
+
+- **Track A (UVM Vtable Fix)**: ✅ **IMPLEMENTED**
+  - UVM report methods called via vtable (virtual method dispatch) now intercepted
+  - Modified `CallIndirectOpConversion` in MooreToCore.cpp to trace VTableLoadMethodOp
+  - Added `convertUvmReportVtableCall()` for vtable-dispatched UVM_INFO/WARNING/ERROR/FATAL
+  - All 1356 unit tests pass
+
+- **Track B (OpenTitan IPs)**: ✅ **4/6 PASS**
+  - PASS: mbx, ascon, spi_host, usbdev (basic connectivity tests)
+  - FAIL: i2c (memory/timeout), alert_handler (delta overflow in esc_timer)
+
+- **Track C (AVIP UVM)**: ⚠️ **INCOMPLETE**
+  - Conversion to MLIR works
+  - Simulation completes at time 0 - UVM phases not executing
+  - Root cause: UVM event-driven scheduling (forks, waits) not fully supported
+
+- **Track D (XFAIL Analysis)**: ✅ **33 TESTS CATEGORIZED**
+  - 12 UVM-related (class method lowering)
+  - 3 BMC lowering (comb.mux legalization)
+  - 9 hierarchical names (interface access)
+  - 9 other (various issues)
+  - 1 potentially ready: errors-xfail.mlir
+
+### Code Changes
+
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`: Added vtable-dispatch interception for UVM report methods
+- `test/Conversion/MooreToCore/uvm-report-vtable-intercept.mlir`: New test for vtable interception
+
+---
+
 ## Iteration 227 - January 26, 2026
 
 ### Focus Areas
