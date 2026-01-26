@@ -67,7 +67,26 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 215 Update)
+### Track Status & Next Tasks (Iteration 218 Update)
+
+**Iteration 217 Results (COMPLETE):**
+- Track A: ✅ **Lit Tests: 97.73%** (2836 pass, 45 XFAIL, 0 failures)
+- Track B: ✅ **Multi-Top AVIPs Working** - APB/I2S HDL+HVL simulations, 100k+ delta cycles
+- Track C: ✅ **45 XFAILs Analyzed** - ~35% UVM-related, ~15 BMC lowering
+- Track D: ✅ **System Verified Healthy** - sv-tests 21/26, verilator 17/17
+
+**Iteration 218 Focus (IN PROGRESS):**
+- Track A: 🔄 **UVM Class Method Support** - Enable more XFAIL tests
+- Track B: 🔄 **Test Real-World AVIPs** - Continue ~/mbit/* testing
+- Track C: 🔄 **BMC Feature Completion** - expect/assume lowering
+- Track D: 🔄 **Hierarchical Names** - Interface/module name resolution
+
+**Remaining Limitations for UVM Parity (Updated Iteration 217):**
+1. **UVM Class Support** (~35% of XFAILs) - Class method lowering, ordering, virtual dispatch
+2. **BMC Feature Completion** (~15 XFAILs) - `expect`, `assume` lowering to BMC
+3. **Hierarchical Names** (~5 XFAILs) - Name resolution through module/interface instances
+4. **Interface Port Binding** - Bind statements with interface ports
+5. **slang Compatibility** (~3 XFAILs) - VCS compat features need slang patches
 
 **Iteration 215 Results (COMPLETE):**
 - Track A: ✅ **Stack Overflow Fixes Verified** - Iterative walk + cycle detection in evaluateContinuousValue

@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 218 - January 26, 2026
+
+### Focus Areas
+
+- **Track A**: Test all ~/mbit/*avip* testbenches systematically
+- **Track B**: Run comprehensive external test suites
+- **Track C**: Investigate UVM class method support for XFAILs
+- **Track D**: Test OpenTitan IPs for extended times
+
+### Track Completions
+
+- **Track A (AVIP Testing)**: ✅ **3/9 AVIPs WORKING**
+  - Working: APB, I2S, I3C (with UVM messages)
+  - Blocked: AHB/AXI4 (bind scope), UART (method signature), SPI (syntax)
+
+- **Track B (External Tests)**: ✅ **ALL BASELINES MET**
+  - sv-tests: 23/26, verilator: 17/17, yosys: 14/14, lit: 2836 pass
+
+- **Track C (UVM Support)**: ✅ **3/4 UVM TESTS ENABLEABLE**
+  - CHECK pattern updates needed for uvm_stubs, uvm-report-infrastructure, uvm-objection-test
+
+- **Track D (OpenTitan)**: ✅ **31/34 PASS** (up to 2.4ms simulation)
+  - 3 full IP crashes: i2c_tb, spi_device_tb, alert_handler_tb
+
+### Updates
+
+- **circt-sim async reset sensitivity**: Track signal dependencies for
+  `llhd.combinational` operands to catch resets sourced from external values;
+  added regression `seq-firreg-async-reset-comb.mlir`.
+- **TL-UL adapter TB**: `opentitan-tlul_adapter_reg_tb.mlir` still stalls with
+  `outstanding_q=X` and `a_ready=0` after reset; needs deeper firreg/reset
+  initialization investigation.
+
+### Remaining Limitations for UVM Parity
+
+| Category | Count | Description |
+|----------|-------|-------------|
+| UVM Class Support | ~16 | Class method lowering, virtual dispatch |
+| BMC Features | ~15 | expect/assume lowering |
+| Hierarchical Names | ~5 | Module/interface name resolution |
+| Interface Binding | ~3 | Bind with interface ports |
+| slang Compat | ~3 | VCS compatibility patches needed |
+
+---
+
 ## Iteration 217 - January 26, 2026
 
 ### Focus Areas
