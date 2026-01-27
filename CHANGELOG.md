@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 230 - January 27, 2026
+
+### Focus Areas
+
+- **Track A**: Enable errors-xfail.mlir test
+- **Track B**: Fix comb.mux LLVM type exclusion
+- **Track C**: Create SimForkOp implementation plan
+- **Track D**: Run comprehensive test verification
+
+### Track Completions
+
+- **Track A (errors-xfail.mlir)**: ✅ **ENABLED**
+  - Removed XFAIL marker
+  - Updated test to verify pass completes successfully with FileCheck
+  - Issue https://github.com/llvm/circt/issues/9398 appears fixed
+
+- **Track B (comb.mux fix)**: ✅ **IMPLEMENTED**
+  - Added check to exclude LLVM struct and pointer types from arith.select→comb.mux
+  - Fix at MooreToCore.cpp line ~18382
+  - This unblocks 63+ BMC tests that use string operations
+
+- **Track C (SimForkOp Plan)**: ✅ **DETAILED PLAN CREATED**
+  - ForkJoinManager infrastructure already exists in ProcessScheduler.h
+  - Need: interpretSimFork, interpretSimJoin handlers
+  - Need: Child process state initialization with value map copy
+  - Need: Fork group management and parent suspension
+
+- **Track D (Test Verification)**: ✅ **97.91% PASS RATE**
+  - OpenTitan mbx: PASSES
+  - sv-tests BMC: 23/23 pass
+  - Lit tests: 2854/2915 pass (5 failures, 35 expected failures)
+
+### Code Changes
+
+- `test/Dialect/FIRRTL/errors-xfail.mlir`: Removed XFAIL, added FileCheck patterns
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`: Exclude LLVM types from comb.mux conversion
+
+---
+
 ## Iteration 229 - January 26, 2026
 
 ### Focus Areas
@@ -109,6 +148,11 @@
   - Continuous assignment evaluation resolves `llhd.process` results via cached yield values
   - Added regression: `module-drive-process-result-signal.mlir`
 
+- **Track A (Process Step Budget)**: ✅ **FIXED**
+  - Process step overflow guard now scales to the process body operation count
+  - Avoids false overflows on large linear processes while still catching runaway loops
+  - Added regression: `process-step-overflow-linear.mlir`
+
 - **Track B (i2c_tb)**: ✅ **PASSES**
   - i2c_tb simulation completes successfully
   - No more infinite delta cycles
@@ -128,6 +172,8 @@
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add `inputValueMap` lookup in `registerModuleDrive()` to resolve child module inputs mapped to parent process results
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: Evaluate `llhd.process` results in continuous assignments; allow mixed process-result + signal dependencies
 - `test/Tools/circt-sim/module-drive-process-result-signal.mlir`: New regression for mixed dependencies in module-level drives
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Scale step budget by process body op count
+- `test/Tools/circt-sim/process-step-overflow-linear.mlir`: New regression for linear step budget behavior
 
 ---
 

@@ -67,19 +67,25 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 229 Update)
+### Track Status & Next Tasks (Iteration 230 Update)
+
+**Iteration 230 Results (COMPLETE):**
+- Track A: ✅ **errors-xfail.mlir Enabled** - Removed XFAIL, test now passes
+- Track B: ✅ **comb.mux LLVM Fix** - Exclude LLVM types from arith.select→comb.mux
+- Track C: ✅ **SimForkOp Plan** - Detailed implementation plan for fork/join handlers
+- Track D: ✅ **97.91% Pass Rate** - 2854/2915 lit tests, mbx passes, sv-tests 23/23
+
+**Iteration 231 Focus (NEXT):**
+- Track A: 🔄 **Implement SimForkOp handler** - Start fork/join implementation
+- Track B: 🔄 **Implement __moore_delay** - Enable delays in class methods
+- Track C: 🔄 **Fix always_comb sensitivity** - Exclude process outputs from sensitivity lists
+- Track D: 🔄 **Fix 5 failing lit tests** - module-drive-process-result-signal, etc.
 
 **Iteration 229 Results (COMPLETE):**
 - Track A: ✅ **UVM Phases Root Cause** - fork/join + __moore_delay NOT implemented in interpreter
 - Track B: ✅ **Alert Handler Root Cause** - Sensitivity list includes process outputs (simulator limit)
 - Track C: ✅ **errors-xfail.mlir Ready** - Issue fixed, can remove XFAIL marker
 - Track D: ✅ **comb.mux Root Cause** - LLVM struct types not handled by CombToSMT
-
-**Iteration 230 Focus (NEXT):**
-- Track A: 🔄 **Implement SimForkOp handler** - Enable fork/join for UVM phases
-- Track B: 🔄 **Implement __moore_delay** - Enable delays in class methods
-- Track C: 🔄 **Fix always_comb sensitivity** - Exclude process outputs from sensitivity lists
-- Track D: 🔄 **Exclude LLVM types from comb.mux** - Fix BMC for string operations
 
 **Iteration 228 Results (COMPLETE):**
 - Track A: ✅ **UVM Vtable Fix** - Virtual method dispatch for UVM reports now intercepted
