@@ -18379,6 +18379,9 @@ static void populateLegality(ConversionTarget &target,
     // Sim types are already legal and don't need conversion to comb.mux
     if (isa<sim::FormatStringType, sim::DynamicStringType>(type))
       return true;
+    // LLVM types should stay as arith.select since comb.mux doesn't support them
+    if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(type))
+      return true;
     return converter.isLegal(type);
   });
 
