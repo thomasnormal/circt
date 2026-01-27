@@ -67,14 +67,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 5. **Hierarchical Name Access** 🟡 MEDIUM:
    - ~9 XFAIL tests blocked on hierarchical names through instances
    - **Impact**: Some interface access patterns don't work
+   - **Recent Progress**: Instance output propagation and probe-driven waits now
+     pass the `llhd-child-module-drive` regression; remaining failures are
+     higher-level name resolution cases.
 
 6. **BMC LLVM Type Handling** ✅ FIXED (Iteration 230):
    - LLVM struct types now excluded from comb.mux conversion
 
-7. **Delta Overflow in Complex IPs** 🟡 MEDIUM (Investigation Ongoing):
-   - alert_handler full IP causes process-step overflow in u_reg
-   - Root cause: processes scheduled even when no signal values change
-   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+7. **Delta Overflow in Complex IPs** 🟡 MEDIUM (Root Cause Found - Iteration 234):
+   - alert_handler full IP causes process-step overflow in prim_diff_decode
+   - **ROOT CAUSE FOUND**: Transitive self-driven signal dependencies through module-level combinational logic
+     - Processes drive signals like `state_d`, `rise_o`, `fall_o`
+     - Module-level `llhd.drv` operations (e.g., `llhd.drv %gen_async.state_d, %65#0`) create feedback
+     - These signals are observed by the same process through module-level `llhd.prb`
+     - Current self-driven filtering only checks **direct** drives within process body
+   - **Fix Implemented**: Enhanced self-driven detection to include module-level
+     drives that depend on process outputs (OpenTitan validation pending)
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4651-4682 (self-driven filtering), 1044-1123 (continuous assignments)
+   - **Next Feature**: Incremental combinational evaluation/caching to avoid
+     re-walking ~6k-op reg blocks on small input changes (alert_handler).
 
 ### Test Suite Status (Iteration 233)
 
@@ -118,13 +129,22 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 233 Update)
+### Track Status & Next Tasks (Iteration 234 Update)
 
-**Iteration 234 Focus (NEXT):**
-- Track A: 🔄 **Test AVIPs with fork/join** - Verify UVM phases now execute with the fix
-- Track B: 🔄 **Investigate delta overflow** - Continue alert_handler analysis
-- Track C: 🔄 **Run external test suites** - sv-tests, verilator, yosys, OpenTitan
-- Track D: 🔄 **Fix remaining lit tests** - 7 pre-existing failures
+**Iteration 234 In Progress:**
+- Track A: 🔄 **Test AVIPs with fork/join** - Testing APB AVIP with circt-sim
+- Track B: ✅ **Delta overflow root cause** - Found transitive self-driven signal dependencies
+- Track C: ✅ **External test suites** - 23/23 sv-tests, 17/17 verilator, 14/14 yosys, OpenTitan PASS
+- Track D: 🔄 **Fix lit test failures** - Investigating sim.fork terminator issue
+- Track E: ✅ **Fix sim.fork terminator** - MooreToCore conversion handles missing terminators
+- Track F: 🔄 **OpenTitan IP verification** - Testing for regressions
+
+**Iteration 234 Findings So Far:**
+- **Delta Overflow Root Cause**: Module-level drives that depend on process outputs create feedback loops
+- **sim.fork Terminator Bug**: MooreToCore conversion now tolerates blocks
+  missing terminators by inspecting the last op and inserting
+  `sim.fork.terminator` when needed; tests updated to check terminators.
+- **External Tests**: All pass - no regressions from fork/join import
 
 **Iteration 233 Results (COMPLETE):**
 - Track A: ✅ **Fork/Join Import IMPLEMENTED** - ROOT CAUSE FIX for UVM phases
