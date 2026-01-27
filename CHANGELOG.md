@@ -1,5 +1,112 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 234 - January 27, 2026
+
+### Focus Areas
+
+- **Track A**: Test AVIPs with fork/join import fix
+- **Track B**: Investigate delta overflow root cause
+- **Track C**: Run external test suites
+- **Track D**: Fix remaining lit test failures
+- **Track E**: Fix sim.fork terminator issue
+- **Track F**: OpenTitan IP verification
+
+### Key Finding: Delta Overflow Root Cause (Track B)
+
+**Root Cause Found**: Transitive self-driven signal dependencies through module-level combinational logic.
+
+In `alert_handler`'s `prim_diff_decode` module:
+1. `llhd.process` blocks drive signals like `state_d`, `rise_o`, `fall_o`
+2. Module-level `llhd.drv` operations (e.g., `llhd.drv %gen_async.state_d, %65#0`) create feedback
+3. These signals are observed by the same process through module-level `llhd.prb`
+4. Current self-driven filtering only checks **direct** drives within process body
+5. Module-level drives that depend on process outputs are not filtered
+
+**Proposed Fix**: Enhanced Self-Driven Detection to extend filtering to include module-level drives
+that depend on process outputs. This would prevent re-triggering when a process drives a signal
+that feeds back through combinational logic.
+
+**Code Locations**:
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4651-4682 (self-driven filtering)
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 1044-1123 (continuous assignments)
+
+### Key Finding: sim.fork Terminator Bug (Track D/E)
+
+After MooreToCore conversion, `sim.fork` blocks end with `func.call_indirect` (not a terminator).
+The conversion code at `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 1769-1779 should add
+`sim.fork.terminator` but appears to not be working correctly for blocks ending with indirect calls.
+
+**Investigation Ongoing**:
+- `block.getTerminator()` behavior with non-terminator last operations
+- Check if Moore IR already missing `moore.fork.terminator`
+
+### Updates
+
+- Extended self-driven sensitivity filtering to include module-level drives
+  fed by process results; added regression test
+  `test/Tools/circt-sim/self-driven-module-drive-filter.mlir`.
+- OpenTitan: `alert_handler_reg_top` passes with `--max-cycles=5` after
+  module-drive filtering; full `alert_handler` still hits SIGKILL in sandbox.
+- MooreToCore: make fork conversion tolerant of blocks without terminators,
+  and assert `sim.fork.terminator` emission in conversion tests.
+- circt-sim: apply self-driven sensitivity filtering after probe-based
+  fallback, with regression `test/Tools/circt-sim/self-driven-fallback-filter.mlir`.
+- circt-sim: updated `test/Tools/circt-sim/llhd-child-module-drive.mlir`
+  to wait on instance output events and added a timeout, keeping it XFAIL
+  while hierarchical propagation is incomplete.
+- circt-sim: allow `getValue` to read probe results directly (enables instance
+  outputs defined via probes); added `test/Tools/circt-sim/llhd-instance-probe-read.mlir`.
+- circt-sim: track instance output signals and update waits on instance outputs;
+  `test/Tools/circt-sim/llhd-wait-instance-output.mlir` validates direct-output waits,
+  while probe-driven instance outputs remain XFAIL in
+  `test/Tools/circt-sim/llhd-child-module-drive.mlir`.
+- circt-sim: resolve probe signal ids through `resolveSignalId` so probes of
+  block arguments/instance outputs can drive waits and continuous evaluation.
+- circt-sim: include drive enable signals in continuous assignment sensitivity
+  and honor `llhd.drv` enables for module-level drives; add
+  `test/Tools/circt-sim/module-drive-enable.mlir`.
+- circt-sim: fix child module drive propagation through instance outputs; remove
+  XFAIL from `test/Tools/circt-sim/llhd-child-module-drive.mlir`.
+- circt-sim: include per-process op counts in `--process-stats` output to
+  highlight large combinational processes.
+- circt-sim: recursively flatten nested aggregate constants so 4-state packed
+  structs with nested fields preserve value/unknown bits; tighten TLUL BFM
+  default checks.
+- circt-sim: cache combinational wait sensitivities and skip re-execution when
+  inputs are unchanged; add `process-cache-skip.mlir` regression.
+- circt-sim: derive always_comb wait sensitivities from drive/yield inputs
+  before falling back to probes; add `llhd-wait-derived-sensitivity.mlir`.
+- circt-sim: cache derived always_comb sensitivities per wait op and report
+  `sens_cache=` hits in `--process-stats`; add
+  `llhd-wait-sensitivity-cache.mlir`.
+- circt-sim: reuse cached observed wait sensitivities; add
+  `llhd-wait-observed-sensitivity-cache.mlir`.
+- OpenTitan: extend alert_handler_reg_top testbench logging to include TL-UL
+  input handshake signals for debugging X propagation.
+- ImportVerilog: attach fork block variable declarations to the following fork
+  branch to avoid dominance errors; add `fork-join-decl.sv`.
+- External: verilator-verification LEC 17/17 pass after sensitivity cache changes.
+- External: yosys SVA LEC 14/14 pass (2 vhdl skips).
+- AVIP: APB compile via `run_avip_circt_verilog.sh` fails with dominance
+  errors in `uvm_phase_hopper.svh`/`uvm_objection.svh`/`uvm_sequencer_base.svh`
+  (moore.read operand dominance); needs investigation.
+
+### Track Completions
+
+- **Track B (Delta Overflow)**: ✅ **ROOT CAUSE FOUND** - See above
+- **Track C (External Tests)**: ✅ **ALL PASS**
+  - sv-tests LEC: 23/23 pass
+  - verilator-verification LEC: 17/17 pass
+  - yosys-sva LEC: 14/14 pass
+  - OpenTitan: prim_count, timer_core pass - no regressions
+
+- **Track A (AVIP Testing)**: 🔄 In Progress - Testing APB AVIP with circt-sim
+- **Track D (Lit Tests)**: 🔄 In Progress - Investigating sim.fork terminator
+- **Track E (Fix Terminator)**: 🔄 In Progress - Analyzing MooreToCore conversion
+- **Track F (OpenTitan)**: 🔄 In Progress - Running IP verification
+
+---
+
 ## Iteration 233 - January 27, 2026
 
 ### Focus Areas
@@ -162,6 +269,15 @@ The `moore.fork` operation exists and `sim.fork` handler is implemented, but:
 - `test/Tools/circt-sim/process-op-counts.mlir`: New analyze-mode op count test
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: Mark unused combinational process variable to silence warnings
 - `tools/circt-sim/circt-sim.cpp`: Add analyze-mode process body dumps
+- `tools/circt-sim/circt-sim.cpp`: Add analyze-mode per-process op breakdowns
+- `test/Tools/circt-sim/process-op-counts-breakdown.mlir`: New op breakdown test
+- `utils/alert-handler-reg-process-repro.mlir`: Truncated repro of the largest alert_handler reg process
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Fast path for wide comb.extract within low 64 bits
+- `test/Tools/circt-sim/comb-extract-wide-low.mlir`: New wide extract regression
+- `tools/circt-sim/circt-sim.cpp`: Add comb.extract bucket breakdowns in analyze mode
+- `test/Tools/circt-sim/process-op-counts-breakdown-extracts.mlir`: New extract breakdown test
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Collapse XOR with all-ones operands
+- `test/Tools/circt-sim/comb-xor-invert.mlir`: New XOR invert regression
 
 ### Key Implementation Details
 
@@ -880,6 +996,9 @@ if (calleeName == "__moore_delay") {
   end steps in non-rising mode.
 - **LEC**: LLHD signal stripping now abstracts non-dominating drive/probe cases
   to inputs instead of erroring.
+- **Test suites**: sv-tests BMC 23/26, verilator-verification BMC 17/17, yosys
+  SVA BMC 14/14 (2 VHDL skips), sv-tests LEC 23/23, verilator-verification LEC
+  17/17, yosys LEC 14/14 (2 VHDL skips).
 
 ### Bug Found & Fixed
 
