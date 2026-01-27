@@ -38,6 +38,48 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 3. **Class Method Inlining** ⚠️ MEDIUM: Virtual method dispatch and class hierarchy not fully simulated.
 
+### CRITICAL: UVM Parity Blockers (Updated Iteration 230)
+
+**For UVM testbenches to run properly, we need:**
+
+1. **Fork/Join Support** 🔴 CRITICAL (Not Implemented):
+   - `sim::SimForkOp` - Spawn concurrent processes
+   - `sim::SimJoinOp` - Wait for all forked processes
+   - `sim::SimJoinAnyOp` - Wait for any forked process
+   - `sim::SimDisableForkOp` - Terminate forked processes
+   - **Impact**: UVM phases don't execute because run_test() uses fork...join_none
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+2. **Class Method Delays** 🔴 CRITICAL (Not Implemented):
+   - `__moore_delay(int64_t)` runtime function not implemented
+   - **Impact**: UVM wait_for_objections() and timing in class methods don't work
+   - **Files**: `lib/Runtime/MooreRuntime.cpp`, `LLHDProcessInterpreter.cpp`
+
+3. **always_comb Sensitivity Lists** 🟡 HIGH (Simulator Limitation):
+   - Process outputs included in sensitivity list causing self-triggering
+   - **Impact**: alert_handler and other IPs hit delta overflow
+   - **Files**: Moore→LLHD lowering or interpreter sensitivity handling
+
+4. **Hierarchical Name Access** 🟡 MEDIUM:
+   - ~9 XFAIL tests blocked on hierarchical names through instances
+   - **Impact**: Some interface access patterns don't work
+
+5. **BMC LLVM Type Handling** ✅ FIXED (Iteration 230):
+   - LLVM struct types now excluded from comb.mux conversion
+
+### Test Suite Status (Iteration 230)
+
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Unit Tests | 1356/1356 (100%) | All pass |
+| Lit Tests | 2854/2915 (97.91%) | 5 failures, 35 XFAIL |
+| sv-tests BMC | 23/26 (88%) | 3 expected failures |
+| verilator | 17/17 (100%) | All pass |
+| yosys | 14/14 (100%) | All pass |
+| OpenTitan reg_top | 28/28 (100%) | All pass |
+| OpenTitan full IPs | 4/6 (67%) | mbx, ascon, spi_host, usbdev pass |
+| AVIPs | 3/3 compile | UVM phases don't execute (fork/join missing) |
+
 ### Concurrent Process Scheduling Root Cause Analysis (Iteration 76)
 
 **The Problem**:
