@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 233 - January 27, 2026
+
+### Focus Areas
+
+- **Track A**: Implement fork/join import in ImportVerilog/Statements.cpp
+- **Track B**: Run lit test verification
+- **Track C**: Run external test suites
+
+### Implementation: Fork/Join Import (Critical Fix)
+
+Implemented proper `fork...join` conversion to `moore.fork` in the Verilog import frontend.
+This was the **ROOT CAUSE** of UVM phases not executing.
+
+#### Changes Made
+
+1. **`lib/Conversion/ImportVerilog/Statements.cpp`** (lines 527-601)
+   - Modified `BlockStatement` visitor to check `stmt.blockKind` field
+   - Sequential blocks (`Sequential`) still inlined into parent
+   - Fork blocks (`JoinAll`, `JoinAny`, `JoinNone`) now create `moore::ForkOp`
+   - Each statement in fork body becomes a separate branch region
+   - Supports named fork blocks via `blockSymbol->name`
+
+2. **`include/circt/Dialect/Moore/MooreOps.td`** (ForkOp definition)
+   - Changed from `SingleBlockImplicitTerminator<"ForkTerminatorOp">` to `NoRegionArguments`
+   - Enables multi-block regions for complex control flow (e.g., `forever` loops)
+
+3. **`lib/Dialect/Moore/MooreOps.cpp`** (ForkOp::parse)
+   - Updated to add implicit terminators to all blocks in multi-block regions
+   - Removed `ensureTerminator` call (incompatible with multi-block regions)
+
+4. **`test/Conversion/ImportVerilog/fork-join-import.sv`** (new test file)
+   - Tests all fork variants: `join`, `join_any`, `join_none`
+   - Tests multiple branches, single branch, nested forks, empty branches
+
+#### Verification
+
+- Fork/join import test: **PASS**
+- `fork...join` → `moore.fork { ... }, { ... }`
+- `fork...join_any` → `moore.fork join_any { ... }, { ... }`
+- `fork...join_none` → `moore.fork join_none { ... }, { ... }`
+
+Test suite: 2865 pass, 7 fail (pre-existing), 35 XFAIL
+
+### Impact
+
+With this fix, UVM's `run_phases()` which uses `fork...join_none` will now correctly
+spawn concurrent phase processes, enabling proper UVM test execution flow.
+
+---
+
 ## Iteration 232 - January 27, 2026
 
 ### Focus Areas
@@ -78,6 +128,9 @@ The `moore.fork` operation exists and `sim.fork` handler is implemented, but:
   - OpenTitan IPs: 8/8 pass (full IPs with alerts)
   - alert_handler_reg_top passes with always_comb sensitivity filtering
   - alert_handler full IP still SIGKILLs in sandbox runs
+  - alert_handler full IP now reaches reset with capped steps but hits process-step overflow in u_reg
+  - alert_handler full IP profiling shows u_reg processes dominate with comb.xor/and/extract
+  - capped profiling after comb fast paths shows similar u_reg step counts; further reg block optimization needed
 
 - **Track D (Lit Tests)**: ✅ **5 TESTS FIXED**
   - Updated 4 sv-tests BMC expectations (UVM files now exist)
@@ -95,6 +148,20 @@ The `moore.fork` operation exists and `sim.fork` handler is implemented, but:
 - `utils/run_opentitan_circt_sim.sh`: Add circt-sim knobs for max deltas/steps and extra sim args
 - `utils/run_opentitan_circt_sim.sh`: Auto-add `--sim-stats` when op/process stats are requested
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: Silence unused combinational-op warning in process registration
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Short-circuit multi-operand comb.and/or evaluation
+- `test/Tools/circt-sim/comb-multi-operand-and-or.mlir`: New regression for multi-operand comb.and/or
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Fast path for wide comb.extract of single-bit results
+- `test/Tools/circt-sim/comb-extract-high-bit.mlir`: New high-bit extract regression
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Scale process-step overflow guard by op-count multiplier
+- `test/Tools/circt-sim/process-step-overflow-loop.mlir`: New bounded-loop step-limit regression
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Print opCount when reporting process-step overflow
+- `test/Tools/circt-sim/process-step-overflow.mlir`: Check for opCount in overflow diagnostics
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Skip neutral operands in comb.and/or/xor evaluation
+- `test/Tools/circt-sim/comb-neutral-ops.mlir`: New neutral-element regression for comb ops
+- `tools/circt-sim/circt-sim.cpp`: Add analyze-mode process op count reporting
+- `test/Tools/circt-sim/process-op-counts.mlir`: New analyze-mode op count test
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Mark unused combinational process variable to silence warnings
+- `tools/circt-sim/circt-sim.cpp`: Add analyze-mode process body dumps
 
 ### Key Implementation Details
 

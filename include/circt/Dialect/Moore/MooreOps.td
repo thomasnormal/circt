@@ -2682,7 +2682,7 @@ def JoinTypeAttr : I32EnumAttr<"JoinType", "Fork join type",
 
 def ForkOp : MooreOp<"fork", [
   RecursiveMemoryEffects,
-  SingleBlockImplicitTerminator<"ForkTerminatorOp">,
+  NoRegionArguments,
 ]> {
   let summary = "Spawn concurrent processes (SystemVerilog fork)";
   let description = [{

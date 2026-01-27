@@ -524,9 +524,81 @@ struct StmtVisitor {
     return success();
   }
 
-  // Inline `begin ... end` blocks into the parent.
+  // Handle `begin ... end` blocks and `fork ... join` blocks.
   LogicalResult visit(const slang::ast::BlockStatement &stmt) {
-    return context.convertStatement(stmt.body);
+    // For sequential blocks, just inline into the parent.
+    if (stmt.blockKind == slang::ast::StatementBlockKind::Sequential)
+      return context.convertStatement(stmt.body);
+
+    // For fork blocks (join, join_any, join_none), create a ForkOp.
+    // Each statement in the fork body becomes a separate parallel branch.
+
+    // Determine the join type.
+    moore::JoinType joinType;
+    switch (stmt.blockKind) {
+    case slang::ast::StatementBlockKind::JoinAll:
+      joinType = moore::JoinType::JoinAll;
+      break;
+    case slang::ast::StatementBlockKind::JoinAny:
+      joinType = moore::JoinType::JoinAny;
+      break;
+    case slang::ast::StatementBlockKind::JoinNone:
+      joinType = moore::JoinType::JoinNone;
+      break;
+    default:
+      llvm_unreachable("unexpected block kind");
+    }
+
+    // Collect the statements that will become parallel branches.
+    // The body is typically a StatementList, but could be a single statement.
+    SmallVector<const slang::ast::Statement *> forkStmts;
+    if (auto *stmtList = stmt.body.as_if<slang::ast::StatementList>()) {
+      for (auto *s : stmtList->list)
+        forkStmts.push_back(s);
+    } else {
+      // Single statement fork (unusual but valid).
+      forkStmts.push_back(&stmt.body);
+    }
+
+    // Handle empty fork (no statements) - just skip.
+    if (forkStmts.empty())
+      return success();
+
+    // Get optional block name.
+    mlir::StringAttr nameAttr;
+    if (stmt.blockSymbol && !stmt.blockSymbol->name.empty())
+      nameAttr = builder.getStringAttr(stmt.blockSymbol->name);
+
+    // Create the ForkOp with the appropriate number of branches.
+    auto forkOp = moore::ForkOp::create(builder, loc, joinType, nameAttr,
+                                        forkStmts.size());
+
+    // Populate each branch region with its corresponding statement.
+    for (size_t i = 0; i < forkStmts.size(); ++i) {
+      auto &region = forkOp.getBranches()[i];
+      // Create entry block if not present.
+      if (region.empty())
+        region.emplaceBlock();
+
+      // Set insertion point to the branch region and convert the statement.
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToEnd(&region.front());
+
+      if (failed(context.convertStatement(*forkStmts[i])))
+        return failure();
+
+      // After converting the statement, check all blocks in the region.
+      // Add terminators to blocks that don't have one.
+      // With control flow (cf.br), some blocks may already be terminated.
+      for (auto &block : region) {
+        builder.setInsertionPointToEnd(&block);
+        if (block.empty() ||
+            !block.back().hasTrait<mlir::OpTrait::IsTerminator>())
+          moore::ForkTerminatorOp::create(builder, loc);
+      }
+    }
+
+    return success();
   }
 
   // Handle expression statements.

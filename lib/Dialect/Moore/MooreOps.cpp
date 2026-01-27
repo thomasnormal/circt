@@ -2263,9 +2263,17 @@ ParseResult ForkOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
 
-  // Add implicit terminators to each branch
-  for (Region *branch : branches)
-    ensureTerminator(*branch, builder, result.location);
+  // Add implicit terminators to blocks that don't have one.
+  // This provides compatibility with both single-block and multi-block regions.
+  for (Region *branch : branches) {
+    for (Block &block : *branch) {
+      if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>()) {
+        OpBuilder termBuilder(builder.getContext());
+        termBuilder.setInsertionPointToEnd(&block);
+        ForkTerminatorOp::create(termBuilder, result.location);
+      }
+    }
+  }
 
   return success();
 }
