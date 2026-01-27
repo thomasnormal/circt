@@ -37,13 +37,32 @@ using namespace circt::sim;
 
 static bool getSignalInitValue(Value initValue, unsigned width,
                                llvm::APInt &outValue);
+static size_t countRegionOps(mlir::Region &region);
+
+static bool getMaskedUInt64(const InterpretedValue &value,
+                            unsigned targetWidth, uint64_t &out) {
+  if (value.isX() || targetWidth > 64)
+    return false;
+  uint64_t v = value.getUInt64();
+  unsigned width = value.getWidth();
+  if (width < 64) {
+    uint64_t mask = (width == 64) ? ~0ULL : ((1ULL << width) - 1);
+    v &= mask;
+  }
+  if (targetWidth < 64) {
+    uint64_t mask = (targetWidth == 64) ? ~0ULL : ((1ULL << targetWidth) - 1);
+    v &= mask;
+  }
+  out = v;
+  return true;
+}
 
 //===----------------------------------------------------------------------===//
 // LLHDProcessInterpreter Implementation
 //===----------------------------------------------------------------------===//
 
 LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
-    : scheduler(scheduler) {}
+    : scheduler(scheduler), forkJoinManager(scheduler) {}
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os << "[circt-sim] Process states:\n";
@@ -65,6 +84,69 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
     os << "\n";
   }
   os.flush();
+}
+
+void LLHDProcessInterpreter::dumpOpStats(llvm::raw_ostream &os,
+                                         size_t topN) const {
+  if (opStats.empty())
+    return;
+
+  llvm::SmallVector<std::pair<llvm::StringRef, uint64_t>, 16> entries;
+  entries.reserve(opStats.size());
+  for (const auto &entry : opStats)
+    entries.push_back({entry.getKey(), entry.getValue()});
+
+  llvm::sort(entries, [](const auto &lhs, const auto &rhs) {
+    if (lhs.second != rhs.second)
+      return lhs.second > rhs.second;
+    return lhs.first < rhs.first;
+  });
+
+  os << "\n=== Op Stats (top " << topN << ") ===\n";
+  size_t limit = std::min(topN, entries.size());
+  for (size_t i = 0; i < limit; ++i) {
+    os << entries[i].first << ": " << entries[i].second << "\n";
+  }
+  os << "========================\n";
+}
+
+void LLHDProcessInterpreter::dumpProcessStats(llvm::raw_ostream &os,
+                                              size_t topN) const {
+  if (processStates.empty())
+    return;
+
+  struct ProcEntry {
+    ProcessId id;
+    uint64_t steps;
+    llvm::StringRef name;
+  };
+
+  llvm::SmallVector<ProcEntry, 16> entries;
+  entries.reserve(processStates.size());
+  for (const auto &entry : processStates) {
+    ProcessId procId = entry.first;
+    const ProcessExecutionState &state = entry.second;
+    llvm::StringRef name;
+    if (const Process *proc = scheduler.getProcess(procId))
+      name = proc->getName();
+    entries.push_back({procId, state.totalSteps, name});
+  }
+
+  llvm::sort(entries, [](const ProcEntry &lhs, const ProcEntry &rhs) {
+    if (lhs.steps != rhs.steps)
+      return lhs.steps > rhs.steps;
+    return lhs.id < rhs.id;
+  });
+
+  os << "\n=== Process Stats (top " << topN << ") ===\n";
+  size_t limit = std::min(topN, entries.size());
+  for (size_t i = 0; i < limit; ++i) {
+    os << "proc " << entries[i].id;
+    if (!entries[i].name.empty())
+      os << " '" << entries[i].name << "'";
+    os << " steps=" << entries[i].steps << "\n";
+  }
+  os << "===========================\n";
 }
 
 LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
@@ -343,6 +425,25 @@ static APInt flattenAggregateConstant(hw::AggregateConstantOp aggConstOp) {
   }
 
   return result;
+}
+
+static size_t countRegionOps(mlir::Region &region) {
+  llvm::SmallVector<mlir::Region *, 16> regionWorklist;
+  regionWorklist.push_back(&region);
+  size_t count = 0;
+
+  while (!regionWorklist.empty()) {
+    mlir::Region *curRegion = regionWorklist.pop_back_val();
+    for (mlir::Block &block : *curRegion) {
+      for (mlir::Operation &op : block) {
+        ++count;
+        for (mlir::Region &nested : op.getRegions())
+          regionWorklist.push_back(&nested);
+      }
+    }
+  }
+
+  return count;
 }
 
 /// Extract an initial APInt value from a signal init operand if possible.
@@ -960,6 +1061,10 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
 
     llvm::SmallVector<ProcessId, 4> processIds;
     collectProcessIds(driveOp.getValue(), processIds);
+
+    llvm::SmallVector<SignalId, 4> sourceSignals;
+    collectSignalIds(driveOp.getValue(), sourceSignals);
+
     if (!processIds.empty()) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  Continuous assignment depends on "
@@ -975,11 +1080,7 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
         if (!alreadyRegistered)
           moduleDrives.push_back({driveOp, procId});
       }
-      continue;
     }
-
-    llvm::SmallVector<SignalId, 4> sourceSignals;
-    collectSignalIds(driveOp.getValue(), sourceSignals);
 
     if (sourceSignals.empty() && processIds.empty()) {
       // No source signals - this is a constant drive, execute once at init
@@ -987,6 +1088,11 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
                  << "  Constant continuous assignment to signal " << targetSigId
                  << "\n");
       executeContinuousAssignment(driveOp);
+      continue;
+    }
+
+    if (sourceSignals.empty()) {
+      // Process-result-only drive; updates are handled on process yields.
       continue;
     }
 
@@ -1453,6 +1559,22 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
   }
 
+  if (auto result = dyn_cast<OpResult>(value)) {
+    if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
+      auto procIt = opToProcessId.find(processOp.getOperation());
+      if (procIt != opToProcessId.end()) {
+        auto stateIt = processStates.find(procIt->second);
+        if (stateIt != processStates.end()) {
+          auto &valueMap = stateIt->second.valueMap;
+          auto valIt = valueMap.find(result);
+          if (valIt != valueMap.end())
+            return valIt->second;
+        }
+      }
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+    }
+  }
+
   // Handle constants
   if (auto constOp = value.getDefiningOp<hw::ConstantOp>()) {
     return InterpretedValue(constOp.getValue());
@@ -1825,6 +1947,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   // Execute operations until we suspend or halt
   size_t stepCount = 0;
+  size_t stepLimit = maxProcessSteps > 0 ? maxProcessSteps : 0;
   while (!state.halted && !state.waiting) {
     ++stepCount;
     LLVM_DEBUG({
@@ -1836,12 +1959,23 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         llvm::dbgs() << "\n";
       }
     });
-    if (maxProcessSteps > 0 && stepCount > maxProcessSteps) {
+    if (stepLimit > 0 && stepCount > stepLimit) {
+      if (state.opCount == 0) {
+        if (auto processOp = state.getProcessOp()) {
+          state.opCount = countRegionOps(processOp.getBody());
+        } else if (auto initialOp = state.getInitialOp()) {
+          state.opCount = countRegionOps(initialOp.getBody());
+        }
+        if (state.opCount > stepLimit) {
+          stepLimit = state.opCount;
+          continue;
+        }
+      }
       llvm::errs() << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW): process "
                    << procId;
       if (auto *proc = scheduler.getProcess(procId))
         llvm::errs() << " '" << proc->getName() << "'";
-      llvm::errs() << " exceeded " << maxProcessSteps << " steps";
+      llvm::errs() << " exceeded " << stepLimit << " steps";
       if (state.lastOp)
         llvm::errs() << " (lastOp=" << state.lastOp->getName().getStringRef()
                      << ")";
@@ -1874,6 +2008,8 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
   ++state.currentOp;
   state.lastOp = op;
   ++state.totalSteps;
+  if (collectOpStats)
+    ++opStats[op->getName().getStringRef()];
 
   LLVM_DEBUG(llvm::dbgs() << "  Executing: " << *op << "\n");
 
@@ -2025,6 +2161,25 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto terminateOp = dyn_cast<sim::TerminateOp>(op))
     return interpretTerminate(procId, terminateOp);
 
+  // Sim dialect operations - for fork/join support
+  if (auto forkOp = dyn_cast<sim::SimForkOp>(op))
+    return interpretSimFork(procId, forkOp);
+
+  if (auto forkTermOp = dyn_cast<sim::SimForkTerminatorOp>(op))
+    return interpretSimForkTerminator(procId, forkTermOp);
+
+  if (auto joinOp = dyn_cast<sim::SimJoinOp>(op))
+    return interpretSimJoin(procId, joinOp);
+
+  if (auto joinAnyOp = dyn_cast<sim::SimJoinAnyOp>(op))
+    return interpretSimJoinAny(procId, joinAnyOp);
+
+  if (auto waitForkOp = dyn_cast<sim::SimWaitForkOp>(op))
+    return interpretSimWaitFork(procId, waitForkOp);
+
+  if (auto disableForkOp = dyn_cast<sim::SimDisableForkOp>(op))
+    return interpretSimDisableFork(procId, disableForkOp);
+
   // Seq dialect operations - seq.yield terminates seq.initial blocks
   if (auto yieldOp = dyn_cast<seq::YieldOp>(op))
     return interpretSeqYield(procId, yieldOp);
@@ -2160,6 +2315,24 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto andOp = dyn_cast<comb::AndOp>(op)) {
     unsigned targetWidth = getTypeWidth(andOp.getType());
+    if (targetWidth <= 64) {
+      uint64_t result = ~0ULL;
+      for (Value operand : andOp.getOperands()) {
+        InterpretedValue value = getValue(procId, operand);
+        uint64_t operandVal = 0;
+        if (!getMaskedUInt64(value, targetWidth, operandVal)) {
+          setValue(procId, andOp.getResult(),
+                   InterpretedValue::makeX(targetWidth));
+          return success();
+        }
+        result &= operandVal;
+      }
+      if (targetWidth < 64)
+        result &= (1ULL << targetWidth) - 1;
+      setValue(procId, andOp.getResult(),
+               InterpretedValue(result, targetWidth));
+      return success();
+    }
     llvm::APInt result(targetWidth, 0);
     result.setAllBits(); // Start with all 1s for AND
     for (Value operand : andOp.getOperands()) {
@@ -2183,6 +2356,24 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto orOp = dyn_cast<comb::OrOp>(op)) {
     unsigned targetWidth = getTypeWidth(orOp.getType());
+    if (targetWidth <= 64) {
+      uint64_t result = 0;
+      for (Value operand : orOp.getOperands()) {
+        InterpretedValue value = getValue(procId, operand);
+        uint64_t operandVal = 0;
+        if (!getMaskedUInt64(value, targetWidth, operandVal)) {
+          setValue(procId, orOp.getResult(),
+                   InterpretedValue::makeX(targetWidth));
+          return success();
+        }
+        result |= operandVal;
+      }
+      if (targetWidth < 64)
+        result &= (1ULL << targetWidth) - 1;
+      setValue(procId, orOp.getResult(),
+               InterpretedValue(result, targetWidth));
+      return success();
+    }
     llvm::APInt result(targetWidth, 0); // Start with all 0s for OR
     for (Value operand : orOp.getOperands()) {
       InterpretedValue value = getValue(procId, operand);
@@ -2205,6 +2396,24 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto xorOp = dyn_cast<comb::XorOp>(op)) {
     unsigned targetWidth = getTypeWidth(xorOp.getType());
+    if (targetWidth <= 64) {
+      uint64_t result = 0;
+      for (Value operand : xorOp.getOperands()) {
+        InterpretedValue value = getValue(procId, operand);
+        uint64_t operandVal = 0;
+        if (!getMaskedUInt64(value, targetWidth, operandVal)) {
+          setValue(procId, xorOp.getResult(),
+                   InterpretedValue::makeX(targetWidth));
+          return success();
+        }
+        result ^= operandVal;
+      }
+      if (targetWidth < 64)
+        result &= (1ULL << targetWidth) - 1;
+      setValue(procId, xorOp.getResult(),
+               InterpretedValue(result, targetWidth));
+      return success();
+    }
     llvm::APInt result(targetWidth, 0); // Start with all 0s for XOR
     for (Value operand : xorOp.getOperands()) {
       InterpretedValue value = getValue(procId, operand);
@@ -2518,6 +2727,14 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     if (lowBit + width > input.getWidth()) {
       setValue(procId, extractOp.getResult(),
                InterpretedValue::makeX(getTypeWidth(extractOp.getType())));
+      return success();
+    }
+    if (width <= 64 && input.getWidth() <= 64) {
+      uint64_t inputVal = input.getUInt64();
+      uint64_t mask = (width == 64) ? ~0ULL : ((1ULL << width) - 1);
+      uint64_t result = (inputVal >> lowBit) & mask;
+      setValue(procId, extractOp.getResult(),
+               InterpretedValue(result, width));
       return success();
     }
     llvm::APInt result = input.getAPInt().lshr(lowBit).trunc(width);
@@ -5396,6 +5613,202 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
 }
 
 //===----------------------------------------------------------------------===//
+// Fork/Join Operation Handlers
+//===----------------------------------------------------------------------===//
+
+LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
+                                                        sim::SimForkOp forkOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork with "
+                          << forkOp.getBranches().size() << " branches, join_type="
+                          << forkOp.getJoinType() << "\n");
+
+  // Parse the join type
+  ForkJoinType joinType = parseForkJoinType(forkOp.getJoinType());
+
+  // Create a fork group
+  ForkId forkId = forkJoinManager.createFork(procId, joinType);
+
+  // Store the fork ID as the handle result (used by join/disable_fork)
+  setValue(procId, forkOp.getHandle(), InterpretedValue(forkId, 64));
+
+  // Create a child process for each branch region
+  for (auto [idx, branch] : llvm::enumerate(forkOp.getBranches())) {
+    if (branch.empty())
+      continue;
+
+    // Generate a unique name for the child process
+    std::string childName = "fork_" + std::to_string(forkId) + "_branch_" +
+                            std::to_string(idx);
+
+    // Register the child process with the scheduler
+    ProcessId childId = scheduler.registerProcess(childName, []() {});
+
+    // Create execution state for the child process
+    ProcessExecutionState childState;
+    childState.currentBlock = &branch.front();
+    childState.currentOp = childState.currentBlock->begin();
+    childState.isInitialBlock = false; // Fork branches are not initial blocks
+
+    // Copy value mappings from parent to child for values defined outside the fork
+    // This allows child processes to access parent's local variables
+    auto &parentState = processStates[procId];
+    childState.valueMap = parentState.valueMap;
+
+    // Store the child state
+    processStates[childId] = std::move(childState);
+
+    // Set up the callback to execute the child process
+    if (auto *proc = scheduler.getProcess(childId))
+      proc->setCallback([this, childId]() { executeProcess(childId); });
+
+    // Add the child to the fork group
+    forkJoinManager.addChildToFork(forkId, childId);
+
+    // Schedule the child process for execution
+    scheduler.scheduleProcess(childId, SchedulingRegion::Active);
+
+    LLVM_DEBUG(llvm::dbgs() << "    Created child process " << childId
+                            << " for branch " << idx << "\n");
+  }
+
+  // Handle different join types
+  switch (joinType) {
+  case ForkJoinType::JoinNone:
+    // Parent continues immediately - no waiting
+    LLVM_DEBUG(llvm::dbgs() << "    join_none: parent continues immediately\n");
+    return success();
+
+  case ForkJoinType::Join:
+  case ForkJoinType::JoinAny: {
+    // Check if fork is already complete (e.g., no branches)
+    if (forkJoinManager.join(forkId)) {
+      LLVM_DEBUG(llvm::dbgs() << "    Fork already complete, continuing\n");
+      return success();
+    }
+
+    // Suspend the parent process until fork completes
+    auto &state = processStates[procId];
+    state.waiting = true;
+
+    // The ForkJoinManager will resume the parent when appropriate
+    // (all children for join, any child for join_any)
+    Process *parentProc = scheduler.getProcess(procId);
+    if (parentProc)
+      parentProc->setState(ProcessState::Waiting);
+
+    LLVM_DEBUG(llvm::dbgs() << "    Parent suspended waiting for fork\n");
+    return success();
+  }
+  }
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretSimForkTerminator(
+    ProcessId procId, sim::SimForkTerminatorOp termOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork.terminator\n");
+
+  // Mark this forked child process as complete
+  forkJoinManager.markChildComplete(procId);
+
+  // Mark the process as halted
+  auto &state = processStates[procId];
+  state.halted = true;
+
+  // Terminate the process in the scheduler
+  scheduler.terminateProcess(procId);
+
+  LLVM_DEBUG(llvm::dbgs() << "    Fork branch " << procId << " completed\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretSimJoin(ProcessId procId,
+                                                        sim::SimJoinOp joinOp) {
+  // Get the fork handle
+  InterpretedValue handleVal = getValue(procId, joinOp.getHandle());
+  ForkId forkId = static_cast<ForkId>(handleVal.getUInt64());
+
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.join for fork " << forkId << "\n");
+
+  // Check if the fork is complete
+  if (forkJoinManager.join(forkId)) {
+    LLVM_DEBUG(llvm::dbgs() << "    Fork already complete\n");
+    return success();
+  }
+
+  // Suspend the process until fork completes
+  auto &state = processStates[procId];
+  state.waiting = true;
+
+  Process *proc = scheduler.getProcess(procId);
+  if (proc)
+    proc->setState(ProcessState::Waiting);
+
+  LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting for fork to complete\n");
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretSimJoinAny(
+    ProcessId procId, sim::SimJoinAnyOp joinAnyOp) {
+  // Get the fork handle
+  InterpretedValue handleVal = getValue(procId, joinAnyOp.getHandle());
+  ForkId forkId = static_cast<ForkId>(handleVal.getUInt64());
+
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.join_any for fork " << forkId << "\n");
+
+  // Check if any child has completed
+  if (forkJoinManager.joinAny(forkId)) {
+    LLVM_DEBUG(llvm::dbgs() << "    At least one child already complete\n");
+    return success();
+  }
+
+  // Suspend the process until any child completes
+  auto &state = processStates[procId];
+  state.waiting = true;
+
+  Process *proc = scheduler.getProcess(procId);
+  if (proc)
+    proc->setState(ProcessState::Waiting);
+
+  LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting for any child to complete\n");
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretSimWaitFork(
+    ProcessId procId, sim::SimWaitForkOp waitForkOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.wait_fork\n");
+
+  // Check if all child processes of this parent are complete
+  if (forkJoinManager.waitFork(procId)) {
+    LLVM_DEBUG(llvm::dbgs() << "    All child processes already complete\n");
+    return success();
+  }
+
+  // Suspend the process until all children complete
+  auto &state = processStates[procId];
+  state.waiting = true;
+
+  Process *proc = scheduler.getProcess(procId);
+  if (proc)
+    proc->setState(ProcessState::Waiting);
+
+  LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting for all children\n");
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
+    ProcessId procId, sim::SimDisableForkOp disableForkOp) {
+  LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.disable_fork\n");
+
+  // Disable all fork groups created by this process
+  forkJoinManager.disableAllForks(procId);
+
+  LLVM_DEBUG(llvm::dbgs() << "    All child processes disabled\n");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Seq Dialect Operation Handlers
 //===----------------------------------------------------------------------===//
 
@@ -6197,6 +6610,63 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_uvm_report_summarize") {
       __moore_uvm_report_summarize();
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_report_summarize()\n");
+      return success();
+    }
+
+    // Handle __moore_delay - delay in class method context
+    // This is called when a #delay statement appears in a class task/method.
+    // Since we're inside a function call stack, we can't easily suspend the
+    // process. Instead, we schedule the delay and advance simulation time
+    // synchronously. This is correct for single-threaded test phases in UVM.
+    if (calleeName == "__moore_delay") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue delayArg = getValue(procId, callOp.getOperand(0));
+        int64_t delayFs = delayArg.isX() ? 0 : static_cast<int64_t>(delayArg.getUInt64());
+
+        if (delayFs > 0) {
+          SimTime currentTime = scheduler.getCurrentTime();
+          SimTime targetTime = currentTime.advanceTime(delayFs);
+
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(" << delayFs
+                                  << " fs) from time " << currentTime.realTime
+                                  << " to " << targetTime.realTime << "\n");
+
+          // Schedule a marker event at the target time.
+          // Use a flag to track when the delay completes.
+          bool delayCompleted = false;
+          scheduler.getEventScheduler().schedule(
+              targetTime, SchedulingRegion::Active,
+              Event([&delayCompleted]() {
+                delayCompleted = true;
+              }));
+
+          // Process events until our delay completes.
+          // This implements a blocking delay within the function context.
+          // We use scheduler.advanceTime() which processes events and advances
+          // simulation time following IEEE 1800 semantics.
+          while (!delayCompleted && !terminationRequested) {
+            // Check if simulation is complete (no more events)
+            if (scheduler.getEventScheduler().isComplete()) {
+              // No more events - this shouldn't happen since we scheduled one
+              LLVM_DEBUG(llvm::dbgs() << "  __moore_delay: WARNING - no events, "
+                                      << "delay may not have completed\n");
+              break;
+            }
+            // Advance time and process events
+            if (!scheduler.advanceTime()) {
+              // No progress was made - check if we've reached target time
+              if (scheduler.getCurrentTime() >= targetTime) {
+                break;
+              }
+            }
+          }
+
+          LLVM_DEBUG(llvm::dbgs() << "  __moore_delay: completed, now at time "
+                                  << scheduler.getCurrentTime().realTime << " fs\n");
+        } else {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(0) - no delay\n");
+        }
+      }
       return success();
     }
 

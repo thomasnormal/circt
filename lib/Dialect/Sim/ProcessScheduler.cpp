@@ -271,6 +271,14 @@ void ProcessScheduler::recordSignalChange(SignalId signalId) {
     signalsChangedThisDelta.push_back(signalId);
 }
 
+void ProcessScheduler::recordTriggerSignal(ProcessId id, SignalId signalId) {
+  pendingTriggerSignals[id] = signalId;
+}
+
+void ProcessScheduler::recordTriggerTime(ProcessId id) {
+  pendingTriggerTimes.insert(id);
+}
+
 void ProcessScheduler::dumpLastDeltaSignals(llvm::raw_ostream &os) const {
   os << "[circt-sim] Signals changed in last delta:\n";
   if (lastDeltaSignals.empty()) {
@@ -316,7 +324,34 @@ void ProcessScheduler::dumpLastDeltaProcesses(llvm::raw_ostream &os) const {
       os << "  proc " << procId << ": <missing>\n";
       continue;
     }
-    os << "  proc " << procId << " '" << procIt->second->getName() << "'\n";
+    Process *proc = procIt->second.get();
+    llvm::StringRef name = proc->getName();
+    os << "  proc " << procId << " '" << name << "' state="
+       << getProcessStateName(proc->getState());
+    if (proc->isCombinational())
+      os << " comb";
+
+    auto trigIt = lastDeltaTriggerSignals.find(procId);
+    if (trigIt != lastDeltaTriggerSignals.end()) {
+      SignalId signalId = trigIt->second;
+      os << " trigger=signal(" << signalId;
+      auto sigIt = signalNames.find(signalId);
+      if (sigIt != signalNames.end())
+        os << ":" << sigIt->second;
+      os << ")";
+    } else if (lastDeltaTriggerTimes.count(procId)) {
+      os << " trigger=time";
+    }
+
+    if (name.consume_front("cont_assign_")) {
+      unsigned signalId = 0;
+      if (!name.getAsInteger(10, signalId)) {
+        auto sigIt = signalNames.find(signalId);
+        if (sigIt != signalNames.end())
+          os << " signal=" << sigIt->second;
+      }
+    }
+    os << "\n";
   }
 }
 
@@ -350,6 +385,7 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
       if (proc->getWaitingSensitivity().isTriggeredBy(signalId, oldVal,
                                                        newVal)) {
         proc->clearWaiting();
+        recordTriggerSignal(procId, signalId);
         scheduleProcess(procId, proc->getPreferredRegion());
         LLVM_DEBUG(llvm::dbgs()
                    << "Process " << procId << " triggered from waiting state\n");
@@ -359,6 +395,7 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
 
     // For suspended/ready processes, check the main sensitivity list
     if (proc->getSensitivityList().isTriggeredBy(signalId, oldVal, newVal)) {
+      recordTriggerSignal(procId, signalId);
       scheduleProcess(procId, proc->getPreferredRegion());
       LLVM_DEBUG(llvm::dbgs() << "Process " << procId << " triggered\n");
     }
@@ -454,6 +491,7 @@ void ProcessScheduler::resumeProcess(ProcessId id) {
     return;
 
   proc->clearWaiting();
+  recordTriggerTime(id);
   scheduleProcess(id, proc->getPreferredRegion());
 
   LLVM_DEBUG(llvm::dbgs() << "Resumed process " << id << "\n");
@@ -490,6 +528,8 @@ bool ProcessScheduler::executeDeltaCycle() {
   signalsChangedThisDelta.clear();
   signalsChangedThisDeltaSet.clear();
   processesExecutedThisDelta.clear();
+  triggerSignalsThisDelta.clear();
+  triggerTimesThisDelta.clear();
 
   // Process all regions in order
   for (size_t regionIdx = 0;
@@ -505,6 +545,8 @@ bool ProcessScheduler::executeDeltaCycle() {
     ++currentDeltaCount;
     lastDeltaSignals = signalsChangedThisDelta;
     lastDeltaProcesses = processesExecutedThisDelta;
+    lastDeltaTriggerSignals = triggerSignalsThisDelta;
+    lastDeltaTriggerTimes = triggerTimesThisDelta;
 
     // Check for infinite loop
     if (currentDeltaCount >= config.maxDeltaCycles) {
@@ -536,6 +578,14 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
 
     if (proc->getState() == ProcessState::Terminated)
       continue;
+
+    auto pendingSignalIt = pendingTriggerSignals.find(id);
+    if (pendingSignalIt != pendingTriggerSignals.end()) {
+      triggerSignalsThisDelta[id] = pendingSignalIt->second;
+      pendingTriggerSignals.erase(pendingSignalIt);
+    }
+    if (pendingTriggerTimes.erase(id))
+      triggerTimesThisDelta.insert(id);
 
     LLVM_DEBUG(llvm::dbgs() << "Executing process " << id << " ('"
                             << proc->getName() << "') in region "
@@ -718,6 +768,12 @@ void ProcessScheduler::reset() {
   lastDeltaSignals.clear();
   processesExecutedThisDelta.clear();
   lastDeltaProcesses.clear();
+  pendingTriggerSignals.clear();
+  pendingTriggerTimes.clear();
+  triggerSignalsThisDelta.clear();
+  lastDeltaTriggerSignals.clear();
+  triggerTimesThisDelta.clear();
+  lastDeltaTriggerTimes.clear();
 
   LLVM_DEBUG(llvm::dbgs() << "ProcessScheduler reset\n");
 }

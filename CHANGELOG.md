@@ -1,5 +1,71 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 231 - January 27, 2026
+
+### Focus Areas
+
+- **Track A**: Implement SimForkOp handler for fork/join support
+- **Track B**: Implement __moore_delay runtime function
+- **Track C**: Run external test suites verification
+- **Track D**: Fix failing lit tests
+
+### Track Completions
+
+- **Track A (SimForkOp)**: ✅ **IMPLEMENTED**
+  - Added interpretSimFork, interpretSimForkTerminator handlers
+  - Added interpretSimJoin, interpretSimJoinAny, interpretSimWaitFork, interpretSimDisableFork
+  - Fork creates child processes with copied value maps
+  - ForkJoinManager tracks fork groups for synchronization
+  - UVM phases can now spawn concurrent processes
+
+- **Track B (__moore_delay)**: ✅ **IMPLEMENTED**
+  - Added handler in interpretLLVMCall for `__moore_delay(int64_t)`
+  - Schedules event at target time and waits for completion
+  - Enables delays in class methods (used by UVM sequences)
+  - Test: `test/circt-sim/llhd-process-moore-delay.mlir`
+
+- **Track C (External Tests)**: ✅ **ALL PASSING**
+  - sv-tests BMC: 23/26 pass (3 expected failures)
+  - verilator-verification: 17/17 pass
+  - yosys-sva: 14/14 pass
+  - OpenTitan IPs: 8/8 pass (full IPs with alerts)
+
+- **Track D (Lit Tests)**: ✅ **5 TESTS FIXED**
+  - Updated 4 sv-tests BMC expectations (UVM files now exist)
+  - Fixed self-driven-sensitivity-filter.mlir syntax
+
+### Code Changes
+
+- `tools/circt-sim/LLHDProcessInterpreter.h`: Fork/join handler declarations, diagnostics
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: SimForkOp/JoinOp implementation, __moore_delay
+- `test/Tools/circt-sim/fork-join-basic.mlir`: New fork/join test
+- `test/Tools/circt-sim/fork-join-wait.mlir`: New wait_fork test
+
+### Key Implementation Details
+
+**SimForkOp Handler:**
+```cpp
+// For each region in the fork op, create a child process
+for (auto &region : forkOp.getRegions()) {
+  ProcessId childId = createChildProcess(procId, region);
+  forkJoinManager.addToForkGroup(forkGroupId, childId);
+  scheduler.scheduleProcess(childId);
+}
+// Parent waits for fork group to complete
+```
+
+**__moore_delay Handler:**
+```cpp
+if (calleeName == "__moore_delay") {
+  int64_t delayFs = delayArg.getUInt64();
+  SimTime targetTime = scheduler.getCurrentTime().advanceTime(delayFs);
+  scheduler.getEventScheduler().schedule(targetTime, ...);
+  // Wait for delay event
+}
+```
+
+---
+
 ## Iteration 230 - January 27, 2026
 
 ### Focus Areas
@@ -149,9 +215,24 @@
   - Added regression: `module-drive-process-result-signal.mlir`
 
 - **Track A (Process Step Budget)**: ✅ **FIXED**
-  - Process step overflow guard now scales to the process body operation count
+  - Process step overflow guard now scales to the process body operation count (computed lazily on overflow)
   - Avoids false overflows on large linear processes while still catching runaway loops
   - Added regression: `process-step-overflow-linear.mlir`
+
+- **Track A (Op Stats)**: ✅ **ADDED**
+  - Added `--op-stats` and `--op-stats-top` to print top operation counts
+  - Helps profile large combinational processes during sim runs
+  - Collection is enabled only when `--op-stats` is requested
+  - Added regression: `op-stats.mlir`
+
+- **Track A (Process Stats)**: ✅ **ADDED**
+  - Added `--process-stats` and `--process-stats-top` to print per-process step counts
+  - Helps identify hot LLHD processes in large designs
+  - Added regression: `process-stats.mlir`
+
+- **Track A (Comb Fast Path)**: ✅ **ADDED**
+  - Fast-path 64-bit `comb.and/or/xor/extract` in the interpreter
+  - Reduces APInt overhead in large combinational processes
 
 - **Track B (i2c_tb)**: ✅ **PASSES**
   - i2c_tb simulation completes successfully
@@ -174,6 +255,13 @@
 - `test/Tools/circt-sim/module-drive-process-result-signal.mlir`: New regression for mixed dependencies in module-level drives
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: Scale step budget by process body op count
 - `test/Tools/circt-sim/process-step-overflow-linear.mlir`: New regression for linear step budget behavior
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Track and report operation execution counts
+- `tools/circt-sim/circt-sim.cpp`: Add op stats CLI flags and reporting hook
+- `test/Tools/circt-sim/op-stats.mlir`: New regression for op stats output
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add per-process step reporting
+- `tools/circt-sim/circt-sim.cpp`: Add process stats CLI flags and reporting hook
+- `test/Tools/circt-sim/process-stats.mlir`: New regression for process stats output
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Add 64-bit fast paths for comb ops
 
 ---
 

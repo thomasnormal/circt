@@ -872,6 +872,12 @@ private:
   /// Record a signal change for delta-cycle diagnostics.
   void recordSignalChange(SignalId signalId);
 
+  /// Record a signal-triggered schedule for delta-cycle diagnostics.
+  void recordTriggerSignal(ProcessId id, SignalId signalId);
+
+  /// Record a time-triggered schedule for delta-cycle diagnostics.
+  void recordTriggerTime(ProcessId id);
+
   /// Execute processes in the ready queue for a specific region.
   size_t executeReadyProcesses(SchedulingRegion region);
 
@@ -920,6 +926,12 @@ private:
 
   llvm::SmallVector<ProcessId, 32> processesExecutedThisDelta;
   llvm::SmallVector<ProcessId, 32> lastDeltaProcesses;
+  llvm::DenseMap<ProcessId, SignalId> pendingTriggerSignals;
+  llvm::DenseSet<ProcessId> pendingTriggerTimes;
+  llvm::DenseMap<ProcessId, SignalId> triggerSignalsThisDelta;
+  llvm::DenseMap<ProcessId, SignalId> lastDeltaTriggerSignals;
+  llvm::DenseSet<ProcessId> triggerTimesThisDelta;
+  llvm::DenseSet<ProcessId> lastDeltaTriggerTimes;
 
   // Static signal for unknown values
   static SignalValue unknownSignal;

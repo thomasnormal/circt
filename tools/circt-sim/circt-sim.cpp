@@ -199,6 +199,26 @@ static llvm::cl::opt<bool>
                llvm::cl::init(false), llvm::cl::cat(debugCategory));
 
 static llvm::cl::opt<bool>
+    printOpStats("op-stats",
+                 llvm::cl::desc("Print operation execution statistics"),
+                 llvm::cl::init(false), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<unsigned>
+    opStatsTop("op-stats-top",
+               llvm::cl::desc("Number of top operations to print"),
+               llvm::cl::init(10), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
+    printProcessStats("process-stats",
+                      llvm::cl::desc("Print per-process execution statistics"),
+                      llvm::cl::init(false), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<unsigned>
+    processStatsTop("process-stats-top",
+                    llvm::cl::desc("Number of top processes to print"),
+                    llvm::cl::init(10), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
     verifyPasses("verify-each",
                  llvm::cl::desc("Run verifier after each pass"),
                  llvm::cl::init(true), llvm::cl::cat(debugCategory));
@@ -577,6 +597,7 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     if (!llhdInterpreter) {
       llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
       llhdInterpreter->setMaxProcessSteps(maxProcessSteps);
+      llhdInterpreter->setCollectOpStats(printOpStats);
 
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
@@ -912,6 +933,14 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
   if (parallelScheduler) {
     os << "\n--- Parallel Statistics ---\n";
     parallelScheduler->printStatistics(os);
+  }
+
+  if (printOpStats && llhdInterpreter) {
+    llhdInterpreter->dumpOpStats(os, opStatsTop);
+  }
+
+  if (printProcessStats && llhdInterpreter) {
+    llhdInterpreter->dumpProcessStats(os, processStatsTop);
   }
 
   if (profiler) {
