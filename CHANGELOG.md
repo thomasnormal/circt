@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 232 - January 27, 2026
+
+### Focus Areas
+
+- **Track A**: Test AVIPs with new fork/join support
+- **Track B**: Investigate alert_handler delta overflow
+- **Track C**: Run external test suites
+- **Track D**: Run lit test verification
+
+### Track Completions
+
+- **Track A (AVIP Fork/Join)**: ✅ **CRITICAL FINDING**
+  - Tested APB/I2S AVIPs with circt-sim
+  - UVM phases do NOT execute despite SimForkOp handler
+  - **Root cause**: `fork...join_none` not converted to `moore.fork` during Verilog import
+  - Frontend flattens fork blocks into sequential `begin...end` blocks
+  - Fix needed in: `lib/Conversion/ImportVerilog/Statements.cpp` line 528-530
+  - `BlockStatement` visitor ignores `blockKind` field (Sequential/JoinAll/JoinAny/JoinNone)
+
+- **Track B (Alert Handler Delta)**: 🔄 **INVESTIGATION ONGOING**
+  - Sensitivity lists include signals derived from process's own outputs
+  - `cnt_en`/`cnt_clr` driven by process, but probed and fed through combinational logic
+  - Creates cyclic dependency through hw.instance
+
+- **Track C (External Tests)**: ✅ **ALL PASS**
+  - sv-tests LEC: 23/23 pass
+  - verilator-verification LEC: 17/17 pass
+  - yosys-sva LEC: 14/14 pass
+  - OpenTitan: prim_count, timer_core pass
+
+- **Track D (Lit Tests)**: ✅ **NO REGRESSIONS**
+  - 2864 pass, 35 XFAIL, 21 unsupported
+  - All fork-join tests pass
+  - 1 failure: untracked draft test file (not a regression)
+
+### Key Finding: UVM Phase Execution Blocker
+
+The `moore.fork` operation exists and `sim.fork` handler is implemented, but:
+1. Verilog import ignores `blockKind` in `BlockStatement`
+2. All block types treated as sequential `begin...end`
+3. UVM's `run_phases()` in `uvm_phase_hopper.svh` uses `fork...join_none`
+4. Without proper fork generation, phases never spawn as concurrent processes
+
+**Next step**: Implement `fork...join_none` -> `moore.fork` conversion in ImportVerilog
+
+---
+
 ## Iteration 231 - January 27, 2026
 
 ### Focus Areas
@@ -29,6 +76,8 @@
   - verilator-verification: 17/17 pass
   - yosys-sva: 14/14 pass
   - OpenTitan IPs: 8/8 pass (full IPs with alerts)
+  - alert_handler_reg_top passes with always_comb sensitivity filtering
+  - alert_handler full IP still SIGKILLs in sandbox runs
 
 - **Track D (Lit Tests)**: ✅ **5 TESTS FIXED**
   - Updated 4 sv-tests BMC expectations (UVM files now exist)
@@ -40,6 +89,12 @@
 - `tools/circt-sim/LLHDProcessInterpreter.cpp`: SimForkOp/JoinOp implementation, __moore_delay
 - `test/Tools/circt-sim/fork-join-basic.mlir`: New fork/join test
 - `test/Tools/circt-sim/fork-join-wait.mlir`: New wait_fork test
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`: Filter `always_comb`/`always_latch` sensitivity to exclude assigned signals
+- `test/Conversion/MooreToCore/basic.mlir`: Update always_comb observed-value expectations
+- `test/Conversion/MooreToCore/always-comb-assign-filter.mlir`: New coverage for assigned-signal sensitivity filtering
+- `utils/run_opentitan_circt_sim.sh`: Add circt-sim knobs for max deltas/steps and extra sim args
+- `utils/run_opentitan_circt_sim.sh`: Auto-add `--sim-stats` when op/process stats are requested
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`: Silence unused combinational-op warning in process registration
 
 ### Key Implementation Details
 
