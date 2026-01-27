@@ -191,6 +191,15 @@ struct ProcessExecutionState {
   /// Used to prevent stack overflow from unbounded recursion.
   size_t callDepth = 0;
 
+  /// Last operation executed by this process (for diagnostics).
+  mlir::Operation *lastOp = nullptr;
+
+  /// Total operations executed by this process.
+  size_t totalSteps = 0;
+
+  /// Total operations in this process/initial body (used for step budget).
+  size_t opCount = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
@@ -308,6 +317,21 @@ public:
 
   /// Get the number of registered processes.
   size_t getNumProcesses() const { return processStates.size(); }
+
+  /// Dump process execution state for diagnostics.
+  void dumpProcessStates(llvm::raw_ostream &os) const;
+
+  /// Dump operation execution statistics.
+  void dumpOpStats(llvm::raw_ostream &os, size_t topN) const;
+
+  /// Dump per-process execution statistics.
+  void dumpProcessStats(llvm::raw_ostream &os, size_t topN) const;
+
+  /// Set the maximum number of operations a process can execute per activation.
+  void setMaxProcessSteps(size_t maxSteps) { maxProcessSteps = maxSteps; }
+
+  /// Enable collection of operation execution statistics.
+  void setCollectOpStats(bool enable) { collectOpStats = enable; }
 
   /// Set a callback to be called when sim.terminate is executed.
   /// The callback receives (success, verbose) parameters.
@@ -505,6 +529,34 @@ private:
   mlir::LogicalResult interpretTerminate(ProcessId procId,
                                           sim::TerminateOp terminateOp);
 
+  /// Interpret a sim.fork operation.
+  /// Creates child processes for each branch region and schedules them.
+  mlir::LogicalResult interpretSimFork(ProcessId procId, sim::SimForkOp forkOp);
+
+  /// Interpret a sim.fork.terminator operation.
+  /// Marks the forked child process as complete.
+  mlir::LogicalResult interpretSimForkTerminator(ProcessId procId,
+                                                  sim::SimForkTerminatorOp termOp);
+
+  /// Interpret a sim.join operation.
+  /// Waits for all processes in the fork to complete.
+  mlir::LogicalResult interpretSimJoin(ProcessId procId, sim::SimJoinOp joinOp);
+
+  /// Interpret a sim.join_any operation.
+  /// Waits for any one process in the fork to complete.
+  mlir::LogicalResult interpretSimJoinAny(ProcessId procId,
+                                           sim::SimJoinAnyOp joinAnyOp);
+
+  /// Interpret a sim.wait_fork operation.
+  /// Waits for all child processes spawned by the current process.
+  mlir::LogicalResult interpretSimWaitFork(ProcessId procId,
+                                            sim::SimWaitForkOp waitForkOp);
+
+  /// Interpret a sim.disable_fork operation.
+  /// Terminates all processes in the specified fork group.
+  mlir::LogicalResult interpretSimDisableFork(ProcessId procId,
+                                               sim::SimDisableForkOp disableForkOp);
+
   /// Evaluate a format string operation to produce output string.
   std::string evaluateFormatString(ProcessId procId, mlir::Value fmtValue);
 
@@ -589,6 +641,12 @@ private:
   /// Reference to the process scheduler.
   ProcessScheduler &scheduler;
 
+  /// Fork/join manager for concurrent process spawning.
+  ForkJoinManager forkJoinManager;
+
+  /// Maximum number of ops a process may execute before forcing a stop.
+  size_t maxProcessSteps = 50000;
+
   /// Name of the top module (for hierarchical path construction).
   std::string moduleName;
 
@@ -625,6 +683,11 @@ private:
 
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
+
+  /// Operation execution statistics (by op name).
+  llvm::StringMap<uint64_t> opStats;
+
+  bool collectOpStats = false;
 
   /// Module-level drives connected to process results.
   /// Each entry is a pair of (DriveOp, ProcessId).
