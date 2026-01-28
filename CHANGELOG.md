@@ -15,7 +15,7 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 | sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
 | Verilator Verif | **17/17 (100%)** | All pass! |
 | yosys-sva | **14/14 (100%)** | 2 skipped |
-| OpenTitan IPs | 6/6 tested | All pass |
+| OpenTitan IPs | 12/12 tested | All pass (build-test binary) |
 
 **Key Achievement**: All three external BMC test suites now pass at 100%.
 All lit test failures resolved.
@@ -35,12 +35,17 @@ All lit test failures resolved.
    - **Test**: `test/Tools/circt-sim/self-driven-transitive-filter.mlir`
 4. **Bind scope patch applied**: Applied `patches/slang-bind-scope.patch` to
    store bind directive scope for proper port name resolution per LRM 23.11.
+5. **Test file syntax fix** (bc0bd77dd): Fixed invalid `llhd.wait` syntax in
+   `self-driven-transitive-filter.mlir` - empty observed list `()` replaced with
+   `delay %eps` for valid LLHD syntax.
 
 ### Active Tracks & Next Steps
 
 - **Track A (OpenTitan IPs)**: Continue testing more IPs
-  - Status: 6/6 tested pass, alert_handler_reg_top OOM (7.5MB MLIR)
-  - Next: Test smaller IPs, profile memory usage
+  - Status: 12/12 tested pass with build-test binary (prim_count, gpio_no_alerts,
+    prim_fifo_sync, uart_reg_top, aes_reg_top, i2c_reg_top, spi_host_reg_top,
+    spi_device_reg_top, rv_timer_reg_top, pwm_reg_top, usbdev_reg_top, pattgen_reg_top)
+  - Next: Test with new circt-sim binary, test full IPs (not just _reg_top)
 
 - **Track B (AVIP Multi-top)**: Fix delta cycle overflow (FIX IMPLEMENTED)
   - Status: Root cause identified - transitive dependencies not filtered
