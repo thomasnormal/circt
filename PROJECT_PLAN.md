@@ -104,6 +104,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Variable scope now correctly created within fork regions
    - **Impact**: AVIPs compile successfully, simulation ready for testing
 
+2. **sim.fork Entry Block Predecessors** ✅ FIXED:
+   - Fork branches with forever loops had back-edges to entry block
+   - MLIR region rules require entry block to have no predecessors
+   - **Fix**: ForkOpConversion now creates loop header block and redirects back-edges
+   - Adds `sim.proc.print ""` to entry block to prevent printer elision
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 1780-1865
+
+3. **Delays Inside Fork Branches** ✅ FIXED:
+   - `#delay` inside fork was incorrectly converted to `llhd.wait`
+   - Fork regions don't have `llhd.process` as parent (required by llhd.wait)
+   - **Fix**: WaitDelayOpConversion checks for ForkOp/SimForkOp parent
+   - Uses `__moore_delay` runtime call instead of `llhd.wait` inside forks
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 1319-1321
+
 **Medium Priority:**
 2. **Hierarchical Name Access** (~9 XFAIL tests):
    - Signal access through instance hierarchy incomplete
@@ -120,18 +134,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 235)
+### Test Suite Status (Iteration 236)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | TBD | Running after fork/join commit |
+| Lit Tests | 2883/2959 (97.4%) | 21 failures, 34 XFAIL |
 | sv-tests LEC | 23/23 (100%) | All pass |
 | sv-tests BMC | 23/23 (100%) | 3 XFAIL as expected |
 | verilator LEC | 17/17 (100%) | All pass |
 | yosys LEC | 14/14 (100%) | All pass |
 | OpenTitan IPs | 32/37 (86%) | 5 fail due to OOM/timeout on large designs |
-| AVIPs | 1/9 compile | APB compiles, others blocked on bind/order issues |
+| AVIPs | 1/9 compile | APB compiles + simulates with UVM_INFO output |
 
 ### AVIP Compilation Status (Iteration 235)
 
@@ -181,13 +195,44 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 235 Update)
+### Track Status & Next Tasks (Iteration 236 Update)
 
-**Iteration 235 Results (IN PROGRESS):**
-- Track A: ✅ **Fork/join commit** - Committed variable declaration handling fix
-- Track B: ✅ **OpenTitan IPs** - 32/37 (86%) pass, 5 OOM/timeout on large designs
-- Track C: ✅ **AVIP testing** - APB compiles successfully, identified blockers for others
-- Track D: 🔄 **Lit test suite** - Running to verify fork/join fix
+**Iteration 236 Results:**
+- ✅ **sim.fork Entry Block Fix** - Fork branches with forever loops now work
+- ✅ **Delays in Fork Branches** - Uses runtime call instead of llhd.wait
+- ✅ **APB AVIP Simulation** - Runs with UVM_INFO output
+
+**Active Tracks for Iteration 237:**
+
+| Track | Focus | Next Task |
+|-------|-------|-----------|
+| **A** | AVIP Simulation | Run APB AVIP to completion, investigate other AVIPs |
+| **B** | Lit Test Failures | Fix the 21 failing lit tests |
+| **C** | External Test Suites | Run sv-tests, verilator, yosys, OpenTitan |
+| **D** | Bind Scope Fix | Fix interface port visibility in bind statements |
+
+**Track A - AVIP Simulation:**
+- APB AVIP compiles and starts running
+- Need to extend simulation time and verify UVM phases complete
+- Test other AVIPs (UART, I2S, AXI4) after fixing bind scope
+
+**Track B - Lit Test Failures (21 failures):**
+- ImportVerilog: queue-struct-array-pop.sv
+- VerifToSMT: 7 multiclock/cover tests
+- LLHD Transforms: mem2reg tests
+- circt-sim: 5 tests (apb-clock-reset, continuous-assignments, etc.)
+- circt-verilog: 3 tests (memories, registers, roundtrip)
+
+**Track C - External Test Suites:**
+- sv-tests LEC/BMC: Verify still at 100%
+- verilator-verification: Verify still at 100%
+- yosys SVA: Verify still at 100%
+- OpenTitan IPs: Test more IPs with fork fix
+
+**Track D - Bind Scope Fix:**
+- ROOT CAUSE: Interface port names not visible in bind statement scope
+- Affects: AHB, AXI4, and other AVIPs
+- Files: `lib/Conversion/ImportVerilog/` bind handling
 
 **Key Findings in Iteration 235:**
 - **Fork/Join Variable Declarations**: Commit `5cb9aed08` fixes handling of variable declarations in fork bodies

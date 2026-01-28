@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 237 - January 28, 2026
+
+### Track Investigation Results
+
+**Track A - AVIP Simulation:**
+- APB AVIP runs 10ms simulation, executes 2M+ processes
+- UVM_INFO messages printed but have empty content (string handling issue)
+- UVM phases not executing - `run_test()` called but phases don't run
+- UART AVIP fails compilation - method signature mismatch with UVM base classes
+
+**Track B - Lit Test Failures (21 total):**
+- VerifToSMT: 7 tests - Missing LTL attribute parser for `#ltl.clock_edge<negedge>`
+- circt-sim: 6 tests - Continuous assignment and process execution issues
+- mem2reg: 2 tests - Drive/probe forwarding not working
+- circt-verilog: 3 tests - FileCheck pattern mismatches
+
+**Track C - External Test Suites (ALL PASS):**
+- sv-tests LEC: 23/23 (100%)
+- verilator-verification LEC: 17/17 (100%)
+- OpenTitan IPs: prim_count, gpio, uart, i2c, spi_host all pass
+
+**Track D - Bind Scope Fix (ROOT CAUSE FOUND):**
+- slang uses target scope for port name resolution, should use bind directive scope
+- Fix requires: Add `bindScope` to `BindDirectiveInfo` struct in slang
+- Affects: AHB, AXI4, AXI4Lite, and other AVIPs with bind directives
+
+## Iteration 236 - January 28, 2026
+
+### sim.fork Entry Block Fix
+
+**Problem:** Fork branches with forever loops had back-edges to the entry block,
+violating MLIR region rules (entry block must have no predecessors).
+
+**Solution:** ForkOpConversion now restructures fork regions with loop back-edges:
+1. Creates a new "loop header" block after entry
+2. Moves all operations from entry to loop header
+3. Redirects back-edges to target loop header instead of entry
+4. Adds `sim.proc.print` with empty format to entry block to prevent elision
+
+**WaitDelayOpConversion Fix:** Delays inside fork branches now use `__moore_delay`
+runtime call instead of `llhd.wait`, since fork regions don't have `llhd.process`
+as parent.
+
+**Test Results:**
+- APB AVIP testbench: Conversion succeeds, simulation runs with UVM_INFO output
+- fork-join.mlir test: All variants pass (join, join_any, join_none, wait_fork, etc.)
+
 ## Iteration 234 - January 27-28, 2026
 
 ### Wave 2 Results (January 28)
@@ -44,6 +91,13 @@
 - Documented `circt-lec --print-counterexample` in FormalVerification docs.
 - Documented clocked-assert edge handling in the SVA BMC/LEC plan.
 - Added OpenTitan AES S-Box LEC harness (`utils/run_opentitan_circt_lec.py`).
+- MooreToCore now writes through 4-state `extract_ref` destinations by driving
+  value/unknown field slices, fixing OpenTitan AES LEC false inequivalences.
+- MooreToCore now rewrites 4-state `extract_ref` assignments as base-signal
+  read/modify/write updates to avoid LLHD ref slices in LEC.
+- LEC strip pass now tracks LLHD ref paths (`sig.struct_extract`,
+  `sig.extract`) and inlines single-block multi-drive signals instead of
+  abstracting them to inputs.
 - Added `circt-lec --fail-on-inequivalent` and LEC harness logging to surface
   inequivalence as a failure in automation.
 - JIT LEC now prints per-input counterexamples with `--print-counterexample`
@@ -72,6 +126,8 @@
   output uses `circt_smt_print_model_value` across LEC/BMC.
 - SMT-to-Z3 JIT model printing now loads the Z3 context in the entry block to
   avoid dominance errors when emitting per-input model values.
+- LEC can now assume 4-state inputs are known via `--assume-known-inputs`,
+  which constrains unknown bits to zero for equivalence checking.
 
 ### Key Finding: Delta Overflow Root Cause (Track B)
 
