@@ -5552,16 +5552,6 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     }
   }
 
-  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
-    SignalId sigId = resolveSignalId(probeOp.getSignal());
-    if (sigId != 0) {
-      const SignalValue &sv = scheduler.getSignalValue(sigId);
-      InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
-      it->second.valueMap[value] = iv;
-      return iv;
-    }
-  }
-
   if (auto combOp = value.getDefiningOp<llhd::CombinationalOp>()) {
     llvm::SmallVector<InterpretedValue, 4> results;
     (void)evaluateCombinationalOp(combOp, results);
