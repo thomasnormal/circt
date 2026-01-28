@@ -1513,6 +1513,7 @@ void circt::populateSMTToZ3LLVMConversionPatterns(
 void LowerSMTToZ3LLVMPass::runOnOperation() {
   LowerSMTToZ3LLVMOptions options;
   options.debug = debug;
+  options.printModelInputs = printModelInputs;
 
   // Check that the lowering is possible
   // Specifically, check that the use of set-logic ops is valid for z3
