@@ -8717,6 +8717,7 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
   matchAndRewrite(OpTy op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Value dst = adaptor.getDst();
+    auto loc = op.getLoc();
 
     // Check if destination is LLVM pointer (possibly through unrealized cast)
     // This handles strings, queues, dynamic arrays, and associative arrays.
@@ -8789,11 +8790,171 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       }
     }
 
+    Value srcValue = adaptor.getSrc();
+
+    auto getConvertedValue = [&](Value value) -> Value {
+      if (auto remapped = rewriter.getRemappedValue(value))
+        return remapped;
+      auto targetType = this->getTypeConverter()->convertType(value.getType());
+      if (!targetType)
+        return Value();
+      return this->getTypeConverter()->materializeTargetConversion(rewriter, loc,
+                                                        targetType, value);
+    };
+
+    auto emitFourStateExtractAssign = [&](Value baseRef, Value idx,
+                                          Type resultType) -> LogicalResult {
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (!resultRefType)
+        return failure();
+      auto resultStructType =
+          dyn_cast<hw::StructType>(resultRefType.getNestedType());
+      if (!resultStructType)
+        return failure();
+      auto resultIntType =
+          dyn_cast<IntegerType>(resultStructType.getElements()[0].type);
+      if (!resultIntType)
+        return failure();
+
+      auto extractedIntRefType = llhd::RefType::get(resultIntType);
+      auto valueFieldRef =
+          llhd::SigStructExtractOp::create(rewriter, loc, baseRef, "value");
+      auto unknownFieldRef =
+          llhd::SigStructExtractOp::create(rewriter, loc, baseRef, "unknown");
+      auto valueExtracted = llhd::SigExtractOp::create(
+          rewriter, loc, extractedIntRefType, valueFieldRef, idx);
+      auto unknownExtracted = llhd::SigExtractOp::create(
+          rewriter, loc, extractedIntRefType, unknownFieldRef, idx);
+
+      Value driveValue = srcValue;
+      Value driveUnknown;
+      if (isFourStateStructType(driveValue.getType())) {
+        driveUnknown = extractFourStateUnknown(rewriter, loc, driveValue);
+        driveValue = extractFourStateValue(rewriter, loc, driveValue);
+      } else {
+        driveUnknown =
+            hw::ConstantOp::create(rewriter, loc, resultIntType, 0);
+      }
+      driveValue =
+          adjustIntegerWidth(rewriter, driveValue, resultIntType.getWidth(), loc);
+      driveUnknown = adjustIntegerWidth(rewriter, driveUnknown,
+                                        resultIntType.getWidth(), loc);
+
+      llhd::DriveOp::create(rewriter, loc, valueExtracted, driveValue, delay,
+                            Value{}, llhdStrength0, llhdStrength1);
+      llhd::DriveOp::create(rewriter, loc, unknownExtracted, driveUnknown,
+                            delay, Value{}, llhdStrength0, llhdStrength1);
+      rewriter.eraseOp(op);
+      return success();
+    };
+
+    if (auto extractRef = op.getDst().template getDefiningOp<ExtractRefOp>()) {
+      Value baseRef = getConvertedValue(extractRef.getInput());
+      auto baseRefType = baseRef ? dyn_cast<llhd::RefType>(baseRef.getType())
+                                 : nullptr;
+      if (baseRefType && isFourStateStructType(baseRefType.getNestedType())) {
+        auto structType = cast<hw::StructType>(baseRefType.getNestedType());
+        auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+        int64_t width = valueType.getWidth();
+        Value idx = hw::ConstantOp::create(
+            rewriter, loc, rewriter.getIntegerType(llvm::Log2_64_Ceil(width)),
+            extractRef.getLowBit());
+        auto resultType =
+            this->getTypeConverter()->convertType(extractRef.getResult().getType());
+        if (failed(emitFourStateExtractAssign(baseRef, idx, resultType)))
+          return failure();
+        return success();
+      }
+    }
+
+    if (auto dynExtractRef =
+            op.getDst().template getDefiningOp<DynExtractRefOp>()) {
+      Value baseRef = getConvertedValue(dynExtractRef.getInput());
+      auto baseRefType = baseRef ? dyn_cast<llhd::RefType>(baseRef.getType())
+                                 : nullptr;
+      if (baseRefType && isFourStateStructType(baseRefType.getNestedType())) {
+        auto structType = cast<hw::StructType>(baseRefType.getNestedType());
+        auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+        int64_t width = valueType.getWidth();
+
+        Value idx = getConvertedValue(dynExtractRef.getLowBit());
+        if (!idx)
+          return failure();
+        if (isFourStateStructType(idx.getType()))
+          idx = extractFourStateValue(rewriter, loc, idx);
+        idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(width), loc);
+
+        auto resultType =
+            this->getTypeConverter()->convertType(dynExtractRef.getResult().getType());
+        if (failed(emitFourStateExtractAssign(baseRef, idx, resultType)))
+          return failure();
+        return success();
+      }
+    }
+
+    auto tryDriveReadOnlyExtractSignal = [&]() -> LogicalResult {
+      auto signal = dst.getDefiningOp<llhd::SignalOp>();
+      if (!signal)
+        return failure();
+      auto dstRefType = dyn_cast<llhd::RefType>(dst.getType());
+      if (!dstRefType || !isFourStateStructType(dstRefType.getNestedType()))
+        return failure();
+
+      auto structCreate =
+          signal.getInit().template getDefiningOp<hw::StructCreateOp>();
+      if (!structCreate || structCreate.getOperands().size() != 2)
+        return failure();
+
+      auto valueProbe =
+          structCreate.getOperand(0).getDefiningOp<llhd::ProbeOp>();
+      auto unknownProbe =
+          structCreate.getOperand(1).getDefiningOp<llhd::ProbeOp>();
+      if (!valueProbe || !unknownProbe)
+        return failure();
+
+      auto valueExtract =
+          valueProbe.getSignal().getDefiningOp<llhd::SigExtractOp>();
+      auto unknownExtract =
+          unknownProbe.getSignal().getDefiningOp<llhd::SigExtractOp>();
+      if (!valueExtract || !unknownExtract)
+        return failure();
+
+      Value valueRef = valueExtract.getResult();
+      Value unknownRef = unknownExtract.getResult();
+      auto valueRefType = cast<llhd::RefType>(valueRef.getType());
+      auto valueIntType = dyn_cast<IntegerType>(valueRefType.getNestedType());
+      if (!valueIntType)
+        return failure();
+
+      Value driveValue = srcValue;
+      Value driveUnknown;
+      if (isFourStateStructType(driveValue.getType())) {
+        driveUnknown = extractFourStateUnknown(rewriter, loc, driveValue);
+        driveValue = extractFourStateValue(rewriter, loc, driveValue);
+      } else {
+        driveUnknown =
+            hw::ConstantOp::create(rewriter, loc, valueIntType, 0);
+      }
+      driveValue =
+          adjustIntegerWidth(rewriter, driveValue, valueIntType.getWidth(), loc);
+      driveUnknown = adjustIntegerWidth(rewriter, driveUnknown,
+                                        valueIntType.getWidth(), loc);
+
+      llhd::DriveOp::create(rewriter, loc, valueRef, driveValue, delay, Value{},
+                            llhdStrength0, llhdStrength1);
+      llhd::DriveOp::create(rewriter, loc, unknownRef, driveUnknown, delay,
+                            Value{}, llhdStrength0, llhdStrength1);
+      rewriter.eraseOp(op);
+      return success();
+    };
+
+    if (succeeded(tryDriveReadOnlyExtractSignal()))
+      return success();
+
     // Handle 4-state struct to union assignment.
     // When assigning a constant to a union with 4-state members, the source
     // gets wrapped in a 4-state struct {value:iN, unknown:iN} which has double
     // the bitwidth, causing hw.bitcast to fail. Extract the value component.
-    Value srcValue = adaptor.getSrc();
     if (isFourStateStructType(srcValue.getType())) {
       if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
         if (isa<hw::UnionType>(refType.getNestedType())) {
