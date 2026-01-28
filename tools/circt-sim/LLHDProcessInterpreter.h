@@ -200,6 +200,34 @@ struct ProcessExecutionState {
   /// Total operations in this process/initial body (used for step budget).
   size_t opCount = 0;
 
+  /// Cached sensitivity list entries for combinational wait reuse.
+  llvm::SmallVector<SensitivityEntry, 4> lastSensitivityEntries;
+
+  /// Cached values for the last sensitivity list.
+  llvm::SmallVector<SignalValue, 4> lastSensitivityValues;
+
+  /// Cache of derived wait sensitivities keyed by wait operations.
+  llvm::DenseMap<mlir::Operation *, llvm::SmallVector<SensitivityEntry, 4>>
+      waitSensitivityCache;
+
+  /// Indicates whether the cached sensitivity data is valid.
+  bool lastSensitivityValid = false;
+
+  /// True if the last wait included a delay.
+  bool lastWaitHadDelay = false;
+
+  /// True if the last wait used edge-specific sensitivity.
+  bool lastWaitHasEdge = false;
+
+  /// True if this process is eligible for cache-based skipping.
+  bool cacheable = false;
+
+  /// Number of times this process skipped execution via caching.
+  uint64_t cacheSkips = 0;
+
+  /// Number of times derived wait sensitivities were reused from cache.
+  uint64_t waitSensitivityCacheHits = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
@@ -389,6 +417,9 @@ private:
   /// Execute module-level drives for a process after it yields.
   void executeModuleDrives(ProcessId procId);
 
+  /// Execute instance output updates that depend on a process result.
+  void executeInstanceOutputUpdates(ProcessId procId);
+
   /// Register combinational processes for static module-level drives.
   /// These drives need to re-execute when their input signals change.
   void registerContinuousAssignments(hw::HWModuleOp hwModule);
@@ -417,6 +448,9 @@ private:
 
   /// Execute a single continuous assignment (static module-level drive).
   void executeContinuousAssignment(llhd::DriveOp driveOp);
+
+  /// Schedule a combinational update of an instance output signal.
+  void scheduleInstanceOutputUpdate(SignalId signalId, mlir::Value outputValue);
 
   /// Evaluate a value for continuous assignments by reading from signal state.
   InterpretedValue evaluateContinuousValue(mlir::Value value);
@@ -662,6 +696,13 @@ private:
 
   /// Map from instance result values to child module output values.
   llvm::DenseMap<mlir::Value, mlir::Value> instanceOutputMap;
+
+  struct InstanceOutputUpdate {
+    SignalId signalId = 0;
+    mlir::Value outputValue;
+    llvm::SmallVector<ProcessId, 4> processIds;
+  };
+  llvm::SmallVector<InstanceOutputUpdate, 16> instanceOutputUpdates;
 
   /// Map from child module input block arguments to instance operand values.
   llvm::DenseMap<mlir::Value, mlir::Value> inputValueMap;
