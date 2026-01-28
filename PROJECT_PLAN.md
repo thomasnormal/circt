@@ -1113,6 +1113,91 @@ circt-verilog --uvm-path ~/uvm-core/src \
 - `utils/run_yosys_sva_circt_lec.sh` for yosys SVA LEC smoke coverage.
 - Manual AVIP spot checks in `~/mbit/*avip*` with targeted properties.
 
+### SVA BMC + LEC Checking Plan (Continuation, Iteration 241+)
+
+**Goal**: Make BMC/LEC runs a stable, repeatable regression signal with clear
+baselines, correct temporal semantics, and actionable diagnostics.
+
+1. **Baselines + Gating**
+   - Record dated baselines for BMC/LEC suites (sv-tests, verilator-verification,
+     yosys SVA) in this plan after each green run.
+   - Add/maintain per-suite XFAIL lists for known unsupported patterns.
+   - Promote the three BMC scripts and three LEC scripts to "required" smoke
+     checks for any SVA-related change.
+
+2. **BMC Temporal Semantics**
+   - Finish posedge-only gating for checks when not in rising-clocks-only mode.
+   - Gate $past/delay buffer updates to advance once per cycle.
+   - Implement proper `ltl.delay` semantics for N>0 in multi-step BMC
+     (replace current "true" shortcut with bounded buffering).
+   - Add targeted tests for `##[m:$]`, goto, non-consecutive repetition, and
+     sampled-value alignment.
+
+3. **Procedural Assertions**
+   - Hoist/guard `assert property` inside `always` blocks to avoid `seq.compreg`
+     inside `llhd.process`.
+   - Add minimal repros in `test/Conversion/VerifToSMT/` to prevent regressions.
+
+4. **LEC Soundness Improvements**
+   - Replace "abstract to input" approximations for multi-driver interface
+     fields with explicit resolution or a dedicated "unknown merge" semantics.
+   - Clarify/guard inout + extnets handling in LEC; add tests for both.
+   - Ensure LLHD stripping preserves equivalence for combinational islands.
+
+5. **Diagnostics + Artifacts**
+   - Standardize SAT/UNSAT reporting and exit codes across `circt-bmc` and
+     `circt-lec` (match script expectations).
+   - Add optional witness/trace emission hooks for failing checks.
+
+6. **Integration Tests**
+   - Add end-to-end SV→BMC tests in `test/Tools/circt-bmc/` for pass/fail cases.
+   - Add LEC pairwise equivalence tests in `test/Tools/circt-lec/`.
+
+7. **Docs**
+   - Document expected tool versions (z3, yosys) and environment assumptions for
+     running each external suite.
+
+### Long-Term Limitations (Current Reality)
+1. **Multi-step BMC semantics** are still approximate (delay>0, goto, and
+   non-consecutive repetition not fully modeled across cycles).
+2. **Procedural assertions** inside `always`/`initial` can still violate
+   legality constraints (`seq.compreg` within `llhd.process`).
+3. **LEC soundness** relies on approximation for multi-driver/interface/inout
+   cases; true resolution semantics are missing.
+4. **Witness/counterexample traces** are not yet standardized across BMC/LEC.
+5. **Formal performance**: large designs can still time out or explode in SMT
+   size due to unoptimized lowering.
+
+### Long-Term Features to Build (Ambitious + Needed)
+1. **True multi-step BMC** with proper delay buffering and sampled-value timing,
+   including `$past`/`$rose`/`$fell` alignment and `##[m:$]` correctness.
+2. **Sound LEC for interfaces/inout/multi-driver**:
+   - Add explicit resolution semantics and avoid input abstraction unless
+     explicitly requested (approx mode).
+3. **Unified formal diagnostics**:
+   - Standardized SAT/UNSAT reporting, proof/witness traces, and stable exit
+     codes across `circt-bmc` and `circt-lec`.
+4. **Formal regression harness**:
+   - A single entry-point script that runs all external suites with baseline
+     comparisons and produces a summary table (pass/fail/xfail/new).
+5. **Scalable SMT lowering**:
+   - Structural hashing, local simplifications, and optional cone-of-influence
+     reduction before SMT emission.
+
+### Ongoing Execution Policy (Keep Us Honest)
+- **Changelog**: update `CHANGELOG.md` for significant fixes/features in formal
+  and SVA pipelines.
+- **Testing cadence**: run all external suites regularly:
+  - `~/mbit/*avip*`
+  - `~/sv-tests/`
+  - `~/verilator-verification/`
+  - `~/yosys/tests/sva`
+  - `~/opentitan/`
+- **Unit tests**: add a focused unit/regression test for every bug fix or new
+  feature. Prefer new tests over expanding unrelated ones.
+- **Commits**: commit frequently, keep scope tight, and merge with upstream main
+  regularly.
+
 ### Feature Completion Matrix
 
 | Feature | Parse | IR | Lower | Runtime | Test |
