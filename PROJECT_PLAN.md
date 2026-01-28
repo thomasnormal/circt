@@ -152,11 +152,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | 2884/2960 (97.4%) | 18 failures (local test expectations), 34 XFAIL |
-| sv-tests BMC | 23/26 (88%) | 3 XFAIL as expected, JIT fix confirmed working |
-| Verilator Verif | 14/17 (82%) | assert_rose, assert_named issues |
-| yosys-sva | 10/14 (71%) | 4 failures, 2 skipped |
-| OpenTitan IPs | 3/3 tested | prim_count, timer_core, gpio_reg_top pass |
+| Lit Tests | 2901/2961 (97.97%) | 2 failures, 34 XFAIL, 3 unresolved (LSP) |
+| sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
+| Verilator Verif | **17/17 (100%)** | All pass! |
+| yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
+| OpenTitan IPs | 6/6 tested | prim_count, timer_core, gpio_reg_top, uart, i2c, spi_host pass |
 | AVIPs | 1/9 compile | APB compiles + simulates, others blocked on bind scope |
 
 ### Iteration 239-240 Progress

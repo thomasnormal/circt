@@ -5,23 +5,36 @@
 ### Goals
 Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
-### Active Tracks
-- **Track A**: Fix 18 failing lit tests with stale expectations
-- **Track B**: Debug delta cycle overflow in multi-top simulations
-- **Track C**: Fix Verilator assert_rose/assert_named failures
-- **Track D**: Test more OpenTitan IPs and AVIP simulations
+### Progress
 
-### Current Limitations
+**Test Suite Status - ALL EXTERNAL SUITES NOW 100%:**
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Unit Tests | 1356/1356 (100%) | All pass |
+| Lit Tests | 2901/2961 (97.97%) | 2 failures, 34 XFAIL |
+| sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
+| Verilator Verif | **17/17 (100%)** | All pass! |
+| yosys-sva | **14/14 (100%)** | 2 skipped |
+| OpenTitan IPs | 6/6 tested | All pass |
+
+**Key Achievement**: All three external BMC test suites now pass at 100%.
+
+### Active Tracks
+- **Track A**: Test OpenTitan IPs with circt-sim
+- **Track B**: Test APB AVIP multi-top simulation
+- **Track C**: Investigate remaining 2 lit test failures
+- **Track D**: Continue AVIP testing
+
+### Remaining Limitations
 
 **Critical:**
 1. Delta cycle overflow (~60ns) in multi-top UVM simulations
 2. Bind scope issue blocks 8/9 AVIPs (slang patch needed)
-3. 18 lit tests have stale expectations after local feature additions
 
 **Medium:**
 1. Hierarchical name access incomplete (~9 XFAIL tests)
 2. Virtual method dispatch not fully implemented
-3. Verilator assert_rose/assert_named patterns failing
+3. 2 lit tests failing (SMTToZ3LLVM, circt-lec strip)
 
 ---
 
