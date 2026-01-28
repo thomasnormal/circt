@@ -1,5 +1,6 @@
 // RUN: circt-opt %s --lower-smt-to-z3-llvm | FileCheck %s
 // RUN: circt-opt %s --lower-smt-to-z3-llvm=debug=true | FileCheck %s --check-prefix=CHECK-DEBUG
+// RUN: circt-opt %s --lower-smt-to-z3-llvm=print-model-inputs=true | FileCheck %s --check-prefix=CHECK-MODEL
 
 // CHECK-LABEL: llvm.mlir.global internal @ctx_0()
 // CHECK-NEXT:   llvm.mlir.zero : !llvm.ptr
@@ -184,6 +185,10 @@ func.func @test(%arg0: i32) {
     // CHECK:   [[IS_SAT:%.+]] = llvm.icmp "eq" [[CHECK]], [[C1]] : i32
     // CHECK:   llvm.cond_br [[IS_SAT]], ^[[BB1:.+]], ^[[BB2:.+]]
     // CHECK: ^[[BB1]]:
+    // CHECK-MODEL: llvm.call @Z3_solver_get_model
+    // CHECK-MODEL: llvm.call @Z3_model_eval
+    // CHECK-MODEL: llvm.call @Z3_ast_to_string
+    // CHECK-MODEL: llvm.call @circt_smt_print_model_value
     // CHECK-DEBUG: [[CTX_ADDR:%.+]] = llvm.mlir.addressof @ctx_0 : !llvm.ptr
     // CHECK-DEBUG: [[CTX0:%.+]] = llvm.load [[CTX_ADDR]] : !llvm.ptr -> !llvm.ptr
     // CHECK-DEBUG: [[MODEL:%.+]] = llvm.call @Z3_solver_get_model([[CTX0]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> !llvm.ptr

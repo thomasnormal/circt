@@ -123,35 +123,28 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK-DAG:  [[ARRAYFUN:%.+]] = smt.declare_fun : !smt.array<[!smt.bv<1> -> !smt.bv<32>]>
 // CHECK:      [[FOR:%.+]]:7 = scf.for [[ARG0:%.+]] = [[C0_I32]] to [[C10_I32]] step [[C1_I32]] iter_args([[ARG1:%.+]] = [[INIT]]#0, [[ARG2:%.+]] = [[F0]], [[ARG3:%.+]] = [[F1]], [[ARG4:%.+]] = [[C42_BV32]], [[ARG5:%.+]] = [[ARRAYFUN]], [[ARG6:%.+]] = [[INIT]]#1, [[ARG7:%.+]] = [[FALSE]])
 // CHECK:        [[CIRCUIT:%.+]]:5 = func.call @bmc_circuit([[ARG1]], [[ARG2]], [[ARG3]], [[ARG4]], [[ARG5]])
-// CHECK:        [[EQ:%.+]] = smt.eq [[CIRCUIT]]#4, [[CNEG1]] : !smt.bv<1>
-// CHECK:        [[LSB:%.+]] = arith.andi [[ARG0]], {{%.+}} : i32
-// CHECK:        [[ISEVEN:%.+]] = arith.cmpi eq, [[LSB]], {{%.+}} : i32
-// CHECK:        [[IF:%.+]] = scf.if [[ISEVEN]] -> (i1) {
-// CHECK:          scf.yield [[ARG7]] : i1
-// CHECK:        } else {
-// CHECK:          [[NOT:%.+]] = smt.not [[EQ]]
-// CHECK:          smt.push 1
-// CHECK:          smt.assert [[NOT]]
-// CHECK:          [[SMTCHECK:%.+]] = smt.check sat {
-// CHECK:            smt.yield [[TRUE]]
-// CHECK:          } unknown {
-// CHECK:            smt.yield [[TRUE]]
-// CHECK:          } unsat {
-// CHECK:            smt.yield [[FALSE]]
-// CHECK:          }
-// CHECK:          smt.pop 1
-// CHECK:          [[ORI:%.+]] = arith.ori [[SMTCHECK]], [[ARG7]]
-// CHECK:          scf.yield [[ORI]] : i1
-// CHECK:        }
 // CHECK:        [[LOOP:%.+]]:2 = func.call @bmc_loop([[ARG1]], [[ARG6]])
 // CHECK:        [[F2:%.+]] = smt.declare_fun : !smt.bv<32>
 // CHECK:        [[OLDCLOCKLOW:%.+]] = smt.bv.not [[ARG1]]
 // CHECK:        [[BVPOSEDGE:%.+]] = smt.bv.and [[OLDCLOCKLOW]], [[LOOP]]#0
 // CHECK:        [[BOOLPOSEDGE:%.+]] = smt.eq [[BVPOSEDGE]], [[CNEG1]]
+// CHECK:        [[EQ:%.+]] = smt.eq [[CIRCUIT]]#4, [[CNEG1]] : !smt.bv<1>
+// CHECK:        [[NOT:%.+]] = smt.not [[EQ]]
+// CHECK:        smt.push 1
+// CHECK:        smt.assert [[NOT]]
+// CHECK:        [[SMTCHECK:%.+]] = smt.check sat {
+// CHECK:          smt.yield [[TRUE]]
+// CHECK:        } unknown {
+// CHECK:          smt.yield [[TRUE]]
+// CHECK:        } unsat {
+// CHECK:          smt.yield [[FALSE]]
+// CHECK:        }
+// CHECK:        smt.pop 1
+// CHECK:        [[ORI:%.+]] = arith.ori [[SMTCHECK]], [[ARG7]]
 // CHECK:        [[NEWREG1:%.+]] = smt.ite [[BOOLPOSEDGE]], [[CIRCUIT]]#1, [[ARG3]]
 // CHECK:        [[NEWREG2:%.+]] = smt.ite [[BOOLPOSEDGE]], [[CIRCUIT]]#2, [[ARG4]]
 // CHECK:        [[NEWREG3:%.+]] = smt.ite [[BOOLPOSEDGE]], [[CIRCUIT]]#3, [[ARG5]]
-// CHECK:        scf.yield [[LOOP]]#0, [[F2]], [[NEWREG1]], [[NEWREG2]], [[NEWREG3]], [[LOOP]]#1, [[IF]]
+// CHECK:        scf.yield [[LOOP]]#0, [[F2]], [[NEWREG1]], [[NEWREG2]], [[NEWREG3]], [[LOOP]]#1, [[ORI]]
 // CHECK:      }
 // CHECK:      [[XORI:%.+]] = arith.xori [[FOR]]#6, [[TRUE]]
 // CHECK:      smt.yield [[XORI]]
@@ -162,10 +155,10 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // RUN: circt-opt %s --convert-verif-to-smt="rising-clocks-only=true" --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s --check-prefix=CHECK1
 // CHECK1-LABEL:  func.func @test_bmc() -> i1 {
 // CHECK1:        [[CIRCUIT:%.+]]:5 = func.call @bmc_circuit(
-// CHECK1:        [[SMTCHECK:%.+]] = smt.check
-// CHECK1:        [[ORI:%.+]] = arith.ori [[SMTCHECK]], {{%.*}}
 // CHECK1:        [[LOOP:%.+]]:2 = func.call @bmc_loop({{%.*}}, {{%.*}})
 // CHECK1:        [[F:%.+]] = smt.declare_fun : !smt.bv<32>
+// CHECK1:        [[SMTCHECK:%.+]] = smt.check
+// CHECK1:        [[ORI:%.+]] = arith.ori [[SMTCHECK]], {{%.*}}
 // CHECK1:        scf.yield [[LOOP]]#0, [[F]], [[CIRCUIT]]#1, [[CIRCUIT]]#2, [[CIRCUIT]]#3, [[LOOP]]#1, [[ORI]]
 
 func.func @test_bmc() -> (i1) {
