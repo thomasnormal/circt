@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 240 - January 28, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Active Tracks
+- **Track A**: Fix 18 failing lit tests with stale expectations
+- **Track B**: Debug delta cycle overflow in multi-top simulations
+- **Track C**: Fix Verilator assert_rose/assert_named failures
+- **Track D**: Test more OpenTitan IPs and AVIP simulations
+
+### Current Limitations
+
+**Critical:**
+1. Delta cycle overflow (~60ns) in multi-top UVM simulations
+2. Bind scope issue blocks 8/9 AVIPs (slang patch needed)
+3. 18 lit tests have stale expectations after local feature additions
+
+**Medium:**
+1. Hierarchical name access incomplete (~9 XFAIL tests)
+2. Virtual method dispatch not fully implemented
+3. Verilator assert_rose/assert_named patterns failing
+
+---
+
 ## Iteration 239 - January 28, 2026
 
 ### Goals
@@ -11,8 +36,30 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 - **Track C**: Run external test suites (sv-tests, verilator, yosys)
 - **Track D**: Test OpenTitan IP simulations with circt-sim
 
-### In Progress
-(Updates will be added as work progresses)
+### Progress
+
+**Build Status:**
+- Unit tests: 1356/1356 (100%)
+- Integration tests: 2884/2960 pass (97.43%)
+- 18 failing tests are local additions needing expectation updates
+
+**External Test Suites:**
+- sv-tests BMC: **23 pass / 0 errors** (3 expected failures)
+- Verilator verification: **14 pass / 3 fail** (assert_rose, assert_named issues)
+- yosys-sva: **14 tests / 4 failures / 2 skipped**
+
+**Key Fixes:**
+1. Fixed `populateVerifToSMTConversionPatterns` function signature mismatch
+   - Added missing `assumeKnownInputs` parameter
+   - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+2. Cleaned up failing locally-added tests that had stale expectations
+
+**Agent Investigation Results:**
+- Track A (Multi-top signal sharing): Delta cycle overflow at ~60ns due to combinational loops
+- Track B (Bind scope): Applied patches, AVIP compilation in progress
+- Track C (External tests): All major test suites running, JIT fix confirmed working
+- Track D (OpenTitan IPs): prim_count, timer_core, gpio_reg_top all passing
 
 ---
 
@@ -72,10 +119,11 @@ after creation using `engine->registerSymbols()`.
 - SSA value caching verified working - posedge detected every 10 time units
 
 ### OpenTitan LEC Investigation
-- Masked AES S-Box implementations collapse to constant outputs after LLHD->SMT
-  lowering (SBOX_FWD/INV[0]) regardless of input data.
-- Next: isolate the pipeline stage that drops data dependencies and add a
-  minimal regression.
+- Masked AES S-Box implementations no longer collapse to constant outputs after
+  skipping `strip-llhd-processes` in the LEC pipeline; the pass was dropping
+  LLHD drives (e.g., `vec_c`) and disconnecting dataflow.
+- Added an LLHD LEC regression to ensure input-driven LLHD drives remain visible
+  in the SMT miter.
 
 ## Iteration 237 - January 28, 2026
 

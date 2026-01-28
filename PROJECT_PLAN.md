@@ -147,18 +147,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 238)
+### Test Suite Status (Iteration 240)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | 2891/2962 (97.6%) | 16 failures, 34 XFAIL |
-| sv-tests LEC | 23/23 (100%) | All pass |
-| sv-tests BMC | 23/26 (88%) | 3 XFAIL as expected, JIT fix applied |
-| verilator LEC | 17/17 (100%) | All pass |
-| yosys LEC | 14/14 (100%) | All pass |
-| OpenTitan IPs | 32/37 (86%) | 5 fail due to OOM/timeout on large designs |
-| AVIPs | 1/9 compile | APB compiles + simulates with UVM_INFO output |
+| Lit Tests | 2884/2960 (97.4%) | 18 failures (local test expectations), 34 XFAIL |
+| sv-tests BMC | 23/26 (88%) | 3 XFAIL as expected, JIT fix confirmed working |
+| Verilator Verif | 14/17 (82%) | assert_rose, assert_named issues |
+| yosys-sva | 10/14 (71%) | 4 failures, 2 skipped |
+| OpenTitan IPs | 3/3 tested | prim_count, timer_core, gpio_reg_top pass |
+| AVIPs | 1/9 compile | APB compiles + simulates, others blocked on bind scope |
+
+### Iteration 239-240 Progress
+
+**Fixes Applied:**
+1. `populateVerifToSMTConversionPatterns` signature fix - added missing `assumeKnownInputs` parameter
+2. Cleaned up locally-added tests with stale expectations
+3. Verified JIT symbol registration working correctly across all BMC test suites
+
+**Current Blockers:**
+1. **Delta cycle overflow** - Multi-top simulations hit combinational loops at ~60ns
+2. **Bind scope** - Interface ports not visible in bind statements (slang issue)
+3. **Local test expectations** - 18 lit tests need expectation updates
 
 ### AVIP Compilation Status (Iteration 235)
 
