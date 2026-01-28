@@ -2542,8 +2542,10 @@ static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
 
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
+    bool risingClocksOnly, bool assumeKnownInputs,
+    SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
+  (void)assumeKnownInputs; // TODO: Use this parameter for assume patterns
   // Add LTL operation conversion patterns
   populateLTLToSMTConversionPatterns(converter, patterns);
 
