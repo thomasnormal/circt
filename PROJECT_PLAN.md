@@ -208,51 +208,55 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 237 Update)
+### Track Status & Next Tasks (Iteration 239)
 
-**Iteration 237 Results:**
-- ✅ **LTL Attribute Parser** - Added `ClockEdgeAttr` parsing, should fix 7 VerifToSMT tests
-- 🔍 **UVM Phase Execution** - ROOT CAUSE: `hvl_top` not instantiated, `run_test()` never called
-- 🔍 **circt-sim SSA Cache** - ROOT CAUSE: Values probed before `llhd.wait` not correctly cached
-- ✅ **Bind Scope Patch** - Created patch for slang, applies cleanly to v10
+**Iteration 238 Results (COMPLETE):**
+- ✅ **SSA Value Caching** - Fixed `getValue()` to check cache BEFORE re-reading signal
+- ✅ **JIT Symbol Registration** - Fixed `circt_bmc_report_result` symbol resolution
+- ✅ **Edge Detection Verified** - Posedge patterns work correctly with caching fix
+- ✅ **sv-tests BMC**: 5 pass → **23 pass** (JIT fix unblocked 18 tests)
+- ⚠️ **Multi-top Simulation**: `--top hdl_top --top hvl_top` works but signals not shared
 
-**Active Tracks for Iteration 238:**
+**Active Tracks for Iteration 239:**
 
 | Track | Focus | Next Task |
 |-------|-------|-----------|
-| **A** | Multi-Top Simulation | Support `--top hdl_top --top hvl_top` in circt-sim |
-| **B** | SSA Value Caching | Fix `getValue()` to use cached probe results after wait |
-| **C** | LTL Parser Tests | Verify VerifToSMT tests pass with attribute parser fix |
-| **D** | Apply Bind Patch | Apply slang-bind-scope.patch and test AVIPs |
+| **A** | Multi-Top Signal Sharing | Make hvl_top see hdl_top signals for UVM phases |
+| **B** | Bind Scope Patch | Apply slang patch and test AHB/AXI4 AVIPs |
+| **C** | External Test Suites | Run sv-tests, verilator, yosys for regressions |
+| **D** | OpenTitan Simulation | Test more IP simulations with circt-sim |
 
-**Track A - Multi-Top Simulation (CRITICAL):**
-- ROOT CAUSE: `hvl_top` contains `run_test()`, `hdl_top` is hardware
-- Currently only `hdl_top` is simulated
-- Need: Support multiple top modules or auto-detect HVL tops
-- Files: `tools/circt-sim/circt-sim.cpp`
+**Track A - Multi-Top Signal Sharing (CRITICAL for UVM):**
+- BLOCKER: `hvl_top` and `hdl_top` don't share signals when both specified as tops
+- `hvl_top` has `run_test()` but can't see clk/reset from `hdl_top`
+- Need: Cross-module signal visibility or module instantiation hierarchy
+- Files: `tools/circt-sim/circt-sim.cpp`, `LLHDProcessInterpreter.cpp`
+- Test: `~/mbit/apb-avip` with `--top hdl_top --top hvl_top`
 
-**Track B - SSA Value Caching (CRITICAL):**
-- ROOT CAUSE: `getValue()` re-reads signal instead of using cached probe
-- Affects edge detection (posedge/negedge) patterns
-- Pattern: `%old = llhd.prb` → `llhd.wait` → use `%old` (should be cached)
-- Files: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 5511-5592
-
-**Track C - VerifToSMT Tests:**
-- LTL attribute parser added in Iteration 237
-- Need to verify 7 tests now pass:
-  - bmc-multiclock-delay-buffer-assert-clock.mlir
-  - bmc-multiclock-delay-buffer-conflict.mlir
-  - bmc-multiclock-nonfinal-per-check.mlir
-  - bmc-multiclock-past-buffer-prop-clock.mlir
-  - bmc-multiple-covers.mlir
-  - bmc-nonfinal-check-negedge.mlir
-  - verif-to-smt.mlir
-
-**Track D - Bind Scope Patch:**
+**Track B - Bind Scope Patch (Unblocks 4+ AVIPs):**
 - Patch at: `patches/slang-bind-scope.patch`
-- Status: Applies cleanly to slang v10
-- Need: Enable in `apply-slang-patches.sh` and test AVIPs
-- Affects: AHB, AXI4, AXI4Lite, and other AVIPs with bind directives
+- Status: Applies cleanly to slang v10, needs rebuild
+- After applying: Test AHB, AXI4, AXI4-Lite AVIPs
+- Expected: Interface ports visible at bind site scope
+
+**Track C - External Test Suites:**
+- sv-tests BMC: 23/26 pass, 3 XFAIL
+- sv-tests LEC: 23/23 pass
+- verilator-verification: 17/17 pass
+- yosys SVA: 14/14 pass
+- Run full suites to verify no regressions from Iteration 238 fixes
+
+**Track D - OpenTitan IP Simulation:**
+- Current: 32/37 (86%) pass
+- Test more IPs: gpio, uart, spi_host, i2c with circt-sim
+- Identify any simulation-specific issues vs compilation issues
+
+**Remaining Blockers for UVM Parity:**
+1. **Multi-top Signal Sharing** - hvl_top can't see hdl_top signals (Track A)
+2. **Bind Scope** - Interface ports not visible at bind site (Track B)
+3. **Virtual Method Dispatch** - Dynamic dispatch not implemented
+4. **UVM Factory/Config DB** - Not yet tested
+5. **Constraint Randomization** - `rand`/`randc` not at runtime
 
 **Key Findings in Iteration 235:**
 - **Fork/Join Variable Declarations**: Commit `5cb9aed08` fixes handling of variable declarations in fork bodies
