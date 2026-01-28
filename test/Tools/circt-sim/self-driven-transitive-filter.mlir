@@ -30,7 +30,7 @@ hw.module @test(in %clk : i1, in %external_input : i1) {
   // Process that reads X and external, and outputs a computed value
   %proc_result = llhd.process -> i1 {
   ^entry:
-    llhd.wait yield (%false : i1), (), ^loop
+    llhd.wait yield (%false : i1), delay %eps, ^loop
   ^loop:
     %x_val = llhd.prb %x : i1
     %ext_val = llhd.prb %ext : i1
