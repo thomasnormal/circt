@@ -65,6 +65,34 @@ static Value gateSMTWithEnable(Value property, Value enable, bool isCover,
   return smt::OrOp::create(builder, loc, notEnable, property);
 }
 
+static void maybeAssertKnownInput(Type originalTy, Value smtVal, Location loc,
+                                  OpBuilder &builder) {
+  auto structTy = dyn_cast<hw::StructType>(originalTy);
+  if (!structTy)
+    return;
+  auto elements = structTy.getElements();
+  if (elements.size() != 2)
+    return;
+  if (!elements[0].name || !elements[1].name)
+    return;
+  if (elements[0].name.getValue() != "value" ||
+      elements[1].name.getValue() != "unknown")
+    return;
+  int64_t valueWidth = hw::getBitWidth(elements[0].type);
+  int64_t unknownWidth = hw::getBitWidth(elements[1].type);
+  if (valueWidth <= 0 || unknownWidth <= 0 || valueWidth != unknownWidth)
+    return;
+  auto bvTy = dyn_cast<smt::BitVectorType>(smtVal.getType());
+  if (!bvTy || bvTy.getWidth() !=
+                   static_cast<unsigned>(valueWidth + unknownWidth))
+    return;
+  auto unkTy = smt::BitVectorType::get(builder.getContext(), unknownWidth);
+  auto unknownBits = smt::ExtractOp::create(builder, loc, unkTy, 0, smtVal);
+  auto zero = smt::BVConstantOp::create(builder, loc, 0, unknownWidth);
+  auto isKnown = smt::EqOp::create(builder, loc, unknownBits, zero);
+  smt::AssertOp::create(builder, loc, isKnown);
+}
+
 //===----------------------------------------------------------------------===//
 // Conversion patterns
 //===----------------------------------------------------------------------===//
@@ -891,6 +919,11 @@ struct LogicEquivalenceCheckingOpConversion
     : CircuitRelationCheckOpConversion<verif::LogicEquivalenceCheckingOp> {
   using CircuitRelationCheckOpConversion<
       verif::LogicEquivalenceCheckingOp>::CircuitRelationCheckOpConversion;
+  LogicEquivalenceCheckingOpConversion(TypeConverter &converter,
+                                       MLIRContext *context,
+                                       bool assumeKnownInputs)
+      : CircuitRelationCheckOpConversion(converter, context),
+        assumeKnownInputs(assumeKnownInputs) {}
 
   LogicalResult
   matchAndRewrite(verif::LogicEquivalenceCheckingOp op, OpAdaptor adaptor,
@@ -911,6 +944,20 @@ struct LogicEquivalenceCheckingOpConversion
                                      ValueRange{});
     rewriter.createBlock(&solver.getBodyRegion());
 
+    // Capture the original argument types BEFORE conversion for assume-known
+    // logic which needs to identify hw.struct types with value/unknown fields.
+    ArrayAttr inputNames = op->getAttrOfType<ArrayAttr>("lec.input_names");
+    ArrayAttr inputTypes = op->getAttrOfType<ArrayAttr>("lec.input_types");
+    auto originalArgTypes = op.getFirstCircuit().getArgumentTypes();
+    auto getOriginalType = [&](unsigned index) -> Type {
+      if (inputTypes && index < inputTypes.size())
+        if (auto typeAttr = dyn_cast<TypeAttr>(inputTypes[index]))
+          return typeAttr.getValue();
+      if (index < originalArgTypes.size())
+        return originalArgTypes[index];
+      return Type{};
+    };
+
     // First, convert the block arguments of the miter bodies.
     if (failed(rewriter.convertRegionTypes(&adaptor.getFirstCircuit(),
                                            *typeConverter)))
@@ -920,14 +967,19 @@ struct LogicEquivalenceCheckingOpConversion
       return failure();
 
     // Second, create the symbolic values we replace the block arguments with
-    ArrayAttr inputNames = op->getAttrOfType<ArrayAttr>("lec.input_names");
     SmallVector<Value> inputs;
     for (auto arg : adaptor.getFirstCircuit().getArguments()) {
+      unsigned index = arg.getArgNumber();
       StringAttr namePrefix;
-      if (inputNames && arg.getArgNumber() < inputNames.size())
-        namePrefix = dyn_cast<StringAttr>(inputNames[arg.getArgNumber()]);
-      inputs.push_back(
-          smt::DeclareFunOp::create(rewriter, loc, arg.getType(), namePrefix));
+      if (inputNames && index < inputNames.size())
+        namePrefix = dyn_cast<StringAttr>(inputNames[index]);
+      Value decl =
+          smt::DeclareFunOp::create(rewriter, loc, arg.getType(), namePrefix);
+      if (assumeKnownInputs) {
+        if (auto originalTy = getOriginalType(index))
+          maybeAssertKnownInput(originalTy, decl, loc, rewriter);
+      }
+      inputs.push_back(decl);
     }
 
     // Third, inline the blocks
@@ -966,12 +1018,19 @@ struct LogicEquivalenceCheckingOpConversion
     replaceOpWithSatCheck(op, loc, rewriter, solver);
     return success();
   }
+
+private:
+  bool assumeKnownInputs = false;
 };
 
 struct RefinementCheckingOpConversion
     : CircuitRelationCheckOpConversion<verif::RefinementCheckingOp> {
   using CircuitRelationCheckOpConversion<
       verif::RefinementCheckingOp>::CircuitRelationCheckOpConversion;
+  RefinementCheckingOpConversion(TypeConverter &converter, MLIRContext *context,
+                                 bool assumeKnownInputs)
+      : CircuitRelationCheckOpConversion(converter, context),
+        assumeKnownInputs(assumeKnownInputs) {}
 
   LogicalResult
   matchAndRewrite(verif::RefinementCheckingOp op, OpAdaptor adaptor,
@@ -1047,8 +1106,15 @@ struct RefinementCheckingOpConversion
 
     // Create the symbolic values we replace the block arguments with
     SmallVector<Value> inputs;
-    for (auto arg : adaptor.getFirstCircuit().getArguments())
-      inputs.push_back(smt::DeclareFunOp::create(rewriter, loc, arg.getType()));
+    auto originalArgTypes = op.getFirstCircuit().getArgumentTypes();
+    for (auto arg : adaptor.getFirstCircuit().getArguments()) {
+      Value decl =
+          smt::DeclareFunOp::create(rewriter, loc, arg.getType(), StringAttr{});
+      if (assumeKnownInputs && arg.getArgNumber() < originalArgTypes.size())
+        maybeAssertKnownInput(originalArgTypes[arg.getArgNumber()], decl, loc,
+                              rewriter);
+      inputs.push_back(decl);
+    }
 
     // Inline the target circuit. Free variables remain free variables.
     rewriter.mergeBlocks(&adaptor.getSecondCircuit().front(), solver.getBody(),
@@ -1092,6 +1158,9 @@ struct RefinementCheckingOpConversion
     replaceOpWithSatCheck(op, loc, rewriter, solver);
     return success();
   }
+
+private:
+  bool assumeKnownInputs = false;
 };
 
 /// Information about a ltl.delay operation that needs multi-step tracking.
@@ -1536,31 +1605,7 @@ struct VerifBoundedModelCheckingOpConversion
 
     auto maybeAssertKnown = [&](Type originalTy, Value smtVal,
                                 OpBuilder &builder) {
-      auto structTy = dyn_cast<hw::StructType>(originalTy);
-      if (!structTy)
-        return;
-      auto elements = structTy.getElements();
-      if (elements.size() != 2)
-        return;
-      if (!elements[0].name || !elements[1].name)
-        return;
-      if (elements[0].name.getValue() != "value" ||
-          elements[1].name.getValue() != "unknown")
-        return;
-      int64_t valueWidth = hw::getBitWidth(elements[0].type);
-      int64_t unknownWidth = hw::getBitWidth(elements[1].type);
-      if (valueWidth <= 0 || unknownWidth <= 0 || valueWidth != unknownWidth)
-        return;
-      auto bvTy = dyn_cast<smt::BitVectorType>(smtVal.getType());
-      if (!bvTy || bvTy.getWidth() !=
-                       static_cast<unsigned>(valueWidth + unknownWidth))
-        return;
-      auto unkTy = smt::BitVectorType::get(builder.getContext(), unknownWidth);
-      auto unknownBits =
-          smt::ExtractOp::create(builder, loc, unkTy, 0, smtVal);
-      auto zero = smt::BVConstantOp::create(builder, loc, 0, unknownWidth);
-      auto isKnown = smt::EqOp::create(builder, loc, unknownBits, zero);
-      smt::AssertOp::create(builder, loc, isKnown);
+      maybeAssertKnownInput(originalTy, smtVal, loc, builder);
     };
 
     // =========================================================================
@@ -2545,16 +2590,15 @@ void circt::populateVerifToSMTConversionPatterns(
     bool risingClocksOnly, bool assumeKnownInputs,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
-  (void)assumeKnownInputs; // TODO: Use this parameter for assume patterns
   // Add LTL operation conversion patterns
   populateLTLToSMTConversionPatterns(converter, patterns);
 
   // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
-               VerifCoverOpConversion,
-               LogicEquivalenceCheckingOpConversion,
-               RefinementCheckingOpConversion>(converter,
-                                               patterns.getContext());
+               VerifCoverOpConversion>(converter, patterns.getContext());
+  patterns.add<LogicEquivalenceCheckingOpConversion,
+               RefinementCheckingOpConversion>(
+      converter, patterns.getContext(), assumeKnownInputs);
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, risingClocksOnly,
       propertylessBMCOps, coverBMCOps);
@@ -2722,9 +2766,10 @@ void ConvertVerifToSMTPass::runOnOperation() {
 
   // First phase: lower Verif operations, leaving LTL ops untouched.
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
-               VerifCoverOpConversion, LogicEquivalenceCheckingOpConversion,
-               RefinementCheckingOpConversion>(converter,
-                                               patterns.getContext());
+               VerifCoverOpConversion>(converter, patterns.getContext());
+  patterns.add<LogicEquivalenceCheckingOpConversion,
+               RefinementCheckingOpConversion>(
+      converter, patterns.getContext(), assumeKnownInputs);
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, risingClocksOnly,
       propertylessBMCOps, coverBMCOps);

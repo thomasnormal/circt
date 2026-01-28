@@ -1,0 +1,21 @@
+// RUN: circt-opt %s --convert-verif-to-smt="assume-known-inputs=true" --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
+
+// CHECK: smt.solver() : () -> i1 {
+// CHECK: [[IN:%.+]] = smt.declare_fun : !smt.bv<2>
+// CHECK: [[UNK:%.+]] = smt.bv.extract [[IN]] from 0 : (!smt.bv<2>) -> !smt.bv<1>
+// CHECK: [[KNOWN:%.+]] = smt.eq [[UNK]], %c0_bv1 : !smt.bv<1>
+// CHECK: smt.assert [[KNOWN]]
+// CHECK: [[DIST:%.+]] = smt.distinct [[IN]], [[IN]] : !smt.bv<2>
+// CHECK: smt.assert [[DIST]]
+// CHECK: smt.check sat
+// CHECK: }
+func.func @test_lec_known_inputs() -> i1 {
+  %0 = verif.lec : i1 first {
+  ^bb0(%arg0: !hw.struct<value: i1, unknown: i1>):
+    verif.yield %arg0 : !hw.struct<value: i1, unknown: i1>
+  } second {
+  ^bb0(%arg0: !hw.struct<value: i1, unknown: i1>):
+    verif.yield %arg0 : !hw.struct<value: i1, unknown: i1>
+  }
+  return %0 : i1
+}
