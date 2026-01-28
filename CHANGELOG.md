@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 239 - January 28, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Active Tracks
+- **Track A**: Multi-top signal sharing - Make hvl_top see hdl_top signals for UVM phases
+- **Track B**: Apply bind scope patch to slang, test AHB/AXI4 AVIPs
+- **Track C**: Run external test suites (sv-tests, verilator, yosys)
+- **Track D**: Test OpenTitan IP simulations with circt-sim
+
+### In Progress
+(Updates will be added as work progresses)
+
+---
+
 ## Iteration 238 - January 28, 2026
 
 ### SSA Value Caching Fix
