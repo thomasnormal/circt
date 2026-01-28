@@ -118,6 +118,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Uses `__moore_delay` runtime call instead of `llhd.wait` inside forks
    - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 1319-1321
 
+4. **SSA Value Caching** ✅ FIXED (Iteration 238):
+   - Signal values were re-read on every `getValue()` call instead of using cached values
+   - Broke edge detection patterns: `%old = prb` before wait, `%new = prb` after wait
+   - **Fix**: Cache lookup now happens BEFORE signal re-read in `getValue()`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 5517-5530
+
+5. **JIT Symbol Registration for circt-bmc** ✅ FIXED (Iteration 238):
+   - `circt_bmc_report_result` callback was not registered with LLVM ExecutionEngine
+   - Caused "Symbols not found" JIT session errors in BMC test suites
+   - **Fix**: Register symbol with `engine->registerSymbols()` after ExecutionEngine creation
+   - **Files**: `tools/circt-bmc/circt-bmc.cpp`
+   - **Impact**: sv-tests BMC improved from 5 pass / 18 errors to 23 pass / 0 errors
+
 **Medium Priority:**
 2. **Hierarchical Name Access** (~9 XFAIL tests):
    - Signal access through instance hierarchy incomplete
@@ -134,14 +147,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 236)
+### Test Suite Status (Iteration 238)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | 2883/2959 (97.4%) | 21 failures, 34 XFAIL |
+| Lit Tests | 2891/2962 (97.6%) | 16 failures, 34 XFAIL |
 | sv-tests LEC | 23/23 (100%) | All pass |
-| sv-tests BMC | 23/23 (100%) | 3 XFAIL as expected |
+| sv-tests BMC | 23/26 (88%) | 3 XFAIL as expected, JIT fix applied |
 | verilator LEC | 17/17 (100%) | All pass |
 | yosys LEC | 14/14 (100%) | All pass |
 | OpenTitan IPs | 32/37 (86%) | 5 fail due to OOM/timeout on large designs |
@@ -195,44 +208,51 @@ When a SystemVerilog file has both `initial` and `always` blocks, only the `init
 - `lib/Dialect/Sim/ProcessScheduler.cpp` lines 192-228, 269-286, 424-475
 - `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 247-322, 1555-1618
 
-### Track Status & Next Tasks (Iteration 236 Update)
+### Track Status & Next Tasks (Iteration 237 Update)
 
-**Iteration 236 Results:**
-- ✅ **sim.fork Entry Block Fix** - Fork branches with forever loops now work
-- ✅ **Delays in Fork Branches** - Uses runtime call instead of llhd.wait
-- ✅ **APB AVIP Simulation** - Runs with UVM_INFO output
+**Iteration 237 Results:**
+- ✅ **LTL Attribute Parser** - Added `ClockEdgeAttr` parsing, should fix 7 VerifToSMT tests
+- 🔍 **UVM Phase Execution** - ROOT CAUSE: `hvl_top` not instantiated, `run_test()` never called
+- 🔍 **circt-sim SSA Cache** - ROOT CAUSE: Values probed before `llhd.wait` not correctly cached
+- ✅ **Bind Scope Patch** - Created patch for slang, applies cleanly to v10
 
-**Active Tracks for Iteration 237:**
+**Active Tracks for Iteration 238:**
 
 | Track | Focus | Next Task |
 |-------|-------|-----------|
-| **A** | AVIP Simulation | Run APB AVIP to completion, investigate other AVIPs |
-| **B** | Lit Test Failures | Fix the 21 failing lit tests |
-| **C** | External Test Suites | Run sv-tests, verilator, yosys, OpenTitan |
-| **D** | Bind Scope Fix | Fix interface port visibility in bind statements |
+| **A** | Multi-Top Simulation | Support `--top hdl_top --top hvl_top` in circt-sim |
+| **B** | SSA Value Caching | Fix `getValue()` to use cached probe results after wait |
+| **C** | LTL Parser Tests | Verify VerifToSMT tests pass with attribute parser fix |
+| **D** | Apply Bind Patch | Apply slang-bind-scope.patch and test AVIPs |
 
-**Track A - AVIP Simulation:**
-- APB AVIP compiles and starts running
-- Need to extend simulation time and verify UVM phases complete
-- Test other AVIPs (UART, I2S, AXI4) after fixing bind scope
+**Track A - Multi-Top Simulation (CRITICAL):**
+- ROOT CAUSE: `hvl_top` contains `run_test()`, `hdl_top` is hardware
+- Currently only `hdl_top` is simulated
+- Need: Support multiple top modules or auto-detect HVL tops
+- Files: `tools/circt-sim/circt-sim.cpp`
 
-**Track B - Lit Test Failures (21 failures):**
-- ImportVerilog: queue-struct-array-pop.sv
-- VerifToSMT: 7 multiclock/cover tests
-- LLHD Transforms: mem2reg tests
-- circt-sim: 5 tests (apb-clock-reset, continuous-assignments, etc.)
-- circt-verilog: 3 tests (memories, registers, roundtrip)
+**Track B - SSA Value Caching (CRITICAL):**
+- ROOT CAUSE: `getValue()` re-reads signal instead of using cached probe
+- Affects edge detection (posedge/negedge) patterns
+- Pattern: `%old = llhd.prb` → `llhd.wait` → use `%old` (should be cached)
+- Files: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 5511-5592
 
-**Track C - External Test Suites:**
-- sv-tests LEC/BMC: Verify still at 100%
-- verilator-verification: Verify still at 100%
-- yosys SVA: Verify still at 100%
-- OpenTitan IPs: Test more IPs with fork fix
+**Track C - VerifToSMT Tests:**
+- LTL attribute parser added in Iteration 237
+- Need to verify 7 tests now pass:
+  - bmc-multiclock-delay-buffer-assert-clock.mlir
+  - bmc-multiclock-delay-buffer-conflict.mlir
+  - bmc-multiclock-nonfinal-per-check.mlir
+  - bmc-multiclock-past-buffer-prop-clock.mlir
+  - bmc-multiple-covers.mlir
+  - bmc-nonfinal-check-negedge.mlir
+  - verif-to-smt.mlir
 
-**Track D - Bind Scope Fix:**
-- ROOT CAUSE: Interface port names not visible in bind statement scope
-- Affects: AHB, AXI4, and other AVIPs
-- Files: `lib/Conversion/ImportVerilog/` bind handling
+**Track D - Bind Scope Patch:**
+- Patch at: `patches/slang-bind-scope.patch`
+- Status: Applies cleanly to slang v10
+- Need: Enable in `apply-slang-patches.sh` and test AVIPs
+- Affects: AHB, AXI4, AXI4Lite, and other AVIPs with bind directives
 
 **Key Findings in Iteration 235:**
 - **Fork/Join Variable Declarations**: Commit `5cb9aed08` fixes handling of variable declarations in fork bodies
