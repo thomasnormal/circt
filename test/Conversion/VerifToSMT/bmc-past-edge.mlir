@@ -102,9 +102,9 @@ func.func @test_multiple_past() -> i1 {
 // Both delay and past buffers are allocated
 // CHECK:         scf.for
 // Circuit has 4 args: req, ack, delay_buffer, past_buffer
-// Returns: orig outputs + buffers + non-final check
+// Returns: orig outputs + buffers + 2 non-final checks (one per assert)
 // CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
+// CHECK-SAME:        : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool, !smt.bool)
 func.func @test_past_with_delay() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {

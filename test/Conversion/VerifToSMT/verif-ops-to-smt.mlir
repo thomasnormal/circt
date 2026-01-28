@@ -90,11 +90,11 @@ func.func @test_assert_with_label(%cond: i1) {
 // CHECK:         func.call @bmc_init
 // CHECK:         scf.for
 // CHECK:           func.call @bmc_circuit
-// CHECK:           smt.check
 // CHECK:           func.call @bmc_loop
 // Verify clock edge detection for registers
 // CHECK:           smt.bv.not
 // CHECK:           smt.bv.and
+// CHECK:           smt.check
 // CHECK:         }
 // CHECK:       }
 func.func @test_bmc_clocked() -> (i1) {

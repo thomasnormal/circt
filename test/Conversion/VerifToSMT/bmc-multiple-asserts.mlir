@@ -1,9 +1,9 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
+// CHECK-LABEL: func.func @test_multi_asserts
+// Multiple asserts violation is checked as smt.or (any violated = failure)
+// CHECK: smt.or
 // CHECK-LABEL: func.func @bmc_circuit
-// Multiple asserts are combined with smt.and and returned as output
-// CHECK: smt.and
-// CHECK: return
 func.func @test_multi_asserts() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values []
   init {

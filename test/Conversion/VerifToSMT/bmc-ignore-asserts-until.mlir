@@ -4,6 +4,8 @@
 // CHECK: [[TRUE:%.+]] = arith.constant true
 // CHECK: [[FALSE:%.+]] = arith.constant false
 // CHECK: scf.for [[I:%.+]] = {{%.+}} to {{%.+}} step {{%.+}} iter_args({{%.+}} = {{%.+}}, [[VIOLATED:%.+]] = {{%.+}})
+// CHECK: func.call @bmc_loop()
+// CHECK: [[FUNCDECL:%.+]] = smt.declare_fun : !smt.bv<32>
 // CHECK: [[CMP:%.+]] = arith.cmpi ult, [[I]], [[IGNOREUNTIL]]
 // CHECK: [[NEWVIOLATED:%.+]] = scf.if [[CMP]]
 // CHECK:     scf.yield [[VIOLATED]]
@@ -18,8 +20,6 @@
 // CHECK:     arith.ori
 // CHECK:     scf.yield
 // CHECK: }
-// CHECK: func.call @bmc_loop()
-// CHECK: [[FUNCDECL:%.+]] = smt.declare_fun : !smt.bv<32>
 // CHECK: scf.yield [[FUNCDECL]], [[NEWVIOLATED]]
 
 
