@@ -1828,10 +1828,13 @@ struct ForkOpConversion : public OpConversionPattern<ForkOp> {
         {
           OpBuilder::InsertionGuard guard(rewriter);
           rewriter.setInsertionPointToStart(entryBlock);
-          // Add an empty print with side effects to prevent block elision.
-          // This prints nothing but ensures the entry block is preserved.
-          auto emptyFmt = sim::FormatLiteralOp::create(rewriter, loc, "");
-          sim::PrintFormattedProcOp::create(rewriter, loc, emptyFmt);
+          // Add a non-empty print with side effects to prevent block elision.
+          // We use a space character which won't print visibly but won't be
+          // optimized away (unlike empty strings which get canonicalized out).
+          // Note: "\0" doesn't work because C string literals treat null as
+          // the terminator, so StringRef("\0") has length 0.
+          auto spaceFmt = sim::FormatLiteralOp::create(rewriter, loc, " ");
+          sim::PrintFormattedProcOp::create(rewriter, loc, spaceFmt);
           cf::BranchOp::create(rewriter, loc, loopHeader);
         }
 
@@ -1857,10 +1860,13 @@ struct ForkOpConversion : public OpConversionPattern<ForkOp> {
         if (mightBeElided) {
           OpBuilder::InsertionGuard guard(rewriter);
           rewriter.setInsertionPointToStart(entryBlock);
-          // Add an empty print with side effects to prevent block elision.
-          // This prints nothing but ensures the entry block is preserved.
-          auto emptyFmt = sim::FormatLiteralOp::create(rewriter, loc, "");
-          sim::PrintFormattedProcOp::create(rewriter, loc, emptyFmt);
+          // Add a non-empty print with side effects to prevent block elision.
+          // We use a space character which won't print visibly but won't be
+          // optimized away (unlike empty strings which get canonicalized out).
+          // Note: "\0" doesn't work because C string literals treat null as
+          // the terminator, so StringRef("\0") has length 0.
+          auto spaceFmt = sim::FormatLiteralOp::create(rewriter, loc, " ");
+          sim::PrintFormattedProcOp::create(rewriter, loc, spaceFmt);
         }
       }
 
@@ -19633,6 +19639,65 @@ void MooreToCorePass::runOnOperation() {
   cleanupPatterns.add<UnrealizedCastToBoolRewrite>(&context);
   if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns))))
     signalPassFailure();
+
+  // Fix sim.fork entry blocks that have predecessors (e.g., from forever
+  // loops). During dialect conversion, inlineRegionBefore doesn't always
+  // preserve predecessor relationships correctly, so we do this fixup after
+  // the conversion is fully complete and block predecessors are finalized.
+  OpBuilder builder(&context);
+  module.walk([&](sim::SimForkOp forkOp) {
+    for (Region &region : forkOp.getBranches()) {
+      if (region.empty())
+        continue;
+      Block *entryBlock = &region.front();
+      if (entryBlock->hasNoPredecessors())
+        continue;
+
+      // Create a new loop header block after the entry block.
+      auto *loopHeader = new Block();
+      region.getBlocks().insertAfter(entryBlock->getIterator(), loopHeader);
+
+      // Move all operations from entry to the loop header.
+      loopHeader->getOperations().splice(loopHeader->end(),
+                                         entryBlock->getOperations());
+
+      // Update all branches in the region that target entryBlock to target
+      // loopHeader instead.
+      for (Block &block : region) {
+        Operation *terminator = block.getTerminator();
+        if (!terminator)
+          continue;
+        if (auto brOp = dyn_cast<cf::BranchOp>(terminator)) {
+          if (brOp.getDest() == entryBlock) {
+            builder.setInsertionPoint(brOp);
+            cf::BranchOp::create(builder, brOp.getLoc(), loopHeader);
+            brOp.erase();
+          }
+        } else if (auto condBrOp = dyn_cast<cf::CondBranchOp>(terminator)) {
+          bool updateTrue = condBrOp.getTrueDest() == entryBlock;
+          bool updateFalse = condBrOp.getFalseDest() == entryBlock;
+          if (updateTrue || updateFalse) {
+            builder.setInsertionPoint(condBrOp);
+            cf::CondBranchOp::create(
+                builder, condBrOp.getLoc(), condBrOp.getCondition(),
+                updateTrue ? loopHeader : condBrOp.getTrueDest(),
+                condBrOp.getTrueDestOperands(),
+                updateFalse ? loopHeader : condBrOp.getFalseDest(),
+                condBrOp.getFalseDestOperands());
+            condBrOp.erase();
+          }
+        }
+      }
+
+      // Add branch from entry to loop header plus a side-effect op to
+      // prevent the MLIR printer from eliding the entry block.
+      builder.setInsertionPointToStart(entryBlock);
+      auto spaceFmt = sim::FormatLiteralOp::create(builder, forkOp.getLoc(),
+                                                   " ");
+      sim::PrintFormattedProcOp::create(builder, forkOp.getLoc(), spaceFmt);
+      cf::BranchOp::create(builder, forkOp.getLoc(), loopHeader);
+    }
+  });
 }
 
 //===----------------------------------------------------------------------===//
