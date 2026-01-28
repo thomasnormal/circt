@@ -157,10 +157,46 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Verilator Verif | **17/17 (100%)** | All pass! |
 | yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
 | OpenTitan IPs | 6/6 tested | prim_count, timer_core, gpio_reg_top, uart, i2c, spi_host pass |
+| AVIPs | 1/9 simulates | APB compiles but hits delta overflow |
 
 **Fixed Iteration 240:**
 1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
 2. `lec-strip-llhd-signal-cf.mlir` - Added test for control flow support in strip-llhd-interface-signals
+
+### Active Workstreams & Next Steps
+
+**Track A - OpenTitan IPs (Status: 6/6 pass)**
+- Current: prim_count, timer_core, gpio_reg_top, uart, i2c, spi_host all pass
+- Next: Test alert_handler_reg_top, spi_device, usbdev
+- Goal: Validate circt-sim on complex OpenTitan blocks
+
+**Track B - AVIP Multi-top Delta Overflow (Status: BLOCKED)**
+- Current: APB AVIP hits delta cycle overflow at ~60ns
+- Root cause: Self-driven signal detection doesn't catch transitive dependencies
+- Next: Enhance `LLHDProcessInterpreter.cpp` to filter module-level drives
+- File: lines 4651-4682 (self-driven filtering)
+- Goal: Fix delta overflow for multi-top UVM simulations
+
+**Track C - External Test Suites (Status: 100%)**
+- Current: All three external suites (sv-tests, verilator, yosys) at 100%
+- Next: Run regression after each change to maintain
+- Goal: Don't regress external test coverage
+
+**Track D - Bind Scope (Status: 8/9 AVIPs blocked)**
+- Current: AHB, AXI4, I2S, I3C, JTAG, SPI, UART blocked
+- Next: Apply `patches/slang-bind-scope.patch`, rebuild slang
+- Goal: Unblock remaining AVIPs for compilation
+
+### Priority Feature Roadmap
+
+| Priority | Feature | Blocks | Files |
+|----------|---------|--------|-------|
+| P0 | Delta cycle overflow fix | All multi-top UVM | LLHDProcessInterpreter.cpp |
+| P0 | Bind scope patch | 8/9 AVIPs | slang-bind-scope.patch |
+| P1 | Hierarchical name access | ~9 tests | MooreToCore, circt-sim |
+| P1 | Virtual method dispatch | UVM polymorphism | MooreToCore |
+| P2 | $display format specifiers | UVM output | sim::PrintOp |
+| P3 | uvm_config_db | UVM infrastructure | Class handling |
 
 ### Iteration 239-240 Progress
 
@@ -172,7 +208,6 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Current Blockers:**
 1. **Delta cycle overflow** - Multi-top simulations hit combinational loops at ~60ns
 2. **Bind scope** - Interface ports not visible in bind statements (slang issue)
-3. **Local test expectations** - 18 lit tests need expectation updates
 
 ### AVIP Compilation Status (Iteration 235)
 

@@ -27,21 +27,56 @@ All lit test failures resolved.
    to identify hw.struct<value: i1, unknown: i1> patterns.
 2. **strip-llhd-interface-signals test**: Added test for control flow support.
 
-### Active Tracks
-- **Track A**: Test OpenTitan IPs with circt-sim
-- **Track B**: Test APB AVIP multi-top simulation
-- **Track C**: All lit test failures now fixed
-- **Track D**: Continue AVIP testing
+### Active Tracks & Next Steps
+
+- **Track A (OpenTitan IPs)**: Continue testing more IPs
+  - Status: prim_count passes, 6/6 tested pass
+  - Next: Test uart, spi_host, alert_handler_reg_top
+
+- **Track B (AVIP Multi-top)**: Investigate delta cycle overflow
+  - Status: APB AVIP hits delta overflow at ~60ns
+  - Next: Debug self-driven signal detection in UVM testbenches
+  - Root cause: Combinational loops between processes not properly filtered
+
+- **Track C (External Tests)**: All suites at 100%, maintain
+  - Status: sv-tests, verilator, yosys all passing
+  - Next: Run regression after each change
+
+- **Track D (Bind Scope)**: Unblock AVIPs with slang patch
+  - Status: 8/9 AVIPs blocked on bind scope issue
+  - Next: Apply/test slang-bind-scope.patch
 
 ### Remaining Limitations
 
-**Critical:**
-1. Delta cycle overflow (~60ns) in multi-top UVM simulations
-2. Bind scope issue blocks 8/9 AVIPs (slang patch needed)
+**Critical - UVM Parity Blockers:**
+1. **Delta Cycle Overflow** (~60ns in multi-top):
+   - Affects: All UVM AVIPs with hvl_top/hdl_top split
+   - Root cause: Self-driven signal detection misses transitive dependencies
+   - File: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4651-4682
+   - Feature needed: Enhanced self-driven filtering for module-level drives
 
-**Medium:**
-1. Hierarchical name access incomplete (~9 XFAIL tests)
-2. Virtual method dispatch not fully implemented
+2. **Bind Scope Resolution** (blocks 8/9 AVIPs):
+   - Affects: AHB, AXI4, I2S, I3C, JTAG, SPI, UART AVIPs
+   - Root cause: Slang doesn't resolve bind targets in parent scope
+   - Patch: `patches/slang-bind-scope.patch`
+   - Feature needed: Apply patch, rebuild slang/circt-verilog
+
+**Medium Priority:**
+1. **Hierarchical Name Access** (~9 XFAIL tests):
+   - Signal access through instance hierarchy incomplete
+   - Feature needed: `instance.signal` path resolution
+
+2. **Virtual Method Dispatch**:
+   - UVM relies on polymorphic calls
+   - Feature needed: Class hierarchy in circt-sim
+
+3. **$display Format Specifiers**:
+   - Some UVM format strings show `<unsupported format>`
+   - Feature needed: %p, %m, %t formatters
+
+**Lower Priority:**
+4. UVM-specific features: uvm_config_db, uvm_factory, sequences
+5. Constraint randomization: `rand`, `constraint`
 
 ---
 
