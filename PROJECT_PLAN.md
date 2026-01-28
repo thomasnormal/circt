@@ -156,18 +156,24 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
 | Verilator Verif | **17/17 (100%)** | All pass! |
 | yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
-| OpenTitan IPs | 6/6 tested | prim_count, timer_core, gpio_reg_top, uart, i2c, spi_host pass |
+| OpenTitan IPs | 12/12 tested | prim_count, gpio_no_alerts, prim_fifo_sync, uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top pass |
 | AVIPs | 1/9 simulates | APB compiles but hits delta overflow |
 
 **Fixed Iteration 240:**
 1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
 2. `lec-strip-llhd-signal-cf.mlir` - Added test for control flow support in strip-llhd-interface-signals
+3. **Transitive self-driven signal filtering** (ea06e826c) - Enhanced `applySelfDrivenFilter` to trace
+   through module-level drive VALUE expressions using `collectSignalIds()`. Prevents zero-delta loops
+   when process outputs feed back through module-level combinational logic.
+4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
 ### Active Workstreams & Next Steps
 
-**Track A - OpenTitan IPs (Status: 6/6 pass)**
-- Current: prim_count, timer_core, gpio_reg_top, uart, i2c, spi_host all pass
-- Next: Test alert_handler_reg_top, spi_device, usbdev
+**Track A - OpenTitan IPs (Status: 12/12 pass)**
+- Current: All tested IPs pass with build-test binary:
+  - prim_count, gpio_no_alerts, prim_fifo_sync
+  - uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top
+- Next: Test with newly built circt-sim, test full IPs (not just _reg_top)
 - Goal: Validate circt-sim on complex OpenTitan blocks
 
 **Track B - AVIP Multi-top Delta Overflow (Status: FIX IMPLEMENTED)**
