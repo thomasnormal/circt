@@ -26,21 +26,30 @@ All lit test failures resolved.
    to SMT types. The maybeAssertKnownInput function needs original HW types
    to identify hw.struct<value: i1, unknown: i1> patterns.
 2. **strip-llhd-interface-signals test**: Added test for control flow support.
+3. **Transitive self-driven signal filtering** (FIX IMPLEMENTED):
+   - Enhanced `applySelfDrivenFilter` in `LLHDProcessInterpreter.cpp` to trace
+     through module-level drive VALUE expressions
+   - Now uses `collectSignalIds()` to find signals that drives depend on
+   - Marks these as "transitively self-driven" to prevent zero-delta loops
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4803-4818
+   - **Test**: `test/Tools/circt-sim/self-driven-transitive-filter.mlir`
+4. **Bind scope patch applied**: Applied `patches/slang-bind-scope.patch` to
+   store bind directive scope for proper port name resolution per LRM 23.11.
 
 ### Active Tracks & Next Steps
 
 - **Track A (OpenTitan IPs)**: Continue testing more IPs
-  - Status: prim_count passes, 6/6 tested pass
-  - Next: Test uart, spi_host, alert_handler_reg_top
+  - Status: 6/6 tested pass, alert_handler_reg_top OOM (7.5MB MLIR)
+  - Next: Test smaller IPs, profile memory usage
 
-- **Track B (AVIP Multi-top)**: Investigate delta cycle overflow
-  - Status: APB AVIP hits delta overflow at ~60ns
-  - Next: Debug self-driven signal detection in UVM testbenches
-  - Root cause: Combinational loops between processes not properly filtered
+- **Track B (AVIP Multi-top)**: Fix delta cycle overflow (FIX IMPLEMENTED)
+  - Status: Root cause identified - transitive dependencies not filtered
+  - Fix: Added collectSignalIds() tracing for module-level drive values
+  - Next: Rebuild and test with APB AVIP
 
-- **Track C (External Tests)**: All suites at 100%, maintain
-  - Status: sv-tests, verilator, yosys all passing
-  - Next: Run regression after each change
+- **Track C (External Tests)**: Build in progress
+  - Status: circt-bmc crash detected (double free), full rebuild in progress
+  - Next: Run regression after rebuild completes
 
 - **Track D (Bind Scope)**: Unblock AVIPs with slang patch
   - Status: 8/9 AVIPs blocked on bind scope issue
@@ -49,11 +58,12 @@ All lit test failures resolved.
 ### Remaining Limitations
 
 **Critical - UVM Parity Blockers:**
-1. **Delta Cycle Overflow** (~60ns in multi-top):
+1. **Delta Cycle Overflow** (~60ns in multi-top) - FIX IN PROGRESS:
    - Affects: All UVM AVIPs with hvl_top/hdl_top split
    - Root cause: Self-driven signal detection misses transitive dependencies
-   - File: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4651-4682
-   - Feature needed: Enhanced self-driven filtering for module-level drives
+   - **FIX APPLIED**: Enhanced `applySelfDrivenFilter` to trace drive value deps
+   - File: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4803-4818
+   - Status: Awaiting rebuild and testing
 
 2. **Bind Scope Resolution** (blocks 8/9 AVIPs):
    - Affects: AHB, AXI4, I2S, I3C, JTAG, SPI, UART AVIPs
@@ -271,6 +281,9 @@ as parent.
 - Documented `circt-lec --print-counterexample` in FormalVerification docs.
 - Documented clocked-assert edge handling in the SVA BMC/LEC plan.
 - Added OpenTitan AES S-Box LEC harness (`utils/run_opentitan_circt_lec.py`).
+- OpenTitan AES S-Box LEC harness now injects a valid-op `assume` wrapper by
+  default (disable with `--allow-invalid-op`) to avoid invalid op_i cases
+  dominating equivalence results.
 - LEC now preserves original input types in `construct-lec` and uses them to
   honor `--assume-known-inputs` after HW-to-SMT lowering, fixing OpenTitan
   canright AES S-Box equivalence with SMT-LIB.

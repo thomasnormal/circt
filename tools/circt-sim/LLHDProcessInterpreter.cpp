@@ -4801,12 +4801,21 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       });
     }
     // Include module-level drives fed by this process's results.
+    // Also include transitive dependencies: signals that the drive value
+    // depends on. If a process drives signal Z via a module-level drive that
+    // reads signal X, then both Z and X are "self-driven" and should be
+    // filtered from the sensitivity list to prevent zero-delta loops.
     for (auto &entry : moduleDrives) {
       if (entry.second != procId)
         continue;
       SignalId drivenId = getSignalId(entry.first.getSignal());
       if (drivenId != 0)
         selfDrivenSignals.insert(drivenId);
+      // Collect transitive dependencies from the drive value expression.
+      llvm::SmallVector<SignalId, 4> transitiveSignals;
+      collectSignalIds(entry.first.getValue(), transitiveSignals);
+      for (SignalId sigId : transitiveSignals)
+        selfDrivenSignals.insert(sigId);
     }
 
     if (selfDrivenSignals.empty())
@@ -5514,10 +5523,26 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (it == processStates.end())
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
+  // Check the cache FIRST. If a value has been explicitly set (e.g., by
+  // interpretProbe when the probe operation was executed), use that cached
+  // value. This is critical for patterns like posedge detection where we
+  // need to compare old vs new signal values:
+  //   %old = llhd.prb %sig   // executed before wait, cached
+  //   llhd.wait ...
+  //   %new = llhd.prb %sig   // executed after wait, gets fresh value
+  //   %edge = comb.and %new, (not %old)  // needs OLD cached value for %old
+  // Without this check, signal values would be re-read every time, causing
+  // %old to return the current (new) value instead of the cached old value.
+  auto &valueMap = it->second.valueMap;
+  auto valIt = valueMap.find(value);
+  if (valIt != valueMap.end())
+    return valIt->second;
+
+  // For direct signal references not in cache, read the current value.
   if (SignalId sigId = getSignalId(value)) {
     const SignalValue &sv = scheduler.getSignalValue(sigId);
     InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
-    it->second.valueMap[value] = iv;
+    valueMap[value] = iv;
     return iv;
   }
 
@@ -5560,19 +5585,6 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
       return results[result.getResultNumber()];
     return InterpretedValue::makeX(getTypeWidth(value.getType()));
   }
-
-  // Check the cache first. If a value has been explicitly set (e.g., by
-  // interpretProbe when the probe operation was executed), use that cached
-  // value. This is important for patterns like posedge detection where we
-  // need to compare old vs new signal values:
-  //   %old = llhd.prb %sig   // executed before wait, cached
-  //   llhd.wait ...
-  //   %new = llhd.prb %sig   // executed after wait, gets fresh value
-  //   %edge = comb.and %new, (not %old)  // needs OLD cached value for %old
-  auto &valueMap = it->second.valueMap;
-  auto valIt = valueMap.find(value);
-  if (valIt != valueMap.end())
-    return valIt->second;
 
   // For probe operations that are NOT in the cache, do a live re-read.
   // This handles the case where a probe result is used but the probe
