@@ -1,8 +1,26 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 234 - January 27, 2026
+## Iteration 234 - January 27-28, 2026
 
-### Focus Areas
+### Wave 2 Results (January 28)
+
+**External Test Suites - ALL PASS:**
+- sv-tests LEC: 23/23 (100%)
+- sv-tests BMC: 23/23 (100%) + 3 XFAIL
+- verilator-verification LEC: 17/17 (100%)
+- yosys SVA LEC: 14/14 (100%)
+
+**OpenTitan IPs - ALL PASS:**
+- prim_count, timer_core, prim_fifo_sync (primitives)
+- gpio_no_alerts, uart_reg_top, spi_host_reg_top (reg blocks)
+- **alert_handler_reg_top** - NOW PASSES (was delta overflow)
+
+**Remaining UVM Blocker:**
+- moore.read operand dominance errors in UVM phase/objection code
+- Affects: uvm_phase_hopper.svh, uvm_objection.svh
+- Investigation ongoing
+
+### Wave 1 Focus Areas
 
 - **Track A**: Test AVIPs with fork/join import fix
 - **Track B**: Investigate delta overflow root cause
@@ -10,6 +28,50 @@
 - **Track D**: Fix remaining lit test failures
 - **Track E**: Fix sim.fork terminator issue
 - **Track F**: OpenTitan IP verification
+
+### SVA BMC/LEC Updates
+
+- BMC delay/past buffers honor `ltl.clock` edge (posedge/negedge/edge) via
+  `bmc.clock_edge` propagation.
+- VerifToSMT tests cover negedge and edge-gated delay/past buffers.
+- LTLToCore now lowers `ltl.clock` with both-edge clocks instead of erroring.
+- Clocked asserts/assumes/covers now carry `bmc.clock_edge`, and BMC skips
+  posedge-only gating unless all non-final checks are posedge.
+- BMC no longer assumes unclocked checks are posedge-gated; verif-to-smt
+  regression updated accordingly.
+- Delay/past clock-edge propagation now applies even when `bmc.clock` is
+  pre-set; added a negedge-gated delay buffer regression.
+- Documented `circt-lec --print-counterexample` in FormalVerification docs.
+- Documented clocked-assert edge handling in the SVA BMC/LEC plan.
+- Added OpenTitan AES S-Box LEC harness (`utils/run_opentitan_circt_lec.py`).
+- Added `circt-lec --fail-on-inequivalent` and LEC harness logging to surface
+  inequivalence as a failure in automation.
+- JIT LEC now prints per-input counterexamples with `--print-counterexample`
+  by emitting model-eval calls in the SMT-to-Z3 lowering.
+- JIT LEC now emits per-input model values for `--print-solver-output` as well,
+  aligning with SMT-LIB counterexample reporting.
+- JIT LEC only prints the counterexample header when at least one model value
+  is emitted, matching the SMT-LIB behavior more closely.
+- JIT LEC now reports equivalence status back to the driver so
+  `--fail-on-inequivalent` works consistently in JIT runs.
+- circt-bmc now accepts `--print-counterexample` and prints per-input model
+  values for SAT/UNKNOWN in JIT runs (also enabled via `--print-solver-output`).
+- circt-bmc now reports JIT results back to the driver so
+  `--fail-on-violation` can turn counterexamples into a failing exit status.
+- Sim fork parsing now inserts branch terminators, fixing UVM multiclock BMC
+  pipelines that round-trip through textual IR.
+- Clocked assert lowering now records `bmc.clock` for named clock inputs, and
+  VerifToSMT propagates it to delay/past buffers for correct multi-clock gating.
+- VerifToSMT now rejects shared delay/past ops annotated with conflicting
+  clocks, preventing unsound multi-clock buffer reuse.
+- Clocked assert properties now clone LTL subtrees before clock annotation so
+  per-clock delay/past buffers are separated instead of shared.
+- Non-final BMC checks now gate each property by its own clock edge, enabling
+  mixed-clock assertions without over-approximating to a single combined check.
+- Shared SMT model printing helpers are now in CIRCTSupport, and JIT model
+  output uses `circt_smt_print_model_value` across LEC/BMC.
+- SMT-to-Z3 JIT model printing now loads the Z3 context in the entry block to
+  avoid dominance errors when emitting per-input model values.
 
 ### Key Finding: Delta Overflow Root Cause (Track B)
 
@@ -87,6 +149,8 @@ The conversion code at `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 1769-1
   branch to avoid dominance errors; add `fork-join-decl.sv`.
 - External: verilator-verification LEC 17/17 pass after sensitivity cache changes.
 - External: yosys SVA LEC 14/14 pass (2 vhdl skips).
+- AVIP: APB AVIP compiles cleanly with the fork-decl fix
+  (`utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`).
 - AVIP: APB compile via `run_avip_circt_verilog.sh` fails with dominance
   errors in `uvm_phase_hopper.svh`/`uvm_objection.svh`/`uvm_sequencer_base.svh`
   (moore.read operand dominance); needs investigation.
@@ -996,9 +1060,27 @@ if (calleeName == "__moore_delay") {
   end steps in non-rising mode.
 - **LEC**: LLHD signal stripping now abstracts non-dominating drive/probe cases
   to inputs instead of erroring.
+- **LEC**: Added `--print-counterexample` to report model inputs without full
+  solver output.
+- **LEC**: `--print-counterexample` now requests models from z3.
+- **LEC**: `--print-counterexample` now collects input names without requiring
+  `--print-solver-output`.
+- **BMC**: Multi-clock delay/past buffers advance only on any clock posedge in
+  non-rising mode.
+- **BMC**: Added regression coverage for multi-clock past buffer gating.
+- **BMC**: Adjusted multi-clock delay/past regressions to exercise buffer
+  allocation via LTL property composition.
+- **BMC**: Delay/past buffers can now be pinned to a specific clock via a
+  `bmc.clock` attribute, with multi-clock regression coverage.
+- **BMC**: Added clock-pinned multi-clock regression for `ltl.past` buffers.
+- **BMC**: `ltl.clock` now propagates to delay/past buffers for clock-pinned
+  updates, with regression coverage.
 - **Test suites**: sv-tests BMC 23/26, verilator-verification BMC 17/17, yosys
   SVA BMC 14/14 (2 VHDL skips), sv-tests LEC 23/23, verilator-verification LEC
   17/17, yosys LEC 14/14 (2 VHDL skips).
+- **Test suites**: re-ran sv-tests BMC/LEC smoke (23/26, 23/23).
+- **Test suites**: re-ran verilator-verification BMC/LEC (17/17, 17/17).
+- **Test suites**: re-ran yosys SVA BMC/LEC (14/14, 14/14; 2 VHDL skips).
 
 ### Bug Found & Fixed
 
