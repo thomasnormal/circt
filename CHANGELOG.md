@@ -38,6 +38,52 @@ All lit test failures resolved.
 5. **Test file syntax fix** (bc0bd77dd): Fixed invalid `llhd.wait` syntax in
    `self-driven-transitive-filter.mlir` - empty observed list `()` replaced with
    `delay %eps` for valid LLHD syntax.
+6. **BMC delay/past buffer edge gating**: Delay and past buffers now advance
+   on the owning property's clock edge (including negedge), with a new
+   `bmc-delay-buffer-negedge` regression test.
+7. **Procedural concurrent assertion hoisting**: Concurrent `assert property`
+   inside procedural blocks now hoist to module scope even without an implicit
+   procedural clock, with a new `sva-procedural-hoist-no-clock` regression.
+8. **BMC clock inference from ltl.clock**: Non-final check gating now infers
+   clock/edge from `ltl.clock` when attributes are absent, with a new
+   `bmc-nonfinal-check-clock-op` regression.
+9. **BMC delay buffer clock inference**: Delay/past buffer updates now infer
+   their clock/edge from `ltl.clock` (not just bmc attrs), with a new
+   `bmc-delay-buffer-clock-op-negedge` regression.
+10. **LEC strict LLHD mode**: Added `--strict-llhd` to fail on unsound LLHD
+   abstractions (multi-driven ref outputs, interface/comb abstraction), with
+   a `lec-lower-llhd-ref-multidrive-strict` regression.
+11. **LEC strict LLHD signal check**: Added `lec-strict-llhd-signal-abstraction`
+   regression to guard plain LLHD signal abstraction failures.
+12. **LEC strict LLHD comb CF**: Added `lec-strict-llhd-comb-cf` regression to
+   fail on combinational control-flow abstraction in strict mode.
+13. **LEC strict LLHD interface multistore**: Added
+   `lec-strip-llhd-interface-multistore-strict` regression to fail on
+   interface signal abstraction in strict mode.
+14. **LEC strict/approx flags**: Added `--lec-strict`/`--lec-approx` CLI flags
+   (aliasing `--strict-llhd`) and documented their behavior.
+15. **LEC strict/approx conflict test**: Added regression to ensure conflicting
+    flags fail with a clear diagnostic.
+16. **LEC strict interface read-before-store**: Added regression to fail on
+    LLHD interface reads that do not dominate a store in strict mode.
+17. **sim.fork entry block predecessor fix**: Post-conversion fixup in
+    MooreToCore that restructures sim.fork regions where forever loops create
+    back-edges to the entry block. Inserts a new entry block with a side-effect
+    op to prevent elision. Unblocks ALL UVM AVIPs from MLIR parse failures.
+    - UART, I3C, I2S, APB AVIPs now compile AND simulate with circt-sim
+6. **Formal result tokens**: Added stable `BMC_RESULT=SAT|UNSAT` and
+   `LEC_RESULT=EQ|NEQ|UNKNOWN` output for scriptable parsing; added LEC token
+   tests and a `bmc-jit` lit feature gate.
+7. **Formal regression harness**: Added `utils/run_formal_all.sh` and
+   `docs/FormalRegression.md` to run BMC/LEC suites with summary output and
+   baseline updates.
+8. **BMC delay e2e tests**: Added SAT/UNSAT end-to-end SVA delay tests to
+   exercise `##1` delay buffering in `circt-bmc`.
+9. **Multi-clock delay gating**: Gate BMC delay buffer updates on any clock
+   posedge in multi-clock mode; added a VerifToSMT regression test.
+10. **Clock-edge gated checks**: Use clock edge signals for non-final BMC
+    checks (respecting `bmc.clock_edge`/`bmc.clock`), instead of loop-index
+    parity; updated negedge regression coverage.
 
 ### Active Tracks & Next Steps
 
@@ -47,34 +93,36 @@ All lit test failures resolved.
     spi_device_reg_top, rv_timer_reg_top, pwm_reg_top, usbdev_reg_top, pattgen_reg_top)
   - Next: Test with new circt-sim binary, test full IPs (not just _reg_top)
 
-- **Track B (AVIP Multi-top)**: Fix delta cycle overflow (FIX IMPLEMENTED)
-  - Status: Root cause identified - transitive dependencies not filtered
-  - Fix: Added collectSignalIds() tracing for module-level drive values
-  - Next: Rebuild and test with APB AVIP
+- **Track B (AVIP Multi-top)**: Delta cycle overflow **CONFIRMED FIXED**
+  - APB AVIP hdl_top: 10ms simulated, ~1M delta cycles, 0 errors, NO overflow
+  - APB AVIP hvl_top: 0 fs, 1 delta cycle, 3412 signal updates, 0 errors
+  - Unit test self-driven-transitive-filter.mlir: PASS
+  - Next: Test I2S, I3C, UART AVIP simulation (these now compile)
 
-- **Track C (External Tests)**: Build in progress
-  - Status: circt-bmc crash detected (double free), full rebuild in progress
-  - Next: Run regression after rebuild completes
+- **Track C (External Tests)**: Handled by codex agent (BMC/LEC/SVA)
 
-- **Track D (Bind Scope)**: Unblock AVIPs with slang patch
-  - Status: 8/9 AVIPs blocked on bind scope issue
-  - Next: Apply/test slang-bind-scope.patch
+- **Track D (Bind Scope)**: Partial success - 3/7 AVIPs compile
+  - PASS: I2S, I3C, UART (compile cleanly with circt-verilog)
+  - FAIL (bind scope): AHB, AXI4, JTAG (bind port refs to enclosing scope)
+  - FAIL (source issues): SPI (nested block comments, empty args, class access)
+  - Root cause: slang still resolves bind port connections in target scope,
+    not enclosing module scope per LRM 23.11
+  - Next: Improve bind scope patch, simulate passing AVIPs
 
 ### Remaining Limitations
 
 **Critical - UVM Parity Blockers:**
-1. **Delta Cycle Overflow** (~60ns in multi-top) - FIX IN PROGRESS:
-   - Affects: All UVM AVIPs with hvl_top/hdl_top split
-   - Root cause: Self-driven signal detection misses transitive dependencies
-   - **FIX APPLIED**: Enhanced `applySelfDrivenFilter` to trace drive value deps
+1. **Delta Cycle Overflow** - ✅ **CONFIRMED FIXED**:
+   - Fix: Transitive self-driven signal filtering (ea06e826c)
+   - APB AVIP hdl_top: 10ms simulated, ~1M delta cycles, 0 errors
    - File: `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 4803-4818
-   - Status: Awaiting rebuild and testing
 
-2. **Bind Scope Resolution** (blocks 8/9 AVIPs):
-   - Affects: AHB, AXI4, I2S, I3C, JTAG, SPI, UART AVIPs
-   - Root cause: Slang doesn't resolve bind targets in parent scope
-   - Patch: `patches/slang-bind-scope.patch`
-   - Feature needed: Apply patch, rebuild slang/circt-verilog
+2. **Bind Scope Resolution** (blocks 3/7 AVIPs):
+   - PASS: I2S, I3C, UART compile cleanly
+   - FAIL: AHB, AXI4, JTAG - bind port refs still resolve in target scope
+   - FAIL: SPI - source-level issues (nested comments, empty args)
+   - Root cause: Slang patch doesn't fully fix LRM 23.11 scope resolution
+   - Next: Improve `slang-bind-scope.patch` for enclosing module scope
 
 **Medium Priority:**
 1. **Hierarchical Name Access** (~9 XFAIL tests):
