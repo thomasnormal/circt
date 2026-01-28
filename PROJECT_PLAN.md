@@ -152,12 +152,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | 2901/2961 (97.97%) | 2 failures, 34 XFAIL, 3 unresolved (LSP) |
+| Lit Tests | **2903/2961 (98.04%)** | All pass, 34 XFAIL, 3 unresolved (LSP) |
 | sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
 | Verilator Verif | **17/17 (100%)** | All pass! |
 | yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
 | OpenTitan IPs | 6/6 tested | prim_count, timer_core, gpio_reg_top, uart, i2c, spi_host pass |
-| AVIPs | 1/9 compile | APB compiles + simulates, others blocked on bind scope |
+
+**Fixed Iteration 240:**
+1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
+2. `lec-strip-llhd-signal-cf.mlir` - Added test for control flow support in strip-llhd-interface-signals
 
 ### Iteration 239-240 Progress
 
