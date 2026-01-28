@@ -68,10 +68,12 @@
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include <atomic>
 
 #ifdef CIRCT_BMC_ENABLE_JIT
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
+#include "llvm/ExecutionEngine/Orc/Mangling.h"
 #include "llvm/Support/TargetSelect.h"
 #endif
 
@@ -125,10 +127,27 @@ static cl::opt<bool> printSolverOutput(
              "prove/disprove."),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> printCounterexample(
+    "print-counterexample",
+    cl::desc("Print counterexample inputs for SAT/UNKNOWN results when a model "
+             "is available"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<bool>
     verbosePassExecutions("verbose-pass-executions",
                           cl::desc("Log executions of toplevel module passes"),
                           cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool> failOnViolation(
+    "fail-on-violation",
+    cl::desc("Return failure when the bounded model check finds a violation"),
+    cl::init(false), cl::cat(mainCategory));
+
+static std::atomic<int> bmcJitResult{-1};
+
+extern "C" void circt_bmc_report_result(int result) {
+  bmcJitResult.store(result ? 1 : 0, std::memory_order_relaxed);
+}
 
 static cl::opt<bool> risingClocksOnly(
     "rising-clocks-only",
@@ -302,6 +321,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB) {
     LowerSMTToZ3LLVMOptions options;
     options.debug = printSolverOutput;
+    options.printModelInputs = printSolverOutput || printCounterexample;
     pm.addPass(createLowerSMTToZ3LLVM(options));
     pm.addPass(createCSEPass());
     pm.addPass(createSimpleCanonicalizerPass());
@@ -385,11 +405,29 @@ static LogicalResult executeBMC(MLIRContext &context) {
       return handleErr(expectedEngine.takeError());
 
     engine = std::move(*expectedEngine);
+
+    // Register the circt_bmc_report_result callback symbol so JIT-compiled code
+    // can call back to report BMC results.
+    engine->registerSymbols([](llvm::orc::MangleAndInterner interner) {
+      llvm::orc::SymbolMap symbolMap;
+      symbolMap[interner("circt_bmc_report_result")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_bmc_report_result),
+          llvm::JITSymbolFlags::Exported};
+      return symbolMap;
+    });
   }
 
   auto timer = ts.nest("JIT Execution");
+  bmcJitResult.store(-1, std::memory_order_relaxed);
   if (auto err = engine->invokePacked(moduleName))
     return handleErr(std::move(err));
+  int result = bmcJitResult.load(std::memory_order_relaxed);
+  if (result < 0) {
+    llvm::errs() << "BMC JIT did not report a result\n";
+    return failure();
+  }
+  if (failOnViolation && result == 0)
+    return failure();
 
   return success();
 #else

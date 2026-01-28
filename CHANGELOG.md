@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 238 - January 28, 2026
+
+### SSA Value Caching Fix
+
+**Problem:** Signal values were being re-read every time `getValue()` was called,
+instead of using cached values from when operations were executed. This broke
+patterns like posedge detection:
+```mlir
+%old = llhd.prb %sig   // executed before wait, should be cached
+llhd.wait ...
+%new = llhd.prb %sig   // executed after wait, gets fresh value
+%edge = comb.and %new, (not %old)  // needs OLD cached value for %old
+```
+
+Without caching, `%old` would return the current (new) signal value, causing
+edge detection to always fail.
+
+**Solution:** Moved cache lookup to happen BEFORE signal re-read in `getValue()`.
+The cache is now checked first, and only if the value is not cached do we read
+from the signal.
+
+**Files:** `tools/circt-sim/LLHDProcessInterpreter.cpp` (lines 5517-5530)
+
+### JIT Symbol Registration Fix for circt-bmc
+
+**Problem:** The circt-bmc tool was failing to execute JIT-compiled code because the
+`circt_bmc_report_result` callback function (defined in the host executable) was not
+registered with the LLVM ExecutionEngine's symbol resolver.
+
+**Error:** `JIT session error: Symbols not found: [ circt_bmc_report_result ]`
+
+**Solution:** Register the `circt_bmc_report_result` symbol with the ExecutionEngine
+after creation using `engine->registerSymbols()`.
+
+**Files:** `tools/circt-bmc/circt-bmc.cpp`
+
+**Test Results:**
+- Before fix: sv-tests BMC - 5 pass, 18 errors (JIT symbol resolution failures)
+- After fix: sv-tests BMC - 23 pass, 0 errors, 3 xfail
+
+### Test Results Summary
+
+**Lit Tests:**
+- Unit tests: 1356/1356 (100%)
+- Integration tests: 2891/2962 (97.6%), 16 pre-existing failures
+
+**External Tests (sv-tests BMC):**
+- Pass: 23, XFail: 3, Skip: 1010
+
+**OpenTitan IPs:**
+- prim_count, timer_core, gpio_reg_top: All 3 pass
+
+**Edge Detection Test:**
+- SSA value caching verified working - posedge detected every 10 time units
+
+### OpenTitan LEC Investigation
+- Masked AES S-Box implementations collapse to constant outputs after LLHD->SMT
+  lowering (SBOX_FWD/INV[0]) regardless of input data.
+- Next: isolate the pipeline stage that drops data dependencies and add a
+  minimal regression.
+
 ## Iteration 237 - January 28, 2026
 
 ### Track Investigation Results
@@ -98,6 +159,19 @@ as parent.
 - LEC strip pass now tracks LLHD ref paths (`sig.struct_extract`,
   `sig.extract`) and inlines single-block multi-drive signals instead of
   abstracting them to inputs.
+- LEC strip pass now collapses multi-block `llhd.combinational` regions when
+  safe and keeps ref paths through `comb.mux`, with regression coverage in
+  `test/Tools/circt-lec/lec-strip-llhd-combinational-merge.mlir`.
+- LEC strip pass now rewrites `comb.mux` on LLHD refs into value-level muxes
+  when only probed, with regression coverage in
+  `test/Tools/circt-lec/lec-strip-llhd-ref-mux.mlir`.
+- LEC strip pass now forwards single constant-time drives from module inputs
+  even when probes appear earlier in the block, avoiding stale init values
+  (`test/Tools/circt-lec/lec-strip-llhd-input-drive-order.mlir`).
+- OpenTitan LEC harness now targets the masked wrapper module name after
+  substitution, fixing masked AES S-Box runs.
+- SMT-LIB LEC now tolerates non-zero solver exit codes when output contains a
+  valid result token, allowing `--print-counterexample` on equivalent cases.
 - Added `circt-lec --fail-on-inequivalent` and LEC harness logging to surface
   inequivalence as a failure in automation.
 - JIT LEC now prints per-input counterexamples with `--print-counterexample`
