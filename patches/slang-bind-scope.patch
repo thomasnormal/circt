@@ -1,0 +1,201 @@
+diff --git a/include/slang/ast/Compilation.h b/include/slang/ast/Compilation.h
+index 927a4db..0ccf038 100644
+--- a/include/slang/ast/Compilation.h
++++ b/include/slang/ast/Compilation.h
+@@ -220,6 +220,10 @@ struct SLANG_EXPORT BindDirectiveInfo {
+     /// A liblist that applies to the newly bound instance.
+     std::span<const SourceLibrary* const> liblist;
+ 
++    /// The scope where the bind directive was written. Used for resolving
++    /// names in port connections per LRM 23.11.
++    const Scope* bindScope = nullptr;
++
+     /// If true, the new instance is also a new config root,
+     /// and @a configRootSyntax points to the config block
+     /// for that root. Otherwise, it points either to nullptr,
+@@ -520,6 +524,10 @@ public:
+     /// scope elaboration to include the newly bound instances.
+     void noteBindDirective(const syntax::BindDirectiveSyntax& syntax, const Scope& scope);
+ 
++    /// Returns the scope where a bind directive was written, for resolving
++    /// port connection names per LRM 23.11. Returns nullptr if not found.
++    const Scope* getBindDirectiveScope(const syntax::BindDirectiveSyntax* syntax) const;
++
+     /// Notes an instance that contains a bind directive targeting a global definition.
+     /// These are later checked for correctness.
+     void noteInstanceWithDefBind(const Symbol& instance);
+diff --git a/include/slang/ast/symbols/InstanceSymbols.h b/include/slang/ast/symbols/InstanceSymbols.h
+index 282c70b..c2b9a4b 100644
+--- a/include/slang/ast/symbols/InstanceSymbols.h
++++ b/include/slang/ast/symbols/InstanceSymbols.h
+@@ -127,6 +127,20 @@ public:
+         canonicalBody = newCanonical;
+     }
+ 
++    /// Returns the scope where the bind directive was written, if this
++    /// instance was created from a bind directive. Used for resolving
++    /// port connection names per LRM 23.11.
++    /// Performs lazy lookup if the scope hasn't been resolved yet.
++    const Scope* getBindScope() const;
++
++    /// Sets the bind directive scope for port connection name resolution.
++    void setBindScope(const Scope* scope) const { bindScope_ = scope; }
++
++    /// Sets the bind directive syntax for lazy scope resolution.
++    void setBindSyntax(const syntax::BindDirectiveSyntax* syntax) const {
++        bindSyntax_ = syntax;
++    }
++
+     void serializeTo(ASTSerializer& serializer) const;
+ 
+     static void fromSyntax(Compilation& compilation,
+@@ -174,6 +188,8 @@ private:
+     mutable PointerMap* connectionMap = nullptr;
+     mutable std::span<const PortConnection* const> connections;
+     mutable const InstanceBodySymbol* canonicalBody = nullptr;
++    mutable const Scope* bindScope_ = nullptr;
++    mutable const syntax::BindDirectiveSyntax* bindSyntax_ = nullptr;
+ };
+ 
+ /// The body of a module, interface, or program instance, which acts as the scope for its members.
+diff --git a/source/ast/Compilation.cpp b/source/ast/Compilation.cpp
+index 83af0fe..a6a8f33 100644
+--- a/source/ast/Compilation.cpp
++++ b/source/ast/Compilation.cpp
+@@ -1097,6 +1097,14 @@ void Compilation::noteBindDirective(const BindDirectiveSyntax& syntax, const Sco
+     }
+ }
+ 
++const Scope* Compilation::getBindDirectiveScope(const BindDirectiveSyntax* syntax) const {
++    for (auto& [s, scope] : bindDirectives) {
++        if (s == syntax)
++            return scope;
++    }
++    return nullptr;
++}
++
+ void Compilation::noteInstanceWithDefBind(const Symbol& instance) {
+     SLANG_ASSERT(!isFrozen());
+ 
+@@ -2365,6 +2373,16 @@ void Compilation::resolveDefParamsAndBinds() {
+ 
+             BindDirectiveInfo info;
+             info.bindSyntax = syntax;
++            // Resolve the bind scope from the main compilation (this),
++            // not from the clone, since the clone's scopes will be
++            // destroyed when the clone goes out of scope.
++            info.bindScope = nullptr;
++            for (auto [mainSyntax, mainScope] : bindDirectives) {
++                if (mainSyntax == syntax) {
++                    info.bindScope = mainScope;
++                    break;
++                }
++            }
+ 
+             auto& def = resolvedBind.instanceDef;
+             info.configRuleSyntax = def.configRule ? def.configRule->syntax.get() : nullptr;
+diff --git a/source/ast/symbols/InstanceSymbols.cpp b/source/ast/symbols/InstanceSymbols.cpp
+index 859363c..23a153d 100644
+--- a/source/ast/symbols/InstanceSymbols.cpp
++++ b/source/ast/symbols/InstanceSymbols.cpp
+@@ -778,6 +778,17 @@ bool InstanceSymbol::isTopLevel() const {
+            !body.flags.has(InstanceFlags::Uninstantiated);
+ }
+ 
++const Scope* InstanceSymbol::getBindScope() const {
++    if (!bindScope_ && bindSyntax_) {
++        // Lazy lookup: the bind directive's scope may not have been available
++        // during handleBind (e.g., when virtual interfaces cause early target
++        // elaboration before the containing scope has been fully elaborated).
++        // By port connection time, all scopes are elaborated.
++        bindScope_ = getParentScope()->getCompilation().getBindDirectiveScope(bindSyntax_);
++    }
++    return bindScope_;
++}
++
+ const PortConnection* InstanceSymbol::getPortConnection(const PortSymbol& port) const {
+     if (!connectionMap)
+         resolvePortConnections();
+@@ -1108,8 +1119,17 @@ void InstanceBodySymbol::finishElaboration(function_ref<void(const Symbol&)> ins
+ 
+             for (auto sym : implicitNets)
+                 insertCB(*sym);
+-            for (auto sym : instances)
++            for (auto sym : instances) {
++                // Per LRM 23.11, store the bind directive's syntax on the instance
++                // so port connections can lazily resolve names in the correct scope.
++                // The scope lookup is deferred to getBindScope() because at this point
++                // the containing scope may not have been elaborated yet (e.g., when
++                // virtual interfaces cause early target elaboration).
++                if (sym->kind == SymbolKind::Instance) {
++                    sym->as<InstanceSymbol>().setBindSyntax(info.bindSyntax);
++                }
+                 insertCB(*sym);
++            }
+         };
+ 
+         if (auto node = hierarchyOverrideNode) {
+diff --git a/source/ast/symbols/PortSymbols.cpp b/source/ast/symbols/PortSymbols.cpp
+index 327a400..0349403 100644
+--- a/source/ast/symbols/PortSymbols.cpp
++++ b/source/ast/symbols/PortSymbols.cpp
+@@ -780,8 +780,13 @@ class PortConnectionBuilder {
+ public:
+     PortConnectionBuilder(const InstanceSymbol& instance,
+                           const SeparatedSyntaxList<PortConnectionSyntax>& portConnections) :
+-        scope(*instance.getParentScope()), instance(instance), comp(scope.getCompilation()),
+-        lookupLocation(LookupLocation::after(instance)),
++        // Per LRM 23.11, bind port connections resolve names in the scope where
++        // the bind directive was written, not the target module scope.
++        scope(instance.getBindScope() ? *instance.getBindScope()
++                                      : *instance.getParentScope()),
++        instance(instance), comp(scope.getCompilation()),
++        lookupLocation(instance.getBindScope() ? LookupLocation::max
++                                               : LookupLocation::after(instance)),
+         context(scope, lookupLocation, ASTFlags::NonProcedural),
+         connMap(portConnections, scope, lookupLocation) {
+ 
+@@ -789,7 +794,8 @@ public:
+ 
+         // Build up the set of dimensions for the instantiating instance's array parent, if any.
+         // This builds up the dimensions in reverse order, so we have to reverse them back.
+-        auto parent = &scope;
++        // Always use the actual parent scope, not the bind scope, for array dimensions.
++        auto parent = instance.getParentScope();
+         while (parent && parent->asSymbol().kind == SymbolKind::InstanceArray) {
+             auto& sym = parent->asSymbol().as<InstanceArraySymbol>();
+             instanceDims.push_back(sym.range);
+@@ -1772,8 +1778,31 @@ const Expression* PortConnection::getExpression() const {
+ 
+     if (connectedSymbol || exprSyntax) {
+         auto& parentInstance = getParentInstance();
+-        auto ll = LookupLocation::after(parentInstance);
+-        auto scope = ll.getScope();
++        const Scope* scope;
++        LookupLocation ll;
++        if (auto bindScope = parentInstance.getBindScope()) {
++            // For bind instances, we need to support name resolution in both
++            // the target scope (where the bind instance is inserted) and the
++            // bind directive scope (where the bind statement was written).
++            // Try the target scope first; if the root name isn't found there,
++            // fall back to the bind directive scope per LRM 23.11.
++            ll = LookupLocation::after(parentInstance);
++            scope = ll.getScope();
++            if (exprSyntax) {
++                auto firstToken = exprSyntax->getFirstToken();
++                if (firstToken.kind == TokenKind::Identifier) {
++                    auto rootName = firstToken.valueText();
++                    if (!rootName.empty() &&
++                        !Lookup::unqualified(*scope, rootName)) {
++                        scope = bindScope;
++                        ll = LookupLocation::max;
++                    }
++                }
++            }
++        } else {
++            ll = LookupLocation::after(parentInstance);
++            scope = ll.getScope();
++        }
+         SLANG_ASSERT(scope);
+ 
+         const bool isNetPort = port.kind == SymbolKind::Port && port.as<PortSymbol>().isNetPort();

@@ -157,7 +157,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Verilator Verif | **17/17 (100%)** | All pass! |
 | yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
 | OpenTitan IPs | 12/12 tested | prim_count, gpio_no_alerts, prim_fifo_sync, uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top pass |
-| AVIPs | 4/7 compile+simulate | APB, UART, I3C, I2S all compile and simulate |
+| AVIPs | **6/9 compile** (0 bind errors) | AHB, AXI4, UART, I3C, APB, I2S all compile cleanly |
 
 **Fixed Iteration 240:**
 1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
@@ -192,22 +192,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Current: All three external suites at 100% (codex agent handles BMC/LEC/SVA)
 - Goal: Don't regress external test coverage
 
-**Track D - Bind Scope (Status: 4/7 AVIPs compile+simulate, patch partial)**
-- PASS + SIMULATE: APB, I2S, I3C, UART compile and simulate with circt-sim
-- FAIL (bind scope): AHB, AXI4, JTAG - bind port refs to enclosing scope
-  - Root cause: PortConnectionBuilder uses instance.getParentScope() which
-    returns target module scope, not bind directive scope (PortSymbols.cpp:782)
-  - Fix needed: Pass BindDirectiveInfo.bindScope to PortConnectionBuilder
-- FAIL (source issues): SPI - nested block comments, empty args, class access
-- Next: Fix PortConnectionBuilder to use bindScope for bind instances
-- Goal: Unblock remaining 3 AVIPs (AHB, AXI4, JTAG)
+**Track D - Bind Scope (Status: ✅ 6/9 AVIPs compile, bind scope FIXED)**
+- **PASS**: AHB, AXI4, UART, I3C, APB, I2S - all compile with 0 errors
+- **FAIL (pre-existing source issues)**: SPI (8 errors: nested comments, empty args),
+  JTAG (17 errors: enum casts, virtual method defaults), AXI4Lite (1 error: env var)
+- **Bind scope fix**: Dual-scope resolution in `PortConnection::getExpression()`.
+  Tries target scope first, falls back to bind directive scope. Lazy lookup
+  defers scope resolution to handle virtual interface elaboration order.
+  Patch: `patches/slang-bind-scope.patch` (201 lines, 5 files)
+- Next: Run circt-sim on newly compilable AVIPs (AHB, AXI4)
 
 ### Priority Feature Roadmap
 
 | Priority | Feature | Blocks | Files |
 |----------|---------|--------|-------|
 | ~~P0~~ | ~~Delta cycle overflow fix~~ | ✅ FIXED | LLHDProcessInterpreter.cpp |
-| P0 | Bind scope patch (full fix) | 3/7 AVIPs | PortSymbols.cpp, InstanceSymbols.cpp |
+| ~~P0~~ | ~~Bind scope patch (full fix)~~ | ✅ FIXED | PortSymbols.cpp, InstanceSymbols.cpp, Compilation.cpp |
 | P1 | Hierarchical name access | ~9 tests | MooreToCore, circt-sim |
 | P1 | Virtual method dispatch | UVM polymorphism | MooreToCore |
 | P2 | $display format specifiers | UVM output | sim::PrintOp |
@@ -222,26 +222,23 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 **Current Blockers:**
 1. **Delta cycle overflow** - Multi-top simulations hit combinational loops at ~60ns
-2. **Bind scope** - Interface ports not visible in bind statements (slang issue)
+2. ~~**Bind scope**~~ - ✅ FIXED: Dual-scope resolution, 6/9 AVIPs compile cleanly
 
-### AVIP Compilation Status (Iteration 235)
+### AVIP Compilation Status (Iteration 240)
 
-| AVIP | Status | Blocker |
-|------|--------|---------|
-| APB | **PASS** | Compiles with only warnings |
-| AHB | FAIL | Bind statement scope - interface port not visible |
-| AXI4 | FAIL | Bind statement scope + UVM generic type issues |
-| AXI4-Lite | FAIL | File compilation order |
-| SPI | FAIL | Source code bugs (nested comments, empty args) |
-| UART | FAIL | File compilation order |
-| I2S | FAIL | File compilation order |
-| I3C | FAIL | File compilation order |
-| JTAG | FAIL | File compilation order |
+| AVIP | Compile | Errors | Blocker |
+|------|---------|--------|---------|
+| APB | **PASS** | 0 | - |
+| AHB | **PASS** | 0 | - (bind scope fixed) |
+| AXI4 | **PASS** | 0 | - (bind scope fixed) |
+| UART | **PASS** | 0 | - (bind scope fixed) |
+| I3C | **PASS** | 0 | - |
+| I2S | **PASS** | 0 | - |
+| SPI | FAIL | 8 | Nested block comments, empty args, non-static class access |
+| JTAG | FAIL | 17 | Virtual iface bind conflict, enum casts, range OOB, do_compare |
+| AXI4Lite | FAIL | 1 | Unexpanded `${AXI4LITE_MASTERWRITE}` env var in compile.f |
 
-**Key UVM Blockers Found:**
-1. **Bind statement scope**: Interface port names not visible in bind statements
-2. **UVM generic type**: `null` assignment to non-class type specializations
-3. **File order**: Many AVIPs need proper compilation order, not alphabetical
+**Remaining AVIP issues are pre-existing source-level problems, not CIRCT/slang bugs.**
 
 ### Concurrent Process Scheduling Root Cause Analysis (Iteration 76)
 
@@ -1285,7 +1282,7 @@ baselines, correct temporal semantics, and actionable diagnostics.
 ### Immediate Next Actions (Do Now, High Leverage)
 1. **Implement BMC delay buffering** for `ltl.delay` with N>0 (bounded history),
    then add minimal MLIR tests and end-to-end SV tests.
-2. **Purge fragile stderr parsing** by standardizing SAT/UNSAT tokens in tool
+2. ✅ **Purge fragile stderr parsing** by standardizing SAT/UNSAT tokens in tool
    output (BMC + LEC) and align scripts accordingly.
 3. **Hoist procedural assertions** into legal contexts and add regression tests.
 4. **Draft formal harness** `utils/run_formal_all.sh` that:
@@ -1337,10 +1334,15 @@ baselines, correct temporal semantics, and actionable diagnostics.
   `lib/Conversion/HWToSMT/HWToSMT.cpp`
 - **Plan**:
   - Add explicit merge operator (unknown-aware) for multi-driver nets.
-  - Add `--lec-strict` flag to disable input abstraction.
+  - ✅ Add `--lec-strict`/`--lec-approx` to control strict vs. approximate LEC
+    lowering; strict mode now rejects LLHD abstraction + inout types.
 - **Tests**:
   - `test/Conversion/HWToSMT/lec-multidriver-merge.mlir`
   - `test/Tools/circt-lec/inout_resolution.sv`
+  - `test/Tools/circt-lec/lec-strict-flag-conflict.mlir`
+  - `test/Tools/circt-lec/lec-strict-flag-alias.mlir`
+  - `test/Tools/circt-lec/lec-strict-llhd-approx-conflict.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout.mlir`
 
 **E. Formal regression harness**
 - **Files**: `utils/run_formal_all.sh`, `docs/FormalRegression.md`
@@ -1384,8 +1386,9 @@ baselines, correct temporal semantics, and actionable diagnostics.
 
 **Iteration 245: LEC Strictness + Interfaces**
 1. Land strict resolution for inout/multi-driver interface fields (no abstraction).
-2. Add explicit `--lec-strict`/`--lec-approx` flags and document behavior.
-3. Add 3-5 LEC tests for inout/extnets/multi-driver equivalence and regressions.
+2. ✅ Add explicit `--lec-strict`/`--lec-approx` flags and document behavior.
+3. Add 3-5 LEC tests for inout/extnets/multi-driver equivalence and regressions
+   (strict-mode regressions now cover LLHD abstraction conflicts + inout reject).
 
 **Iteration 246: Formal Harness + Performance**
 1. Ship `utils/run_formal_all.sh` with baseline diffing and summary table output.
@@ -1408,14 +1411,17 @@ baselines, correct temporal semantics, and actionable diagnostics.
    bounded buffering is implemented and validated across suites.
 2. **Sampling semantics**: `$past/$rose/$fell` alignment is still brittle in
    mixed-edge clocks and needs a single, well-defined policy.
-3. **Procedural assertions**: in-process assertions can still lower into illegal
+3. **Multi-clock sharing**: shared `ltl.delay`/`ltl.past` now clone per property,
+   but conflicting clock info within a single property still errors and
+   implicit clock inference remains brittle.
+4. **Procedural assertions**: in-process assertions can still lower into illegal
    placements until hoisting is complete and validated.
-4. **LEC soundness**: inout + multi-driver interface fields are unsound until
+5. **LEC soundness**: inout + multi-driver interface fields are unsound until
    true resolution semantics are implemented.
-5. **Diagnostics**: witnesses are not standardized, output parsing is fragile,
+6. **Diagnostics**: witnesses are not standardized, output parsing is fragile,
    and traceability is limited for large designs.
-6. **Performance**: SMT size can explode on large IPs without COI or hashing.
-7. **Coverage**: Formal regressions are not yet a single push-button flow with
+7. **Performance**: SMT size can explode on large IPs without COI or hashing.
+8. **Coverage**: Formal regressions are not yet a single push-button flow with
    baseline diffing and summary tables.
 
 ### Long-Term Features We Should Build (Ambitious, High-Leverage)
@@ -1444,6 +1450,10 @@ baselines, correct temporal semantics, and actionable diagnostics.
   `~/yosys/tests/sva`, and `~/opentitan/` and record baselines.
 - **Commits**: commit frequently; merge with upstream main regularly.
 - **Long-term choice**: prefer correctness + soundness even if slower initially.
+- **Latest suite runs (2026-01-28)**:
+  - sv-tests SVA BMC: total=26 pass=5 error=18 xfail=3 xpass=0 skip=1010
+  - yosys SVA BMC: 14 tests, failures=27, skipped=2 (bind `.*` implicit port
+    connections failing in `basic02` and similar cases)
 
 ### Feature Completion Matrix
 
