@@ -170,11 +170,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Next: Test alert_handler_reg_top, spi_device, usbdev
 - Goal: Validate circt-sim on complex OpenTitan blocks
 
-**Track B - AVIP Multi-top Delta Overflow (Status: BLOCKED)**
+**Track B - AVIP Multi-top Delta Overflow (Status: FIX IMPLEMENTED)**
 - Current: APB AVIP hits delta cycle overflow at ~60ns
 - Root cause: Self-driven signal detection doesn't catch transitive dependencies
-- Next: Enhance `LLHDProcessInterpreter.cpp` to filter module-level drives
-- File: lines 4651-4682 (self-driven filtering)
+- **FIX APPLIED**: Enhanced `applySelfDrivenFilter` to trace drive value deps via `collectSignalIds()`
+- File: lines 4803-4818 (transitive self-driven filtering)
+- Test: `test/Tools/circt-sim/self-driven-transitive-filter.mlir`
+- Next: Rebuild and test with APB AVIP
 - Goal: Fix delta overflow for multi-top UVM simulations
 
 **Track C - External Test Suites (Status: 100%)**
@@ -182,9 +184,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Next: Run regression after each change to maintain
 - Goal: Don't regress external test coverage
 
-**Track D - Bind Scope (Status: 8/9 AVIPs blocked)**
+**Track D - Bind Scope (Status: PATCH APPLIED)**
 - Current: AHB, AXI4, I2S, I3C, JTAG, SPI, UART blocked
-- Next: Apply `patches/slang-bind-scope.patch`, rebuild slang
+- **PATCH APPLIED**: `patches/slang-bind-scope.patch` applied to slang source
+- Next: Full rebuild in progress, then test AVIPs
 - Goal: Unblock remaining AVIPs for compilation
 
 ### Priority Feature Roadmap
