@@ -695,7 +695,8 @@ static void getValuesToObserve(Region *region,
                                function_ref<void(Value)> setInsertionPoint,
                                const TypeConverter *typeConverter,
                                ConversionPatternRewriter &rewriter,
-                               SmallVector<Value> &observeValues) {
+                               SmallVector<Value> &observeValues,
+                               const SmallDenseSet<Value> *ignoreValues) {
   SmallDenseSet<Value> alreadyObserved;
   Location loc = region->getLoc();
 
@@ -708,8 +709,15 @@ static void getValuesToObserve(Region *region,
   region->getParentOp()->walk<WalkOrder::PreOrder, ForwardDominanceIterator<>>(
       [&](Operation *operation) {
         for (auto value : operation->getOperands()) {
+          Value rawValue = value;
           if (isa<BlockArgument>(value))
             value = rewriter.getRemappedValue(value);
+
+          if (ignoreValues) {
+            if (ignoreValues->contains(rawValue) ||
+                (value && ignoreValues->contains(value)))
+              continue;
+          }
 
           if (region->isAncestor(value.getParentRegion()))
             continue;
@@ -751,6 +759,22 @@ static void getValuesToObserve(Region *region,
             observeValues.push_back(observeValue);
         }
       });
+}
+
+static void collectAssignedValues(Region &region,
+                                  SmallDenseSet<Value> &assignedValues) {
+  region.walk([&](Operation *op) {
+    if (auto assign = dyn_cast<ContinuousAssignOp>(op))
+      assignedValues.insert(assign.getDst());
+    else if (auto assign = dyn_cast<DelayedContinuousAssignOp>(op))
+      assignedValues.insert(assign.getDst());
+    else if (auto assign = dyn_cast<BlockingAssignOp>(op))
+      assignedValues.insert(assign.getDst());
+    else if (auto assign = dyn_cast<NonBlockingAssignOp>(op))
+      assignedValues.insert(assign.getDst());
+    else if (auto assign = dyn_cast<DelayedNonBlockingAssignOp>(op))
+      assignedValues.insert(assign.getDst());
+  });
 }
 
 /// Check if any function called from within the given region (transitively)
@@ -810,11 +834,13 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
     SmallVector<Value> observedValues;
     if (op.getKind() == ProcedureKind::AlwaysComb ||
         op.getKind() == ProcedureKind::AlwaysLatch) {
+      SmallDenseSet<Value> assignedValues;
+      collectAssignedValues(op.getBody(), assignedValues);
       auto setInsertionPoint = [&](Value value) {
         rewriter.setInsertionPoint(op);
       };
       getValuesToObserve(&op.getBody(), setInsertionPoint, typeConverter,
-                         rewriter, observedValues);
+                         rewriter, observedValues, &assignedValues);
     }
 
     auto loc = op.getLoc();
@@ -1108,7 +1134,7 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
     };
 
     getValuesToObserve(&clonedOp.getBody(), setInsertionPointAfterDef,
-                       typeConverter, rewriter, observeValues);
+                       typeConverter, rewriter, observeValues, nullptr);
 
     // Create the `llhd.wait` op that suspends the current process and waits for
     // a change in the interesting values listed in `observeValues`. When a
@@ -1737,12 +1763,21 @@ struct ForkOpConversion : public OpConversionPattern<ForkOp> {
       Region &simRegion = simFork.getBranches()[idx];
       rewriter.inlineRegionBefore(branch, simRegion, simRegion.end());
 
-      // Convert ForkTerminatorOp to SimForkTerminatorOp
+      // Convert ForkTerminatorOp to SimForkTerminatorOp, or add terminator
+      // if the block doesn't have one
       for (Block &block : simRegion) {
-        if (auto terminator = dyn_cast<ForkTerminatorOp>(block.getTerminator())) {
-          rewriter.setInsertionPoint(terminator);
-          sim::SimForkTerminatorOp::create(rewriter, terminator.getLoc());
-          rewriter.eraseOp(terminator);
+        Operation *lastOp = block.empty() ? nullptr : &block.back();
+        bool hasTerminator =
+            lastOp && lastOp->hasTrait<mlir::OpTrait::IsTerminator>();
+        if (auto forkTerm = dyn_cast_or_null<ForkTerminatorOp>(lastOp)) {
+          rewriter.setInsertionPoint(forkTerm);
+          sim::SimForkTerminatorOp::create(rewriter, forkTerm.getLoc());
+          rewriter.eraseOp(forkTerm);
+        } else if (!hasTerminator) {
+          // Block has no terminator or the last op isn't a terminator,
+          // add sim.fork.terminator
+          rewriter.setInsertionPointToEnd(&block);
+          sim::SimForkTerminatorOp::create(rewriter, loc);
         }
       }
     }
