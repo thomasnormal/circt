@@ -157,7 +157,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Verilator Verif | **17/17 (100%)** | All pass! |
 | yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
 | OpenTitan IPs | 12/12 tested | prim_count, gpio_no_alerts, prim_fifo_sync, uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top pass |
-| AVIPs | 1/9 simulates | APB compiles but hits delta overflow |
+| AVIPs | 4/7 compile+simulate | APB, UART, I3C, I2S all compile and simulate |
 
 **Fixed Iteration 240:**
 1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
@@ -169,39 +169,45 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### Active Workstreams & Next Steps
 
-**Track A - OpenTitan IPs (Status: 12/12 pass)**
-- Current: All tested IPs pass with build-test binary:
+**Track A - OpenTitan IPs (Status: 12/12 pass, new binary confirmed)**
+- Current: All tested IPs pass with BOTH build-test and new build binaries:
   - prim_count, gpio_no_alerts, prim_fifo_sync
   - uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top
-- Next: Test with newly built circt-sim, test full IPs (not just _reg_top)
+  - New binary (33MB Release) produces identical output to old binary (85MB Debug)
+- Next: Test full IPs (not just _reg_top), test more complex OpenTitan blocks
 - Goal: Validate circt-sim on complex OpenTitan blocks
 
-**Track B - AVIP Multi-top Delta Overflow (Status: FIX IMPLEMENTED)**
-- Current: APB AVIP hits delta cycle overflow at ~60ns
-- Root cause: Self-driven signal detection doesn't catch transitive dependencies
-- **FIX APPLIED**: Enhanced `applySelfDrivenFilter` to trace drive value deps via `collectSignalIds()`
-- File: lines 4803-4818 (transitive self-driven filtering)
-- Test: `test/Tools/circt-sim/self-driven-transitive-filter.mlir`
-- Next: Rebuild and test with APB AVIP
-- Goal: Fix delta overflow for multi-top UVM simulations
+**Track B - AVIP Multi-top (Status: ✅ 4/4 AVIPs simulate)**
+- **sim.fork entry block fix**: Post-conversion fixup in MooreToCore
+  restructures sim.fork regions with forever loop back-edges
+- **All 4 compilable AVIPs now simulate**:
+  - APB: multi-top 100ns, 10K delta cycles, 0 errors
+  - UART: multi-top runs indefinitely (no $finish), 0 errors
+  - I3C: multi-top, initial blocks execute, prints BFM messages
+  - I2S: multi-top completes at 1.3ms, 0 errors
+- Next: Investigate UVM test execution (currently no UVM phases run)
+- Goal: Run UVM test phases end-to-end
 
 **Track C - External Test Suites (Status: 100%)**
-- Current: All three external suites (sv-tests, verilator, yosys) at 100%
-- Next: Run regression after each change to maintain
+- Current: All three external suites at 100% (codex agent handles BMC/LEC/SVA)
 - Goal: Don't regress external test coverage
 
-**Track D - Bind Scope (Status: PATCH APPLIED)**
-- Current: AHB, AXI4, I2S, I3C, JTAG, SPI, UART blocked
-- **PATCH APPLIED**: `patches/slang-bind-scope.patch` applied to slang source
-- Next: Full rebuild in progress, then test AVIPs
-- Goal: Unblock remaining AVIPs for compilation
+**Track D - Bind Scope (Status: 4/7 AVIPs compile+simulate, patch partial)**
+- PASS + SIMULATE: APB, I2S, I3C, UART compile and simulate with circt-sim
+- FAIL (bind scope): AHB, AXI4, JTAG - bind port refs to enclosing scope
+  - Root cause: PortConnectionBuilder uses instance.getParentScope() which
+    returns target module scope, not bind directive scope (PortSymbols.cpp:782)
+  - Fix needed: Pass BindDirectiveInfo.bindScope to PortConnectionBuilder
+- FAIL (source issues): SPI - nested block comments, empty args, class access
+- Next: Fix PortConnectionBuilder to use bindScope for bind instances
+- Goal: Unblock remaining 3 AVIPs (AHB, AXI4, JTAG)
 
 ### Priority Feature Roadmap
 
 | Priority | Feature | Blocks | Files |
 |----------|---------|--------|-------|
-| P0 | Delta cycle overflow fix | All multi-top UVM | LLHDProcessInterpreter.cpp |
-| P0 | Bind scope patch | 8/9 AVIPs | slang-bind-scope.patch |
+| ~~P0~~ | ~~Delta cycle overflow fix~~ | ✅ FIXED | LLHDProcessInterpreter.cpp |
+| P0 | Bind scope patch (full fix) | 3/7 AVIPs | PortSymbols.cpp, InstanceSymbols.cpp |
 | P1 | Hierarchical name access | ~9 tests | MooreToCore, circt-sim |
 | P1 | Virtual method dispatch | UVM polymorphism | MooreToCore |
 | P2 | $display format specifiers | UVM output | sim::PrintOp |
@@ -1197,6 +1203,247 @@ baselines, correct temporal semantics, and actionable diagnostics.
   feature. Prefer new tests over expanding unrelated ones.
 - **Commits**: commit frequently, keep scope tight, and merge with upstream main
   regularly.
+
+### Formal Roadmap (Next 3 Iterations)
+**Iteration 241: Semantics + Baselines**
+1. Land posedge-only gating for checks and history updates.
+2. Replace `ltl.delay` (N>0) "true" shortcut with bounded buffering in BMC.
+3. Add dated baselines for sv-tests, verilator-verification, yosys SVA (BMC+LEC).
+4. Add 3-5 targeted end-to-end BMC tests for delay/goto/repetition.
+
+**Iteration 242: Procedural Assertions + LEC Soundness**
+1. Hoist/guard `assert property` inside `always` blocks.
+2. Add regression tests in `test/Conversion/VerifToSMT/`.
+3. Implement a non-approximate LEC mode for interface multi-driver handling.
+4. Add 3-5 LEC tests for inout/extnets/multi-driver equivalence.
+
+**Iteration 243: Diagnostics + Performance**
+1. Standardize SAT/UNSAT reporting and exit codes for `circt-bmc`/`circt-lec`.
+2. Add optional witness/trace emission for failing checks.
+3. Prototype cone-of-influence or local simplification in HWToSMT.
+
+### Baseline Tracking (Fill After Each Green Run)
+| Date | Suite | Mode | Result | Notes |
+|------|-------|------|--------|-------|
+| 2026-01-28 | sv-tests | BMC | TBD | add after run |
+| 2026-01-28 | sv-tests | LEC | TBD | add after run |
+| 2026-01-28 | verilator-verification | BMC | TBD | add after run |
+| 2026-01-28 | verilator-verification | LEC | TBD | add after run |
+| 2026-01-28 | yosys/tests/sva | BMC | TBD | add after run |
+| 2026-01-28 | yosys/tests/sva | LEC | TBD | add after run |
+
+### Known XFAIL Themes (Keep Lists Per Suite)
+- Unbounded delay patterns not representable in current BMC bound.
+- Procedural assertions in `always` before hoisting fix.
+- Multi-driver interface/inout equivalence in LEC until resolution semantics land.
+
+### Long-Term Principle (Decision Filter)
+- Prefer correctness + soundness over heuristics, even if slower initially.
+- If two options exist, choose the one that scales to full UVM and full SVA.
+
+### What Still Limits Us (Detailed)
+1. **SVA multi-cycle semantics**: `ltl.delay` for N>0 still not modeled as
+   bounded buffering, so properties can pass/ fail incorrectly in deeper bounds.
+2. **Sampled-value alignment**: `$past/$rose/$fell` timing is only correct in
+   rising-clocks-only mode; mixed-edge checks can yield false positives.
+3. **Procedural assertion legalization**: `assert property` in processes can
+   still lower into illegal `seq.compreg` placements.
+4. **LEC approximations**: inout + multi-driver interface fields are abstracted
+   to inputs in some cases, which is unsound for equivalence checking.
+5. **Diagnostics**: no consistent witness format, and stderr parsing is still
+   needed in some paths (fragile).
+6. **Performance**: SMT graphs inflate for large designs; no COI reduction or
+   structural hashing across BMC steps.
+
+### Features We Should Build Next (Long-Term Bets)
+1. **Formal kernel correctness**: finish BMC delay buffering and sampled-value
+   timing; add reference tests for each construct (delay, repetition, goto).
+2. **Sound LEC**: implement true resolution semantics for inout/multi-driver and
+   add a strict-vs-approx mode switch.
+3. **Traceability**: witness/CE emission standard across BMC/LEC with stable
+   formatting for CI and external debugging tools.
+4. **Performance core**: COI reduction, rewrite/simplify passes, and SMT memo
+   tables per step to reduce solver load.
+5. **Unified formal runner**: one `utils/run_formal_all.sh` harness with summary
+   tables + baseline diffs.
+
+### ChangeLog Discipline (Formal/Verification)
+- Always update `CHANGELOG.md` for:
+  - new BMC/LEC features or semantics changes,
+  - new external suite baselines,
+  - added tests that codify formal semantics.
+
+### Regression Test Strategy (Formal)
+- **Per bug/feature**: add one minimal MLIR test + one end-to-end SV→BMC/LEC test.
+- **Suite-level**: keep BMC + LEC external suite baselines current.
+- **Performance**: track one larger design per suite (if stable).
+
+### Regular External Test Cadence (Target)
+- **Weekly**: run all five suites and update the baseline table.
+- **Per formal change**: run at least one BMC + one LEC suite.
+
+### Immediate Next Actions (Do Now, High Leverage)
+1. **Implement BMC delay buffering** for `ltl.delay` with N>0 (bounded history),
+   then add minimal MLIR tests and end-to-end SV tests.
+2. **Purge fragile stderr parsing** by standardizing SAT/UNSAT tokens in tool
+   output (BMC + LEC) and align scripts accordingly.
+3. **Hoist procedural assertions** into legal contexts and add regression tests.
+4. **Draft formal harness** `utils/run_formal_all.sh` that:
+   - runs all suites in order,
+   - emits a single summary table,
+   - updates baseline table entries when requested.
+5. **Start LEC soundness work**: introduce explicit resolution semantics for
+   multi-driver interface fields (strict mode).
+
+### Long-Term Success Metrics (Targets)
+- **BMC semantics**: all yosys SVA tests pass without approximations.
+- **LEC soundness**: no input-abstraction needed for inout/interface fields.
+- **Regression stability**: external suites stay green for 4 consecutive weeks.
+- **Diagnostics**: witness/trace available for any failing property.
+
+### Implementation Breakdown (Concrete, Files + Tests)
+**A. BMC `ltl.delay` bounded buffering**
+- **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- **Plan**:
+  - Replace `delay>0 => true` shortcut with bounded shift-register semantics.
+  - Add per-step history buffers keyed by property instance + delay value.
+- **Tests**:
+  - `test/Conversion/VerifToSMT/bmc-delay-buffer.mlir`
+  - `test/Tools/circt-bmc/sva_delay_pass.sv`
+  - `test/Tools/circt-bmc/sva_delay_fail.sv`
+
+**B. SAT/UNSAT output standardization**
+- **Files**: `tools/circt-bmc/circt-bmc.cpp`, `tools/circt-lec/circt-lec.cpp`
+- **Plan**:
+  - Emit single-line tokens: `BMC_RESULT=SAT|UNSAT|UNKNOWN`,
+    `LEC_RESULT=EQ|NEQ|UNKNOWN`.
+  - Align scripts to parse these tokens directly (no stderr scan).
+- **Tests**:
+  - `test/Tools/circt-bmc/result-token.mlir`
+  - `test/Tools/circt-lec/result-token.mlir`
+
+**C. Procedural assertion hoisting**
+- **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`,
+  `lib/Conversion/LowerToBMC/LowerToBMC.cpp`
+- **Plan**:
+  - Detect `verif.assert` in `llhd.process` and lift to a safe top-level
+    assertion with guarded clocking.
+- **Tests**:
+  - `test/Conversion/VerifToSMT/proc-assert-hoist.mlir`
+  - End-to-end: `test/Tools/circt-bmc/proc_assert.sv`
+
+**D. LEC multi-driver/interface resolution (strict mode)**
+- **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`,
+  `lib/Conversion/HWToSMT/HWToSMT.cpp`
+- **Plan**:
+  - Add explicit merge operator (unknown-aware) for multi-driver nets.
+  - Add `--lec-strict` flag to disable input abstraction.
+- **Tests**:
+  - `test/Conversion/HWToSMT/lec-multidriver-merge.mlir`
+  - `test/Tools/circt-lec/inout_resolution.sv`
+
+**E. Formal regression harness**
+- **Files**: `utils/run_formal_all.sh`, `docs/FormalRegression.md`
+- **Plan**:
+  - Provide `--update-baselines` and `--fail-on-diff`.
+  - Single summary table output with per-suite links to logs.
+- **Tests**:
+  - Minimal smoke via `utils/` script self-check (exit codes + summary).
+
+### Dependency Graph (Priorities + Ordering)
+1. **BMC delay buffering** → unlocks correct multi-step semantics and many
+   yosys SVA failures.
+2. **Procedural assertion hoisting** → fixes illegal placements, unblocks
+   real-world designs with in-process assertions.
+3. **SAT/UNSAT tokens** → stabilizes all suite scripts and baseline tracking.
+4. **LEC strict resolution** → removes unsound approximations, long-term
+   correctness for equivalence.
+5. **Formal harness** → operationalizes regression discipline across suites.
+
+### Effort Estimates (Rough)
+- BMC delay buffering: 2-4 days + tests
+- Procedural assertion hoisting: 1-2 days + tests
+- SAT/UNSAT tokens: 0.5-1 day + tests
+- LEC strict resolution: 3-6 days + tests
+- Formal harness: 1-2 days + docs
+
+### Risk Register (Formal)
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Delay buffering bugs | False proofs or spurious failures | Add minimal + end-to-end tests |
+| Procedural hoisting mis-clocks | Incorrect assertion timing | Add gated clocking tests |
+| LEC strict mode performance | Slow regressions | Provide strict/approx switch |
+| Tool output churn | Script breakage | Tokenize output + keep stable |
+
+### Formal Roadmap (Iterations 244-246)
+**Iteration 244: BMC Temporal Correctness + Traces**
+1. Finish bounded delay buffering and delete `delay>0 => true` shortcut.
+2. Align `$past/$rose/$fell` sampling in non-rising mode (update only on posedge).
+3. Add a stable witness/CE trace format for `circt-bmc` (header + per-step values).
+4. Add 3-5 tests for delay/past alignment + trace emission (MLIR + SV end-to-end).
+
+**Iteration 245: LEC Strictness + Interfaces**
+1. Land strict resolution for inout/multi-driver interface fields (no abstraction).
+2. Add explicit `--lec-strict`/`--lec-approx` flags and document behavior.
+3. Add 3-5 LEC tests for inout/extnets/multi-driver equivalence and regressions.
+
+**Iteration 246: Formal Harness + Performance**
+1. Ship `utils/run_formal_all.sh` with baseline diffing and summary table output.
+2. Add optional COI or structural hashing pass before SMT emission.
+3. Track one larger design per suite with runtime/memory notes.
+
+### SVA BMC + LEC Regression Checklist (Per Change)
+- Run at least one BMC suite + one LEC suite (prefer sv-tests + yosys SVA).
+- Update the baseline table when results change (with date + notes).
+- Add 1 minimal MLIR test and 1 end-to-end SV test for any semantics change.
+- Verify result tokens in logs: `BMC_RESULT=...` / `LEC_RESULT=...`.
+
+### Open Decisions (Resolve Before Iteration 244)
+1. **Witness format**: JSONL vs. SMT-LIB models vs. compact text table.
+2. **LEC strict default**: strict-by-default vs. opt-in strict mode.
+3. **COI reduction placement**: HWToSMT vs. VerifToSMT vs. pre-BMC passes.
+
+### Updated Limitations (Formal, Long-Term Reality Check)
+1. **Multi-step BMC correctness**: delay/goto/repetition still approximate until
+   bounded buffering is implemented and validated across suites.
+2. **Sampling semantics**: `$past/$rose/$fell` alignment is still brittle in
+   mixed-edge clocks and needs a single, well-defined policy.
+3. **Procedural assertions**: in-process assertions can still lower into illegal
+   placements until hoisting is complete and validated.
+4. **LEC soundness**: inout + multi-driver interface fields are unsound until
+   true resolution semantics are implemented.
+5. **Diagnostics**: witnesses are not standardized, output parsing is fragile,
+   and traceability is limited for large designs.
+6. **Performance**: SMT size can explode on large IPs without COI or hashing.
+7. **Coverage**: Formal regressions are not yet a single push-button flow with
+   baseline diffing and summary tables.
+
+### Long-Term Features We Should Build (Ambitious, High-Leverage)
+1. **True multi-step BMC**:
+   - bounded delay buffering, sampled-value timing, and per-clock semantics
+   - unify semantics across SVAToLTL → VerifToSMT → SMT
+2. **Sound LEC for interfaces/inout/multi-driver**:
+   - strict resolution semantics with an opt-in approx mode
+   - deterministic equivalence for multi-driver nets
+3. **Unified formal diagnostics**:
+   - standard witness/CE format and stable CLI outputs
+   - trace visualization hooks (scriptable)
+4. **Formal regression harness**:
+   - `run_formal_all.sh` with suite + baseline diffing
+   - summary table with regressions and elapsed time
+5. **Performance core**:
+   - COI reduction, structural hashing, and SMT memoization across BMC steps
+6. **Large-design stability**:
+   - formal-friendly lowering for big IPs, avoid legalization pitfalls
+   - streaming/log-limited traces for huge proofs
+
+### Operational Cadence (Keep Us Honest)
+- **Changelog**: add a line in `CHANGELOG.md` for every formal/SVA change.
+- **Tests**: add unit/regression tests for each bug fix or feature.
+- **Suites**: regularly run `~/mbit/*avip*`, `~/sv-tests/`, `~/verilator-verification/`,
+  `~/yosys/tests/sva`, and `~/opentitan/` and record baselines.
+- **Commits**: commit frequently; merge with upstream main regularly.
+- **Long-term choice**: prefer correctness + soundness even if slower initially.
 
 ### Feature Completion Matrix
 
