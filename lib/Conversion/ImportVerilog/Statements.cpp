@@ -552,29 +552,54 @@ struct StmtVisitor {
     // Collect the statements that will become parallel branches.
     // The body is typically a StatementList, but could be a single statement.
     SmallVector<const slang::ast::Statement *> forkStmts;
-    if (auto *stmtList = stmt.body.as_if<slang::ast::StatementList>()) {
+    const slang::ast::Statement *bodyStmt = &stmt.body;
+    if (auto *stmtList = bodyStmt->as_if<slang::ast::StatementList>()) {
       for (auto *s : stmtList->list)
         forkStmts.push_back(s);
     } else {
       // Single statement fork (unusual but valid).
-      forkStmts.push_back(&stmt.body);
+      forkStmts.push_back(bodyStmt);
     }
-
-    // Handle empty fork (no statements) - just skip.
-    if (forkStmts.empty())
-      return success();
 
     // Get optional block name.
     mlir::StringAttr nameAttr;
     if (stmt.blockSymbol && !stmt.blockSymbol->name.empty())
       nameAttr = builder.getStringAttr(stmt.blockSymbol->name);
 
+    struct ForkBranch {
+      llvm::SmallVector<const slang::ast::VariableDeclStatement *, 4> decls;
+      const slang::ast::Statement *stmt = nullptr;
+    };
+    llvm::SmallVector<ForkBranch, 4> branches;
+    llvm::SmallVector<const slang::ast::VariableDeclStatement *, 4> pendingDecls;
+    for (auto *s : forkStmts) {
+      if (auto *decl = s->as_if<slang::ast::VariableDeclStatement>()) {
+        pendingDecls.push_back(decl);
+        continue;
+      }
+      ForkBranch branch;
+      branch.decls = pendingDecls;
+      branch.stmt = s;
+      branches.push_back(std::move(branch));
+      pendingDecls.clear();
+    }
+
+    if (branches.empty()) {
+      for (auto *decl : pendingDecls) {
+        if (failed(visit(*decl)))
+          return failure();
+      }
+      return success();
+    }
+
+    Context::ValueSymbolScope forkScope(context.valueSymbols);
+
     // Create the ForkOp with the appropriate number of branches.
     auto forkOp = moore::ForkOp::create(builder, loc, joinType, nameAttr,
-                                        forkStmts.size());
+                                        branches.size());
 
     // Populate each branch region with its corresponding statement.
-    for (size_t i = 0; i < forkStmts.size(); ++i) {
+    for (size_t i = 0; i < branches.size(); ++i) {
       auto &region = forkOp.getBranches()[i];
       // Create entry block if not present.
       if (region.empty())
@@ -584,7 +609,13 @@ struct StmtVisitor {
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToEnd(&region.front());
 
-      if (failed(context.convertStatement(*forkStmts[i])))
+      Context::ValueSymbolScope branchScope(context.valueSymbols);
+      for (auto *decl : branches[i].decls) {
+        if (failed(visit(*decl)))
+          return failure();
+      }
+
+      if (failed(context.convertStatement(*branches[i].stmt)))
         return failure();
 
       // After converting the statement, check all blocks in the region.
@@ -721,7 +752,10 @@ struct StmtVisitor {
 
   // Handle variable declarations.
   LogicalResult visit(const slang::ast::VariableDeclStatement &stmt) {
-    const auto &var = stmt.symbol;
+    return declareVariable(stmt.symbol);
+  }
+
+  LogicalResult declareVariable(const slang::ast::VariableSymbol &var) {
     auto type = context.convertType(*var.getDeclaredType());
     if (!type)
       return failure();

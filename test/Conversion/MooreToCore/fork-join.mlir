@@ -8,6 +8,7 @@ moore.module @ForkJoinConversion() {
 
     // CHECK: sim.fork
     // CHECK-NOT: join_type
+    // CHECK: sim.fork.terminator
     moore.fork join {
       %v1 = moore.variable : <i32>
       moore.blocking_assign %v1, %c1 : i32
@@ -28,6 +29,7 @@ moore.module @ForkJoinAnyConversion() {
 
     // CHECK: sim.fork
     // CHECK-SAME: join_type "join_any"
+    // CHECK: sim.fork.terminator
     moore.fork join_any {
       %v1 = moore.variable : <i32>
       moore.blocking_assign %v1, %c1 : i32
@@ -47,6 +49,7 @@ moore.module @ForkJoinNoneConversion() {
 
     // CHECK: sim.fork
     // CHECK-SAME: join_type "join_none"
+    // CHECK: sim.fork.terminator
     moore.fork join_none {
       %v = moore.variable : <i32>
       moore.blocking_assign %v, %c : i32
