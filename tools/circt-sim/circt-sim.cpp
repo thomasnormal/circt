@@ -27,6 +27,7 @@
 #include "circt/Dialect/Arc/ArcOps.h"
 #include "circt/Dialect/Arc/ArcPasses.h"
 #include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
@@ -71,6 +72,7 @@
 #include "mlir/Support/Timing.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -217,6 +219,38 @@ static llvm::cl::opt<unsigned>
     processStatsTop("process-stats-top",
                     llvm::cl::desc("Number of top processes to print"),
                     llvm::cl::init(10), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
+    printProcessOpCounts("process-op-counts",
+                         llvm::cl::desc("Print per-process operation counts"),
+                         llvm::cl::init(false), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<unsigned>
+    processOpCountsTop("process-op-counts-top",
+                       llvm::cl::desc("Number of top processes to print"),
+                       llvm::cl::init(10), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
+    printProcessOpDumps("process-op-counts-dump",
+                        llvm::cl::desc("Dump process bodies in analyze mode"),
+                        llvm::cl::init(false), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
+    printProcessOpBreakdown(
+        "process-op-counts-breakdown",
+        llvm::cl::desc("Print per-process op breakdown in analyze mode"),
+        llvm::cl::init(false), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<unsigned>
+    processOpBreakdownTop("process-op-counts-breakdown-top",
+                          llvm::cl::desc("Number of ops to show per process"),
+                          llvm::cl::init(5), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
+    printProcessOpExtractBreakdown(
+        "process-op-counts-breakdown-extracts",
+        llvm::cl::desc("Print comb.extract width/offset breakdowns"),
+        llvm::cl::init(false), llvm::cl::cat(debugCategory));
 
 static llvm::cl::opt<bool>
     verifyPasses("verify-each",
@@ -973,6 +1007,80 @@ static LogicalResult processInput(MLIRContext &context,
     return failure();
   }
 
+  auto countRegionOps = [](mlir::Region &region) -> size_t {
+    llvm::SmallVector<mlir::Region *, 16> regionWorklist;
+    regionWorklist.push_back(&region);
+    size_t count = 0;
+    while (!regionWorklist.empty()) {
+      mlir::Region *curRegion = regionWorklist.pop_back_val();
+      for (mlir::Block &block : *curRegion) {
+        for (mlir::Operation &op : block) {
+          ++count;
+          for (mlir::Region &nested : op.getRegions())
+            regionWorklist.push_back(&nested);
+        }
+      }
+    }
+    return count;
+  };
+
+  auto countRegionOpNames = [](mlir::Region &region) {
+    llvm::SmallVector<mlir::Region *, 16> regionWorklist;
+    regionWorklist.push_back(&region);
+    llvm::StringMap<size_t> counts;
+    while (!regionWorklist.empty()) {
+      mlir::Region *curRegion = regionWorklist.pop_back_val();
+      for (mlir::Block &block : *curRegion) {
+        for (mlir::Operation &op : block) {
+          ++counts[op.getName().getStringRef()];
+          for (mlir::Region &nested : op.getRegions())
+            regionWorklist.push_back(&nested);
+        }
+      }
+    }
+    return counts;
+  };
+
+  auto countExtractBuckets = [](mlir::Region &region) {
+    struct Buckets {
+      size_t low1 = 0;
+      size_t high1 = 0;
+      size_t lowWide = 0;
+      size_t highWide = 0;
+    } buckets;
+
+    llvm::SmallVector<mlir::Region *, 16> regionWorklist;
+    regionWorklist.push_back(&region);
+    while (!regionWorklist.empty()) {
+      mlir::Region *curRegion = regionWorklist.pop_back_val();
+      for (mlir::Block &block : *curRegion) {
+        for (mlir::Operation &op : block) {
+          if (auto extract = dyn_cast<comb::ExtractOp>(op)) {
+            auto intTy = dyn_cast<IntegerType>(extract.getType());
+            if (!intTy)
+              continue;
+            unsigned width = intTy.getWidth();
+            unsigned lowBit = extract.getLowBit();
+            if (width == 1) {
+              if (lowBit < 64)
+                ++buckets.low1;
+              else
+                ++buckets.high1;
+            } else {
+              if (lowBit + width <= 64)
+                ++buckets.lowWide;
+              else
+                ++buckets.highWide;
+            }
+          }
+          for (mlir::Region &nested : op.getRegions())
+            regionWorklist.push_back(&nested);
+        }
+      }
+    }
+    return buckets;
+  };
+
   // Handle analyze mode - just print statistics and exit
   if (runMode == RunMode::Analyze) {
     llvm::outs() << "=== Design Analysis ===\n";
@@ -994,6 +1102,122 @@ static LogicalResult processInput(MLIRContext &context,
     llvm::outs() << "Ports:     " << portCount << "\n";
     llvm::outs() << "Instances: " << instanceCount << "\n";
     llvm::outs() << "========================\n";
+
+    if (printProcessOpCounts) {
+      struct ProcEntry {
+        std::string kind;
+        std::string loc;
+        size_t opCount;
+        Operation *op;
+      };
+      llvm::SmallVector<ProcEntry, 16> entries;
+      module->walk([&](llhd::ProcessOp op) {
+        std::string locStr;
+        llvm::raw_string_ostream locStream(locStr);
+        op.getLoc().print(locStream);
+        entries.push_back(
+            {"process", locStream.str(), countRegionOps(op.getBody()),
+             op.getOperation()});
+      });
+      module->walk([&](seq::InitialOp op) {
+        std::string locStr;
+        llvm::raw_string_ostream locStream(locStr);
+        op.getLoc().print(locStream);
+        entries.push_back(
+            {"initial", locStream.str(), countRegionOps(op.getBody()),
+             op.getOperation()});
+      });
+
+      llvm::sort(entries, [](const ProcEntry &lhs, const ProcEntry &rhs) {
+        if (lhs.opCount != rhs.opCount)
+          return lhs.opCount > rhs.opCount;
+        if (lhs.kind != rhs.kind)
+          return lhs.kind < rhs.kind;
+        return lhs.loc < rhs.loc;
+      });
+
+      llvm::outs() << "\n=== Process Op Counts (top "
+                   << processOpCountsTop << ") ===\n";
+      size_t limit = std::min<size_t>(processOpCountsTop, entries.size());
+      for (size_t i = 0; i < limit; ++i) {
+        llvm::outs() << entries[i].kind << " opCount=" << entries[i].opCount;
+        if (!entries[i].loc.empty())
+          llvm::outs() << " loc=" << entries[i].loc;
+        llvm::outs() << "\n";
+      }
+      llvm::outs() << "===============================\n";
+
+      if (printProcessOpDumps) {
+        llvm::outs() << "\n=== Process Op Dumps (top " << processOpCountsTop
+                     << ") ===\n";
+        for (size_t i = 0; i < limit; ++i) {
+          llvm::outs() << "--- " << entries[i].kind << " opCount="
+                       << entries[i].opCount;
+          if (!entries[i].loc.empty())
+            llvm::outs() << " loc=" << entries[i].loc;
+          llvm::outs() << " ---\n";
+          if (entries[i].op)
+            entries[i].op->print(llvm::outs());
+          llvm::outs() << "\n";
+        }
+        llvm::outs() << "=============================\n";
+      }
+
+      if (printProcessOpBreakdown) {
+        llvm::outs() << "\n=== Process Op Breakdown (top "
+                     << processOpCountsTop << ") ===\n";
+        for (size_t i = 0; i < limit; ++i) {
+          llvm::outs() << "--- " << entries[i].kind << " opCount="
+                       << entries[i].opCount;
+          if (!entries[i].loc.empty())
+            llvm::outs() << " loc=" << entries[i].loc;
+          llvm::outs() << " ---\n";
+          if (!entries[i].op)
+            continue;
+          llvm::StringMap<size_t> counts;
+          if (auto proc = dyn_cast<llhd::ProcessOp>(entries[i].op))
+            counts = countRegionOpNames(proc.getBody());
+          else if (auto init = dyn_cast<seq::InitialOp>(entries[i].op))
+            counts = countRegionOpNames(init.getBody());
+
+          struct OpEntry {
+            llvm::StringRef name;
+            size_t count;
+          };
+          llvm::SmallVector<OpEntry, 16> opEntries;
+          opEntries.reserve(counts.size());
+          for (const auto &entry : counts)
+            opEntries.push_back({entry.getKey(), entry.getValue()});
+          llvm::sort(opEntries, [](const OpEntry &lhs, const OpEntry &rhs) {
+            if (lhs.count != rhs.count)
+              return lhs.count > rhs.count;
+            return lhs.name < rhs.name;
+          });
+
+          size_t opLimit =
+              std::min<size_t>(processOpBreakdownTop, opEntries.size());
+          for (size_t idx = 0; idx < opLimit; ++idx) {
+            llvm::outs() << opEntries[idx].name << ": " << opEntries[idx].count
+                         << "\n";
+          }
+          if (printProcessOpExtractBreakdown) {
+            decltype(countExtractBuckets(std::declval<mlir::Region &>()))
+                buckets;
+            if (auto proc = dyn_cast<llhd::ProcessOp>(entries[i].op))
+              buckets = countExtractBuckets(proc.getBody());
+            else if (auto init = dyn_cast<seq::InitialOp>(entries[i].op))
+              buckets = countExtractBuckets(init.getBody());
+            llvm::outs() << "comb.extract.low1<64: " << buckets.low1 << "\n";
+            llvm::outs() << "comb.extract.high1>=64: " << buckets.high1 << "\n";
+            llvm::outs() << "comb.extract.lowWide<64: " << buckets.lowWide
+                         << "\n";
+            llvm::outs() << "comb.extract.highWide>=64: " << buckets.highWide
+                         << "\n";
+          }
+        }
+        llvm::outs() << "===============================\n";
+      }
+    }
 
     return success();
   }
