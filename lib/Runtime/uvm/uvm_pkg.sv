@@ -2599,7 +2599,7 @@ package uvm_pkg;
 
     virtual function bit try_get(output T t);
       if (is_empty()) begin
-        t = null;
+        // Don't assign null - T may be a non-class type
         return 0;
       end
       t = m_fifo.pop_front();
@@ -2619,7 +2619,7 @@ package uvm_pkg;
 
     virtual function bit try_peek(output T t);
       if (is_empty()) begin
-        t = null;
+        // Don't assign null - T may be a non-class type
         return 0;
       end
       t = m_fifo[0];
