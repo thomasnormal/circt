@@ -1313,8 +1313,13 @@ struct WaitDelayOpConversion : public OpConversionPattern<WaitDelayOp> {
     // or already inside an llhd.process. In these cases, use llhd.wait.
     // Note: During conversion, we check for ProcedureOp because the conversion
     // of ProcedureOp to llhd.process may happen after this conversion.
-    if (op->getParentOfType<ProcedureOp>() ||
-        op->getParentOfType<llhd::ProcessOp>()) {
+    // However, if we're inside a fork branch (moore.fork or sim.fork), we need
+    // to use the runtime call instead, because fork branches become sim.fork
+    // regions, not llhd.process, and llhd.wait requires llhd.process parent.
+    bool insideFork = op->getParentOfType<ForkOp>() ||
+                      op->getParentOfType<sim::SimForkOp>();
+    if (!insideFork && (op->getParentOfType<ProcedureOp>() ||
+                        op->getParentOfType<llhd::ProcessOp>())) {
       // llhd.wait expects llhd::TimeType, so we need to convert from i64.
       // Use llhd.int_to_time to convert i64 (femtoseconds) to llhd.time.
       Value llhdTime = llhd::IntToTimeOp::create(rewriter, loc, delay);
@@ -1762,6 +1767,102 @@ struct ForkOpConversion : public OpConversionPattern<ForkOp> {
     for (auto [idx, branch] : llvm::enumerate(op.getBranches())) {
       Region &simRegion = simFork.getBranches()[idx];
       rewriter.inlineRegionBefore(branch, simRegion, simRegion.end());
+
+      // If the entry block has predecessors (e.g., from forever loops),
+      // we need to create a new "loop header" block and redirect back-edges.
+      // Region entry blocks must not have predecessors.
+      Block *entryBlock = &simRegion.front();
+      if (!entryBlock->hasNoPredecessors()) {
+        // Create a new loop header block after the entry block.
+        // We'll redirect all back-edges from the entry block to this header.
+        auto *loopHeader = new Block();
+        simRegion.getBlocks().insertAfter(entryBlock->getIterator(), loopHeader);
+
+        // Move all operations from entry to the loop header.
+        // We need to keep the structure such that:
+        // 1. Entry block has no predecessors
+        // 2. Entry block content can be printed (not elided)
+        // 3. Back-edges go to loop header, not entry
+        loopHeader->getOperations().splice(loopHeader->end(),
+                                           entryBlock->getOperations());
+
+        // After the splice, the loopHeader now has the original operations,
+        // including any back-edge branches that were targeting entryBlock.
+        // We need to update those branches to target loopHeader instead.
+        // This must happen BEFORE we add the new branch from entry to loopHeader.
+
+        // Update all branches in the region that target entryBlock.
+        // After splice, these branches are now in loopHeader (or other blocks
+        // if there were multiple blocks inlined).
+        for (Block &block : simRegion) {
+          Operation *terminator = block.getTerminator();
+          if (!terminator)
+            continue;
+          if (auto brOp = dyn_cast<cf::BranchOp>(terminator)) {
+            if (brOp.getDest() == entryBlock) {
+              OpBuilder::InsertionGuard g(rewriter);
+              rewriter.setInsertionPoint(brOp);
+              cf::BranchOp::create(rewriter, brOp.getLoc(), loopHeader);
+              rewriter.eraseOp(brOp);
+            }
+          } else if (auto condBrOp = dyn_cast<cf::CondBranchOp>(terminator)) {
+            bool updateTrue = condBrOp.getTrueDest() == entryBlock;
+            bool updateFalse = condBrOp.getFalseDest() == entryBlock;
+            if (updateTrue || updateFalse) {
+              OpBuilder::InsertionGuard g(rewriter);
+              rewriter.setInsertionPoint(condBrOp);
+              cf::CondBranchOp::create(
+                  rewriter, condBrOp.getLoc(), condBrOp.getCondition(),
+                  updateTrue ? loopHeader : condBrOp.getTrueDest(),
+                  condBrOp.getTrueDestOperands(),
+                  updateFalse ? loopHeader : condBrOp.getFalseDest(),
+                  condBrOp.getFalseDestOperands());
+              rewriter.eraseOp(condBrOp);
+            }
+          }
+        }
+
+        // Now add a branch from entry to loop header.
+        // The entry block is now empty, but we'll add an op with side effects
+        // to prevent the printer from eliding it completely.
+        {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPointToStart(entryBlock);
+          // Add an empty print with side effects to prevent block elision.
+          // This prints nothing but ensures the entry block is preserved.
+          auto emptyFmt = sim::FormatLiteralOp::create(rewriter, loc, "");
+          sim::PrintFormattedProcOp::create(rewriter, loc, emptyFmt);
+          cf::BranchOp::create(rewriter, loc, loopHeader);
+        }
+
+        // After the transformation, verify the entry has no predecessors.
+        assert(entryBlock->hasNoPredecessors() &&
+               "entry block should have no predecessors after restructuring");
+      }
+
+      // Ensure the entry block won't be elided by the printer.
+      // If the entry block only contains a branch (or nothing), the MLIR printer
+      // may elide it, causing the next block (which might have predecessors from
+      // loops) to be treated as the entry during re-parsing, which fails verification.
+      // We add an op with side effects to ensure the entry block is preserved.
+      entryBlock = &simRegion.front();
+      if (entryBlock->hasNoPredecessors()) {
+        // Check if entry block might be elided: only has a branch terminator
+        // or no operations at all.
+        Operation *termOp = entryBlock->getTerminator();
+        bool hasOnlyBranch = termOp && isa<cf::BranchOp>(termOp) &&
+                             entryBlock->without_terminator().empty();
+        bool mightBeElided = entryBlock->empty() || hasOnlyBranch;
+
+        if (mightBeElided) {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPointToStart(entryBlock);
+          // Add an empty print with side effects to prevent block elision.
+          // This prints nothing but ensures the entry block is preserved.
+          auto emptyFmt = sim::FormatLiteralOp::create(rewriter, loc, "");
+          sim::PrintFormattedProcOp::create(rewriter, loc, emptyFmt);
+        }
+      }
 
       // Convert ForkTerminatorOp to SimForkTerminatorOp, or add terminator
       // if the block doesn't have one
@@ -5295,48 +5396,24 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
     // Handle 4-state struct types ({value, unknown} structs in llhd.ref)
     if (isFourStateStructType(inputType)) {
       auto loc = op.getLoc();
-      auto structType = cast<hw::StructType>(inputType);
-      auto valueType = structType.getElements()[0].type;
-      auto intType = cast<IntegerType>(valueType);
-      int64_t width = intType.getWidth();
+      // Extract from both value and unknown fields via value reads.
+      Value baseValue = llhd::ProbeOp::create(rewriter, loc, adaptor.getInput());
+      Value valueField = extractFourStateValue(rewriter, loc, baseValue);
+      Value unknownField = extractFourStateUnknown(rewriter, loc, baseValue);
 
-      // Create the index constant
-      Value idx = hw::ConstantOp::create(
-          rewriter, loc, rewriter.getIntegerType(llvm::Log2_64_Ceil(width)),
-          adaptor.getLowBit());
-
-      // For 4-state refs, we need to extract from both value and unknown fields.
-      // Use llhd.sig_struct_extract to get refs to each field, then
-      // llhd.sig.extract to extract the bit(s) from each integer field.
-
-      // Get ref to 'value' field (integer ref)
-      auto valueFieldRef = llhd::SigStructExtractOp::create(
-          rewriter, loc, adaptor.getInput(), "value");
-
-      // Get ref to 'unknown' field (integer ref)
-      auto unknownFieldRef = llhd::SigStructExtractOp::create(
-          rewriter, loc, adaptor.getInput(), "unknown");
-
-      // Determine the result width from the converted result type
+      // Determine the result width from the converted result type.
       auto resultRefType = cast<llhd::RefType>(resultType);
-      auto resultStructType = cast<hw::StructType>(resultRefType.getNestedType());
+      auto resultStructType =
+          cast<hw::StructType>(resultRefType.getNestedType());
       auto resultIntType =
           cast<IntegerType>(resultStructType.getElements()[0].type);
-      auto extractedIntRefType = llhd::RefType::get(resultIntType);
+      auto resultWidth = resultIntType.getWidth();
 
-      // Extract bits from value field
-      auto valueExtracted = llhd::SigExtractOp::create(
-          rewriter, loc, extractedIntRefType, valueFieldRef, idx);
-
-      // Extract bits from unknown field
-      auto unknownExtracted = llhd::SigExtractOp::create(
-          rewriter, loc, extractedIntRefType, unknownFieldRef, idx);
-
-      // Probe both extracted refs to get values
-      auto extractedValue =
-          llhd::ProbeOp::create(rewriter, loc, valueExtracted);
-      auto extractedUnknown =
-          llhd::ProbeOp::create(rewriter, loc, unknownExtracted);
+      Value extractedValue =
+          comb::ExtractOp::create(rewriter, loc, valueField, adaptor.getLowBit(),
+                                  resultWidth);
+      Value extractedUnknown = comb::ExtractOp::create(
+          rewriter, loc, unknownField, adaptor.getLowBit(), resultWidth);
 
       // Create the 4-state struct result
       auto fourStateStruct = hw::StructCreateOp::create(
@@ -5808,38 +5885,27 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
         idx = extractFourStateValue(rewriter, loc, idx);
       idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(width), loc);
 
-      // For 4-state refs, we need to extract from both value and unknown fields.
-      // Use llhd.sig_struct_extract to get refs to each field, then
-      // llhd.sig.extract to extract the bit(s) from each integer field.
+      // Extract from both value and unknown fields via value reads.
+      Value baseValue = llhd::ProbeOp::create(rewriter, loc, adaptor.getInput());
+      Value valueField = extractFourStateValue(rewriter, loc, baseValue);
+      Value unknownField = extractFourStateUnknown(rewriter, loc, baseValue);
 
-      // Get ref to 'value' field (integer ref)
-      auto valueFieldRef = llhd::SigStructExtractOp::create(
-          rewriter, loc, adaptor.getInput(), "value");
-
-      // Get ref to 'unknown' field (integer ref)
-      auto unknownFieldRef = llhd::SigStructExtractOp::create(
-          rewriter, loc, adaptor.getInput(), "unknown");
-
-      // Determine the result width from the converted result type
       auto resultRefType = cast<llhd::RefType>(resultType);
-      auto resultStructType = cast<hw::StructType>(resultRefType.getNestedType());
+      auto resultStructType =
+          cast<hw::StructType>(resultRefType.getNestedType());
       auto resultIntType =
           cast<IntegerType>(resultStructType.getElements()[0].type);
-      auto extractedIntRefType = llhd::RefType::get(resultIntType);
+      auto resultWidth = resultIntType.getWidth();
 
-      // Extract bits from value field
-      auto valueExtracted = llhd::SigExtractOp::create(
-          rewriter, loc, extractedIntRefType, valueFieldRef, idx);
-
-      // Extract bits from unknown field
-      auto unknownExtracted = llhd::SigExtractOp::create(
-          rewriter, loc, extractedIntRefType, unknownFieldRef, idx);
-
-      // Probe both extracted refs to get values
-      auto extractedValue =
-          llhd::ProbeOp::create(rewriter, loc, valueExtracted);
-      auto extractedUnknown =
-          llhd::ProbeOp::create(rewriter, loc, unknownExtracted);
+      Value idxShift = adjustIntegerWidth(rewriter, idx, width, loc);
+      Value valueShifted =
+          comb::ShrUOp::create(rewriter, loc, valueField, idxShift);
+      Value unknownShifted =
+          comb::ShrUOp::create(rewriter, loc, unknownField, idxShift);
+      Value extractedValue = comb::ExtractOp::create(
+          rewriter, loc, valueShifted, 0, resultWidth);
+      Value extractedUnknown = comb::ExtractOp::create(
+          rewriter, loc, unknownShifted, 0, resultWidth);
 
       // Create the 4-state struct result
       auto fourStateStruct = hw::StructCreateOp::create(
@@ -8815,16 +8881,26 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
           dyn_cast<IntegerType>(resultStructType.getElements()[0].type);
       if (!resultIntType)
         return failure();
+      auto baseRefType = dyn_cast<llhd::RefType>(baseRef.getType());
+      if (!baseRefType)
+        return failure();
+      auto baseStructType =
+          dyn_cast<hw::StructType>(baseRefType.getNestedType());
+      if (!baseStructType)
+        return failure();
+      auto baseIntType =
+          dyn_cast<IntegerType>(baseStructType.getElements()[0].type);
+      if (!baseIntType)
+        return failure();
 
-      auto extractedIntRefType = llhd::RefType::get(resultIntType);
-      auto valueFieldRef =
-          llhd::SigStructExtractOp::create(rewriter, loc, baseRef, "value");
-      auto unknownFieldRef =
-          llhd::SigStructExtractOp::create(rewriter, loc, baseRef, "unknown");
-      auto valueExtracted = llhd::SigExtractOp::create(
-          rewriter, loc, extractedIntRefType, valueFieldRef, idx);
-      auto unknownExtracted = llhd::SigExtractOp::create(
-          rewriter, loc, extractedIntRefType, unknownFieldRef, idx);
+      int64_t baseWidth = baseIntType.getWidth();
+      int64_t sliceWidth = resultIntType.getWidth();
+      if (sliceWidth <= 0 || sliceWidth > baseWidth)
+        return failure();
+
+      Value baseStruct = llhd::ProbeOp::create(rewriter, loc, baseRef);
+      Value baseValue = extractFourStateValue(rewriter, loc, baseStruct);
+      Value baseUnknown = extractFourStateUnknown(rewriter, loc, baseStruct);
 
       Value driveValue = srcValue;
       Value driveUnknown;
@@ -8832,18 +8908,58 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         driveUnknown = extractFourStateUnknown(rewriter, loc, driveValue);
         driveValue = extractFourStateValue(rewriter, loc, driveValue);
       } else {
-        driveUnknown =
-            hw::ConstantOp::create(rewriter, loc, resultIntType, 0);
+        driveUnknown = hw::ConstantOp::create(rewriter, loc, resultIntType, 0);
       }
       driveValue =
-          adjustIntegerWidth(rewriter, driveValue, resultIntType.getWidth(), loc);
-      driveUnknown = adjustIntegerWidth(rewriter, driveUnknown,
-                                        resultIntType.getWidth(), loc);
+          adjustIntegerWidth(rewriter, driveValue, sliceWidth, loc);
+      driveUnknown =
+          adjustIntegerWidth(rewriter, driveUnknown, sliceWidth, loc);
 
-      llhd::DriveOp::create(rewriter, loc, valueExtracted, driveValue, delay,
-                            Value{}, llhdStrength0, llhdStrength1);
-      llhd::DriveOp::create(rewriter, loc, unknownExtracted, driveUnknown,
-                            delay, Value{}, llhdStrength0, llhdStrength1);
+      Value shiftAmount =
+          adjustIntegerWidth(rewriter, idx, baseWidth, loc);
+      APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
+      Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
+      Value shiftedMask = maskConst;
+      if (sliceWidth != baseWidth)
+        shiftedMask =
+            comb::ShlOp::create(rewriter, loc, maskConst, shiftAmount);
+
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, APInt::getAllOnes(baseWidth));
+      Value maskInv =
+          comb::XorOp::create(rewriter, loc, shiftedMask, allOnes);
+
+      Value baseValueCleared =
+          comb::AndOp::create(rewriter, loc, baseValue, maskInv);
+      Value baseUnknownCleared =
+          comb::AndOp::create(rewriter, loc, baseUnknown, maskInv);
+
+      Value driveValueWide =
+          adjustIntegerWidth(rewriter, driveValue, baseWidth, loc);
+      Value driveUnknownWide =
+          adjustIntegerWidth(rewriter, driveUnknown, baseWidth, loc);
+      Value driveValueShifted = driveValueWide;
+      Value driveUnknownShifted = driveUnknownWide;
+      if (sliceWidth != baseWidth) {
+        driveValueShifted =
+            comb::ShlOp::create(rewriter, loc, driveValueWide, shiftAmount);
+        driveUnknownShifted =
+            comb::ShlOp::create(rewriter, loc, driveUnknownWide, shiftAmount);
+      }
+      Value driveValueMasked =
+          comb::AndOp::create(rewriter, loc, driveValueShifted, shiftedMask);
+      Value driveUnknownMasked =
+          comb::AndOp::create(rewriter, loc, driveUnknownShifted, shiftedMask);
+
+      Value newValue =
+          comb::OrOp::create(rewriter, loc, baseValueCleared, driveValueMasked);
+      Value newUnknown =
+          comb::OrOp::create(rewriter, loc, baseUnknownCleared, driveUnknownMasked);
+
+      Value newStruct =
+          createFourStateStruct(rewriter, loc, newValue, newUnknown);
+      llhd::DriveOp::create(rewriter, loc, baseRef, newStruct, delay, Value{},
+                            llhdStrength0, llhdStrength1);
       rewriter.eraseOp(op);
       return success();
     };
