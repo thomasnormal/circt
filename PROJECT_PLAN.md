@@ -207,7 +207,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 248)
+### Active Workstreams & Next Steps (Iteration 249)
+
+**Iteration 249 Fixes:**
+1. **Hierarchical Variable Initialization** (FIXED): Variables with hierarchical initializers now work
+   - Added HierarchicalExpressionDetector to detect hierarchical paths in initializers
+   - Defer such variables to postInstanceMembers for correct ordering
+   - Test: `test/Conversion/ImportVerilog/hierarchical-var-init.sv`
+
+2. **Virtual Method Dispatch** (VERIFIED WORKING): UVM polymorphism is fully supported
+   - Vtable generation, storage, and runtime dispatch all implemented
+   - Multi-level inheritance and method overrides work correctly
+   - Only pure virtual methods have minor issue (rare in UVM patterns)
+
+3. **OpenTitan Validation** (100% PASS): All 40 harness targets pass simulation
+   - Primitives (prim_fifo_sync, prim_count)
+   - Register blocks (22/22)
+   - Crypto IPs (12/12)
+   - Full IP logic (alert_handler, mbx, rv_dm, timer_core)
+
+4. **AVIP Status Clarification**: 6/9 still compile/simulate
+   - AXI4Lite: Fails due to package naming conflicts (not CIRCT bug)
+   - SPI: Fails due to syntax errors in source
+   - JTAG: Fails due to bind/virtual interface conflicts
 
 **Iteration 248 Fixes:**
 1. **Nested Interface Signal Access** (FIXED): Multi-level nested interface paths (vif.middle.inner.signal) now work

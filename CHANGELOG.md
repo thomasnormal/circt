@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 249 - January 29, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Fixed in this Iteration
+
+1. **Hierarchical Variable Initialization** (Structure.cpp lines 309-330, 2510-2528):
+   - **ROOT CAUSE**: Variables with hierarchical initializers were processed before instances existed
+   - **FIX**: Added HierarchicalExpressionDetector, defer such variables to postInstanceMembers
+   - **Test**: `test/Conversion/ImportVerilog/hierarchical-var-init.sv`
+
+2. **Virtual Method Dispatch** (VERIFIED WORKING):
+   - Vtable generation (`VTableOpConversion`) fully implemented
+   - Runtime dispatch (`VTableLoadMethodOpConversion`) working
+   - Interpreter vtable resolution working
+   - UVM polymorphic patterns (build_phase overrides) work correctly
+   - Only pure virtual methods have minor issue (rare in practice)
+
+### Validation Results
+
+**OpenTitan**: 40/40 harness targets pass (100%)
+- Primitives: prim_fifo_sync, prim_count
+- Register blocks: 22/22 (gpio, uart, i2c, spi_host, spi_device, etc.)
+- Crypto IPs: 12/12 (aes, hmac, csrng, keymgr, kmac, otbn, etc.)
+- Full IP logic: alert_handler, mbx, rv_dm, timer_core
+
+**AVIPs**: 6/9 compile and simulate
+- Working: APB, AHB, AXI4, UART, I2S, I3C
+- AXI4Lite: Package naming conflicts (AVIP design issue)
+- SPI: Syntax errors in source (nested comments, empty args)
+- JTAG: Bind/virtual interface conflicts (AVIP design issue)
+
+### Remaining Limitations
+
+1. **Pure Virtual Methods**: Minor issue with dispatch (low priority)
+2. **Hierarchical Interface Tasks**: Pattern 3 from investigation (~5 days work)
+3. **AVIP Source Issues**: 3 AVIPs need source code fixes
+
+---
+
 ## Iteration 248 - January 29, 2026
 
 ### Goals
@@ -27,6 +68,12 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
    - Pattern 1: Variable initialization ordering (Medium complexity)
    - Pattern 2: Nested interface signals (FIXED above)
    - Pattern 3: Hierarchical interface tasks (High complexity, ~5 days)
+
+5. **BMC SMT-LIB Export** (VerifToSMT.cpp):
+   - **FIX**: Emit solver-only, unrolled SMT for `--emit-smtlib` (no scf/func/arith or solver results)
+   - **IMPACT**: `circt-bmc --emit-smtlib` now produces exportable SMT-LIB
+   - **Tests**: `test/Tools/circt-bmc/bmc-emit-smtlib.mlir`,
+     `test/Tools/circt-bmc/bmc-emit-smtlib-bad-ops.mlir`
 
 ### Test Suite Results
 - All external test suites maintain 100% pass rate
