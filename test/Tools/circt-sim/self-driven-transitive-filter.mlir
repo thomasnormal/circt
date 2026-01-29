@@ -49,4 +49,4 @@ hw.module @test(in %clk : i1, in %external_input : i1) {
 }
 
 // CHECK-NOT: delta cycle overflow
-// CHECK: simulation finished
+// CHECK: Simulation finished
