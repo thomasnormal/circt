@@ -207,7 +207,23 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 249)
+### Active Workstreams & Next Steps (Iteration 250)
+
+**Iteration 250 Fixes:**
+1. **Pure Virtual Method Dispatch** (FIXED): All virtual methods now work
+   - Changed isMethod check to consider MethodFlags::Virtual flag
+   - Pure virtual methods now get proper %this argument in declareFunction
+   - Virtual dispatch correctly calls derived class implementations
+
+2. **UVM Testing Results** (IDENTIFIED ISSUES):
+   - UVM-core compiles successfully (8.5MB MLIR)
+   - APB AVIP compiles successfully (10.9MB MLIR)
+   - Issues found requiring fixes:
+     - **Vtable initialization**: Vtables are `#llvm.zero` instead of function pointers
+     - **String truncation**: Off-by-one error dropping first character
+     - **UVM static initialization**: `uvm_root::get()` returns null
+
+3. **Hierarchical Interface Tasks**: Improved error message, full support deferred (medium-high complexity)
 
 **Iteration 249 Fixes:**
 1. **Hierarchical Variable Initialization** (FIXED): Variables with hierarchical initializers now work
