@@ -16526,10 +16526,52 @@ struct IntToStringOpConversion : public OpConversionPattern<IntToStringOp> {
       return rewriter.notifyMatchFailure(op, "input must be an integer type");
     auto inputWidth = input.getType().getIntOrFloatBitWidth();
 
+    // For wide constant strings (> 64 bits), extract all bytes and create
+    // a global string constant to avoid truncation.
+    if (inputWidth > 64) {
+      // Try to get the constant value from the input
+      APInt constValue;
+      if (auto hwConstOp = input.getDefiningOp<hw::ConstantOp>()) {
+        constValue = hwConstOp.getValue();
+      } else if (auto arithConstOp = input.getDefiningOp<arith::ConstantOp>()) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue()))
+          constValue = intAttr.getValue();
+      }
+
+      if (constValue.getBitWidth() > 0) {
+        // Extract bytes from the packed integer (big-endian: MSB is first char)
+        unsigned numBytes = (inputWidth + 7) / 8;
+        std::string strContent;
+        strContent.reserve(numBytes);
+
+        // Extract bytes from MSB to LSB (SystemVerilog packed string order)
+        for (int i = numBytes - 1; i >= 0; --i) {
+          unsigned bitOffset = i * 8;
+          if (bitOffset + 8 <= constValue.getBitWidth()) {
+            char c = static_cast<char>(
+                constValue.extractBits(8, bitOffset).getZExtValue());
+            if (c != 0 || !strContent.empty())
+              strContent.push_back(c);
+          }
+        }
+
+        if (!strContent.empty()) {
+          // Create global string constant using the helper function
+          Value result = createMooreStringFromAttr(
+              loc, mod, rewriter, strContent, "__packed_string");
+          rewriter.replaceOp(op, result);
+          return success();
+        }
+      }
+      // Fall through to runtime call if we couldn't extract constant
+    }
+
     Value inputI64;
     if (inputWidth < 64) {
       inputI64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, input);
     } else if (inputWidth > 64) {
+      // For non-constant wide inputs, truncate (lossy, but no better option
+      // without a runtime function that handles wide packed strings)
       inputI64 = arith::TruncIOp::create(rewriter, loc, i64Ty, input);
     } else {
       inputI64 = input;
