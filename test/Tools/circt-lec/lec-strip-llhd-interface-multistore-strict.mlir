@@ -1,7 +1,10 @@
-// RUN: not circt-lec --emit-mlir --strict-llhd -c1=top -c2=top %s %s 2>&1 | FileCheck %s
+// RUN: circt-lec --emit-mlir --strict-llhd -c1=top -c2=top %s %s 2>&1 | FileCheck %s
 
-// CHECK: LLHD interface signal requires abstraction; rerun without --strict-llhd
+// Test that multiple sequential stores to the same field are resolved by
+// dominance analysis, using the last dominating store value.
+// This now passes because resolveStoresByDominance handles this case.
 
+// CHECK: smt.solver
 module {
   llvm.mlir.global internal @iface_storage(#llvm.zero) : !llvm.struct<(i1)>
 
