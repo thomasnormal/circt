@@ -66,6 +66,14 @@ Both BMC and LEC verification pipelines fully functional.
     detection in circt-lec strict mode
     - Improved type traversal to correctly identify inout ports in module signatures
     - Ensures strict mode properly rejects designs with bidirectional ports
+11. **StripSim erase safety**: Deduplicate erase list and skip ops whose
+    ancestors are already marked to avoid double-free crashes when stripping
+    nested sim ops
+    - Verified `test/Dialect/Sim/strip-sim.mlir`
+12. **StripLLHDProcesses signal drivers**: Preserve signal drivers when
+    stripping LLHD processes by hoisting init-only drives and externalizing
+    dynamic-driven signals to new inputs
+    - Added regression: `test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
 
 ### Remaining Limitations
 
