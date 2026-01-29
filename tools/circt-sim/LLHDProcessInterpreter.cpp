@@ -4502,6 +4502,88 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     return success();
   }
 
+  // LLVM extractvalue - extract a value from an aggregate (struct/array)
+  if (auto extractValueOp = dyn_cast<LLVM::ExtractValueOp>(op)) {
+    InterpretedValue container = getValue(procId, extractValueOp.getContainer());
+    unsigned resultWidth = getTypeWidth(extractValueOp.getType());
+    if (container.isX()) {
+      setValue(procId, extractValueOp.getResult(),
+               InterpretedValue::makeX(resultWidth));
+      return success();
+    }
+
+    // Calculate the bit offset for the indexed position
+    // LLVM aggregates are laid out from low bits to high bits (opposite of HW)
+    Type currentType = extractValueOp.getContainer().getType();
+    unsigned bitOffset = 0;
+    for (int64_t idx : extractValueOp.getPosition()) {
+      if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
+        // For struct, accumulate offsets of preceding fields
+        auto body = structType.getBody();
+        for (int64_t i = 0; i < idx; ++i) {
+          bitOffset += getTypeWidth(body[i]);
+        }
+        currentType = body[idx];
+      } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+        // For array, compute offset based on element size
+        unsigned elemWidth = getTypeWidth(arrayType.getElementType());
+        bitOffset += elemWidth * idx;
+        currentType = arrayType.getElementType();
+      }
+    }
+
+    APInt extractedValue =
+        container.getAPInt().extractBits(resultWidth, bitOffset);
+    setValue(procId, extractValueOp.getResult(),
+             InterpretedValue(extractedValue));
+    return success();
+  }
+
+  // LLVM insertvalue - insert a value into an aggregate (struct/array)
+  if (auto insertValueOp = dyn_cast<LLVM::InsertValueOp>(op)) {
+    InterpretedValue container = getValue(procId, insertValueOp.getContainer());
+    InterpretedValue value = getValue(procId, insertValueOp.getValue());
+    unsigned totalWidth = getTypeWidth(insertValueOp.getType());
+    if (container.isX() || value.isX()) {
+      setValue(procId, insertValueOp.getResult(),
+               InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+
+    // Calculate the bit offset for the indexed position
+    // LLVM aggregates are laid out from low bits to high bits (opposite of HW)
+    Type currentType = insertValueOp.getContainer().getType();
+    unsigned bitOffset = 0;
+    unsigned fieldWidth = 0;
+    for (int64_t idx : insertValueOp.getPosition()) {
+      if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
+        // For struct, accumulate offsets of preceding fields
+        auto body = structType.getBody();
+        for (int64_t i = 0; i < idx; ++i) {
+          bitOffset += getTypeWidth(body[i]);
+        }
+        currentType = body[idx];
+      } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+        // For array, compute offset based on element size
+        unsigned elemWidth = getTypeWidth(arrayType.getElementType());
+        bitOffset += elemWidth * idx;
+        currentType = arrayType.getElementType();
+      }
+    }
+    fieldWidth = getTypeWidth(currentType);
+
+    APInt result = container.getAPInt();
+    APInt fieldValue = value.getAPInt();
+    if (fieldValue.getBitWidth() < fieldWidth)
+      fieldValue = fieldValue.zext(fieldWidth);
+    else if (fieldValue.getBitWidth() > fieldWidth)
+      fieldValue = fieldValue.trunc(fieldWidth);
+    result.insertBits(fieldValue, bitOffset);
+
+    setValue(procId, insertValueOp.getResult(), InterpretedValue(result));
+    return success();
+  }
+
   // Handle builtin.unrealized_conversion_cast - propagate values through
   if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
     // For casts, propagate the input values to the output values
