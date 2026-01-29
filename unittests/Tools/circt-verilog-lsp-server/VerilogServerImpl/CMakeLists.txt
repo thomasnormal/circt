@@ -1,13 +1,15 @@
-add_circt_unittest(CIRCTVerilogLSPSemanticTokensTests
+add_circt_unittest(CIRCTVerilogLSPVerilogServerImplTests
+  PARTIAL_SOURCES_INTENDED
   SemanticTokensTest.cpp
+  SlangPositionConversionTest.cpp
 )
 
-target_include_directories(CIRCTVerilogLSPSemanticTokensTests
+target_include_directories(CIRCTVerilogLSPVerilogServerImplTests
   PRIVATE
-  ${CMAKE_SOURCE_DIR}/lib/Tools/circt-verilog-lsp-server/VerilogServerImpl
+  ${CIRCT_SOURCE_DIR}/lib/Tools/circt-verilog-lsp-server/VerilogServerImpl
 )
 
-target_link_libraries(CIRCTVerilogLSPSemanticTokensTests
+target_link_libraries(CIRCTVerilogLSPVerilogServerImplTests
   PRIVATE
   CIRCTVerilogLspServerImpl
 )
