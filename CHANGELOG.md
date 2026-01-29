@@ -23,9 +23,9 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 **Key Achievement**: All 6 external BMC/LEC test suites now pass at 100%.
 Both BMC and LEC verification pipelines fully functional.
 
-**AVIP Simulation Status (5/9 working):**
+**AVIP Simulation Status (5/9 working, AXI4 pending validation):**
 - APB, I2S, I3C, UART, AHB: ✅ Compile + Simulate
-- AXI4: ⚠️ Compiles (bind scope patched), needs simulation test
+- AXI4: ⚠️ Compiles (bind scope patched), find_first_index implemented (testing)
 - JTAG: ❌ Needs AllowVirtualIfaceWithOverride slang flag
 - SPI: ❌ Source code bugs
 - AXI4Lite: ❌ Namespace collision
@@ -75,6 +75,24 @@ Both BMC and LEC verification pipelines fully functional.
     stripping LLHD processes by hoisting init-only drives and externalizing
     dynamic-driven signals to new inputs
     - Added regression: `test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+13. **BMC runtime lowering**: Lower LLHD signal/probe/drive ops in non-HW
+    contexts to LLVM alloc/load/store, including ref casts and time ops
+    - Added regression: `test/Tools/circt-bmc/lower-to-bmc-lower-llhd-sig.mlir`
+14. **BMC SMT bridge cleanup**: Convert non-BMC comb.mux to llvm.select for
+    LLVM-compatible types and only rewrite struct/pointer muxes inside BMC
+    circuits to avoid illegal SMT casts
+    - Added regression: `test/Tools/circt-bmc/lower-to-bmc-llvm-select.mlir`
+15. **BMC symbol pruning**: Drop LLVM global ctors/dtors when pruning by entry
+    symbol to avoid retaining unused runtime helpers
+    - Updated regression: `test/Tools/circt-bmc/strip-unreachable-symbols.mlir`
+16. **BMC pipeline**: Reconcile unrealized casts after SMT->Z3 lowering to
+    keep LLVM translation robust
+17. **find_first_index on associative arrays** (f93ab3a1e): Implemented in MooreToCore
+    - Added `lowerAssocArrayWithInlineLoop` method for find_first_index()
+    - Uses runtime functions: `__moore_assoc_first`, `__moore_assoc_next`, `__moore_assoc_get_ref`
+    - Generates scf.while loop to iterate and call predicate
+    - Fixes AXI4 AVIP which uses find_first_index() for transaction tracking
+    - Added test: `test/Conversion/MooreToCore/assoc-array-locator.mlir`
 
 ### Remaining Limitations
 
