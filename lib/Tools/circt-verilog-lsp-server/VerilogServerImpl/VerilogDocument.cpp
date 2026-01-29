@@ -76,6 +76,18 @@ using namespace llvm::lsp;
 
 namespace {
 
+/// Convert slang 1-based line number to LSP 0-based line number.
+/// Clamps to 0 if slang returns 0 (which can happen for invalid locations).
+inline int slangLineToLsp(size_t slangLine) {
+  return slangLine > 0 ? static_cast<int>(slangLine) - 1 : 0;
+}
+
+/// Convert slang 1-based column number to LSP 0-based column number.
+/// Clamps to 0 if slang returns 0 (which can happen for invalid locations).
+inline int slangColumnToLsp(size_t slangColumn) {
+  return slangColumn > 0 ? static_cast<int>(slangColumn) - 1 : 0;
+}
+
 #ifdef CIRCT_VERILOG_LSP_LINTING_ENABLED
 /// Convert a lint severity to LSP DiagnosticSeverity.
 llvm::lsp::DiagnosticSeverity
@@ -125,12 +137,12 @@ void runLintChecks(const slang::ast::Compilation &compilation,
       lspDiag.message = "[" + *lintDiag.code + "] " + lspDiag.message;
 
     // Convert location
-    int line = sm.getLineNumber(lintDiag.location) - 1;
-    int col = sm.getColumnNumber(lintDiag.location) - 1;
+    int line = slangLineToLsp(sm.getLineNumber(lintDiag.location));
+    int col = slangColumnToLsp(sm.getColumnNumber(lintDiag.location));
 
     if (lintDiag.range) {
-      int endLine = sm.getLineNumber(lintDiag.range->end()) - 1;
-      int endCol = sm.getColumnNumber(lintDiag.range->end()) - 1;
+      int endLine = slangLineToLsp(sm.getLineNumber(lintDiag.range->end()));
+      int endCol = slangColumnToLsp(sm.getColumnNumber(lintDiag.range->end()));
       lspDiag.range = llvm::lsp::Range(llvm::lsp::Position(line, col),
                                         llvm::lsp::Position(endLine, endCol));
     } else {
@@ -144,8 +156,8 @@ void runLintChecks(const slang::ast::Compilation &compilation,
       if (!relatedLoc.valid())
         continue;
 
-      int relLine = sm.getLineNumber(relatedLoc) - 1;
-      int relCol = sm.getColumnNumber(relatedLoc) - 1;
+      int relLine = slangLineToLsp(sm.getLineNumber(relatedLoc));
+      int relCol = slangColumnToLsp(sm.getColumnNumber(relatedLoc));
 
       llvm::lsp::DiagnosticRelatedInformation relatedInfo;
       relatedInfo.message = relatedMsg;
@@ -391,8 +403,8 @@ llvm::lsp::Location
 VerilogDocument::getLspLocation(slang::SourceLocation loc) const {
   if (loc && loc.buffer() != slang::SourceLocation::NoLocation.buffer()) {
     const auto &slangSourceManager = getSlangSourceManager();
-    auto line = slangSourceManager.getLineNumber(loc) - 1;
-    auto column = slangSourceManager.getColumnNumber(loc) - 1;
+    auto line = slangLineToLsp(slangSourceManager.getLineNumber(loc));
+    auto column = slangColumnToLsp(slangSourceManager.getColumnNumber(loc));
     auto it = loc.buffer();
     if (it == mainBufferId)
       return llvm::lsp::Location(uri, llvm::lsp::Range(Position(line, column)));
@@ -701,10 +713,10 @@ void VerilogDocument::getDocumentHighlights(
     if (!range.start().valid() || range.start().buffer() != mainBufferId)
       return std::nullopt;
 
-    int startLine = sm.getLineNumber(range.start()) - 1;
-    int startCol = sm.getColumnNumber(range.start()) - 1;
-    int endLine = sm.getLineNumber(range.end()) - 1;
-    int endCol = sm.getColumnNumber(range.end()) - 1;
+    int startLine = slangLineToLsp(sm.getLineNumber(range.start()));
+    int startCol = slangColumnToLsp(sm.getColumnNumber(range.start()));
+    int endLine = slangLineToLsp(sm.getLineNumber(range.end()));
+    int endCol = slangColumnToLsp(sm.getColumnNumber(range.end()));
 
     DocumentHighlight highlight;
     highlight.range = llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
@@ -1063,10 +1075,10 @@ mapSymbolKind(slang::ast::SymbolKind slangKind) {
 /// Calculate LSP Range from slang source range.
 llvm::lsp::Range VerilogDocument::getLspRange(slang::SourceRange range) const {
   const auto &sm = getSlangSourceManager();
-  int startLine = sm.getLineNumber(range.start()) - 1;
-  int startCol = sm.getColumnNumber(range.start()) - 1;
-  int endLine = sm.getLineNumber(range.end()) - 1;
-  int endCol = sm.getColumnNumber(range.end()) - 1;
+  int startLine = slangLineToLsp(sm.getLineNumber(range.start()));
+  int startCol = slangColumnToLsp(sm.getColumnNumber(range.start()));
+  int endLine = slangLineToLsp(sm.getLineNumber(range.end()));
+  int endCol = slangColumnToLsp(sm.getColumnNumber(range.end()));
   return llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                           llvm::lsp::Position(endLine, endCol));
 }
@@ -1092,8 +1104,8 @@ public:
       return;
 
     llvm::lsp::Range fullRange = doc.getLspRange(syntax->sourceRange());
-    int nameLine = sm.getLineNumber(body.location) - 1;
-    int nameCol = sm.getColumnNumber(body.location) - 1;
+    int nameLine = slangLineToLsp(sm.getLineNumber(body.location));
+    int nameCol = slangColumnToLsp(sm.getColumnNumber(body.location));
     llvm::lsp::Range nameRange(llvm::lsp::Position(nameLine, nameCol),
                                llvm::lsp::Position(nameLine, nameCol + body.name.size()));
 
@@ -1110,8 +1122,8 @@ public:
         if (!port->location.valid() || port->location.buffer() != bufferId)
           continue;
 
-        int pLine = sm.getLineNumber(port->location) - 1;
-        int pCol = sm.getColumnNumber(port->location) - 1;
+        int pLine = slangLineToLsp(sm.getLineNumber(port->location));
+        int pCol = slangColumnToLsp(sm.getColumnNumber(port->location));
         llvm::lsp::Range pRange(llvm::lsp::Position(pLine, pCol),
                                 llvm::lsp::Position(pLine, pCol + port->name.size()));
 
@@ -1201,8 +1213,8 @@ public:
         llvm::lsp::Range classFullRange = classSyntax
             ? doc.getLspRange(classSyntax->sourceRange())
             : llvm::lsp::Range();
-        int cLine = sm.getLineNumber(classType.location) - 1;
-        int cCol = sm.getColumnNumber(classType.location) - 1;
+        int cLine = slangLineToLsp(sm.getLineNumber(classType.location));
+        int cCol = slangColumnToLsp(sm.getColumnNumber(classType.location));
         llvm::lsp::Range classNameRange(llvm::lsp::Position(cLine, cCol),
                                         llvm::lsp::Position(cLine, cCol + classType.name.size()));
 
@@ -1240,8 +1252,8 @@ public:
             continue;
           }
 
-          int cmLine = sm.getLineNumber(classMember.location) - 1;
-          int cmCol = sm.getColumnNumber(classMember.location) - 1;
+          int cmLine = slangLineToLsp(sm.getLineNumber(classMember.location));
+          int cmCol = slangColumnToLsp(sm.getColumnNumber(classMember.location));
           llvm::lsp::Range cmRange(llvm::lsp::Position(cmLine, cmCol),
                                    llvm::lsp::Position(cmLine, cmCol + classMember.name.size()));
 
@@ -1288,8 +1300,8 @@ public:
           break;
         }
 
-        int pLine = sm.getLineNumber(procBlock.location) - 1;
-        int pCol = sm.getColumnNumber(procBlock.location) - 1;
+        int pLine = slangLineToLsp(sm.getLineNumber(procBlock.location));
+        int pCol = slangColumnToLsp(sm.getColumnNumber(procBlock.location));
         llvm::lsp::Range pRange(llvm::lsp::Position(pLine, pCol),
                                 llvm::lsp::Position(pLine, pCol + blockName.size()));
 
@@ -1305,8 +1317,8 @@ public:
       if (member.name.empty())
         continue;
 
-      int mLine = sm.getLineNumber(member.location) - 1;
-      int mCol = sm.getColumnNumber(member.location) - 1;
+      int mLine = slangLineToLsp(sm.getLineNumber(member.location));
+      int mCol = slangColumnToLsp(sm.getColumnNumber(member.location));
       llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),
                               llvm::lsp::Position(mLine, mCol + member.name.size()));
 
@@ -1328,8 +1340,8 @@ public:
       return;
 
     llvm::lsp::Range fullRange = doc.getLspRange(syntax->sourceRange());
-    int nameLine = sm.getLineNumber(pkg.location) - 1;
-    int nameCol = sm.getColumnNumber(pkg.location) - 1;
+    int nameLine = slangLineToLsp(sm.getLineNumber(pkg.location));
+    int nameCol = slangColumnToLsp(sm.getColumnNumber(pkg.location));
     llvm::lsp::Range nameRange(llvm::lsp::Position(nameLine, nameCol),
                                llvm::lsp::Position(nameLine, nameCol + pkg.name.size()));
 
@@ -1354,8 +1366,8 @@ public:
         llvm::lsp::Range classFullRange = classSyntax
             ? doc.getLspRange(classSyntax->sourceRange())
             : llvm::lsp::Range();
-        int cLine = sm.getLineNumber(classType.location) - 1;
-        int cCol = sm.getColumnNumber(classType.location) - 1;
+        int cLine = slangLineToLsp(sm.getLineNumber(classType.location));
+        int cCol = slangColumnToLsp(sm.getColumnNumber(classType.location));
         llvm::lsp::Range classNameRange(llvm::lsp::Position(cLine, cCol),
                                         llvm::lsp::Position(cLine, cCol + classType.name.size()));
 
@@ -1393,8 +1405,8 @@ public:
             continue;
           }
 
-          int cmLine = sm.getLineNumber(classMember.location) - 1;
-          int cmCol = sm.getColumnNumber(classMember.location) - 1;
+          int cmLine = slangLineToLsp(sm.getLineNumber(classMember.location));
+          int cmCol = slangColumnToLsp(sm.getColumnNumber(classMember.location));
           llvm::lsp::Range cmRange(llvm::lsp::Position(cmLine, cmCol),
                                    llvm::lsp::Position(cmLine, cmCol + classMember.name.size()));
 
@@ -1408,8 +1420,8 @@ public:
         continue;
       }
 
-      int mLine = sm.getLineNumber(member.location) - 1;
-      int mCol = sm.getColumnNumber(member.location) - 1;
+      int mLine = slangLineToLsp(sm.getLineNumber(member.location));
+      int mCol = slangColumnToLsp(sm.getColumnNumber(member.location));
       llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),
                               llvm::lsp::Position(mLine, mCol + member.name.size()));
 
@@ -1437,8 +1449,8 @@ public:
       return;
 
     llvm::lsp::Range fullRange = doc.getLspRange(syntax->sourceRange());
-    int nameLine = sm.getLineNumber(def.location) - 1;
-    int nameCol = sm.getColumnNumber(def.location) - 1;
+    int nameLine = slangLineToLsp(sm.getLineNumber(def.location));
+    int nameCol = slangColumnToLsp(sm.getColumnNumber(def.location));
     llvm::lsp::Range nameRange(llvm::lsp::Position(nameLine, nameCol),
                                llvm::lsp::Position(nameLine, nameCol + def.name.size()));
 
@@ -1461,8 +1473,8 @@ public:
         if (!port->location.valid() || port->location.buffer() != bufferId)
           continue;
 
-        int pLine = sm.getLineNumber(port->location) - 1;
-        int pCol = sm.getColumnNumber(port->location) - 1;
+        int pLine = slangLineToLsp(sm.getLineNumber(port->location));
+        int pCol = slangColumnToLsp(sm.getColumnNumber(port->location));
         llvm::lsp::Range pRange(llvm::lsp::Position(pLine, pCol),
                                 llvm::lsp::Position(pLine, pCol + port->name.size()));
 
@@ -1547,8 +1559,8 @@ public:
       if (member.name.empty())
         continue;
 
-      int mLine = sm.getLineNumber(member.location) - 1;
-      int mCol = sm.getColumnNumber(member.location) - 1;
+      int mLine = slangLineToLsp(sm.getLineNumber(member.location));
+      int mCol = slangColumnToLsp(sm.getColumnNumber(member.location));
       llvm::lsp::Range mRange(llvm::lsp::Position(mLine, mCol),
                               llvm::lsp::Position(mLine, mCol + member.name.size()));
 
@@ -3835,8 +3847,8 @@ public:
     if (!loc.valid() || loc.buffer() != bufferId || length == 0)
       return;
 
-    uint32_t line = sm.getLineNumber(loc) - 1;
-    uint32_t col = sm.getColumnNumber(loc) - 1;
+    uint32_t line = slangLineToLsp(sm.getLineNumber(loc));
+    uint32_t col = slangColumnToLsp(sm.getColumnNumber(loc));
 
     tokens.emplace_back(line, col, static_cast<uint32_t>(length),
                         type, modifiers);
@@ -3935,8 +3947,8 @@ public:
     if (!loc.valid() || loc.buffer() != bufferId || length == 0)
       return;
 
-    uint32_t line = sm.getLineNumber(loc) - 1;
-    uint32_t col = sm.getColumnNumber(loc) - 1;
+    uint32_t line = slangLineToLsp(sm.getLineNumber(loc));
+    uint32_t col = slangColumnToLsp(sm.getColumnNumber(loc));
 
     tokens.emplace_back(line, col, static_cast<uint32_t>(length),
                         type, modifiers);
@@ -4094,8 +4106,8 @@ public:
     if (!loc.valid() || loc.buffer() != bufferId)
       return false;
 
-    int line = sm.getLineNumber(loc) - 1;
-    int col = sm.getColumnNumber(loc) - 1;
+    int line = slangLineToLsp(sm.getLineNumber(loc));
+    int col = slangColumnToLsp(sm.getColumnNumber(loc));
 
     if (line < range.start.line || line > range.end.line)
       return false;
@@ -4108,8 +4120,8 @@ public:
   }
 
   llvm::lsp::Position getPosition(slang::SourceLocation loc) const {
-    return llvm::lsp::Position(sm.getLineNumber(loc) - 1,
-                                sm.getColumnNumber(loc) - 1);
+    return llvm::lsp::Position(slangLineToLsp(sm.getLineNumber(loc)),
+                                slangColumnToLsp(sm.getColumnNumber(loc)));
   }
 
   void handle(const slang::ast::InstanceBodySymbol &body) {
@@ -5267,24 +5279,24 @@ VerilogDocument::prepareCallHierarchy(const llvm::lsp::URIForFile &uri,
   // Get the range of the entire subroutine
   if (auto *syntax = sub.getSyntax()) {
     auto syntaxRange = syntax->sourceRange();
-    int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
-    int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
-    int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
-    int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+    int startLine = slangLineToLsp(sm.getLineNumber(syntaxRange.start()));
+    int startCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.start()));
+    int endLine = slangLineToLsp(sm.getLineNumber(syntaxRange.end()));
+    int endCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.end()));
     item.range =
         llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                          llvm::lsp::Position(endLine, endCol));
   } else {
     // Fallback to just the name location
-    int line = sm.getLineNumber(sub.location) - 1;
-    int col = sm.getColumnNumber(sub.location) - 1;
+    int line = slangLineToLsp(sm.getLineNumber(sub.location));
+    int col = slangColumnToLsp(sm.getColumnNumber(sub.location));
     item.range = llvm::lsp::Range(llvm::lsp::Position(line, col),
                                   llvm::lsp::Position(line, col + sub.name.size()));
   }
 
   // Selection range is just the name
-  int nameLine = sm.getLineNumber(sub.location) - 1;
-  int nameCol = sm.getColumnNumber(sub.location) - 1;
+  int nameLine = slangLineToLsp(sm.getLineNumber(sub.location));
+  int nameCol = slangColumnToLsp(sm.getColumnNumber(sub.location));
   item.selectionRange =
       llvm::lsp::Range(llvm::lsp::Position(nameLine, nameCol),
                        llvm::lsp::Position(nameLine, nameCol + sub.name.size()));
@@ -5318,8 +5330,8 @@ void VerilogDocument::getIncomingCalls(
       if (member.kind == slang::ast::SymbolKind::Subroutine &&
           member.name == item.name) {
         const auto &sub = member.as<slang::ast::SubroutineSymbol>();
-        int line = sm.getLineNumber(sub.location) - 1;
-        int col = sm.getColumnNumber(sub.location) - 1;
+        int line = slangLineToLsp(sm.getLineNumber(sub.location));
+        int col = slangColumnToLsp(sm.getColumnNumber(sub.location));
         if (line == targetLine && col == targetCol) {
           targetSub = &sub;
           return true;
@@ -5332,8 +5344,8 @@ void VerilogDocument::getIncomingCalls(
           if (classMember.kind == slang::ast::SymbolKind::Subroutine &&
               classMember.name == item.name) {
             const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
-            int line = sm.getLineNumber(sub.location) - 1;
-            int col = sm.getColumnNumber(sub.location) - 1;
+            int line = slangLineToLsp(sm.getLineNumber(sub.location));
+            int col = slangColumnToLsp(sm.getColumnNumber(sub.location));
             if (line == targetLine && col == targetCol) {
               targetSub = &sub;
               return true;
@@ -5406,24 +5418,24 @@ void VerilogDocument::getIncomingCalls(
     // Range of the caller
     if (auto *syntax = caller->getSyntax()) {
       auto syntaxRange = syntax->sourceRange();
-      int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
-      int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
-      int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
-      int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+      int startLine = slangLineToLsp(sm.getLineNumber(syntaxRange.start()));
+      int startCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.start()));
+      int endLine = slangLineToLsp(sm.getLineNumber(syntaxRange.end()));
+      int endCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.end()));
       incoming.from.range =
           llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                            llvm::lsp::Position(endLine, endCol));
     } else {
-      int line = sm.getLineNumber(caller->location) - 1;
-      int col = sm.getColumnNumber(caller->location) - 1;
+      int line = slangLineToLsp(sm.getLineNumber(caller->location));
+      int col = slangColumnToLsp(sm.getColumnNumber(caller->location));
       incoming.from.range =
           llvm::lsp::Range(llvm::lsp::Position(line, col),
                            llvm::lsp::Position(line, col + caller->name.size()));
     }
 
     // Selection range
-    int callerLine = sm.getLineNumber(caller->location) - 1;
-    int callerCol = sm.getColumnNumber(caller->location) - 1;
+    int callerLine = slangLineToLsp(sm.getLineNumber(caller->location));
+    int callerCol = slangColumnToLsp(sm.getColumnNumber(caller->location));
     incoming.from.selectionRange = llvm::lsp::Range(
         llvm::lsp::Position(callerLine, callerCol),
         llvm::lsp::Position(callerLine, callerCol + caller->name.size()));
@@ -5432,10 +5444,10 @@ void VerilogDocument::getIncomingCalls(
 
     // Convert call ranges
     for (const auto &range : ranges) {
-      int startLine = sm.getLineNumber(range.start()) - 1;
-      int startCol = sm.getColumnNumber(range.start()) - 1;
-      int endLine = sm.getLineNumber(range.end()) - 1;
-      int endCol = sm.getColumnNumber(range.end()) - 1;
+      int startLine = slangLineToLsp(sm.getLineNumber(range.start()));
+      int startCol = slangColumnToLsp(sm.getColumnNumber(range.start()));
+      int endLine = slangLineToLsp(sm.getLineNumber(range.end()));
+      int endCol = slangColumnToLsp(sm.getColumnNumber(range.end()));
       incoming.fromRanges.push_back(
           llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                            llvm::lsp::Position(endLine, endCol)));
@@ -5467,8 +5479,8 @@ void VerilogDocument::getOutgoingCalls(
       if (member.kind == slang::ast::SymbolKind::Subroutine &&
           member.name == item.name) {
         const auto &sub = member.as<slang::ast::SubroutineSymbol>();
-        int line = sm.getLineNumber(sub.location) - 1;
-        int col = sm.getColumnNumber(sub.location) - 1;
+        int line = slangLineToLsp(sm.getLineNumber(sub.location));
+        int col = slangColumnToLsp(sm.getColumnNumber(sub.location));
         if (line == sourceLine && col == sourceCol) {
           sourceSub = &sub;
           return true;
@@ -5481,8 +5493,8 @@ void VerilogDocument::getOutgoingCalls(
           if (classMember.kind == slang::ast::SymbolKind::Subroutine &&
               classMember.name == item.name) {
             const auto &sub = classMember.as<slang::ast::SubroutineSymbol>();
-            int line = sm.getLineNumber(sub.location) - 1;
-            int col = sm.getColumnNumber(sub.location) - 1;
+            int line = slangLineToLsp(sm.getLineNumber(sub.location));
+            int col = slangColumnToLsp(sm.getColumnNumber(sub.location));
             if (line == sourceLine && col == sourceCol) {
               sourceSub = &sub;
               return true;
@@ -5561,31 +5573,31 @@ void VerilogDocument::getOutgoingCalls(
     if (auto *syntax = callee->getSyntax()) {
       auto syntaxRange = syntax->sourceRange();
       if (syntaxRange.start().valid()) {
-        int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
-        int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
-        int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
-        int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+        int startLine = slangLineToLsp(sm.getLineNumber(syntaxRange.start()));
+        int startCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.start()));
+        int endLine = slangLineToLsp(sm.getLineNumber(syntaxRange.end()));
+        int endCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.end()));
         outgoing.to.range =
             llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                              llvm::lsp::Position(endLine, endCol));
       } else {
-        int line = sm.getLineNumber(callee->location) - 1;
-        int col = sm.getColumnNumber(callee->location) - 1;
+        int line = slangLineToLsp(sm.getLineNumber(callee->location));
+        int col = slangColumnToLsp(sm.getColumnNumber(callee->location));
         outgoing.to.range = llvm::lsp::Range(
             llvm::lsp::Position(line, col),
             llvm::lsp::Position(line, col + callee->name.size()));
       }
     } else {
-      int line = sm.getLineNumber(callee->location) - 1;
-      int col = sm.getColumnNumber(callee->location) - 1;
+      int line = slangLineToLsp(sm.getLineNumber(callee->location));
+      int col = slangColumnToLsp(sm.getColumnNumber(callee->location));
       outgoing.to.range = llvm::lsp::Range(
           llvm::lsp::Position(line, col),
           llvm::lsp::Position(line, col + callee->name.size()));
     }
 
     // Selection range
-    int calleeLine = sm.getLineNumber(callee->location) - 1;
-    int calleeCol = sm.getColumnNumber(callee->location) - 1;
+    int calleeLine = slangLineToLsp(sm.getLineNumber(callee->location));
+    int calleeCol = slangColumnToLsp(sm.getColumnNumber(callee->location));
     outgoing.to.selectionRange = llvm::lsp::Range(
         llvm::lsp::Position(calleeLine, calleeCol),
         llvm::lsp::Position(calleeLine, calleeCol + callee->name.size()));
@@ -5595,10 +5607,10 @@ void VerilogDocument::getOutgoingCalls(
     // Convert call ranges (these are the locations in the source subroutine
     // where the call is made)
     for (const auto &range : ranges) {
-      int startLine = sm.getLineNumber(range.start()) - 1;
-      int startCol = sm.getColumnNumber(range.start()) - 1;
-      int endLine = sm.getLineNumber(range.end()) - 1;
-      int endCol = sm.getColumnNumber(range.end()) - 1;
+      int startLine = slangLineToLsp(sm.getLineNumber(range.start()));
+      int startCol = slangColumnToLsp(sm.getColumnNumber(range.start()));
+      int endLine = slangLineToLsp(sm.getLineNumber(range.end()));
+      int endCol = slangColumnToLsp(sm.getColumnNumber(range.end()));
       outgoing.fromRanges.push_back(
           llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                            llvm::lsp::Position(endLine, endCol)));
@@ -5643,8 +5655,8 @@ public:
 
     size_t refCount = countReferences(&symbol);
 
-    int line = sm.getLineNumber(symbol.location) - 1;
-    int col = sm.getColumnNumber(symbol.location) - 1;
+    int line = slangLineToLsp(sm.getLineNumber(symbol.location));
+    int col = slangColumnToLsp(sm.getColumnNumber(symbol.location));
 
     VerilogDocument::CodeLensInfo lens;
     lens.range = llvm::lsp::Range(
@@ -5757,8 +5769,8 @@ public:
     if (method.location.buffer() != bufferId)
       return;
 
-    int line = sm.getLineNumber(method.location) - 1;
-    int col = sm.getColumnNumber(method.location) - 1;
+    int line = slangLineToLsp(sm.getLineNumber(method.location));
+    int col = slangColumnToLsp(sm.getColumnNumber(method.location));
 
     VerilogDocument::CodeLensInfo lens;
     lens.range = llvm::lsp::Range(
@@ -5897,25 +5909,25 @@ buildTypeHierarchyItem(const slang::ast::ClassType &classType,
   // Get the range of the entire class
   if (auto *syntax = classType.getSyntax()) {
     auto syntaxRange = syntax->sourceRange();
-    int startLine = sm.getLineNumber(syntaxRange.start()) - 1;
-    int startCol = sm.getColumnNumber(syntaxRange.start()) - 1;
-    int endLine = sm.getLineNumber(syntaxRange.end()) - 1;
-    int endCol = sm.getColumnNumber(syntaxRange.end()) - 1;
+    int startLine = slangLineToLsp(sm.getLineNumber(syntaxRange.start()));
+    int startCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.start()));
+    int endLine = slangLineToLsp(sm.getLineNumber(syntaxRange.end()));
+    int endCol = slangColumnToLsp(sm.getColumnNumber(syntaxRange.end()));
     item.range =
         llvm::lsp::Range(llvm::lsp::Position(startLine, startCol),
                          llvm::lsp::Position(endLine, endCol));
   } else {
     // Fallback to just the name location
-    int line = sm.getLineNumber(classType.location) - 1;
-    int col = sm.getColumnNumber(classType.location) - 1;
+    int line = slangLineToLsp(sm.getLineNumber(classType.location));
+    int col = slangColumnToLsp(sm.getColumnNumber(classType.location));
     item.range = llvm::lsp::Range(
         llvm::lsp::Position(line, col),
         llvm::lsp::Position(line, col + static_cast<int>(classType.name.size())));
   }
 
   // Selection range is just the name
-  int nameLine = sm.getLineNumber(classType.location) - 1;
-  int nameCol = sm.getColumnNumber(classType.location) - 1;
+  int nameLine = slangLineToLsp(sm.getLineNumber(classType.location));
+  int nameCol = slangColumnToLsp(sm.getColumnNumber(classType.location));
   item.selectionRange = llvm::lsp::Range(
       llvm::lsp::Position(nameLine, nameCol),
       llvm::lsp::Position(nameLine, nameCol + static_cast<int>(classType.name.size())));
@@ -6029,8 +6041,8 @@ void VerilogDocument::getSupertypes(
       if (member.kind == slang::ast::SymbolKind::ClassType &&
           member.name == item.name) {
         const auto &classType = member.as<slang::ast::ClassType>();
-        int line = sm.getLineNumber(classType.location) - 1;
-        int col = sm.getColumnNumber(classType.location) - 1;
+        int line = slangLineToLsp(sm.getLineNumber(classType.location));
+        int col = slangColumnToLsp(sm.getColumnNumber(classType.location));
         if (line == targetLine && col == targetCol) {
           targetClass = &classType;
           return true;
@@ -6112,8 +6124,8 @@ void VerilogDocument::getSubtypes(
   const slang::ast::ClassType *targetClass = nullptr;
   for (const auto *classType : collector.allClasses) {
     if (classType->name == item.name) {
-      int line = sm.getLineNumber(classType->location) - 1;
-      int col = sm.getColumnNumber(classType->location) - 1;
+      int line = slangLineToLsp(sm.getLineNumber(classType->location));
+      int col = slangColumnToLsp(sm.getColumnNumber(classType->location));
       if (line == targetLine && col == targetCol) {
         targetClass = classType;
         break;
