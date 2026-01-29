@@ -775,6 +775,10 @@ private:
   /// Map from global variable names to their simulated base addresses.
   llvm::StringMap<uint64_t> globalAddresses;
 
+  /// Reverse map from simulated addresses to global variable names.
+  /// Used for looking up string content by virtual address (e.g., in fmt.dyn_string).
+  llvm::DenseMap<uint64_t, std::string> addressToGlobal;
+
   /// Next available address for global memory allocation.
   uint64_t nextGlobalAddress = 0x10000000;
 
