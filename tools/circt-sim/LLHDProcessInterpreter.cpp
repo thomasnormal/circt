@@ -4544,10 +4544,19 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     InterpretedValue container = getValue(procId, insertValueOp.getContainer());
     InterpretedValue value = getValue(procId, insertValueOp.getValue());
     unsigned totalWidth = getTypeWidth(insertValueOp.getType());
-    if (container.isX() || value.isX()) {
+
+    // If only the value being inserted is X, propagate X
+    if (value.isX()) {
       setValue(procId, insertValueOp.getResult(),
                InterpretedValue::makeX(totalWidth));
       return success();
+    }
+
+    // If the container is X (e.g., from llvm.mlir.undef), treat it as zeros
+    // to allow building up structs incrementally. This is the common pattern
+    // for constructing structs: start with undef, then insertvalue fields.
+    if (container.isX()) {
+      container = InterpretedValue(APInt::getZero(totalWidth));
     }
 
     // Calculate the bit offset for the indexed position
@@ -6175,6 +6184,19 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
     }
 
     return "<dynamic string>";
+  }
+
+  // Handle arith.select - conditional selection of format strings
+  if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+    InterpretedValue condVal = getValue(procId, selectOp.getCondition());
+    if (condVal.isX()) {
+      // Return some indication for X condition
+      return "<X>";
+    }
+    bool condition = condVal.getAPInt().getBoolValue();
+    Value selectedValue =
+        condition ? selectOp.getTrueValue() : selectOp.getFalseValue();
+    return evaluateFormatString(procId, selectedValue);
   }
 
   // Unknown format operation
