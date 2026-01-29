@@ -84,6 +84,13 @@ Value ConstructLECPass::constructMiter(OpBuilder builder, Location loc,
   auto inputNames = moduleA.getInputNames();
   if (!inputNames.empty())
     lecOp->setAttr("lec.input_names", builder.getArrayAttr(inputNames));
+  if (moduleA.getNumInputPorts() != 0) {
+    SmallVector<Attribute> typeAttrs;
+    typeAttrs.reserve(moduleA.getNumInputPorts());
+    for (Type type : moduleA.getInputTypes())
+      typeAttrs.push_back(TypeAttr::get(type));
+    lecOp->setAttr("lec.input_types", builder.getArrayAttr(typeAttrs));
+  }
 
   moduleA->erase();
   if (moduleA != moduleB)
