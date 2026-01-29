@@ -35,11 +35,26 @@ Both BMC and LEC verification pipelines fully functional.
 - Message content strings empty (dynamic string formatting limitation)
 
 ### Fixed in this Iteration
-1. **Build mismatch diagnosis**: Identified stale `build/` binaries vs `build-test/`
+1. **LSP Position.character bug** (d5b12c82e): Fixed slang column 0 -> -1 conversion
+   - Added slangLineToLsp/slangColumnToLsp helper functions that clamp to non-negative
+   - Applied fix to 100+ occurrences in VerilogDocument.cpp
+   - Added unit tests: NormalConversion, ZeroInputClampedToZero, LargeNumbers
+2. **VerifToSMT test expectations** (272085b46): Updated 49 test files for new output format
+   - Multiple properties returned separately (not combined with smt.and)
+   - Loop function call ordering changed, function signatures updated
+   - 54/61 tests pass (7 XFAIL for known bugs)
+3. **LLVM::InsertValueOp/ExtractValueOp** (13bf3701d): Implemented in circt-sim
+   - Root cause of empty UVM messages: struct ops not handled
+   - Added handlers for llvm.insertvalue and llvm.extractvalue
+   - Added unit test: llvm-insertvalue-extractvalue.mlir
+4. **AHB AVIP now compiles**: Re-applied bind scope patch to slang
+   - Bind scope LRM 23.11 dual-scope resolution working
+   - AHB AVIP compiles to 1.8MB MLIR output
+5. **Build mismatch diagnosis**: Identified stale `build/` binaries vs `build-test/`
    - `#ltl<clock_edge>` attribute parsing only in newer builds
    - All external suites pass with correct binaries
-2. **AVIP testing**: I3C and UART AVIPs verified to simulate
-3. **OpenTitan keymgr_dpe**: Complex crypto IP simulation verified
+6. **AVIP testing**: I3C, UART, and now AHB AVIPs verified to compile
+7. **OpenTitan keymgr_dpe**: Complex crypto IP simulation verified
 
 ### Remaining Limitations
 
