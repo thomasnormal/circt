@@ -1170,6 +1170,9 @@ baselines, correct temporal semantics, and actionable diagnostics.
 4. **Witness/counterexample traces** are not yet standardized across BMC/LEC.
 5. **Formal performance**: large designs can still time out or explode in SMT
    size due to unoptimized lowering.
+6. **Rising-clocks-only limitation**: `--rising-clocks-only` rejects negedge
+   and edge-triggered properties; full edge modeling is required for suites
+   that include them.
 
 ### Long-Term Features to Build (Ambitious + Needed)
 1. **True multi-step BMC** with proper delay buffering and sampled-value timing,
