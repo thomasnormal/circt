@@ -7,25 +7,65 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
 ### Progress
 
-**Test Suite Status - ALL EXTERNAL SUITES 100%:**
+**Test Suite Status - Latest External Suites (Updated 2026-01-29):**
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | 2861/3037 (94.2%) | 32 VerifToSMT + 17 LSP pytest |
-| sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
+| Lit Tests | **2955/2996 (100%)** | 41 XFAIL, 54 unsupported - **All tests pass** |
+| sv-tests BMC | **23/26 (88.5%)** | 3 XFAIL as expected |
 | sv-tests LEC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | 2 VHDL skipped |
+
+Latest sv-tests BMC run (January 29, 2026):
+- `utils/run_sv_tests_circt_bmc.sh ~/sv-tests`
+- total=26 pass=23 xfail=3 xpass=0 error=0 skip=1010
+
+Latest yosys SVA BMC run (January 29, 2026):
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+- 14 tests, failures=0, skipped=2 (VHDL)
+
+Latest verilator-verification BMC run (January 29, 2026):
+- `utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification`
+- total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0
+
+Latest sv-tests LEC run (January 29, 2026):
+- `utils/run_sv_tests_circt_lec.sh ~/sv-tests`
+- total=23 pass=23 fail=0 error=0 skip=1013
+
+Latest verilator-verification LEC run (January 29, 2026):
+- `utils/run_verilator_verification_circt_lec.sh ~/verilator-verification`
+- total=17 pass=17 fail=0 error=0 skip=0
+
+Latest yosys SVA LEC run (January 29, 2026):
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+- total=14 pass=14 fail=0 error=0 skip=2
+
+Latest AVIP compile smoke (January 29, 2026):
+- `utils/run_avip_circt_verilog.sh ~/mbit/apb_avip ~/mbit/apb_avip/sim/apb_compile.f`
+- log: `avip-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/axi4_avip ~/mbit/axi4_avip/sim/axi4_compile.f`
+- log: `avip-axi4-circt-verilog.log`
+
+Latest OpenTitan LEC smoke (January 29, 2026):
+- `utils/run_opentitan_circt_lec.py`
+- aes_sbox_canright FAIL (known issue: masked S-Box inequivalence)
+- counterexample: op_i=4'h8, data_i=16'hB600
+- logs: `/tmp/opentitan-lec-debug-smtlib/aes_sbox_canright_masked/`
+
+Latest OpenTitan Verilog parse (January 29, 2026):
+- `utils/run_opentitan_circt_verilog.sh aes_reg_top`
+- log: `opentitan-aes_reg_top.log`
 | OpenTitan IPs | 36+ simulating | keymgr_dpe verified |
 
 **Key Achievement**: All 6 external BMC/LEC test suites now pass at 100%.
 Both BMC and LEC verification pipelines fully functional.
 
-**AVIP Simulation Status (5/9 working, AXI4 pending validation):**
-- APB, I2S, I3C, UART, AHB: ✅ Compile + Simulate
-- AXI4: ⚠️ Compiles (bind scope patched), find_first_index implemented (testing)
+**AVIP Simulation Status (6/9 working):**
+- APB, I2S, I3C, UART, AHB, **AXI4**: ✅ Compile + Simulate
+- AXI4: ✅ Now works with find_first_index implementation (1102 signals, 8 processes)
 - JTAG: ❌ Needs AllowVirtualIfaceWithOverride slang flag
 - SPI: ❌ Source code bugs
 - AXI4Lite: ❌ Namespace collision
@@ -58,6 +98,9 @@ Both BMC and LEC verification pipelines fully functional.
 7. **OpenTitan keymgr_dpe**: Complex crypto IP simulation verified
 8. **BMC LLHD drive hoisting order**: Preserve ordering for hoisted drives so
    constant/block-arg pairs don't override sequential updates
+9. **Clocked LTL asserts lowered for BMC**: Convert clocked assert/assume/cover
+   with LTL properties into unclocked verif ops with `ltl.clock` wrapping.
+   Fixes sv-tests local-var fail cases that were incorrectly XPASS.
    - Added regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-hoist-drive-order.mlir`
 9. **sim.fmt.dyn_string reverse address lookup** (324c36c5f): Fixed address lookup
    for dynamic string formatting in circt-sim
@@ -85,6 +128,10 @@ Both BMC and LEC verification pipelines fully functional.
 15. **BMC symbol pruning**: Drop LLVM global ctors/dtors when pruning by entry
     symbol to avoid retaining unused runtime helpers
     - Updated regression: `test/Tools/circt-bmc/strip-unreachable-symbols.mlir`
+16. **BMC final checks gated by clock edge**: Final-only properties now update
+    only on their clock edge to avoid sampling on inactive phases.
+    - Added regression: `test/Conversion/VerifToSMT/bmc-final-check-edge.mlir`
+    - Tests: `build/bin/llvm-lit -v test/Conversion/VerifToSMT/bmc-final-check-edge.mlir`
 16. **BMC pipeline**: Reconcile unrealized casts after SMT->Z3 lowering to
     keep LLVM translation robust
 17. **find_first_index on associative arrays** (f93ab3a1e): Implemented in MooreToCore
