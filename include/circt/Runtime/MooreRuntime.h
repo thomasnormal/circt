@@ -178,6 +178,11 @@ MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init);
 /// @return Pointer to the new associative array (opaque handle)
 void *__moore_assoc_create(int32_t key_size, int32_t value_size);
 
+/// Get the number of elements in an associative array.
+/// @param array Pointer to the associative array
+/// @return Number of key-value pairs in the array
+int64_t __moore_assoc_size(void *array);
+
 /// Delete all entries from an associative array.
 /// @param array Pointer to the associative array
 void __moore_assoc_delete(void *array);
