@@ -557,20 +557,20 @@ Cannot lower to HW dialect due to prim_diff_decode control-flow bug in prim_aler
 - I3C AVIP: ✅ PASS (compiles + simulates 10ms, no bind statements)
 - UART AVIP: ✅ PASS (compiles + simulates, UVM_INFO/UVM_WARNING messages at time 0)
 - AHB AVIP: ✅ PASS + SIMULATES (1.8MB MLIR, bind scope patch working, simulation runs end-to-end)
-- AXI4 AVIP: ⚠️ PARSES (find_first_index() queue method not implemented in circt-sim)
-- JTAG AVIP: ❌ BLOCKED - need slang rebuild with bind scope patches
+- AXI4 AVIP: ❌ BLOCKED - bind scope violation (same issue AHB had before fix)
+- JTAG AVIP: ❌ BLOCKED - needs AllowVirtualIfaceWithOverride slang flag
 - SPI AVIP: ❌ BLOCKED - source code bugs (nested block comments, invalid `this` in constraints)
 - AXI4Lite AVIP: ❌ BLOCKED - parameter namespace collision + bind statements
 
 **UVM Phase Execution**: Verified working (2026-01-29)
-- UVM_INFO and UVM_WARNING messages print at time 0
+- UVM_INFO and UVM_WARNING messages print with actual content ✅
 - Clock generation and BFM initialization work
-- Message content requires sim.fmt.dyn_string fix for dynamic string formatting
+- sim.fmt.dyn_string reverse lookup FIXED (324c36c5f)
 
 **Next Tasks**:
-1. Implement find_first_index() queue method (unblocks AXI4 AVIP simulation)
-2. Implement sim.fmt.dyn_string for UVM message string formatting
-3. Rebuild slang with bind scope patches (unblocks JTAG)
+1. Apply bind scope patch to AXI4 (same fix as AHB)
+2. Add AllowVirtualIfaceWithOverride slang flag (unblocks JTAG)
+3. Test full UVM test sequences end-to-end
 
 ### Track 2: SVA/BMC Verification (Priority: HIGH)
 **Goal**: Full SystemVerilog Assertions support for bounded model checking
