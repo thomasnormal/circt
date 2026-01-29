@@ -1758,14 +1758,30 @@ ClassPropertyRefOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError("symbol `")
            << classSym << "` does not name a `moore.class.classdecl`";
 
-  // Look up the field symbol inside the class declaration's symbol table.
+  // Look up the field symbol inside the class declaration's symbol table,
+  // walking up the inheritance hierarchy if necessary.
   FlatSymbolRefAttr fieldSym = getPropertyAttr();
   if (!fieldSym)
     return emitOpError("missing field symbol");
 
-  Operation *fldSym = symbolTable.lookupSymbolIn(classDecl, fieldSym.getAttr());
+  ClassDeclOp cursor = classDecl;
+  Operation *fldSym = nullptr;
+
+  // Search for the property in this class and its base classes.
+  while (cursor && !fldSym) {
+    fldSym = symbolTable.lookupSymbolIn(cursor, fieldSym.getAttr());
+    if (fldSym)
+      break;
+    SymbolRefAttr baseSym = cursor.getBaseAttr();
+    if (!baseSym)
+      break;
+    Operation *baseOp = symbolTable.lookupSymbolIn(module, baseSym);
+    cursor = baseOp ? dyn_cast<ClassDeclOp>(baseOp) : ClassDeclOp();
+  }
+
   if (!fldSym)
-    return emitOpError("no field `") << fieldSym << "` in class " << classSym;
+    return emitOpError("no field `") << fieldSym << "` in class " << classSym
+                                     << " or its base classes";
 
   auto fieldDecl = dyn_cast<ClassPropertyDeclOp>(fldSym);
   if (!fieldDecl)

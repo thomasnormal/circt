@@ -92,11 +92,27 @@ void __moore_queue_push_front(MooreQueue *queue, void *element,
 /// @return The popped element value (as 64-bit integer)
 int64_t __moore_queue_pop_back(MooreQueue *queue, int64_t element_size);
 
+/// Pop an element from the back of a queue into a provided buffer.
+/// Used for complex types (structs, pointers) that don't fit in int64_t.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param result_ptr Pointer to buffer where the element will be written
+/// @param element_size Size of the element in bytes
+void __moore_queue_pop_back_ptr(MooreQueue *queue, void *result_ptr,
+                                int64_t element_size);
+
 /// Pop an element from the front of a queue.
 /// @param queue Pointer to the queue structure (modified in place)
 /// @param element_size Size of the element in bytes
 /// @return The popped element value (as 64-bit integer)
 int64_t __moore_queue_pop_front(MooreQueue *queue, int64_t element_size);
+
+/// Pop an element from the front of a queue into a provided buffer.
+/// Used for complex types (structs, pointers) that don't fit in int64_t.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param result_ptr Pointer to buffer where the element will be written
+/// @param element_size Size of the element in bytes
+void __moore_queue_pop_front_ptr(MooreQueue *queue, void *result_ptr,
+                                 int64_t element_size);
 
 /// Clear all elements from a queue.
 /// This corresponds to the SystemVerilog `.delete()` method without arguments.
@@ -111,6 +127,17 @@ void __moore_queue_clear(MooreQueue *queue);
 /// @param element_size Size of each element in bytes
 void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
                                 int64_t element_size);
+
+/// Insert an element at a specific index in a queue.
+/// This corresponds to the SystemVerilog `.insert(index, item)` method.
+/// Elements at and after the index are shifted up by one position.
+/// If index < 0, it's treated as 0. If index >= size, the item is appended.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param index Index at which to insert the element
+/// @param element Pointer to the element to insert
+/// @param element_size Size of the element in bytes
+void __moore_queue_insert(MooreQueue *queue, int32_t index, void *element,
+                          int64_t element_size);
 
 /// Sort a queue and return a new sorted queue.
 /// @param queue Pointer to the queue structure
@@ -151,6 +178,26 @@ MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start, int64_t end,
 /// @return A new queue containing all elements in order
 MooreQueue __moore_queue_concat(MooreQueue *queues, int64_t count,
                                 int64_t element_size);
+
+/// Get the size (number of elements) of a queue.
+/// Implements SystemVerilog queue.size() method.
+/// @param queue Pointer to the queue structure
+/// @return Number of elements in the queue
+int64_t __moore_queue_size(MooreQueue *queue);
+
+/// Get unique elements from a queue.
+/// Implements SystemVerilog queue.unique() method.
+/// This is a simplified version that doesn't take element_size - it's
+/// computed from the stored queue metadata or uses a default.
+/// @param queue Pointer to the queue structure
+/// @return A new queue containing unique elements (first occurrence of each)
+MooreQueue __moore_queue_unique(MooreQueue *queue);
+
+/// Sort a queue in place (ascending order).
+/// Implements SystemVerilog queue.sort() method for in-place sorting.
+/// @param queue Pointer to the queue structure (modified in place)
+/// @param elem_size Size of each element in bytes
+void __moore_queue_sort_inplace(MooreQueue *queue, int64_t elem_size);
 
 //===----------------------------------------------------------------------===//
 // Dynamic Array Operations

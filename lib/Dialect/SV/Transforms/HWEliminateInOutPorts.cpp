@@ -14,6 +14,7 @@
 #include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/SV/SVPasses.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/PostOrderIterator.h"
 
@@ -43,7 +44,8 @@ class HWInOutPortConversion : public PortConversion {
 public:
   HWInOutPortConversion(PortConverterImpl &converter, hw::PortInfo port,
                         llvm::StringRef readSuffix,
-                        llvm::StringRef writeSuffix);
+                        llvm::StringRef writeSuffix,
+                        bool allowMultipleWritersSameValue);
 
   void mapInputSignals(OpBuilder &b, Operation *inst, Value instValue,
                        SmallVectorImpl<Value> &newOperands,
@@ -73,14 +75,43 @@ private:
   llvm::StringRef readSuffix;
   // Suffix to be used when creating write ports.
   llvm::StringRef writeSuffix;
+
+  bool allowMultipleWritersSameValue;
 };
 
-HWInOutPortConversion::HWInOutPortConversion(PortConverterImpl &converter,
-                                             hw::PortInfo port,
-                                             llvm::StringRef readSuffix,
-                                             llvm::StringRef writeSuffix)
+HWInOutPortConversion::HWInOutPortConversion(
+    PortConverterImpl &converter, hw::PortInfo port, llvm::StringRef readSuffix,
+    llvm::StringRef writeSuffix, bool allowMultipleWritersSameValue)
     : PortConversion(converter, port), readSuffix(readSuffix),
-      writeSuffix(writeSuffix) {}
+      writeSuffix(writeSuffix),
+      allowMultipleWritersSameValue(allowMultipleWritersSameValue) {}
+
+static bool allWritersSameValue(ArrayRef<sv::AssignOp> writers) {
+  if (writers.empty())
+    return true;
+  sv::AssignOp first = writers.front();
+  Value src = first.getSrc();
+  auto attrs = first->getAttrDictionary();
+  auto areEquivalentValues = [](Value lhs, Value rhs) -> bool {
+    if (lhs == rhs)
+      return true;
+    Operation *lhsOp = lhs.getDefiningOp();
+    Operation *rhsOp = rhs.getDefiningOp();
+    if (!lhsOp || !rhsOp)
+      return false;
+    if (lhsOp->getNumOperands() != 0 || rhsOp->getNumOperands() != 0)
+      return false;
+    return mlir::OperationEquivalence::isEquivalentTo(
+        lhsOp, rhsOp, mlir::OperationEquivalence::IgnoreLocations);
+  };
+  for (auto writer : writers.drop_front()) {
+    if (!areEquivalentValues(writer.getSrc(), src))
+      return false;
+    if (writer->getAttrDictionary() != attrs)
+      return false;
+  }
+  return true;
+}
 
 LogicalResult HWInOutPortConversion::init() {
   // Gather readers and writers (how to handle sv.passign?)
@@ -94,7 +125,8 @@ LogicalResult HWInOutPortConversion::init() {
                                  << " but the operation itself is unsupported.";
   }
 
-  if (writers.size() > 1)
+  if (writers.size() > 1 &&
+      (!allowMultipleWritersSameValue || !allWritersSameValue(writers)))
     return converter.getModule()->emitOpError()
            << "multiple writers of inout port " << origPort.name
            << " is unsupported.";
@@ -123,7 +155,8 @@ void HWInOutPortConversion::buildInputSignals() {
     sv::AssignOp write = writers.front();
     converter.createNewOutput(origPort, writeSuffix, origPort.type,
                               write.getSrc(), writePort);
-    write.erase();
+    for (auto writer : writers)
+      writer.erase();
   }
 }
 
@@ -172,20 +205,24 @@ class HWInoutPortConversionBuilder : public PortConversionBuilder {
 public:
   HWInoutPortConversionBuilder(PortConverterImpl &converter,
                                llvm::StringRef readSuffix,
-                               llvm::StringRef writeSuffix)
+                               llvm::StringRef writeSuffix,
+                               bool allowMultipleWritersSameValue)
       : PortConversionBuilder(converter), readSuffix(readSuffix),
-        writeSuffix(writeSuffix) {}
+        writeSuffix(writeSuffix),
+        allowMultipleWritersSameValue(allowMultipleWritersSameValue) {}
 
   FailureOr<std::unique_ptr<PortConversion>> build(hw::PortInfo port) override {
     if (port.dir == hw::ModulePort::Direction::InOut)
       return {std::make_unique<HWInOutPortConversion>(converter, port,
-                                                      readSuffix, writeSuffix)};
+                                                      readSuffix, writeSuffix,
+                                                      allowMultipleWritersSameValue)};
     return PortConversionBuilder::build(port);
   }
 
 private:
   llvm::StringRef readSuffix;
   llvm::StringRef writeSuffix;
+  bool allowMultipleWritersSameValue;
 };
 
 } // namespace
@@ -227,7 +264,7 @@ void HWEliminateInOutPortsPass::runOnOperation() {
         continue;
       if (failed(PortConverter<HWInoutPortConversionBuilder>(
                      instanceGraph, mutableModule, readSuffix.getValue(),
-                     writeSuffix.getValue())
+                     writeSuffix.getValue(), allowMultipleWritersSameValue)
                      .run()))
         return signalPassFailure();
     }

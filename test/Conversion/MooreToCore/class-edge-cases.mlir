@@ -95,7 +95,9 @@ func.func private @test_multiple_new() {
 
 // CHECK-LABEL: func.func private @test_own_property_level1
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i64> {
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level1"
+// For derived classes, own properties are at index 1 (after base at index 0).
+// The leading 0 is for pointer dereference.
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level1"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i64>
 // CHECK:   return [[CONV]] : !llhd.ref<i64>
 // CHECK-NOT: moore.class.property_ref
@@ -107,7 +109,7 @@ func.func private @test_own_property_level1(%obj: !moore.class<@Level1>) -> !moo
 
 // CHECK-LABEL: func.func private @test_own_property_level2
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i16> {
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level2"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i16>
 // CHECK:   return [[CONV]] : !llhd.ref<i16>
 // CHECK-NOT: moore.class.property_ref
@@ -119,7 +121,7 @@ func.func private @test_own_property_level2(%obj: !moore.class<@Level2>) -> !moo
 
 // CHECK-LABEL: func.func private @test_own_property_level3
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i8> {
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level3"
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Level3"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i8>
 // CHECK:   return [[CONV]] : !llhd.ref<i8>
 // CHECK-NOT: moore.class.property_ref
@@ -133,7 +135,8 @@ func.func private @test_own_property_level3(%obj: !moore.class<@Level3>) -> !moo
 
 // CHECK-LABEL: func.func private @test_upcast_then_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Base", (i32, ptr, i32)>
+// For root class Base, field baseVal is at index 2 (after typeId[0], vtablePtr[1]).
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"Base", (i32, ptr, i32)>
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 // CHECK-NOT: moore.class.property_ref

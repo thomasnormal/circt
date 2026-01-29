@@ -147,12 +147,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 246 - Verified 2026-01-29)
+### Test Suite Status (Iteration 247 - Verified 2026-01-29)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
-| Unit Tests | 1360/1360 (100%) | All pass |
-| Lit Tests | **2961/3054 (100%)** | **ALL PASS** - 38 XFAIL, 54 unsupported |
+| Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
+| Lit Tests | **2980/3085 (96.6%)** | 12 SMT/LEC failures, 38 XFAIL, 55 unsupported |
 | sv-tests BMC | **23/26 (100%)** | 3 XFAIL as expected, 0 errors |
 | Verilator BMC | **17/17 (100%)** | All pass with Z3 |
 | Verilator LEC | **17/17 (100%)** | All pass |
@@ -206,6 +206,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    through module-level drive VALUE expressions using `collectSignalIds()`. Prevents zero-delta loops
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
+
+### Active Workstreams & Next Steps (Iteration 247)
+
+**Iteration 247 Fixes:**
+1. **Class Member Variable Access**: Fixed block argument remapping in `getConvertedOperand()` for class method contexts
+2. **Class Property Verifier**: Fixed inheritance chain walking for property symbol lookup
+3. **Queue Runtime Methods**: Added 5 new queue functions with 13 unit tests
+4. **Build Fixes**: HWEliminateInOutPorts, circt-lec/bmc CMakeLists
 
 ### Active Workstreams & Next Steps (Iteration 246)
 
@@ -1298,6 +1306,16 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-29 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-01-29 | yosys/tests/sva | BMC | total=14 pass=12 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
 | 2026-01-29 | yosys/tests/sva | LEC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
+| 2026-01-29 | avip/ahb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/apb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/axi4Lite_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/axi4_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/i2s_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/i3c_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/jtag_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/spi_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-29 | opentitan | LEC | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
 
 ### Known XFAIL Themes (Keep Lists Per Suite)
 - Unbounded delay patterns not representable in current BMC bound.
@@ -1459,9 +1477,13 @@ baselines, correct temporal semantics, and actionable diagnostics.
 
 **Iteration 245: LEC Strictness + Interfaces**
 1. Land strict resolution for inout/multi-driver interface fields (no abstraction).
+   - Partial: strict now eliminates inout ports with identical writers; full
+     resolution semantics still pending.
 2. ✅ Add explicit `--lec-strict`/`--lec-approx` flags and document behavior.
 3. Add 3-5 LEC tests for inout/extnets/multi-driver equivalence and regressions
    (strict-mode regressions now cover LLHD abstraction conflicts + inout reject).
+4. ✅ JIT counterexample printing: wire `print-model-inputs` to emit named
+   model inputs for SAT/UNKNOWN results.
 
 **Iteration 246: Formal Harness + Performance**
 1. Ship `utils/run_formal_all.sh` with baseline diffing and summary table output.

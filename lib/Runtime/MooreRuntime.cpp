@@ -117,21 +117,22 @@ std::string convertGlobToRegex(const std::string &pattern, bool withBrackets) {
 // Queue Operations
 //===----------------------------------------------------------------------===//
 
+// NOTE: __moore_queue_max and __moore_queue_min are deprecated.
+// Use __moore_array_max and __moore_array_min instead, which take
+// element size and signedness parameters for proper comparison.
+// These are kept for backward compatibility but return empty queues.
+
 extern "C" MooreQueue __moore_queue_max(MooreQueue *queue) {
-  // TODO: Implement queue max operation.
-  // This requires knowing the element type and size to compare elements.
-  // For now, return an empty queue as a placeholder.
+  // DEPRECATED: Use __moore_array_max instead.
   MooreQueue result = {nullptr, 0};
-  (void)queue; // Suppress unused parameter warning
+  (void)queue;
   return result;
 }
 
 extern "C" MooreQueue __moore_queue_min(MooreQueue *queue) {
-  // TODO: Implement queue min operation.
-  // This requires knowing the element type and size to compare elements.
-  // For now, return an empty queue as a placeholder.
+  // DEPRECATED: Use __moore_array_min instead.
   MooreQueue result = {nullptr, 0};
-  (void)queue; // Suppress unused parameter warning
+  (void)queue;
   return result;
 }
 
@@ -187,6 +188,52 @@ extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
 
   // Free old data and update queue
   std::free(queue->data);
+  queue->data = newData;
+  queue->len = newLen;
+}
+
+extern "C" void __moore_queue_insert(MooreQueue *queue, int32_t index,
+                                     void *element, int64_t element_size) {
+  // Insert element at specified index.
+  // SystemVerilog semantics: insert(index, item) inserts the item at the
+  // specified index, shifting all subsequent elements up by one position.
+  // If index < 0, it's treated as 0. If index >= size, the item is appended.
+  if (!queue || !element || element_size <= 0)
+    return;
+
+  // Clamp index to valid range
+  if (index < 0)
+    index = 0;
+  if (index > queue->len)
+    index = static_cast<int32_t>(queue->len);
+
+  // Allocate new storage with space for one more element
+  int64_t newLen = queue->len + 1;
+  void *newData = std::malloc(newLen * element_size);
+  if (!newData)
+    return;
+
+  char *src = static_cast<char *>(queue->data);
+  char *dst = static_cast<char *>(newData);
+
+  // Copy elements before the insertion index
+  if (index > 0 && queue->data) {
+    std::memcpy(dst, src, index * element_size);
+  }
+
+  // Copy the new element at the insertion index
+  std::memcpy(dst + index * element_size, element, element_size);
+
+  // Copy elements after the insertion index
+  if (queue->data && index < queue->len) {
+    std::memcpy(dst + (index + 1) * element_size,
+                src + index * element_size,
+                (queue->len - index) * element_size);
+  }
+
+  // Free old data and update queue
+  if (queue->data)
+    std::free(queue->data);
   queue->data = newData;
   queue->len = newLen;
 }
@@ -465,6 +512,129 @@ extern "C" void __moore_queue_reverse(MooreQueue *queue, int64_t elem_size) {
     ++left;
     --right;
   }
+}
+
+extern "C" void __moore_queue_pop_back_ptr(MooreQueue *queue, void *result_ptr,
+                                            int64_t element_size) {
+  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0 ||
+      !result_ptr)
+    return;
+
+  // Copy the last element to the result buffer
+  void *lastElem = static_cast<char *>(queue->data) +
+                   (queue->len - 1) * element_size;
+  std::memcpy(result_ptr, lastElem, element_size);
+
+  // Reduce the queue size
+  queue->len--;
+
+  // If queue is now empty, free the data
+  if (queue->len == 0) {
+    std::free(queue->data);
+    queue->data = nullptr;
+  }
+}
+
+extern "C" void __moore_queue_pop_front_ptr(MooreQueue *queue, void *result_ptr,
+                                             int64_t element_size) {
+  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0 ||
+      !result_ptr)
+    return;
+
+  // Copy the first element to the result buffer
+  std::memcpy(result_ptr, queue->data, element_size);
+
+  // Reduce the queue size and shift elements
+  queue->len--;
+
+  if (queue->len == 0) {
+    // Queue is now empty
+    std::free(queue->data);
+    queue->data = nullptr;
+  } else {
+    // Shift remaining elements to the front
+    std::memmove(queue->data,
+                 static_cast<char *>(queue->data) + element_size,
+                 queue->len * element_size);
+  }
+}
+
+extern "C" int64_t __moore_queue_size(MooreQueue *queue) {
+  if (!queue)
+    return 0;
+  return queue->len;
+}
+
+extern "C" MooreQueue __moore_queue_unique(MooreQueue *queue) {
+  MooreQueue result = {nullptr, 0};
+
+  // This simplified version assumes 8-byte elements (pointers/int64).
+  // For full support, element size should be passed as a parameter.
+  // The MooreToCore should be updated to use __moore_array_unique instead.
+  if (!queue || !queue->data || queue->len <= 0)
+    return result;
+
+  // Default to 8-byte element size (common for pointers and int64)
+  int64_t elementSize = 8;
+
+  auto *data = static_cast<char *>(queue->data);
+  int64_t numElements = queue->len;
+
+  // For each element, check if it's already in the result
+  for (int64_t i = 0; i < numElements; ++i) {
+    void *element = data + i * elementSize;
+    bool found = false;
+
+    // Check if this element is already in the result
+    auto *resultData = static_cast<char *>(result.data);
+    for (int64_t j = 0; j < result.len; ++j) {
+      if (std::memcmp(resultData + j * elementSize, element, elementSize) ==
+          0) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      // Append element to result
+      int64_t newLen = result.len + 1;
+      void *newData = std::realloc(result.data, newLen * elementSize);
+      if (!newData)
+        return result;
+      std::memcpy(static_cast<char *>(newData) + result.len * elementSize,
+                  element, elementSize);
+      result.data = newData;
+      result.len = newLen;
+    }
+  }
+
+  return result;
+}
+
+namespace {
+thread_local int64_t queueSortInplaceElemSize = 0;
+
+int compareQueueElemAsc(const void *a, const void *b) {
+  uint64_t va = 0, vb = 0;
+  if (queueSortInplaceElemSize > 0 && queueSortInplaceElemSize <= 8) {
+    std::memcpy(&va, a, queueSortInplaceElemSize);
+    std::memcpy(&vb, b, queueSortInplaceElemSize);
+  }
+  if (va < vb)
+    return -1;
+  if (va > vb)
+    return 1;
+  return 0;
+}
+} // namespace
+
+extern "C" void __moore_queue_sort_inplace(MooreQueue *queue, int64_t elem_size) {
+  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0 ||
+      elem_size > 8)
+    return;
+
+  queueSortInplaceElemSize = elem_size;
+  std::qsort(queue->data, queue->len, elem_size, compareQueueElemAsc);
 }
 
 //===----------------------------------------------------------------------===//
