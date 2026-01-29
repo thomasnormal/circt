@@ -55,6 +55,17 @@ Both BMC and LEC verification pipelines fully functional.
    - All external suites pass with correct binaries
 6. **AVIP testing**: I3C, UART, and now AHB AVIPs verified to compile
 7. **OpenTitan keymgr_dpe**: Complex crypto IP simulation verified
+8. **BMC LLHD drive hoisting order**: Preserve ordering for hoisted drives so
+   constant/block-arg pairs don't override sequential updates
+   - Added regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-hoist-drive-order.mlir`
+9. **sim.fmt.dyn_string reverse address lookup** (324c36c5f): Fixed address lookup
+   for dynamic string formatting in circt-sim
+   - Added reverse lookup mechanism for string addresses during format operations
+   - Resolves empty UVM message content by properly mapping string addresses back to values
+10. **circt-lec strict mode inout port detection** (d91f52655): Fixed inout port
+    detection in circt-lec strict mode
+    - Improved type traversal to correctly identify inout ports in module signatures
+    - Ensures strict mode properly rejects designs with bidirectional ports
 
 ### Remaining Limitations
 
