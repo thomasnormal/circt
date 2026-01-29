@@ -290,23 +290,16 @@ struct ExprVisitor {
   /// member variable. We need to parse the syntax to find the virtual
   /// interface base and emit the proper VirtualInterfaceSignalRefOp.
   ///
+  /// This also handles nested interface access like vif.inner.data where
+  /// 'inner' is a nested interface instance inside the virtual interface.
+  /// In this case, we need to build a chain of VirtualInterfaceSignalRefOp
+  /// operations to traverse the interface hierarchy.
+  ///
   /// Returns the result value, or nullptr if this is not a virtual interface
   /// member access that we can handle.
   Value visitVirtualInterfaceMemberAccess(
       const slang::ast::NamedValueExpression &expr,
       const slang::syntax::SyntaxNode &syntax) {
-    // Get the left side of a scoped name syntax, which should be the
-    // virtual interface variable expression.
-    const slang::syntax::NameSyntax *leftSyntax = nullptr;
-
-    // Handle scoped names like vif.data
-    if (auto *scoped = syntax.as_if<slang::syntax::ScopedNameSyntax>()) {
-      leftSyntax = scoped->left;
-    }
-
-    if (!leftSyntax)
-      return {};
-
     // Use slang's expression binding to get the expression for the left side
     // (the virtual interface variable). We need the current scope where the
     // expression is being evaluated.
@@ -317,47 +310,298 @@ struct ExprVisitor {
     slang::ast::ASTContext astContext(*context.currentScope,
                                       slang::ast::LookupLocation::max);
 
-    // Bind the left syntax to get an expression for the virtual interface
-    const auto &vifExpr = slang::ast::Expression::bind(*leftSyntax, astContext);
-    if (vifExpr.bad())
+    // Collect the path of interface member names by walking up the syntax tree.
+    // For "vif.middle.inner.data", this collects ["middle", "inner"] as the
+    // intermediate interface path (the final "data" is the signal name).
+    SmallVector<std::string_view, 4> interfacePath;
+    const slang::syntax::NameSyntax *currentSyntax = nullptr;
+
+    // Handle scoped names like vif.data or vif.inner.data
+    if (auto *scoped = syntax.as_if<slang::syntax::ScopedNameSyntax>())
+      currentSyntax = scoped->left;
+
+    if (!currentSyntax)
       return {};
 
-    // Check if this is a virtual interface type
-    if (!vifExpr.type->isVirtualInterface())
-      return {};
+    // Walk up the syntax tree to find the virtual interface base and collect
+    // intermediate interface instance names.
+    while (currentSyntax) {
+      // First, check if this is a ScopedNameSyntax. If so, we need to
+      // recursively check if we have a virtual interface at any level.
+      if (auto *scoped =
+              currentSyntax->as_if<slang::syntax::ScopedNameSyntax>()) {
+        // Bind the left side to check if it's a virtual interface
+        const auto &leftExpr =
+            slang::ast::Expression::bind(*scoped->left, astContext);
+        if (leftExpr.bad()) {
+          // If binding fails, this might be because the left side contains
+          // nested scoped names that slang can't resolve individually.
+          // Try to continue by extracting the member name and walking further.
+          if (auto *leftScoped =
+                  scoped->left->as_if<slang::syntax::ScopedNameSyntax>()) {
+            if (auto *rightIdent =
+                    scoped->right->as_if<slang::syntax::IdentifierNameSyntax>()) {
+              interfacePath.push_back(rightIdent->identifier.valueText());
+            }
+            currentSyntax = scoped->left;
+            continue;
+          }
+        }
+        if (!leftExpr.bad()) {
+          if (leftExpr.type->isVirtualInterface()) {
+            // The left side is a virtual interface! Add the right side as an
+            // intermediate interface and then process.
+            if (auto *rightIdent =
+                    scoped->right->as_if<slang::syntax::IdentifierNameSyntax>()) {
+              interfacePath.push_back(rightIdent->identifier.valueText());
+            }
+            currentSyntax = scoped->left;
+            continue;
+          }
+          // If the left side is not a virtual interface but is an interface
+          // instance reference (ArbitrarySymbolExpression pointing to an
+          // Interface), we should continue walking up. The right side is an
+          // intermediate member.
+          if (auto *arb =
+                  leftExpr.as_if<slang::ast::ArbitrarySymbolExpression>()) {
+            if (auto *instSym =
+                    arb->symbol->as_if<slang::ast::InstanceSymbol>()) {
+              if (instSym->getDefinition().definitionKind ==
+                  slang::ast::DefinitionKind::Interface) {
+                // This is an intermediate interface access. Add the right side
+                // to the path and continue walking up.
+                if (auto *rightIdent = scoped->right->as_if<
+                        slang::syntax::IdentifierNameSyntax>()) {
+                  interfacePath.push_back(rightIdent->identifier.valueText());
+                }
+                currentSyntax = scoped->left;
+                continue;
+              }
+            }
+          }
+        }
+      }
 
-    // Now convert the virtual interface expression to get the MLIR value
-    Value vifValue = context.convertRvalueExpression(vifExpr);
-    if (!vifValue)
-      return {};
+      // Try to bind this syntax to see if we've reached a virtual interface
+      const auto &boundExpr =
+          slang::ast::Expression::bind(*currentSyntax, astContext);
+      if (boundExpr.bad())
+        return {};
 
-    auto vifTy = dyn_cast<moore::VirtualInterfaceType>(vifValue.getType());
-    if (!vifTy)
-      return {};
+      // If this is a virtual interface, we've found the base
+      if (boundExpr.type->isVirtualInterface()) {
+        // Now convert the virtual interface expression to get the MLIR value
+        Value vifValue = context.convertRvalueExpression(boundExpr);
+        if (!vifValue)
+          return {};
 
-    // Create the signal reference operation
-    auto type = context.convertType(*expr.type);
-    if (!type)
-      return {};
+        auto vifTy = dyn_cast<moore::VirtualInterfaceType>(vifValue.getType());
+        if (!vifTy)
+          return {};
 
-    // For modport ports, use the internal symbol's name (the actual signal
-    // name), not the modport port name which might be different.
-    std::string_view signalName = expr.symbol.name;
-    if (auto *modportPort =
-            expr.symbol.as_if<slang::ast::ModportPortSymbol>()) {
-      if (modportPort->internalSymbol)
-        signalName = modportPort->internalSymbol->name;
+        // Walk through intermediate interface instances to build signal ref
+        // chain. The path is collected in reverse order, so process from end.
+        for (auto it = interfacePath.rbegin(); it != interfacePath.rend();
+             ++it) {
+          std::string_view nestedIfaceName = *it;
+
+          // Get the interface declaration for the current virtual interface
+          auto ifaceSymRef = vifTy.getInterfaceRef();
+          auto *ifaceOp = mlir::SymbolTable::lookupNearestSymbolFrom(
+              context.intoModuleOp, ifaceSymRef);
+          if (!ifaceOp)
+            return {};
+          auto ifaceDecl = dyn_cast_or_null<moore::InterfaceDeclOp>(ifaceOp);
+          if (!ifaceDecl)
+            return {};
+
+          // If the interface body is empty, it may not have been converted yet.
+          // This can happen when we're processing a class method that references
+          // a virtual interface before the interface body conversion phase.
+          // Look up the interface in the Context and trigger body conversion.
+          if (ifaceDecl.getBody().front().empty()) {
+            // Find the interface in the interfaces map by matching the op
+            for (auto &[iface, lowering] : context.interfaces) {
+              if (lowering && lowering->op == ifaceDecl) {
+                if (failed(context.convertInterfaceBody(iface)))
+                  return {};
+                break;
+              }
+            }
+          }
+
+          // Find the nested interface signal declaration
+          moore::InterfaceSignalDeclOp nestedIfaceSignal;
+          for (auto &op : ifaceDecl.getBody().front()) {
+            if (auto signalDecl =
+                    dyn_cast<moore::InterfaceSignalDeclOp>(&op)) {
+              if (signalDecl.getSymName() == StringRef(nestedIfaceName)) {
+                nestedIfaceSignal = signalDecl;
+                break;
+              }
+            }
+          }
+
+          if (!nestedIfaceSignal)
+            return {};
+
+          // Check if this signal is a virtual interface type (nested interface)
+          auto nestedSignalType = nestedIfaceSignal.getType();
+          auto nestedVifTy =
+              dyn_cast<moore::VirtualInterfaceType>(nestedSignalType);
+          if (!nestedVifTy)
+            return {};
+
+          // Create signal ref to get the nested interface
+          auto signalSym =
+              mlir::FlatSymbolRefAttr::get(builder.getContext(), nestedIfaceName);
+          auto childRefTy = moore::RefType::get(nestedVifTy);
+          Value childRef = moore::VirtualInterfaceSignalRefOp::create(
+              builder, loc, childRefTy, vifValue, signalSym);
+
+          // Read the nested interface for the next iteration
+          vifValue = moore::ReadOp::create(builder, loc, childRef);
+          vifTy = nestedVifTy;
+        }
+
+        // Now create the final signal reference for the actual signal
+        auto type = context.convertType(*expr.type);
+        if (!type)
+          return {};
+
+        // For modport ports, use the internal symbol's name (the actual signal
+        // name), not the modport port name which might be different.
+        std::string_view signalName = expr.symbol.name;
+        if (auto *modportPort =
+                expr.symbol.as_if<slang::ast::ModportPortSymbol>()) {
+          if (modportPort->internalSymbol)
+            signalName = modportPort->internalSymbol->name;
+        }
+
+        auto signalSym =
+            mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
+        auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+        Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+            builder, loc, refTy, vifValue, signalSym);
+
+        // For rvalue, read from the reference; for lvalue, return the ref
+        return isLvalue ? signalRef
+                        : moore::ReadOp::create(builder, loc, signalRef);
+      }
+
+      // Check if this is an interface instance access (direct or hierarchical)
+      // For "outer.inner" where outer is a direct interface instance and inner
+      // is a nested interface, we need to handle this path as well.
+      if (auto *arb = boundExpr.as_if<slang::ast::ArbitrarySymbolExpression>()) {
+        if (auto *instSym = arb->symbol->as_if<slang::ast::InstanceSymbol>()) {
+          if (instSym->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface) {
+            // This is an interface instance. Try to resolve it.
+            // If resolution fails, it might be a nested interface inside a
+            // virtual interface, so we continue walking up the syntax tree.
+            Value ifaceRef = context.resolveInterfaceInstance(instSym, loc);
+            if (ifaceRef) {
+              auto ifaceRefTy = dyn_cast<moore::RefType>(ifaceRef.getType());
+              if (!ifaceRefTy)
+                return {};
+
+              auto vifTy = dyn_cast<moore::VirtualInterfaceType>(
+                  ifaceRefTy.getNestedType());
+              if (!vifTy)
+                return {};
+
+              // Read the interface to get the virtual interface value
+              Value vifValue = moore::ReadOp::create(builder, loc, ifaceRef);
+
+              // Walk through intermediate interface instances
+              for (auto it = interfacePath.rbegin(); it != interfacePath.rend();
+                   ++it) {
+                std::string_view nestedIfaceName = *it;
+
+                // Get the interface declaration
+                auto ifaceSymRef = vifTy.getInterfaceRef();
+                auto *ifaceOp = mlir::SymbolTable::lookupNearestSymbolFrom(
+                    context.intoModuleOp, ifaceSymRef);
+                auto ifaceDecl =
+                    dyn_cast_or_null<moore::InterfaceDeclOp>(ifaceOp);
+                if (!ifaceDecl)
+                  return {};
+
+                // Find the nested interface signal declaration
+                moore::InterfaceSignalDeclOp nestedIfaceSignal;
+                for (auto &op : ifaceDecl.getBody().front()) {
+                  if (auto signalDecl =
+                          dyn_cast<moore::InterfaceSignalDeclOp>(&op)) {
+                    if (signalDecl.getSymName() == StringRef(nestedIfaceName)) {
+                      nestedIfaceSignal = signalDecl;
+                      break;
+                    }
+                  }
+                }
+
+                if (!nestedIfaceSignal)
+                  return {};
+
+                auto nestedSignalType = nestedIfaceSignal.getType();
+                auto nestedVifTy =
+                    dyn_cast<moore::VirtualInterfaceType>(nestedSignalType);
+                if (!nestedVifTy)
+                  return {};
+
+                auto signalSym = mlir::FlatSymbolRefAttr::get(
+                    builder.getContext(), nestedIfaceName);
+                auto childRefTy = moore::RefType::get(nestedVifTy);
+                Value childRef = moore::VirtualInterfaceSignalRefOp::create(
+                    builder, loc, childRefTy, vifValue, signalSym);
+
+                vifValue = moore::ReadOp::create(builder, loc, childRef);
+                vifTy = nestedVifTy;
+              }
+
+              // Create the final signal reference
+              auto type = context.convertType(*expr.type);
+              if (!type)
+                return {};
+
+              std::string_view signalName = expr.symbol.name;
+              if (auto *modportPort =
+                      expr.symbol.as_if<slang::ast::ModportPortSymbol>()) {
+                if (modportPort->internalSymbol)
+                  signalName = modportPort->internalSymbol->name;
+              }
+
+              auto signalSym =
+                  mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
+              auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+              Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, refTy, vifValue, signalSym);
+
+              return isLvalue ? signalRef
+                              : moore::ReadOp::create(builder, loc, signalRef);
+            }
+            // Resolution failed - this might be a nested interface inside a
+            // virtual interface. Fall through to continue walking up.
+          }
+        }
+      }
+
+      // This is an intermediate interface access. Extract the member name
+      // and continue walking up.
+      if (auto *scoped =
+              currentSyntax->as_if<slang::syntax::ScopedNameSyntax>()) {
+        // The right side is the member name at this level
+        if (auto *rightIdent =
+                scoped->right->as_if<slang::syntax::IdentifierNameSyntax>()) {
+          interfacePath.push_back(rightIdent->identifier.valueText());
+        }
+        currentSyntax = scoped->left;
+      } else {
+        // Can't continue walking
+        return {};
+      }
     }
 
-    auto signalSym =
-        mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
-    auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
-    Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
-        builder, loc, refTy, vifValue, signalSym);
-
-    // For rvalue, read from the reference; for lvalue, return the ref
-    return isLvalue ? signalRef
-                    : moore::ReadOp::create(builder, loc, signalRef);
+    return {};
   }
 
   /// Handle single bit selections.
@@ -4391,16 +4635,20 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     if (isQueueInsertMethod && args.size() == 3) {
-      // queue.insert(index, elem) -- approximate with push_back for now.
+      // queue.insert(index, elem) -- proper implementation
       Value queueRef = context.convertLvalueExpression(*args[0]);
+      Value index = context.convertRvalueExpression(*args[1]);
       Value element = context.convertRvalueExpression(*args[2]);
-      if (!queueRef || !element)
+      if (!queueRef || !index || !element)
         return {};
       if (auto refTy = dyn_cast<moore::RefType>(queueRef.getType()))
         if (auto queueTy = dyn_cast<moore::QueueType>(refTy.getNestedType()))
           element = context.materializeConversion(queueTy.getElementType(),
                                                   element, false, loc);
-      moore::QueuePushBackOp::create(builder, loc, queueRef, element);
+      // Convert index to i32 for the insert method
+      auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+      index = context.materializeConversion(i32Ty, index, false, loc);
+      moore::QueueInsertOp::create(builder, loc, queueRef, index, element);
       auto intTy = moore::IntType::getInt(context.getContext(), 1);
       return moore::ConstantOp::create(builder, loc, intTy, 0);
     }

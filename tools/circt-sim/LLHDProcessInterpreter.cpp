@@ -4701,6 +4701,110 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             return success();
           }
         }
+        // Handle GEP-based memory access (e.g., class member access)
+        // This happens when class properties are accessed - the property ref
+        // creates a GEP to the field, which is then cast to !llhd.ref.
+        if (auto gepOp = input.getDefiningOp<LLVM::GEPOp>()) {
+          // Get the pointer value computed by the GEP
+          InterpretedValue ptrVal = getValue(procId, gepOp.getResult());
+          unsigned width = getTypeWidth(probeOp.getResult().getType());
+          unsigned loadSize = (width + 7) / 8;
+
+          if (ptrVal.isX()) {
+            // Uninitialized pointer - return X
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe of GEP pointer: X (uninitialized)\n");
+            return success();
+          }
+
+          // Find the memory block - first try local, then global, then malloc
+          MemoryBlock *block = findMemoryBlock(procId, gepOp);
+          uint64_t offset = 0;
+
+          if (block) {
+            // Calculate offset for local memory
+            InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+            if (!baseVal.isX()) {
+              offset = ptrVal.getUInt64() - baseVal.getUInt64();
+            }
+          } else {
+            // Check global and malloc memory by address
+            uint64_t addr = ptrVal.getUInt64();
+
+            // Check globals
+            for (auto &entry : globalAddresses) {
+              StringRef globalName = entry.first();
+              uint64_t globalBaseAddr = entry.second;
+              auto blockIt = globalMemoryBlocks.find(globalName);
+              if (blockIt != globalMemoryBlocks.end()) {
+                uint64_t globalSize = blockIt->second.size;
+                if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+                  block = &blockIt->second;
+                  offset = addr - globalBaseAddr;
+                  LLVM_DEBUG(llvm::dbgs() << "  Probe: found global '" << globalName
+                                          << "' at offset " << offset << "\n");
+                  break;
+                }
+              }
+            }
+
+            // Check malloc blocks
+            if (!block) {
+              for (auto &entry : mallocBlocks) {
+                uint64_t mallocBaseAddr = entry.first;
+                uint64_t mallocSize = entry.second.size;
+                if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+                  block = &entry.second;
+                  offset = addr - mallocBaseAddr;
+                  LLVM_DEBUG(llvm::dbgs() << "  Probe: found malloc block at 0x"
+                                          << llvm::format_hex(mallocBaseAddr, 16)
+                                          << " offset " << offset << "\n");
+                  break;
+                }
+              }
+            }
+          }
+
+          if (!block) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe of GEP pointer 0x"
+                       << llvm::format_hex(ptrVal.getUInt64(), 0)
+                       << " failed - memory not found\n");
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            return success();
+          }
+
+          if (offset + loadSize > block->size) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe: out of bounds (offset=" << offset
+                       << " size=" << loadSize << " block=" << block->size << ")\n");
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            return success();
+          }
+
+          if (!block->initialized) {
+            LLVM_DEBUG(llvm::dbgs() << "  Probe: reading uninitialized memory\n");
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            return success();
+          }
+
+          // Read the value from memory
+          uint64_t value = 0;
+          for (unsigned i = 0; i < loadSize; ++i) {
+            value |= (static_cast<uint64_t>(block->data[offset + i]) << (i * 8));
+          }
+          // Mask to the exact bit width
+          if (width < 64)
+            value &= (1ULL << width) - 1;
+
+          setValue(procId, probeOp.getResult(), InterpretedValue(value, width));
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Probe of GEP pointer 0x"
+                     << llvm::format_hex(ptrVal.getUInt64(), 0)
+                     << " = " << value << " (width=" << width << ")\n");
+          return success();
+        }
       }
     }
 
@@ -6962,6 +7066,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (addr == 0 || len <= 0)
         return "";
 
+      // First check dynamicStrings registry - these are actual C pointers from runtime
+      auto dynIt = dynamicStrings.find(static_cast<int64_t>(addr));
+      if (dynIt != dynamicStrings.end() && dynIt->second.first && dynIt->second.second > 0) {
+        size_t effectiveLen = std::min(static_cast<size_t>(len), static_cast<size_t>(dynIt->second.second));
+        return std::string(dynIt->second.first, effectiveLen);
+      }
       // Search through global memory blocks for this address
       for (auto &[globalName, globalAddr] : globalAddresses) {
         auto blockIt = globalMemoryBlocks.find(globalName);

@@ -74,6 +74,7 @@ struct ClassLowering {
 // Interface lowering information.
 struct InterfaceLowering {
   circt::moore::InterfaceDeclOp op;
+  bool bodyConverted = false;
 };
 
 struct PendingInterfacePortConnection {
