@@ -147,17 +147,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 240)
+### Test Suite Status (Iteration 241 - Updated 2026-01-29)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | **2903/2961 (98.04%)** | All pass, 34 XFAIL, 3 unresolved (LSP) |
-| sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
-| Verilator Verif | **17/17 (100%)** | All pass! |
-| yosys-sva | **14/14 (100%)** | 2 skipped (rg missing) |
-| OpenTitan IPs | 12/12 tested | prim_count, gpio_no_alerts, prim_fifo_sync, uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top pass |
-| AVIPs | **6/9 compile** (0 bind errors) | AHB, AXI4, UART, I3C, APB, I2S all compile cleanly |
+| Lit Tests | **2955/2996 (100%)** | **ALL PASS** - 41 XFAIL, 54 unsupported |
+| sv-tests BMC | **23/26 (88.5%)** | 3 XFAIL as expected |
+| Verilator BMC | **17/17 (100%)** | All pass! |
+| Verilator LEC | **17/17 (100%)** | All pass! |
+| yosys-sva BMC | **14/14 (100%)** | 2 VHDL skipped |
+| yosys-sva LEC | **14/14 (100%)** | 2 VHDL skipped |
+| OpenTitan IPs | 39+/42 (93%) | gpio, uart, i2c, spi_host, spi_device, usbdev, timer_core, alert_handler all simulate |
+| AVIPs | **6/9 compile** | APB, I2S, I3C, UART, AHB, AXI4 compile; SPI/JTAG/AXI4Lite have source issues |
 
 **Fixed Iteration 240:**
 1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
@@ -167,40 +169,51 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps
+### Active Workstreams & Next Steps (Iteration 241)
 
-**Track A - OpenTitan IPs (Status: 12/12 pass, new binary confirmed)**
-- Current: All tested IPs pass with BOTH build-test and new build binaries:
-  - prim_count, gpio_no_alerts, prim_fifo_sync
-  - uart/i2c/spi_host/spi_device/aes/pwm/usbdev/pattgen/rv_timer reg_top
-  - New binary (33MB Release) produces identical output to old binary (85MB Debug)
-- Next: Test full IPs (not just _reg_top), test more complex OpenTitan blocks
-- Goal: Validate circt-sim on complex OpenTitan blocks
+**Track A - OpenTitan IPs (Status: 39+/42 simulate, 93%)**
+- Current: Major IPs now simulate via circt-sim:
+  - gpio, uart, i2c, spi_host, spi_device, usbdev (communication)
+  - timer_core, aon_timer, pwm, rv_timer (timers)
+  - alert_handler, keymgr_dpe, dma, mbx, rv_dm (complex)
+  - hmac, aes, csrng, entropy_src, edn, kmac, ascon (crypto)
+- Blockers: 3 partial failures with 64-bit format issues (prim_count, timer_core, tlul_adapter_reg)
+- Next: Debug 64-bit formatting issues, test more crypto blocks
+- Goal: 100% OpenTitan simulation coverage
 
-**Track B - AVIP Multi-top (Status: ✅ 4/4 AVIPs simulate)**
-- **sim.fork entry block fix**: Post-conversion fixup in MooreToCore
-  restructures sim.fork regions with forever loop back-edges
-- **All 4 compilable AVIPs now simulate**:
-  - APB: multi-top 100ns, 10K delta cycles, 0 errors
-  - UART: multi-top runs indefinitely (no $finish), 0 errors
-  - I3C: multi-top, initial blocks execute, prints BFM messages
-  - I2S: multi-top completes at 1.3ms, 0 errors
-- Next: Investigate UVM test execution (currently no UVM phases run)
-- Goal: Run UVM test phases end-to-end
+**Track B - AVIP Simulation (Status: 6/9 compile, simulation in progress)**
+- **6 AVIPs compile cleanly**: APB, I2S, I3C, UART, AHB, AXI4
+- **Simulation status**:
+  - APB: multi-top 100ns runs, UVM message formatting incomplete
+  - UART/I3C/I2S: multi-top runs, BFM messages print
+- **UVM Blockers**:
+  - Dynamic string formatting (dyn_string) shows empty content
+  - Virtual method dispatch for UVM polymorphism
+  - uvm_do macro expansion issues in some AVIPs (JTAG)
+- Next: Fix UVM string formatting, test AHB/AXI4 simulation
+- Goal: Full UVM phase execution in all AVIPs
 
-**Track C - External Test Suites (Status: 100%)**
-- Current: All three external suites at 100% (codex agent handles BMC/LEC/SVA)
-- Goal: Don't regress external test coverage
+**Track C - External Test Suites (Status: 100% across all suites)**
+- **All suites at 100%**:
+  - Lit tests: 2955 pass (41 XFAIL, 54 unsupported)
+  - sv-tests BMC: 23/26 (3 XFAIL)
+  - Verilator BMC/LEC: 17/17 each
+  - yosys-sva BMC/LEC: 14/14 each
+- Goal: Maintain 100%, don't regress
 
-**Track D - Bind Scope (Status: ✅ 6/9 AVIPs compile, bind scope FIXED)**
-- **PASS**: AHB, AXI4, UART, I3C, APB, I2S - all compile with 0 errors
-- **FAIL (pre-existing source issues)**: SPI (8 errors: nested comments, empty args),
-  JTAG (17 errors: enum casts, virtual method defaults), AXI4Lite (1 error: env var)
-- **Bind scope fix**: Dual-scope resolution in `PortConnection::getExpression()`.
-  Tries target scope first, falls back to bind directive scope. Lazy lookup
-  defers scope resolution to handle virtual interface elaboration order.
-  Patch: `patches/slang-bind-scope.patch` (201 lines, 5 files)
-- Next: Run circt-sim on newly compilable AVIPs (AHB, AXI4)
+**Track D - Remaining Limitations (Features to Build)**
+- **P1 - Hierarchical Name Access** (~9 XFAIL tests):
+  - Signal access through instance hierarchy incomplete
+  - Blocks some interface modport patterns
+- **P1 - Virtual Method Dispatch**:
+  - UVM relies on polymorphic method calls
+  - Class hierarchy simulation needs completion
+- **P2 - UVM Dynamic Strings**:
+  - `sim.fmt.dyn_string` shows empty content
+  - Needs reverse address-to-global lookup for string content
+- **P2 - uvm_do Macro Expansion**:
+  - JTAG AVIP blocked on sequence start() method resolution
+- Next: Implement hierarchical name access for interface signals
 
 ### Priority Feature Roadmap
 
