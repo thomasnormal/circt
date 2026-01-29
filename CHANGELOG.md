@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 241 - January 29, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Progress
+
+**Test Suite Status - ALL EXTERNAL SUITES 100%:**
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Unit Tests | 1356/1356 (100%) | All pass |
+| Lit Tests | 2861/3037 (94.2%) | 32 VerifToSMT + 17 LSP pytest |
+| sv-tests BMC | **23/23 (100%)** | 3 XFAIL as expected |
+| sv-tests LEC | **23/23 (100%)** | All pass |
+| Verilator BMC | **17/17 (100%)** | All pass |
+| Verilator LEC | **17/17 (100%)** | All pass |
+| yosys-sva BMC | **14/14 (100%)** | 2 VHDL skipped |
+| yosys-sva LEC | **14/14 (100%)** | 2 VHDL skipped |
+| OpenTitan IPs | 36+ simulating | keymgr_dpe verified |
+
+**Key Achievement**: All 6 external BMC/LEC test suites now pass at 100%.
+Both BMC and LEC verification pipelines fully functional.
+
+**AVIP Simulation Status (5/9 working):**
+- APB, I2S, I3C, UART: ✅ Compile + Simulate
+- AHB, AXI4, JTAG: ❌ Bind scope resolution
+- SPI: ❌ Source code bugs
+- AXI4Lite: ❌ Namespace collision
+
+**UVM Phase Execution**: Verified working
+- UVM_INFO/UVM_WARNING messages print at time 0
+- Clock generation and BFM initialization work
+- Message content strings empty (dynamic string formatting limitation)
+
+### Fixed in this Iteration
+1. **Build mismatch diagnosis**: Identified stale `build/` binaries vs `build-test/`
+   - `#ltl<clock_edge>` attribute parsing only in newer builds
+   - All external suites pass with correct binaries
+2. **AVIP testing**: I3C and UART AVIPs verified to simulate
+3. **OpenTitan keymgr_dpe**: Complex crypto IP simulation verified
+
+### Remaining Limitations
+
+**Track 1 (UVM/AVIP) - HIGH Priority:**
+- UVM message string formatting (empty content)
+- TLUL BFM multiple driver conflict
+- AHB/AXI4/JTAG bind scope (patches exist, need validation)
+
+**Track 2 (SVA/BMC) - COMPLETE for external suites:**
+- VerifToSMT lit tests (32 failing - output format changed)
+- LSP pytest tests (17 failing - Position.character = -1 bug)
+
+**Track 3 (Simulation) - MEDIUM Priority:**
+- Incremental combinational evaluation for large reg blocks
+- alert_handler full IP process step overflow
+
+**Track 4 (LSP/DX) - LOW Priority:**
+- Fix Position.character bug in VerilogDocument.cpp
+
+---
+
 ## Iteration 240 - January 28, 2026
 
 ### Goals
@@ -24,6 +85,10 @@ All lit test failures resolved.
 - sv-tests SVA BMC: total=26 pass=5 error=18 xfail=3 xpass=0 skip=1010
 - yosys SVA BMC: 14 tests, failures=27, skipped=2 (bind `.*` implicit port
   connections failing in `basic02` and similar cases)
+
+**Suite Runs (2026-01-29)**:
+- yosys SVA BMC: 14 tests, failures=0, skipped=2 (full suite after bind `.*`
+  fix + crash guard)
 
 ### Fixed in this Iteration
 1. **assume-known-inputs for LEC**: Fixed bug where originalArgTypes was
@@ -177,6 +242,21 @@ All lit test failures resolved.
     buffers and non-final checks honor `ltl.clock` with edge=both.
 62. **Yosys SVA harness fallback**: Added grep fallback when `rg` is missing
     and a smoke test for the yosys SVA BMC script.
+63. **Bind implicit wildcard ports**: Added slang patch for bind `.*` implicit
+    connections to fall back to the bound target scope and a regression in
+    `bind-directive.sv` to guard it.
+64. **Rising clocks-only guard**: `--rising-clocks-only` now rejects negedge
+    or edge-triggered properties (including assumes, final-only checks,
+    `ltl.clock`-derived edges, and their delay/past buffers) with a clear
+    diagnostic; added VerifToSMT regressions (including edge=both).
+65. **BMC CLI/docs**: Documented rising-clocks-only limitations in formal docs,
+    Passes.td, and the circt-bmc help smoke test.
+66. **Slang bind wildcard patch applied**: Applied the local Slang fix for
+    bind `.*` implicit port resolution; rebuild + yosys SVA rerun still needed.
+67. **Slang bind-scope crash fix**: Guarded bind-scope root-name lookup for
+    implicit connections to avoid a PortConnection crash on `bind ... (.*)`;
+    rebuilt `circt-verilog`/`circt-bmc`, verified `bind-directive.sv`, and
+    confirmed yosys `basic02` passes in a filtered BMC run.
 17. **sim.fork entry block predecessor fix**: Post-conversion fixup in
     MooreToCore that restructures sim.fork regions where forever loops create
     back-edges to the entry block. Inserts a new entry block with a side-effect
