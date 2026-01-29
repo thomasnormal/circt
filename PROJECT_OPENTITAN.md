@@ -592,20 +592,14 @@ Cannot lower to HW dialect due to prim_diff_decode control-flow bug in prim_aler
 - bind `.*` wildcard: ✅ PASS (patch applied)
 
 **Known Issues**:
-- **VerifToSMT tests (32 failing)**: Refactoring changed output format - tests need updating:
-  - Multiple properties returned separately (not combined with smt.and)
-  - Loop function call ordering changed
-  - Function signatures have additional return values
-- **LSP pytest tests (17 failing)**: `Position.character = -1` bug in VerilogDocument.cpp
-  - Slang column 0 becomes -1 after 0-based conversion; needs clamping to 0
-- **Build mismatch (RESOLVED)**: `build/` has stale binaries vs `build-test/`
-  - LEC tests fail with `build/` due to missing `#ltl<clock_edge>` attribute support
-  - Use `build-test/` binaries for all testing
+- **VerifToSMT tests**: Most updated (272085b46), some edge cases remain
+- **LSP Position.character bug**: FIXED (d5b12c82e) - added slangLineToLsp/slangColumnToLsp helpers
+- **Build mismatch (RESOLVED)**: Use `build-test/` binaries for all testing
 
 **Next Tasks**:
-1. Update VerifToSMT test expectations to match new output format
-2. Fix LSP Position.character bug (clamp to non-negative)
-3. Rebuild `build/` to match `build-test/` or remove stale build directory
+1. Continue regression testing on all external suites
+2. Validate any remaining VerifToSMT edge cases
+3. Test coverage for more complex SVA patterns
 
 ### Track 3: Simulation Performance (Priority: MEDIUM)
 **Goal**: Optimize circt-sim for large OpenTitan designs
