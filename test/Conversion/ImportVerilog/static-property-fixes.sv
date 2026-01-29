@@ -181,8 +181,8 @@ endmodule
 // Previously, this combination caused errors during vtable generation.
 
 // CHECK-LABEL: moore.class.classdecl @AbstractMixed {
-// Pure virtual method - now has a stub implementation reference
-// CHECK:   moore.class.methoddecl @pureMethod -> @pureMethod : () -> !moore.i32
+// Pure virtual method - now has a stub implementation reference with %this argument
+// CHECK:   moore.class.methoddecl @pureMethod -> @"AbstractMixed::pureMethod" : (!moore.class<@AbstractMixed>) -> !moore.i32
 // Concrete virtual method - has implementation reference
 // CHECK:   moore.class.methoddecl @concreteVirtual -> @"AbstractMixed::concreteVirtual" : (!moore.class<@AbstractMixed>) -> !moore.i32
 // CHECK: }
@@ -258,9 +258,9 @@ module testAbstractMixed;
     end
 endmodule
 
-// Test interface class (pure abstract)
+// Test interface class (pure abstract) - pure virtual methods now have %this argument
 // CHECK-LABEL: moore.class.classdecl @PureAbstractInterface {
-// CHECK:   moore.class.methoddecl @interfaceMethod -> @interfaceMethod : () -> ()
+// CHECK:   moore.class.methoddecl @interfaceMethod -> @"PureAbstractInterface::interfaceMethod" : (!moore.class<@PureAbstractInterface>) -> ()
 // CHECK: }
 
 interface class PureAbstractInterface;

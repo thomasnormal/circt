@@ -3315,6 +3315,53 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
   }
 
   if (!subroutine.thisVar) {
+    // Check if this is a virtual method (including pure virtual methods) inside
+    // a class. Pure virtual methods have no thisVar because they have no body in
+    // the abstract class, but they still need a %this argument for virtual
+    // dispatch.
+    const bool isVirtualMethod =
+        (subroutine.flags & slang::ast::MethodFlags::Virtual) != 0;
+    const auto &parentSym = subroutine.getParentScope()->asSymbol();
+    if (isVirtualMethod &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      // This is a pure virtual method inside a class.
+      const auto *classTy = parentSym.as_if<slang::ast::ClassType>();
+      if (classTy) {
+        auto loc = convertLocation(subroutine.location);
+
+        // Ensure the class is declared.
+        (void)convertClassDeclaration(*classTy);
+
+        // Re-check if this function was already created during conversion.
+        auto recheck = functions.find(&subroutine);
+        if (recheck != functions.end() && recheck->second && recheck->second->op)
+          return recheck->second.get();
+
+        auto *lowering = declareClass(*classTy);
+        if (!lowering || !lowering->op) {
+          mlir::emitError(loc)
+              << "class '" << classTy->name << "' has not been lowered yet";
+          return {};
+        }
+        auto ownerDecl = lowering->op;
+
+        // Build qualified name: @"Class"::subroutine
+        SmallString<64> qualName;
+        qualName += ownerDecl.getSymName();
+        qualName += "::";
+        qualName += subroutine.name;
+
+        // Add %this : class<@C> argument
+        SmallVector<Type, 1> extraParams;
+        auto classSym =
+            mlir::FlatSymbolRefAttr::get(getContext(), ownerDecl.getSymName());
+        auto handleTy = moore::ClassHandleType::get(getContext(), classSym);
+        extraParams.push_back(handleTy);
+
+        return declareCallableImpl(subroutine, qualName, extraParams);
+      }
+    }
+
     SmallString<64> name;
 
     // DPI-C imports should use just the function name (for C linkage),

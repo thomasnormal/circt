@@ -615,9 +615,9 @@ endfunction
 /// Check pure virtual forward declarations
 
 // CHECK-LABEL:  moore.class.classdecl @virtualFunctionClass {
-// CHECK:    moore.class.methoddecl @subroutine -> @subroutine : () -> ()
+// CHECK:    moore.class.methoddecl @subroutine -> @"virtualFunctionClass::subroutine" : (!moore.class<@virtualFunctionClass>) -> ()
 // CHECK:  }
-// CHECK:  func.func private @subroutine() {
+// CHECK:  func.func private @"virtualFunctionClass::subroutine"(%arg0: !moore.class<@virtualFunctionClass>) {
 // CHECK:    return
 // CHECK:  }
 // CHECK:  moore.class.classdecl @realFunctionClass implements [@virtualFunctionClass] {

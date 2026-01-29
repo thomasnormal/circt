@@ -3192,7 +3192,11 @@ struct RvalueExprVisitor : public ExprVisitor {
       // Fall through to normal call generation below
     }
 
-    const bool isMethod = (subroutine->thisVar != nullptr);
+    // A subroutine is a method if it has a thisVar (normal methods) or if it's
+    // a virtual method (including pure virtual methods, which may not have
+    // thisVar set in slang because they have no body in the abstract class).
+    const bool isMethod = (subroutine->thisVar != nullptr) ||
+                          ((subroutine->flags & slang::ast::MethodFlags::Virtual) != 0);
 
     if (subroutine->name == "rand_mode" ||
         subroutine->name == "constraint_mode") {
@@ -3459,10 +3463,49 @@ struct RvalueExprVisitor : public ExprVisitor {
           }
 
           if (!interfaceInstance) {
-            mlir::emitError(loc)
-                << "interface method call requires interface instance (could "
-                   "not find instance for interface '"
-                << instBody->getDefinition().name << "')";
+            // Try to detect hierarchical interface access through module
+            // instances. For calls like `agentBFM.driverBFM.waitForResetn()`
+            // where driverBFM is an interface inside module agentBFM, we need
+            // to identify this pattern and provide a helpful error message.
+            bool isHierarchicalInterfaceCall = false;
+
+            // Check if the interface containing this method is inside a
+            // different module from the current scope. The interface instance
+            // is in instBody->parentInstance.
+            if (instBody->parentInstance) {
+              auto *ifaceInst = instBody->parentInstance;
+              // Get the scope where this interface was instantiated
+              if (auto *ifaceParentScope = ifaceInst->getParentScope()) {
+                if (auto *containingBody =
+                        ifaceParentScope->getContainingInstance()) {
+                  // Check if the interface is inside a different module
+                  if (containingBody->getDefinition().definitionKind ==
+                      slang::ast::DefinitionKind::Module) {
+                    if (context.currentScope) {
+                      auto *currentBody =
+                          context.currentScope->getContainingInstance();
+                      if (currentBody && currentBody != containingBody) {
+                        isHierarchicalInterfaceCall = true;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            if (isHierarchicalInterfaceCall) {
+              mlir::emitError(loc)
+                  << "hierarchical interface method calls through module "
+                     "instances are not yet supported (interface '"
+                  << instBody->getDefinition().name
+                  << "' is inside a child module); consider using a virtual "
+                     "interface passed through module ports instead";
+            } else {
+              mlir::emitError(loc)
+                  << "interface method call requires interface instance (could "
+                     "not find instance for interface '"
+                  << instBody->getDefinition().name << "')";
+            }
             return {};
           }
 
