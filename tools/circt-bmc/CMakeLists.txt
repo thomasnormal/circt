@@ -51,6 +51,7 @@ target_link_libraries(circt-bmc
   MLIRLLVMIRTransforms
   MLIRLLVMToLLVMIRTranslation
   MLIRSMT
+  MLIRExportSMTLIB
   MLIRTargetLLVMIRExport
 
   ${CIRCT_BMC_JIT_DEPS}

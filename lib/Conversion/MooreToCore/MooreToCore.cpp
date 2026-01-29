@@ -2048,6 +2048,10 @@ struct ClassPropertyRefOpConversion
 
     auto i32Ty = IntegerType::get(ctx, 32);
     SmallVector<Value> idxVals;
+    // First index 0 is needed to dereference the pointer to the struct.
+    // Subsequent indices navigate into the struct fields.
+    idxVals.push_back(LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
     for (unsigned idx : *pathOpt)
       idxVals.push_back(LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(idx)));
@@ -10348,17 +10352,30 @@ struct QueueMaxOpConversion : public RuntimeCallConversionBase<QueueMaxOp> {
     }
 
     // Queue/dynamic array case: input is already {ptr, i64} struct
-    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy});
-    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_max", fnTy);
+    // Use __moore_array_max with (ptr, elementSize, isSigned)
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i1Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_max", fnTy);
 
     // Store input to alloca and pass pointer.
     auto inputAlloca =
         LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
     LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
 
+    // Get element type and size from the result queue type
+    auto resultQueueTy = cast<moore::QueueType>(op.getResult().getType());
+    auto elemType = typeConverter->convertType(resultQueueTy.getElementType());
+    int32_t elemSize = getTypeSizeInBytes(elemType);
+    auto elemSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemSize));
+
+    // Use unsigned comparison by default (isSigned = false)
+    auto isSignedConst = LLVM::ConstantOp::create(
+        rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),
-                                     ValueRange{inputAlloca});
+                                     ValueRange{inputAlloca, elemSizeConst, isSignedConst});
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
@@ -10426,17 +10443,30 @@ struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
     }
 
     // Queue/dynamic array case: input is already {ptr, i64} struct
-    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy});
-    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_min", fnTy);
+    // Use __moore_array_min with (ptr, elementSize, isSigned)
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i1Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_min", fnTy);
 
     // Store input to alloca and pass pointer.
     auto inputAlloca =
         LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
     LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
 
+    // Get element type and size from the result queue type
+    auto resultQueueTy = cast<moore::QueueType>(op.getResult().getType());
+    auto elemType = typeConverter->convertType(resultQueueTy.getElementType());
+    int32_t elemSize = getTypeSizeInBytes(elemType);
+    auto elemSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemSize));
+
+    // Use unsigned comparison by default (isSigned = false)
+    auto isSignedConst = LLVM::ConstantOp::create(
+        rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),
-                                     ValueRange{inputAlloca});
+                                     ValueRange{inputAlloca, elemSizeConst, isSignedConst});
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
@@ -10618,6 +10648,69 @@ struct QueuePushFrontOpConversion
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
                          ValueRange{queueAlloca, elemAlloca, elemSize});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.insert -> runtime function call.
+struct QueueInsertOpConversion
+    : public RuntimeCallConversionBase<QueueInsertOp> {
+  using RuntimeCallConversionBase::RuntimeCallConversionBase;
+
+  LogicalResult
+  matchAndRewrite(QueueInsertOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto queueTy = getQueueStructType(ctx);
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Function signature: void insert(queue_ptr, index, element_ptr, element_size)
+    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i64Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter,
+                                     "__moore_queue_insert", fnTy);
+
+    // Store queue to alloca and pass pointer
+    auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                        rewriter.getI64IntegerAttr(1));
+    auto queueAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // Convert index to i32 if necessary
+    Value index = adaptor.getIndex();
+    if (index.getType() != i32Ty) {
+      index = LLVM::TruncOp::create(rewriter, loc, i32Ty, index);
+    }
+
+    // Store element to alloca and pass pointer
+    auto elemType = typeConverter->convertType(op.getElement().getType());
+    // Convert element type to pure LLVM type for LLVM operations
+    Type llvmElemType = convertToLLVMType(elemType);
+    auto elemAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElemType, one);
+    // Cast element to LLVM type if needed (hw.struct -> llvm.struct)
+    Value elemToStore = adaptor.getElement();
+    if (llvmElemType != elemType) {
+      elemToStore = UnrealizedConversionCastOp::create(
+                        rewriter, loc, llvmElemType, ValueRange{elemToStore})
+                        .getResult(0);
+    }
+    LLVM::StoreOp::create(rewriter, loc, elemToStore, elemAlloca);
+
+    // Calculate element size (use LLVM type for accurate size)
+    auto elemSize = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(llvmElemType)));
+
+    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                         ValueRange{queueAlloca, index, elemAlloca, elemSize});
 
     rewriter.eraseOp(op);
     return success();
@@ -13045,6 +13138,31 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       if (remapped)
         return remapped;
 
+      // Special handling for block arguments from enclosing functions.
+      // When a function's signature is converted, the old block arguments are
+      // replaced with new ones. Operations in nested regions (like predicate
+      // bodies) or operations referencing the function's block arguments still
+      // reference the old arguments, but those have been invalidated. We need
+      // to find the new block argument at the corresponding position in the
+      // converted function.
+      //
+      // This is critical for class method contexts where the 'this' pointer
+      // is a block argument that gets remapped during function signature
+      // conversion.
+      if (auto blockArg = dyn_cast<BlockArgument>(mooreVal)) {
+        // Get the parent function's entry block to find the new block argument
+        auto funcOp = mooreOp->getParentOfType<func::FuncOp>();
+        if (funcOp) {
+          Block *funcEntryBlock = &funcOp.getBody().front();
+          unsigned argIndex = blockArg.getArgNumber();
+          if (argIndex < funcEntryBlock->getNumArguments()) {
+            Value newBlockArg = funcEntryBlock->getArgument(argIndex);
+            valueMap[mooreVal] = newBlockArg;
+            return newBlockArg;
+          }
+        }
+      }
+
       // For external values that are results of Moore operations,
       // recursively convert the defining operation
       if (Operation *definingOp = mooreVal.getDefiningOp()) {
@@ -13166,6 +13284,10 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
       auto i32Ty = IntegerType::get(ctx, 32);
       SmallVector<Value> idxVals;
+      // First index 0 is needed to dereference the pointer to the struct.
+      // Subsequent indices navigate into the struct fields.
+      idxVals.push_back(LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
       for (unsigned idx : *pathOpt)
         idxVals.push_back(LLVM::ConstantOp::create(
             rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(idx)));
@@ -19852,6 +19974,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueDeleteOpConversion,
     QueuePushBackOpConversion,
     QueuePushFrontOpConversion,
+    QueueInsertOpConversion,
     QueuePopBackOpConversion,
     QueuePopFrontOpConversion,
     StreamConcatOpConversion,

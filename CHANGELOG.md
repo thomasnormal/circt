@@ -1,5 +1,62 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 247 - January 29, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Fixed in this Iteration
+
+1. **Class Member Variable Access Bug** (MooreToCore.cpp lines 13141-13163):
+   - **ROOT CAUSE**: Block argument remapping issue in class method contexts
+   - When class methods are converted to LLVM, the `this` pointer (block argument) gets remapped
+   - Operations inside methods still referenced OLD/invalidated block arguments
+   - `getConvertedOperand()` failed to find the remapped value
+   - **FIX**: Added special handling in `getConvertedOperand()` to detect BlockArguments from enclosing function scopes and remap them to the corresponding arguments in the converted function's entry block
+   - **Pattern**: Mirrors existing fix for array locator predicates (lines 14602-14647)
+   - **Test**: `test/Conversion/MooreToCore/class-member-access-method.mlir` (8 test cases)
+
+2. **Class Property Verifier Inheritance Bug** (MooreOps.cpp lines 1761-1787):
+   - Verifier wasn't walking inheritance chain for property symbol lookup
+   - Multi-level inheritance (grandparent class properties) failed verification
+   - **FIX**: Added while-loop to search base classes in `ClassPropertyRefOp::verifySymbolUses`
+   - **Test**: `test/Conversion/MooreToCore/class-field-indexing.mlir`
+
+3. **Queue Runtime Methods** (MooreRuntime.cpp lines 517-640):
+   - Added 5 new queue functions:
+     - `__moore_queue_pop_back_ptr` - Pop to buffer for complex types
+     - `__moore_queue_pop_front_ptr` - Pop from front to buffer
+     - `__moore_queue_size` - Returns queue length
+     - `__moore_queue_unique` - Remove duplicates
+     - `__moore_queue_sort_inplace` - Sort in place
+   - **Tests**: 13 new unit tests in MooreRuntimeTest.cpp (all pass)
+
+4. **Build Fixes**:
+   - HWEliminateInOutPorts.cpp: Added missing include, fixed const correctness
+   - circt-lec CMakeLists.txt: Added missing CIRCTSVTransforms
+   - circt-bmc CMakeLists.txt: Added missing MLIRExportSMTLIB
+
+### Test Suite Status
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Unit Tests | 1373/1373 (100%) | +13 queue tests |
+| Lit Tests | 2980/3085 (96.6%) | 12 SMT/LEC failures (pre-existing) |
+
+### Remaining Limitations
+
+**Critical for UVM Parity:**
+1. **Class Method Simulation**: Class-based code compiles correctly but circt-sim has limited LLHD process interpretation for LLVM dialect ops (malloc, etc.)
+2. **AXI4Lite Nested Interface Bug**: `moore.virtual_interface.signal_ref` fails on 3-level nested interfaces
+3. **Hierarchical Name Access**: ~9 XFAIL tests blocked on multi-level paths
+4. **Virtual Method Dispatch**: UVM polymorphism not fully simulated
+
+**Features to Build:**
+- uvm_config_db support
+- Constraint randomization (`rand`, `constraint`)
+- Factory/sequencer infrastructure
+
+---
+
 ## Iteration 241 - January 29, 2026
 
 ### Goals
@@ -16,7 +73,7 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 | sv-tests LEC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
-| yosys-sva BMC | **14/14 (100%)** | 2 VHDL skipped |
+| yosys-sva BMC | **12/14 (85.7%)** | 2 VHDL skipped, 0 failures |
 | yosys-sva LEC | **14/14 (100%)** | 2 VHDL skipped |
 
 Latest sv-tests BMC run (January 29, 2026):
@@ -25,7 +82,7 @@ Latest sv-tests BMC run (January 29, 2026):
 
 Latest yosys SVA BMC run (January 29, 2026):
 - `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
-- 14 tests, failures=0, skipped=2 (VHDL)
+- 14 tests, failures=0, skipped=2 (VHDL) → pass=12
 
 Latest verilator-verification BMC run (January 29, 2026):
 - `utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification`
@@ -43,11 +100,29 @@ Latest yosys SVA LEC run (January 29, 2026):
 - `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
 - total=14 pass=14 fail=0 error=0 skip=2
 
+Latest formal harness run (January 29, 2026):
+- `utils/run_formal_all.sh --update-baselines --with-opentitan --with-avip`
+- logs: `formal-results-20260129/`
+  - OpenTitan LEC: 1 failure (aes_sbox_canright)
+  - AVIP compile: JTAG/SPI/AXI4Lite failed, others passed
+
 Latest AVIP compile smoke (January 29, 2026):
 - `utils/run_avip_circt_verilog.sh ~/mbit/apb_avip ~/mbit/apb_avip/sim/apb_compile.f`
 - log: `avip-circt-verilog.log`
 - `utils/run_avip_circt_verilog.sh ~/mbit/axi4_avip ~/mbit/axi4_avip/sim/axi4_compile.f`
 - log: `avip-axi4-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/i3c_avip ~/mbit/i3c_avip/sim/i3c_compile.f`
+- log: `avip-i3c-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/ahb_avip ~/mbit/ahb_avip/sim/ahb_compile.f`
+- log: `avip-ahb-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/uart_avip ~/mbit/uart_avip/sim/UartCompile.f`
+- log: `avip-uart-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/spi_avip ~/mbit/spi_avip/sim/SpiCompile.f` (FAIL)
+- log: `avip-spi-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/i2s_avip ~/mbit/i2s_avip/sim/I2sCompile.f`
+- log: `avip-i2s-circt-verilog.log`
+- `utils/run_avip_circt_verilog.sh ~/mbit/jtag_avip ~/mbit/jtag_avip/sim/JtagCompile.f` (FAIL)
+- log: `avip-jtag-circt-verilog.log`
 
 Latest OpenTitan LEC smoke (January 29, 2026):
 - `utils/run_opentitan_circt_lec.py`
@@ -87,6 +162,36 @@ Both BMC and LEC verification pipelines fully functional.
     - 41 expectedly failed
     - 54 unsupported (pytest e2e, VHDL files)
     - No failures
+11. **Formal baseline harness fixes**: `run_formal_all.sh` now passes OUT_DIR and
+    date through to the baseline update, supports `--baseline-file`/`--plan-file`,
+    and has a lit test for baseline file creation.
+12. **Formal baseline capture**: `utils/formal-baselines.tsv` now records the
+    2026-01-29 suite results from the full formal harness run.
+13. **LEC strict interface stores**: strict LEC now resolves multiple interface
+    stores by selecting a unique dominating store per read, avoiding abstraction
+    in simple multi-store cases.
+14. **LEC strict read-before-store**: strict interface lowering now falls back
+    to zero-initialized global storage for read-before-store cases when the
+    backing storage is `#llvm.zero`.
+15. **Formal harness coverage**: `run_formal_all.sh` now records OpenTitan and
+    AVIP compile results in the summary/baseline outputs.
+16. **LEC harness inequivalence handling**: sv-tests/verilator/yosys LEC
+    harnesses now pass `--fail-on-inequivalent` by default (override with
+    `LEC_FAIL_ON_INEQ=0`).
+17. **BMC multiclock check gating**: unclocked properties now gate on any
+    posedge in multi-clock BMC to avoid sampling on negedge iterations.
+18. **BMC SMT-LIB output**: `circt-bmc --emit-smtlib` now emits SMT-LIB via
+    the SMT exporter (regression: `bmc-emit-smtlib.mlir`).
+19. **BMC harness violation handling**: sv-tests/verilator/yosys BMC harnesses
+    now pass `--fail-on-violation` by default (override with
+    `BMC_FAIL_ON_VIOLATION=0`). Regression: `fail-on-violation.mlir`.
+20. **LEC output model visibility**: SMT-LIB LEC now declares per-output
+    symbols (`c1_*/c2_*`) and prints differing output values when a model is
+    available (regression: `lec-smtlib-output-names.mlir`).
+16. **AVIP exit codes**: `run_avip_circt_verilog.sh` now exits with the
+    underlying `circt-verilog` return code so harnesses can detect failures.
+17. **LEC strict identical drives**: strict LEC now allows multiple identical
+    unconditional LLHD drives without forcing abstraction.
 
 ### Fixed Earlier in this Iteration
 1. **LSP Position.character bug** (d5b12c82e): Fixed slang column 0 -> -1 conversion
@@ -145,6 +250,14 @@ Both BMC and LEC verification pipelines fully functional.
     only on their clock edge to avoid sampling on inactive phases.
     - Added regression: `test/Conversion/VerifToSMT/bmc-final-check-edge.mlir`
     - Tests: `build/bin/llvm-lit -v test/Conversion/VerifToSMT/bmc-final-check-edge.mlir`
+17. **BMC i1 clocked properties**: Infer clock positions for `ltl.clock` using
+    direct i1 clock inputs so non-final checks are gated by the correct edge.
+    - Added regression: `test/Conversion/VerifToSMT/bmc-nonfinal-check-i1-clock.mlir`
+    - Tests: `build/bin/llvm-lit -v test/Conversion/VerifToSMT/bmc-nonfinal-check-i1-clock.mlir`
+18. **BMC i1 clock + delay**: Lower `ltl.clock` to SMT so delay buffers can be
+    gated by i1 clock edges without region-isolation failures.
+    - Added regression: `test/Conversion/VerifToSMT/bmc-delay-i1-clock.mlir`
+    - Tests: `build/bin/llvm-lit -v test/Conversion/VerifToSMT/bmc-delay-i1-clock.mlir`
 16. **BMC pipeline**: Reconcile unrealized casts after SMT->Z3 lowering to
     keep LLVM translation robust
 17. **find_first_index on associative arrays** (f93ab3a1e): Implemented in MooreToCore
@@ -153,6 +266,19 @@ Both BMC and LEC verification pipelines fully functional.
     - Generates scf.while loop to iterate and call predicate
     - Fixes AXI4 AVIP which uses find_first_index() for transaction tracking
     - Added test: `test/Conversion/MooreToCore/assoc-array-locator.mlir`
+18. **LEC strict inout lowering**: Run inout port elimination in strict mode,
+    allowing multiple identical writers while rejecting unresolved inouts.
+    - Added pass option `allow-multiple-writers-same-value` with regression:
+      `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-multi-writer-same.mlir`
+    - Updated strict LEC inout tests to expect success.
+19. **LEC JIT counterexample inputs**: Print named model inputs when lowering
+    SMT to Z3 LLVM with `print-model-inputs` enabled.
+    - Added regression: `test/Conversion/SMTToZ3LLVM/smt-to-z3-llvm-print-model-inputs.mlir`
+20. **LEC strict inout multi-writer tests**: Cover identical-writer acceptance
+    and conflicting-writer rejection in strict mode.
+    - Added regressions: `test/Tools/circt-lec/lec-strict-inout-multi-writer-same.mlir`,
+      `test/Tools/circt-lec/lec-strict-inout-multi-writer-conflict.mlir`
+    - Identical constants now accepted even when produced by distinct ops.
 
 ### Remaining Limitations & Features to Build
 

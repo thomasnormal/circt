@@ -1067,6 +1067,425 @@ TEST(MooreRuntimeQueueTest, QueueSortAlreadySorted) {
 }
 
 //===----------------------------------------------------------------------===//
+// Queue Insert Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeQueueTest, QueueInsertAtBeginning) {
+  // Create a queue with some elements
+  MooreQueue queue = {nullptr, 0};
+  int32_t a = 2, b = 3, c = 1;
+  int64_t elementSize = sizeof(int32_t);
+
+  __moore_queue_push_back(&queue, &a, elementSize);
+  __moore_queue_push_back(&queue, &b, elementSize);
+
+  // Insert at beginning (index 0)
+  __moore_queue_insert(&queue, 0, &c, elementSize);
+
+  ASSERT_EQ(queue.len, 3);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);  // Newly inserted
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueInsertAtMiddle) {
+  MooreQueue queue = {nullptr, 0};
+  int32_t a = 1, b = 3, c = 2;
+  int64_t elementSize = sizeof(int32_t);
+
+  __moore_queue_push_back(&queue, &a, elementSize);
+  __moore_queue_push_back(&queue, &b, elementSize);
+
+  // Insert at middle (index 1)
+  __moore_queue_insert(&queue, 1, &c, elementSize);
+
+  ASSERT_EQ(queue.len, 3);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);  // Newly inserted
+  EXPECT_EQ(data[2], 3);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueInsertAtEnd) {
+  MooreQueue queue = {nullptr, 0};
+  int32_t a = 1, b = 2, c = 3;
+  int64_t elementSize = sizeof(int32_t);
+
+  __moore_queue_push_back(&queue, &a, elementSize);
+  __moore_queue_push_back(&queue, &b, elementSize);
+
+  // Insert at end (index == size)
+  __moore_queue_insert(&queue, 2, &c, elementSize);
+
+  ASSERT_EQ(queue.len, 3);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);  // Newly inserted
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueInsertBeyondEnd) {
+  MooreQueue queue = {nullptr, 0};
+  int32_t a = 1, b = 2, c = 3;
+  int64_t elementSize = sizeof(int32_t);
+
+  __moore_queue_push_back(&queue, &a, elementSize);
+  __moore_queue_push_back(&queue, &b, elementSize);
+
+  // Insert beyond end (index > size) - should append
+  __moore_queue_insert(&queue, 100, &c, elementSize);
+
+  ASSERT_EQ(queue.len, 3);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);  // Appended
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueInsertNegativeIndex) {
+  MooreQueue queue = {nullptr, 0};
+  int32_t a = 2, b = 3, c = 1;
+  int64_t elementSize = sizeof(int32_t);
+
+  __moore_queue_push_back(&queue, &a, elementSize);
+  __moore_queue_push_back(&queue, &b, elementSize);
+
+  // Insert with negative index - should treat as 0
+  __moore_queue_insert(&queue, -5, &c, elementSize);
+
+  ASSERT_EQ(queue.len, 3);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);  // Inserted at front
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueInsertIntoEmpty) {
+  MooreQueue queue = {nullptr, 0};
+  int32_t a = 42;
+  int64_t elementSize = sizeof(int32_t);
+
+  // Insert into empty queue
+  __moore_queue_insert(&queue, 0, &a, elementSize);
+
+  ASSERT_EQ(queue.len, 1);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 42);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueInsertMultiple) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int32_t);
+
+  // Build queue {1, 2, 3, 4, 5} by inserting at various positions
+  int32_t v3 = 3;
+  __moore_queue_insert(&queue, 0, &v3, elementSize);  // {3}
+
+  int32_t v1 = 1;
+  __moore_queue_insert(&queue, 0, &v1, elementSize);  // {1, 3}
+
+  int32_t v5 = 5;
+  __moore_queue_insert(&queue, 2, &v5, elementSize);  // {1, 3, 5}
+
+  int32_t v2 = 2;
+  __moore_queue_insert(&queue, 1, &v2, elementSize);  // {1, 2, 3, 5}
+
+  int32_t v4 = 4;
+  __moore_queue_insert(&queue, 3, &v4, elementSize);  // {1, 2, 3, 4, 5}
+
+  ASSERT_EQ(queue.len, 5);
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+  EXPECT_EQ(data[3], 4);
+  EXPECT_EQ(data[4], 5);
+
+  __moore_free(queue.data);
+}
+
+//===----------------------------------------------------------------------===//
+// Queue Pop Ptr Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeQueueTest, QueuePopBackPtr) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int32_t);
+
+  // Build queue {10, 20, 30}
+  int32_t v1 = 10, v2 = 20, v3 = 30;
+  __moore_queue_push_back(&queue, &v1, elementSize);
+  __moore_queue_push_back(&queue, &v2, elementSize);
+  __moore_queue_push_back(&queue, &v3, elementSize);
+
+  // Pop back should return 30
+  int32_t result = 0;
+  __moore_queue_pop_back_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result, 30);
+  EXPECT_EQ(queue.len, 2);
+
+  // Pop again should return 20
+  __moore_queue_pop_back_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result, 20);
+  EXPECT_EQ(queue.len, 1);
+
+  // Pop last element should return 10
+  __moore_queue_pop_back_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result, 10);
+  EXPECT_EQ(queue.len, 0);
+  EXPECT_EQ(queue.data, nullptr);
+}
+
+TEST(MooreRuntimeQueueTest, QueuePopFrontPtr) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int32_t);
+
+  // Build queue {10, 20, 30}
+  int32_t v1 = 10, v2 = 20, v3 = 30;
+  __moore_queue_push_back(&queue, &v1, elementSize);
+  __moore_queue_push_back(&queue, &v2, elementSize);
+  __moore_queue_push_back(&queue, &v3, elementSize);
+
+  // Pop front should return 10
+  int32_t result = 0;
+  __moore_queue_pop_front_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result, 10);
+  EXPECT_EQ(queue.len, 2);
+
+  // Pop again should return 20
+  __moore_queue_pop_front_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result, 20);
+  EXPECT_EQ(queue.len, 1);
+
+  // Pop last element should return 30
+  __moore_queue_pop_front_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result, 30);
+  EXPECT_EQ(queue.len, 0);
+  EXPECT_EQ(queue.data, nullptr);
+}
+
+TEST(MooreRuntimeQueueTest, QueuePopPtrWithStructs) {
+  // Test with struct elements
+  struct TestStruct {
+    int32_t a;
+    int32_t b;
+  };
+
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(TestStruct);
+
+  TestStruct s1 = {1, 2};
+  TestStruct s2 = {3, 4};
+  TestStruct s3 = {5, 6};
+
+  __moore_queue_push_back(&queue, &s1, elementSize);
+  __moore_queue_push_back(&queue, &s2, elementSize);
+  __moore_queue_push_back(&queue, &s3, elementSize);
+
+  TestStruct result = {0, 0};
+  __moore_queue_pop_back_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result.a, 5);
+  EXPECT_EQ(result.b, 6);
+  EXPECT_EQ(queue.len, 2);
+
+  __moore_queue_pop_front_ptr(&queue, &result, elementSize);
+  EXPECT_EQ(result.a, 1);
+  EXPECT_EQ(result.b, 2);
+  EXPECT_EQ(queue.len, 1);
+
+  __moore_free(queue.data);
+}
+
+//===----------------------------------------------------------------------===//
+// Queue Size Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeQueueTest, QueueSize) {
+  MooreQueue queue = {nullptr, 0};
+
+  // Empty queue
+  EXPECT_EQ(__moore_queue_size(&queue), 0);
+
+  // Add elements
+  int32_t v = 42;
+  __moore_queue_push_back(&queue, &v, sizeof(int32_t));
+  EXPECT_EQ(__moore_queue_size(&queue), 1);
+
+  __moore_queue_push_back(&queue, &v, sizeof(int32_t));
+  EXPECT_EQ(__moore_queue_size(&queue), 2);
+
+  __moore_queue_push_back(&queue, &v, sizeof(int32_t));
+  EXPECT_EQ(__moore_queue_size(&queue), 3);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSizeNull) {
+  // Null pointer should return 0
+  EXPECT_EQ(__moore_queue_size(nullptr), 0);
+}
+
+//===----------------------------------------------------------------------===//
+// Queue Unique Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeQueueTest, QueueUnique) {
+  // Note: __moore_queue_unique assumes 8-byte elements
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int64_t);
+
+  // Build queue with duplicates {1, 2, 2, 3, 1, 4, 2}
+  int64_t vals[] = {1, 2, 2, 3, 1, 4, 2};
+  for (auto v : vals) {
+    __moore_queue_push_back(&queue, &v, elementSize);
+  }
+
+  MooreQueue result = __moore_queue_unique(&queue);
+
+  // Expected unique: {1, 2, 3, 4}
+  ASSERT_EQ(result.len, 4);
+  auto *data = static_cast<int64_t *>(result.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+  EXPECT_EQ(data[3], 4);
+
+  __moore_free(queue.data);
+  __moore_free(result.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueUniqueEmpty) {
+  MooreQueue queue = {nullptr, 0};
+  MooreQueue result = __moore_queue_unique(&queue);
+  EXPECT_EQ(result.len, 0);
+  EXPECT_EQ(result.data, nullptr);
+}
+
+TEST(MooreRuntimeQueueTest, QueueUniqueAllSame) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int64_t);
+
+  // All same values
+  int64_t v = 42;
+  for (int i = 0; i < 5; ++i) {
+    __moore_queue_push_back(&queue, &v, elementSize);
+  }
+
+  MooreQueue result = __moore_queue_unique(&queue);
+  ASSERT_EQ(result.len, 1);
+  EXPECT_EQ(static_cast<int64_t *>(result.data)[0], 42);
+
+  __moore_free(queue.data);
+  __moore_free(result.data);
+}
+
+//===----------------------------------------------------------------------===//
+// Queue Sort Inplace Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeQueueTest, QueueSortInplace) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int32_t);
+
+  // Build unsorted queue
+  int32_t vals[] = {5, 2, 8, 1, 9, 3};
+  for (auto v : vals) {
+    __moore_queue_push_back(&queue, &v, elementSize);
+  }
+
+  __moore_queue_sort_inplace(&queue, elementSize);
+
+  // Should be sorted ascending
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+  EXPECT_EQ(data[3], 5);
+  EXPECT_EQ(data[4], 8);
+  EXPECT_EQ(data[5], 9);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortInplaceAlreadySorted) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int32_t);
+
+  int32_t vals[] = {1, 2, 3, 4, 5};
+  for (auto v : vals) {
+    __moore_queue_push_back(&queue, &v, elementSize);
+  }
+
+  __moore_queue_sort_inplace(&queue, elementSize);
+
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+  EXPECT_EQ(data[3], 4);
+  EXPECT_EQ(data[4], 5);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortInplaceReversed) {
+  MooreQueue queue = {nullptr, 0};
+  int64_t elementSize = sizeof(int32_t);
+
+  int32_t vals[] = {5, 4, 3, 2, 1};
+  for (auto v : vals) {
+    __moore_queue_push_back(&queue, &v, elementSize);
+  }
+
+  __moore_queue_sort_inplace(&queue, elementSize);
+
+  auto *data = static_cast<int32_t *>(queue.data);
+  EXPECT_EQ(data[0], 1);
+  EXPECT_EQ(data[1], 2);
+  EXPECT_EQ(data[2], 3);
+  EXPECT_EQ(data[3], 4);
+  EXPECT_EQ(data[4], 5);
+
+  __moore_free(queue.data);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortInplaceEmpty) {
+  MooreQueue queue = {nullptr, 0};
+
+  // Should not crash
+  __moore_queue_sort_inplace(&queue, sizeof(int32_t));
+
+  EXPECT_EQ(queue.len, 0);
+  EXPECT_EQ(queue.data, nullptr);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSortInplaceSingleElement) {
+  MooreQueue queue = {nullptr, 0};
+  int32_t v = 42;
+  __moore_queue_push_back(&queue, &v, sizeof(int32_t));
+
+  __moore_queue_sort_inplace(&queue, sizeof(int32_t));
+
+  EXPECT_EQ(queue.len, 1);
+  EXPECT_EQ(static_cast<int32_t *>(queue.data)[0], 42);
+
+  __moore_free(queue.data);
+}
+
+//===----------------------------------------------------------------------===//
 // Dynamic Array Tests
 //===----------------------------------------------------------------------===//
 

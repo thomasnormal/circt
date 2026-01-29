@@ -36,6 +36,7 @@ target_link_libraries(circt-lec
   CIRCTSim
   CIRCTSimTransforms
   CIRCTSMTToZ3LLVM
+  CIRCTSVTransforms
   CIRCTSVAToLTL
   CIRCTLTLToCore
   CIRCTTransforms
