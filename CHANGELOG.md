@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 248 - January 29, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Fixed in this Iteration
+
+1. **Nested Interface Signal Access** (Expressions.cpp):
+   - **ROOT CAUSE**: Code didn't traverse through intermediate interface instances in paths like `vif.middle.inner.signal`
+   - **FIX**: Added recursive syntax tree walking, on-demand interface body conversion
+   - **IMPACT**: AXI4Lite and similar nested interface patterns now compile
+   - **Test**: `test/Conversion/ImportVerilog/nested-interface-signal-access.sv`
+
+2. **GEP-based Memory Probe** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `interpretProbe` didn't handle llhd.prb on GEP-based pointers
+   - **FIX**: Trace through UnrealizedConversionCastOp, compute offset, read from memory blocks
+   - **IMPACT**: Class member access in simulation now works end-to-end
+
+3. **Test Pattern Updates**:
+   - Updated LEC tests for named output format (c1_out0, c2_out0)
+   - Fixed verif-to-smt.mlir CHECK patterns
+   - Fixed SmallDenseSet -> DenseSet in LowerSMTToZ3LLVM.cpp
+
+4. **Hierarchical Name Access Investigation**:
+   - Pattern 1: Variable initialization ordering (Medium complexity)
+   - Pattern 2: Nested interface signals (FIXED above)
+   - Pattern 3: Hierarchical interface tasks (High complexity, ~5 days)
+
+### Test Suite Results
+- All external test suites maintain 100% pass rate
+- 6/9 AVIPs compile and simulate (APB, AHB, AXI4, I2S, I3C, UART)
+
+---
+
 ## Iteration 247 - January 29, 2026
 
 ### Goals
@@ -188,6 +222,15 @@ Both BMC and LEC verification pipelines fully functional.
 20. **LEC output model visibility**: SMT-LIB LEC now declares per-output
     symbols (`c1_*/c2_*`) and prints differing output values when a model is
     available (regression: `lec-smtlib-output-names.mlir`).
+21. **JIT model input printing**: SMT-to-Z3 JIT now prints named model inputs
+    via `circt_smt_print_model_*`, and circt-bmc/lec register these symbols.
+    Duplicate input prefixes now fall back to Z3’s unique names so multi-step
+    BMC traces remain readable (regression:
+    `smt-to-z3-llvm-print-model-inputs.mlir`,
+    `smt-to-z3-llvm-print-model-inputs-dup.mlir`).
+22. **BMC SMT-LIB limitation documented**: added a regression expecting
+    `--emit-smtlib` to fail until the solver-only encoding is implemented
+    (`bmc-emit-smtlib-bad-ops.mlir`).
 16. **AVIP exit codes**: `run_avip_circt_verilog.sh` now exits with the
     underlying `circt-verilog` return code so harnesses can detect failures.
 17. **LEC strict identical drives**: strict LEC now allows multiple identical
