@@ -207,7 +207,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 247)
+### Active Workstreams & Next Steps (Iteration 248)
+
+**Iteration 248 Fixes:**
+1. **Nested Interface Signal Access** (FIXED): Multi-level nested interface paths (vif.middle.inner.signal) now work
+   - Added recursive syntax tree walking to collect intermediate interface names
+   - Added on-demand interface body conversion when accessed early
+   - Fixes AXI4Lite and similar nested interface patterns
+2. **GEP-based Memory Probe** (FIXED): Class member access in simulation now works
+   - Handle llhd.prb on GEP-based pointers (class member access)
+   - Trace through UnrealizedConversionCastOp to find LLVM::GEPOp
+3. **Test Pattern Updates**: Fixed LEC/BMC test CHECK patterns for named output format
+4. **Hierarchical Name Investigation**: Identified 3 distinct failure patterns with fix approaches
 
 **Iteration 247 Fixes:**
 1. **Class Member Variable Access**: Fixed block argument remapping in `getConvertedOperand()` for class method contexts
