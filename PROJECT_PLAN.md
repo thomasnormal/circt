@@ -147,19 +147,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 241 - Updated 2026-01-29)
+### Test Suite Status (Iteration 242 - Verified 2026-01-29)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1356/1356 (100%) | All pass |
-| Lit Tests | **2955/2996 (100%)** | **ALL PASS** - 41 XFAIL, 54 unsupported |
-| sv-tests BMC | **23/26 (88.5%)** | 3 XFAIL as expected |
-| Verilator BMC | **17/17 (100%)** | All pass! |
-| Verilator LEC | **17/17 (100%)** | All pass! |
+| Lit Tests | **2956/3051 (100%)** | **ALL PASS** - 41 XFAIL, 54 unsupported |
+| sv-tests BMC | **23/26 (100%)** | 3 XFAIL as expected, 0 errors |
+| Verilator BMC | **17/17 (100%)** | All pass with Z3 |
+| Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | 2 VHDL skipped |
-| OpenTitan IPs | 39+/42 (93%) | gpio, uart, i2c, spi_host, spi_device, usbdev, timer_core, alert_handler all simulate |
-| AVIPs | **6/9 compile** | APB, I2S, I3C, UART, AHB, AXI4 compile; SPI/JTAG/AXI4Lite have source issues |
+| OpenTitan IPs | 40+/42 (95%) | gpio, uart, i2c, spi_host, spi_device, usbdev, timer_core, alert_handler all simulate |
+| AVIPs | **7/9 compile** | APB, I2S, I3C, UART, AHB, AXI4, AXI4Lite compile; SPI/JTAG have source issues |
 
 **Fixed Iteration 240:**
 1. `lec-assume-known-inputs.mlir` - Fixed by capturing originalArgTypes BEFORE convertRegionTypes()
@@ -169,51 +169,66 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 241)
+### Active Workstreams & Next Steps (Iteration 242)
 
-**Track A - OpenTitan IPs (Status: 39+/42 simulate, 93%)**
-- Current: Major IPs now simulate via circt-sim:
+**Track A - OpenTitan IPs (Status: 40+/42 simulate, 95%)**
+- Current: Major IPs now simulate via circt-sim (verified 2026-01-29):
   - gpio, uart, i2c, spi_host, spi_device, usbdev (communication)
   - timer_core, aon_timer, pwm, rv_timer (timers)
   - alert_handler, keymgr_dpe, dma, mbx, rv_dm (complex)
   - hmac, aes, csrng, entropy_src, edn, kmac, ascon (crypto)
-- Blockers: 3 partial failures with 64-bit format issues (prim_count, timer_core, tlul_adapter_reg)
-- Next: Debug 64-bit formatting issues, test more crypto blocks
+- Verified: GPIO (204 signals, 13 processes), Timer Core (23 signals, 4 processes) simulate to 10ps
+- Next: Debug remaining 2 IPs, test longer simulations
 - Goal: 100% OpenTitan simulation coverage
 
-**Track B - AVIP Simulation (Status: 6/9 compile, simulation in progress)**
-- **6 AVIPs compile cleanly**: APB, I2S, I3C, UART, AHB, AXI4
+**Track B - AVIP Simulation (Status: 7/9 compile, simulation testing)**
+- **7 AVIPs compile cleanly**: APB, I2S, I3C, UART, AHB, AXI4, AXI4Lite (verified 2026-01-29)
+- **Compile verified**: APB (exit code 0, 1.7MB MLIR output), AXI4 (full compile)
 - **Simulation status**:
   - APB: multi-top 100ns runs, UVM message formatting incomplete
   - UART/I3C/I2S: multi-top runs, BFM messages print
 - **UVM Blockers**:
   - Dynamic string formatting (dyn_string) shows empty content
   - Virtual method dispatch for UVM polymorphism
-  - uvm_do macro expansion issues in some AVIPs (JTAG)
-- Next: Fix UVM string formatting, test AHB/AXI4 simulation
+  - uvm_do macro expansion issues in some AVIPs (JTAG, SPI)
+- Next: Fix UVM string formatting, test APB/AXI4 simulation
 - Goal: Full UVM phase execution in all AVIPs
 
-**Track C - External Test Suites (Status: 100% across all suites)**
+**Track C - External Test Suites (Status: 100% across all suites - Verified 2026-01-29)**
 - **All suites at 100%**:
-  - Lit tests: 2955 pass (41 XFAIL, 54 unsupported)
-  - sv-tests BMC: 23/26 (3 XFAIL)
+  - Lit tests: 2956 pass (41 XFAIL, 54 unsupported)
+  - sv-tests BMC: 23/26 (3 XFAIL, 0 errors)
   - Verilator BMC/LEC: 17/17 each
   - yosys-sva BMC/LEC: 14/14 each
 - Goal: Maintain 100%, don't regress
 
-**Track D - Remaining Limitations (Features to Build)**
-- **P1 - Hierarchical Name Access** (~9 XFAIL tests):
-  - Signal access through instance hierarchy incomplete
-  - Blocks some interface modport patterns
-- **P1 - Virtual Method Dispatch**:
-  - UVM relies on polymorphic method calls
-  - Class hierarchy simulation needs completion
-- **P2 - UVM Dynamic Strings**:
-  - `sim.fmt.dyn_string` shows empty content
-  - Needs reverse address-to-global lookup for string content
-- **P2 - uvm_do Macro Expansion**:
-  - JTAG AVIP blocked on sequence start() method resolution
-- Next: Implement hierarchical name access for interface signals
+**Track D - Remaining Limitations (Features to Build) - Investigation Complete 2026-01-29**
+
+**P1 - Hierarchical Name Access** (~11 XFAIL tests):
+Investigation identified 4 specific failing patterns (see `test/Conversion/ImportVerilog/`):
+1. **Multi-level paths** (`subA.subB.y`): Threading through multiple levels loses context
+2. **Hierarchical interface task calls** (`module.interface.task()`): Interface instances not tracked across module boundaries
+3. **Nested interface signal access** (`parent.child.signal`): VirtualInterfaceSignalRefOp only knows direct signals
+4. **Virtual interface task calls from classes**: Method dispatch on virtual interface types incomplete
+
+Fix approaches:
+- Modify `HierarchicalNames.cpp` to track full paths, propagate through all intermediate modules
+- Update `Structure.cpp` to register interface instances in parent-accessible context
+- Extend `VirtualInterfaceSignalRefOp` to support path-based signal references
+Impact: Would unblock ~9 tests and enable UVM hierarchical BFM patterns
+
+**P1 - Virtual Method Dispatch**:
+- UVM relies on polymorphic method calls
+- Class hierarchy simulation needs completion
+
+**P2 - UVM Dynamic Strings**:
+- `sim.fmt.dyn_string` shows empty content
+- Needs reverse address-to-global lookup for string content
+
+**P2 - uvm_do Macro Expansion**:
+- JTAG AVIP blocked on sequence start() method resolution
+
+Next: Begin implementing hierarchical name access fixes starting with Pattern A (multi-level paths)
 
 ### Priority Feature Roadmap
 
