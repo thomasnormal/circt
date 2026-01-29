@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'echo "BMC_RESULT=UNSAT"' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env USE_RG=0 CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 SKIP_FAIL_WITHOUT_MACRO=1 %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
+
+// CHECK: PASS(pass): simple
+// CHECK: SKIP(fail-no-macro): simple
+// CHECK: yosys SVA summary: 1 tests, failures=0, skipped=0
