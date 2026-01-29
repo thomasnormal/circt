@@ -24,15 +24,16 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 Both BMC and LEC verification pipelines fully functional.
 
 **AVIP Simulation Status (5/9 working):**
-- APB, I2S, I3C, UART: ✅ Compile + Simulate
-- AHB, AXI4, JTAG: ❌ Bind scope resolution
+- APB, I2S, I3C, UART, AHB: ✅ Compile + Simulate
+- AXI4: ⚠️ Compiles (bind scope patched), needs simulation test
+- JTAG: ❌ Needs AllowVirtualIfaceWithOverride slang flag
 - SPI: ❌ Source code bugs
 - AXI4Lite: ❌ Namespace collision
 
 **UVM Phase Execution**: Verified working
-- UVM_INFO/UVM_WARNING messages print at time 0
+- UVM_INFO/UVM_WARNING messages print with actual content ✅
 - Clock generation and BFM initialization work
-- Message content strings empty (dynamic string formatting limitation)
+- sim.fmt.dyn_string reverse lookup FIXED (324c36c5f)
 
 ### Fixed in this Iteration
 1. **LSP Position.character bug** (d5b12c82e): Fixed slang column 0 -> -1 conversion
