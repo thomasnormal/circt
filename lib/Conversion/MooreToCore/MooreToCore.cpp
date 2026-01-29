@@ -14049,6 +14049,353 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     return nullptr;
   }
 
+  /// Lower array.locator for associative arrays using first/next iteration.
+  /// Associative arrays require a different iteration approach than regular
+  /// arrays because they use keys instead of numeric indices.
+  LogicalResult lowerAssocArrayWithInlineLoop(
+      ArrayLocatorOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter, Location loc, MLIRContext *ctx,
+      ModuleOp mod, Type mooreElemType, Type mooreKeyType, Type elemType,
+      int64_t elemSizeBytes, Value blockArg, ArrayLocatorYieldOp yieldOp,
+      Value resultAlloca, LLVM::LLVMStructType queueTy,
+      LLVM::LLVMPointerType ptrTy, IntegerType i64Ty, IntegerType i1Ty,
+      Value emptyQueue, Value one) const {
+    Block &body = op.getBody().front();
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+
+    // Convert key and element types to LLVM
+    Type keyType = mooreKeyType ? typeConverter->convertType(mooreKeyType)
+                                : nullptr;
+    Type llvmElemType = convertToLLVMType(elemType);
+
+    // Determine key size for runtime calls
+    int32_t keySize = 0; // 0 means string key
+    bool isStringKey = isa_and_nonnull<StringType>(mooreKeyType);
+    if (!isStringKey && keyType) {
+      if (auto intTy = dyn_cast<IntegerType>(keyType))
+        keySize = (intTy.getWidth() + 7) / 8;
+      else
+        keySize = 8; // Default to 64-bit
+    }
+
+    // For string keys, the key storage is a MooreString struct {ptr, i64}
+    // For integer keys, we use the integer type directly
+    Type llvmKeyType;
+    if (isStringKey) {
+      llvmKeyType = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+    } else if (keyType) {
+      llvmKeyType = convertToLLVMType(keyType);
+    } else {
+      // Wildcard with no specific key type - use i64 as default
+      llvmKeyType = i64Ty;
+    }
+
+    // Allocate storage for the current key
+    Value keyAlloca =
+        LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmKeyType, one);
+
+    // Initialize key storage to zero
+    if (isStringKey) {
+      // Initialize string to {nullptr, 0}
+      Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+      Value zeroLen = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                               rewriter.getI64IntegerAttr(0));
+      Value emptyStr = LLVM::UndefOp::create(rewriter, loc, llvmKeyType);
+      emptyStr = LLVM::InsertValueOp::create(rewriter, loc, emptyStr, nullPtr,
+                                             ArrayRef<int64_t>{0});
+      emptyStr = LLVM::InsertValueOp::create(rewriter, loc, emptyStr, zeroLen,
+                                             ArrayRef<int64_t>{1});
+      LLVM::StoreOp::create(rewriter, loc, emptyStr, keyAlloca);
+    } else {
+      Value zeroKey = LLVM::ConstantOp::create(
+          rewriter, loc, llvmKeyType, rewriter.getIntegerAttr(llvmKeyType, 0));
+      LLVM::StoreOp::create(rewriter, loc, zeroKey, keyAlloca);
+    }
+
+    // Get runtime functions
+    auto firstFnTy = LLVM::LLVMFunctionType::get(i1Ty, {ptrTy, ptrTy});
+    auto firstFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_first", firstFnTy);
+    auto nextFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_next", firstFnTy);
+
+    // __moore_assoc_get_ref(array, key_ptr, value_size) -> value_ptr
+    auto getRefFnTy =
+        LLVM::LLVMFunctionType::get(ptrTy, {ptrTy, ptrTy, i32Ty});
+    auto getRefFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_get_ref", getRefFnTy);
+
+    Value valueSizeConst = LLVM::ConstantOp::create(
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(elemSizeBytes));
+
+    // Use scf.for loop (iterate up to array size)
+    // First get the array size
+    auto sizeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy});
+    auto sizeFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_size", sizeFnTy);
+    Value arraySize = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
+                                           SymbolRefAttr::get(sizeFn),
+                                           ValueRange{adaptor.getArray()})
+                          .getResult();
+
+    Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                         rewriter.getI64IntegerAttr(0));
+    Value step = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(1));
+
+    // Use scf.for loop: for i in 0..<size, use first/next to iterate
+    auto forOp = scf::ForOp::create(rewriter, loc, lb, arraySize, step);
+    rewriter.setInsertionPointToStart(forOp.getBody());
+    Value iv = forOp.getInductionVar();
+
+    // On first iteration, use hasFirst result; otherwise, assoc_next was called
+    // Actually, we need to call first on iteration 0, and next on subsequent iterations
+    Value zeroIdx = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                              rewriter.getI64IntegerAttr(0));
+    Value isFirst = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                          iv, zeroIdx);
+
+    // Create the hasKey control variable - on first iteration, call first; otherwise next already called
+    auto iterIfOp = scf::IfOp::create(rewriter, loc, TypeRange{i1Ty}, isFirst,
+                                      /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&iterIfOp.getThenRegion().front());
+    // First iteration: call assoc_first
+    Value firstResult = LLVM::CallOp::create(rewriter, loc, TypeRange{i1Ty},
+                                             SymbolRefAttr::get(firstFn),
+                                             ValueRange{adaptor.getArray(), keyAlloca})
+                            .getResult();
+    scf::YieldOp::create(rewriter, loc, ValueRange{firstResult});
+
+    rewriter.setInsertionPointToStart(&iterIfOp.getElseRegion().front());
+    // Subsequent iterations: call assoc_next (key was updated in previous iteration)
+    Value nextResult = LLVM::CallOp::create(rewriter, loc, TypeRange{i1Ty},
+                                            SymbolRefAttr::get(nextFn),
+                                            ValueRange{adaptor.getArray(), keyAlloca})
+                           .getResult();
+    scf::YieldOp::create(rewriter, loc, ValueRange{nextResult});
+
+    rewriter.setInsertionPointAfter(iterIfOp);
+    Value hasKey = iterIfOp.getResult(0);
+
+    // Only process if hasKey is true
+    auto keyValidIf = scf::IfOp::create(rewriter, loc, TypeRange{}, hasKey,
+                                        /*withElseRegion=*/false);
+    rewriter.setInsertionPointToStart(&keyValidIf.getThenRegion().front());
+
+    // Get the element value using the current key
+    Value elemPtr = LLVM::CallOp::create(
+                        rewriter, loc, TypeRange{ptrTy},
+                        SymbolRefAttr::get(getRefFn),
+                        ValueRange{adaptor.getArray(), keyAlloca, valueSizeConst})
+                        .getResult();
+    Value currentElem =
+        LLVM::LoadOp::create(rewriter, loc, llvmElemType, elemPtr);
+
+    // Build value map for predicate conversion
+    DenseMap<Value, Value> valueMap;
+    valueMap[blockArg] = currentElem;
+
+    // Map the index block argument (if present) to the current key
+    // For associative arrays, the "index" is actually the key
+    if (body.getNumArguments() >= 2) {
+      Value indexArg = body.getArgument(1);
+      Value currentKey =
+          LLVM::LoadOp::create(rewriter, loc, llvmKeyType, keyAlloca);
+      // The index argument type may differ from the key type
+      Type indexArgType = typeConverter->convertType(indexArg.getType());
+      if (indexArgType && indexArgType != llvmKeyType) {
+        currentKey = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                        indexArgType, currentKey)
+                         .getResult(0);
+      }
+      valueMap[indexArg] = currentKey;
+    }
+
+    // Map the input array
+    valueMap[op.getArray()] = adaptor.getArray();
+
+    // Handle external values from enclosing scope
+    auto funcOp = op->getParentOfType<func::FuncOp>();
+    Block *funcEntryBlock = funcOp ? &funcOp.getBody().front() : nullptr;
+
+    for (Operation &innerOp : body.without_terminator()) {
+      for (unsigned i = 0; i < innerOp.getNumOperands(); ++i) {
+        Value operand = innerOp.getOperand(i);
+        if (valueMap.count(operand))
+          continue;
+        if (Operation *defOp = operand.getDefiningOp()) {
+          if (defOp->getBlock() == &body)
+            continue;
+        }
+        Value converted = rewriter.getRemappedValue(operand);
+        if (converted) {
+          valueMap[operand] = converted;
+          continue;
+        }
+        if (auto blockArgVal = dyn_cast<BlockArgument>(operand)) {
+          Block *ownerBlock = blockArgVal.getOwner();
+          if (ownerBlock != &body && funcEntryBlock) {
+            unsigned argIndex = blockArgVal.getArgNumber();
+            if (argIndex < funcEntryBlock->getNumArguments()) {
+              Value newBlockArg = funcEntryBlock->getArgument(argIndex);
+              valueMap[operand] = newBlockArg;
+              innerOp.setOperand(i, newBlockArg);
+              continue;
+            }
+          }
+        }
+        Type targetType = typeConverter->convertType(operand.getType());
+        if (targetType && targetType != operand.getType()) {
+          converted = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                          targetType, operand)
+                          .getResult(0);
+          valueMap[operand] = converted;
+        } else if (targetType) {
+          valueMap[operand] = operand;
+        }
+      }
+    }
+
+    // Convert predicate operations inline
+    for (Operation &innerOp : body.without_terminator()) {
+      Value result =
+          convertMooreOpInline(&innerOp, rewriter, loc, ctx, valueMap, mod);
+      if (!result) {
+        return rewriter.notifyMatchFailure(
+            op, "failed to convert predicate operation: " +
+                    innerOp.getName().getStringRef().str());
+      }
+      if (innerOp.getNumResults() == 1) {
+        valueMap[innerOp.getResult(0)] = result;
+      }
+    }
+
+    // Get the converted condition
+    Value condValue = yieldOp.getCondition();
+    auto condIt = valueMap.find(condValue);
+    Value cond;
+    if (condIt != valueMap.end()) {
+      cond = condIt->second;
+    } else {
+      cond = typeConverter->materializeTargetConversion(rewriter, loc, i1Ty,
+                                                        condValue);
+    }
+    if (!cond)
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to convert predicate condition");
+
+    // Ensure condition is i1
+    if (cond.getType() != i1Ty) {
+      if (isFourStateStructType(cond.getType())) {
+        cond = extractFourStateValue(rewriter, loc, cond);
+      }
+      if (auto intTy = dyn_cast<IntegerType>(cond.getType())) {
+        if (intTy.getWidth() > 1) {
+          Value zero = hw::ConstantOp::create(rewriter, loc, cond.getType(), 0);
+          cond = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ne,
+                                      cond, zero);
+        }
+      }
+    }
+
+    // If condition matches, add to result queue
+    auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, cond,
+                                  /*withElseRegion=*/false);
+    rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto pushFnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty});
+    auto pushFn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_push_back",
+                                         pushFnTy);
+
+    bool returnIndices = op.getIndexed();
+    if (returnIndices) {
+      // For find_first_index etc., push the key (not a numeric index)
+      int64_t keySizeBytes = getTypeSize(llvmKeyType);
+      auto keySizeVal = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(keySizeBytes));
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(pushFn),
+                           ValueRange{resultAlloca, keyAlloca, keySizeVal});
+    } else {
+      auto elemAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElemType, one);
+      LLVM::StoreOp::create(rewriter, loc, currentElem, elemAlloca);
+      auto elemSize = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(elemSizeBytes));
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(pushFn),
+                           ValueRange{resultAlloca, elemAlloca, elemSize});
+    }
+
+    // After the for loop, get the result
+    rewriter.setInsertionPointAfter(forOp);
+    Value result = LLVM::LoadOp::create(rewriter, loc, queueTy, resultAlloca);
+
+    // Handle first/last mode - extract single element from result
+    auto mode = op.getMode();
+    if (mode != LocatorMode::All) {
+      Value resultLen = LLVM::ExtractValueOp::create(
+          rewriter, loc, i64Ty, result, ArrayRef<int64_t>{1});
+      Value resultDataPtr = LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrTy, result, ArrayRef<int64_t>{0});
+      Value zeroLen = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                               rewriter.getI64IntegerAttr(0));
+      Value stepVal = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                                rewriter.getI64IntegerAttr(1));
+
+      Value isNotEmpty = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::sgt, resultLen, zeroLen);
+      auto modeIfOp =
+          scf::IfOp::create(rewriter, loc, TypeRange{queueTy}, isNotEmpty,
+                            /*withElseRegion=*/true);
+
+      rewriter.setInsertionPointToStart(&modeIfOp.getThenRegion().front());
+      Value extractIdx;
+      if (mode == LocatorMode::First) {
+        extractIdx = zeroLen;
+      } else {
+        extractIdx = arith::SubIOp::create(rewriter, loc, resultLen, stepVal);
+      }
+
+      Type resultElemType = returnIndices ? llvmKeyType : llvmElemType;
+      int64_t resultElemSize =
+          returnIndices ? getTypeSize(llvmKeyType) : elemSizeBytes;
+
+      Value singleElemPtr = LLVM::GEPOp::create(
+          rewriter, loc, ptrTy, resultElemType, resultDataPtr, extractIdx);
+      Value singleElem =
+          LLVM::LoadOp::create(rewriter, loc, resultElemType, singleElemPtr);
+
+      auto singleResultAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, emptyQueue, singleResultAlloca);
+
+      auto singleElemAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, resultElemType, one);
+      LLVM::StoreOp::create(rewriter, loc, singleElem, singleElemAlloca);
+      auto singleElemSizeVal = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(resultElemSize));
+      LLVM::CallOp::create(
+          rewriter, loc, TypeRange{}, SymbolRefAttr::get(pushFn),
+          ValueRange{singleResultAlloca, singleElemAlloca, singleElemSizeVal});
+
+      Value singleResult =
+          LLVM::LoadOp::create(rewriter, loc, queueTy, singleResultAlloca);
+      scf::YieldOp::create(rewriter, loc, ValueRange{singleResult});
+
+      rewriter.setInsertionPointToStart(&modeIfOp.getElseRegion().front());
+      scf::YieldOp::create(rewriter, loc, ValueRange{emptyQueue});
+
+      rewriter.setInsertionPointAfter(modeIfOp);
+      result = modeIfOp.getResult(0);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
   /// Lower array.locator with an inline loop for complex predicates.
   /// This works for arbitrary predicate expressions because the predicate
   /// operations are converted inline to LLVM/arith equivalents.
@@ -14070,7 +14417,9 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
     // Get element type from the input array
     Type mooreElemType;
+    Type mooreKeyType = nullptr; // Only set for associative arrays
     int64_t fixedArraySize = -1; // -1 indicates dynamic array
+    bool isAssocArray = false;
     if (auto queueType = dyn_cast<QueueType>(op.getArray().getType())) {
       mooreElemType = queueType.getElementType();
     } else if (auto arrayType =
@@ -14080,6 +14429,17 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     } else if (auto dynArrayType =
                    dyn_cast<OpenUnpackedArrayType>(op.getArray().getType())) {
       mooreElemType = dynArrayType.getElementType();
+    } else if (auto assocArrayType =
+                   dyn_cast<AssocArrayType>(op.getArray().getType())) {
+      mooreElemType = assocArrayType.getElementType();
+      mooreKeyType = assocArrayType.getIndexType();
+      isAssocArray = true;
+    } else if (auto wildcardAssocType =
+                   dyn_cast<WildcardAssocArrayType>(op.getArray().getType())) {
+      mooreElemType = wildcardAssocType.getElementType();
+      // Wildcard assoc arrays use string keys by default in our runtime
+      mooreKeyType = StringType::get(ctx);
+      isAssocArray = true;
     } else {
       return rewriter.notifyMatchFailure(op, "unsupported array type");
     }
@@ -14107,6 +14467,16 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
         LLVM::InsertValueOp::create(rewriter, loc, emptyQueue, zeroLen,
                                     ArrayRef<int64_t>{1});
     LLVM::StoreOp::create(rewriter, loc, emptyQueue, resultAlloca);
+
+    // Handle associative arrays with a different iteration approach
+    if (isAssocArray) {
+      auto result = lowerAssocArrayWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod,
+                                           mooreElemType, mooreKeyType,
+                                           elemType, elemSizeBytes, blockArg,
+                                           yieldOp, resultAlloca, queueTy,
+                                           ptrTy, i64Ty, i1Ty, emptyQueue, one);
+      return result;
+    }
 
     // Handle array length and data pointer differently for fixed-size arrays
     // vs dynamic arrays/queues
@@ -14681,6 +15051,12 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     // If not a constant, fall back to inline loop approach for variable comparisons
     auto constOp = constValue.getDefiningOp<ConstantOp>();
     if (!constOp)
+      return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
+
+    // For associative arrays, use the inline loop approach which handles
+    // the key-based iteration via __moore_assoc_first/next/get_ref.
+    // The simple runtime functions are designed for sequential arrays.
+    if (isa<AssocArrayType, WildcardAssocArrayType>(op.getArray().getType()))
       return lowerWithInlineLoop(op, adaptor, rewriter, loc, ctx, mod);
 
     // For fixed-size arrays (UnpackedArrayType), use direct lowering
