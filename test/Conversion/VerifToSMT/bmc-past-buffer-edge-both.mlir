@@ -8,13 +8,14 @@
 // CHECK:   func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 // CHECK:   func.call @bmc_loop
-// Edge detection: posedge OR negedge
+// Edge detection: posedge OR negedge (both bv.nots first, then both bv.ands, then both eqs)
+// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
 // CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
 // CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
 // CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// Property check happens between edge detection and buffer update
 // CHECK:   smt.or {{%.+}}, {{%.+}}
 // Past buffer update conditioned on edge
 // CHECK:   smt.ite {{%.+}}, {{%.+}}, {{%.+}} : !smt.bv<1>
