@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 251 - January 29, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Fixed in this Iteration
+
+1. **String Truncation** (MooreToCore.cpp):
+   - **ROOT CAUSE**: IntToStringOpConversion truncated packed strings to 64 bits
+   - **FIX**: Handle wide strings by extracting bytes, creating global constants
+   - **IMPACT**: Strings >8 characters no longer lose beginning characters
+
+2. **LLVM InsertValue X Propagation** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: X propagated from undef containers in insertvalue
+   - **FIX**: Treat X containers as zeros for incremental struct building
+
+3. **Format String Select** (LLHDProcessInterpreter.cpp):
+   - Added arith.select handling in evaluateFormatString
+
+### Investigation Results (All Working)
+- **Vtables**: Interpreter uses `circt.vtable_entries` at runtime ✓
+- **Static Initialization**: `llvm.global_ctors` runs before processes ✓
+- **Virtual Dispatch**: Works with pure virtual fix from Iter 250 ✓
+- **Singleton Pattern**: UVM-like patterns work correctly ✓
+
+---
+
 ## Iteration 250 - January 29, 2026
 
 ### Goals
@@ -122,7 +149,8 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 
 8. **BMC run-smtlib** (circt-bmc.cpp):
    - **FIX**: Add `--run-smtlib` with external z3 execution and `--z3-path`
-   - **Test**: `test/Tools/circt-bmc/bmc-run-smtlib-unsat.mlir`
+   - **Tests**: `test/Tools/circt-bmc/bmc-run-smtlib-unsat.mlir`,
+     `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample.mlir`
 
 ### Test Suite Results
 - All external test suites maintain 100% pass rate

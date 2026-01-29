@@ -207,7 +207,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 250)
+### Active Workstreams & Next Steps (Iteration 251)
+
+**Iteration 251 Fixes:**
+1. **String Truncation** (FIXED): Wide packed strings now handled correctly
+   - Handle packed strings >64 bits in IntToStringOpConversion
+   - Extract bytes from APInt and create global string constants
+   - Strings like "test_base" (9 chars) no longer truncated
+
+2. **LLVM InsertValue X Propagation** (FIXED): Struct construction from undef now works
+   - Don't propagate X from undef containers
+   - Enables incremental struct building pattern
+
+3. **Format String Select** (FIXED): Conditional $display now works
+   - Added arith.select handling in evaluateFormatString
+
+4. **Investigation Results** (No fixes needed):
+   - **Vtables**: Working correctly - interpreter uses circt.vtable_entries at runtime
+   - **Static Initialization**: Working correctly - llvm.global_ctors runs before processes
+   - **Virtual Dispatch**: Working correctly with pure virtual fix from Iter 250
 
 **Iteration 250 Fixes:**
 1. **Pure Virtual Method Dispatch** (FIXED): All virtual methods now work
