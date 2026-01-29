@@ -416,6 +416,7 @@ circt-verilog --ir-hw -DVERILATOR \
 
 | Date | Update |
 |------|--------|
+| 2026-01-29 | **find_first_index implemented** (f93ab3a1e): Added `lowerAssocArrayWithInlineLoop` in MooreToCore for find_first_index() on associative arrays. Uses runtime functions for iteration. AXI4 AVIP should now compile and simulate. |
 | 2026-01-29 | **AVIP Progress Update**: AHB AVIP now simulates end-to-end (7/9 AVIPs working). AXI4 AVIP parses but find_first_index() queue method not implemented. UVM message strings need sim.fmt.dyn_string fix. Lit tests: 2861/3037 pass (94.2%). |
 | 2026-01-29 | **Simulation Infrastructure Validation Complete**: Tested 20+ OpenTitan targets. All pass: hmac_reg_top, aes_reg_top, ascon_reg_top, keymgr_reg_top, otbn_reg_top, flash_ctrl_reg_top, otp_ctrl_reg_top, kmac_reg_top, csrng_reg_top, lc_ctrl_regs_reg_top. Full IPs: spi_host, dma, keymgr_dpe, ascon, spi_device, usbdev, gpio, uart, i2c, alert_handler, mbx, rv_dm. APB AVIP runs 33.5s simulated time before timeout. |
 | 2026-01-28 | **LSP E2E Test Suite**: Created pytest-lsp based end-to-end tests for both circt-verilog-lsp-server (8 tests) and circt-lsp-server (7 tests) at test/Tools/circt-verilog-lsp-server/e2e/. Tests cover initialization, diagnostics, symbols, hover, goto-definition, completion, and references. |
@@ -557,7 +558,7 @@ Cannot lower to HW dialect due to prim_diff_decode control-flow bug in prim_aler
 - I3C AVIP: ✅ PASS (compiles + simulates 10ms, no bind statements)
 - UART AVIP: ✅ PASS (compiles + simulates, UVM_INFO/UVM_WARNING messages at time 0)
 - AHB AVIP: ✅ PASS + SIMULATES (1.8MB MLIR, bind scope patch working, simulation runs end-to-end)
-- AXI4 AVIP: ❌ BLOCKED - bind scope violation (same issue AHB had before fix)
+- AXI4 AVIP: ❌ BLOCKED - find_first_index() on associative arrays not implemented
 - JTAG AVIP: ❌ BLOCKED - needs AllowVirtualIfaceWithOverride slang flag
 - SPI AVIP: ❌ BLOCKED - source code bugs (nested block comments, invalid `this` in constraints)
 - AXI4Lite AVIP: ❌ BLOCKED - parameter namespace collision + bind statements
