@@ -307,6 +307,31 @@ static LogicalResult emitInterfacePortConnections(
 }
 
 //===----------------------------------------------------------------------===//
+// Hierarchical Expression Detection
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Visitor to check if an expression contains any HierarchicalValueExpression.
+/// Used to determine if a variable initializer depends on instance members.
+struct HierarchicalExpressionDetector
+    : public slang::ast::ASTVisitor<HierarchicalExpressionDetector, false, true,
+                                    true> {
+  bool hasHierarchical = false;
+
+  void handle(const slang::ast::HierarchicalValueExpression &) {
+    hasHierarchical = true;
+  }
+};
+
+/// Check if an expression contains hierarchical value expressions.
+static bool containsHierarchicalExpression(const slang::ast::Expression &expr) {
+  HierarchicalExpressionDetector detector;
+  expr.visit(detector);
+  return detector.hasHierarchical;
+}
+} // namespace
+
+//===----------------------------------------------------------------------===//
 // Base Visitor
 //===----------------------------------------------------------------------===//
 
@@ -2486,7 +2511,20 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
         member.kind == slang::ast::SymbolKind::ProceduralBlock) {
       postInstanceMembers.push_back(&member);
     } else {
-      preInstanceMembers.push_back(&member);
+      // Check if variables/nets have initializers with hierarchical expressions.
+      // These must be processed after instances are created.
+      bool hasHierarchicalInit = false;
+      if (auto *var = member.as_if<slang::ast::VariableSymbol>()) {
+        if (const auto *init = var->getInitializer())
+          hasHierarchicalInit = containsHierarchicalExpression(*init);
+      } else if (auto *net = member.as_if<slang::ast::NetSymbol>()) {
+        if (const auto *init = net->getInitializer())
+          hasHierarchicalInit = containsHierarchicalExpression(*init);
+      }
+      if (hasHierarchicalInit)
+        postInstanceMembers.push_back(&member);
+      else
+        preInstanceMembers.push_back(&member);
     }
   }
 
@@ -2556,8 +2594,9 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   }
   pendingInterfacePortConnections.clear();
 
-  // Final pass: convert procedural blocks and continuous assigns after
-  // instances so hierarchical outputs are available.
+  // Final pass: convert procedural blocks, continuous assigns, and variables
+  // with hierarchical initializers after instances so hierarchical outputs
+  // are available.
   for (auto *member : postInstanceMembers) {
     auto memberLoc = convertLocation(member->location);
     if (failed(member->visit(ModuleVisitor(*this, memberLoc))))
