@@ -24,6 +24,7 @@
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -798,6 +799,30 @@ struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
     auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
     auto printfType = LLVM::LLVMFunctionType::get(
         LLVM::LLVMVoidType::get(rewriter.getContext()), {ptrTy}, true);
+    struct ModelDeclInfo {
+      std::string prefix;
+      Value value;
+    };
+    SmallVector<ModelDeclInfo> modelDecls;
+    llvm::StringMap<unsigned> nameCounts;
+    if (options.printModelInputs) {
+      if (auto solverOp = op->getParentOfType<SolverOp>()) {
+        auto &solverBlock = solverOp.getBodyRegion().front();
+        for (auto decl : solverBlock.getOps<DeclareFunOp>()) {
+          if (!decl.getNamePrefix())
+            continue;
+          if (isa<smt::SMTFuncType>(decl.getType()))
+            continue;
+          StringRef name = *decl.getNamePrefix();
+          if (name.empty())
+            continue;
+          if (auto remapped = rewriter.getRemappedValue(decl.getResult())) {
+            modelDecls.push_back({name.str(), remapped});
+            nameCounts[name] += 1;
+          }
+        }
+      }
+    }
 
     auto getHeaderString = [](const std::string &title) {
       unsigned titleSize = title.size() + 2; // Add a space left and right
@@ -858,6 +883,55 @@ struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
                                 unsatIfOp.getElseRegion().end());
 
     rewriter.replaceOp(op, satIfOp->getResults());
+
+    auto emitModelPrints = [&](Block *block) {
+      if (!options.printModelInputs || modelDecls.empty())
+        return;
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(block);
+      auto voidTy = LLVM::LLVMVoidType::get(rewriter.getContext());
+      auto headerType = LLVM::LLVMFunctionType::get(voidTy, {});
+      auto valueType = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy});
+      buildCall(rewriter, loc, "circt_smt_print_model_header", headerType, {});
+      auto model =
+          buildPtrAPICall(rewriter, loc, "Z3_solver_get_model", {solver});
+      auto boolTy = rewriter.getI1Type();
+      auto modelEvalType = LLVM::LLVMFunctionType::get(
+          boolTy, {ptrTy, ptrTy, ptrTy, boolTy, ptrTy});
+      Value modelCompletion =
+          LLVM::ConstantOp::create(rewriter, loc, boolTy, 1);
+      Value one =
+          LLVM::ConstantOp::create(rewriter, loc, rewriter.getI32Type(), 1);
+      for (const auto &entry : modelDecls) {
+        Value slot = LLVM::AllocaOp::create(rewriter, loc, ptrTy, one);
+        auto ctx = buildContextPtr(rewriter, loc);
+        Value ok = buildCall(rewriter, loc, "Z3_model_eval", modelEvalType,
+                             {ctx, model, entry.value, modelCompletion, slot})
+                       .getResult();
+        auto ifOp = scf::IfOp::create(rewriter, loc, ok, /*withElse=*/false);
+        rewriter.setInsertionPointToStart(ifOp.thenBlock());
+        Value valueAst = LLVM::LoadOp::create(rewriter, loc, ptrTy, slot);
+        Value valueStr =
+            buildPtrAPICall(rewriter, loc, "Z3_ast_to_string", {valueAst});
+        Value nameStr;
+        auto countIt = nameCounts.find(entry.prefix);
+        bool uniqueName =
+            countIt != nameCounts.end() && countIt->second == 1;
+        if (uniqueName) {
+          nameStr = buildString(rewriter, loc, entry.prefix);
+        } else {
+          nameStr =
+              buildPtrAPICall(rewriter, loc, "Z3_ast_to_string", {entry.value});
+        }
+        buildCall(rewriter, loc, "circt_smt_print_model_value", valueType,
+                  {nameStr, valueStr});
+      }
+    };
+
+    if (options.printModelInputs) {
+      emitModelPrints(satIfOp.thenBlock());
+      emitModelPrints(&unsatIfOp.getElseRegion().front());
+    }
 
     if (options.debug) {
       // In debug-mode, if the assertions are unsatisfiable we can print the

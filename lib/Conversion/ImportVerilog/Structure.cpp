@@ -2772,6 +2772,12 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
 LogicalResult
 Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
   auto &lowering = *interfaces[iface];
+
+  // Check if the body has already been converted to avoid duplicate conversion.
+  if (lowering.bodyConverted)
+    return success();
+  lowering.bodyConverted = true;
+
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToStart(&lowering.op.getBody().front());
 

@@ -5,7 +5,13 @@
 // CHECK: [[UNK:%.+]] = smt.bv.extract [[IN]] from 0 : (!smt.bv<2>) -> !smt.bv<1>
 // CHECK: [[KNOWN:%.+]] = smt.eq [[UNK]], %c0_bv1 : !smt.bv<1>
 // CHECK: smt.assert [[KNOWN]]
-// CHECK: [[DIST:%.+]] = smt.distinct [[IN]], [[IN]] : !smt.bv<2>
+// CHECK: [[C1OUT:%.+]] = smt.declare_fun "c1_out0" : !smt.bv<2>
+// CHECK: [[C2OUT:%.+]] = smt.declare_fun "c2_out0" : !smt.bv<2>
+// CHECK: [[EQ1:%.+]] = smt.eq [[C1OUT]], [[IN]] : !smt.bv<2>
+// CHECK: smt.assert [[EQ1]]
+// CHECK: [[EQ2:%.+]] = smt.eq [[C2OUT]], [[IN]] : !smt.bv<2>
+// CHECK: smt.assert [[EQ2]]
+// CHECK: [[DIST:%.+]] = smt.distinct [[C1OUT]], [[C2OUT]] : !smt.bv<2>
 // CHECK: smt.assert [[DIST]]
 // CHECK: smt.check sat
 // CHECK: }

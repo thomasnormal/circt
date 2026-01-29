@@ -22,4 +22,8 @@ module {
 }
 
 // CHECK: declare-const data_i
-// CHECK: distinct tmp data_i
+// CHECK: declare-const c1_data_o
+// CHECK: declare-const c2_data_o
+// CHECK: (= c1_data_o
+// CHECK: (= c2_data_o data_i
+// CHECK: distinct c1_data_o c2_data_o

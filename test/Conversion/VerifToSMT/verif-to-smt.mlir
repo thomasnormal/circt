@@ -42,10 +42,18 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
   // CHECK-DAG: [[V1:%.+]] = builtin.unrealized_conversion_cast [[IN1]] : !smt.bv<32> to i32
   // CHECK: [[V2:%.+]]:2 = "some_op"([[V0]], [[V1]]) : (i32, i32) -> (i32, i32)
   // CHECK-DAG: [[V3:%.+]] = builtin.unrealized_conversion_cast [[V2]]#0 : i32 to !smt.bv<32>
-  // CHECK-DAG: [[V4:%.+]] = smt.distinct [[IN0]], [[V3]] : !smt.bv<32>
+  // CHECK-DAG: [[C1OUT0:%.+]] = smt.declare_fun "c1_out0" : !smt.bv<32>
+  // CHECK-DAG: [[C2OUT0:%.+]] = smt.declare_fun "c2_out0" : !smt.bv<32>
+  // CHECK: smt.eq [[C1OUT0]], [[IN0]]
+  // CHECK: smt.eq [[C2OUT0]], [[V3]]
   // CHECK-DAG: [[V5:%.+]] = builtin.unrealized_conversion_cast [[V2]]#1 : i32 to !smt.bv<32>
-  // CHECK-DAG: [[V6:%.+]] = smt.distinct [[IN1]], [[V5]] : !smt.bv<32>
-  // CHECK-DAG: [[V7:%.+]] = smt.or [[V4]], [[V6]]
+  // CHECK-DAG: [[C1OUT1:%.+]] = smt.declare_fun "c1_out1" : !smt.bv<32>
+  // CHECK-DAG: [[C2OUT1:%.+]] = smt.declare_fun "c2_out1" : !smt.bv<32>
+  // CHECK: smt.eq [[C1OUT1]], [[IN1]]
+  // CHECK: smt.eq [[C2OUT1]], [[V5]]
+  // CHECK-DAG: [[D0:%.+]] = smt.distinct [[C1OUT0]], [[C2OUT0]] : !smt.bv<32>
+  // CHECK-DAG: [[D1:%.+]] = smt.distinct [[C1OUT1]], [[C2OUT1]] : !smt.bv<32>
+  // CHECK-DAG: [[V7:%.+]] = smt.or [[D0]], [[D1]]
   // CHECK: smt.assert [[V7]]
   // CHECK-DAG: [[FALSE:%.+]] = arith.constant false
   // CHECK-DAG: [[TRUE:%.+]] = arith.constant true
@@ -96,7 +104,13 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
   }
   // CHECK: smt.solver() : () -> () {
   // CHECK:   [[V11:%.+]] = smt.declare_fun : !smt.bv<32>
-  // CHECK:   [[EQ3:%.+]] = smt.distinct [[V11]], [[V11]] : !smt.bv<32>
+  // CHECK:   [[C1OUTX:%.+]] = smt.declare_fun "c1_out0" : !smt.bv<32>
+  // CHECK:   [[C2OUTX:%.+]] = smt.declare_fun "c2_out0" : !smt.bv<32>
+  // CHECK:   [[EQ1X:%.+]] = smt.eq [[C1OUTX]], [[V11]] : !smt.bv<32>
+  // CHECK:   smt.assert [[EQ1X]]
+  // CHECK:   [[EQ2X:%.+]] = smt.eq [[C2OUTX]], [[V11]] : !smt.bv<32>
+  // CHECK:   smt.assert [[EQ2X]]
+  // CHECK:   [[EQ3:%.+]] = smt.distinct [[C1OUTX]], [[C2OUTX]] : !smt.bv<32>
   // CHECK:   smt.assert [[EQ3]]
   // CHECK:   smt.check sat {
   // CHECK:   } unknown {
@@ -159,8 +173,8 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK1-SAME: -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
 // In rising-clocks-only mode, bmc_loop is called then the check is done
 // CHECK1:        func.call @bmc_loop
+// CHECK1:        smt.eq
 // CHECK1:        smt.not
-// CHECK1:        smt.and
 // CHECK1:        smt.push 1
 // CHECK1:        smt.assert
 // CHECK1:        smt.check
@@ -254,8 +268,14 @@ func.func @large_initial_value() -> (i1) {
 
 // CHECK:     smt.solver() : () -> () {
 // CHECK:       [[V0:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK:       [[V1:%.+]] = smt.distinct [[V0]], [[V0]] : !smt.bv<32>
-// CHECK:       smt.assert [[V1]]
+// CHECK:       [[C1OUT:%.+]] = smt.declare_fun "c1_out0" : !smt.bv<32>
+// CHECK:       [[C2OUT:%.+]] = smt.declare_fun "c2_out0" : !smt.bv<32>
+// CHECK:       [[EQ1:%.+]] = smt.eq [[C1OUT]], [[V0]] : !smt.bv<32>
+// CHECK:       smt.assert [[EQ1]]
+// CHECK:       [[EQ2:%.+]] = smt.eq [[C2OUT]], [[V0]] : !smt.bv<32>
+// CHECK:       smt.assert [[EQ2]]
+// CHECK:       [[DIST:%.+]] = smt.distinct [[C1OUT]], [[C2OUT]] : !smt.bv<32>
+// CHECK:       smt.assert [[DIST]]
 // CHECK:       smt.check sat {
 // CHECK-NEXT:   } unknown {
 // CHECK-NEXT:   } unsat {
@@ -296,8 +316,14 @@ func.func @test_refines_noreturn() -> () {
 // CHECK-DAG:   [[TRUE:%.+]]  = arith.constant true
 // CHECK-DAG:   [[FALSE:%.+]] = arith.constant false
 // CHECK:       [[V0:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK:       [[V1:%.+]] = smt.distinct [[V0]], [[V0]] : !smt.bv<32>
-// CHECK:       smt.assert [[V1]]
+// CHECK:       [[C1OUT:%.+]] = smt.declare_fun "c1_out0" : !smt.bv<32>
+// CHECK:       [[C2OUT:%.+]] = smt.declare_fun "c2_out0" : !smt.bv<32>
+// CHECK:       [[EQ1:%.+]] = smt.eq [[C1OUT]], [[V0]] : !smt.bv<32>
+// CHECK:       smt.assert [[EQ1]]
+// CHECK:       [[EQ2:%.+]] = smt.eq [[C2OUT]], [[V0]] : !smt.bv<32>
+// CHECK:       smt.assert [[EQ2]]
+// CHECK:       [[DIST:%.+]] = smt.distinct [[C1OUT]], [[C2OUT]] : !smt.bv<32>
+// CHECK:       smt.assert [[DIST]]
 // CHECK:       [[V2:%.+]] = smt.check sat {
 // CHECK-NEXT:     smt.yield [[FALSE]]
 // CHECK-NEXT:   } unknown {
@@ -383,9 +409,15 @@ func.func @nondet_to_det() -> () {
 // CHECK:     smt.solver()
 // CHECK-DAG:   [[BVCST:%.+]] = smt.bv.constant #smt.bv<0> : !smt.bv<32>
 // CHECK-DAG:   [[FREEVAR:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK:       [[V0:%.+]] = smt.distinct [[BVCST]], [[FREEVAR]]
-// CHECK-NEXT:  smt.assert [[V0]]
-// CHECK-NEXT:  smt.check
+// CHECK-DAG:   [[C1OUT:%.+]] = smt.declare_fun "c1_out0" : !smt.bv<32>
+// CHECK-DAG:   [[C2OUT:%.+]] = smt.declare_fun "c2_out0" : !smt.bv<32>
+// CHECK:       [[EQ1:%.+]] = smt.eq [[C1OUT]], [[BVCST]] : !smt.bv<32>
+// CHECK:       smt.assert [[EQ1]]
+// CHECK:       [[EQ2:%.+]] = smt.eq [[C2OUT]], [[FREEVAR]] : !smt.bv<32>
+// CHECK:       smt.assert [[EQ2]]
+// CHECK:       [[DIST:%.+]] = smt.distinct [[C1OUT]], [[C2OUT]]
+// CHECK:       smt.assert [[DIST]]
+// CHECK:       smt.check
 
 func.func @det_to_nondet() -> () {
   verif.refines first {
