@@ -1,9 +1,29 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
+// Test that multiple verif.assert ops in a BMC circuit are returned separately
+// and combined in the main loop using smt.and/smt.or for property checking.
+// Each assert becomes a separate !smt.bv<1> return value from bmc_circuit.
+
 // CHECK-LABEL: func.func @test_multi_asserts
-// Multiple asserts violation is checked as smt.or (any violated = failure)
-// CHECK: smt.or
+// CHECK:         scf.for
+// Circuit returns original outputs + one !smt.bv<1> per assert
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
+// Properties are checked separately and combined with smt.and/smt.or
+// CHECK:           smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:           smt.not
+// CHECK:           smt.and
+// CHECK:           smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:           smt.not
+// CHECK:           smt.and
+// CHECK:           smt.or
+// CHECK:           smt.push 1
+// CHECK:           smt.assert
+// CHECK:           smt.check
+// CHECK:           smt.pop 1
 // CHECK-LABEL: func.func @bmc_circuit
+// Each assert contributes a separate return value (no smt.and combining)
+// CHECK-SAME:    -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
 func.func @test_multi_asserts() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values []
   init {
