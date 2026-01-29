@@ -89,12 +89,24 @@ func.func @test_assert_with_label(%cond: i1) {
 // CHECK:         smt.solver
 // CHECK:         func.call @bmc_init
 // CHECK:         scf.for
+// Circuit returns outputs + property (!smt.bv<1>)
 // CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        -> (!smt.bv<8>, !smt.bv<1>)
+// Loop is called after circuit
 // CHECK:           func.call @bmc_loop
-// Verify clock edge detection for registers
+// Edge detection for register updates
 // CHECK:           smt.bv.not
 // CHECK:           smt.bv.and
+// CHECK:           smt.eq
+// Property check
+// CHECK:           smt.not
+// CHECK:           smt.and
+// CHECK:           smt.push
+// CHECK:           smt.assert
 // CHECK:           smt.check
+// CHECK:           smt.pop
+// Register update with ite
+// CHECK:           smt.ite
 // CHECK:         }
 // CHECK:       }
 func.func @test_bmc_clocked() -> (i1) {

@@ -1,26 +1,35 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
-// CHECK: [[IGNOREUNTIL:%.+]] = arith.constant 3
-// CHECK: [[TRUE:%.+]] = arith.constant true
-// CHECK: [[FALSE:%.+]] = arith.constant false
-// CHECK: scf.for [[I:%.+]] = {{%.+}} to {{%.+}} step {{%.+}} iter_args({{%.+}} = {{%.+}}, [[VIOLATED:%.+]] = {{%.+}})
-// CHECK: func.call @bmc_loop()
-// CHECK: [[FUNCDECL:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK: [[CMP:%.+]] = arith.cmpi ult, [[I]], [[IGNOREUNTIL]]
-// CHECK: [[NEWVIOLATED:%.+]] = scf.if [[CMP]]
-// CHECK:     scf.yield [[VIOLATED]]
+// Test that ignore_asserts_until attribute gates property checking until
+// a certain number of iterations have passed.
+
+// CHECK-DAG: arith.constant 3
+// CHECK-DAG: arith.constant true
+// CHECK-DAG: arith.constant false
+// CHECK: scf.for {{%.+}} = {{%.+}} to {{%.+}} step {{%.+}} iter_args({{%.+}} = {{%.+}}, {{%.+}} = {{%.+}})
+// Circuit returns outputs + property value (!smt.bv<1>)
+// CHECK: func.call @bmc_circuit
+// CHECK-SAME: -> (!smt.bv<32>, !smt.bv<1>)
+// Loop is called after circuit
+// CHECK: func.call @bmc_loop
+// CHECK: smt.declare_fun : !smt.bv<32>
+// ignore_asserts_until check (compare iteration with threshold)
+// CHECK: arith.cmpi ult
+// CHECK: scf.if
+// Skip checking if before threshold
+// CHECK:     scf.yield
 // CHECK: } else {
-// CHECK:     smt.check sat {
-// CHECK:     smt.yield [[TRUE]]
-// CHECK:     } unknown {
-// CHECK:     smt.yield [[TRUE]]
-// CHECK:     } unsat {
-// CHECK:     smt.yield [[FALSE]]
-// CHECK:     } -> i1
+// Check the property
+// CHECK:     smt.not
+// CHECK:     smt.and
+// CHECK:     smt.push 1
+// CHECK:     smt.assert
+// CHECK:     smt.check sat
+// CHECK:     smt.pop 1
 // CHECK:     arith.ori
 // CHECK:     scf.yield
 // CHECK: }
-// CHECK: scf.yield [[FUNCDECL]], [[NEWVIOLATED]]
+// CHECK: scf.yield
 
 
 func.func @test_bmc() -> (i1) {

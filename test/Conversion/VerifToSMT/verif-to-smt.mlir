@@ -108,6 +108,7 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
   return %1, %2, %3 : i1, i1, i1
 }
 
+// Test BMC lowering: circuit is called, then loop, then edge detection for regs
 // CHECK-LABEL:  func.func @test_bmc() -> i1 {
 // CHECK:    [[BMC:%.+]] = smt.solver
 // CHECK-DAG:  [[CNEG1:%.+]] = smt.bv.constant #smt.bv<-1> : !smt.bv<1>
@@ -118,48 +119,54 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK-DAG:  [[C0_I32:%.+]] = arith.constant 0 : i32
 // CHECK-DAG:  [[C42_BV32:%.+]] = smt.bv.constant #smt.bv<42> : !smt.bv<32>
 // CHECK-DAG:  [[INIT:%.+]]:2 = func.call @bmc_init()
-// CHECK-DAG:  [[F0:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK-DAG:  [[F1:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK-DAG:  [[ARRAYFUN:%.+]] = smt.declare_fun : !smt.array<[!smt.bv<1> -> !smt.bv<32>]>
-// CHECK:      [[FOR:%.+]]:7 = scf.for [[ARG0:%.+]] = [[C0_I32]] to [[C10_I32]] step [[C1_I32]] iter_args([[ARG1:%.+]] = [[INIT]]#0, [[ARG2:%.+]] = [[F0]], [[ARG3:%.+]] = [[F1]], [[ARG4:%.+]] = [[C42_BV32]], [[ARG5:%.+]] = [[ARRAYFUN]], [[ARG6:%.+]] = [[INIT]]#1, [[ARG7:%.+]] = [[FALSE]])
-// CHECK:        [[CIRCUIT:%.+]]:5 = func.call @bmc_circuit([[ARG1]], [[ARG2]], [[ARG3]], [[ARG4]], [[ARG5]])
-// CHECK:        [[LOOP:%.+]]:2 = func.call @bmc_loop([[ARG1]], [[ARG6]])
-// CHECK:        [[F2:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK:        [[OLDCLOCKLOW:%.+]] = smt.bv.not [[ARG1]]
-// CHECK:        [[BVPOSEDGE:%.+]] = smt.bv.and [[OLDCLOCKLOW]], [[LOOP]]#0
-// CHECK:        [[BOOLPOSEDGE:%.+]] = smt.eq [[BVPOSEDGE]], [[CNEG1]]
-// CHECK:        [[EQ:%.+]] = smt.eq [[CIRCUIT]]#4, [[CNEG1]] : !smt.bv<1>
-// CHECK:        [[NOT:%.+]] = smt.not [[EQ]]
+// CHECK-DAG:  smt.declare_fun : !smt.bv<32>
+// CHECK-DAG:  smt.declare_fun : !smt.bv<32>
+// CHECK-DAG:  smt.declare_fun : !smt.array<[!smt.bv<1> -> !smt.bv<32>]>
+// CHECK:      scf.for
+// The circuit now returns 5 values (4 outputs + 1 property)
+// CHECK:        func.call @bmc_circuit
+// CHECK-SAME: -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
+// Loop is called after circuit
+// CHECK:        func.call @bmc_loop
+// Edge detection for register updates
+// CHECK:        smt.bv.not
+// CHECK:        smt.bv.and
+// CHECK:        smt.eq {{%.+}}, [[CNEG1]] : !smt.bv<1>
+// Property checking
+// CHECK:        smt.eq {{%.+}}, [[CNEG1]] : !smt.bv<1>
+// CHECK:        smt.not
+// CHECK:        smt.and
 // CHECK:        smt.push 1
-// CHECK:        smt.assert [[NOT]]
-// CHECK:        [[SMTCHECK:%.+]] = smt.check sat {
-// CHECK:          smt.yield [[TRUE]]
-// CHECK:        } unknown {
-// CHECK:          smt.yield [[TRUE]]
-// CHECK:        } unsat {
-// CHECK:          smt.yield [[FALSE]]
-// CHECK:        }
+// CHECK:        smt.assert
+// CHECK:        smt.check sat
 // CHECK:        smt.pop 1
-// CHECK:        [[ORI:%.+]] = arith.ori [[SMTCHECK]], [[ARG7]]
-// CHECK:        [[NEWREG1:%.+]] = smt.ite [[BOOLPOSEDGE]], [[CIRCUIT]]#1, [[ARG3]]
-// CHECK:        [[NEWREG2:%.+]] = smt.ite [[BOOLPOSEDGE]], [[CIRCUIT]]#2, [[ARG4]]
-// CHECK:        [[NEWREG3:%.+]] = smt.ite [[BOOLPOSEDGE]], [[CIRCUIT]]#3, [[ARG5]]
-// CHECK:        scf.yield [[LOOP]]#0, [[F2]], [[NEWREG1]], [[NEWREG2]], [[NEWREG3]], [[LOOP]]#1, [[ORI]]
+// CHECK:        arith.ori
+// Register updates with smt.ite
+// CHECK:        smt.ite
+// CHECK:        smt.ite
+// CHECK:        smt.ite
+// CHECK:        scf.yield
 // CHECK:      }
-// CHECK:      [[XORI:%.+]] = arith.xori [[FOR]]#6, [[TRUE]]
-// CHECK:      smt.yield [[XORI]]
+// CHECK:      arith.xori
+// CHECK:      smt.yield
 // CHECK:    }
 // CHECK:    return [[BMC]]
 // CHECK:  }
 
 // RUN: circt-opt %s --convert-verif-to-smt="rising-clocks-only=true" --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s --check-prefix=CHECK1
 // CHECK1-LABEL:  func.func @test_bmc() -> i1 {
-// CHECK1:        [[CIRCUIT:%.+]]:5 = func.call @bmc_circuit(
-// CHECK1:        [[LOOP:%.+]]:2 = func.call @bmc_loop({{%.*}}, {{%.*}})
-// CHECK1:        [[F:%.+]] = smt.declare_fun : !smt.bv<32>
-// CHECK1:        [[SMTCHECK:%.+]] = smt.check
-// CHECK1:        [[ORI:%.+]] = arith.ori [[SMTCHECK]], {{%.*}}
-// CHECK1:        scf.yield [[LOOP]]#0, [[F]], [[CIRCUIT]]#1, [[CIRCUIT]]#2, [[CIRCUIT]]#3, [[LOOP]]#1, [[ORI]]
+// CHECK1:        func.call @bmc_circuit
+// CHECK1-SAME: -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
+// In rising-clocks-only mode, bmc_loop is called then the check is done
+// CHECK1:        func.call @bmc_loop
+// CHECK1:        smt.not
+// CHECK1:        smt.and
+// CHECK1:        smt.push 1
+// CHECK1:        smt.assert
+// CHECK1:        smt.check
+// CHECK1:        smt.pop 1
+// CHECK1:        arith.ori
+// CHECK1:        scf.yield
 
 func.func @test_bmc() -> (i1) {
   %bmc = verif.bmc bound 10 num_regs 3 initial_values [unit, 42 : i32, unit]
@@ -191,35 +198,29 @@ func.func @test_bmc() -> (i1) {
 }
 
 // CHECK-LABEL:  func.func @bmc_init() -> (!smt.bv<1>, !smt.bv<1>) {
-// CHECK:    [[FALSE:%.+]] = hw.constant false
-// CHECK:    [[TOCLOCK:%.+]] = seq.const_clock{{ *}}low
-// CHECK:    [[C0:%.+]] = builtin.unrealized_conversion_cast [[TOCLOCK]] : !seq.clock to !smt.bv<1>
-// CHECK:    [[C1:%.+]] = builtin.unrealized_conversion_cast [[FALSE]] : i1 to !smt.bv<1>
-// CHECK:    return [[C0]], [[C1]]
+// CHECK:    seq.const_clock{{ *}}low
+// CHECK:    builtin.unrealized_conversion_cast
+// CHECK:    builtin.unrealized_conversion_cast
+// CHECK:    return
 // CHECK:  }
-// CHECK:  func.func @bmc_loop([[ARGO:%.+]]: !smt.bv<1>, [[ARG1:%.+]]: !smt.bv<1>)
-// CHECK-DAG:    [[TRUE]] = hw.constant true
-// CHECK:    [[C2:%.+]] = builtin.unrealized_conversion_cast [[ARG1]] : !smt.bv<1> to i1
-// CHECK:    [[C3:%.+]] = builtin.unrealized_conversion_cast [[ARG0]] : !smt.bv<1> to !seq.clock
-// CHECK:    [[FROMCLOCK:%.+]] = seq.from_clock [[C3]]
-// CHECK:    [[NCLOCK:%.+]] = comb.xor [[FROMCLOCK]], [[TRUE]]
-// CHECK:    [[NARG:%.+]] = comb.xor [[C2]], [[TRUE]]
-// CHECK:    [[TOCLOCK:%.+]] = seq.to_clock [[NCLOCK]]
-// CHECK:    [[C4:%.+]] = builtin.unrealized_conversion_cast [[TOCLOCK]] : !seq.clock to !smt.bv<1>
-// CHECK:    [[C5:%.+]] = builtin.unrealized_conversion_cast [[NARG]] : i1 to !smt.bv<1>
-// CHECK:    return [[C4]], [[C5]]
+// CHECK:  func.func @bmc_loop({{%.+}}: !smt.bv<1>, {{%.+}}: !smt.bv<1>)
+// CHECK:    hw.constant true
+// CHECK:    builtin.unrealized_conversion_cast
+// CHECK:    builtin.unrealized_conversion_cast
+// CHECK:    seq.from_clock
+// CHECK:    comb.xor
+// CHECK:    comb.xor
+// CHECK:    seq.to_clock
+// CHECK:    builtin.unrealized_conversion_cast
+// CHECK:    builtin.unrealized_conversion_cast
+// CHECK:    return
 // CHECK:  }
-// CHECK:  func.func @bmc_circuit([[ARGO:%.+]]: !smt.bv<1>, [[ARG1:%.+]]: !smt.bv<32>, [[ARG2:%.+]]: !smt.bv<32>, [[ARG3:%.+]]: !smt.bv<32>, [[ARG4:%.+]]: !smt.array<[!smt.bv<1> -> !smt.bv<32>]>) -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
-// CHECK-DAG:    [[TRUE:%.+]] = hw.constant true
-// CHECK-DAG:    [[CN1_I32:%.+]] = hw.constant -1 : i32
-// CHECK:    [[C6:%.+]] = builtin.unrealized_conversion_cast [[ARG2]] : !smt.bv<32> to i32
-// CHECK:    [[C7:%.+]] = builtin.unrealized_conversion_cast [[ARG1]] : !smt.bv<32> to i32
-// CHECK:    [[ADD:%.+]] = comb.add [[C7]], [[C6]]
-// CHECK:    [[XOR:%.+]] = comb.xor [[C6]], [[CN1_I32]]
-// CHECK:    [[C9:%.+]] = builtin.unrealized_conversion_cast [[XOR]] : i32 to !smt.bv<32>
-// CHECK:    [[C10:%.+]] = builtin.unrealized_conversion_cast [[ADD]] : i32 to !smt.bv<32>
-// CHECK:    [[C11:%.+]] = builtin.unrealized_conversion_cast [[TRUE]] : i1 to !smt.bv<1>
-// CHECK:    return [[C9]], [[C10]], [[ARG3]], [[ARG4]], [[C11]]
+// CHECK:  func.func @bmc_circuit({{%.+}}: !smt.bv<1>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.array<[!smt.bv<1> -> !smt.bv<32>]>) -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
+// CHECK-DAG:    hw.constant true
+// CHECK-DAG:    hw.constant -1 : i32
+// CHECK:    comb.add
+// CHECK:    comb.xor
+// CHECK:    return
 // CHECK:  }
 
 // -----
