@@ -5786,6 +5786,15 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return iv;
   }
 
+  // Check if this is an llvm.mlir.undef (undefined value)
+  if (auto undefOp = value.getDefiningOp<LLVM::UndefOp>()) {
+    unsigned width = getTypeWidth(undefOp.getType());
+    // Initialize undef to zero (safe default for building structs)
+    InterpretedValue iv(APInt::getZero(width));
+    valueMap[value] = iv;
+    return iv;
+  }
+
   // Check if this is an UnrealizedConversionCastOp - propagate value through
   if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>()) {
     if (!castOp.getInputs().empty()) {
@@ -6027,7 +6036,32 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
       return std::string(it->second.first, it->second.second);
     }
 
-    // Fallback: try to interpret as direct pointer
+    // Try reverse address-to-global lookup for string globals
+    auto globalIt = addressToGlobal.find(static_cast<uint64_t>(ptrVal));
+    if (globalIt != addressToGlobal.end()) {
+      std::string globalName = globalIt->second;
+      auto blockIt = globalMemoryBlocks.find(globalName);
+      if (blockIt != globalMemoryBlocks.end()) {
+        const MemoryBlock &block = blockIt->second;
+        // Use the length from the struct, or the block size if length is invalid
+        size_t effectiveLen = (lenVal > 0 && static_cast<size_t>(lenVal) <= block.data.size())
+                                  ? static_cast<size_t>(lenVal)
+                                  : block.data.size();
+        // Find null terminator if present
+        size_t actualLen = 0;
+        for (size_t i = 0; i < effectiveLen; ++i) {
+          if (block.data[i] == 0)
+            break;
+          actualLen++;
+        }
+        if (actualLen > 0) {
+          return std::string(reinterpret_cast<const char *>(block.data.data()),
+                             actualLen);
+        }
+      }
+    }
+
+    // Fallback: try to interpret as direct pointer (unsafe, for debugging)
     if (ptrVal != 0 && lenVal > 0 && lenVal < 1024) {
       const char *ptr = reinterpret_cast<const char *>(ptrVal);
       // Safety check - only dereference if it looks valid
@@ -7294,6 +7328,9 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
     nextGlobalAddress += ((size + 7) / 8) * 8; // Align to 8 bytes
 
     globalAddresses[globalName] = addr;
+
+    // Also populate the reverse map for address-to-global lookup
+    addressToGlobal[addr] = globalName.str();
 
     // Create memory block
     MemoryBlock block(size, 64);
