@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 250 - January 29, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Fixed in this Iteration
+
+1. **Pure Virtual Method Dispatch** (Expressions.cpp, Structure.cpp):
+   - **ROOT CAUSE**: `isMethod = (subroutine->thisVar != nullptr)` was false for pure virtual
+   - **FIX**: Also check `MethodFlags::Virtual` flag, add %this argument in declareFunction
+   - Virtual dispatch now correctly calls derived class implementations
+
+2. **Hierarchical Interface Task Errors** (Expressions.cpp):
+   - Improved error detection for Pattern 3 (hierarchical interface tasks)
+   - Emit helpful message suggesting virtual interface pattern
+   - Full support deferred (medium-high complexity)
+
+### UVM Testing Results
+
+**What Works:**
+- UVM-core compiles successfully (8.5MB MLIR, 118k lines)
+- APB AVIP compiles successfully (10.9MB MLIR, 150k lines)
+- DPI-C imports recognized with runtime stubs
+- Class constructors and basic inheritance work
+
+**Issues Identified (Blocking UVM Simulation):**
+1. **Vtable Initialization**: Vtables are `#llvm.zero` instead of function pointers
+2. **String Truncation**: Off-by-one error dropping first character of strings
+3. **UVM Static Initialization**: `uvm_root::get()` returns null
+
+### Test Suite Status
+- Lit tests: 2990/3088 (96.83%)
+- All external suites: 100% pass rate maintained
+- OpenTitan: 40/40 targets pass
+
+---
+
 ## Iteration 249 - January 29, 2026
 
 ### Goals
@@ -74,6 +111,18 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
    - **IMPACT**: `circt-bmc --emit-smtlib` now produces exportable SMT-LIB
    - **Tests**: `test/Tools/circt-bmc/bmc-emit-smtlib.mlir`,
      `test/Tools/circt-bmc/bmc-emit-smtlib-bad-ops.mlir`
+
+6. **BMC SMT-LIB Final-Check Semantics** (VerifToSMT.cpp):
+   - **FIX**: Combine multiple final asserts with conjunction in SMT-LIB export
+   - **Test**: `test/Conversion/VerifToSMT/bmc-final-checks-smtlib.mlir`
+
+7. **BMC SMT-LIB Model Requests** (circt-bmc.cpp):
+   - **FIX**: `--emit-smtlib --print-counterexample` now injects `(get-model)`
+   - **Test**: `test/Tools/circt-bmc/bmc-emit-smtlib-print-model.mlir`
+
+8. **BMC run-smtlib** (circt-bmc.cpp):
+   - **FIX**: Add `--run-smtlib` with external z3 execution and `--z3-path`
+   - **Test**: `test/Tools/circt-bmc/bmc-run-smtlib-unsat.mlir`
 
 ### Test Suite Results
 - All external test suites maintain 100% pass rate
