@@ -1,7 +1,5 @@
-// RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
+// RUN: crun %s --uvm-path=%S/../../../lib/Runtime/uvm-core --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: find_all() is not available in our UVM library version
 
 // Test find_all component lookup with patterns.
 
@@ -44,8 +42,9 @@ module tb_top;
       phase.raise_objection(this);
 
       // Find all children using wildcard "*"
-      find_all("*", comps);
-      if (comps.size() == 5)
+      uvm_root::get().find_all("*", comps);
+      // find_all("*") matches this component plus all descendants.
+      if (comps.size() == 6)
         `uvm_info("TEST", "find all children: PASS", UVM_LOW)
       else
         `uvm_error("TEST", $sformatf("find all children: FAIL (got %0d)", comps.size()))

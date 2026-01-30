@@ -10207,3 +10207,33 @@
   - broader component slice:
     - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-component-*.sv test/Tools/crun/uvm-root-find.sv`
     - result: `7 passed, 2 expectedly failed`.
+
+## 2026-03-01 - crun component find_all semantics (remove stale XFAILs)
+
+- realization:
+  - Remaining `XFAIL`s in component lookup tests were stale expectation issues,
+    not runtime feature gaps:
+    - `uvm-component-find-all.sv` expected `2`, but `find_all("*agent*")`
+      matches full hierarchical names and correctly returns `4` (agents plus
+      descendants under agent paths).
+    - `uvm-component-lookup-regex.sv` used bare `find_all(...)` (undeclared in
+      this API surface) and expected `5`, while
+      `uvm_root::get().find_all("*")` returns `6` (self plus 5 children).
+
+- implemented:
+  - Updated tests to semantic behavior of bundled UVM:
+    - `test/Tools/crun/uvm-component-find-all.sv`
+      - removed `XFAIL`, set expected count to `4`.
+    - `test/Tools/crun/uvm-component-lookup-regex.sv`
+      - removed `XFAIL`, switched call to `uvm_root::get().find_all("*", comps)`,
+      - set expected count to `6`.
+  - Pinned both tests to bundled runtime using
+    `--uvm-path=%S/../../../lib/Runtime/uvm-core` for deterministic behavior.
+
+- validation:
+  - targeted:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-component-find-all.sv test/Tools/crun/uvm-component-lookup-regex.sv`
+    - result: `2 passed`.
+  - component slice regression:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-component-*.sv test/Tools/crun/uvm-root-find.sv`
+    - result: `9 passed`.
