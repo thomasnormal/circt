@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 253 - January 30, 2026
+
+### Goals
+Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
+
+### Fixed in this Iteration
+
+1. **UVM Stubs Removed** (circt-verilog.cpp, lib/Runtime/uvm/):
+   - **CHANGE**: Deleted UVM stubs that were masking real uvm-core issues
+   - **FIX**: Added helpful warning when UVM not found, directing to uvm-core
+   - **IMPACT**: All UVM testing now uses real Accellera uvm-core library
+
+2. **Virtual Dispatch Address Collision** (LLHDProcessInterpreter):
+   - **ROOT CAUSE**: Per-process `nextMemoryAddress` collided in global `mallocBlocks`
+   - **FIX**: Added `globalNextAddress` (0x100000+) for malloc/queue allocations
+   - **IMPACT**: Virtual method calls through queue elements now work
+
+3. **Type Size Calculation** (MooreToCore.cpp):
+   - **FIX**: Handle LLVM pointer, struct, array types in `getTypeSizeInBytes`
+   - **IMPACT**: Queue element sizes correct for complex types
+
+### Identified Blockers (UVM Simulation)
+
+1. **Queue Double-Indirection Bug** (P0 - Blocking UVM):
+   - MooreToCore `QueuePushFrontOp` creates extra pointer indirection
+   - Runtime receives `MooreQueue**` instead of `MooreQueue*`
+   - ALL queue operations fail silently - UVM factory registrations lost
+   - **Status**: Root cause identified, fix in progress
+
+2. **UVM Phase Execution** (P0 - Depends on #1):
+   - `run_test()` returns immediately at time 0
+   - Factory lookup fails because registrations lost
+   - Fix queue bug first, then verify phases work
+
+### Test Status
+- Lit tests: 2960/3066 (96.5%)
+- External suites: 100% pass rate maintained
+- AVIPs: 6/9 compile, all blocked on UVM phase bug
+
+---
+
 ## Iteration 251 - January 29, 2026
 
 ### Goals
@@ -142,6 +183,14 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 34. **BMC Goto + Delay Range + Concat E2E Coverage** (sva-goto-delay-range-concat-*-e2e.sv):
     - **FIX**: Added end-to-end SVA BMC tests for `a [->1:3] ##[1:2] b ##1 c` sequences
     - **IMPACT**: Guards goto-repeat interactions with delay-range concat lowering
+
+35. **BMC Multi-step Sequence NFAs** (VerifToSMT.cpp, LTLSequenceNFA.h):
+    - **FIX**: Track `ltl.delay`, `ltl.concat`, `ltl.repeat`, `ltl.goto_repeat`,
+      and `ltl.non_consecutive_repeat` with per-sequence NFAs in BMC, avoiding
+      bounded single-step approximations for multi-cycle semantics.
+    - **IMPACT**: Exact multi-step matching for sequence operators with proper
+      clock-edge gating; adds tick inputs + NFA state slots to the BMC circuit.
+    - **TEST**: `test/Tools/circt-bmc/sva-goto-repeat-delay-sat-e2e.sv`.
 
 ### Investigation Results (All Working)
 - **Vtables**: Interpreter uses `circt.vtable_entries` at runtime ✓

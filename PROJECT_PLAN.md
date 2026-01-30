@@ -207,7 +207,46 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 252)
+### Active Workstreams & Next Steps (Iteration 253)
+
+**Iteration 253 Changes:**
+1. **UVM Stubs Removed** (IMPORTANT): Require real uvm-core library
+   - Deleted `lib/Runtime/uvm/` (stubs were masking real UVM issues)
+   - Added warning when UVM not found, directing to uvm-core
+   - Use `--uvm-path ~/uvm-core/src` or set `UVM_HOME`
+
+2. **Virtual Dispatch Address Collision** (FIXED): Queue virtual calls now work
+   - Added `globalNextAddress` counter for malloc/queue allocations
+   - Fixed address collision between processes in `mallocBlocks`
+   - Virtual method calls through queue elements execute correctly
+
+3. **Type Size Calculation** (FIXED): Queue element sizes for complex types
+   - Added LLVM pointer, struct, array handling in `getTypeSizeInBytes`
+
+**Remaining UVM Blockers (Priority Order):**
+1. **Queue Double-Indirection Bug** (P0): MooreToCore creates extra pointer level
+   - `QueuePushFrontOp` stores pointer into alloca, passes alloca address
+   - Runtime receives pointer-to-pointer instead of queue pointer
+   - Affects ALL queue operations - UVM factory registrations lost
+
+2. **UVM Phase Execution** (P0): `run_test()` returns immediately
+   - Factory lookup fails because registrations lost (queue bug)
+   - Phase machinery never starts
+
+3. **Test Pattern Regressions** (P1): ~40 VerifToSMT tests need CHECK updates
+
+**AVIP Status (6/9 working):**
+| AVIP | Compile | Simulate | Blocker |
+|------|---------|----------|---------|
+| APB | ✅ | ✅ (exits early) | UVM phase bug |
+| AHB | ✅ | ✅ | UVM phase bug |
+| AXI4 | ⚠️ | - | defparam + vif issue |
+| AXI4Lite | ⚠️ | - | Environment setup |
+| UART | ✅ | ✅ | UVM phase bug |
+| SPI | ❌ | - | Source code bugs |
+| JTAG | ❌ | - | defparam + bind |
+| I2S | ✅ | ✅ | UVM phase bug |
+| I3C | ✅ | ✅ | UVM phase bug |
 
 **Iteration 252 Fixes:**
 1. **Dynamic String Display** (FIXED): String variables now show content, not `<dynamic string>`
