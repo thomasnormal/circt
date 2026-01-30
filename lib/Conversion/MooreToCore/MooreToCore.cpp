@@ -9003,6 +9003,52 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       }
       rewriter.replaceOp(op, loaded);
     } else {
+      // Handle function ref parameters: when the input is a block argument
+      // with llhd.ref type, and we're inside a func::FuncOp (not llhd.process
+      // or seq.initial), use llvm.load instead of llhd.prb. This is necessary
+      // because the simulator cannot track signal references through function
+      // calls, so llhd.prb fails when the source is a function ref parameter.
+      Value origInput = op.getInput();
+      bool origIsBlockArg = isa<BlockArgument>(origInput);
+      bool inputIsBlockArg = isa<BlockArgument>(input);
+
+      if (origIsBlockArg || inputIsBlockArg) {
+        if (auto refType = dyn_cast<llhd::RefType>(input.getType())) {
+          // Only apply this for function contexts, not for hw.module contexts.
+          // In hw.module, signals are properly tracked by the simulator.
+          // Also check if we're NOT in an llhd.process or seq.initial
+          // (those are inside hw.module and signals work there).
+          bool inFuncOp = op->getParentOfType<func::FuncOp>() != nullptr;
+          bool inProcess = op->getParentOfType<llhd::ProcessOp>() != nullptr;
+          bool inInitial = op->getParentOfType<seq::InitialOp>() != nullptr;
+
+          if (inFuncOp && !inProcess && !inInitial) {
+            // For function ref parameters, cast to LLVM pointer and load.
+            Value refAsPtr = UnrealizedConversionCastOp::create(
+                                 rewriter, op.getLoc(),
+                                 LLVM::LLVMPointerType::get(rewriter.getContext()),
+                                 input)
+                                 .getResult(0);
+
+            auto hwResultType =
+                typeConverter->convertType(op.getResult().getType());
+            auto llvmResultType = convertToLLVMType(hwResultType);
+
+            Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(),
+                                                llvmResultType, refAsPtr);
+
+            // Cast back to HW type if needed (e.g., for 4-state structs)
+            if (hwResultType != llvmResultType) {
+              loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
+                                                          hwResultType, loaded)
+                           .getResult(0);
+            }
+            rewriter.replaceOp(op, loaded);
+            return success();
+          }
+        }
+      }
+
       rewriter.replaceOpWithNewOp<llhd::ProbeOp>(op, input);
     }
     return success();
