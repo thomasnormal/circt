@@ -4019,6 +4019,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (isa<LLVM::ReturnOp>(op))
     return success();
 
+  // LLVM unreachable indicates control should not reach here (e.g., after $finish)
+  // Halt the process when this is reached
+  if (isa<LLVM::UnreachableOp>(op)) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.unreachable reached - halting process\n");
+    auto &state = processStates[procId];
+    state.halted = true;
+    scheduler.terminateProcess(procId);
+    return success();
+  }
+
   // LLVM undef creates an undefined value
   if (auto undefOp = dyn_cast<LLVM::UndefOp>(op)) {
     setValue(procId, undefOp.getResult(),
@@ -5784,6 +5794,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         llvm::errs() << "\n";
         llvm::errs() << "  Location: " << op.getLoc() << "\n";
         return failure();
+      }
+
+      // Check if process was halted (e.g., by sim.terminate or llvm.unreachable)
+      auto it = processStates.find(procId);
+      if (it != processStates.end() && it->second.halted) {
+        LLVM_DEBUG(llvm::dbgs() << "  Process halted during function body - "
+                                << "returning early\n");
+        return success();
       }
     }
   }
@@ -8381,6 +8399,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         llvm::errs() << "\n";
         llvm::errs() << "  Location: " << op.getLoc() << "\n";
         return failure();
+      }
+
+      // Check if process was halted (e.g., by sim.terminate or llvm.unreachable)
+      auto it = processStates.find(procId);
+      if (it != processStates.end() && it->second.halted) {
+        LLVM_DEBUG(llvm::dbgs() << "  Process halted during LLVM function body - "
+                                << "returning early\n");
+        return success();
       }
     }
 
