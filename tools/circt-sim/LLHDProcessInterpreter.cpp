@@ -1616,6 +1616,12 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
     if (failed(interpretOperation(tempProcId, &op))) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  Warning: Failed to interpret combinational op\n");
+      // Emit diagnostic for failed combinational op
+      llvm::errs() << "circt-sim: Failed to interpret combinational op\n";
+      llvm::errs() << "  Operation: ";
+      op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+      llvm::errs() << "\n";
+      llvm::errs() << "  Location: " << op.getLoc() << "\n";
       break;
     }
   }
@@ -2270,6 +2276,13 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
   // Interpret the operation
   if (failed(interpretOperation(procId, op))) {
     LLVM_DEBUG(llvm::dbgs() << "  Failed to interpret operation\n");
+    // Always emit diagnostic for failed operations (not just in debug mode)
+    llvm::errs() << "circt-sim: interpretOperation failed for process "
+                 << procId << "\n";
+    llvm::errs() << "  Operation: ";
+    op->print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+    llvm::errs() << "\n";
+    llvm::errs() << "  Location: " << op->getLoc() << "\n";
     return false;
   }
 
@@ -5545,8 +5558,15 @@ LogicalResult LLHDProcessInterpreter::interpretWhileCondition(
       return success();
     }
 
-    if (failed(interpretOperation(procId, &op)))
+    if (failed(interpretOperation(procId, &op))) {
+      llvm::errs() << "circt-sim: Failed in while condition for process "
+                   << procId << "\n";
+      llvm::errs() << "  Operation: ";
+      op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+      llvm::errs() << "\n";
+      llvm::errs() << "  Location: " << op.getLoc() << "\n";
       return failure();
+    }
   }
 
   return failure();
@@ -5576,8 +5596,15 @@ LogicalResult LLHDProcessInterpreter::interpretRegion(
       return success();
     }
 
-    if (failed(interpretOperation(procId, &op)))
+    if (failed(interpretOperation(procId, &op))) {
+      llvm::errs() << "circt-sim: Failed in region for process " << procId
+                   << "\n";
+      llvm::errs() << "  Operation: ";
+      op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+      llvm::errs() << "\n";
+      llvm::errs() << "  Location: " << op.getLoc() << "\n";
       return failure();
+    }
   }
 
   return success();
@@ -5725,8 +5752,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         break;
       }
 
-      if (failed(interpretOperation(procId, &op)))
+      if (failed(interpretOperation(procId, &op))) {
+        llvm::errs() << "circt-sim: Failed in func body for process " << procId
+                     << "\n";
+        llvm::errs() << "  Function: " << funcOp.getName() << "\n";
+        llvm::errs() << "  Operation: ";
+        op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+        llvm::errs() << "\n";
+        llvm::errs() << "  Location: " << op.getLoc() << "\n";
         return failure();
+      }
     }
   }
 
@@ -8314,8 +8349,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       }
 
       // Interpret other operations
-      if (failed(interpretOperation(procId, &op)))
+      if (failed(interpretOperation(procId, &op))) {
+        llvm::errs() << "circt-sim: Failed in LLVM func body for process "
+                     << procId << "\n";
+        llvm::errs() << "  Function: " << funcOp.getName() << "\n";
+        llvm::errs() << "  Operation: ";
+        op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+        llvm::errs() << "\n";
+        llvm::errs() << "  Location: " << op.getLoc() << "\n";
         return failure();
+      }
     }
 
     // If we didn't branch, we're done
