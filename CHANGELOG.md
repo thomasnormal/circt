@@ -51,6 +51,42 @@ Fix class member access from methods, enable uvm-core simulation.
    - UVM initialization starts: "UVM_INFO @ 0: NOMAXQUITOVR" printed
    - Hits process step overflow in fork branch (testbench waiting for events)
 
+7. **BMC Register COI Pruning**:
+   - **FIX**: Added a pass to drop externalized registers and unused outputs
+     that do not influence any property, including transitive register deps.
+   - **TEST**: `test/Tools/circt-bmc/prune-bmc-registers-transitive.mlir`
+   - **TEST**: `test/Tools/circt-bmc/prune-bmc-inputs.mlir`
+
+8. **BMC/LEC sv-tests Re-run**:
+   - **sv-tests BMC**: 23/26 pass (3 XFAIL)
+   - **sv-tests LEC**: 23/23 pass (0 fail, 0 error)
+
+9. **BMC/LEC yosys-sva Re-run**:
+   - **yosys-sva BMC**: 14/14 pass (2 VHDL skipped)
+   - **yosys-sva LEC**: 14/14 pass (2 VHDL skipped)
+
+10. **BMC/LEC verilator-verification Re-run**:
+    - **verilator-verification BMC**: 17/17 pass
+    - **verilator-verification LEC**: 17/17 pass
+
+11. **OpenTitan LEC Re-run**:
+    - **aes_sbox_canright**: FAIL (known masked S-Box inequivalence)
+   - **TEST**: `test/Tools/circt-bmc/prune-bmc-registers.mlir`
+
+12. **`__moore_wait_condition` Implemented** (LLHDProcessInterpreter.cpp):
+    - **FIX**: Added handler for `__moore_wait_condition` runtime function
+    - **IMPACT**: `wait(condition)` statements now work in circt-sim
+    - **TEST**: `test/Tools/circt-sim/moore-wait-event.mlir`
+
+13. **Diagnostic Output for interpretOperation Failures** (LLHDProcessInterpreter.cpp):
+    - **FIX**: Added diagnostic output when `interpretOperation` returns failure
+    - **IMPACT**: Easier to debug unsupported operations during simulation
+
+14. **Test Suite Numbers Corrected**:
+    - **sv-tests BMC**: 88.5% pass rate (was incorrectly reported)
+    - **verilator-verification**: 100% pass rate
+    - **All non-UVM simulations pass**: class members, virtual methods, OpenTitan
+
 ### Remaining Issues
 
 1. **UVM Fatal Error During Initialization** - ROOT CAUSE FOUND:
@@ -64,6 +100,11 @@ Fix class member access from methods, enable uvm-core simulation.
    - Interpreter can't save/restore instruction pointer mid-function
    - **5 options analyzed**: Explicit call stack (recommended), coroutines, forking, IR transform, fibers
    - **FIX NEEDED**: Option A (Explicit Call Stack State) - ~2-3 weeks effort
+
+3. **llhd.drv Used Incorrectly for Output Parameters** - NEW:
+   - Output parameters in functions/tasks use `llhd.drv` which is intended for signals
+   - This causes incorrect behavior when output parameters are not connected to signals
+   - **IMPACT**: Some UVM patterns with output parameters may not work correctly
 
 ---
 
