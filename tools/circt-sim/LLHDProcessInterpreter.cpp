@@ -6729,8 +6729,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
   // Create a memory block
   MemoryBlock block(totalSize, getTypeWidth(elemType));
 
-  // Check if this alloca is at module level (not inside an llhd.process)
-  bool isModuleLevel = !allocaOp->getParentOfType<llhd::ProcessOp>();
+  // Check if this alloca is at module level (not inside an llhd.process,
+  // func.func, or llvm.func). Allocas inside functions should be process-local
+  // even if the function is called from a global constructor, because they
+  // need to be found via the process's valueMap when findMemoryBlockByAddress
+  // is called.
+  bool isModuleLevel = !allocaOp->getParentOfType<llhd::ProcessOp>() &&
+                       !allocaOp->getParentOfType<mlir::func::FuncOp>() &&
+                       !allocaOp->getParentOfType<LLVM::LLVMFuncOp>();
 
   if (isModuleLevel) {
     // Store in module-level allocas (accessible by all processes)

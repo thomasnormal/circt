@@ -17,10 +17,11 @@ func.func private @work() -> ()
 moore.module @ForkForeverEntryBranch() {
   moore.procedure initial {
     // CHECK:       sim.fork join_type "join_none" {
-    //   Entry block: has sim.proc.print (anti-elision) and no predecessors.
+    //   Entry block: has sim.proc.print (anti-elision), branch to loop header.
     // CHECK-NEXT:    sim.proc.print
+    // CHECK-NEXT:    cf.br ^[[LOOP:bb[0-9]+]]
     //   Loop header block has the back-edge to itself (2 preds: entry + self).
-    // CHECK-NEXT:  ^[[LOOP:bb[0-9]+]]:
+    // CHECK-NEXT:  ^[[LOOP]]:
     // CHECK-NEXT:    func.call @work
     // CHECK-NEXT:    cf.br ^[[LOOP]]
     // CHECK-NEXT:  }
@@ -41,10 +42,11 @@ moore.module @ForkForeverEntryBranch() {
 moore.module @ForkForeverEntryContent() {
   moore.procedure initial {
     // CHECK:       sim.fork join_type "join_none" {
-    //   Entry block has func.call (side effects prevent elision).
+    //   Entry block has func.call (side effects prevent elision) and branch to loop header.
     // CHECK-NEXT:    func.call @work
+    // CHECK-NEXT:    cf.br ^[[LOOP:bb[0-9]+]]
     //   Loop header block has the back-edge to itself.
-    // CHECK-NEXT:  ^[[LOOP:bb[0-9]+]]:
+    // CHECK-NEXT:  ^[[LOOP]]:
     // CHECK-NEXT:    func.call @work
     // CHECK-NEXT:    cf.br ^[[LOOP]]
     // CHECK-NEXT:  }
