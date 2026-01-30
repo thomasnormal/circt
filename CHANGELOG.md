@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 265 - January 30, 2026
+
+### Goals
+Fix local variable semantics and expand AVIP/OpenTitan coverage.
+
+### Fixed in this Iteration
+1. **Local Variable Lowering in Procedural Blocks** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Local variables in `llhd.process` used `llhd.sig` with delta-cycle semantics
+   - When passed as `ref` parameters, function reads happened before `llhd.drv` took effect
+   - **FIX**: Use `LLVM::AllocaOp` for local variables inside `llhd.process`
+   - Gives immediate memory semantics matching SystemVerilog automatic variables
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - **Commit**: `b6a9c402d`
+   - **Test Fixed**: `test/Tools/circt-sim/ref-param-read.sv`
+
+2. **New Unit Tests**:
+   - `test/Tools/circt-sim/class-null-compare.sv` - Comprehensive class handle null comparison
+   - Commit: `c04a21047`
+
+3. **Expanded AVIP Coverage**:
+   - **AXI4 AVIP**: Compiles and simulates successfully
+   - **I2S AVIP**: Compiles and simulates successfully
+   - **I3C AVIP**: Compiles and simulates successfully
+   - Total: 6/9 AVIPs now work (APB, AHB, UART, AXI4, I2S, I3C)
+
+4. **Expanded OpenTitan Coverage**:
+   - **hmac_reg_top**: TEST PASSED
+   - **kmac_reg_top**: TEST PASSED
+   - **entropy_src_reg_top**: TEST PASSED
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| **AVIPs** | 6/9 pass | APB, AHB, UART, AXI4, I2S, I3C |
+| **OpenTitan IPs** | 7+ pass | +hmac, kmac, entropy_src reg_tops |
+| MooreToCore | 96/97 (99%) | 1 XFAIL expected |
+| circt-sim | 73/74 (99%) | All pass except 1 timeout |
+| sv-tests LEC | 23/23 (100%) | No regressions |
+| yosys LEC | 14/14 (100%) | No regressions |
+
+### Remaining Limitations
+1. **UVM `get_root()` calls `die()`** - Root cause under investigation
+   - Package-level class variable initialization during elaboration may have timing issues
+   - `m_inst != uvm_top` check fails even though both should be the same object
+2. **3 AVIPs blocked** - AXI4Lite (compiler bug), SPI/JTAG (source bugs)
+
+---
+
 ## Iteration 264 - January 30, 2026
 
 ### Goals
@@ -66,6 +114,19 @@ Fix llhd.prb support for function argument references in circt-sim interpreter t
 6. **Truth table lowering** (CombToSMT.cpp):
    - Lowered `comb.truth_table` to SMT arrays with exact table-based X-prop.
    - **Test**: `test/Conversion/CombToSMT/comb-truth-table.mlir`
+7. **LEC strict multi-way LLHD signal drives** (StripLLHDInterfaceSignals.cpp):
+   - Allow mutually exclusive conditional drive chains to resolve via muxes in strict mode.
+   - **Test**: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-exclusive.mlir`
+8. **Shared BoolCondition helper** (Support/BoolCondition.h):
+   - Factor boolean condition tracking used by LLHD control-flow removal and LEC stripping.
+   - **Test**: `unittests/Support/BoolConditionTest.cpp`
+9. **LEC strict multi-way LLHD interface stores** (StripLLHDInterfaceSignals.cpp):
+   - Resolve exclusive conditional store chains (scf.if or cf.cond_br trees) on
+     interface fields in strict mode.
+   - **Test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-multiway.mlir`
+   - **Negative test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-overlap.mlir`
+   - **Negative test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-partial.mlir`
+   - **Merge test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-merge.mlir`
 
 ### Current Limitations & Features Needed
 
