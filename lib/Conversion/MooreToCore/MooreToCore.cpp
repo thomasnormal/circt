@@ -2600,42 +2600,43 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
     // Initialize queue-type properties to {nullptr, 0}.
     // Malloc returns uninitialized memory, so we need to zero-initialize
     // queue members to avoid reading garbage values.
+    // Use the cached field paths from structInfo to get correct GEP indices.
     auto *classDeclOp = mod.lookupSymbol(sym);
     if (auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclOp)) {
       // Walk through class hierarchy to initialize all queue members
-      std::function<void(ClassDeclOp, unsigned)> initQueueMembers =
-          [&](ClassDeclOp decl, unsigned inheritanceLevel) {
+      std::function<void(ClassDeclOp)> initQueueMembers =
+          [&](ClassDeclOp decl) {
             // First, process base class if any
             if (auto baseAttr = decl.getBaseAttr()) {
               if (auto *baseOp = mod.lookupSymbol(baseAttr)) {
                 if (auto baseDecl = dyn_cast<ClassDeclOp>(baseOp)) {
-                  initQueueMembers(baseDecl, inheritanceLevel + 1);
+                  initQueueMembers(baseDecl);
                 }
               }
             }
 
             // Process properties at this level
-            unsigned propIdx = 0;
             for (auto &childOp : decl.getBody().getOps()) {
               if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(childOp)) {
                 Type propType = propDecl.getPropertyType();
                 if (isa<QueueType>(propType)) {
-                  // Build GEP path to this property:
-                  // [0, 0, ..., fieldIdx] where 0s navigate through inheritance
+                  // Look up the cached GEP path for this property.
+                  // This handles inheritance correctly - the path already
+                  // accounts for the full class hierarchy.
+                  auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
+                  if (!pathOpt)
+                    continue; // Skip if path not found (shouldn't happen)
+
+                  // Build GEP indices from the cached path
                   SmallVector<Value> propGepIndices;
                   // First index is always 0 (pointer dereference)
                   propGepIndices.push_back(LLVM::ConstantOp::create(
                       rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
-                  // Navigate through base class chain
-                  for (unsigned i = 0; i < inheritanceLevel; ++i) {
+                  // Add all indices from the cached path
+                  for (unsigned idx : *pathOpt) {
                     propGepIndices.push_back(LLVM::ConstantOp::create(
-                        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+                        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(idx)));
                   }
-                  // Field index = typeId(0) + vtablePtr(1) + propIdx + 2
-                  unsigned fieldIdx = propIdx + 2;
-                  propGepIndices.push_back(LLVM::ConstantOp::create(
-                      rewriter, loc, i32Ty,
-                      rewriter.getI32IntegerAttr(fieldIdx)));
 
                   // GEP to the queue field
                   auto propPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
@@ -2660,11 +2661,10 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
                   // Store the zero-initialized queue
                   LLVM::StoreOp::create(rewriter, loc, zeroQueue, propPtr);
                 }
-                propIdx++;
               }
             }
           };
-      initQueueMembers(classDecl, structInfo->inheritanceDepth);
+      initQueueMembers(classDecl);
     }
 
     // Replace the new op with the malloc pointer

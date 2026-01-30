@@ -207,61 +207,72 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 253)
+### Active Workstreams & Next Steps (Iteration 255)
 
-**Iteration 253 Changes:**
-1. **UVM Stubs Removed** (IMPORTANT): Require real uvm-core library
-   - Deleted `lib/Runtime/uvm/` (stubs were masking real UVM issues)
-   - Added warning when UVM not found, directing to uvm-core
-   - Use `--uvm-path ~/uvm-core/src` or set `UVM_HOME`
+**Iteration 255 Changes (2026-01-30):**
+1. **String Truncation Bug** (FIXED): String parameters now correctly sized
+   - ROOT CAUSE: `materializeString()` used `getEffectiveWidth()` (minimum bits) instead of `str().size() * 8`
+   - Also used `toString()` which adds quotes instead of `str()` for raw content
+   - Impact: UVM factory string parameters like `"my_class"` now work
+   - Files: `lib/Conversion/ImportVerilog/Expressions.cpp`
 
-2. **Virtual Dispatch Address Collision** (FIXED): Queue virtual calls now work
-   - Added `globalNextAddress` counter for malloc/queue allocations
-   - Fixed address collision between processes in `mallocBlocks`
-   - Virtual method calls through queue elements execute correctly
+2. **GEP Queue Initialization** (FIXED): Correct paths for deep class hierarchies
+   - ROOT CAUSE: Queue init code computed GEP paths incorrectly for derived classes
+   - Was adding `inheritanceLevel` zeros then `propIdx + 2` regardless of class level
+   - FIX: Use cached `structInfo->getFieldPath()` for correct paths
+   - Impact: UVM classes with queue properties now compile to hw level
+   - Files: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 2600-2668
 
-3. **Type Size Calculation** (FIXED): Queue element sizes for complex types
-   - Added LLVM pointer, struct, array handling in `getTypeSizeInBytes`
+3. **yosys-sva BMC** (CONFIRMED 100%): All 14 tests pass
+   - Previous 50% report was outdated - script already had `BMC_ASSUME_KNOWN_INPUTS=1`
+   - Verified: 14/14 tests pass (2 VHDL skipped)
 
-**UVM Blockers Status:**
-1. ~~**Fork Entry Block Predecessors**~~ ✅ FIXED (Iter 253):
-   - Changed `printBlockTerminators=false` to `true` in ForkOp printers
-   - Forever loops inside fork blocks now work correctly
-   - **ALL AVIP SIMULATIONS UNBLOCKED**
-
-2. ~~**Queue Double-Indirection Bug**~~ ✅ FIXED (Iter 253):
-   - Pass `adaptor.getQueue()` directly to runtime functions
-   - Use globalNextAddress for ALL allocas (fixed address collision)
-   - Queue operations verified: basic, class handles, factory pattern
-
-3. ~~**Test Pattern Regressions**~~ ✅ FIXED (Iter 253):
-   - Added `REQUIRES: uvm` to UVM-dependent tests
-   - All VerifToSMT tests pass (67 XFAIL for known NFA issues)
-
-**Current Status: Ready for UVM E2E Testing!**
-
-**Actual Test Suite Results (Verified 2026-01-30):**
+**Test Suite Results (Verified 2026-01-30):**
 | Suite | Pass | Fail | Notes |
 |-------|------|------|-------|
-| sv-tests BMC | 23/26 | 0 | 3 XFAIL as expected |
+| Lit Tests | 2927/3143 | 32 | 93.13% (28 UVM macro, 4 other) |
+| sv-tests BMC | 23/26 | 0 | 3 XFAIL expected |
 | sv-tests LEC | 23/23 | 0 | ✅ |
 | verilator BMC | 17/17 | 0 | ✅ |
 | verilator LEC | 17/17 | 0 | ✅ |
-| yosys-sva BMC | 7/14 | 5 | ⚠️ 50% - needs investigation |
+| yosys-sva BMC | 14/14 | 0 | ✅ 100% (2 VHDL skipped) |
 | yosys-sva LEC | 14/14 | 0 | ✅ |
 
-**AVIP Status (6/9 working):**
-| AVIP | Compile | Simulate | Blocker |
-|------|---------|----------|---------|
-| APB | ✅ | ✅ (exits early) | UVM phase bug |
-| AHB | ✅ | ✅ | UVM phase bug |
-| AXI4 | ⚠️ | - | defparam + vif issue |
-| AXI4Lite | ⚠️ | - | Environment setup |
-| UART | ✅ | ✅ | UVM phase bug |
-| SPI | ❌ | - | Source code bugs |
-| JTAG | ❌ | - | defparam + bind |
-| I2S | ✅ | ✅ | UVM phase bug |
-| I3C | ✅ | ✅ | UVM phase bug |
+**AVIP Status (6/8 compile at moore level):**
+| AVIP | Moore | HW | Notes |
+|------|-------|----|-------|
+| APB | ✅ | ✅ | Compiles successfully |
+| AHB | ✅ | ✅ | Compiles successfully |
+| UART | ✅ | ✅ | Compiles successfully |
+| I2S | ✅ | ✅ | Compiles successfully |
+| I3C | ✅ | ✅ | Compiles successfully |
+| AXI4 | ✅ | ✅ | Compiles successfully |
+| SPI | ❌ | - | Source bugs (nested comments, trailing comma) |
+| JTAG | ❌ | - | Source bugs (virtual method default arg mismatch) |
+| AXI4Lite | - | - | No filelist found |
+
+**Remaining UVM Blockers (Priority Order):**
+1. **UVM Factory/run_test()** (P1):
+   - type_id::create() returns null (typedef not elaborated until used)
+   - Phase mechanism doesn't trigger
+   - Static initialization works when type_id is actually referenced
+
+**Iteration 254 Changes:**
+1. **Queue Property Initialization** (FIXED): Zero-init queue fields in class constructors
+   - Queue struct {ptr, len} initialized to {nullptr, 0} in ClassNewOpConversion
+   - Queue operations on class properties now work correctly
+
+2. **UVM E2E Testing Results**:
+   - ✅ Simple UVM patterns work (queue, virtual dispatch, static vars)
+   - ✅ Basic UVM reporting (`uvm_report_info`) works
+   - ✅ uvm-core compiles (119K lines MLIR)
+   - ✅ Static initialization works when type_id is referenced
+
+**Iteration 253 Changes:**
+1. **UVM Stubs Removed** (IMPORTANT): Require real uvm-core library
+2. **Fork Entry Block** (FIXED): printBlockTerminators=true
+3. **Queue Double-Indirection** (FIXED): Pass queue pointer directly
+4. **Address Collision** (FIXED): globalNextAddress for all allocas
 
 **Iteration 252 Fixes:**
 1. **Dynamic String Display** (FIXED): String variables now show content, not `<dynamic string>`
