@@ -35,23 +35,35 @@ Fix class member access from methods, enable uvm-core simulation.
 | MooreToCore lit tests | 93/94 pass |
 | circt-sim lit tests | 70/70 pass |
 
-### Remaining Issues (Root Causes Identified)
+4. **Call Depth Tracking in getValue Path** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `getValue` -> `interpretLLVMCall` recursion didn't track depth
+   - **FIX**: Added callDepth check/increment/decrement matching pattern elsewhere
+   - **TEST**: `test/Tools/circt-sim/static-class-variable.sv`
+   - **IMPACT**: Prevents C++ stack overflow in UVM-style deep call chains
 
-1. **APB AVIP Global Constructor Crash** - ROOT CAUSE FOUND:
-   - C++ stack overflow from deep recursive interpretation
-   - The `getValue` -> `interpretLLVMCall` path doesn't track call depth
-   - Even with callDepth=50 limit, ~150-250 actual C++ stack frames
-   - **FIX NEEDED**: Track depth in getValue path, or convert to iterative interpreter
+5. **Static Class Variable Access Confirmed Working** (Investigation):
+   - The `llvm.store` / `llhd.prb` pattern for static variables works correctly
+   - Interpreter already handles `unrealized_conversion_cast` properly
+   - UVM exit at 0fs is a different issue (phase execution mechanism)
 
-2. **UVM Simulation Exits at 0fs** - ROOT CAUSE FOUND:
-   - Mismatch between `llvm.store` and `llhd.prb` for static class variables
-   - `m_inst` (uvm_root singleton) written with `llvm.store` but read with `llhd.prb`
-   - `unrealized_conversion_cast` from LLVM ptr to `!llhd.ref` causes wrong semantics
-   - **FIX NEEDED**: Use consistent `llvm.load`/`llvm.store` for LLVM globals
+6. **APB AVIP No Longer Crashes** (Verified):
+   - Call depth fix resolved stack overflow
+   - UVM initialization starts: "UVM_INFO @ 0: NOMAXQUITOVR" printed
+   - Hits process step overflow in fork branch (testbench waiting for events)
 
-3. **Delay Accumulation Bug** - NEW:
-   - `llhd-process-moore-delay-multi.mlir` expects 60fs but only gets 30fs
-   - `__moore_delay` only applies last delay instead of accumulating sequential delays
+### Remaining Issues
+
+1. **UVM Fatal Error During Initialization** - ROOT CAUSE FOUND:
+   - `uvm_component::new()` triggers a fatal error during `uvm_root` construction
+   - Fatal handler calls `sim.terminate success, quiet` (silent termination)
+   - Need to add debug output to fatal handlers to identify specific check failing
+   - **IMPACT**: Simulation exits at 0fs before phases can run
+
+2. **Delay Accumulation Bug** - ARCHITECTURAL ANALYSIS COMPLETE:
+   - `llhd-process-moore-delay-multi.mlir` expects 60fs but gets 30fs
+   - Interpreter can't save/restore instruction pointer mid-function
+   - **5 options analyzed**: Explicit call stack (recommended), coroutines, forking, IR transform, fibers
+   - **FIX NEEDED**: Option A (Explicit Call Stack State) - ~2-3 weeks effort
 
 ---
 
