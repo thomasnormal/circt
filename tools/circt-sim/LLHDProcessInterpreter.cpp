@@ -3564,7 +3564,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
     // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
     auto &callState = processStates[procId];
-    constexpr size_t maxCallDepth = 100;
+    constexpr size_t maxCallDepth = 50;
     if (callState.callDepth >= maxCallDepth) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: max call depth ("
                               << maxCallDepth << ") exceeded, returning X\n");
@@ -5607,7 +5607,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
   auto &state = processStates[procId];
-  constexpr size_t maxCallDepth = 100;
+  constexpr size_t maxCallDepth = 50;
   if (state.callDepth >= maxCallDepth) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: max call depth (" << maxCallDepth
                             << ") exceeded, returning X\n");
@@ -6714,6 +6714,22 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
   return nullptr;
 }
 
+bool LLHDProcessInterpreter::findNativeMemoryBlockByAddress(
+    uint64_t addr, uint64_t *outOffset, size_t *outSize) const {
+  for (auto &entry : nativeMemoryBlocks) {
+    uint64_t baseAddr = entry.first;
+    size_t blockSize = entry.second;
+    if (addr >= baseAddr && addr < baseAddr + static_cast<uint64_t>(blockSize)) {
+      if (outOffset) *outOffset = addr - baseAddr;
+      if (outSize) *outSize = blockSize;
+      return true;
+    }
+  }
+  if (outOffset) *outOffset = 0;
+  if (outSize) *outSize = 0;
+  return false;
+}
+
 LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
     ProcessId procId, LLVM::AllocaOp allocaOp) {
   auto &state = processStates[procId];
@@ -6777,6 +6793,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   // First try to find a local memory block (from alloca)
   MemoryBlock *block = findMemoryBlock(procId, loadOp.getAddr());
   uint64_t offset = 0;
+  bool useNative = false;
+  uint64_t nativeOffset = 0;
+  size_t nativeSize = 0;
 
   if (block) {
     // Local alloca memory
@@ -6823,15 +6842,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
         }
       }
     }
+    if (!block) {
+      if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
+        useNative = true;
+        offset = nativeOffset;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.load: found native block at 0x"
+                                << llvm::format_hex(addr - nativeOffset, 16)
+                                << " offset " << nativeOffset << "\n");
+      }
+    }
   }
 
-  // NOTE: Native pointer access was removed because it caused crashes during
-  // UVM global constructor execution. Addresses that pass range validation
-  // may still point to unmapped memory. Instead, rely on tracked memory blocks
-  // (mallocBlocks, globalMemoryBlocks, moduleLevelAllocas).
-  // If a pointer is not in any tracked block, return X (unknown value).
+  // Native pointer access is only allowed for known blocks registered by the
+  // runtime (e.g., associative array element refs). If a pointer is not in any
+  // tracked block, return X (unknown value).
 
-  if (!block) {
+  if (!block && !useNative) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: no memory block found for pointer 0x"
                             << llvm::format_hex(ptrVal.isX() ? 0 : ptrVal.getUInt64(), 16) << "\n");
     setValue(procId, loadOp.getResult(),
@@ -6839,34 +6865,52 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     return success();
   }
 
-  if (offset + loadSize > block->size) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: out of bounds access (offset="
-                            << offset << " size=" << loadSize
-                            << " block_size=" << block->size << ")\n");
-    setValue(procId, loadOp.getResult(),
-             InterpretedValue::makeX(bitWidth));
-    return success();
+  if (block) {
+    if (offset + loadSize > block->size) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: out of bounds access (offset="
+                              << offset << " size=" << loadSize
+                              << " block_size=" << block->size << ")\n");
+      setValue(procId, loadOp.getResult(),
+               InterpretedValue::makeX(bitWidth));
+      return success();
+    }
+
+    // Check if memory has been initialized
+    if (!block->initialized) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: reading uninitialized memory\n");
+      setValue(procId, loadOp.getResult(),
+               InterpretedValue::makeX(bitWidth));
+      return success();
+    }
+  } else {
+    if (offset + loadSize > nativeSize) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: native out of bounds access (offset="
+                              << offset << " size=" << loadSize
+                              << " block_size=" << nativeSize << ")\n");
+      setValue(procId, loadOp.getResult(),
+               InterpretedValue::makeX(bitWidth));
+      return success();
+    }
   }
 
-  // Check if memory has been initialized
-  if (!block->initialized) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: reading uninitialized memory\n");
-    setValue(procId, loadOp.getResult(),
-             InterpretedValue::makeX(bitWidth));
-    return success();
-  }
+  auto readByte = [&](unsigned i) -> uint8_t {
+    if (block)
+      return block->data[offset + i];
+    auto *nativePtr = reinterpret_cast<const uint8_t *>(ptrVal.getUInt64());
+    return nativePtr[i];
+  };
 
   // Read bytes from memory and construct the value (little-endian)
   uint64_t value = 0;
   for (unsigned i = 0; i < loadSize && i < 8; ++i) {
-    value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+    value |= static_cast<uint64_t>(readByte(i)) << (i * 8);
   }
 
   // For values larger than 64 bits, use APInt directly
   if (bitWidth > 64) {
     APInt apValue(bitWidth, 0);
     for (unsigned i = 0; i < loadSize; ++i) {
-      APInt byteVal(bitWidth, block->data[offset + i]);
+      APInt byteVal(bitWidth, readByte(i));
       apValue |= byteVal.shl(i * 8);
     }
     setValue(procId, loadOp.getResult(), InterpretedValue(apValue));
@@ -6890,6 +6934,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   // Find the memory block for this pointer
   MemoryBlock *block = findMemoryBlock(procId, storeOp.getAddr());
   uint64_t offset = 0;
+  bool useNative = false;
+  uint64_t nativeOffset = 0;
+  size_t nativeSize = 0;
 
   if (block) {
     // Local alloca memory
@@ -6936,43 +6983,66 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         }
       }
     }
+    if (!block) {
+      if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
+        useNative = true;
+        offset = nativeOffset;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found native block at 0x"
+                                << llvm::format_hex(addr - nativeOffset, 16)
+                                << " offset " << nativeOffset << "\n");
+      }
+    }
   }
 
   // Get the value to store
   InterpretedValue storeVal = getValue(procId, storeOp.getValue());
   unsigned storeSize = getLLVMTypeSize(storeOp.getValue().getType());
 
-  // NOTE: Native pointer access was removed because it caused crashes during
-  // UVM global constructor execution. If pointer is not in tracked memory,
-  // the store is silently skipped (stores to X are no-ops anyway).
+  // Native pointer access is only allowed for known blocks registered by the
+  // runtime. If pointer is not tracked, the store is silently skipped (stores
+  // to X are no-ops anyway).
 
-  if (!block) {
+  if (!block && !useNative) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.store: no memory block found for pointer 0x"
                             << llvm::format_hex(ptrVal.isX() ? 0 : ptrVal.getUInt64(), 16) << "\n");
     return success(); // Don't fail, just skip the store
   }
 
-  if (offset + storeSize > block->size) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.store: out of bounds access\n");
-    return success();
+  if (block) {
+    if (offset + storeSize > block->size) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: out of bounds access\n");
+      return success();
+    }
+  } else {
+    if (offset + storeSize > nativeSize) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: native out of bounds access\n");
+      return success();
+    }
   }
 
   // Write bytes to memory (little-endian)
   if (!storeVal.isX()) {
     const APInt &apValue = storeVal.getAPInt();
+    auto storeByte = [&](unsigned i, uint8_t value) {
+      if (block)
+        block->data[offset + i] = value;
+      else
+        reinterpret_cast<uint8_t *>(ptrVal.getUInt64())[i] = value;
+    };
     if (apValue.getBitWidth() > 64) {
       // Handle wide values using APInt operations
       for (unsigned i = 0; i < storeSize; ++i) {
-        block->data[offset + i] =
-            static_cast<uint8_t>(apValue.extractBits(8, i * 8).getZExtValue());
+        storeByte(i, static_cast<uint8_t>(
+                         apValue.extractBits(8, i * 8).getZExtValue()));
       }
     } else {
       uint64_t value = storeVal.getUInt64();
       for (unsigned i = 0; i < storeSize && i < 8; ++i) {
-        block->data[offset + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+        storeByte(i, static_cast<uint8_t>((value >> (i * 8)) & 0xFF));
       }
     }
-    block->initialized = true;
+    if (block)
+      block->initialized = true;
   }
 
   LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored "
@@ -7096,7 +7166,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   StringRef calleeName = resolvedCalleeName;
 
   // Look up the function in the module
-  auto &state = processStates[procId];
+  // Safe access: check if process state exists before accessing
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end()) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: process state not found for "
+                            << "procId=" << procId << ", using rootModule\n");
+    // Create a temporary entry to avoid issues
+    processStates[procId] = ProcessExecutionState();
+    stateIt = processStates.find(procId);
+  }
+  auto &state = stateIt->second;
   Operation *parent = state.processOrInitialOp;
   while (parent && !isa<ModuleOp>(parent))
     parent = parent->getParentOp();
@@ -7750,6 +7829,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         void *resultPtr = __moore_assoc_get_ref(arrayPtr, keyPtr, valueSize);
         uint64_t resultVal = reinterpret_cast<uint64_t>(resultPtr);
 
+        if (resultPtr && valueSize > 0) {
+          size_t size = static_cast<size_t>(valueSize);
+          auto it = nativeMemoryBlocks.find(resultVal);
+          if (it == nativeMemoryBlocks.end() || it->second < size)
+            nativeMemoryBlocks[resultVal] = size;
+        }
+
         setValue(procId, callOp.getResult(), InterpretedValue(resultVal, 64));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref(0x"
@@ -7974,7 +8060,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Using 100 as the limit since each recursive call uses significant C++ stack
   // space due to the deep call chain: interpretLLVMFuncBody -> interpretOperation
   // -> interpretLLVMCall -> interpretLLVMFuncBody.
-  constexpr size_t maxCallDepth = 100;
+  constexpr size_t maxCallDepth = 50;
   if (state.callDepth >= maxCallDepth) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: max call depth (" << maxCallDepth
                             << ") exceeded for '" << calleeName << "'\n");
