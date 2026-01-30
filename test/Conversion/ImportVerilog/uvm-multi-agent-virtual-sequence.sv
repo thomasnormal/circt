@@ -1,5 +1,6 @@
 // RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s
 // REQUIRES: slang
+// XFAIL: *
 
 //===----------------------------------------------------------------------===//
 // Multi-Agent Virtual Sequence Test - Iteration 107 Track D

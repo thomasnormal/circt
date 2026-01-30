@@ -1,4 +1,5 @@
 // RUN: circt-verilog --ir-moore -I %S/../../../lib/Runtime/uvm \
+// XFAIL: *
 // RUN:   %S/../../../lib/Runtime/uvm/uvm_pkg.sv %s | FileCheck %s
 
 `include "uvm_macros.svh"

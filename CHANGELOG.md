@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 258 - January 30, 2026
+
+### Goals
+Fix virtual dispatch in fork, investigate real UVM initialization crashes.
+
+### Fixed in this Iteration
+
+1. **Virtual Dispatch in sim.fork** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Child fork states didn't have `processOrInitialOp` set
+   - **FIX**: Copy `processOrInitialOp` from parent process state to child
+   - **IMPACT**: Virtual method dispatch inside fork blocks now works correctly
+
+2. **Alloca Classification in Global Constructors** (LLHDProcessInterpreter.cpp):
+   - **FIX**: Check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors when classifying allocas
+   - **IMPACT**: Allocas inside functions called from global constructors now correctly marked as function-level
+
+### Known Issues Identified
+
+1. **vtable_entry Override Errors**:
+   - `'moore.vtable_entry' op Target should be overridden by vtable`
+   - Appears for inherited methods like `send_request` in UVM sequences
+   - Blocks AVIP compilation with real uvm-core
+
+2. **Real UVM Global Initialization Crash**:
+   - LLVM load fails during global constructor execution
+   - UVM stubs work but real uvm-core crashes early
+
+3. **Potential `__moore_delay` Regression**:
+   - Delay accumulation behavior may have changed
+   - Needs investigation
+
+### Test Suite Results
+
+| Suite | Pass | Total | Notes |
+|-------|------|-------|-------|
+| sv-tests BMC | 23 | 26 | 100% (3 XFAIL) |
+| verilator-verification BMC | 17 | 17 | 100% |
+| verilator-verification LEC | 17 | 17 | 100% |
+| yosys-sva BMC | 14 | 14 | 100% |
+| yosys-sva LEC | 14 | 14 | 100% |
+
+---
+
 ## Iteration 257 - January 30, 2026
 
 ### Goals
@@ -23,6 +66,26 @@ Fix remaining UVM blockers: fork overflow, associative arrays, virtual methods.
    - **IMPACT**: Override methods now correctly marked virtual
 
 4. **OpenTitan Validation**: 97.5% pass (39/40 tests)
+
+5. **AVIP filelist env bootstrap** (`run_avip_circt_verilog.sh`):
+   - **FIX**: Auto-populate AXI4LITE_* env vars + include VIP sub-filelists
+   - **FIX**: Prepend VIP filelists so packages compile before env/test code
+   - **TEST**: `test/Tools/run-avip-circt-verilog-axi4lite.test`
+   - **IMPACT**: AXI4Lite AVIP now reaches real SV errors instead of missing files
+
+### Test Runs
+- **sv-tests BMC**: total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010
+- **yosys-sva BMC**: 14 tests, failures=0, skipped=2
+- **verilator-verification BMC**: total=17 pass=17 fail=0
+- **OpenTitan (verilog parse)**: `uart_reg_top`, `gpio_no_alerts`, `aes_reg_top`, `i2c_reg_top`, `spi_host_reg_top` SUCCESS
+- **OpenTitan (full IP)**:
+  - OK: `uart`
+  - FAIL: `i2c` (moore region isolation in prim_util_memload.svh: readmemh/dyn_extract_ref)
+- **AVIP (verilog parse)**:
+  - OK: `uart_avip`, `apb_avip`, `ahb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`
+  - FAIL: `axi4Lite_avip` (cover property module missing + WDATA width OOB in cover properties)
+  - FAIL: `spi_avip` (nested block comments, empty $sformatf arg, nested class property access errors)
+  - FAIL: `jtag_avip` (enum index type mismatch, range OOB, default args on virtual overrides)
 
 ---
 

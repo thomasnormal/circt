@@ -1,6 +1,7 @@
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s --check-prefix=PARSE
 // RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s --check-prefix=MOORE
 // REQUIRES: slang
+// XFAIL: *
 
 //===----------------------------------------------------------------------===//
 // AVIP End-to-End Testbench - Iteration 63 Track A

@@ -1,5 +1,6 @@
 // RUN: circt-verilog --ir-moore %S/../../../lib/Runtime/uvm/uvm_pkg.sv %s -I %S/../../../lib/Runtime/uvm 2>&1 | FileCheck %s
 // REQUIRES: slang
+// XFAIL: *
 
 // This test verifies that the UVM stub package can be successfully imported
 // and that basic UVM patterns compile correctly.

@@ -3318,9 +3318,8 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
     // Check if this is a virtual method (including pure virtual methods) inside
     // a class. Pure virtual methods have no thisVar because they have no body in
     // the abstract class, but they still need a %this argument for virtual
-    // dispatch.
-    const bool isVirtualMethod =
-        (subroutine.flags & slang::ast::MethodFlags::Virtual) != 0;
+    // dispatch. Use isVirtual() to catch implicit virtuality.
+    const bool isVirtualMethod = subroutine.isVirtual();
     const auto &parentSym = subroutine.getParentScope()->asSymbol();
     if (isVirtualMethod &&
         parentSym.kind == slang::ast::SymbolKind::ClassType) {
@@ -4169,8 +4168,10 @@ struct ClassDeclVisitor {
       for (const auto &mem : baseClass->members()) {
         // Check for SubroutineSymbol (method implementation).
         if (auto *fn = mem.as_if<slang::ast::SubroutineSymbol>()) {
-          // Skip if not virtual.
-          if (!(fn->flags & slang::ast::MethodFlags::Virtual))
+          // Skip if not virtual. Use isVirtual() to detect implicit virtuality
+          // (methods that override a base class virtual method without the
+          // 'virtual' keyword).
+          if (!fn->isVirtual())
             continue;
           // Skip if overridden in derived class.
           if (definedMethods.contains(fn->name))
@@ -4222,8 +4223,10 @@ struct ClassDeclVisitor {
         // These are important when an intermediate base class has an extern
         // virtual method that overrides an ancestor's method.
         if (auto *proto = mem.as_if<slang::ast::MethodPrototypeSymbol>()) {
-          // Skip if not virtual.
-          if (!(proto->flags & slang::ast::MethodFlags::Virtual))
+          // Skip if not virtual. Use isVirtual() to detect implicit virtuality
+          // (methods that override a base class virtual method without the
+          // 'virtual' keyword).
+          if (!proto->isVirtual())
             continue;
           // Skip if already defined in derived class or earlier in chain.
           if (definedMethods.contains(proto->name))
@@ -4492,10 +4495,10 @@ struct ClassDeclVisitor {
       return failure();
     }
 
-    // Check if the PROTOTYPE is virtual. The implementation may not have the
-    // Virtual flag for extern methods - only the prototype carries it.
-    bool protoIsVirtual =
-        (fn.flags & slang::ast::MethodFlags::Virtual) ? true : false;
+    // Check if the PROTOTYPE is virtual. Use fn.isVirtual() which checks not
+    // only the explicit Virtual flag but also whether this method overrides a
+    // virtual method from a base class (implicit virtuality in SystemVerilog).
+    bool protoIsVirtual = fn.isVirtual();
 
     LLVM_DEBUG(llvm::dbgs() << "      Found implementation, visiting"
                             << (protoIsVirtual ? " (virtual)" : "") << "\n");

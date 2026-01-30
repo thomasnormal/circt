@@ -3153,8 +3153,8 @@ struct RvalueExprVisitor : public ExprVisitor {
     // Method call: choose direct vs virtual.
     // For super calls, always use direct dispatch to call the parent's
     // implementation directly, bypassing virtual dispatch.
-    const bool isVirtual =
-        (subroutine->flags & slang::ast::MethodFlags::Virtual) != 0;
+    // Use isVirtual() to catch implicit virtuality (overriding base class).
+    const bool isVirtual = subroutine->isVirtual();
 
     if (!isVirtual || isSuperCall) {
       auto calleeSym = lowering->op.getSymName();
@@ -3195,8 +3195,9 @@ struct RvalueExprVisitor : public ExprVisitor {
     // A subroutine is a method if it has a thisVar (normal methods) or if it's
     // a virtual method (including pure virtual methods, which may not have
     // thisVar set in slang because they have no body in the abstract class).
+    // Use isVirtual() to catch implicit virtuality.
     const bool isMethod = (subroutine->thisVar != nullptr) ||
-                          ((subroutine->flags & slang::ast::MethodFlags::Virtual) != 0);
+                          subroutine->isVirtual();
 
     if (subroutine->name == "rand_mode" ||
         subroutine->name == "constraint_mode") {
