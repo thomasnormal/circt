@@ -207,33 +207,70 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 261)
+### Active Workstreams & Next Steps (Iteration 262)
 
-**Iteration 261 Changes (2026-01-30) - UNIT TEST COVERAGE:**
-1. **ReadOpConversion Unit Test** (ADDED):
-   - Test file: `test/Conversion/MooreToCore/class-member-read-cast.mlir`
-   - Validates that class member reads use `llvm.load` through `unrealized_conversion_cast`
-   - Previously, class member GEP pointers wrapped in unrealized casts would incorrectly use `llhd.prb`
-   - Key fix: `ReadOpConversion` looks through unrealized casts to find LLVM pointers
-   - **Tests**: Simple member read, 4-state fields, multiple reads from same instance
+**Iteration 262 Changes (2026-01-30) - FUNCTION REF PARAMETERS:**
 
-2. **AssignOpConversion Unit Test** (ADDED):
-   - Test file: `test/Conversion/MooreToCore/ref-param-store.mlir`
-   - Validates that class ref parameters use `llvm.store` instead of `llhd.drv`
-   - Key fix: `AssignOpConversion` detects `!llhd.ref<!llvm.ptr>` block args in functions
-   - Uses LLVM store since interpreter doesn't track refs through function calls as signals
-   - **Tests**: Single class output param, multiple refs, ref with new(), conditional assignment
+1. **Function Ref Parameters Fixed** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Function ref parameters (`ref int x`) used `llhd.drv`/`llhd.prb`
+   - Simulator cannot track signal references through function call boundaries
+   - UVM callback iterators failed with "interpretOperation failed for llhd.prb"
+   - **FIX**: AssignOpConversion and ReadOpConversion now detect block args of
+     `!llhd.ref<T>` in function context and use `llvm.store`/`llvm.load` instead
+   - **IMPACT**: UVM compiles and initializes without runtime errors
 
-3. **Remaining Architecture Gaps Identified**:
-   - **RefType Architecture**: General `!moore.ref<i32>` params still use `llhd.drv` (by design)
-     - Class handles (`!llhd.ref<!llvm.ptr>`) are special-cased for LLVM store
-     - Signal-backed refs work correctly with `llhd.drv` in hw.module/llhd.process
-   - **hw::ArrayGetOp**: Dynamic array indexing needs additional lowering work
+2. **Termination Handling in Nested Functions** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `sim.terminate` inside nested function calls didn't halt process
+   - Process continued executing after `halted=true` was set
+   - APB AVIP looped infinitely printing "terminate" messages
+   - **FIX**: Added LLVM::UnreachableOp handling and halted checks after each op
+   - **IMPACT**: APB AVIP terminates cleanly at time 0
 
-**Test Suite Status (Iteration 261):**
-- Unit Tests: 1373/1373 (100%)
-- Lit Tests: 2980/3085 (96.6%) - includes 2 new MooreToCore tests
-- All external suites unchanged (passing at high rates)
+3. **Static Class Member Initialization Verified**:
+   - Parameterized class static initialization WORKS in CIRCT
+   - Simple factory registration pattern passes tests
+   - UVM-like test case with typedef + static init passes
+
+4. **UVM die() Still Called** (INVESTIGATION ONGOING):
+   - Real uvm-core library terminates at 0fs
+   - `uvm_root::die()` is invoked during initialization
+   - Likely NOCOMP error (no components registered) or phase execution issue
+   - **Next**: Investigate UVM deferred initialization queue processing
+
+**Test Suite Status (Iteration 262):**
+- MooreToCore lit tests: 97/97 pass (96 + 1 XFAIL)
+- OpenTitan timer_core: PASS
+- APB AVIP: Terminates cleanly (was infinite loop)
+- UVM-like factory test: PASS
+- Real uvm-core: Compiles, runs without errors, dies at 0fs
+
+### Current Track Status & Next Tasks
+
+| Track | Status | Next Task |
+|-------|--------|-----------|
+| **Track 1: UVM Parity** | Function refs fixed | Investigate UVM die() root cause |
+| **Track 2: AVIP Testing** | APB terminates cleanly | Test all 9 AVIPs after UVM fix |
+| **Track 3: OpenTitan** | timer_core PASS | Run full OpenTitan suite |
+| **Track 4: External Suites** | sv-tests/verilator working | Run regression tests |
+
+### Remaining Limitations
+
+**Critical for UVM:**
+1. **UVM Factory Registration** - die() called during run_test()
+   - Static initialization works for simple cases
+   - Real UVM has complex initialization ordering requirements
+   - May need explicit elaboration phase for class registration
+
+2. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
+   - Needs explicit call stack (architectural change)
+
+**Medium Priority:**
+3. **Hierarchical Name Access** - ~9 XFAIL tests
+4. **Virtual Method Dispatch** - Some edge cases may remain
+
+**Lower Priority:**
+5. **UVM-specific Features** (config_db, factory, sequences)
+6. **Constraint Randomization** (rand, constraint)
 
 ---
 
