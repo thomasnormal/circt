@@ -209,40 +209,42 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 265)
+### Active Workstreams & Next Steps (Iteration 266)
 
-**Iteration 265 Focus (2026-01-30) - CONTINUED AVIP VALIDATION:**
+**Iteration 266 Focus (2026-01-30) - UVM PACKAGE INITIALIZATION FIX:**
 
 **Current Status:**
-- **AVIP llhd.prb error FIXED** ✅ - AVIPs now compile and simulate
-- APB, AHB, UART AVIPs all pass initial simulation
-- UVM infrastructure initializes correctly
+- **UVM root cause identified**: Package-level class variable assignments during elaboration don't persist
+- All 6 AVIPs compile and simulate (APB, AHB, UART, AXI4, I2S, I3C)
+- OpenTitan: hmac_reg_top, kmac_reg_top, entropy_src_reg_top pass
+- New unit test: class-null-compare.sv added
 
 **Next Tasks:**
-1. Test AVIPs with actual UVM test names (`+UVM_TESTNAME`)
-2. Investigate UVM factory/phase progression
-3. Validate more OpenTitan IPs
-4. Continue external test suite maintenance
+1. Fix package-level class variable persistence during elaboration
+2. Investigate ref-param-read.sv test failure
+3. Continue AVIP testing with actual UVM tests
+4. Maintain external test suite coverage
 
 ### Current Track Status & Next Tasks
 
 | Track | Status | Next Task |
 |-------|--------|-----------|
-| **Track 1: UVM Parity** | ✅ AVIP fix done | Test with actual UVM tests |
-| **Track 2: AVIP Testing** | ✅ 3 AVIPs pass | Validate more AVIPs |
-| **Track 3: OpenTitan** | 38+/42 pass | Continue validation |
+| **Track 1: UVM Parity** | Root cause found | Fix package elaboration |
+| **Track 2: AVIP Testing** | ✅ 6 AVIPs pass | Test with UVM tests |
+| **Track 3: OpenTitan** | 3 more pass | Continue validation |
 | **Track 4: External Suites** | 100% pass | Maintain coverage |
 
 ### Remaining Limitations
 
 **Critical for UVM/AVIP:**
-1. **UVM Test Execution** - AVIPs terminate at time 0 (no test running yet)
-   - Need to pass `+UVM_TESTNAME` to run actual tests
-   - UVM factory/phase infrastructure needs testing
+1. **Package-Level Class Variable Persistence** - ROOT CAUSE IDENTIFIED
+   - Class variable assignments during package elaboration don't persist
+   - Affects UVM factory registration (uvm_default_factory, uvm_top, etc.)
+   - Need to fix elaboration-time assignment handling
 
 2. **UVM Factory Registration** - die() called during run_test()
+   - Caused by limitation #1 above
    - Static initialization works for simple cases
-   - Real UVM has complex initialization ordering requirements
 
 3. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
    - Needs explicit call stack (architectural change)
@@ -254,6 +256,34 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Lower Priority:**
 6. **UVM-specific Features** (config_db, factory, sequences)
 7. **Constraint Randomization** (rand, constraint)
+
+---
+
+### Previous Iteration: Iteration 265
+
+**Iteration 265 Results (2026-01-30) - UVM ROOT CAUSE IDENTIFIED:**
+
+1. **UVM Package Initialization Root Cause**:
+   - **FINDING**: Package-level class variable assignments during elaboration don't persist
+   - Variables like `uvm_default_factory`, `uvm_top` are null at runtime
+   - Elaboration-time assignments need special handling
+
+2. **New Unit Test Added:**
+   - `class-null-compare.sv` - Tests class null comparison behavior
+
+3. **Test Results:**
+   | Suite | Status | Notes |
+   |-------|--------|-------|
+   | **APB AVIP** | ✅ PASS | Compiles and simulates |
+   | **AHB AVIP** | ✅ PASS | Compiles and simulates |
+   | **UART AVIP** | ✅ PASS | Compiles and simulates |
+   | **AXI4 AVIP** | ✅ PASS | Compiles and simulates |
+   | **I2S AVIP** | ✅ PASS | Compiles and simulates |
+   | **I3C AVIP** | ✅ PASS | Compiles and simulates |
+   | OpenTitan hmac_reg_top | ✅ PASS | New |
+   | OpenTitan kmac_reg_top | ✅ PASS | New |
+   | OpenTitan entropy_src_reg_top | ✅ PASS | New |
+   | ref-param-read.sv | ❌ FAIL | Needs investigation |
 
 ---
 
