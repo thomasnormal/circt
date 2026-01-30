@@ -240,6 +240,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 **Current Status: Ready for UVM E2E Testing!**
 
+**Actual Test Suite Results (Verified 2026-01-30):**
+| Suite | Pass | Fail | Notes |
+|-------|------|------|-------|
+| sv-tests BMC | 23/26 | 0 | 3 XFAIL as expected |
+| sv-tests LEC | 23/23 | 0 | ✅ |
+| verilator BMC | 17/17 | 0 | ✅ |
+| verilator LEC | 17/17 | 0 | ✅ |
+| yosys-sva BMC | 7/14 | 5 | ⚠️ 50% - needs investigation |
+| yosys-sva LEC | 14/14 | 0 | ✅ |
+
 **AVIP Status (6/9 working):**
 | AVIP | Compile | Simulate | Blocker |
 |------|---------|----------|---------|
