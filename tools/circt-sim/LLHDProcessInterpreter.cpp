@@ -2221,6 +2221,26 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     if (!executeStep(procId))
       break;
   }
+
+  // After the loop exits, check if we have pending delay from __moore_delay.
+  // If so, schedule the resumption event with the accumulated delay.
+  if (state.waiting && state.pendingDelayFs > 0) {
+    SimTime currentTime = scheduler.getCurrentTime();
+    SimTime targetTime = currentTime.advanceTime(state.pendingDelayFs);
+
+    LLVM_DEBUG(llvm::dbgs() << "  Scheduling __moore_delay resumption: "
+                            << state.pendingDelayFs << " fs from time "
+                            << currentTime.realTime << " to "
+                            << targetTime.realTime << "\n");
+
+    // Reset the pending delay before scheduling
+    state.pendingDelayFs = 0;
+
+    // Schedule resumption at the target time
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::Active,
+        Event([this, procId]() { resumeProcess(procId); }));
+  }
 }
 
 bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
@@ -5953,8 +5973,23 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   // Check if this is an LLVM call at module level (e.g., string conversion)
   // Execute the call on demand when its result is needed.
   if (auto callOp = value.getDefiningOp<LLVM::CallOp>()) {
-    // Interpret the call to compute and cache its result
-    if (succeeded(interpretLLVMCall(procId, callOp))) {
+    // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
+    // This path can recurse: getValue -> interpretLLVMCall -> interpretLLVMFuncBody
+    // -> interpretOperation -> getValue
+    auto &state = processStates[procId];
+    constexpr size_t maxCallDepth = 50;
+    if (state.callDepth >= maxCallDepth) {
+      LLVM_DEBUG(llvm::dbgs() << "  getValue: max call depth (" << maxCallDepth
+                              << ") exceeded for LLVM call, returning X\n");
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+    }
+
+    // Interpret the call to compute and cache its result with depth tracking
+    ++state.callDepth;
+    LogicalResult callResult = interpretLLVMCall(procId, callOp);
+    --state.callDepth;
+
+    if (succeeded(callResult)) {
       // Now try to get the cached result
       auto it = valueMap.find(value);
       if (it != valueMap.end())
@@ -6730,6 +6765,43 @@ bool LLHDProcessInterpreter::findNativeMemoryBlockByAddress(
   return false;
 }
 
+bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
+                                               uint64_t strPtrVal,
+                                               int64_t strLen,
+                                               std::string &out) {
+  out.clear();
+  if (strLen < 0)
+    return false;
+  if (strLen == 0)
+    return true;
+  constexpr int64_t kMaxStringKeyBytes = 1 << 20;
+  if (strLen > kMaxStringKeyBytes)
+    return false;
+
+  uint64_t offset = 0;
+  if (auto *block = findMemoryBlockByAddress(strPtrVal, procId, &offset)) {
+    if (!block->initialized)
+      return false;
+    if (offset + static_cast<uint64_t>(strLen) > block->data.size())
+      return false;
+    out.assign(reinterpret_cast<const char *>(block->data.data() + offset),
+               static_cast<size_t>(strLen));
+    return true;
+  }
+
+  uint64_t nativeOffset = 0;
+  size_t nativeSize = 0;
+  if (findNativeMemoryBlockByAddress(strPtrVal, &nativeOffset, &nativeSize)) {
+    if (nativeOffset + static_cast<size_t>(strLen) > nativeSize)
+      return false;
+    auto *nativePtr = reinterpret_cast<const char *>(strPtrVal);
+    out.assign(nativePtr, static_cast<size_t>(strLen));
+    return true;
+  }
+
+  return false;
+}
+
 LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
     ProcessId procId, LLVM::AllocaOp allocaOp) {
   auto &state = processStates[procId];
@@ -7436,34 +7508,32 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
     // Handle __moore_delay - delay in class method context or fork branches.
     // This is called when a #delay statement appears in a class task/method
-    // or inside a fork branch. We suspend the process and schedule resumption
-    // at the target time. This properly yields control to the scheduler,
-    // avoiding reentrancy issues that caused PROCESS_STEP_OVERFLOW errors
-    // when using synchronous blocking loops with scheduler.advanceTime().
+    // or inside a fork branch. We accumulate the delay in pendingDelayFs and
+    // mark the process as waiting. Multiple sequential __moore_delay calls
+    // within the same function will accumulate their delays before the process
+    // actually suspends.
     if (calleeName == "__moore_delay") {
       if (callOp.getNumOperands() >= 1) {
         InterpretedValue delayArg = getValue(procId, callOp.getOperand(0));
         int64_t delayFs = delayArg.isX() ? 0 : static_cast<int64_t>(delayArg.getUInt64());
 
         if (delayFs > 0) {
-          SimTime currentTime = scheduler.getCurrentTime();
-          SimTime targetTime = currentTime.advanceTime(delayFs);
+          auto &state = processStates[procId];
+
+          // Accumulate the delay. Multiple __moore_delay calls in sequence
+          // (e.g., #10; #20; #30;) should result in a total delay of 60.
+          state.pendingDelayFs += delayFs;
 
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(" << delayFs
-                                  << " fs) from time " << currentTime.realTime
-                                  << " to " << targetTime.realTime
-                                  << " - suspending process\n");
+                                  << " fs) accumulated, total pending = "
+                                  << state.pendingDelayFs << " fs\n");
 
           // Mark the process as waiting. This will cause the executeProcess
           // loop to exit after this step, yielding control to the scheduler.
-          auto &state = processStates[procId];
+          // The actual scheduling of the resumption event happens in
+          // executeProcess when it detects state.waiting is true and
+          // state.pendingDelayFs > 0.
           state.waiting = true;
-
-          // Schedule resumption at the target time. The resumeProcess callback
-          // will clear the waiting flag and reschedule this process.
-          scheduler.getEventScheduler().schedule(
-              targetTime, SchedulingRegion::Active,
-              Event([this, procId]() { resumeProcess(procId); }));
 
         } else {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(0) - no delay\n");
@@ -7783,6 +7853,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint8_t keyBuffer[16] = {0};
         void *keyPtr = keyBuffer;
         MooreString keyString = {nullptr, 0};
+        std::string keyStorage;
 
         if (keyBlock && keyBlock->initialized) {
           // Copy up to 16 bytes of key data
@@ -7801,8 +7872,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
                 strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
               }
-              keyString.data = reinterpret_cast<char *>(strPtrVal);
-              keyString.len = strLen;
+              if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+                LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref "
+                                           "string key not readable\n");
+                setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+                return success();
+              }
+              keyString.data = keyStorage.data();
+              keyString.len = keyStorage.size();
               keyPtr = &keyString;
 
               LLVM_DEBUG({
@@ -7863,6 +7940,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint8_t keyBuffer[16] = {0};
         void *keyPtr = keyBuffer;
         MooreString keyString = {nullptr, 0};
+        std::string keyStorage;
 
         if (keyBlock && keyBlock->initialized) {
           size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
@@ -7877,8 +7955,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
                 strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
               }
-              keyString.data = reinterpret_cast<char *>(strPtrVal);
-              keyString.len = strLen;
+              if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+                LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists "
+                                           "string key not readable\n");
+                setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+                return success();
+              }
+              keyString.data = keyStorage.data();
+              keyString.len = keyStorage.size();
               keyPtr = &keyString;
             }
           }
