@@ -8,19 +8,21 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
 ### Current Limitations & Features Needed
 
 **Critical Blockers for UVM:**
-1. **Class Member llhd.drv Issue**: Class member fields use `llhd.drv` when should use `llvm.store`
-   - UVM callbacks/iterators fail during initialization (get_first_623)
-   - `unrealized_conversion_cast` from `!llvm.ptr` to `!llhd.ref` not recognized as signal
+1. **Static Class Member Initialization** (NEW - Root Cause Found):
+   - UVM uses `local static bit m__initialized = __deferred_init();` for factory registration
+   - CIRCT doesn't execute these static initializers at elaboration time
+   - Result: No components register with UVM factory, `run_test()` fails with NOCOMP error
+   - **Impact**: All UVM testbenches fail at 0fs with "No components instantiated" error
 
 2. **Delay Accumulation**: Interpreter can't save/restore instruction pointer mid-function
    - Sequential `#delay` in functions only apply last delay
-   - Needs explicit call stack (architectural change, ~2-3 weeks)
+   - Needs explicit call stack (architectural change)
 
 **Features to Build:**
-1. Fix MooreToCore to use `llvm.store` for class member assignments (not `llhd.drv`)
-2. Implement proper signal vs memory distinction in lowering
-3. Add UVM phase execution tracing for debugging
-4. Consider explicit call stack for delay handling
+1. Implement static class member initialization at elaboration time
+2. Run class static initializers before procedural code
+3. Consider UVM-specific factory registration workaround
+4. Add UVM phase execution tracing for debugging
 
 ### Fixed in Iteration 261
 
@@ -32,10 +34,41 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
    - Use `llvm.store` for any `!llhd.ref<T>` block argument in function context
    - Previously only handled `!llhd.ref<!llvm.ptr>`, now handles all types
 
-3. **hw::ArrayGetOp Issue Identified** (timer_core):
-   - `evaluateContinuousValue` doesn't support `hw::ArrayGetOp`
-   - Causes timer_core interrupt to not fire
-   - FIX NEEDED: Add ArrayGetOp support in evaluateContinuousValueImpl
+3. **hw::ArrayGetOp Support** (LLHDProcessInterpreter.cpp):
+   - Added ArrayGetOp handling in `evaluateContinuousValueImpl`
+   - **IMPACT**: timer_core now PASSES - interrupt fires correctly
+
+4. **Signal vs Class Ref Distinction** (MooreToCore.cpp):
+   - Check nested type: LLVM types use store/load, HW types use drv/prb
+   - Fixes regression where signal refs incorrectly used llvm.store
+   - **All 96 MooreToCore tests pass**
+
+5. **ReadOpConversion for Ref Block Args** (MooreToCore.cpp):
+   - Handle block arguments of type `!llhd.ref<T>` in function context
+   - Create cast and use `llvm.load` for class member refs
+
+6. **Termination Handling in Nested Function Calls** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `sim.terminate` inside function calls didn't stop execution
+   - Process continued executing after nested function set `halted=true`
+   - Simulation would loop infinitely printing "terminate" messages
+   - **FIX**: Added LLVM::UnreachableOp handling to halt process immediately
+   - Added halted checks after each operation in `interpretFuncBody` and `interpretLLVMFuncBody`
+   - **IMPACT**: APB AVIP now terminates cleanly instead of looping forever
+
+7. **BMC Clock-Source Struct Sampling** (VerifToSMT.cpp):
+   - **FIX**: Consume `bmc_clock_sources` to substitute 4‑state clock source
+     inputs with post‑edge BMC clock values during SMT lowering.
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct.mlir`
+
+5. **BMC Clock-Source Mapping for Derived Struct Clocks** (VerifToSMT.cpp):
+   - **FIX**: Resolve struct-derived clock expressions to BMC clock positions
+     when `bmc_clock_sources` is present (including invert handling).
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct-invert.mlir`
+
+6. **PruneBMCRegisters Output-Use Safety** (PruneBMCRegisters.cpp):
+   - **FIX**: Keep ops whose results are still used by kept operations to avoid
+     erasing live defs during register pruning.
+   - **TEST**: `test/Tools/circt-bmc/prune-bmc-registers-kept-output.mlir`
 
 ### Workstream Status
 
@@ -52,8 +85,8 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
 |-------|--------|-------|
 | circt-sim | 70/70 (100%) | All pass |
 | sv-tests BMC | 23/26 (88.5%) | 3 XFAIL |
-| verilator BMC | 17/17 (100%) | All pass |
-| yosys-sva BMC | 14/14 (100%) | 2 VHDL skipped |
+| verilator BMC | 9/17 pass | 8 errors (compile/import) |
+| yosys-sva BMC | 16 failures | basic00-03, counter, sva_not, sva_value_change_* |
 | OpenTitan | gpio/uart PASS | timer_core functional issue |
 
 ---
