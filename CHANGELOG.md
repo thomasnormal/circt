@@ -22,14 +22,29 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
 3. Add UVM phase execution tracing for debugging
 4. Consider explicit call stack for delay handling
 
+### Fixed in Iteration 261
+
+1. **ReadOpConversion for Class Members** (MooreToCore.cpp):
+   - Look through `unrealized_conversion_cast` to find LLVM pointer
+   - Use `llvm.load` instead of `llhd.prb` for class member reads
+
+2. **AssignOpConversion for Ref Function Params** (MooreToCore.cpp):
+   - Use `llvm.store` for any `!llhd.ref<T>` block argument in function context
+   - Previously only handled `!llhd.ref<!llvm.ptr>`, now handles all types
+
+3. **hw::ArrayGetOp Issue Identified** (timer_core):
+   - `evaluateContinuousValue` doesn't support `hw::ArrayGetOp`
+   - Causes timer_core interrupt to not fire
+   - FIX NEEDED: Add ArrayGetOp support in evaluateContinuousValueImpl
+
 ### Workstream Status
 
 | Track | Status | Next Task |
 |-------|--------|-----------|
-| **Track 1: llhd.drv Fix** | Identified | Fix class member assignment lowering in MooreToCore |
-| **Track 2: AVIP Testing** | APB runs, hits drv issue | Test after llhd.drv fix |
-| **Track 3: OpenTitan** | gpio/uart pass | Continue timer_core debugging |
-| **Track 4: External Suites** | All high rates | Monitor for regressions |
+| **Track 1: RefType Lowering** | Read/write fixed | Broader RefType distinction (class vs signal) |
+| **Track 2: AVIP Testing** | Still failing at prb/drv | Need RefType architecture fix |
+| **Track 3: OpenTitan** | 5/6 pass | Fix hw::ArrayGetOp for timer_core |
+| **Track 4: External Suites** | Core tests 100% | Monitor for regressions |
 
 ### Test Suite Status
 
@@ -129,6 +144,13 @@ Fix class member access from methods, enable uvm-core simulation.
     - **sv-tests BMC**: 88.5% pass rate (was incorrectly reported)
     - **verilator-verification**: 100% pass rate
     - **All non-UVM simulations pass**: class members, virtual methods, OpenTitan
+
+15. **BMC Clock Mapping for 4-state Inputs** (LowerToBMC.cpp, ExternalizeRegisters.cpp):
+    - **FIX**: Preserve clock port names for i1/struct‑typed clock roots when
+      externalizing registers, and derive BMC clocks from `bmc_reg_clocks` even
+      after `ltl.clock`/`seq.to_clock` get pruned.
+    - **TEST**: `test/Tools/circt-bmc/lower-to-bmc-struct-clock.mlir`
+    - **TEST**: `test/Tools/circt-bmc/sva-multiclock-nfa-clocked-sat-e2e.sv`
 
 ### Remaining Issues
 
