@@ -4442,7 +4442,7 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       return success();
     }
 
-    // Handle string variables - these need stack allocation with empty init
+    // Handle string variables - these need stack allocation
     if (isa<StringType>(nestedMooreType)) {
       auto *ctx = rewriter.getContext();
       // Get the struct type by converting the nested string type directly
@@ -4456,20 +4456,27 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       auto alloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
 
-      // Initialize with empty string {nullptr, 0}
-      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-      auto zeroLen = LLVM::ConstantOp::create(
-          rewriter, loc, rewriter.getI64IntegerAttr(0));
+      // Check if there is an initial value
+      Value initVal = adaptor.getInitial();
+      if (initVal) {
+        // Use the provided initial value
+        LLVM::StoreOp::create(rewriter, loc, initVal, alloca);
+      } else {
+        // Initialize with empty string {nullptr, 0}
+        auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        auto zeroLen = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(0));
 
-      // Build the struct value
-      Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
-      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, nullPtr,
-                                              ArrayRef<int64_t>{0});
-      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, zeroLen,
-                                              ArrayRef<int64_t>{1});
+        // Build the struct value
+        Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
+        structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal,
+                                                nullPtr, ArrayRef<int64_t>{0});
+        structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal,
+                                                zeroLen, ArrayRef<int64_t>{1});
 
-      // Store to alloca
-      LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+        // Store to alloca
+        LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+      }
 
       rewriter.replaceOp(op, alloca.getResult());
       return success();
