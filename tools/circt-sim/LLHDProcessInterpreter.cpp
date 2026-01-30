@@ -6821,6 +6821,37 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     }
   }
 
+  if (!block && !ptrVal.isX()) {
+    // No interpreter memory block found - try native memory access.
+    // This handles pointers returned from runtime functions like
+    // __moore_assoc_get_ref which return real C++ memory addresses.
+    uint64_t addr = ptrVal.getUInt64();
+    if (addr != 0) {
+      void *nativePtr = reinterpret_cast<void *>(addr);
+      uint64_t value = 0;
+      if (loadSize <= 8) {
+        std::memcpy(&value, nativePtr, loadSize);
+        setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded from native ptr 0x"
+                                << llvm::format_hex(addr, 16) << " value="
+                                << value << " (" << loadSize << " bytes)\n");
+      } else {
+        // Handle wide values
+        APInt apValue(bitWidth, 0);
+        auto *bytes = static_cast<uint8_t *>(nativePtr);
+        for (unsigned i = 0; i < loadSize; ++i) {
+          APInt byteVal(bitWidth, bytes[i]);
+          apValue |= byteVal.shl(i * 8);
+        }
+        setValue(procId, loadOp.getResult(), InterpretedValue(apValue));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded wide value from native ptr 0x"
+                                << llvm::format_hex(addr, 16)
+                                << " (" << loadSize << " bytes)\n");
+      }
+      return success();
+    }
+  }
+
   if (!block) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: no memory block found for pointer 0x"
                             << llvm::format_hex(ptrVal.isX() ? 0 : ptrVal.getUInt64(), 16) << "\n");
@@ -6928,15 +6959,45 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     }
   }
 
+  // Get the value to store
+  InterpretedValue storeVal = getValue(procId, storeOp.getValue());
+  unsigned storeSize = getLLVMTypeSize(storeOp.getValue().getType());
+
+  if (!block && !ptrVal.isX()) {
+    // No interpreter memory block found - try native memory access.
+    // This handles pointers returned from runtime functions like
+    // __moore_assoc_get_ref which return real C++ memory addresses.
+    uint64_t addr = ptrVal.getUInt64();
+    if (addr != 0 && !storeVal.isX()) {
+      void *nativePtr = reinterpret_cast<void *>(addr);
+      const APInt &apValue = storeVal.getAPInt();
+      if (storeSize <= 8) {
+        uint64_t value = apValue.getZExtValue();
+        std::memcpy(nativePtr, &value, storeSize);
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored to native ptr 0x"
+                                << llvm::format_hex(addr, 16) << " value="
+                                << value << " (" << storeSize << " bytes)\n");
+      } else {
+        // Handle wide values
+        for (unsigned i = 0; i < storeSize; ++i) {
+          static_cast<uint8_t *>(nativePtr)[i] =
+              static_cast<uint8_t>(apValue.extractBits(8, i * 8).getZExtValue());
+        }
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored wide value to native ptr 0x"
+                                << llvm::format_hex(addr, 16)
+                                << " (" << storeSize << " bytes)\n");
+      }
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: skipped store to null/X pointer\n");
+    }
+    return success();
+  }
+
   if (!block) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.store: no memory block found for pointer 0x"
                             << llvm::format_hex(ptrVal.isX() ? 0 : ptrVal.getUInt64(), 16) << "\n");
     return success(); // Don't fail, just skip the store
   }
-
-  // Get the value to store
-  InterpretedValue storeVal = getValue(procId, storeOp.getValue());
-  unsigned storeSize = getLLVMTypeSize(storeOp.getValue().getType());
 
   if (offset + storeSize > block->size) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.store: out of bounds access\n");
@@ -7341,11 +7402,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
-    // Handle __moore_delay - delay in class method context
-    // This is called when a #delay statement appears in a class task/method.
-    // Since we're inside a function call stack, we can't easily suspend the
-    // process. Instead, we schedule the delay and advance simulation time
-    // synchronously. This is correct for single-threaded test phases in UVM.
+    // Handle __moore_delay - delay in class method context or fork branches.
+    // This is called when a #delay statement appears in a class task/method
+    // or inside a fork branch. We suspend the process and schedule resumption
+    // at the target time. This properly yields control to the scheduler,
+    // avoiding reentrancy issues that caused PROCESS_STEP_OVERFLOW errors
+    // when using synchronous blocking loops with scheduler.advanceTime().
     if (calleeName == "__moore_delay") {
       if (callOp.getNumOperands() >= 1) {
         InterpretedValue delayArg = getValue(procId, callOp.getOperand(0));
@@ -7357,40 +7419,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(" << delayFs
                                   << " fs) from time " << currentTime.realTime
-                                  << " to " << targetTime.realTime << "\n");
+                                  << " to " << targetTime.realTime
+                                  << " - suspending process\n");
 
-          // Schedule a marker event at the target time.
-          // Use a flag to track when the delay completes.
-          bool delayCompleted = false;
+          // Mark the process as waiting. This will cause the executeProcess
+          // loop to exit after this step, yielding control to the scheduler.
+          auto &state = processStates[procId];
+          state.waiting = true;
+
+          // Schedule resumption at the target time. The resumeProcess callback
+          // will clear the waiting flag and reschedule this process.
           scheduler.getEventScheduler().schedule(
               targetTime, SchedulingRegion::Active,
-              Event([&delayCompleted]() {
-                delayCompleted = true;
-              }));
+              Event([this, procId]() { resumeProcess(procId); }));
 
-          // Process events until our delay completes.
-          // This implements a blocking delay within the function context.
-          // We use scheduler.advanceTime() which processes events and advances
-          // simulation time following IEEE 1800 semantics.
-          while (!delayCompleted && !terminationRequested) {
-            // Check if simulation is complete (no more events)
-            if (scheduler.getEventScheduler().isComplete()) {
-              // No more events - this shouldn't happen since we scheduled one
-              LLVM_DEBUG(llvm::dbgs() << "  __moore_delay: WARNING - no events, "
-                                      << "delay may not have completed\n");
-              break;
-            }
-            // Advance time and process events
-            if (!scheduler.advanceTime()) {
-              // No progress was made - check if we've reached target time
-              if (scheduler.getCurrentTime() >= targetTime) {
-                break;
-              }
-            }
-          }
-
-          LLVM_DEBUG(llvm::dbgs() << "  __moore_delay: completed, now at time "
-                                  << scheduler.getCurrentTime().realTime << " fs\n");
         } else {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(0) - no delay\n");
         }
@@ -7664,6 +7706,298 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                     << ") -> len=" << newLen << "\n");
           }
         }
+      }
+      return success();
+    }
+
+    // Handle __moore_assoc_create - create an associative array
+    // Signature: (key_size: i32, value_size: i32) -> ptr
+    if (calleeName == "__moore_assoc_create") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        int32_t keySize = static_cast<int32_t>(getValue(procId, callOp.getOperand(0)).getUInt64());
+        int32_t valueSize = static_cast<int32_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
+
+        void *arrayPtr = __moore_assoc_create(keySize, valueSize);
+        uint64_t ptrVal = reinterpret_cast<uint64_t>(arrayPtr);
+
+        setValue(procId, callOp.getResult(), InterpretedValue(ptrVal, 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_create("
+                                << keySize << ", " << valueSize << ") = 0x"
+                                << llvm::format_hex(ptrVal, 16) << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_assoc_get_ref - get reference to element in associative array
+    // Signature: (array: ptr, key: ptr, value_size: i32) -> ptr
+    // The runtime determines string vs integer keys from the array header.
+    if (calleeName == "__moore_assoc_get_ref") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        int32_t valueSize = static_cast<int32_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+
+        // Read key from interpreter memory into a local buffer
+        uint64_t keyOffset = 0;
+        auto *keyBlock = findMemoryBlockByAddress(keyAddr, procId, &keyOffset);
+
+        // We need to read the key data and pass a pointer to it.
+        // For string keys: {ptr, i64} (16 bytes)
+        // For integer keys: i8/i16/i32/i64 (1-8 bytes)
+        // The runtime uses keySize stored in array header to know which.
+        uint8_t keyBuffer[16] = {0};
+        void *keyPtr = keyBuffer;
+        MooreString keyString = {nullptr, 0};
+
+        if (keyBlock && keyBlock->initialized) {
+          // Copy up to 16 bytes of key data
+          size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
+          std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
+
+          // Check if this looks like a string key ({ptr, len} struct)
+          // by reading the header and checking keySize
+          if (arrayPtr) {
+            auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+            if (header->type == AssocArrayType_StringKey) {
+              // For string keys, interpret as MooreString
+              uint64_t strPtrVal = 0;
+              int64_t strLen = 0;
+              for (int i = 0; i < 8; ++i) {
+                strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
+                strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
+              }
+              keyString.data = reinterpret_cast<char *>(strPtrVal);
+              keyString.len = strLen;
+              keyPtr = &keyString;
+
+              LLVM_DEBUG({
+                llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref string key: ptr=0x"
+                            << llvm::format_hex(strPtrVal, 16) << " len=" << strLen;
+                if (keyString.data && keyString.len > 0) {
+                  llvm::dbgs() << " = \"";
+                  llvm::dbgs().write(keyString.data, std::min<int64_t>(keyString.len, 100));
+                  llvm::dbgs() << "\"";
+                }
+                llvm::dbgs() << "\n";
+              });
+            } else {
+              // Integer key - keyBuffer already contains the value
+              LLVM_DEBUG({
+                int64_t intKey = 0;
+                std::memcpy(&intKey, keyBuffer, std::min<size_t>(8, maxCopy));
+                llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref int key: " << intKey << "\n";
+              });
+            }
+          }
+        }
+
+        void *resultPtr = __moore_assoc_get_ref(arrayPtr, keyPtr, valueSize);
+        uint64_t resultVal = reinterpret_cast<uint64_t>(resultPtr);
+
+        setValue(procId, callOp.getResult(), InterpretedValue(resultVal, 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ", 0x"
+                                << llvm::format_hex(keyAddr, 16) << ", "
+                                << valueSize << ") = 0x"
+                                << llvm::format_hex(resultVal, 16) << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_assoc_exists - check if key exists in associative array
+    // Signature: (array: ptr, key: ptr) -> i32
+    if (calleeName == "__moore_assoc_exists") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+
+        // Read key from interpreter memory
+        uint64_t keyOffset = 0;
+        auto *keyBlock = findMemoryBlockByAddress(keyAddr, procId, &keyOffset);
+
+        uint8_t keyBuffer[16] = {0};
+        void *keyPtr = keyBuffer;
+        MooreString keyString = {nullptr, 0};
+
+        if (keyBlock && keyBlock->initialized) {
+          size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
+          std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
+
+          if (arrayPtr) {
+            auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+            if (header->type == AssocArrayType_StringKey) {
+              uint64_t strPtrVal = 0;
+              int64_t strLen = 0;
+              for (int i = 0; i < 8; ++i) {
+                strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
+                strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
+              }
+              keyString.data = reinterpret_cast<char *>(strPtrVal);
+              keyString.len = strLen;
+              keyPtr = &keyString;
+            }
+          }
+        }
+
+        int32_t result = __moore_assoc_exists(arrayPtr, keyPtr);
+
+        setValue(procId, callOp.getResult(), InterpretedValue(static_cast<uint64_t>(result), 32));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ", key) = "
+                                << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_assoc_first - get first key in associative array
+    // Signature: (array: ptr, key_out: ptr) -> i1
+    if (calleeName == "__moore_assoc_first") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+
+        // Find key output memory block
+        uint64_t keyOutOffset = 0;
+        auto *keyOutBlock = findMemoryBlockByAddress(keyOutAddr, procId, &keyOutOffset);
+
+        // Determine key type from array header
+        bool isStringKey = false;
+        if (arrayPtr) {
+          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+          isStringKey = (header->type == AssocArrayType_StringKey);
+        }
+
+        bool result = false;
+        if (isStringKey) {
+          MooreString keyOut = {nullptr, 0};
+          result = __moore_assoc_first(arrayPtr, &keyOut);
+
+          if (result && keyOutBlock && keyOutOffset + 16 <= keyOutBlock->data.size()) {
+            uint64_t ptrVal = reinterpret_cast<uint64_t>(keyOut.data);
+            int64_t lenVal = keyOut.len;
+            for (int i = 0; i < 8; ++i) {
+              keyOutBlock->data[keyOutOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
+              keyOutBlock->data[keyOutOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
+            }
+            keyOutBlock->initialized = true;
+          }
+        } else {
+          // Integer key - pass pointer to memory block directly
+          // The key size can be 1, 2, 4, or 8 bytes depending on the index type.
+          uint8_t keyBuffer[8] = {0};
+          result = __moore_assoc_first(arrayPtr, keyBuffer);
+
+          if (result && keyOutBlock) {
+            size_t availableBytes = keyOutBlock->data.size() - keyOutOffset;
+            size_t copySize = std::min<size_t>(8, availableBytes);
+            std::memcpy(keyOutBlock->data.data() + keyOutOffset, keyBuffer, copySize);
+            keyOutBlock->initialized = true;
+          }
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(result ? 1ULL : 0ULL, 1));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_first(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ") = "
+                                << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_assoc_next - get next key in associative array
+    // Signature: (array: ptr, key_ref: ptr) -> i1
+    if (calleeName == "__moore_assoc_next") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyRefAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+
+        // Find key memory block
+        uint64_t keyRefOffset = 0;
+        auto *keyRefBlock = findMemoryBlockByAddress(keyRefAddr, procId, &keyRefOffset);
+
+        // Determine key type from array header
+        bool isStringKey = false;
+        if (arrayPtr) {
+          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+          isStringKey = (header->type == AssocArrayType_StringKey);
+        }
+
+        bool result = false;
+        if (isStringKey) {
+          MooreString keyRef = {nullptr, 0};
+          if (keyRefBlock && keyRefBlock->initialized && keyRefOffset + 16 <= keyRefBlock->data.size()) {
+            uint64_t strPtrVal = 0;
+            int64_t strLen = 0;
+            for (int i = 0; i < 8; ++i) {
+              strPtrVal |= static_cast<uint64_t>(keyRefBlock->data[keyRefOffset + i]) << (i * 8);
+              strLen |= static_cast<int64_t>(keyRefBlock->data[keyRefOffset + 8 + i]) << (i * 8);
+            }
+            keyRef.data = reinterpret_cast<char *>(strPtrVal);
+            keyRef.len = strLen;
+          }
+
+          result = __moore_assoc_next(arrayPtr, &keyRef);
+
+          if (result && keyRefBlock && keyRefOffset + 16 <= keyRefBlock->data.size()) {
+            uint64_t ptrVal = reinterpret_cast<uint64_t>(keyRef.data);
+            int64_t lenVal = keyRef.len;
+            for (int i = 0; i < 8; ++i) {
+              keyRefBlock->data[keyRefOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
+              keyRefBlock->data[keyRefOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
+            }
+          }
+        } else {
+          // Integer key - the key size can be 1, 2, 4, or 8 bytes.
+          uint8_t keyBuffer[8] = {0};
+          if (keyRefBlock && keyRefBlock->initialized) {
+            size_t availableBytes = keyRefBlock->data.size() - keyRefOffset;
+            size_t readSize = std::min<size_t>(8, availableBytes);
+            std::memcpy(keyBuffer, keyRefBlock->data.data() + keyRefOffset, readSize);
+          }
+
+          result = __moore_assoc_next(arrayPtr, keyBuffer);
+
+          if (result && keyRefBlock) {
+            size_t availableBytes = keyRefBlock->data.size() - keyRefOffset;
+            size_t copySize = std::min<size_t>(8, availableBytes);
+            std::memcpy(keyRefBlock->data.data() + keyRefOffset, keyBuffer, copySize);
+          }
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(result ? 1ULL : 0ULL, 1));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_next(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ") = "
+                                << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_assoc_size - get size of associative array
+    // Signature: (array: ptr) -> i64
+    if (calleeName == "__moore_assoc_size") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+
+        int64_t result = __moore_assoc_size(arrayPtr);
+
+        setValue(procId, callOp.getResult(), InterpretedValue(static_cast<uint64_t>(result), 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_size(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ") = "
+                                << result << "\n");
       }
       return success();
     }

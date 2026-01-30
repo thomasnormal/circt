@@ -4398,10 +4398,12 @@ struct ClassDeclVisitor {
       return success();
     }
 
+    // Use fn.isVirtual() which checks not only the Virtual flag but also
+    // whether this method overrides a virtual method from a base class.
+    // In SystemVerilog, overriding methods are implicitly virtual even without
+    // the 'virtual' keyword.
     const mlir::UnitAttr isVirtual =
-        (fn.flags & slang::ast::MethodFlags::Virtual)
-            ? UnitAttr::get(context.getContext())
-            : nullptr;
+        fn.isVirtual() ? UnitAttr::get(context.getContext()) : nullptr;
 
     auto loc = convertLocation(fn.location);
     // Pure virtual functions regulate inheritance rules during parsing.

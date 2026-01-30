@@ -8827,6 +8827,39 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
     // If the input was converted to an LLVM pointer (for queues, dynamic
     // arrays, etc.), use LLVM load instead of llhd.probe.
     if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
+      // Get the original Moore type to check for associative arrays.
+      auto mooreRefType = cast<moore::RefType>(op.getInput().getType());
+      auto mooreNestedType = mooreRefType.getNestedType();
+
+      // For local associative array variables, the pointer IS the value
+      // (the handle), not a pointer to the value. Local variables are created
+      // by VariableOp which calls __moore_assoc_create and returns the handle
+      // directly.
+      //
+      // However, for global variable references (from GetGlobalVariableOp),
+      // we DO need to load because the global stores the handle.
+      //
+      // We detect global variable refs by checking if the source is an
+      // AddressOfOp or an UnrealizedConversionCast wrapping AddressOfOp.
+      if (isa<AssocArrayType, WildcardAssocArrayType>(mooreNestedType)) {
+        Value source = adaptor.getInput();
+        // Unwrap unrealized conversion casts
+        while (auto castOp = source.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (castOp.getInputs().size() == 1)
+            source = castOp.getInputs()[0];
+          else
+            break;
+        }
+        // Check if this is NOT from an AddressOfOp (global variable reference).
+        // If it's not an addressof, it's a local variable handle - pass through.
+        if (!source.getDefiningOp<LLVM::AddressOfOp>()) {
+          // Local variable: the pointer is the handle itself.
+          rewriter.replaceOp(op, adaptor.getInput());
+          return success();
+        }
+        // Global variable reference: fall through to load the handle.
+      }
+
       auto hwResultType = typeConverter->convertType(op.getResult().getType());
       // Convert HW type to LLVM type for the load operation
       auto llvmResultType = convertToLLVMType(hwResultType);

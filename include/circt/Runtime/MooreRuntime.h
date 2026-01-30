@@ -219,6 +219,19 @@ MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init);
 // Associative Array Operations
 //===----------------------------------------------------------------------===//
 
+/// Type tag for associative arrays to distinguish string vs integer keys.
+typedef enum {
+  AssocArrayType_StringKey = 0,
+  AssocArrayType_IntKey = 1
+} AssocArrayType;
+
+/// Header structure for associative arrays.
+/// The interpreter uses this to determine key type for proper marshalling.
+typedef struct {
+  AssocArrayType type;
+  void *array;
+} AssocArrayHeader;
+
 /// Create a new empty associative array.
 /// @param key_size Size of keys in bytes (0 for string keys)
 /// @param value_size Size of values in bytes
@@ -262,6 +275,12 @@ bool __moore_assoc_last(void *array, void *key_out);
 /// @param key_ref Pointer to current key; updated to previous key on success
 /// @return true if a previous key was found, false otherwise
 bool __moore_assoc_prev(void *array, void *key_ref);
+
+/// Check if a key exists in the associative array.
+/// @param array Pointer to the associative array
+/// @param key Pointer to the key to check
+/// @return 1 if key exists, 0 otherwise
+int32_t __moore_assoc_exists(void *array, void *key);
 
 /// Get or create a reference to an element in the associative array.
 /// If the key doesn't exist, creates a new entry with zero-initialized value.
