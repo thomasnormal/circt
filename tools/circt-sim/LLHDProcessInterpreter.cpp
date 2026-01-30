@@ -7401,14 +7401,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
 
         if (queueAddr != 0 && elemSize > 0) {
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
+            // Read from the correct offset within the block
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
             // Allocate new storage with space for one more element.
             // Use global address counter to avoid overlap with other processes.
@@ -7439,14 +7441,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
 
-            // Update queue struct with new ptr and len
+            // Update queue struct with new ptr and len (at the correct offset)
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+              queueBlock->data[queueOffset + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+              queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
 
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
                                     << llvm::format_hex(queueAddr, 16)
+                                    << " queueOffset=" << queueOffset
                                     << " newDataAddr=0x" << llvm::format_hex(newDataAddr, 16)
                                     << " elemSize=" << elemSize
                                     << " newLen=" << newLen << "\n");
@@ -7464,10 +7467,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int64_t queueLen = 0;
 
         if (queueAddr != 0) {
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
           }
         }
 
@@ -7488,10 +7492,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
 
         if (queueAddr != 0) {
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
-            // Set data ptr to 0 and len to 0
-            std::memset(queueBlock->data.data(), 0, 16);
+            // Set data ptr to 0 and len to 0 (at the correct offset)
+            std::memset(queueBlock->data.data() + queueOffset, 0, 16);
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_clear("
                                     << "queue=0x" << llvm::format_hex(queueAddr, 16)
                                     << ")\n");
@@ -7510,14 +7515,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t result = 0;
 
         if (queueAddr != 0 && elemSize > 0) {
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
             if (queueLen > 0 && dataPtr != 0) {
               // Read the last element
@@ -7531,7 +7537,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // Decrement length
               int64_t newLen = queueLen - 1;
               for (int i = 0; i < 8; ++i)
-                queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+                queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
           }
         }
@@ -7553,14 +7559,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t result = 0;
 
         if (queueAddr != 0 && elemSize > 0) {
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
             if (queueLen > 0 && dataPtr != 0) {
               auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
@@ -7580,7 +7587,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // Decrement length
               int64_t newLen = queueLen - 1;
               for (int i = 0; i < 8; ++i)
-                queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+                queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
           }
         }
@@ -7602,14 +7609,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
 
         if (queueAddr != 0 && elemSize > 0) {
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
             // Use global address counter to avoid overlap with other processes.
             int64_t newLen = queueLen + 1;
@@ -7639,11 +7647,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
 
-            // Update queue struct
+            // Update queue struct (at the correct offset)
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+              queueBlock->data[queueOffset + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+              queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
 
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_push_front("
                                     << "queue=0x" << llvm::format_hex(queueAddr, 16)

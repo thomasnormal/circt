@@ -2597,6 +2597,76 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
         LLVM::AddressOfOp::create(rewriter, loc, ptrTy, vtableGlobalName);
     LLVM::StoreOp::create(rewriter, loc, vtableGlobalAddr, vtablePtrPtr);
 
+    // Initialize queue-type properties to {nullptr, 0}.
+    // Malloc returns uninitialized memory, so we need to zero-initialize
+    // queue members to avoid reading garbage values.
+    auto *classDeclOp = mod.lookupSymbol(sym);
+    if (auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclOp)) {
+      // Walk through class hierarchy to initialize all queue members
+      std::function<void(ClassDeclOp, unsigned)> initQueueMembers =
+          [&](ClassDeclOp decl, unsigned inheritanceLevel) {
+            // First, process base class if any
+            if (auto baseAttr = decl.getBaseAttr()) {
+              if (auto *baseOp = mod.lookupSymbol(baseAttr)) {
+                if (auto baseDecl = dyn_cast<ClassDeclOp>(baseOp)) {
+                  initQueueMembers(baseDecl, inheritanceLevel + 1);
+                }
+              }
+            }
+
+            // Process properties at this level
+            unsigned propIdx = 0;
+            for (auto &childOp : decl.getBody().getOps()) {
+              if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(childOp)) {
+                Type propType = propDecl.getPropertyType();
+                if (isa<QueueType>(propType)) {
+                  // Build GEP path to this property:
+                  // [0, 0, ..., fieldIdx] where 0s navigate through inheritance
+                  SmallVector<Value> propGepIndices;
+                  // First index is always 0 (pointer dereference)
+                  propGepIndices.push_back(LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+                  // Navigate through base class chain
+                  for (unsigned i = 0; i < inheritanceLevel; ++i) {
+                    propGepIndices.push_back(LLVM::ConstantOp::create(
+                        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+                  }
+                  // Field index = typeId(0) + vtablePtr(1) + propIdx + 2
+                  unsigned fieldIdx = propIdx + 2;
+                  propGepIndices.push_back(LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty,
+                      rewriter.getI32IntegerAttr(fieldIdx)));
+
+                  // GEP to the queue field
+                  auto propPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                                     structTy, objPtr,
+                                                     propGepIndices);
+
+                  // Create the zero-initialized queue struct {nullptr, 0}
+                  auto queueStructTy = LLVM::LLVMStructType::getLiteral(
+                      ctx, {ptrTy, i64Ty});
+                  Value zeroQueue =
+                      LLVM::UndefOp::create(rewriter, loc, queueStructTy);
+                  Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+                  Value zeroLen = LLVM::ConstantOp::create(
+                      rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(0));
+                  zeroQueue = LLVM::InsertValueOp::create(rewriter, loc,
+                                                          zeroQueue, nullPtr,
+                                                          ArrayRef<int64_t>{0});
+                  zeroQueue = LLVM::InsertValueOp::create(rewriter, loc,
+                                                          zeroQueue, zeroLen,
+                                                          ArrayRef<int64_t>{1});
+
+                  // Store the zero-initialized queue
+                  LLVM::StoreOp::create(rewriter, loc, zeroQueue, propPtr);
+                }
+                propIdx++;
+              }
+            }
+          };
+      initQueueMembers(classDecl, structInfo->inheritanceDepth);
+    }
+
     // Replace the new op with the malloc pointer
     rewriter.replaceOp(op, objPtr);
     return success();
