@@ -3,7 +3,7 @@
 ## Iteration 259 - January 30, 2026
 
 ### Goals
-Fix vtable generation for implicit virtual methods, add pointer validation for safe native memory access.
+Fix vtable generation for implicit virtual methods, restore non-UVM simulation stability.
 
 ### Fixed in this Iteration
 
@@ -12,14 +12,20 @@ Fix vtable generation for implicit virtual methods, add pointer validation for s
    - **FIX**: Use `fn.isVirtual()` which detects implicit virtuality from base class override
    - **IMPACT**: All 6 AVIPs now compile to HW level without vtable_entry errors
 
-2. **Native Pointer Validation** (LLHDProcessInterpreter.cpp):
-   - **ROOT CAUSE**: `if (addr != 0)` check was insufficient before dereferencing native pointers
-   - **FIX**: Validate address is above 0x10000 (guard pages), below 0x7FFFFFFFFFFF (kernel space)
-   - **IMPACT**: Prevents crashes from invalid pointer dereferences
+2. **Native Pointer Access Removed** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Native pointer access caused SIGSEGV even with validation (unmapped memory)
+   - **FIX**: Removed native pointer dereference, rely only on tracked memory blocks
+   - **IMPACT**: OpenTitan and simple simulations work; UVM simulations need further investigation
 
 3. **Test Expectations** (basic.sv, builtins.sv):
    - Fixed string constant width expectations (i127 -> i128 for 16-char strings)
    - XFAILed UVM stub tests since stubs were removed for real uvm-core
+
+### Remaining UVM Simulation Issue
+
+UVM-based simulations (AVIPs) crash during global constructor execution in `interpretLLVMCall`.
+This is a separate issue from the pointer access - the crash happens deep in function call chains
+during the 297 global constructor initializations. Investigation ongoing.
 
 ### Test Suite Results
 
@@ -65,6 +71,10 @@ Fix virtual dispatch in fork, investigate real UVM initialization crashes.
    - **FIX**: Capture outer refs used by `$readmemh` and ref-select ops inside tasks/functions
    - **TEST**: `test/Conversion/ImportVerilog/readmemh-task-capture.sv`
    - **IMPACT**: OpenTitan `i2c` full IP parse now succeeds (prim_util_memload)
+
+4. **Implicit Virtual Override for Extern Prototypes**:
+   - **TEST**: `test/Conversion/ImportVerilog/extern-implicit-virtual-override.sv`
+   - **IMPACT**: Guards vtable generation for overrides without explicit `virtual`
 
 ### Known Issues Identified
 
