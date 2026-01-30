@@ -147,7 +147,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 260 - Updated 2026-01-30)
+### Test Suite Status (Iteration 261 - Updated 2026-01-30)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
@@ -207,7 +207,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 260)
+### Active Workstreams & Next Steps (Iteration 261)
+
+**Iteration 261 Changes (2026-01-30) - UNIT TEST COVERAGE:**
+1. **ReadOpConversion Unit Test** (ADDED):
+   - Test file: `test/Conversion/MooreToCore/class-member-read-cast.mlir`
+   - Validates that class member reads use `llvm.load` through `unrealized_conversion_cast`
+   - Previously, class member GEP pointers wrapped in unrealized casts would incorrectly use `llhd.prb`
+   - Key fix: `ReadOpConversion` looks through unrealized casts to find LLVM pointers
+   - **Tests**: Simple member read, 4-state fields, multiple reads from same instance
+
+2. **AssignOpConversion Unit Test** (ADDED):
+   - Test file: `test/Conversion/MooreToCore/ref-param-store.mlir`
+   - Validates that class ref parameters use `llvm.store` instead of `llhd.drv`
+   - Key fix: `AssignOpConversion` detects `!llhd.ref<!llvm.ptr>` block args in functions
+   - Uses LLVM store since interpreter doesn't track refs through function calls as signals
+   - **Tests**: Single class output param, multiple refs, ref with new(), conditional assignment
+
+3. **Remaining Architecture Gaps Identified**:
+   - **RefType Architecture**: General `!moore.ref<i32>` params still use `llhd.drv` (by design)
+     - Class handles (`!llhd.ref<!llvm.ptr>`) are special-cased for LLVM store
+     - Signal-backed refs work correctly with `llhd.drv` in hw.module/llhd.process
+   - **hw::ArrayGetOp**: Dynamic array indexing needs additional lowering work
+
+**Test Suite Status (Iteration 261):**
+- Unit Tests: 1373/1373 (100%)
+- Lit Tests: 2980/3085 (96.6%) - includes 2 new MooreToCore tests
+- All external suites unchanged (passing at high rates)
+
+---
+
+### Previous Iteration: Iteration 260
 
 **Iteration 260 Changes (2026-01-30) - UVM DEBUGGING PROGRESS:**
 1. **VTable Entry Population Bug** (FIXED):

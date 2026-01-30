@@ -1787,6 +1787,29 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     return InterpretedValue(fieldVal);
   }
 
+  // Handle array get
+  if (auto arrayGetOp = value.getDefiningOp<hw::ArrayGetOp>()) {
+    InterpretedValue arrayVal =
+        evaluateContinuousValueImpl(arrayGetOp.getInput(), inProgress);
+    InterpretedValue indexVal =
+        evaluateContinuousValueImpl(arrayGetOp.getIndex(), inProgress);
+    if (arrayVal.isX() || indexVal.isX())
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+
+    auto arrayType = hw::type_cast<hw::ArrayType>(arrayGetOp.getInput().getType());
+    unsigned elementWidth = getTypeWidth(arrayType.getElementType());
+    unsigned numElements = arrayType.getNumElements();
+
+    uint64_t index = indexVal.getAPInt().getZExtValue();
+    if (index >= numElements)
+      return InterpretedValue::makeX(elementWidth);
+
+    // Extract element (arrays store element 0 at highest bits)
+    unsigned bitOffset = (numElements - 1 - index) * elementWidth;
+    APInt result = arrayVal.getAPInt().extractBits(elementWidth, bitOffset);
+    return InterpretedValue(result);
+  }
+
   // Handle struct create
   if (auto createOp = value.getDefiningOp<hw::StructCreateOp>()) {
     auto structType = hw::type_cast<hw::StructType>(createOp.getType());
