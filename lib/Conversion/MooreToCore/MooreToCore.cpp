@@ -9014,46 +9014,37 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
 
       if (origIsBlockArg || inputIsBlockArg) {
         if (auto refType = dyn_cast<llhd::RefType>(input.getType())) {
-          // Only use llvm.load when the nested type is an LLVM type (e.g.,
-          // !llvm.ptr for class handles). Signal refs have HW types (like i32)
-          // as the nested type and should use llhd.prb.
-          Type nestedType = refType.getNestedType();
-          bool nestedIsLLVMType = isa<LLVM::LLVMPointerType, LLVM::LLVMStructType,
-                                      LLVM::LLVMArrayType>(nestedType);
+          // Check if we're in a function context (not inside a process/initial)
+          bool inFuncOp = op->getParentOfType<func::FuncOp>() != nullptr;
+          bool inProcess = op->getParentOfType<llhd::ProcessOp>() != nullptr;
+          bool inInitial = op->getParentOfType<seq::InitialOp>() != nullptr;
 
-          // Only apply this for function contexts with LLVM nested types.
-          // Signal refs (with HW nested types) should use llhd.prb even in
-          // function contexts.
-          if (nestedIsLLVMType) {
-            bool inFuncOp = op->getParentOfType<func::FuncOp>() != nullptr;
-            bool inProcess = op->getParentOfType<llhd::ProcessOp>() != nullptr;
-            bool inInitial = op->getParentOfType<seq::InitialOp>() != nullptr;
+          // For function ref parameters (both LLVM and HW nested types),
+          // use llvm.load since the simulator can't track signal references
+          // through function call boundaries.
+          if (inFuncOp && !inProcess && !inInitial) {
+            // Cast to LLVM pointer and load.
+            Value refAsPtr = UnrealizedConversionCastOp::create(
+                                 rewriter, op.getLoc(),
+                                 LLVM::LLVMPointerType::get(rewriter.getContext()),
+                                 input)
+                                 .getResult(0);
 
-            if (inFuncOp && !inProcess && !inInitial) {
-              // For function ref parameters with LLVM types (class handles),
-              // cast to LLVM pointer and load.
-              Value refAsPtr = UnrealizedConversionCastOp::create(
-                                   rewriter, op.getLoc(),
-                                   LLVM::LLVMPointerType::get(rewriter.getContext()),
-                                   input)
-                                   .getResult(0);
+            auto hwResultType =
+                typeConverter->convertType(op.getResult().getType());
+            auto llvmResultType = convertToLLVMType(hwResultType);
 
-              auto hwResultType =
-                  typeConverter->convertType(op.getResult().getType());
-              auto llvmResultType = convertToLLVMType(hwResultType);
+            Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(),
+                                                llvmResultType, refAsPtr);
 
-              Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(),
-                                                  llvmResultType, refAsPtr);
-
-              // Cast back to HW type if needed (e.g., for 4-state structs)
-              if (hwResultType != llvmResultType) {
-                loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
-                                                            hwResultType, loaded)
-                             .getResult(0);
-              }
-              rewriter.replaceOp(op, loaded);
-              return success();
+            // Cast back to HW type if needed (e.g., for 4-state structs)
+            if (hwResultType != llvmResultType) {
+              loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
+                                                          hwResultType, loaded)
+                           .getResult(0);
             }
+            rewriter.replaceOp(op, loaded);
+            return success();
           }
         }
       }
@@ -9118,6 +9109,36 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, llvmPtrDst);
       rewriter.eraseOp(op);
       return success();
+    }
+
+    // Check if destination is an llhd.ref block argument in a function context.
+    // Function ref parameters should use llvm.store since the simulator can't
+    // track signal references through function call boundaries.
+    if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
+      if (auto blockArg = dyn_cast<BlockArgument>(dst)) {
+        // Check if we're in a function context (not hw.module/llhd.process)
+        if (auto funcOp = dyn_cast<func::FuncOp>(
+                blockArg.getOwner()->getParentOp())) {
+          // For function ref parameters, use llvm.store
+          auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+          Value ptrValue = UnrealizedConversionCastOp::create(
+                               rewriter, loc, ptrType, dst)
+                               .getResult(0);
+
+          Value storeVal = adaptor.getSrc();
+          Type storeType = storeVal.getType();
+          Type llvmStoreType = convertToLLVMType(storeType);
+
+          if (storeType != llvmStoreType) {
+            storeVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmStoreType, storeVal)
+                           .getResult(0);
+          }
+          LLVM::StoreOp::create(rewriter, loc, storeVal, ptrValue);
+          rewriter.eraseOp(op);
+          return success();
+        }
+      }
     }
 
     // Determine the delay for the assignment.
