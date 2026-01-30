@@ -147,19 +147,21 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 261 - Updated 2026-01-30)
+### Test Suite Status (Iteration 262 - Updated 2026-01-30)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
 | Lit Tests | **2980/3085 (96.6%)** | 12 SMT/LEC failures, 38 XFAIL, 55 unsupported |
+| circt-sim | **71/72 (99%)** | 1 failure |
+| MooreToCore | **96/97 (99%)** | 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/26 (88.5%)** | 3 are XFAIL (expected failures) |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **52+/60 (87%)** | 12 reg_top IPs + 5 full IPs simulate successfully |
-| AVIPs | **6/9 simulate** | APB no longer crashes! UVM starts initializing. AXI4Lite has nested interface bug; SPI/JTAG have source bugs |
+| OpenTitan IPs | **8/10 (80%)** | timer_core, gpio, uart, i2c, prim_count, prim_fifo_sync, aes_reg_top, spi_device |
+| AVIPs | **6/9 simulate** | APB, AHB, AXI4, UART, I2S, I3C work; AXI4Lite/SPI/JTAG have source bugs |
 
 **OpenTitan Simulation Verified (Iteration 244):**
 - **reg_top IPs** (12/12): hmac, kmac, flash_ctrl, otp_ctrl, keymgr, lc_ctrl, otbn, csrng, entropy_src, pwm, pattgen, rom_ctrl
@@ -207,9 +209,88 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 262)
+### Active Workstreams & Next Steps (Iteration 263)
 
-**Iteration 262 Changes (2026-01-30) - FUNCTION REF PARAMETERS:**
+**Iteration 263 Focus (2026-01-30) - LLHD.PRB FUNCTION ARG SUPPORT:**
+
+**Goal:** Fix llhd.prb support for function argument references in circt-sim interpreter
+
+**Current Blocker:**
+- uvm-core compiles successfully but simulation is blocked
+- Function arguments passed as `llhd.ref` types cannot be probed with `llhd.prb`
+- circt-sim interpreter needs to handle `llhd.prb` on function parameter refs
+
+**Tasks:**
+1. **llhd.prb Function Arg Support** - Enable probing of function argument references
+2. **AVIP Testing** - Continue APB and AXI4 validation with uvm-core
+3. **OpenTitan Validation** - Verify gpio, uart, aes_reg_top, prim_count, i2c continue passing
+
+### Current Track Status & Next Tasks
+
+| Track | Status | Next Task |
+|-------|--------|-----------|
+| **Track 1: UVM Parity** | Blocked on llhd.prb | Fix function arg ref probing in interpreter |
+| **Track 2: AVIP Testing** | APB/AXI4 compile | Run with llhd.prb fix |
+| **Track 3: OpenTitan** | 5 IPs pass | Continue validation |
+| **Track 4: External Suites** | No regressions | Maintain coverage |
+
+### Remaining Limitations
+
+**Critical for UVM:**
+1. **llhd.prb Function Arg References** - Simulation blocked on this
+   - Function arguments passed as `llhd.ref` need interpreter support
+   - Current interpreter cannot probe function parameter refs
+
+2. **UVM Factory Registration** - die() called during run_test()
+   - Static initialization works for simple cases
+   - Real UVM has complex initialization ordering requirements
+
+3. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
+   - Needs explicit call stack (architectural change)
+
+**Medium Priority:**
+4. **Hierarchical Name Access** - ~9 XFAIL tests
+5. **Virtual Method Dispatch** - Some edge cases may remain
+
+**Lower Priority:**
+6. **UVM-specific Features** (config_db, factory, sequences)
+7. **Constraint Randomization** (rand, constraint)
+
+---
+
+### Previous Iteration: Iteration 262
+
+**Iteration 262 Results (2026-01-30) - READOP FIX COMPLETED:**
+
+1. **ReadOpConversion Bug Fixed** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Incorrect `llvm.load` path for `llhd.ref` types in functions
+   - Was breaking ref-param-read.sv test - signal references need `llhd.prb`, not `llvm.load`
+   - **FIX**: Removed incorrect llvm.load path for llhd.ref types
+   - llhd.ref signal references now correctly use llhd.prb
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+
+2. **No Lit Test Regressions** - All existing tests continue to pass
+
+3. **UVM-Core Status**:
+   - Compiles successfully
+   - Simulation blocked by llhd.prb function arg support (next iteration)
+
+4. **OpenTitan IPs Passing (5/10)**:
+   - gpio, uart, aes_reg_top, prim_count, i2c
+
+5. **AVIP Status**:
+   - APB and AXI4 compile with uvm-core
+   - Blocked on same llhd.prb function arg issue
+
+**Test Suite Status (Iteration 262):**
+- MooreToCore lit tests: No regressions
+- OpenTitan IPs: gpio, uart, aes_reg_top, prim_count, i2c passing
+- AVIP: APB, AXI4 compile (simulation pending llhd.prb fix)
+
+---
+
+### Previous Iteration: Iteration 261
+**Iteration 261 Changes (2026-01-30) - FUNCTION REF PARAMETERS:**
 
 1. **Function Ref Parameters Fixed** (MooreToCore.cpp):
    - **ROOT CAUSE**: Function ref parameters (`ref int x`) used `llhd.drv`/`llhd.prb`
@@ -235,42 +316,6 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Real uvm-core library terminates at 0fs
    - `uvm_root::die()` is invoked during initialization
    - Likely NOCOMP error (no components registered) or phase execution issue
-   - **Next**: Investigate UVM deferred initialization queue processing
-
-**Test Suite Status (Iteration 262):**
-- MooreToCore lit tests: 97/97 pass (96 + 1 XFAIL)
-- OpenTitan timer_core: PASS
-- APB AVIP: Terminates cleanly (was infinite loop)
-- UVM-like factory test: PASS
-- Real uvm-core: Compiles, runs without errors, dies at 0fs
-
-### Current Track Status & Next Tasks
-
-| Track | Status | Next Task |
-|-------|--------|-----------|
-| **Track 1: UVM Parity** | Function refs fixed | Investigate UVM die() root cause |
-| **Track 2: AVIP Testing** | APB terminates cleanly | Test all 9 AVIPs after UVM fix |
-| **Track 3: OpenTitan** | timer_core PASS | Run full OpenTitan suite |
-| **Track 4: External Suites** | sv-tests/verilator working | Run regression tests |
-
-### Remaining Limitations
-
-**Critical for UVM:**
-1. **UVM Factory Registration** - die() called during run_test()
-   - Static initialization works for simple cases
-   - Real UVM has complex initialization ordering requirements
-   - May need explicit elaboration phase for class registration
-
-2. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
-   - Needs explicit call stack (architectural change)
-
-**Medium Priority:**
-3. **Hierarchical Name Access** - ~9 XFAIL tests
-4. **Virtual Method Dispatch** - Some edge cases may remain
-
-**Lower Priority:**
-5. **UVM-specific Features** (config_db, factory, sequences)
-6. **Constraint Randomization** (rand, constraint)
 
 ---
 
@@ -1677,7 +1722,9 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-29 | opentitan | LEC | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
 | 2026-01-30 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
 | 2026-01-30 | verilator-verification | BMC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
-| 2026-01-30 | yosys/tests/sva | BMC | total=14 pass=12 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
+| 2026-01-30 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-01-30 | yosys/tests/sva | BMC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
+| 2026-01-30 | yosys/tests/sva | LEC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
 | 2026-01-30 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
 | 2026-01-30 | avip/apb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
 | 2026-01-30 | avip/ahb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |

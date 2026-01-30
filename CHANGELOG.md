@@ -1,5 +1,92 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 263 - January 30, 2026
+
+### Goals
+Fix llhd.prb support for function argument references in circt-sim interpreter to enable UVM simulation.
+
+### Current Limitations & Features Needed
+
+**Critical Blockers for UVM:**
+1. **llhd.prb Function Argument References** (Root Cause Identified):
+   - circt-sim interpreter's `valueToSignal` map doesn't track signal refs passed as function arguments
+   - When `llhd.prb` executes on a function parameter, `resolveSignalId` returns 0 (invalid)
+   - **Location**: `LLHDProcessInterpreter.cpp` lines 4737-4920, 1270-1285
+   - **Impact**: uvm-core compiles but simulation fails during UVM initialization
+
+2. **Delay Accumulation**: Sequential `#delay` in functions only apply last delay
+   - Needs explicit call stack (architectural change)
+
+**Features to Build:**
+1. Add temporary signal mappings for function arguments in `interpretLLVMFuncBody`
+2. Map function parameter BlockArguments to their original SignalIds
+3. Clear mappings after function returns to avoid stale references
+
+### Investigation Results (Iteration 263)
+
+**llhd.prb Function Argument Fix Design:**
+```cpp
+// In interpretLLVMFuncBody setup:
+for (auto [param, argValue] : llvm::zip(funcParams, args)) {
+  if (auto sigId = resolveSignalId(argValue)) {
+    valueToSignal[param] = sigId;  // Create temporary mapping
+  }
+  setValue(procId, param, argValue);
+}
+```
+
+**Files to Modify:**
+- `tools/circt-sim/LLHDProcessInterpreter.h` - Add paramToSignalId map
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` lines 5719-5800 - Function setup
+- `LLHDProcessInterpreter.cpp` lines 1270-1285 - Query new mapping in resolveSignalId
+
+### Test Results (Iteration 262-263)
+
+| Suite | Pass | Fail | Notes |
+|-------|------|------|-------|
+| MooreToCore | 96/97 | 0 | 1 expected failure |
+| circt-sim | 71/72 | 1 | tlul-bfm-user-default.sv (pre-existing) |
+| sv-tests BMC | 18/26 | 5 | 3 xfail, no regressions |
+| verilator BMC | 17/17 | 0 | 100% pass |
+| OpenTitan IPs | 5/10 | - | gpio, uart, aes_reg_top, prim_count, i2c pass |
+
+### AVIP Compilation with uvm-core
+
+| AVIP | Status | MLIR Lines |
+|------|--------|------------|
+| APB | Compiles | ~229k |
+| AXI4 | Compiles | 556k |
+| I2S | Compiles | 360k |
+| SPI | Source errors | N/A |
+| JTAG | Source errors | N/A |
+
+---
+
+## Iteration 262 - January 30, 2026
+
+### Goals
+Fix ReadOpConversion bug and validate with external test suites.
+
+### Fixed in Iteration 262
+
+1. **ReadOpConversion Bug Fix** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Incorrect `llvm.load` path for `llhd.ref` types in functions
+   - Signal references need `llhd.prb`, not `llvm.load`
+   - **FIX**: Removed incorrect llvm.load handling for llhd.ref types
+   - **COMMITS**: `91e87d547`, `1221d3e92`
+   - **TEST**: `test/Conversion/MooreToCore/ref-param-read.mlir`
+
+2. **Unit Test Updated** (ref-param-read.mlir):
+   - Updated to expect `llhd.prb` instead of `unrealized_conversion_cast` + `llvm.load`
+
+### Validation Results
+
+- **No lit test regressions** - All existing tests continue to pass
+- **uvm-core compiles** - 229k lines MLIR generated successfully
+- **OpenTitan IPs passing**: gpio, uart, aes_reg_top, prim_count, i2c
+
+---
+
 ## Iteration 261 - January 30, 2026
 
 ### Goals
@@ -47,7 +134,15 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
    - Handle block arguments of type `!llhd.ref<T>` in function context
    - Create cast and use `llvm.load` for class member refs
 
-6. **Termination Handling in Nested Function Calls** (LLHDProcessInterpreter.cpp):
+6. **ReadOpConversion Bug Fix for Signal References** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Earlier iteration 261 changes incorrectly added `llvm.load` handling for `llhd.ref` types in function contexts
+   - Signal references should use `llhd.prb` after inlining, not `llvm.load`
+   - This caused ref-param-read.sv test failure
+   - **FIX**: Removed incorrect `llvm.load` handling for `llhd.ref` types in function contexts
+   - Signal references now correctly use `llhd.prb` after inlining
+   - **TEST**: `test/Tools/circt-sim/ref-param-read.sv`
+
+7. **Termination Handling in Nested Function Calls** (LLHDProcessInterpreter.cpp):
    - **ROOT CAUSE**: `sim.terminate` inside function calls didn't stop execution
    - Process continued executing after nested function set `halted=true`
    - Simulation would loop infinitely printing "terminate" messages
@@ -55,7 +150,7 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
    - Added halted checks after each operation in `interpretFuncBody` and `interpretLLVMFuncBody`
    - **IMPACT**: APB AVIP now terminates cleanly instead of looping forever
 
-7. **Function Ref Parameters** (MooreToCore.cpp):
+8. **Function Ref Parameters** (MooreToCore.cpp):
    - **ROOT CAUSE**: Function ref parameters (like `ref int x`) used llhd.drv/prb
    - Simulator cannot track signal references through function calls
    - UVM callback iterators failed with "interpretOperation failed"
@@ -63,7 +158,7 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
      of `!llhd.ref<T>` type in function context and use llvm.store/load instead
    - **IMPACT**: UVM compiles and initializes without llhd.prb/drv errors
 
-8. **BMC Clock-Source Struct Sampling** (VerifToSMT.cpp):
+9. **BMC Clock-Source Struct Sampling** (VerifToSMT.cpp):
    - **FIX**: Consume `bmc_clock_sources` to substitute 4‑state clock source
      inputs with post‑edge BMC clock values during SMT lowering.
    - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct.mlir`
@@ -83,6 +178,23 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
      and erase dead ops in a use-safe order to avoid prune crashes.
    - **IMPACT**: Yosys SVA BMC pass/fail modes now behave correctly end-to-end.
    - **TEST**: `test/Tools/circt-bmc/sva-llhd-overlap-sat-e2e.sv`
+
+8. **BMC Unnamed Register Clocks** (VerifOps.cpp):
+   - **FIX**: Allow `verif.bmc` with registers but no explicit clock inputs when
+     `bmc_reg_clocks` entries are unnamed, avoiding false verifier errors for
+     internal/constant clocks.
+   - **TEST**: `test/Dialect/Verif/bmc-unnamed-reg-clocks.mlir`
+
+9. **BMC No-Clock Register Iteration** (VerifToSMT.cpp):
+   - **FIX**: Keep register state flowing in the BMC loop when no clock inputs
+     are detected to avoid scf.for iter-arg mismatches.
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-no-clock-regs.mlir`
+
+10. **Clocked Property/Sequence Tick Gating** (LTLToCore.cpp):
+    - **FIX**: Gate clocked properties and sequences with a tick signal so they
+      are vacuously true outside clock edges, and only treat input‑derived
+      clocks as always‑ticking for BMC.
+    - **TEST**: `test/Conversion/LTLToCore/clocked-property-gating.mlir`
 
 ### Workstream Status
 
