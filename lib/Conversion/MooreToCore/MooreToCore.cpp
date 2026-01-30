@@ -4750,7 +4750,6 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
         return success();
       }
     }
-
     // For dynamic container types (queues, dynamic arrays, associative arrays),
     // the converted type is an LLVM pointer, not llhd.ref. These are handled
     // differently since they don't fit the llhd signal model.
@@ -4766,6 +4765,29 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       init = createZeroValue(elementType, loc, rewriter);
       if (!init)
         return failure();
+    }
+
+    // For local variables inside procedural blocks (llhd.process), use LLVM
+    // alloca instead of llhd.sig. This gives immediate memory semantics,
+    // which is required when variables are passed as ref parameters to
+    // functions. Signal semantics (with delta-cycle delays) don't work
+    // correctly with function inlining because the function expects immediate
+    // memory access.
+    if (op->getParentOfType<llhd::ProcessOp>()) {
+      auto *ctx = rewriter.getContext();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto elementType = refType.getNestedType();
+
+      // Create an alloca for the variable
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI64IntegerAttr(1));
+      auto alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, elementType, one);
+
+      // Store the initial value
+      LLVM::StoreOp::create(rewriter, loc, init, alloca);
+
+      rewriter.replaceOp(op, alloca.getResult());
+      return success();
     }
 
     rewriter.replaceOpWithNewOp<llhd::SignalOp>(op, resultType,
