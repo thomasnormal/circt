@@ -34,14 +34,23 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
    - Fixed sv-tests-parsing-filter to exclude UVM tests
    - All VerifToSMT tests pass (67 XFAIL for NFA issues)
 
-### NEW Blocker Identified
+6. **Fork Entry Block Predecessors** (MooreOps.cpp, SimOps.cpp):
+   - **ROOT CAUSE**: ForkOp printers used `printBlockTerminators=false`
+   - Forever loops in fork printed without entry block terminator
+   - Entry block appeared to have predecessors after IR round-trip
+   - **FIX**: Changed to `printBlockTerminators=true`
+   - **IMPACT**: ALL AVIP SIMULATIONS NOW UNBLOCKED
 
-**Fork Entry Block Predecessors** (P0 - Blocks ALL AVIP Simulations):
-- `forever` loop inside `fork join_none` creates `cf.br` back-edge to entry block
-- MLIR requires region entry blocks have no predecessors
-- Error: `entry block of region may not have predecessors`
-- Occurs in UVM's `uvm_phase_hopper` class
-- **Fix needed**: ImportVerilog/Statements.cpp fork generation
+7. **Queue Alloca Address Collision** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Per-process `nextMemoryAddress` collided with module-level allocas
+   - **FIX**: Use `globalNextAddress` for ALL allocas
+   - **IMPACT**: Queue operations work correctly (basic, class handles, factory)
+
+### Test Results
+- External suites: 100% pass (sv-tests, verilator, yosys)
+- OpenTitan: 17/18 pass (94%)
+- Queue UVM patterns: All pass
+- Lit tests: 2928/2959 (31 UVM-related need UVM_HOME set)
 
 ### Test Status
 - Lit tests: 2960/3066 (96.5%)
