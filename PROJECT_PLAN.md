@@ -207,7 +207,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 255)
+### Active Workstreams & Next Steps (Iteration 256)
+
+**Iteration 256 Changes (2026-01-30):**
+1. **AVIP Simulation - MAJOR MILESTONE** 🎉:
+   - 6/8 AVIPs compile to hw level AND simulate
+   - **4 AVIPs show UVM output**: APB, AXI4, UART, AHB print `UVM_INFO @ 0: NOMAXQUITOVR`
+   - I2S and I3C show BFM initialization messages
+   - Blocking issue: `PROCESS_STEP_OVERFLOW` in UVM phase scheduler fork
+
+2. **Alloca Classification Fix** (LLHDProcessInterpreter.cpp):
+   - ROOT CAUSE: Allocas inside functions called from global constructors incorrectly marked "module level"
+   - FIX: Check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors
+   - Impact: Queue operations in global constructors work correctly
+
+3. **fork-forever-entry-block.mlir Test Fix**:
+   - Updated CHECK patterns to expect `cf.br` instruction between blocks
+   - MooreToCore tests: 92/93 pass (1 XFAIL)
+
+**Remaining Blockers (Priority Order):**
+1. **PROCESS_STEP_OVERFLOW in UVM fork** (P0): Phase scheduler creates infinite loop
+2. **Associative arrays with string keys** (P0): Lookups return `x`, `exists()` returns false
+3. **UVM run_test() phases** (P1): Phases don't trigger after initialization
 
 **Iteration 255 Changes (2026-01-30):**
 1. **String Truncation Bug** (FIXED): String parameters now correctly sized

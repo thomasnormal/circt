@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 256 - January 30, 2026
+
+### Goals
+Test AVIP simulation after GEP fix, investigate UVM factory, fix lit test failures.
+
+### Fixed in this Iteration
+
+1. **AVIP Simulation - MAJOR MILESTONE** 🎉:
+   - 6/8 AVIPs now compile to hw level AND simulate
+   - 4 AVIPs show UVM output: `UVM_INFO @ 0: NOMAXQUITOVR`
+   - This proves UVM classes are instantiated and methods called correctly
+
+2. **Alloca Classification Fix** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Allocas inside functions called from global constructors incorrectly marked "module level"
+   - **FIX**: Add check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors
+   - **IMPACT**: Queue operations in global constructors now work correctly
+
+3. **fork-forever-entry-block.mlir Test Fix**:
+   - **ISSUE**: CHECK patterns didn't expect `cf.br` instruction between blocks
+   - **FIX**: Updated patterns to include expected branch instruction
+   - **IMPACT**: MooreToCore tests 92/93 pass (1 XFAIL)
+
+### AVIP Simulation Status
+
+| AVIP | Compile HW | Simulate | UVM Output |
+|------|------------|----------|------------|
+| APB | ✅ | ✅ | `UVM_INFO @ 0: NOMAXQUITOVR` |
+| AXI4 | ✅ | ✅ | `UVM_INFO @ 0: NOMAXQUITOVR` |
+| UART | ✅ | ✅ | `UVM_INFO @ 0: NOMAXQUITOVR` |
+| AHB | ✅ | ✅ | `UVM_INFO @ 0: NOMAXQUITOVR` |
+| I2S | ✅ | ✅ | BFM output |
+| I3C | ✅ | ✅ | BFM output |
+| SPI | ❌ | - | Source bugs |
+| JTAG | ❌ | - | Source bugs |
+
+### Known Issues
+
+1. **PROCESS_STEP_OVERFLOW** in UVM phase scheduler fork - creates infinite loop
+2. **Associative arrays with string keys** - lookups return `x`, `exists()` returns false
+
+---
+
 ## Iteration 255 - January 30, 2026
 
 ### Goals
@@ -75,9 +117,21 @@ Continue fixing remaining blockers for UVM testbench execution with real uvm-cor
    - **Lit tests**: 2960/3066 (96.5%)
 
 4. **4-State Comb SMT Semantics** (CombToSMT.cpp):
-   - **CHANGE**: Implemented 4-state AND/OR/XOR, mux, and case/wild equality lowering
+   - **CHANGE**: Implemented 4-state AND/OR/XOR, mux, add/sub, shifts, mul/div/mod, comparisons, and case/wild equality lowering
    - **IMPACT**: Unknown masks are now preserved for core comb ops in BMC/LEC
-   - **TEST**: `test/Conversion/CombToSMT/comb-to-smt-fourstate.mlir`
+    - **TEST**: `test/Conversion/CombToSMT/comb-to-smt-fourstate.mlir`,
+     `test/Tools/circt-bmc/sva-xprop-comb-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-add-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-shift-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-compare-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-muldiv-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-mod-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-weq-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-ceq-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-eq-vs-ceq-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-compare-signed-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-compare-unsigned-sat-e2e.sv`
 
 ### Known Issues (P0 Blockers)
 
