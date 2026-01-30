@@ -394,18 +394,16 @@ static void addUvmSupportIfAvailable() {
   }
 
   if (uvmPkgPath.empty()) {
-    llvm::SmallString<256> repoUvmPath("lib/Runtime/uvm/uvm_pkg.sv");
-    if (llvm::sys::fs::exists(repoUvmPath)) {
-      uvmPkgPath = repoUvmPath.str().str();
-      uvmIncludeDir = "lib/Runtime/uvm";
-      llvm::SmallString<256> repoMacrosPath("lib/Runtime/uvm/uvm_macros.svh");
-      if (llvm::sys::fs::exists(repoMacrosPath))
-        uvmMacrosPath = repoMacrosPath.str().str();
-    }
-  }
-
-  if (uvmPkgPath.empty())
+    // No UVM library found. Print a warning to help users find uvm-core.
+    llvm::errs()
+        << "warning: UVM library not found. To use UVM, either:\n"
+        << "  1. Set UVM_HOME environment variable to your uvm-core directory\n"
+        << "  2. Use --uvm-path=<path> to specify the UVM library location\n"
+        << "  3. Use --no-uvm-auto-include to disable UVM auto-inclusion\n"
+        << "  Recommended: Use Accellera's uvm-core from "
+           "https://github.com/accellera-official/uvm-core\n";
     return;
+  }
 
   if (!uvmIncludeDir.empty() &&
       llvm::find(opts.includeDirs, uvmIncludeDir) == opts.includeDirs.end())
