@@ -12,12 +12,13 @@ moore.module @dyn_extract_ref_fourstate(in %idx_in : !moore.i4, out out : !moore
 
   // Dynamic bit extraction from 4-state ref - this was failing before the fix
   // CHECK: [[SIG:%.+]] = llhd.sig
-  // CHECK: llhd.sig.struct_extract [[SIG]]["value"]
-  // CHECK: llhd.sig.struct_extract [[SIG]]["unknown"]
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i8> -> <i1>
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i8> -> <i1>
-  // CHECK: llhd.prb
-  // CHECK: llhd.prb
+  // CHECK: llhd.prb [[SIG]]
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
+  // CHECK: comb.shru
+  // CHECK: comb.shru
+  // CHECK: comb.extract
+  // CHECK: comb.extract
   // CHECK: hw.struct_create
   // CHECK: llhd.sig
   %bit_ref = moore.dyn_extract_ref %sig from %idx_in : !moore.ref<l8>, !moore.i4 -> !moore.ref<l1>
@@ -38,10 +39,13 @@ moore.module @dyn_extract_ref_fourstate_slice(in %idx : !moore.i5, out out : !mo
   %sig = moore.variable : !moore.ref<l16>
 
   // Dynamic slice extraction from 4-state ref
-  // CHECK: llhd.sig.struct_extract {{%.+}}["value"]
-  // CHECK: llhd.sig.struct_extract {{%.+}}["unknown"]
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i16> -> <i4>
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i16> -> <i4>
+  // CHECK: llhd.prb {{%.+}}
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
+  // CHECK: comb.shru
+  // CHECK: comb.shru
+  // CHECK: comb.extract
+  // CHECK: comb.extract
   %slice_ref = moore.dyn_extract_ref %sig from %idx : !moore.ref<l16>, !moore.i5 -> !moore.ref<l4>
 
   // Read the extracted slice
@@ -60,8 +64,9 @@ moore.module @dyn_extract_ref_fourstate_idx(in %idx : !moore.l4, out out : !moor
   // Dynamic bit extraction with 4-state index
   // The index should have its value component extracted
   // CHECK: hw.struct_extract %idx["value"]
-  // CHECK: llhd.sig.struct_extract {{%.+}}["value"]
-  // CHECK: llhd.sig.struct_extract {{%.+}}["unknown"]
+  // CHECK: llhd.prb {{%.+}}
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
   %bit_ref = moore.dyn_extract_ref %sig from %idx : !moore.ref<l8>, !moore.l4 -> !moore.ref<l1>
 
   %bit = moore.read %bit_ref : !moore.ref<l1>
@@ -77,10 +82,11 @@ moore.module @extract_ref_fourstate(out out : !moore.l1) {
   %sig = moore.variable : !moore.ref<l8>
 
   // Static bit extraction from 4-state ref
-  // CHECK: llhd.sig.struct_extract {{%.+}}["value"]
-  // CHECK: llhd.sig.struct_extract {{%.+}}["unknown"]
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i8> -> <i1>
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i8> -> <i1>
+  // CHECK: llhd.prb {{%.+}}
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
+  // CHECK: comb.extract
+  // CHECK: comb.extract
   %bit_ref = moore.extract_ref %sig from 3 : !moore.ref<l8> -> !moore.ref<l1>
 
   // Read the extracted bit
@@ -97,14 +103,52 @@ moore.module @extract_ref_fourstate_slice(out out : !moore.l4) {
   %sig = moore.variable : !moore.ref<l16>
 
   // Static slice extraction from 4-state ref
-  // CHECK: llhd.sig.struct_extract {{%.+}}["value"]
-  // CHECK: llhd.sig.struct_extract {{%.+}}["unknown"]
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i16> -> <i4>
-  // CHECK: llhd.sig.extract {{%.+}} from {{%.+}} : <i16> -> <i4>
+  // CHECK: llhd.prb {{%.+}}
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
+  // CHECK: comb.extract
+  // CHECK: comb.extract
   %slice_ref = moore.extract_ref %sig from 4 : !moore.ref<l16> -> !moore.ref<l4>
 
   // Read the extracted slice
   %slice = moore.read %slice_ref : !moore.ref<l4>
 
   moore.output %slice : !moore.l4
+}
+
+// Test assigning to static extract ref from 4-state signal
+// CHECK-LABEL: hw.module @assign_extract_ref_fourstate
+moore.module @assign_extract_ref_fourstate() {
+  %sig = moore.variable : !moore.ref<l8>
+  %bit_ref = moore.extract_ref %sig from 3 : !moore.ref<l8> -> !moore.ref<l1>
+  %val = moore.constant 1 : l1
+  // CHECK: llhd.prb {{%.+}}
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
+  // CHECK: comb.and
+  // CHECK: comb.and
+  // CHECK: comb.or
+  // CHECK: hw.struct_create
+  // CHECK: llhd.drv {{%.+}}, {{%.+}} after
+  moore.blocking_assign %bit_ref, %val : l1
+  moore.output
+}
+
+// Test assigning to dynamic extract ref from 4-state signal
+// CHECK-LABEL: hw.module @assign_dyn_extract_ref_fourstate
+moore.module @assign_dyn_extract_ref_fourstate(in %idx : !moore.i4) {
+  %sig = moore.variable : !moore.ref<l8>
+  %bit_ref = moore.dyn_extract_ref %sig from %idx : !moore.ref<l8>, !moore.i4 -> !moore.ref<l1>
+  %val = moore.constant 0 : l1
+  // CHECK: llhd.prb {{%.+}}
+  // CHECK: hw.struct_extract {{%.+}}["value"]
+  // CHECK: hw.struct_extract {{%.+}}["unknown"]
+  // CHECK: comb.shl
+  // CHECK: comb.xor
+  // CHECK: comb.and
+  // CHECK: comb.or
+  // CHECK: hw.struct_create
+  // CHECK: llhd.drv {{%.+}}, {{%.+}} after
+  moore.blocking_assign %bit_ref, %val : l1
+  moore.output
 }

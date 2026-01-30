@@ -112,7 +112,9 @@ moore.class.classdecl @F extends @C {
 
 // CHECK-LABEL: func.func private @test_new6
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32> {
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"G"
+// G extends C (derived), so layout is {base_C, d, e, f}. Accessing d at index 1.
+// First index 0 dereferences the pointer, second index 1 accesses field d.
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"G"
 // CHECK:   [[CONV:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CONV]] : !llhd.ref<i32>
 
