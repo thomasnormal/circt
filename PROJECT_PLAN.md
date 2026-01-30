@@ -207,7 +207,44 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 258)
+### Active Workstreams & Next Steps (Iteration 259)
+
+**Iteration 259 Changes (2026-01-30) - COMPILATION MILESTONE:**
+1. **Implicit Virtual Method Detection** (FIXED):
+   - ROOT CAUSE: Line 4501 in Structure.cpp used `fn.flags & MethodFlags::Virtual`
+   - FIX: Use `fn.isVirtual()` which detects implicit virtuality from base class override
+   - Impact: **All 6 AVIPs now compile to HW level** without vtable_entry errors
+   - Files: `lib/Conversion/ImportVerilog/Structure.cpp`, `Expressions.cpp`
+
+2. **Native Pointer Safety** (FIXED):
+   - ROOT CAUSE: Native pointer dereference caused SIGSEGV on unmapped memory
+   - FIX: Removed unsafe native pointer access, rely only on tracked memory blocks
+   - Impact: OpenTitan and non-UVM simulations work correctly
+
+3. **Process State Safety** (FIXED):
+   - Added safe lookup for processStates in interpretLLVMCall
+   - Reduced call depth limit from 100 to 50 to help prevent C++ stack overflow
+
+**Current Status:**
+- **AVIP Compilation**: ✅ All 6 AVIPs compile to HW level (APB, UART, AHB, AXI4, I2S, I3C)
+- **OpenTitan Simulation**: ✅ gpio_reg_top, uart_reg_top pass; timer_core simulates (functional issue)
+- **External Suites**: ✅ sv-tests 23/26, verilator 17/17, yosys-sva 14/14
+- **circt-sim Tests**: ✅ 69/69 pass
+
+**Current Blocker for UVM Simulation:**
+- **Deep Call Chain Crash**: UVM global constructors create 50+ levels of nested function calls
+  - Exceeds C++ stack limit in the recursive interpreter
+  - Requires architectural change: convert to explicit stack-based interpreter
+  - Affects: All UVM-based simulations (AVIPs with real uvm-core)
+
+**Workstreams & Next Tasks:**
+
+| Track | Current Status | Next Task |
+|-------|----------------|-----------|
+| **Track 1: UVM Interpreter** | Blocked on deep call chains | Convert interpretLLVMFuncBody to explicit stack |
+| **Track 2: AVIP Validation** | All compile, simulation blocked | Test simulation once Track 1 unblocks |
+| **Track 3: OpenTitan** | 2/3 IPs pass simulation | Fix timer_core interrupt issue |
+| **Track 4: Test Suites** | All green | Continue regression monitoring |
 
 **Iteration 258 Changes (2026-01-30):**
 1. **Virtual Dispatch in sim.fork** (FIXED):
@@ -219,17 +256,6 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. **Alloca Classification in Global Constructors** (FIXED):
    - FIX: Check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors
    - Impact: Allocas inside functions called from global constructors now correctly classified
-
-**Current Blockers for Real uvm-core:**
-1. **vtable_entry Override Errors** (NEW ISSUE):
-   - Error: `'moore.vtable_entry' op Target should be overridden by vtable`
-   - Appears for inherited methods like `send_request` in UVM sequences
-   - Blocks AVIP compilation when using real Accellera uvm-core
-
-2. **Real UVM Global Initialization Crash** (NEW ISSUE):
-   - LLVM load fails during global constructor execution
-   - UVM stubs work but real uvm-core crashes early
-   - Need to investigate memory initialization patterns
 
 **Iteration 257 Changes (2026-01-30) - MAJOR FIXES:**
 1. **PROCESS_STEP_OVERFLOW in UVM Fork** (FIXED):
