@@ -55,7 +55,15 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
    - Added halted checks after each operation in `interpretFuncBody` and `interpretLLVMFuncBody`
    - **IMPACT**: APB AVIP now terminates cleanly instead of looping forever
 
-7. **BMC Clock-Source Struct Sampling** (VerifToSMT.cpp):
+7. **Function Ref Parameters** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Function ref parameters (like `ref int x`) used llhd.drv/prb
+   - Simulator cannot track signal references through function calls
+   - UVM callback iterators failed with "interpretOperation failed"
+   - **FIX**: AssignOpConversion and ReadOpConversion now check for block args
+     of `!llhd.ref<T>` type in function context and use llvm.store/load instead
+   - **IMPACT**: UVM compiles and initializes without llhd.prb/drv errors
+
+8. **BMC Clock-Source Struct Sampling** (VerifToSMT.cpp):
    - **FIX**: Consume `bmc_clock_sources` to substitute 4‑state clock source
      inputs with post‑edge BMC clock values during SMT lowering.
    - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct.mlir`
@@ -69,6 +77,12 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
    - **FIX**: Keep ops whose results are still used by kept operations to avoid
      erasing live defs during register pruning.
    - **TEST**: `test/Tools/circt-bmc/prune-bmc-registers-kept-output.mlir`
+
+7. **PruneBMCRegisters LLHD Drive Retention + Safe Erase** (PruneBMCRegisters.cpp):
+   - **FIX**: Preserve LLHD input drives used inside llhd.combinational regions
+     and erase dead ops in a use-safe order to avoid prune crashes.
+   - **IMPACT**: Yosys SVA BMC pass/fail modes now behave correctly end-to-end.
+   - **TEST**: `test/Tools/circt-bmc/sva-llhd-overlap-sat-e2e.sv`
 
 ### Workstream Status
 
