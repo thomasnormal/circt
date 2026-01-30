@@ -923,12 +923,16 @@ void SimForkOp::print(OpAsmPrinter &p) {
   }
 
   // Print branches
+  // Note: printBlockTerminators must be true to preserve cf.br ops in entry
+  // blocks. Without this, a forever loop inside a fork would have its entry
+  // block's branch suppressed, causing the loop body block to appear as the
+  // entry block with predecessors (which violates MLIR region semantics).
   bool first = true;
   for (auto &region : getBranches()) {
     if (!first)
       p << ", ";
     p.printRegion(region, /*printEntryBlockArgs=*/false,
-                  /*printBlockTerminators=*/false);
+                  /*printBlockTerminators=*/true);
     first = false;
   }
 
@@ -937,6 +941,7 @@ void SimForkOp::print(OpAsmPrinter &p) {
 
 ParseResult SimForkOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &builder = parser.getBuilder();
+  OpBuilder opBuilder(parser.getContext());
 
   // Parse optional join_type
   StringRef joinType = "join";
@@ -961,9 +966,17 @@ ParseResult SimForkOp::parse(OpAsmParser &parser, OperationState &result) {
     Region *branch = result.addRegion();
     if (parser.parseRegion(*branch, /*arguments=*/{}, /*argTypes=*/{}))
       return failure();
-    // Ensure the region has a terminator
+    // Ensure the region has a terminator.
     if (branch->empty())
       branch->emplaceBlock();
+    for (Block &block : *branch) {
+      if (!block.empty() && block.back().hasTrait<OpTrait::IsTerminator>())
+        continue;
+      OpBuilder::InsertionGuard guard(opBuilder);
+      opBuilder.setInsertionPointToEnd(&block);
+      auto loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
+      SimForkTerminatorOp::create(opBuilder, loc);
+    }
   } while (succeeded(parser.parseOptionalComma()));
 
   // Parse optional attributes

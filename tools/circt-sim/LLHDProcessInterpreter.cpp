@@ -6741,8 +6741,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
   }
 
   // Assign a unique address to this pointer (for tracking purposes)
-  uint64_t addr = state.nextMemoryAddress;
-  state.nextMemoryAddress += totalSize;
+  // Use globalNextAddress to ensure no overlap between module-level
+  // and process-level allocas.
+  uint64_t addr = globalNextAddress;
+  globalNextAddress += totalSize;
 
   // Store the pointer value (the address)
   setValue(procId, allocaOp.getResult(), InterpretedValue(addr, 64));
@@ -7391,36 +7393,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     // Handle __moore_queue_push_back - append element to queue
-    // Signature: (queue_ptr_ptr, element_ptr, element_size)
-    // MooreToCore passes pointer-to-pointer for queue argument
+    // Signature: (queue_ptr, element_ptr, element_size)
     if (calleeName == "__moore_queue_push_back") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queuePtrPtrAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
 
-        if (queuePtrPtrAddr != 0 && elemSize > 0) {
-          // First dereference: get the actual queue pointer
-          uint64_t ptrOffset = 0;
-          auto *ptrBlock = findMemoryBlockByAddress(queuePtrPtrAddr, procId, &ptrOffset);
-          if (!ptrBlock || !ptrBlock->initialized) {
-            LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: ptr block not found\n");
-            return success();
-          }
-          uint64_t queueAddr = 0;
-          for (int i = 0; i < 8; ++i)
-            queueAddr |= static_cast<uint64_t>(ptrBlock->data[ptrOffset + i]) << (i * 8);
-
-          // Second dereference: access the queue struct
-          uint64_t queueOffset = 0;
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+        if (queueAddr != 0 && elemSize > 0) {
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
           if (queueBlock && queueBlock->initialized) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
 
             // Allocate new storage with space for one more element.
             // Use global address counter to avoid overlap with other processes.
@@ -7442,32 +7430,26 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             }
 
             // Copy new element to the end
-            uint64_t elemOffset = 0;
-            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
+            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId);
             if (elemBlock && elemBlock->initialized) {
-              size_t copySize = std::min(static_cast<size_t>(elemSize),
-                                         elemBlock->data.size() - static_cast<size_t>(elemOffset));
+              size_t copySize = std::min(static_cast<size_t>(elemSize), elemBlock->data.size());
               std::memcpy(newBlock.data.data() + queueLen * elemSize,
-                          elemBlock->data.data() + elemOffset, copySize);
+                          elemBlock->data.data(), copySize);
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
 
-            // Update queue struct with new ptr and len (with offset)
+            // Update queue struct with new ptr and len
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+              queueBlock->data[i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+              queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
 
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
                                     << llvm::format_hex(queueAddr, 16)
-                                    << " queueOffset=" << queueOffset
                                     << " newDataAddr=0x" << llvm::format_hex(newDataAddr, 16)
                                     << " elemSize=" << elemSize
                                     << " newLen=" << newLen << "\n");
-          } else {
-            LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queue block not found at 0x"
-                                    << llvm::format_hex(queueAddr, 16) << "\n");
           }
         }
       }

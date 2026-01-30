@@ -2227,12 +2227,16 @@ void ForkOp::print(OpAsmPrinter &p) {
   }
 
   // Print branches
+  // Note: printBlockTerminators must be true to preserve cf.br ops in entry
+  // blocks. Without this, a forever loop inside a fork would have its entry
+  // block's branch suppressed, causing the loop body block to appear as the
+  // entry block with predecessors (which violates MLIR region semantics).
   bool first = true;
   for (auto &region : getBranches()) {
     if (!first)
       p << ", ";
     p.printRegion(region, /*printEntryBlockArgs=*/false,
-                  /*printBlockTerminators=*/false);
+                  /*printBlockTerminators=*/true);
     first = false;
   }
 
@@ -2303,8 +2307,12 @@ void NamedBlockOp::print(OpAsmPrinter &p) {
   p.printAttributeWithoutType(getBlockNameAttr());
   p << " ";
   p.printOptionalAttrDictWithKeyword((*this)->getAttrs(), {"blockName"});
+  // Note: printBlockTerminators must be true to preserve cf.br ops in entry
+  // blocks. Without this, loops would have their entry block's branch
+  // suppressed, causing the loop body block to appear as the entry block with
+  // predecessors (which violates MLIR region semantics).
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
-                /*printBlockTerminators=*/false);
+                /*printBlockTerminators=*/true);
 }
 
 ParseResult NamedBlockOp::parse(OpAsmParser &parser, OperationState &result) {
