@@ -21,11 +21,26 @@ Fix vtable generation for implicit virtual methods, restore non-UVM simulation s
    - Fixed string constant width expectations (i127 -> i128 for 16-char strings)
    - XFAILed UVM stub tests since stubs were removed for real uvm-core
 
+4. **Scoped Native Pointer Access for Assoc Refs** (LLHDProcessInterpreter.cpp):
+   - **FIX**: Track native blocks returned by `__moore_assoc_get_ref` and allow
+     load/store only within tracked blocks; unknown native pointers return X
+   - **TEST**: `test/Tools/circt-sim/llvm-assoc-native-ref-load-store.mlir`,
+     `test/Tools/circt-sim/llvm-load-unknown-native.mlir`
+   - **IMPACT**: Prevents native pointer crashes while keeping associative array
+     element access functional in circt-sim
+
 ### Remaining UVM Simulation Issue
 
-UVM-based simulations (AVIPs) crash during global constructor execution in `interpretLLVMCall`.
-This is a separate issue from the pointer access - the crash happens deep in function call chains
-during the 297 global constructor initializations. Investigation ongoing.
+UVM-based simulations (AVIPs) crash during global constructor execution due to very deep
+function call chains that exceed the C++ stack limit. The UVM initialization code has
+call depths exceeding 50 levels of nested function calls, which requires a different
+approach (explicit stacks or trampoline-based execution) to solve.
+
+**Non-UVM simulations work correctly:**
+- OpenTitan gpio_reg_top_tb: PASS
+- OpenTitan uart_reg_top_tb: PASS
+- OpenTitan timer_core_tb: Simulates (test failure is functional issue)
+- All 69 circt-sim lit tests: PASS
 
 ### Test Suite Results
 
@@ -33,7 +48,7 @@ during the 297 global constructor initializations. Investigation ongoing.
 |-------|------|-------|-------|
 | MooreToCore | 92 | 93 | 1 XFAIL |
 | ImportVerilog | 192 | 215 | 23 XFAIL |
-| circt-sim | 67 | 67 | 100% |
+| circt-sim | 69 | 69 | 100% |
 | sv-tests BMC | 23 | 26 | 100% (3 XFAIL) |
 | verilator-verification BMC | 17 | 17 | 100% |
 | yosys-sva BMC | 14 | 14 | 100% |
