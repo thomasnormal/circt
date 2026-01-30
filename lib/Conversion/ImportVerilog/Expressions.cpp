@@ -6886,20 +6886,26 @@ Value Context::materializeSVReal(const slang::ConstantValue &svreal,
 Value Context::materializeString(const slang::ConstantValue &stringLiteral,
                                  const slang::ast::Type &astType,
                                  Location loc) {
-  slang::ConstantValue intVal = stringLiteral.convertToInt();
-  auto effectiveWidth = intVal.getEffectiveWidth();
-  if (!effectiveWidth)
+  if (!astType.isString())
     return {};
 
-  auto intTy = moore::IntType::getInt(getContext(), effectiveWidth.value());
+  // Get the actual string content (without quotes).
+  // stringLiteral.str() returns the raw string content, while
+  // stringLiteral.toString() would add surrounding quotes.
+  const std::string &strContent = stringLiteral.str();
 
-  if (astType.isString()) {
-    auto immInt = moore::ConstantStringOp::create(builder, loc, intTy,
-                                                  stringLiteral.toString())
-                      .getResult();
-    return moore::IntToStringOp::create(builder, loc, immInt).getResult();
-  }
-  return {};
+  // Calculate the bit width as string length * 8 bits per character.
+  // This ensures the integer type can hold the entire string content.
+  // IEEE 1800-2017 Section 5.9: strings are stored with first character
+  // in the most significant byte.
+  unsigned bitWidth = strContent.size() * 8;
+  if (bitWidth == 0)
+    bitWidth = 8; // Empty string still needs at least 1 byte
+
+  auto intTy = moore::IntType::getInt(getContext(), bitWidth);
+  auto immInt = moore::ConstantStringOp::create(builder, loc, intTy, strContent)
+                    .getResult();
+  return moore::IntToStringOp::create(builder, loc, immInt).getResult();
 }
 
 /// Materialize a Slang integer literal as a constant op.

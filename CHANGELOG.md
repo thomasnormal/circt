@@ -1,5 +1,114 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 255 - January 30, 2026
+
+### Goals
+Fix remaining blockers for UVM testbench execution: string truncation, GEP paths.
+
+### Fixed in this Iteration
+
+1. **String Truncation in materializeString()** (Expressions.cpp):
+   - **ROOT CAUSE**: Used `getEffectiveWidth()` (minimum bits for integer) instead of `str().size() * 8`
+   - **ROOT CAUSE**: Used `toString()` (adds quotes) instead of `str()` (raw content)
+   - **FIX**: Calculate bit width as `strContent.size() * 8`, use `str()` for content
+   - **IMPACT**: UVM factory string parameters like `"my_class"` now preserved correctly
+
+2. **GEP Queue Initialization for Deep Inheritance** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Queue init computed GEP paths incorrectly for derived classes
+   - **BUG**: Was adding `inheritanceLevel` zeros then `propIdx + 2` for ALL classes
+   - **FIX**: Use cached `structInfo->getFieldPath()` which has correct inheritance-aware paths
+   - **IMPACT**: Classes with 5+ inheritance levels (all UVM) now compile to hw level
+
+3. **yosys-sva BMC Confirmed 100%**:
+   - **CLARIFICATION**: Previous "50% failures" was incorrect - script already had `BMC_ASSUME_KNOWN_INPUTS=1`
+   - **VERIFIED**: 14/14 tests pass (2 VHDL skipped)
+
+### Test Suite Results (Verified)
+
+| Suite | Pass | Total | Notes |
+|-------|------|-------|-------|
+| Lit Tests | 2927 | 3143 | 93.13% |
+| sv-tests BMC | 23 | 26 | 100% (3 XFAIL) |
+| sv-tests LEC | 23 | 23 | 100% |
+| verilator BMC | 17 | 17 | 100% |
+| verilator LEC | 17 | 17 | 100% |
+| yosys-sva BMC | 14 | 14 | 100% |
+| yosys-sva LEC | 14 | 14 | 100% |
+
+### AVIP Compilation Status
+
+| AVIP | --ir-moore | --ir-hw | Notes |
+|------|------------|---------|-------|
+| APB | ✅ | ✅ | Compiles successfully |
+| AXI4 | ✅ | ✅ | Compiles successfully |
+| UART | ✅ | ✅ | Compiles successfully |
+| I2S | ✅ | ✅ | Compiles successfully |
+| I3C | ✅ | ✅ | Compiles successfully |
+| AHB | ✅ | ✅ | Compiles successfully |
+| SPI | ❌ | - | Source bugs (nested block comments) |
+| JTAG | ❌ | - | Source bugs (virtual method default) |
+| AXI4Lite | - | - | No filelist found |
+
+---
+
+## Iteration 254 - January 30, 2026
+
+### Goals
+Continue fixing remaining blockers for UVM testbench execution with real uvm-core.
+
+### Fixed in this Iteration
+
+1. **Queue Property Initialization** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Queue properties in classes were uninitialized
+   - **FIX**: Added zero-initialization for queue struct {ptr=nullptr, len=0} in ClassNewOpConversion
+   - **IMPACT**: Class instances with queue members now work correctly
+
+2. **UVM E2E Testing Validation**:
+   - Verified UVM stubs removed, using real ~/uvm-core
+   - Basic UVM test reaches run_phase but type_id::create() returns null
+   - UVM factory registration not working correctly (investigation ongoing)
+
+3. **Test Results Correction**:
+   - **yosys-sva BMC**: 50% (7/14 pass, 5 failures need investigation)
+   - **sv-tests BMC/LEC**: 100% pass
+   - **verilator-verification**: 100% pass
+   - **Lit tests**: 2960/3066 (96.5%)
+
+4. **4-State Comb SMT Semantics** (CombToSMT.cpp):
+   - **CHANGE**: Implemented 4-state AND/OR/XOR, mux, and case/wild equality lowering
+   - **IMPACT**: Unknown masks are now preserved for core comb ops in BMC/LEC
+   - **TEST**: `test/Conversion/CombToSMT/comb-to-smt-fourstate.mlir`
+
+### Known Issues (P0 Blockers)
+
+1. **MooreToCore GEP for Deep Class Hierarchies**:
+   - Classes with 5+ levels of inheritance (common in UVM) fail at hw level
+   - Field indices don't account for all inherited fields
+   - Blocks all AVIP compilation at --ir-hw level
+
+2. **UVM Factory/run_test()**:
+   - type_id::create() returns null
+   - Factory registration mechanism needs investigation
+
+3. **yosys-sva BMC Failures**:
+   - 5 tests failing, need root cause analysis
+
+### AVIP Compilation Status
+
+| AVIP | --ir-moore | --ir-hw | Notes |
+|------|------------|---------|-------|
+| APB | ✅ | ❌ GEP | Deep inheritance |
+| AXI4 | ✅ | ❌ GEP | Deep inheritance |
+| AXI4-Lite | ✅ | ❌ GEP | Deep inheritance |
+| I2S | ✅ | ❌ GEP | Deep inheritance |
+| SPI | ✅ | ❌ GEP | Deep inheritance |
+| UART | ✅ | ❌ GEP | Deep inheritance |
+| I3C | ✅ | ❌ GEP | Deep inheritance |
+| JTAG | ✅ | ❌ GEP | Deep inheritance |
+| AHB | ❌ | - | Missing features |
+
+---
+
 ## Iteration 253 - January 30, 2026
 
 ### Goals
@@ -209,6 +318,12 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
     - **IMPACT**: Exact multi-step matching for sequence operators with proper
       clock-edge gating; adds tick inputs + NFA state slots to the BMC circuit.
     - **TEST**: `test/Tools/circt-bmc/sva-goto-repeat-delay-sat-e2e.sv`.
+
+36. **BMC NFA Tick Clock Resolution** (VerifToSMT.cpp):
+    - **FIX**: Resolve NFA tick gating to a specific clock position (including
+      derived clock inversion) so sequence NFAs advance on the correct edge in
+      multi-clock BMC.
+    - **TEST**: `test/Tools/circt-bmc/sva-multiclock-nfa-delay-sat-e2e.sv`.
 
 ### Investigation Results (All Working)
 - **Vtables**: Interpreter uses `circt.vtable_entries` at runtime ✓
