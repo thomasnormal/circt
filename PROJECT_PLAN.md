@@ -207,25 +207,38 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 259)
+### Active Workstreams & Next Steps (Iteration 260)
 
-**Iteration 259 Changes (2026-01-30) - COMPILATION MILESTONE:**
-1. **Implicit Virtual Method Detection** (FIXED):
-   - ROOT CAUSE: Line 4501 in Structure.cpp used `fn.flags & MethodFlags::Virtual`
-   - FIX: Use `fn.isVirtual()` which detects implicit virtuality from base class override
-   - Impact: **All 6 AVIPs now compile to HW level** without vtable_entry errors
-   - Files: `lib/Conversion/ImportVerilog/Structure.cpp`, `Expressions.cpp`
+**Iteration 260 Changes (2026-01-30) - CLASS MEMBER ACCESS MILESTONE:**
+1. **VTable Entry Population Bug** (FIXED):
+   - ROOT CAUSE: When `ClassNewOpConversion` runs before `VTableOpConversion`, placeholder vtable global lacks `circt.vtable_entries` attribute
+   - FIX: Modified `VTableOpConversion::matchAndRewrite()` to populate entries on existing globals
+   - Impact: **Virtual methods dispatch correctly; class member access from methods works**
+   - Files: `lib/Conversion/MooreToCore/MooreToCore.cpp`
 
-2. **Native Pointer Safety** (FIXED):
-   - ROOT CAUSE: Native pointer dereference caused SIGSEGV on unmapped memory
-   - FIX: Removed unsafe native pointer access, rely only on tracked memory blocks
-   - Impact: OpenTitan and non-UVM simulations work correctly
+2. **Queue find_first_index** (CONFIRMED WORKING):
+   - `ArrayLocatorOpConversion` already handles `find_first_index` for queues
+   - Added comprehensive test: `test/Conversion/MooreToCore/queue-find-first-index.mlir`
 
-3. **Process State Safety** (FIXED):
-   - Added safe lookup for processStates in interpretLLVMCall
-   - Reduced call depth limit from 100 to 50 to help prevent C++ stack overflow
+3. **Field Indexing Audit** (PASSED):
+   - Root classes correctly offset by 2 (typeId + vtablePtr)
+   - Derived classes correctly offset by 1 (embedded base class)
+   - All GEP paths calculated correctly by `ClassTypeCache`
+
+**Class Member Access Test Results (All PASS):**
+- Simple class member access: `c.get_value()` returns 42
+- Complex class members with setters: Multiple members work
+- Class inheritance member access: Derived class accesses work
+- Virtual method override with member access: Polymorphism works
+
+**Remaining Blockers for UVM:**
+1. **APB AVIP Global Constructor Crash**: Crashes in `interpretLLVMCall` during global constructor execution
+2. **UVM Simulation Exits at 0fs**: uvm-core compiles but phases don't execute
 
 **Current Status:**
+- **Class Member Access**: ✅ FIXED - All test cases pass
+- **Virtual Method Dispatch**: ✅ FIXED - Polymorphism works correctly
+- **uvm-core Compilation**: ✅ WORKS - 9.4 MB MLIR output generated
 - **AVIP Compilation**: ✅ All 6 AVIPs compile to HW level (APB, UART, AHB, AXI4, I2S, I3C)
 - **OpenTitan Simulation**: ✅ gpio_reg_top, uart_reg_top pass; timer_core simulates (functional issue)
 - **External Suites**: ✅ sv-tests 23/26, verilator 17/17, yosys-sva 14/14

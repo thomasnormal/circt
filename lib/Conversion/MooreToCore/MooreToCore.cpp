@@ -2661,6 +2661,68 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
                   // Store the zero-initialized queue
                   LLVM::StoreOp::create(rewriter, loc, zeroQueue, propPtr);
                 }
+
+                // Initialize associative array properties by calling __moore_assoc_create
+                if (auto assocType = dyn_cast<AssocArrayType>(propType)) {
+                  auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
+                  if (!pathOpt)
+                    continue;
+
+                  // Build GEP indices from the cached path
+                  SmallVector<Value> propGepIndices;
+                  propGepIndices.push_back(LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0)));
+                  for (unsigned idx : *pathOpt) {
+                    propGepIndices.push_back(LLVM::ConstantOp::create(
+                        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(idx)));
+                  }
+
+                  // GEP to the associative array field
+                  auto propPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                                     structTy, objPtr,
+                                                     propGepIndices);
+
+                  // Determine key size (0 for string keys)
+                  int32_t keySize = 0;
+                  auto keyType = assocType.getIndexType();
+                  if (!isa<StringType>(keyType)) {
+                    auto convertedKeyType = typeConverter->convertType(keyType);
+                    if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
+                      keySize = intTy.getWidth() / 8;
+                    else if (isa<LLVM::LLVMPointerType>(convertedKeyType))
+                      keySize = 8; // Pointer size
+                    else
+                      keySize = 4; // Default
+                  }
+
+                  // Determine value size
+                  auto valueType = assocType.getElementType();
+                  auto convertedValueType = typeConverter->convertType(valueType);
+                  int32_t valueSize = 4; // Default
+                  if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+                    valueSize = (intTy.getWidth() + 7) / 8;
+                  else if (isa<LLVM::LLVMPointerType>(convertedValueType))
+                    valueSize = 8; // Pointer size for class handles
+
+                  // Get or create __moore_assoc_create function
+                  auto assocFnTy = LLVM::LLVMFunctionType::get(ptrTy, {i32Ty, i32Ty});
+                  auto assocFn =
+                      getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", assocFnTy);
+
+                  // Create constants for key and value sizes
+                  auto keySizeConst = LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
+                  auto valueSizeConst = LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+                  // Call __moore_assoc_create(key_size, value_size)
+                  auto assocCall = LLVM::CallOp::create(
+                      rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(assocFn),
+                      ValueRange{keySizeConst, valueSizeConst});
+
+                  // Store the created associative array handle in the property field
+                  LLVM::StoreOp::create(rewriter, loc, assocCall.getResult(), propPtr);
+                }
               }
             }
           };
@@ -4090,8 +4152,27 @@ struct VTableOpConversion : public OpConversionPattern<VTableOp> {
     // llvm.func declarations.
     std::string globalName = structInfo.vtableGlobalName;
 
-    // Check if vtable global already exists
-    if (mod.lookupSymbol<LLVM::GlobalOp>(globalName)) {
+    // Check if vtable global already exists (may have been created as a
+    // placeholder by ClassNewOpConversion).
+    LLVM::GlobalOp existingGlobal = mod.lookupSymbol<LLVM::GlobalOp>(globalName);
+    if (existingGlobal) {
+      // Global exists as placeholder - we still need to add vtable entries
+      // Build vtable entries attribute for the existing global
+      SmallVector<Attribute> vtableEntries;
+      for (const auto &[methodName, targetSym] : methodToTarget) {
+        auto indexIt = methodToIndex.find(methodName);
+        if (indexIt == methodToIndex.end())
+          continue;
+        unsigned index = indexIt->second;
+        SmallVector<Attribute> entry;
+        entry.push_back(rewriter.getI64IntegerAttr(index));
+        entry.push_back(targetSym);
+        vtableEntries.push_back(rewriter.getArrayAttr(entry));
+      }
+      if (!vtableEntries.empty()) {
+        existingGlobal->setAttr("circt.vtable_entries",
+                                rewriter.getArrayAttr(vtableEntries));
+      }
       rewriter.eraseOp(op);
       return success();
     }
@@ -5879,6 +5960,30 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       int32_t valueSize = 4; // Default
       if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
         valueSize = (intTy.getWidth() + 7) / 8;
+      else if (isa<LLVM::LLVMPointerType>(convertedValueType))
+        valueSize = 8; // Class handles are pointers
+
+      // Determine the actual array handle.
+      // For local variables, adaptor.getInput() IS the handle (from __moore_assoc_create).
+      // For class property refs (from GEP), adaptor.getInput() is a pointer TO the
+      // field that contains the handle, so we need to load first.
+      // For global refs (from AddressOfOp), we also need to load.
+      Value arrayHandle = adaptor.getInput();
+      {
+        Value source = arrayHandle;
+        // Unwrap unrealized conversion casts
+        while (auto castOp = source.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (castOp.getInputs().size() == 1)
+            source = castOp.getInputs()[0];
+          else
+            break;
+        }
+        // For GEP (class property) or AddressOfOp (global), load the handle
+        if (source.getDefiningOp<LLVM::GEPOp>() ||
+            source.getDefiningOp<LLVM::AddressOfOp>()) {
+          arrayHandle = LLVM::LoadOp::create(rewriter, loc, ptrTy, arrayHandle);
+        }
+      }
 
       // Store the key to an alloca and pass its pointer
       auto keyType = adaptor.getLowBit().getType();
@@ -5903,7 +6008,7 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       // Call __moore_assoc_get_ref(array, key_ptr, value_size)
       auto call = LLVM::CallOp::create(
           rewriter, loc, TypeRange{ptrTy}, SymbolRefAttr::get(fn),
-          ValueRange{adaptor.getInput(), keyAlloca, valueSizeConst});
+          ValueRange{arrayHandle, keyAlloca, valueSizeConst});
 
       rewriter.replaceOp(op, call.getResult());
       return success();
@@ -8839,8 +8944,11 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       // However, for global variable references (from GetGlobalVariableOp),
       // we DO need to load because the global stores the handle.
       //
-      // We detect global variable refs by checking if the source is an
-      // AddressOfOp or an UnrealizedConversionCast wrapping AddressOfOp.
+      // Similarly, for class property references (from ClassPropertyRefOp),
+      // we need to load because the property field stores the handle.
+      //
+      // We detect these by checking if the source is an AddressOfOp (global)
+      // or a GEPOp (class property), vs a local variable handle.
       if (isa<AssocArrayType, WildcardAssocArrayType>(mooreNestedType)) {
         Value source = adaptor.getInput();
         // Unwrap unrealized conversion casts
@@ -8850,14 +8958,17 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
           else
             break;
         }
-        // Check if this is NOT from an AddressOfOp (global variable reference).
-        // If it's not an addressof, it's a local variable handle - pass through.
-        if (!source.getDefiningOp<LLVM::AddressOfOp>()) {
+        // Check if this is from an AddressOfOp (global variable reference)
+        // or a GEPOp (class property reference).
+        // If neither, it's a local variable handle - pass through.
+        bool needsLoad = source.getDefiningOp<LLVM::AddressOfOp>() != nullptr ||
+                         source.getDefiningOp<LLVM::GEPOp>() != nullptr;
+        if (!needsLoad) {
           // Local variable: the pointer is the handle itself.
           rewriter.replaceOp(op, adaptor.getInput());
           return success();
         }
-        // Global variable reference: fall through to load the handle.
+        // Global variable or class property: fall through to load the handle.
       }
 
       auto hwResultType = typeConverter->convertType(op.getResult().getType());
@@ -15649,9 +15760,29 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
       return rewriter.notifyMatchFailure(loc, "unsupported key type");
     }
 
+    // Determine the actual array handle.
+    // For local variables, adaptor.getArray() IS the handle.
+    // For class property refs (from GEP), we need to load the handle first.
+    Value arrayHandle = adaptor.getArray();
+    {
+      Value source = arrayHandle;
+      // Unwrap unrealized conversion casts
+      while (auto castOp = source.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() == 1)
+          source = castOp.getInputs()[0];
+        else
+          break;
+      }
+      // For GEP (class property) or AddressOfOp (global), load the handle
+      if (source.getDefiningOp<LLVM::GEPOp>() ||
+          source.getDefiningOp<LLVM::AddressOfOp>()) {
+        arrayHandle = LLVM::LoadOp::create(rewriter, loc, ptrTy, arrayHandle);
+      }
+    }
+
     auto call = LLVM::CallOp::create(
         rewriter, loc, TypeRange{i1Ty}, SymbolRefAttr::get(fn),
-        ValueRange{adaptor.getArray(), keyAlloca});
+        ValueRange{arrayHandle, keyAlloca});
 
     // For non-string keys (llhd.ref), write back the updated key value
     if (keyValueType) {

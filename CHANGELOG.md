@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 260 - January 30, 2026
+
+### Goals
+Fix class member access from methods, enable uvm-core simulation.
+
+### Fixed in this Iteration
+
+1. **VTable Entry Population Bug** (MooreToCore.cpp):
+   - **ROOT CAUSE**: When `ClassNewOpConversion` runs before `VTableOpConversion`, it creates a placeholder vtable global without the `circt.vtable_entries` attribute. `VTableOpConversion` then skipped adding entries if global already exists.
+   - **FIX**: Modified `VTableOpConversion::matchAndRewrite()` to still populate `circt.vtable_entries` attribute on existing globals before erasing the vtable op.
+   - **IMPACT**: Virtual methods now dispatch correctly; class member access from methods works.
+   - **TEST**: Updated `test/Conversion/MooreToCore/vtable.mlir` with additional test case.
+
+2. **Queue find_first_index Already Implemented** (Confirmed):
+   - `ArrayLocatorOpConversion` handles `find_first_index` for queues
+   - Uses `__moore_array_find_eq` for simple equality, `__moore_array_find_cmp` for comparisons
+   - **TEST**: Added `test/Conversion/MooreToCore/queue-find-first-index.mlir` with comprehensive test cases
+
+3. **Field Indexing Audit Passed** (Confirmed):
+   - Root classes correctly offset by 2 (typeId + vtablePtr)
+   - Derived classes correctly offset by 1 (embedded base class)
+   - `ClassTypeCache` properly calculates GEP paths for all inheritance levels
+
+### Test Results
+
+| Test | Status |
+|------|--------|
+| Simple class member access | ✅ PASS |
+| Complex class members + setters | ✅ PASS |
+| Class inheritance member access | ✅ PASS |
+| Virtual method override with members | ✅ PASS |
+| uvm-core compilation | ✅ PASS |
+| MooreToCore lit tests | 93/94 pass |
+| circt-sim lit tests | 70/70 pass |
+
+### Remaining Issues
+
+1. **APB AVIP Global Constructor Crash**: Crashes in `interpretLLVMCall` during global constructor execution
+2. **UVM Simulation Exits at 0fs**: Compiles but phases don't execute (needs investigation)
+
+---
+
 ## Iteration 259 - January 30, 2026
 
 ### Goals
@@ -29,12 +71,47 @@ Fix vtable generation for implicit virtual methods, restore non-UVM simulation s
    - **IMPACT**: Prevents native pointer crashes while keeping associative array
      element access functional in circt-sim
 
+5. **String-Key Assoc Safety in circt-sim** (LLHDProcessInterpreter.cpp):
+   - **FIX**: Validate string-key pointers for assoc ops and short-circuit
+     unreadable keys to avoid runtime memcpy crashes
+   - **TEST**: `test/Tools/circt-sim/llvm-assoc-string-key-unknown.mlir`
+   - **IMPACT**: `/tmp/uvm_core_smoke.mlir` now runs to completion without segfault
+
+6. **BMC Non-Consecutive Repeat + Delay Range E2E**:
+   - **TEST**: `test/Tools/circt-bmc/sva-nonconsecutive-repeat-delay-range-sat-e2e.sv`
+   - **TEST**: `test/Tools/circt-bmc/sva-nonconsecutive-repeat-delay-range-unsat-e2e.sv`
+   - **IMPACT**: Covers [=m:n] combined with ##[m:n] under NFA-based multi-step BMC
+
+7. **BMC Goto + Repeat + Delay Range E2E**:
+   - **TEST**: `test/Tools/circt-bmc/sva-goto-repeat-delay-range-sat-e2e.sv`
+   - **TEST**: `test/Tools/circt-bmc/sva-goto-repeat-delay-range-unsat-e2e.sv`
+   - **IMPACT**: Covers [->m:n] combined with ##[m:n] and [*k] in NFA BMC
+
+8. **BMC Non-Consecutive + Goto + Delay Range E2E**:
+   - **TEST**: `test/Tools/circt-bmc/sva-nonconsecutive-goto-delay-range-sat-e2e.sv`
+   - **TEST**: `test/Tools/circt-bmc/sva-nonconsecutive-goto-delay-range-unsat-e2e.sv`
+   - **IMPACT**: Covers [=m:n] combined with ##[m:n] and [->m:n] in NFA BMC
+
+9. **BMC Concat + Delay Range + Goto E2E**:
+   - **TEST**: `test/Tools/circt-bmc/sva-concat-delay-range-goto-sat-e2e.sv`
+   - **TEST**: `test/Tools/circt-bmc/sva-concat-delay-range-goto-unsat-e2e.sv`
+   - **IMPACT**: Covers concat + delay-range feeding goto repetition in NFA BMC
+
+10. **BMC Concat + Repeat + Delay Range E2E**:
+   - **TEST**: `test/Tools/circt-bmc/sva-concat-repeat-delay-range-sat-e2e.sv`
+   - **TEST**: `test/Tools/circt-bmc/sva-concat-repeat-delay-range-unsat-e2e.sv`
+   - **IMPACT**: Covers concat+repeat combined with delay-range in NFA BMC
+
+11. **NFA Clone Safety for Repeated Concat** (LTLSequenceNFA.h):
+   - **FIX**: Clone now walks epsilon transitions to avoid DenseMap rehash crashes
+   - **IMPACT**: Prevents circt-bmc crash on repeated concat sequences
+
 ### Remaining UVM Simulation Issue
 
-UVM-based simulations (AVIPs) crash during global constructor execution due to very deep
-function call chains that exceed the C++ stack limit. The UVM initialization code has
-call depths exceeding 50 levels of nested function calls, which requires a different
-approach (explicit stacks or trampoline-based execution) to solve.
+UVM smoke now runs after string-key assoc safety, but full AVIP/UVM coverage is still
+unverified. Previous global-constructor crashes in `__moore_assoc_exists` are fixed
+by safe string-key handling; remaining risks include deeper UVM call chains and any
+other runtime string/assoc corner cases that only show up in large designs.
 
 **Non-UVM simulations work correctly:**
 - OpenTitan gpio_reg_top_tb: PASS
