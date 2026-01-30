@@ -7155,10 +7155,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         InterpretedValue sizeArg = getValue(procId, callOp.getOperand(0));
         uint64_t size = sizeArg.isX() ? 256 : sizeArg.getUInt64();  // Default size if X
 
-        // Allocate memory block for this allocation
-        auto &procState = processStates[procId];
-        uint64_t addr = procState.nextMemoryAddress;
-        procState.nextMemoryAddress += size;
+        // Use global address counter to avoid overlap between processes.
+        // Each process has its own nextMemoryAddress for allocas, but malloc
+        // blocks are stored globally in mallocBlocks, so we need a global counter.
+        uint64_t addr = globalNextAddress;
+        globalNextAddress += size;
 
         // Create a memory block for this allocation
         MemoryBlock block(size, 64);
@@ -7421,10 +7422,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
 
-            // Allocate new storage with space for one more element
+            // Allocate new storage with space for one more element.
+            // Use global address counter to avoid overlap with other processes.
             int64_t newLen = queueLen + 1;
-            uint64_t newDataAddr = processStates[procId].nextMemoryAddress;
-            processStates[procId].nextMemoryAddress += newLen * elemSize;
+            uint64_t newDataAddr = globalNextAddress;
+            globalNextAddress += newLen * elemSize;
 
             MemoryBlock newBlock(newLen * elemSize, 64);
             newBlock.initialized = true;
@@ -7459,6 +7461,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
                                     << llvm::format_hex(queueAddr, 16)
+                                    << " queueOffset=" << queueOffset
+                                    << " newDataAddr=0x" << llvm::format_hex(newDataAddr, 16)
+                                    << " elemSize=" << elemSize
                                     << " newLen=" << newLen << "\n");
           } else {
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queue block not found at 0x"
@@ -7624,9 +7629,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
 
+            // Use global address counter to avoid overlap with other processes.
             int64_t newLen = queueLen + 1;
-            uint64_t newDataAddr = processStates[procId].nextMemoryAddress;
-            processStates[procId].nextMemoryAddress += newLen * elemSize;
+            uint64_t newDataAddr = globalNextAddress;
+            globalNextAddress += newLen * elemSize;
 
             MemoryBlock newBlock(newLen * elemSize, 64);
             newBlock.initialized = true;
