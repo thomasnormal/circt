@@ -9014,37 +9014,46 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
 
       if (origIsBlockArg || inputIsBlockArg) {
         if (auto refType = dyn_cast<llhd::RefType>(input.getType())) {
-          // Only apply this for function contexts, not for hw.module contexts.
-          // In hw.module, signals are properly tracked by the simulator.
-          // Also check if we're NOT in an llhd.process or seq.initial
-          // (those are inside hw.module and signals work there).
-          bool inFuncOp = op->getParentOfType<func::FuncOp>() != nullptr;
-          bool inProcess = op->getParentOfType<llhd::ProcessOp>() != nullptr;
-          bool inInitial = op->getParentOfType<seq::InitialOp>() != nullptr;
+          // Only use llvm.load when the nested type is an LLVM type (e.g.,
+          // !llvm.ptr for class handles). Signal refs have HW types (like i32)
+          // as the nested type and should use llhd.prb.
+          Type nestedType = refType.getNestedType();
+          bool nestedIsLLVMType = isa<LLVM::LLVMPointerType, LLVM::LLVMStructType,
+                                      LLVM::LLVMArrayType>(nestedType);
 
-          if (inFuncOp && !inProcess && !inInitial) {
-            // For function ref parameters, cast to LLVM pointer and load.
-            Value refAsPtr = UnrealizedConversionCastOp::create(
-                                 rewriter, op.getLoc(),
-                                 LLVM::LLVMPointerType::get(rewriter.getContext()),
-                                 input)
-                                 .getResult(0);
+          // Only apply this for function contexts with LLVM nested types.
+          // Signal refs (with HW nested types) should use llhd.prb even in
+          // function contexts.
+          if (nestedIsLLVMType) {
+            bool inFuncOp = op->getParentOfType<func::FuncOp>() != nullptr;
+            bool inProcess = op->getParentOfType<llhd::ProcessOp>() != nullptr;
+            bool inInitial = op->getParentOfType<seq::InitialOp>() != nullptr;
 
-            auto hwResultType =
-                typeConverter->convertType(op.getResult().getType());
-            auto llvmResultType = convertToLLVMType(hwResultType);
+            if (inFuncOp && !inProcess && !inInitial) {
+              // For function ref parameters with LLVM types (class handles),
+              // cast to LLVM pointer and load.
+              Value refAsPtr = UnrealizedConversionCastOp::create(
+                                   rewriter, op.getLoc(),
+                                   LLVM::LLVMPointerType::get(rewriter.getContext()),
+                                   input)
+                                   .getResult(0);
 
-            Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(),
-                                                llvmResultType, refAsPtr);
+              auto hwResultType =
+                  typeConverter->convertType(op.getResult().getType());
+              auto llvmResultType = convertToLLVMType(hwResultType);
 
-            // Cast back to HW type if needed (e.g., for 4-state structs)
-            if (hwResultType != llvmResultType) {
-              loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
-                                                          hwResultType, loaded)
-                           .getResult(0);
+              Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(),
+                                                  llvmResultType, refAsPtr);
+
+              // Cast back to HW type if needed (e.g., for 4-state structs)
+              if (hwResultType != llvmResultType) {
+                loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
+                                                            hwResultType, loaded)
+                             .getResult(0);
+              }
+              rewriter.replaceOp(op, loaded);
+              return success();
             }
-            rewriter.replaceOp(op, loaded);
-            return success();
           }
         }
       }
@@ -9395,35 +9404,44 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       // we need to use LLVM store instead of llhd.drv because the interpreter
       // doesn't track refs passed through function calls (only signals).
       if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
-        // Only apply this for function contexts, not for hw.module contexts.
-        // In hw.module, signals are properly tracked by the simulator.
-        // Also check if we're NOT in an llhd.process or seq.initial
-        // (those are inside hw.module and signals work there).
-        bool inFuncOp = op->template getParentOfType<func::FuncOp>() != nullptr;
-        bool inProcess = op->template getParentOfType<llhd::ProcessOp>() != nullptr;
-        bool inInitial = op->template getParentOfType<seq::InitialOp>() != nullptr;
+        // Only use llvm.store when the nested type is an LLVM type (e.g.,
+        // !llvm.ptr for class handles). Signal refs have HW types (like i42)
+        // as the nested type and should use llhd.drv.
+        Type nestedType = refType.getNestedType();
+        bool nestedIsLLVMType = isa<LLVM::LLVMPointerType, LLVM::LLVMStructType,
+                                    LLVM::LLVMArrayType>(nestedType);
 
-        if (inFuncOp && !inProcess && !inInitial) {
-          // For function output parameters, use llvm.store instead of llhd.drv.
-          // Convert the ref to an LLVM pointer and store through it.
-          Value refAsPtr = UnrealizedConversionCastOp::create(
-                               rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
-                               dst)
-                               .getResult(0);
+        // Only apply this for function contexts with LLVM nested types.
+        // Signal refs (with HW nested types) should use llhd.drv even in
+        // function contexts.
+        if (nestedIsLLVMType) {
+          bool inFuncOp = op->template getParentOfType<func::FuncOp>() != nullptr;
+          bool inProcess = op->template getParentOfType<llhd::ProcessOp>() != nullptr;
+          bool inInitial = op->template getParentOfType<seq::InitialOp>() != nullptr;
 
-          // Convert the source value to LLVM type if needed.
-          Value storeVal = srcValue;
-          Type storeType = storeVal.getType();
-          Type llvmStoreType = convertToLLVMType(storeType);
-          if (storeType != llvmStoreType) {
-            storeVal = UnrealizedConversionCastOp::create(
-                           rewriter, loc, llvmStoreType, storeVal)
-                           .getResult(0);
+          if (inFuncOp && !inProcess && !inInitial) {
+            // For function output parameters with LLVM types (class handles),
+            // use llvm.store instead of llhd.drv.
+            // Convert the ref to an LLVM pointer and store through it.
+            Value refAsPtr = UnrealizedConversionCastOp::create(
+                                 rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
+                                 dst)
+                                 .getResult(0);
+
+            // Convert the source value to LLVM type if needed.
+            Value storeVal = srcValue;
+            Type storeType = storeVal.getType();
+            Type llvmStoreType = convertToLLVMType(storeType);
+            if (storeType != llvmStoreType) {
+              storeVal = UnrealizedConversionCastOp::create(
+                             rewriter, loc, llvmStoreType, storeVal)
+                             .getResult(0);
+            }
+
+            LLVM::StoreOp::create(rewriter, loc, storeVal, refAsPtr);
+            rewriter.eraseOp(op);
+            return success();
           }
-
-          LLVM::StoreOp::create(rewriter, loc, storeVal, refAsPtr);
-          rewriter.eraseOp(op);
-          return success();
         }
       }
     }
