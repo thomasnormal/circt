@@ -1020,11 +1020,13 @@ moore.module @ContinuousAssignment(in %a: !moore.ref<i42>, in %b: !moore.i42, in
 // CHECK-SAME: %arg1: i42
 // CHECK-SAME: %arg2: i64
 func.func @NonBlockingAssignment(%arg0: !moore.ref<i42>, %arg1: !moore.i42, %arg2: !moore.time) {
-  // CHECK-NEXT: [[DELTA:%.+]] = llhd.constant_time <0ns, 1d, 0e>
-  // CHECK-NEXT: llhd.drv %arg0, %arg1 after [[DELTA]]
+  // For function ref parameters, use llvm.store instead of llhd.drv
+  // CHECK-NEXT: [[PTR:%.+]] = builtin.unrealized_conversion_cast %arg0 : !llhd.ref<i42> to !llvm.ptr
+  // CHECK-NEXT: llvm.store %arg1, [[PTR]] : i42, !llvm.ptr
   moore.nonblocking_assign %arg0, %arg1 : i42
-  // CHECK-NEXT: [[TIME:%.+]] = llhd.int_to_time %arg2
-  // CHECK-NEXT: llhd.drv %arg0, %arg1 after [[TIME]]
+  // Delayed nonblocking assign to ref parameter also uses llvm.store
+  // CHECK-NEXT: [[PTR2:%.+]] = builtin.unrealized_conversion_cast %arg0 : !llhd.ref<i42> to !llvm.ptr
+  // CHECK-NEXT: llvm.store %arg1, [[PTR2]] : i42, !llvm.ptr
   moore.delayed_nonblocking_assign %arg0, %arg1, %arg2 : i42
   return
 }
