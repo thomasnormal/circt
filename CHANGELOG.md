@@ -1,9 +1,71 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 264 - January 30, 2026
+
+### Goals
+Fix the critical AVIP simulation blocker where function ref parameters couldn't be read.
+
+### Fixed in this Iteration
+1. **ReadOpConversion Fix for Function Ref Parameters** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Function parameters of `!llhd.ref<T>` type incorrectly used `llhd.prb`
+   - The simulator cannot track signal references through function call boundaries
+   - `get_first_1739()` and similar UVM iterator functions failed with "llhd.prb" errors
+   - **FIX**: Detect BlockArguments of func.func with `!llhd.ref<T>` type
+   - Cast to `!llvm.ptr` via unrealized_conversion_cast and use `llvm.load`
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - **Commit**: `ef4226f5f`
+
+2. **AVIP Simulation Now Works**:
+   - APB, AHB, UART AVIPs all compile and simulate successfully
+   - UVM infrastructure initializes: `UVM_INFO @ 0: NOMAXQUITOVR`
+   - Report server works: `UVM_INFO .../uvm_report_server.svh(1009) @ 0: UVM/REPORT/SERVER`
+   - Simulations terminate cleanly (at time 0 without test name)
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| **APB AVIP** | ✅ PASS | Compiles and simulates |
+| **AHB AVIP** | ✅ PASS | Compiles and simulates |
+| **UART AVIP** | ✅ PASS | Compiles and simulates |
+| MooreToCore | 96/97 (99%) | 1 XFAIL expected |
+| circt-sim | 71/73 (97%) | 1 pre-existing issue |
+| OpenTitan | gpio, uart pass | No regressions |
+| yosys SVA | 14/14 (100%) | No regressions |
+| sv-tests BMC | 23/26 | No regressions (3 XFAIL) |
+| verilator BMC | 17/17 (100%) | No regressions |
+
+### Remaining Limitations
+1. **UVM Test Execution** - AVIPs terminate at time 0 (no `+UVM_TESTNAME` provided)
+2. **UVM Factory Registration** - die() called during run_test() in some cases
+3. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
+
+---
+
 ## Iteration 263 - January 30, 2026
 
 ### Goals
 Fix llhd.prb support for function argument references in circt-sim interpreter to enable UVM simulation.
+
+### Fixed in this Iteration
+1. **LLHD process lowering with probe loops** (LowerProcesses.cpp):
+   - Allow combinational lowering when wait-dest blocks only re-probe observed signals.
+   - Unblocks circt-lec on OpenTitan AES S-Box wrappers.
+   - **Test**: `test/Dialect/LLHD/Transforms/lower-processes.mlir`
+2. **OpenTitan LEC coverage**:
+   - Verified AES S-Box equivalence for canright + masked variants under `circt-lec --run-smtlib`.
+3. **LEC strict conditional interface stores** (StripLLHDInterfaceSignals.cpp):
+   - Resolve complementary `scf.if` stores into SSA muxes in strict mode.
+   - **Test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store.mlir`
+4. **LEC strict complementary LLHD drives** (StripLLHDInterfaceSignals.cpp):
+   - Allow complementary enable signals to resolve multi-drive LLHD signals in strict mode.
+   - **Test**: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-enable-complementary.mlir`
+5. **Four-state parity lowering** (CombToSMT.cpp):
+   - Reduction XOR now yields a symbolic value when any input bit is unknown.
+   - **Test**: `test/Tools/circt-bmc/sva-xprop-reduction-xor-sat-e2e.sv`
+   - **CF test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-cf.mlir`
+6. **Truth table lowering** (CombToSMT.cpp):
+   - Lowered `comb.truth_table` to SMT arrays with exact table-based X-prop.
+   - **Test**: `test/Conversion/CombToSMT/comb-truth-table.mlir`
 
 ### Current Limitations & Features Needed
 
@@ -46,9 +108,13 @@ for (auto [param, argValue] : llvm::zip(funcParams, args)) {
 |-------|------|------|-------|
 | MooreToCore | 96/97 | 0 | 1 expected failure |
 | circt-sim | 71/72 | 1 | tlul-bfm-user-default.sv (pre-existing) |
-| sv-tests BMC | 18/26 | 5 | 3 xfail, no regressions |
+| sv-tests BMC | 23/26 | 0 | 3 xfail |
+| sv-tests LEC | 23/23 | 0 | 0 errors |
 | verilator BMC | 17/17 | 0 | 100% pass |
-| OpenTitan IPs | 5/10 | - | gpio, uart, aes_reg_top, prim_count, i2c pass |
+| verilator LEC | 17/17 | 0 | 100% pass |
+| yosys-sva BMC | 14/14 | 0 | 2 VHDL skipped |
+| yosys-sva LEC | 14/14 | 0 | 2 VHDL skipped |
+| OpenTitan AES S-Box | 3/3 | 0 | canright + masked variants |
 
 ### AVIP Compilation with uvm-core
 
