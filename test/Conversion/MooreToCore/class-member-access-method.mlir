@@ -37,8 +37,7 @@ moore.class.classdecl @DerivedCounter extends @BaseCounter {
 // CHECK-LABEL: func.func @test_simple_member_read
 // CHECK-SAME: (%[[THIS:arg0]]: !llvm.ptr) -> i32
 // CHECK:   %[[GEP:.*]] = llvm.getelementptr %[[THIS]][0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleCounter"
-// CHECK:   %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[GEP]] : !llvm.ptr to !llhd.ref<i32>
-// CHECK:   %[[RESULT:.*]] = llhd.prb %[[CAST]]
+// CHECK:   %[[RESULT:.*]] = llvm.load %[[GEP]] : !llvm.ptr -> i32
 // CHECK:   return %[[RESULT]] : i32
 func.func @test_simple_member_read(%this: !moore.class<@SimpleCounter>) -> !moore.i32 {
   %ref = moore.class.property_ref %this[@count] : <@SimpleCounter> -> !moore.ref<i32>

@@ -8929,9 +8929,26 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
   LogicalResult
   matchAndRewrite(ReadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Value input = adaptor.getInput();
+
+    // Check if the input is an LLVM pointer (possibly through unrealized cast).
+    // This handles class member access (from GEP), queues, dynamic arrays, etc.
+    Value llvmPtrInput;
+    if (isa<LLVM::LLVMPointerType>(input.getType())) {
+      llvmPtrInput = input;
+    } else if (auto castOp = input.getDefiningOp<UnrealizedConversionCastOp>()) {
+      // Look through unrealized_conversion_cast to find LLVM pointer.
+      // This handles class member access where GEP returns !llvm.ptr which is
+      // then cast to !llhd.ref<T> for type compatibility.
+      if (castOp.getInputs().size() == 1 &&
+          isa<LLVM::LLVMPointerType>(castOp.getInputs()[0].getType())) {
+        llvmPtrInput = castOp.getInputs()[0];
+      }
+    }
+
     // If the input was converted to an LLVM pointer (for queues, dynamic
-    // arrays, etc.), use LLVM load instead of llhd.probe.
-    if (isa<LLVM::LLVMPointerType>(adaptor.getInput().getType())) {
+    // arrays, class member access, etc.), use LLVM load instead of llhd.probe.
+    if (llvmPtrInput) {
       // Get the original Moore type to check for associative arrays.
       auto mooreRefType = cast<moore::RefType>(op.getInput().getType());
       auto mooreNestedType = mooreRefType.getNestedType();
@@ -8950,7 +8967,7 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       // We detect these by checking if the source is an AddressOfOp (global)
       // or a GEPOp (class property), vs a local variable handle.
       if (isa<AssocArrayType, WildcardAssocArrayType>(mooreNestedType)) {
-        Value source = adaptor.getInput();
+        Value source = llvmPtrInput;
         // Unwrap unrealized conversion casts
         while (auto castOp = source.getDefiningOp<UnrealizedConversionCastOp>()) {
           if (castOp.getInputs().size() == 1)
@@ -8965,7 +8982,7 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
                          source.getDefiningOp<LLVM::GEPOp>() != nullptr;
         if (!needsLoad) {
           // Local variable: the pointer is the handle itself.
-          rewriter.replaceOp(op, adaptor.getInput());
+          rewriter.replaceOp(op, llvmPtrInput);
           return success();
         }
         // Global variable or class property: fall through to load the handle.
@@ -8976,7 +8993,7 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       auto llvmResultType = convertToLLVMType(hwResultType);
 
       Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(), llvmResultType,
-                                          adaptor.getInput());
+                                          llvmPtrInput);
 
       // Cast back to HW type if needed (e.g., for 4-state structs)
       if (hwResultType != llvmResultType) {
@@ -8986,7 +9003,7 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       }
       rewriter.replaceOp(op, loaded);
     } else {
-      rewriter.replaceOpWithNewOp<llhd::ProbeOp>(op, adaptor.getInput());
+      rewriter.replaceOpWithNewOp<llhd::ProbeOp>(op, input);
     }
     return success();
   }

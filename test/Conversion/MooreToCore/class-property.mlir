@@ -13,7 +13,8 @@ moore.class.classdecl @SimpleClass {
 
 // CHECK-LABEL: func.func @test_simple_property_ref
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32>
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
+// The first index 0 dereferences the pointer, second index 2 accesses field1 (after typeId[0] and vtablePtr[1])
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
 // CHECK:   [[CAST:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CAST]] : !llhd.ref<i32>
 func.func @test_simple_property_ref(%obj: !moore.class<@SimpleClass>) -> !moore.ref<i32> {
@@ -23,7 +24,8 @@ func.func @test_simple_property_ref(%obj: !moore.class<@SimpleClass>) -> !moore.
 
 // CHECK-LABEL: func.func @test_second_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<!hw.struct<value: i64, unknown: i64>>
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[3] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
+// The first index 0 dereferences the pointer, second index 3 accesses field2 (after typeId[0], vtablePtr[1], field1[2])
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 3] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"SimpleClass"
 // CHECK:   [[CAST:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<!hw.struct<value: i64, unknown: i64>>
 // CHECK:   return [[CAST]] : !llhd.ref<!hw.struct<value: i64, unknown: i64>>
 func.func @test_second_property(%obj: !moore.class<@SimpleClass>) -> !moore.ref<l64> {
@@ -45,7 +47,8 @@ moore.class.classdecl @DerivedClass extends @BaseClass {
 
 // CHECK-LABEL: func.func @test_derived_class_property
 // CHECK-SAME: (%arg0: !llvm.ptr) -> !llhd.ref<i32>
-// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"DerivedClass"
+// For derived classes: first index 0 dereferences the pointer, second index 1 accesses derived_field (after base[0])
+// CHECK:   [[GEP:%.+]] = llvm.getelementptr %arg0[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<"DerivedClass"
 // CHECK:   [[CAST:%.+]] = builtin.unrealized_conversion_cast [[GEP]] : !llvm.ptr to !llhd.ref<i32>
 // CHECK:   return [[CAST]] : !llhd.ref<i32>
 func.func @test_derived_class_property(%obj: !moore.class<@DerivedClass>) -> !moore.ref<i32> {
