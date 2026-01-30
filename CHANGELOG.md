@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 257 - January 30, 2026
+
+### Goals
+Fix remaining UVM blockers: fork overflow, associative arrays, virtual methods.
+
+### Fixed in this Iteration
+
+1. **PROCESS_STEP_OVERFLOW in UVM Fork** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `__moore_delay` used synchronous blocking loop causing reentrancy
+   - **FIX**: Properly yield with `state.waiting = true` and schedule resume callback
+   - **IMPACT**: UVM phase scheduler forks now work
+
+2. **Associative Arrays with String Keys** (Multiple files):
+   - Added `__moore_assoc_exists` function
+   - Fixed `ReadOpConversion` for local assoc arrays
+   - Added interpreter handlers for all assoc array functions
+   - **IMPACT**: UVM factory type_map lookups work
+
+3. **Virtual Method Override Without `virtual`** (Structure.cpp):
+   - **FIX**: Use `fn.isVirtual()` instead of checking `MethodFlags::Virtual`
+   - **IMPACT**: Override methods now correctly marked virtual
+
+4. **OpenTitan Validation**: 97.5% pass (39/40 tests)
+
+---
+
 ## Iteration 256 - January 30, 2026
 
 ### Goals
@@ -131,7 +157,45 @@ Continue fixing remaining blockers for UVM testbench execution with real uvm-cor
      `test/Tools/circt-bmc/sva-xprop-eq-vs-ceq-e2e.sv`,
      `test/Tools/circt-bmc/sva-xprop-compare-signed-sat-e2e.sv`,
      `test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv`,
-     `test/Tools/circt-bmc/sva-xprop-compare-unsigned-sat-e2e.sv`
+     `test/Tools/circt-bmc/sva-xprop-compare-unsigned-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-compare-mixed-width-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-array-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-array-inject-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-struct-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-struct-inject-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-struct-wide-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-nested-aggregate-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-nested-aggregate-inject-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-concat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-extract-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-partselect-replicate-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-concat-nested-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-array-struct-concat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-dyn-index-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-dyn-partselect-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-signed-shift-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-reduction-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-reduction-xor-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-not-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-logical-not-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-logical-and-or-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-ternary-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-implication-consequent-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-until-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-eventually-always-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-strong-until-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-nexttime-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-delay-range-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-repeat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-nonconsecutive-repeat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-goto-repeat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-unbounded-repeat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-unbounded-delay-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-seq-concat-sat-e2e.sv`,
+     `test/Tools/circt-bmc/sva-xprop-seq-and-or-sat-e2e.sv`
 
 ### Known Issues (P0 Blockers)
 

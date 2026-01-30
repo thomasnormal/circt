@@ -207,28 +207,40 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 256)
+### Active Workstreams & Next Steps (Iteration 257)
+
+**Iteration 257 Changes (2026-01-30) - MAJOR FIXES:**
+1. **PROCESS_STEP_OVERFLOW in UVM Fork** (FIXED):
+   - ROOT CAUSE: `__moore_delay` used synchronous blocking loop causing reentrancy
+   - FIX: Properly yield control using `state.waiting = true` and resume callback
+   - Impact: UVM phase scheduler forks now work correctly
+   - Test: `test/Tools/circt-sim/fork-forever-delay.mlir`
+
+2. **Associative Arrays with String Keys** (FIXED):
+   - Added missing `__moore_assoc_exists` function
+   - Fixed `ReadOpConversion` for local associative arrays
+   - Added interpreter handlers for all assoc array functions
+   - Added native memory access support for runtime pointers
+   - Impact: UVM factory type_map lookups now work
+
+3. **Virtual Method Override Without `virtual`** (FIXED):
+   - ROOT CAUSE: Was checking only `MethodFlags::Virtual` instead of `fn.isVirtual()`
+   - FIX: Use slang's `fn.isVirtual()` which handles implicit virtuality
+   - Impact: Methods overriding virtual base methods now work
+
+4. **OpenTitan Validation**: 97.5% pass rate (39/40 tests)
+   - All register blocks: 27/27 pass
+   - Full IPs: 12/13 pass (timer_core has pre-existing 64-bit issue)
+
+**Remaining Blockers:**
+1. **Virtual dispatch inside sim.fork** (P1): Separate bug found - needs investigation
+2. **UVM run_test() phases** (P1): Need to test if phases work now
 
 **Iteration 256 Changes (2026-01-30):**
 1. **AVIP Simulation - MAJOR MILESTONE** 🎉:
    - 6/8 AVIPs compile to hw level AND simulate
    - **4 AVIPs show UVM output**: APB, AXI4, UART, AHB print `UVM_INFO @ 0: NOMAXQUITOVR`
    - I2S and I3C show BFM initialization messages
-   - Blocking issue: `PROCESS_STEP_OVERFLOW` in UVM phase scheduler fork
-
-2. **Alloca Classification Fix** (LLHDProcessInterpreter.cpp):
-   - ROOT CAUSE: Allocas inside functions called from global constructors incorrectly marked "module level"
-   - FIX: Check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors
-   - Impact: Queue operations in global constructors work correctly
-
-3. **fork-forever-entry-block.mlir Test Fix**:
-   - Updated CHECK patterns to expect `cf.br` instruction between blocks
-   - MooreToCore tests: 92/93 pass (1 XFAIL)
-
-**Remaining Blockers (Priority Order):**
-1. **PROCESS_STEP_OVERFLOW in UVM fork** (P0): Phase scheduler creates infinite loop
-2. **Associative arrays with string keys** (P0): Lookups return `x`, `exists()` returns false
-3. **UVM run_test() phases** (P1): Phases don't trigger after initialization
 
 **Iteration 255 Changes (2026-01-30):**
 1. **String Truncation Bug** (FIXED): String parameters now correctly sized

@@ -724,15 +724,8 @@ void writeIntKey(void *key, int64_t value, int32_t keySize) {
   }
 }
 
-/// Type tag stored at the beginning of the allocation to identify the array
-/// type.
-enum class AssocArrayType : int32_t { StringKey = 0, IntKey = 1 };
-
-/// Wrapper that holds the type tag and pointer to the actual array.
-struct AssocArrayHeader {
-  AssocArrayType type;
-  void *array;
-};
+// Use the AssocArrayType and AssocArrayHeader from the header file.
+// These are C-style types for ABI compatibility.
 
 } // anonymous namespace
 
@@ -742,14 +735,14 @@ extern "C" void *__moore_assoc_create(int32_t key_size, int32_t value_size) {
     // String-keyed associative array
     auto *arr = new StringKeyAssocArray;
     arr->valueSize = value_size;
-    header->type = AssocArrayType::StringKey;
+    header->type = AssocArrayType_StringKey;
     header->array = arr;
   } else {
     // Integer-keyed associative array
     auto *arr = new IntKeyAssocArray;
     arr->keySize = key_size;
     arr->valueSize = value_size;
-    header->type = AssocArrayType::IntKey;
+    header->type = AssocArrayType_IntKey;
     header->array = arr;
   }
   return header;
@@ -759,7 +752,7 @@ extern "C" int64_t __moore_assoc_size(void *array) {
   if (!array)
     return 0;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     return static_cast<int64_t>(arr->data.size());
   } else {
@@ -796,7 +789,7 @@ extern "C" void __moore_assoc_delete(void *array) {
   if (!array)
     return;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     arr->data.clear();
   } else {
@@ -809,7 +802,7 @@ extern "C" void __moore_assoc_delete_key(void *array, void *key) {
   if (!array || !key)
     return;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     auto *strKey = static_cast<MooreString *>(key);
     if (strKey->data) {
@@ -827,7 +820,7 @@ extern "C" bool __moore_assoc_first(void *array, void *key_out) {
   if (!array || !key_out)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     if (arr->data.empty())
       return false;
@@ -858,7 +851,7 @@ extern "C" bool __moore_assoc_next(void *array, void *key_ref) {
   if (!array || !key_ref)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     if (arr->data.empty())
       return false;
@@ -902,7 +895,7 @@ extern "C" bool __moore_assoc_last(void *array, void *key_out) {
   if (!array || !key_out)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     if (arr->data.empty())
       return false;
@@ -932,7 +925,7 @@ extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
   if (!array || !key_ref)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     if (arr->data.empty())
       return false;
@@ -965,12 +958,30 @@ extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
   }
 }
 
+extern "C" int32_t __moore_assoc_exists(void *array, void *key) {
+  if (!array || !key)
+    return 0;
+  auto *header = static_cast<AssocArrayHeader *>(array);
+  if (header->type == AssocArrayType_StringKey) {
+    auto *arr = static_cast<StringKeyAssocArray *>(header->array);
+    auto *strKey = static_cast<MooreString *>(key);
+    std::string keyStr;
+    if (strKey->data && strKey->len > 0)
+      keyStr = std::string(strKey->data, strKey->len);
+    return arr->data.find(keyStr) != arr->data.end() ? 1 : 0;
+  } else {
+    auto *arr = static_cast<IntKeyAssocArray *>(header->array);
+    int64_t intKey = readIntKey(key, arr->keySize);
+    return arr->data.find(intKey) != arr->data.end() ? 1 : 0;
+  }
+}
+
 extern "C" void *__moore_assoc_get_ref(void *array, void *key,
                                        int32_t value_size) {
   if (!array || !key)
     return nullptr;
   auto *header = static_cast<AssocArrayHeader *>(array);
-  if (header->type == AssocArrayType::StringKey) {
+  if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
     auto *strKey = static_cast<MooreString *>(key);
     std::string keyStr;
