@@ -636,6 +636,12 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
           [this](bool success, bool verbose) {
+            // Always print termination info for debugging - this helps diagnose
+            // silent terminations from fatal errors (e.g., UVM die() -> $finish)
+            llvm::errs() << "[circt-sim] Simulation terminated at time "
+                         << scheduler.getCurrentTime().realTime << " fs"
+                         << " (success=" << (success ? "true" : "false")
+                         << ", verbose=" << (verbose ? "true" : "false") << ")\n";
             if (verbose) {
               llvm::outs() << "[circt-sim] Simulation "
                            << (success ? "finished" : "failed") << " at time "

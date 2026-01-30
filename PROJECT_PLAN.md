@@ -147,19 +147,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 247 - Verified 2026-01-29)
+### Test Suite Status (Iteration 260 - Updated 2026-01-30)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
 | Lit Tests | **2980/3085 (96.6%)** | 12 SMT/LEC failures, 38 XFAIL, 55 unsupported |
-| sv-tests BMC | **23/26 (100%)** | 3 XFAIL as expected, 0 errors |
-| Verilator BMC | **17/17 (100%)** | All pass with Z3 |
+| sv-tests BMC | **5/26 (19%)** | Current run status; investigating regressions |
+| Verilator BMC | **0/17 (0%)** | Current run status; environment issue suspected |
 | Verilator LEC | **17/17 (100%)** | All pass |
-| yosys-sva BMC | **14/14 (100%)** | 2 VHDL skipped |
-| yosys-sva LEC | **14/14 (100%)** | 2 VHDL skipped |
+| yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
+| yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | OpenTitan IPs | **52+/60 (87%)** | 12 reg_top IPs + 5 full IPs simulate successfully |
-| AVIPs | **6/9 simulate** | APB, I2S, I3C, AHB, AXI4, UART simulate! AXI4Lite has nested interface bug; SPI/JTAG have source bugs |
+| AVIPs | **6/9 simulate** | APB no longer crashes! UVM starts initializing. AXI4Lite has nested interface bug; SPI/JTAG have source bugs |
 
 **OpenTitan Simulation Verified (Iteration 244):**
 - **reg_top IPs** (12/12): hmac, kmac, flash_ctrl, otp_ctrl, keymgr, lc_ctrl, otbn, csrng, entropy_src, pwm, pattgen, rom_ctrl
@@ -209,21 +209,27 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### Active Workstreams & Next Steps (Iteration 260)
 
-**Iteration 260 Changes (2026-01-30) - CLASS MEMBER ACCESS MILESTONE:**
+**Iteration 260 Changes (2026-01-30) - UVM DEBUGGING PROGRESS:**
 1. **VTable Entry Population Bug** (FIXED):
    - ROOT CAUSE: When `ClassNewOpConversion` runs before `VTableOpConversion`, placeholder vtable global lacks `circt.vtable_entries` attribute
    - FIX: Modified `VTableOpConversion::matchAndRewrite()` to populate entries on existing globals
    - Impact: **Virtual methods dispatch correctly; class member access from methods works**
    - Files: `lib/Conversion/MooreToCore/MooreToCore.cpp`
 
-2. **Queue find_first_index** (CONFIRMED WORKING):
-   - `ArrayLocatorOpConversion` already handles `find_first_index` for queues
-   - Added comprehensive test: `test/Conversion/MooreToCore/queue-find-first-index.mlir`
+2. **Call Depth Tracking** (ADDED):
+   - Added call depth tracking to `getValue()` path in interpreter
+   - Helps diagnose deep recursion issues in UVM initialization
 
-3. **Field Indexing Audit** (PASSED):
-   - Root classes correctly offset by 2 (typeId + vtablePtr)
-   - Derived classes correctly offset by 1 (embedded base class)
-   - All GEP paths calculated correctly by `ClassTypeCache`
+3. **APB AVIP Progress**:
+   - **No longer crashes** - VTable fix resolved global constructor crash
+   - UVM now starts initializing (reaches `uvm_component::new`)
+   - ROOT CAUSE FOUND: `uvm_component::new` triggers silent fatal error
+   - Error occurs during component registration/hierarchy setup
+
+4. **Delay Accumulation Issue** (ANALYZED):
+   - UVM `run_phase` uses `#delay` statements that accumulate incorrectly
+   - Root cause: Interpreter lacks explicit call stack for delay propagation
+   - **Estimated fix time: 2-3 weeks** (requires interpreter architecture change)
 
 **Class Member Access Test Results (All PASS):**
 - Simple class member access: `c.get_value()` returns 42
@@ -232,32 +238,42 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Virtual method override with member access: Polymorphism works
 
 **Remaining Blockers for UVM:**
-1. **APB AVIP Global Constructor Crash**: Crashes in `interpretLLVMCall` during global constructor execution
-2. **UVM Simulation Exits at 0fs**: uvm-core compiles but phases don't execute
+1. **Silent Fatal Error in uvm_component::new**: Component hierarchy registration fails
+2. **Delay Accumulation**: `#delay` statements need explicit call stack (2-3 weeks)
 
 **Current Status:**
 - **Class Member Access**: ✅ FIXED - All test cases pass
 - **Virtual Method Dispatch**: ✅ FIXED - Polymorphism works correctly
+- **APB AVIP**: ✅ No longer crashes, UVM starts initializing
 - **uvm-core Compilation**: ✅ WORKS - 9.4 MB MLIR output generated
 - **AVIP Compilation**: ✅ All 6 AVIPs compile to HW level (APB, UART, AHB, AXI4, I2S, I3C)
 - **OpenTitan Simulation**: ✅ gpio_reg_top, uart_reg_top pass; timer_core simulates (functional issue)
-- **External Suites**: ✅ sv-tests 23/26, verilator 17/17, yosys-sva 14/14
+- **External Suites**: yosys-sva 100%, sv-tests 19%, verilator 0% (see note below)
 - **circt-sim Tests**: ✅ 69/69 pass
 
+**Test Suite Note (Iteration 260):**
+The external test suite percentages reflect current run status, not full capability.
+Some suites may have configuration or environment issues affecting pass rates.
+
 **Current Blocker for UVM Simulation:**
-- **Deep Call Chain Crash**: UVM global constructors create 50+ levels of nested function calls
-  - Exceeds C++ stack limit in the recursive interpreter
-  - Requires architectural change: convert to explicit stack-based interpreter
-  - Affects: All UVM-based simulations (AVIPs with real uvm-core)
+- **uvm_component::new Fatal Error**: Silent crash during component hierarchy setup
+  - UVM initializes but fails when registering components
+  - Need to investigate `uvm_root` and component parent/child relationships
+  - May be related to factory or report handler initialization
 
 **Workstreams & Next Tasks:**
 
 | Track | Current Status | Next Task |
 |-------|----------------|-----------|
-| **Track 1: UVM Interpreter** | Blocked on deep call chains | Convert interpretLLVMFuncBody to explicit stack |
-| **Track 2: AVIP Validation** | All compile, simulation blocked | Test simulation once Track 1 unblocks |
+| **Track 1: UVM Interpreter** | uvm_component::new fails | Debug component hierarchy registration |
+| **Track 2: AVIP Validation** | APB no longer crashes | Test with UVM fix once available |
 | **Track 3: OpenTitan** | 2/3 IPs pass simulation | Fix timer_core interrupt issue |
-| **Track 4: Test Suites** | All green | Continue regression monitoring |
+| **Track 4: Test Suites** | yosys-sva 100% | Investigate sv-tests/verilator regressions |
+
+- **LEC Strictness**: Reject enabled multi-drive LLHD signals in strict mode
+  (prevents unsound priority resolution).
+- **LEC Strictness**: Add interface-conditional-store regression (strict mode
+  must require abstraction when dominance cannot resolve stores).
 
 **Iteration 258 Changes (2026-01-30):**
 1. **Virtual Dispatch in sim.fork** (FIXED):

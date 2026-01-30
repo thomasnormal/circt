@@ -6273,6 +6273,13 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
                           << (success ? "success" : "failure") << ", "
                           << (verbose ? "verbose" : "quiet") << ")\n");
 
+  // Print diagnostic info about the termination source for debugging
+  // This helps identify where fatal errors occur (e.g., UVM die() -> $finish)
+  llvm::errs() << "[circt-sim] sim.terminate triggered in process ID "
+               << procId << " at ";
+  terminateOp.getLoc().print(llvm::errs());
+  llvm::errs() << "\n";
+
   // Mark termination requested
   terminationRequested = true;
 
