@@ -16,11 +16,10 @@ moore.class.classdecl @TestClass {
 moore.global_variable @classQueue : !moore.queue<!moore.class<@TestClass>, 0>
 
 // CHECK-LABEL: func @test_queue_pop_back_class
-// CHECK: llvm.mlir.addressof @classQueue : !llvm.ptr
-// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
-// CHECK: llvm.alloca {{.*}} x !llvm.ptr
-// CHECK: llvm.call @__moore_queue_pop_back_ptr({{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, i64) -> ()
-// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.ptr
+// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @classQueue : !llvm.ptr
+// CHECK: [[RESULTALLOCA:%.+]] = llvm.alloca {{.*}} x !llvm.ptr
+// CHECK: llvm.call @__moore_queue_pop_back_ptr([[QPTR]], [[RESULTALLOCA]], {{.*}}) : (!llvm.ptr, !llvm.ptr, i64) -> ()
+// CHECK: llvm.load [[RESULTALLOCA]] : !llvm.ptr -> !llvm.ptr
 // CHECK: return
 func.func @test_queue_pop_back_class() -> !moore.class<@TestClass> {
   %queue_ref = moore.get_global_variable @classQueue : !moore.ref<queue<!moore.class<@TestClass>, 0>>
@@ -46,10 +45,10 @@ func.func @test_queue_pop_front_class() -> !moore.class<@TestClass> {
 moore.global_variable @stringQueue : !moore.queue<!moore.string, 0>
 
 // CHECK-LABEL: func @test_queue_pop_back_string
-// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
-// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
-// CHECK: llvm.call @__moore_queue_pop_back_ptr({{.*}}, {{.*}}, {{.*}}) : (!llvm.ptr, !llvm.ptr, i64) -> ()
-// CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
+// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @stringQueue : !llvm.ptr
+// CHECK: [[RESULTALLOCA:%.+]] = llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
+// CHECK: llvm.call @__moore_queue_pop_back_ptr([[QPTR]], [[RESULTALLOCA]], {{.*}}) : (!llvm.ptr, !llvm.ptr, i64) -> ()
+// CHECK: llvm.load [[RESULTALLOCA]] : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: return
 func.func @test_queue_pop_back_string() -> !moore.string {
   %queue_ref = moore.get_global_variable @stringQueue : !moore.ref<queue<!moore.string, 0>>

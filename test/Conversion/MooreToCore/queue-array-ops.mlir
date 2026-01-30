@@ -248,12 +248,10 @@ func.func @test_stream_concat_int_queue_rtl() -> !moore.i32 {
 
 // CHECK-LABEL: func @test_queue_push_back
 // CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
-// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
-// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
-// CHECK: llvm.store {{.*}} : !llvm.ptr, !llvm.ptr
-// CHECK: llvm.alloca {{.*}} x i32
+// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[ELEMALLOCA:%.+]] = llvm.alloca {{.*}} x i32
 // CHECK: llvm.store {{.*}} : i32, !llvm.ptr
-// CHECK: llvm.call @__moore_queue_push_back({{.*}}, {{.*}}, [[SIZE]]) : (!llvm.ptr, !llvm.ptr, i64) -> ()
+// CHECK: llvm.call @__moore_queue_push_back([[QPTR]], [[ELEMALLOCA]], [[SIZE]]) : (!llvm.ptr, !llvm.ptr, i64) -> ()
 func.func @test_queue_push_back() {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
   %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
@@ -274,10 +272,8 @@ func.func @test_queue_push_front() {
 
 // CHECK-LABEL: func @test_queue_pop_back
 // CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
-// CHECK: llvm.mlir.addressof @testQueue : !llvm.ptr
-// CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
-// CHECK: llvm.store {{.*}} : !llvm.ptr, !llvm.ptr
-// CHECK: [[RESULT:%.+]] = llvm.call @__moore_queue_pop_back({{.*}}, [[SIZE]]) : (!llvm.ptr, i64) -> i64
+// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: [[RESULT:%.+]] = llvm.call @__moore_queue_pop_back([[QPTR]], [[SIZE]]) : (!llvm.ptr, i64) -> i64
 // CHECK: arith.trunci [[RESULT]] : i64 to i32
 func.func @test_queue_pop_back() -> !moore.i32 {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>

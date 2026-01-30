@@ -10511,11 +10511,14 @@ struct QueueDeleteOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // adaptor.getQueue() is already a pointer to the queue struct (from RefType
+    // conversion), so pass it directly to the runtime function.
+    Value queuePtr = adaptor.getQueue();
 
     if (adaptor.getIndex()) {
       // delete(index) - remove element at specific index
@@ -10529,13 +10532,6 @@ struct QueueDeleteOpConversion
       auto mooreQueueTy = cast<moore::QueueType>(refType.getNestedType());
       auto elemType = typeConverter->convertType(mooreQueueTy.getElementType());
 
-      // Queue is passed by pointer, index by value, element_size by value
-      auto one = LLVM::ConstantOp::create(rewriter, loc,
-                                          rewriter.getI64IntegerAttr(1));
-      auto queueAlloca =
-          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-      LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
-
       // Calculate element size
       auto elemSize = LLVM::ConstantOp::create(
           rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
@@ -10547,21 +10543,15 @@ struct QueueDeleteOpConversion
 
       LLVM::CallOp::create(rewriter, loc, TypeRange{},
                            SymbolRefAttr::get(fn),
-                           ValueRange{queueAlloca, indexVal, elemSize});
+                           ValueRange{queuePtr, indexVal, elemSize});
     } else {
       // delete() - clear all elements
       auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
       auto fn =
           getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_clear", fnTy);
 
-      auto one = LLVM::ConstantOp::create(rewriter, loc,
-                                          rewriter.getI64IntegerAttr(1));
-      auto queueAlloca =
-          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-      LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
-
       LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                           ValueRange{queueAlloca});
+                           ValueRange{queuePtr});
     }
 
     rewriter.eraseOp(op);
@@ -10581,7 +10571,6 @@ struct QueuePushBackOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
@@ -10591,12 +10580,12 @@ struct QueuePushBackOpConversion
     auto fn = getOrCreateRuntimeFunc(mod, rewriter,
                                      "__moore_queue_push_back", fnTy);
 
-    // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto queueAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // adaptor.getQueue() is already a pointer to the queue struct (from RefType
+    // conversion), so pass it directly to the runtime function.
+    Value queuePtr = adaptor.getQueue();
 
     // Store element to alloca and pass pointer
     auto elemType = typeConverter->convertType(op.getElement().getType());
@@ -10618,7 +10607,7 @@ struct QueuePushBackOpConversion
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(llvmElemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{queueAlloca, elemAlloca, elemSize});
+                         ValueRange{queuePtr, elemAlloca, elemSize});
 
     rewriter.eraseOp(op);
     return success();
@@ -10637,7 +10626,6 @@ struct QueuePushFrontOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
@@ -10647,12 +10635,12 @@ struct QueuePushFrontOpConversion
     auto fn = getOrCreateRuntimeFunc(mod, rewriter,
                                      "__moore_queue_push_front", fnTy);
 
-    // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto queueAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // adaptor.getQueue() is already a pointer to the queue struct (from RefType
+    // conversion), so pass it directly to the runtime function.
+    Value queuePtr = adaptor.getQueue();
 
     // Store element to alloca and pass pointer
     auto elemType = typeConverter->convertType(op.getElement().getType());
@@ -10674,7 +10662,7 @@ struct QueuePushFrontOpConversion
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(llvmElemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{queueAlloca, elemAlloca, elemSize});
+                         ValueRange{queuePtr, elemAlloca, elemSize});
 
     rewriter.eraseOp(op);
     return success();
@@ -10693,7 +10681,6 @@ struct QueueInsertOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
@@ -10704,12 +10691,12 @@ struct QueueInsertOpConversion
     auto fn = getOrCreateRuntimeFunc(mod, rewriter,
                                      "__moore_queue_insert", fnTy);
 
-    // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto queueAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // adaptor.getQueue() is already a pointer to the queue struct (from RefType
+    // conversion), so pass it directly to the runtime function.
+    Value queuePtr = adaptor.getQueue();
 
     // Convert index to i32 if necessary
     Value index = adaptor.getIndex();
@@ -10737,7 +10724,7 @@ struct QueueInsertOpConversion
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(llvmElemType)));
 
     LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{queueAlloca, index, elemAlloca, elemSize});
+                         ValueRange{queuePtr, index, elemAlloca, elemSize});
 
     rewriter.eraseOp(op);
     return success();
@@ -10756,19 +10743,18 @@ struct QueuePopBackOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
 
-    // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto queueAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // adaptor.getQueue() is already a pointer to the queue struct (from RefType
+    // conversion), so pass it directly to the runtime function.
+    Value queuePtr = adaptor.getQueue();
 
     // Calculate element size
     auto elemSize = LLVM::ConstantOp::create(
@@ -10794,7 +10780,7 @@ struct QueuePopBackOpConversion
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmResultType, one);
 
       LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                           ValueRange{queueAlloca, resultAlloca, elemSize});
+                           ValueRange{queuePtr, resultAlloca, elemSize});
 
       // Load the result from the alloca
       Value result =
@@ -10809,7 +10795,7 @@ struct QueuePopBackOpConversion
 
       auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
                                        SymbolRefAttr::get(fn),
-                                       ValueRange{queueAlloca, elemSize});
+                                       ValueRange{queuePtr, elemSize});
 
       // Convert result to the expected type
       Value result = call.getResult();
@@ -10840,19 +10826,18 @@ struct QueuePopFrontOpConversion
     auto *ctx = rewriter.getContext();
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto queueTy = getQueueStructType(ctx);
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
 
-    // Store queue to alloca and pass pointer
     auto one = LLVM::ConstantOp::create(rewriter, loc,
                                         rewriter.getI64IntegerAttr(1));
-    auto queueAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getQueue(), queueAlloca);
+
+    // adaptor.getQueue() is already a pointer to the queue struct (from RefType
+    // conversion), so pass it directly to the runtime function.
+    Value queuePtr = adaptor.getQueue();
 
     // Calculate element size
     auto elemSize = LLVM::ConstantOp::create(
@@ -10878,7 +10863,7 @@ struct QueuePopFrontOpConversion
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmResultType, one);
 
       LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                           ValueRange{queueAlloca, resultAlloca, elemSize});
+                           ValueRange{queuePtr, resultAlloca, elemSize});
 
       // Load the result from the alloca
       Value result =
@@ -10893,7 +10878,7 @@ struct QueuePopFrontOpConversion
 
       auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
                                        SymbolRefAttr::get(fn),
-                                       ValueRange{queueAlloca, elemSize});
+                                       ValueRange{queuePtr, elemSize});
 
       // Convert result to the expected type
       Value result = call.getResult();
