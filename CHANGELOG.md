@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 261 - January 30, 2026
+
+### Goals
+Fix class member llhd.drv issue blocking UVM callbacks/iterators.
+
+### Current Limitations & Features Needed
+
+**Critical Blockers for UVM:**
+1. **Class Member llhd.drv Issue**: Class member fields use `llhd.drv` when should use `llvm.store`
+   - UVM callbacks/iterators fail during initialization (get_first_623)
+   - `unrealized_conversion_cast` from `!llvm.ptr` to `!llhd.ref` not recognized as signal
+
+2. **Delay Accumulation**: Interpreter can't save/restore instruction pointer mid-function
+   - Sequential `#delay` in functions only apply last delay
+   - Needs explicit call stack (architectural change, ~2-3 weeks)
+
+**Features to Build:**
+1. Fix MooreToCore to use `llvm.store` for class member assignments (not `llhd.drv`)
+2. Implement proper signal vs memory distinction in lowering
+3. Add UVM phase execution tracing for debugging
+4. Consider explicit call stack for delay handling
+
+### Workstream Status
+
+| Track | Status | Next Task |
+|-------|--------|-----------|
+| **Track 1: llhd.drv Fix** | Identified | Fix class member assignment lowering in MooreToCore |
+| **Track 2: AVIP Testing** | APB runs, hits drv issue | Test after llhd.drv fix |
+| **Track 3: OpenTitan** | gpio/uart pass | Continue timer_core debugging |
+| **Track 4: External Suites** | All high rates | Monitor for regressions |
+
+### Test Suite Status
+
+| Suite | Status | Notes |
+|-------|--------|-------|
+| circt-sim | 70/70 (100%) | All pass |
+| sv-tests BMC | 23/26 (88.5%) | 3 XFAIL |
+| verilator BMC | 17/17 (100%) | All pass |
+| yosys-sva BMC | 14/14 (100%) | 2 VHDL skipped |
+| OpenTitan | gpio/uart PASS | timer_core functional issue |
+
+---
+
 ## Iteration 260 - January 30, 2026
 
 ### Goals
