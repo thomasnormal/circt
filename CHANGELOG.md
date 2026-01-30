@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 259 - January 30, 2026
+
+### Goals
+Fix vtable generation for implicit virtual methods, add pointer validation for safe native memory access.
+
+### Fixed in this Iteration
+
+1. **Implicit Virtual Method Detection** (Structure.cpp, Expressions.cpp):
+   - **ROOT CAUSE**: Line 4501 used `fn.flags & MethodFlags::Virtual` instead of `fn.isVirtual()`
+   - **FIX**: Use `fn.isVirtual()` which detects implicit virtuality from base class override
+   - **IMPACT**: All 6 AVIPs now compile to HW level without vtable_entry errors
+
+2. **Native Pointer Validation** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `if (addr != 0)` check was insufficient before dereferencing native pointers
+   - **FIX**: Validate address is above 0x10000 (guard pages), below 0x7FFFFFFFFFFF (kernel space)
+   - **IMPACT**: Prevents crashes from invalid pointer dereferences
+
+3. **Test Expectations** (basic.sv, builtins.sv):
+   - Fixed string constant width expectations (i127 -> i128 for 16-char strings)
+   - XFAILed UVM stub tests since stubs were removed for real uvm-core
+
+### Test Suite Results
+
+| Suite | Pass | Total | Notes |
+|-------|------|-------|-------|
+| MooreToCore | 92 | 93 | 1 XFAIL |
+| ImportVerilog | 192 | 215 | 23 XFAIL |
+| circt-sim | 67 | 67 | 100% |
+| sv-tests BMC | 23 | 26 | 100% (3 XFAIL) |
+| verilator-verification BMC | 17 | 17 | 100% |
+| yosys-sva BMC | 14 | 14 | 100% |
+
+### AVIP Compilation Status (All Now Compile!)
+
+| AVIP | Status | Output Size |
+|------|--------|-------------|
+| APB | ✅ SUCCESS | 195,697 lines |
+| UART | ✅ SUCCESS | 186,767 lines |
+| AHB | ✅ SUCCESS | 190,848 lines |
+| AXI4 | ✅ SUCCESS | 277,283 lines |
+| I2S | ✅ SUCCESS | 213,037 lines |
+| I3C | ✅ SUCCESS | 215,688 lines |
+
+---
+
 ## Iteration 258 - January 30, 2026
 
 ### Goals
@@ -15,6 +60,11 @@ Fix virtual dispatch in fork, investigate real UVM initialization crashes.
 2. **Alloca Classification in Global Constructors** (LLHDProcessInterpreter.cpp):
    - **FIX**: Check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors when classifying allocas
    - **IMPACT**: Allocas inside functions called from global constructors now correctly marked as function-level
+
+3. **ImportVerilog Task Captures for Memload/Ref Selects** (Expressions.cpp, Statements.cpp):
+   - **FIX**: Capture outer refs used by `$readmemh` and ref-select ops inside tasks/functions
+   - **TEST**: `test/Conversion/ImportVerilog/readmemh-task-capture.sv`
+   - **IMPACT**: OpenTitan `i2c` full IP parse now succeeds (prim_util_memload)
 
 ### Known Issues Identified
 
@@ -40,6 +90,8 @@ Fix virtual dispatch in fork, investigate real UVM initialization crashes.
 | verilator-verification LEC | 17 | 17 | 100% |
 | yosys-sva BMC | 14 | 14 | 100% |
 | yosys-sva LEC | 14 | 14 | 100% |
+
+- OpenTitan (full IP): `i2c` PASS after memload capture fix.
 
 ---
 

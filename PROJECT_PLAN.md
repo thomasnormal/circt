@@ -1556,6 +1556,7 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-30 | avip/jtag_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | enum cast + override default args |
 | 2026-01-30 | opentitan/uart | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | full IP parse |
 | 2026-01-30 | opentitan/i2c | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | prim_util_memload region isolation |
+| 2026-01-30 | opentitan/i2c | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | full IP parse (memload capture fix) |
 
 ### Known XFAIL Themes (Keep Lists Per Suite)
 - Unbounded delay patterns not representable in current BMC bound.
