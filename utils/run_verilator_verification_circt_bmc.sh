@@ -12,6 +12,8 @@ CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
+BMC_FAIL_ON_VIOLATION="${BMC_FAIL_ON_VIOLATION:-1}"
+BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS for clocked assertions that are lowered later in the pipeline.
@@ -23,10 +25,28 @@ OUT="${OUT:-$PWD/verilator-verification-bmc-results.txt}"
 XFAILS="${XFAILS:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
+Z3_BIN="${Z3_BIN:-}"
+BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-0}"
 
 if [[ ! -d "$VERIF_DIR/tests" ]]; then
   echo "verilator-verification directory not found: $VERIF_DIR" >&2
   exit 1
+fi
+
+if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
+  if [[ -z "$Z3_BIN" ]]; then
+    if command -v z3 >/dev/null 2>&1; then
+      Z3_BIN="z3"
+    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3/build/z3"
+    fi
+  fi
+  if [[ -z "$Z3_BIN" ]]; then
+    echo "z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB" >&2
+    exit 1
+  fi
 fi
 
 suites=("$@")
@@ -160,9 +180,22 @@ for suite in "${suites[@]}"; do
     fi
 
     bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-      "--module" "$top_for_file" "--shared-libs=$Z3_LIB")
+      "--module" "$top_for_file")
+    if [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
+      if [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
+        bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+      else
+        bmc_args+=("--shared-libs=$Z3_LIB")
+      fi
+    fi
+    if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_FAIL_ON_VIOLATION" == "1" ]]; then
+      bmc_args+=("--fail-on-violation")
+    fi
     if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
       bmc_args+=("--rising-clocks-only")
+    fi
+    if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+      bmc_args+=("--assume-known-inputs")
     fi
     if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
       bmc_args+=("--allow-multi-clock")
@@ -200,9 +233,9 @@ for suite in "${suites[@]}"; do
         result="ERROR"
       fi
     else
-      if grep -q "Bound reached with no violations!" <<<"$out"; then
+      if grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
         result="PASS"
-      elif grep -q "Assertion can be violated!" <<<"$out"; then
+      elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
         result="FAIL"
       else
         result="ERROR"

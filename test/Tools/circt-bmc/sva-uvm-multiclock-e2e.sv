@@ -2,7 +2,7 @@
 // RUN:   circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers \
 // RUN:   --lower-to-bmc="top-module=sva_uvm_multiclock bound=5 allow-multi-clock" \
 // RUN:   | FileCheck %s --check-prefix=CHECK-BMC
-// REQUIRES: slang
+// REQUIRES: slang, uvm
 // UVM multiclock test with UVM report function interception.
 
 `include "uvm_macros.svh"
