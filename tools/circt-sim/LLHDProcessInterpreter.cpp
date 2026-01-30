@@ -7549,6 +7549,67 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle __moore_wait_condition - wait until condition becomes true.
+    // Implements the SystemVerilog `wait(condition)` statement.
+    // Signature: __moore_wait_condition(i32 condition)
+    // If condition is true (non-zero), return immediately.
+    // If condition is false (zero), suspend the process and wait for signal
+    // changes, then re-evaluate.
+    if (calleeName == "__moore_wait_condition") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue condArg = getValue(procId, callOp.getOperand(0));
+        bool conditionTrue = !condArg.isX() && condArg.getUInt64() != 0;
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_wait_condition("
+                                << (condArg.isX() ? "X" : std::to_string(condArg.getUInt64()))
+                                << ") -> condition is "
+                                << (conditionTrue ? "true" : "false") << "\n");
+
+        if (conditionTrue) {
+          // Condition is already true, continue immediately
+          return success();
+        }
+
+        // Condition is false - suspend the process and set up sensitivity
+        // to all probed signals so we wake up when something changes.
+        auto &state = processStates[procId];
+        state.waiting = true;
+
+        // Build sensitivity list from all signals probed by this process.
+        // When any of these signals change, the process will resume and
+        // re-evaluate the wait condition.
+        SensitivityList waitList;
+
+        // Collect signals from the process/initial op
+        if (auto processOp = state.getProcessOp()) {
+          processOp.walk([&](llhd::ProbeOp probeOp) {
+            SignalId sigId = getSignalId(probeOp.getSignal());
+            if (sigId != 0)
+              waitList.addLevel(sigId);
+          });
+        } else if (auto initialOp = state.getInitialOp()) {
+          initialOp.walk([&](llhd::ProbeOp probeOp) {
+            SignalId sigId = getSignalId(probeOp.getSignal());
+            if (sigId != 0)
+              waitList.addLevel(sigId);
+          });
+        }
+
+        if (!waitList.empty()) {
+          scheduler.suspendProcessForEvents(procId, waitList);
+          LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting on "
+                                  << waitList.size() << " signals for condition\n");
+        } else {
+          // No signals found - schedule a delta cycle wait to prevent infinite loop
+          // This will allow other processes to run and potentially change state
+          LLVM_DEBUG(llvm::dbgs() << "    Warning: No signals found for wait_condition, "
+                                     "doing single delta wait\n");
+          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+        }
+      }
+      return success();
+    }
+
     // Handle __moore_queue_push_back - append element to queue
     // Signature: (queue_ptr, element_ptr, element_size)
     if (calleeName == "__moore_queue_push_back") {
