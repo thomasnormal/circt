@@ -6,7 +6,11 @@
 // CHECK-NOT: moore.vtable
 // CHECK-NOT: moore.vtable_entry
 
-// CHECK: llvm.mlir.global internal @"testClass::__vtable__"(#llvm.zero) {addr_space = 0 : i32, circt.vtable_entries = {{.*}}} : !llvm.array<2 x ptr>
+// Check that both vtables have circt.vtable_entries (verifies the fix for
+// the bug where ClassNewOpConversion would create a placeholder global
+// without vtable entries before VTableOpConversion runs).
+// CHECK-DAG: llvm.mlir.global internal @"SimpleClass::__vtable__"(#llvm.zero) {addr_space = 0 : i32, circt.vtable_entries = {{.*}}} : !llvm.array<1 x ptr>
+// CHECK-DAG: llvm.mlir.global internal @"testClass::__vtable__"(#llvm.zero) {addr_space = 0 : i32, circt.vtable_entries = {{.*}}} : !llvm.array<2 x ptr>
 
 moore.class.classdecl @virtualFunctionClass {
   moore.class.methoddecl @subroutine : (!moore.class<@virtualFunctionClass>) -> ()
@@ -70,4 +74,34 @@ func.func @test_vtable_load_method_nested(%obj: !moore.class<@virtualFunctionCla
   // via the class's methodToVtableIndex map which is populated from method declarations.
   %fptr = moore.vtable.load_method %obj : @subroutine of <@virtualFunctionClass> -> (!moore.class<@virtualFunctionClass>) -> ()
   return %fptr : (!moore.class<@virtualFunctionClass>) -> ()
+}
+
+// Test vtable entries are populated even when ClassNewOpConversion creates
+// the vtable global first (before VTableOpConversion runs).
+// This tests the fix for the bug where the vtable global would be created
+// without circt.vtable_entries attribute.
+
+moore.class.classdecl @SimpleClass {
+  moore.class.propertydecl @value : !moore.i32
+  moore.class.methoddecl @get_value -> @"SimpleClass::get_value" : (!moore.class<@SimpleClass>) -> !moore.i32
+}
+
+moore.vtable @SimpleClass::@vtable {
+  moore.vtable_entry @get_value -> @"SimpleClass::get_value"
+}
+
+func.func private @"SimpleClass::get_value"(%this: !moore.class<@SimpleClass>) -> !moore.i32 {
+  %ref = moore.class.property_ref %this[@value] : <@SimpleClass> -> !moore.ref<i32>
+  %val = moore.read %ref : <i32>
+  return %val : !moore.i32
+}
+
+// Test that class.new before vtable still gets vtable entries populated.
+// The order is intentional: new appears before vtable in IR.
+
+// CHECK-LABEL: func.func @test_new_before_vtable
+// CHECK:         llvm.call @malloc
+func.func @test_new_before_vtable() -> !moore.class<@SimpleClass> {
+  %obj = moore.class.new : <@SimpleClass>
+  return %obj : !moore.class<@SimpleClass>
 }
