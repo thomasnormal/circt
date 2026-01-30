@@ -10289,6 +10289,26 @@ protected:
   /// Get the size in bytes for a type. Uses hw::getBitWidth which handles
   /// all types including structs. Returns at least 1 byte.
   static int64_t getTypeSizeInBytes(Type type) {
+    // Handle LLVM pointer types - they are 8 bytes on 64-bit systems.
+    // This is critical for queue operations storing class objects.
+    if (isa<LLVM::LLVMPointerType>(type))
+      return 8;
+
+    // Handle LLVM struct types by computing their size from members.
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(type)) {
+      int64_t totalSize = 0;
+      for (Type elemTy : structTy.getBody()) {
+        totalSize += getTypeSizeInBytes(elemTy);
+      }
+      return totalSize > 0 ? totalSize : 1;
+    }
+
+    // Handle LLVM array types.
+    if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(type)) {
+      int64_t elemSize = getTypeSizeInBytes(arrayTy.getElementType());
+      return elemSize * arrayTy.getNumElements();
+    }
+
     int64_t bitWidth = hw::getBitWidth(type);
     if (bitWidth <= 0)
       return 1; // Default to 1 byte for unknown/opaque types

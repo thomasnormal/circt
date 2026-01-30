@@ -773,6 +773,10 @@ private:
   /// Maps address to memory block.
   llvm::DenseMap<uint64_t, MemoryBlock> mallocBlocks;
 
+  /// Global address counter for malloc and cross-process memory.
+  /// This ensures no address overlap between different processes.
+  uint64_t globalNextAddress = 0x100000;
+
   /// Memory storage for module-level (hw.module body) allocas.
   /// These are allocas defined outside of llhd.process blocks but inside
   /// the hw.module body, accessible by all processes in the module.
