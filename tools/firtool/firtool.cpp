@@ -915,7 +915,6 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "MLIR-based FIRRTL compiler\n");
 
   circt::installResourceGuard();
-
   // Set up custom thread pool if multi-threading is requested, and limit the
   // number of threads used by llvm internally.
   llvm::ThreadPoolStrategy strategy = llvm::hardware_concurrency(numThreads);
