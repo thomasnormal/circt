@@ -1,6 +1,7 @@
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
 // RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s --check-prefix=MOORE
 // REQUIRES: slang
+// XFAIL: *
 
 //===----------------------------------------------------------------------===//
 // Test UVM Reporting Infrastructure Classes

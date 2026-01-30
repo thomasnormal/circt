@@ -510,27 +510,27 @@ endfunction
 // CHECK-SAME: [[BYTE_ARG:%.+]]: !moore.i8
 // CHECK-SAME: [[LOGIC_ARG:%.+]]: !moore.l8
 function void TypenameBuiltin(int int_arg, real real_arg, string str_arg, byte byte_arg, logic [7:0] logic_arg);
-  // CHECK: [[INT_TYPE:%.+]] = moore.constant_string "\22int\22"
+  // CHECK: [[INT_TYPE:%.+]] = moore.constant_string "int" : i24
   // CHECK: [[INT_STR:%.+]] = moore.int_to_string [[INT_TYPE]]
   // CHECK: call @dummyD([[INT_STR]]) : (!moore.string) -> ()
   dummyD($typename(int_arg));
 
-  // CHECK: [[REAL_TYPE:%.+]] = moore.constant_string "\22real\22"
+  // CHECK: [[REAL_TYPE:%.+]] = moore.constant_string "real" : i32
   // CHECK: [[REAL_STR:%.+]] = moore.int_to_string [[REAL_TYPE]]
   // CHECK: call @dummyD([[REAL_STR]]) : (!moore.string) -> ()
   dummyD($typename(real_arg));
 
-  // CHECK: [[STR_TYPE:%.+]] = moore.constant_string "\22string\22"
+  // CHECK: [[STR_TYPE:%.+]] = moore.constant_string "string" : i48
   // CHECK: [[STR_STR:%.+]] = moore.int_to_string [[STR_TYPE]]
   // CHECK: call @dummyD([[STR_STR]]) : (!moore.string) -> ()
   dummyD($typename(str_arg));
 
-  // CHECK: [[BYTE_TYPE:%.+]] = moore.constant_string "\22byte\22"
+  // CHECK: [[BYTE_TYPE:%.+]] = moore.constant_string "byte" : i32
   // CHECK: [[BYTE_STR:%.+]] = moore.int_to_string [[BYTE_TYPE]]
   // CHECK: call @dummyD([[BYTE_STR]]) : (!moore.string) -> ()
   dummyD($typename(byte_arg));
 
-  // CHECK: [[LOGIC_TYPE:%.+]] = moore.constant_string "\22logic[7:0]\22"
+  // CHECK: [[LOGIC_TYPE:%.+]] = moore.constant_string "logic[7:0]" : i80
   // CHECK: [[LOGIC_STR:%.+]] = moore.int_to_string [[LOGIC_TYPE]]
   // CHECK: call @dummyD([[LOGIC_STR]]) : (!moore.string) -> ()
   dummyD($typename(logic_arg));

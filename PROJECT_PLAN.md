@@ -207,7 +207,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    when process outputs feed back through module-level combinational logic.
 4. **Test file syntax fix** (bc0bd77dd) - Fixed invalid `llhd.wait` syntax in transitive filter test
 
-### Active Workstreams & Next Steps (Iteration 257)
+### Active Workstreams & Next Steps (Iteration 258)
+
+**Iteration 258 Changes (2026-01-30):**
+1. **Virtual Dispatch in sim.fork** (FIXED):
+   - ROOT CAUSE: Child fork states didn't have `processOrInitialOp` set
+   - FIX: Copy `processOrInitialOp` from parent process state to child
+   - Impact: Virtual method dispatch inside fork blocks now works correctly
+   - Test: `test/Tools/circt-sim/fork-virtual-method.mlir`
+
+2. **Alloca Classification in Global Constructors** (FIXED):
+   - FIX: Check for `func::FuncOp` and `LLVM::LLVMFuncOp` ancestors
+   - Impact: Allocas inside functions called from global constructors now correctly classified
+
+**Current Blockers for Real uvm-core:**
+1. **vtable_entry Override Errors** (NEW ISSUE):
+   - Error: `'moore.vtable_entry' op Target should be overridden by vtable`
+   - Appears for inherited methods like `send_request` in UVM sequences
+   - Blocks AVIP compilation when using real Accellera uvm-core
+
+2. **Real UVM Global Initialization Crash** (NEW ISSUE):
+   - LLVM load fails during global constructor execution
+   - UVM stubs work but real uvm-core crashes early
+   - Need to investigate memory initialization patterns
 
 **Iteration 257 Changes (2026-01-30) - MAJOR FIXES:**
 1. **PROCESS_STEP_OVERFLOW in UVM Fork** (FIXED):
@@ -1519,6 +1541,21 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-29 | avip/spi_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
 | 2026-01-29 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
 | 2026-01-29 | opentitan | LEC | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
+| 2026-01-30 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
+| 2026-01-30 | verilator-verification | BMC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-01-30 | yosys/tests/sva | BMC | total=14 pass=12 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
+| 2026-01-30 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
+| 2026-01-30 | avip/apb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
+| 2026-01-30 | avip/ahb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
+| 2026-01-30 | avip/axi4_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
+| 2026-01-30 | avip/axi4Lite_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | cover module missing + WDATA range OOB |
+| 2026-01-30 | avip/spi_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | SV syntax/HVL issues |
+| 2026-01-30 | opentitan (verilog parse) | compile | total=5 pass=5 fail=0 xfail=0 xpass=0 error=0 skip=0 | uart_reg_top,gpio_no_alerts,aes_reg_top,i2c_reg_top,spi_host_reg_top |
+| 2026-01-30 | avip/i2s_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
+| 2026-01-30 | avip/i3c_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | rerun |
+| 2026-01-30 | avip/jtag_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | enum cast + override default args |
+| 2026-01-30 | opentitan/uart | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | full IP parse |
+| 2026-01-30 | opentitan/i2c | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | prim_util_memload region isolation |
 
 ### Known XFAIL Themes (Keep Lists Per Suite)
 - Unbounded delay patterns not representable in current BMC bound.

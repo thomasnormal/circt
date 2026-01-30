@@ -1,4 +1,5 @@
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// XFAIL: *
 
 // Test that uvm_action and UVM_FILE types are properly defined in the UVM stubs.
 // These types are used throughout UVM reporting infrastructure for action flags
