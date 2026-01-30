@@ -228,6 +228,11 @@ struct ProcessExecutionState {
   /// Number of times derived wait sensitivities were reused from cache.
   uint64_t waitSensitivityCacheHits = 0;
 
+  /// Accumulated delay from __moore_delay calls (in femtoseconds).
+  /// Multiple sequential __moore_delay calls within a function accumulate here,
+  /// and the total is used when the process actually suspends.
+  int64_t pendingDelayFs = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
@@ -652,6 +657,14 @@ private:
                                         ProcessId procId = static_cast<ProcessId>(-1),
                                         uint64_t *outOffset = nullptr);
 
+  /// Find a native memory block by address (e.g., assoc array element refs).
+  bool findNativeMemoryBlockByAddress(uint64_t addr, uint64_t *outOffset,
+                                      size_t *outSize) const;
+
+  /// Read a Moore string payload from interpreter/native memory.
+  bool tryReadStringKey(ProcessId procId, uint64_t strPtrVal, int64_t strLen,
+                        std::string &out);
+
   //===--------------------------------------------------------------------===//
   // Value Management
   //===--------------------------------------------------------------------===//
@@ -772,6 +785,10 @@ private:
   /// Memory storage for dynamically allocated memory (malloc).
   /// Maps address to memory block.
   llvm::DenseMap<uint64_t, MemoryBlock> mallocBlocks;
+
+  /// Native memory regions returned by runtime helpers (e.g., assoc array refs).
+  /// Maps base address to size in bytes.
+  llvm::DenseMap<uint64_t, size_t> nativeMemoryBlocks;
 
   /// Global address counter for malloc and cross-process memory.
   /// This ensures no address overlap between different processes.

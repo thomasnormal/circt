@@ -35,10 +35,23 @@ Fix class member access from methods, enable uvm-core simulation.
 | MooreToCore lit tests | 93/94 pass |
 | circt-sim lit tests | 70/70 pass |
 
-### Remaining Issues
+### Remaining Issues (Root Causes Identified)
 
-1. **APB AVIP Global Constructor Crash**: Crashes in `interpretLLVMCall` during global constructor execution
-2. **UVM Simulation Exits at 0fs**: Compiles but phases don't execute (needs investigation)
+1. **APB AVIP Global Constructor Crash** - ROOT CAUSE FOUND:
+   - C++ stack overflow from deep recursive interpretation
+   - The `getValue` -> `interpretLLVMCall` path doesn't track call depth
+   - Even with callDepth=50 limit, ~150-250 actual C++ stack frames
+   - **FIX NEEDED**: Track depth in getValue path, or convert to iterative interpreter
+
+2. **UVM Simulation Exits at 0fs** - ROOT CAUSE FOUND:
+   - Mismatch between `llvm.store` and `llhd.prb` for static class variables
+   - `m_inst` (uvm_root singleton) written with `llvm.store` but read with `llhd.prb`
+   - `unrealized_conversion_cast` from LLVM ptr to `!llhd.ref` causes wrong semantics
+   - **FIX NEEDED**: Use consistent `llvm.load`/`llvm.store` for LLVM globals
+
+3. **Delay Accumulation Bug** - NEW:
+   - `llhd-process-moore-delay-multi.mlir` expects 60fs but only gets 30fs
+   - `__moore_delay` only applies last delay instead of accumulating sequential delays
 
 ---
 
@@ -105,6 +118,44 @@ Fix vtable generation for implicit virtual methods, restore non-UVM simulation s
 11. **NFA Clone Safety for Repeated Concat** (LTLSequenceNFA.h):
    - **FIX**: Clone now walks epsilon transitions to avoid DenseMap rehash crashes
    - **IMPACT**: Prevents circt-bmc crash on repeated concat sequences
+
+12. **LEC Regression Suites Re-run**:
+   - **sv-tests LEC**: 23/23 pass (0 fail, 0 error)
+   - **verilator-verification LEC**: 17/17 pass
+   - **yosys-sva LEC**: 14/14 pass (2 VHDL skipped)
+
+13. **BMC Regression Suites Re-run**:
+   - **verilator-verification BMC**: 17/17 pass
+   - **yosys-sva BMC**: 14/14 pass (2 VHDL skipped)
+
+14. **LEC Strict Multi-Drive With Enable**:
+   - **FIX**: Reject multiple enabled drives in strict LLHD mode to avoid
+     unsound implicit priority
+   - **TEST**: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-enable-conflict.mlir`
+
+15. **LEC Regression Suites Re-run (post-strict change)**:
+   - **sv-tests LEC**: 23/23 pass (0 fail, 0 error)
+   - **verilator-verification LEC**: 17/17 pass
+   - **yosys-sva LEC**: 14/14 pass (2 VHDL skipped)
+
+16. **LEC Strict Interface Conditional Stores**:
+   - **TEST**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-conflict.mlir`
+   - **IMPACT**: Ensures strict mode rejects interface signals that require
+     abstraction due to conditional stores without a dominating write
+
+17. **LEC Regression Suites Re-run (post-interface strict test)**:
+   - **sv-tests LEC**: 23/23 pass (0 fail, 0 error)
+   - **verilator-verification LEC**: 17/17 pass
+   - **yosys-sva LEC**: 14/14 pass (2 VHDL skipped)
+
+18. **BMC Regression Suites Re-run**:
+   - **sv-tests BMC**: 23/26 pass (3 XFAIL)
+   - **verilator-verification BMC**: 17/17 pass
+   - **yosys-sva BMC**: 14/14 pass (2 VHDL skipped)
+
+19. **BMC Helper Cleanup**:
+   - **FIX**: Mark legacy BMC sequence expansion helpers as maybe-unused to
+     silence build warnings while NFA lowering is active.
 
 ### Remaining UVM Simulation Issue
 
