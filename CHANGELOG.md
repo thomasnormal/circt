@@ -19,6 +19,130 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
 3. **Format String Select** (LLHDProcessInterpreter.cpp):
    - Added arith.select handling in evaluateFormatString
 
+4. **BMC Inverted Clock Mapping** (VerifToSMT.cpp):
+   - **FIX**: Resolve comb.xor-based inverted clocks for ltl.clock and flip edges
+   - **IMPACT**: Posedge on inverted clocks now gates on the base clock negedge
+
+5. **BMC Derived Inverted Clocks** (VerifToSMT.cpp):
+   - **FIX**: Derived clock mapping now preserves inversion via assume equality
+   - **IMPACT**: Derived clocks constrained to inverted base clocks gate correctly
+
+6. **BMC Inverted Clock Commutation** (VerifToSMT.cpp):
+   - **FIX**: Detect inverted clocks even when the all-ones constant is the first XOR operand
+   - **IMPACT**: Clock inversion resolution is robust to operand order
+
+7. **BMC Derived Clock Inequality** (VerifToSMT.cpp):
+   - **FIX**: Treat `comb.icmp ne` clock assumptions as inverted derived clocks
+   - **IMPACT**: Derived negated clocks now gate with the correct base edge
+
+8. **BMC Derived Clock Case Equality** (VerifToSMT.cpp):
+   - **FIX**: Accept `comb.icmp ceq/cne` when mapping derived clocks
+   - **IMPACT**: Case equality clock assumptions now map consistently
+
+9. **BMC Derived Clock Case Inequality Test** (VerifToSMT.cpp):
+   - **FIX**: Added coverage for `comb.icmp cne` derived clock inversion
+   - **IMPACT**: Case-inequality derived clocks remain regression-tested
+
+10. **BMC Derived Clock XOR Inversion** (VerifToSMT.cpp):
+    - **FIX**: Allow `verif.assume` on `comb.xor` to map inverted derived clocks
+    - **IMPACT**: XOR-based derived clocks now gate with the correct base edge
+
+11. **BMC Derived Clock Assume Enable** (VerifToSMT.cpp):
+    - **FIX**: Allow derived clock mapping when assume enable is constant true
+    - **IMPACT**: Enabled assumes no longer block derived clock resolution
+
+12. **BMC Derived Clock Enable Folding** (VerifToSMT.cpp):
+    - **FIX**: Treat constant XOR enables as true/false for derived clock mapping
+    - **IMPACT**: Derived clocks map even when enable is expressed as XOR of constants
+
+13. **BMC Inverted Clock Arith Constant** (VerifToSMT.cpp):
+    - **FIX**: Recognize arith.constant true as inversion constant in clock mapping
+    - **IMPACT**: Inverted clocks are resolved even with arith constants
+
+14. **BMC XOR False Clock Mapping** (VerifToSMT.cpp):
+    - **FIX**: Treat XOR with false as identity in clock mapping
+    - **IMPACT**: Posedge clocks remain posedge when XORed with false
+
+15. **BMC XOR Derived Clocks** (VerifToSMT.cpp):
+    - **FIX**: Consolidate XOR constant handling for derived clock mapping
+    - **IMPACT**: XOR-based derived clocks now map correctly for true/false constants
+
+16. **BMC XOR True Derived Clocks** (VerifToSMT.cpp):
+    - **FIX**: Allow derived clock mapping for XOR with true (XNOR semantics)
+    - **IMPACT**: XOR-with-true assumptions now map to equivalence
+
+17. **BMC comb.not Clock Inversion** (VerifToSMT.cpp):
+    - **FIX**: Treat `comb.not` clock values as inverted base clocks in BMC mapping
+    - **IMPACT**: Posedge clocking on `comb.not` now gates on the base negedge
+
+18. **BMC Wildcard Equality Derived Clocks** (VerifToSMT.cpp):
+    - **FIX**: Accept `comb.icmp weq/wne` for derived clock mapping
+    - **IMPACT**: Wildcard equality clock assumptions map to the correct edges
+
+19. **BMC Fixed-Length Concat Expansion** (VerifToSMT.cpp):
+    - **FIX**: Expand fixed-length `ltl.concat` into aligned delay terms before BMC lowering
+    - **IMPACT**: Concatenations like `a[*2] ##0 b` now allocate delay buffers and model timing
+
+20. **BMC Fixed-Prefix Concat Expansion** (VerifToSMT.cpp):
+    - **FIX**: Allow concat expansion when all prefix lengths are fixed, even if the suffix has variable length
+    - **IMPACT**: Fixed-length prefixes now correctly delay range suffixes (e.g., `a[*2] ##[1:3] b`)
+
+21. **BMC Variable-Length Concat Expansion** (VerifToSMT.cpp):
+    - **FIX**: Enumerate variable-length prefix ranges to align concat offsets within the BMC bound
+    - **IMPACT**: Concat with ranged prefixes now delays suffixes correctly instead of collapsing to AND
+
+22. **BMC Unbounded Repeat Concat Expansion** (VerifToSMT.cpp):
+    - **FIX**: Cap unbounded repeat lengths by the BMC bound when expanding concat offsets
+    - **IMPACT**: `a[*1:$] ##0 b` now models delays up to the bound instead of skipping expansion
+
+23. **BMC Concat Expansion Guardrails** (VerifToSMT.cpp):
+    - **FIX**: Propagate concat expansion size errors to fail the BMC conversion
+    - **IMPACT**: Oversized concat expansions now report a clear error instead of silently continuing
+
+24. **BMC Concat Unknown Bounds Error** (VerifToSMT.cpp):
+    - **FIX**: Error out when concat inputs lack bounded sequence lengths
+    - **IMPACT**: Prevents silently unsound concat lowering in BMC
+
+25. **BMC Concat Empty Prefix Regression** (VerifToSMT.cpp):
+    - **FIX**: Added regression for empty-prefix concat to ensure no extra delay buffers
+    - **IMPACT**: Guards against accidental delay insertion for empty sequences
+
+26. **BMC Unbounded Delay Range E2E Coverage** (sva-unbounded-delay-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `##[m:$]` delay ranges
+    - **IMPACT**: Keeps bounded unbounded-delay approximation under regression
+
+27. **BMC Unbounded Repeat E2E Coverage** (sva-repeat-unbounded-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `[*m:$]` repetition
+    - **IMPACT**: Guards bounded unbounded-repeat expansion in BMC lowering
+
+28. **BMC Concat Delay E2E Coverage** (sva-concat-delay-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a ##1 b` concatenation
+    - **IMPACT**: Keeps concat expansion behavior under regression
+
+29. **BMC Concat + Repeat E2E Coverage** (sva-concat-repeat-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a[*2] ##1 b` sequences
+    - **IMPACT**: Guards repeat+concat expansion interactions in BMC lowering
+
+30. **BMC Concat + Unbounded Repeat E2E Coverage** (sva-concat-unbounded-repeat-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a[*1:$] ##1 b` sequences
+    - **IMPACT**: Exercises unbounded repeat expansion inside concat lowering
+
+31. **BMC Goto + Concat E2E Coverage** (sva-goto-concat-delay-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a [->1:3] ##1 b` sequences
+    - **IMPACT**: Guards goto-repeat interactions with concat/delay lowering
+
+32. **BMC Non-Consecutive Repeat + Concat E2E Coverage** (sva-nonconsecutive-repeat-concat-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a [=1:3] ##1 b` sequences
+    - **IMPACT**: Guards non-consecutive repeat interactions with concat/delay lowering
+
+33. **BMC Delay Range + Concat E2E Coverage** (sva-delay-range-concat-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a ##[1:2] b ##1 c` sequences
+    - **IMPACT**: Guards delay-range concat expansion interactions
+
+34. **BMC Goto + Delay Range + Concat E2E Coverage** (sva-goto-delay-range-concat-*-e2e.sv):
+    - **FIX**: Added end-to-end SVA BMC tests for `a [->1:3] ##[1:2] b ##1 c` sequences
+    - **IMPACT**: Guards goto-repeat interactions with delay-range concat lowering
+
 ### Investigation Results (All Working)
 - **Vtables**: Interpreter uses `circt.vtable_entries` at runtime ✓
 - **Static Initialization**: `llvm.global_ctors` runs before processes ✓
@@ -151,6 +275,55 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
    - **FIX**: Add `--run-smtlib` with external z3 execution and `--z3-path`
    - **Tests**: `test/Tools/circt-bmc/bmc-run-smtlib-unsat.mlir`,
      `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample.mlir`
+
+9. **BMC assume-known-inputs** (VerifToSMT.cpp, circt-bmc.cpp):
+   - **FIX**: Add `--assume-known-inputs` to control 4-state input constraints
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-assume-known-inputs.mlir`,
+     `test/Tools/circt-bmc/bmc-emit-smtlib-assume-known-inputs.mlir`
+
+10. **BMC harness 4-state flag** (utils/):
+    - **FIX**: Add `BMC_ASSUME_KNOWN_INPUTS=1` to pass `--assume-known-inputs`
+      through external suite harnesses.
+
+11. **LEC harness 4-state flag** (utils/):
+    - **FIX**: Add `LEC_ASSUME_KNOWN_INPUTS=1` to pass `--assume-known-inputs`
+      through external suite harnesses.
+
+12. **LEC SMT-LIB assume-known-inputs** (VerifToSMT.cpp):
+    - **Test**: `test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir`
+
+13. **BMC run-smtlib harness** (utils/):
+    - **FIX**: Add `BMC_RUN_SMTLIB=1` to use external z3 via `--run-smtlib`.
+
+14. **Formal all harness flags** (utils/run_formal_all.sh):
+    - **FIX**: Add CLI switches for `--bmc-run-smtlib`,
+      `--bmc-assume-known-inputs`, `--lec-assume-known-inputs`, and `--z3-bin`.
+
+15. **OpenTitan LEC assume-known toggle** (utils/run_opentitan_circt_lec.py):
+    - **FIX**: Gate `--assume-known-inputs` on `LEC_ASSUME_KNOWN_INPUTS`.
+
+16. **OpenTitan LEC run-smtlib** (utils/run_opentitan_circt_lec.py):
+    - **FIX**: Default to `--run-smtlib` with `LEC_RUN_SMTLIB=1` and `Z3_BIN`.
+
+17. **4-state input warning** (VerifToSMT.cpp):
+    - **FIX**: Warn when 4-state inputs are unconstrained without
+      `--assume-known-inputs`.
+    - **Test**: `test/Conversion/VerifToSMT/four-state-input-warning.mlir`
+
+18. **Clocked property mapping checks** (VerifToSMT.cpp):
+    - **FIX**: Error out if an explicit clocked property cannot be mapped to a
+      BMC clock input.
+    - **Test**: `test/Conversion/VerifToSMT/bmc-unmapped-clock.mlir`
+
+19. **Derived clock mapping** (VerifToSMT.cpp):
+    - **FIX**: Map derived clock expressions constrained by assume-eq to the
+      corresponding BMC clock input.
+    - **Test**: `test/Conversion/VerifToSMT/bmc-derived-clock-mapping.mlir`
+
+20. **Derived clock conflict detection** (VerifToSMT.cpp):
+    - **FIX**: Error out when a derived clock is constrained to multiple BMC
+      clock inputs.
+    - **Test**: `test/Conversion/VerifToSMT/bmc-derived-clock-conflict.mlir`
 
 ### Test Suite Results
 - All external test suites maintain 100% pass rate
