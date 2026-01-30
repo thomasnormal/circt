@@ -6825,45 +6825,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     }
   }
 
-  if (!block && !ptrVal.isX()) {
-    // No interpreter memory block found - try native memory access.
-    // This handles pointers returned from runtime functions like
-    // __moore_assoc_get_ref which return real C++ memory addresses.
-    uint64_t addr = ptrVal.getUInt64();
-    // Validate address: must be non-zero, above guard page region (0x10000),
-    // and below kernel space boundary on x86-64. Also validate size is reasonable.
-    constexpr uint64_t MIN_VALID_ADDR = 0x10000; // Skip guard pages
-    constexpr uint64_t MAX_VALID_ADDR = 0x7FFFFFFFFFFF; // x86-64 user space
-    constexpr unsigned MAX_LOAD_SIZE = 8192;
-    if (addr >= MIN_VALID_ADDR && addr <= MAX_VALID_ADDR && loadSize <= MAX_LOAD_SIZE) {
-      void *nativePtr = reinterpret_cast<void *>(addr);
-      uint64_t value = 0;
-      if (loadSize <= 8) {
-        std::memcpy(&value, nativePtr, loadSize);
-        setValue(procId, loadOp.getResult(), InterpretedValue(value, bitWidth));
-        LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded from native ptr 0x"
-                                << llvm::format_hex(addr, 16) << " value="
-                                << value << " (" << loadSize << " bytes)\n");
-      } else {
-        // Handle wide values
-        APInt apValue(bitWidth, 0);
-        auto *bytes = static_cast<uint8_t *>(nativePtr);
-        for (unsigned i = 0; i < loadSize; ++i) {
-          APInt byteVal(bitWidth, bytes[i]);
-          apValue |= byteVal.shl(i * 8);
-        }
-        setValue(procId, loadOp.getResult(), InterpretedValue(apValue));
-        LLVM_DEBUG(llvm::dbgs() << "  llvm.load: loaded wide value from native ptr 0x"
-                                << llvm::format_hex(addr, 16)
-                                << " (" << loadSize << " bytes)\n");
-      }
-      return success();
-    }
-    // Address failed validation - fall through to return X
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: native ptr 0x"
-                            << llvm::format_hex(addr, 16)
-                            << " failed validation, returning X\n");
-  }
+  // NOTE: Native pointer access was removed because it caused crashes during
+  // UVM global constructor execution. Addresses that pass range validation
+  // may still point to unmapped memory. Instead, rely on tracked memory blocks
+  // (mallocBlocks, globalMemoryBlocks, moduleLevelAllocas).
+  // If a pointer is not in any tracked block, return X (unknown value).
 
   if (!block) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.load: no memory block found for pointer 0x"
@@ -6976,42 +6942,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   InterpretedValue storeVal = getValue(procId, storeOp.getValue());
   unsigned storeSize = getLLVMTypeSize(storeOp.getValue().getType());
 
-  if (!block && !ptrVal.isX()) {
-    // No interpreter memory block found - try native memory access.
-    // This handles pointers returned from runtime functions like
-    // __moore_assoc_get_ref which return real C++ memory addresses.
-    uint64_t addr = ptrVal.getUInt64();
-    // Validate address: must be non-zero, above guard page region (0x10000),
-    // and below kernel space boundary on x86-64. Also validate size is reasonable.
-    constexpr uint64_t MIN_VALID_ADDR = 0x10000; // Skip guard pages
-    constexpr uint64_t MAX_VALID_ADDR = 0x7FFFFFFFFFFF; // x86-64 user space
-    constexpr unsigned MAX_STORE_SIZE = 8192;
-    if (addr >= MIN_VALID_ADDR && addr <= MAX_VALID_ADDR &&
-        storeSize <= MAX_STORE_SIZE && !storeVal.isX()) {
-      void *nativePtr = reinterpret_cast<void *>(addr);
-      const APInt &apValue = storeVal.getAPInt();
-      if (storeSize <= 8) {
-        uint64_t value = apValue.getZExtValue();
-        std::memcpy(nativePtr, &value, storeSize);
-        LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored to native ptr 0x"
-                                << llvm::format_hex(addr, 16) << " value="
-                                << value << " (" << storeSize << " bytes)\n");
-      } else {
-        // Handle wide values
-        for (unsigned i = 0; i < storeSize; ++i) {
-          static_cast<uint8_t *>(nativePtr)[i] =
-              static_cast<uint8_t>(apValue.extractBits(8, i * 8).getZExtValue());
-        }
-        LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored wide value to native ptr 0x"
-                                << llvm::format_hex(addr, 16)
-                                << " (" << storeSize << " bytes)\n");
-      }
-    } else {
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: skipped store to invalid ptr 0x"
-                              << llvm::format_hex(addr, 16) << "\n");
-    }
-    return success();
-  }
+  // NOTE: Native pointer access was removed because it caused crashes during
+  // UVM global constructor execution. If pointer is not in tracked memory,
+  // the store is silently skipped (stores to X are no-ops anyway).
 
   if (!block) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.store: no memory block found for pointer 0x"
