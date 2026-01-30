@@ -21,18 +21,27 @@ Bring CIRCT up to parity with Cadence Xcelium for running UVM testbenches.
    - **FIX**: Handle LLVM pointer, struct, array types in `getTypeSizeInBytes`
    - **IMPACT**: Queue element sizes correct for complex types
 
-### Identified Blockers (UVM Simulation)
+### Fixed in this Iteration (cont.)
 
-1. **Queue Double-Indirection Bug** (P0 - Blocking UVM):
-   - MooreToCore `QueuePushFrontOp` creates extra pointer indirection
-   - Runtime receives `MooreQueue**` instead of `MooreQueue*`
-   - ALL queue operations fail silently - UVM factory registrations lost
-   - **Status**: Root cause identified, fix in progress
+4. **Queue Double-Indirection Bug** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Queue ops created alloca, stored pointer, passed alloca address
+   - **FIX**: Pass `adaptor.getQueue()` directly to runtime functions
+   - **IMPACT**: All queue operations (push, pop, insert, delete) now work
+   - **Tests**: Updated queue-array-ops.mlir, queue-pop-complex-types.mlir
 
-2. **UVM Phase Execution** (P0 - Depends on #1):
-   - `run_test()` returns immediately at time 0
-   - Factory lookup fails because registrations lost
-   - Fix queue bug first, then verify phases work
+5. **UVM Test Requirements** (test/Tools/circt-bmc/):
+   - Added `REQUIRES: uvm` to UVM-dependent tests
+   - Fixed sv-tests-parsing-filter to exclude UVM tests
+   - All VerifToSMT tests pass (67 XFAIL for NFA issues)
+
+### NEW Blocker Identified
+
+**Fork Entry Block Predecessors** (P0 - Blocks ALL AVIP Simulations):
+- `forever` loop inside `fork join_none` creates `cf.br` back-edge to entry block
+- MLIR requires region entry blocks have no predecessors
+- Error: `entry block of region may not have predecessors`
+- Occurs in UVM's `uvm_phase_hopper` class
+- **Fix needed**: ImportVerilog/Statements.cpp fork generation
 
 ### Test Status
 - Lit tests: 2960/3066 (96.5%)
