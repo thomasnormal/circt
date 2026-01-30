@@ -215,6 +215,11 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(executeGlobalConstructors()))
     return failure();
 
+  // Execute module-level LLVM ops (alloca, call, store) that initialize
+  // module-level variables like strings before processes start.
+  if (failed(executeModuleLevelLLVMOps(hwModule)))
+    return failure();
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
                           << getNumSignals() << " signals and "
                           << getNumProcesses() << " processes\n");
@@ -5733,6 +5738,11 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   if (valIt != valueMap.end())
     return valIt->second;
 
+  // Check module-level init values (for values computed during module init)
+  auto moduleIt = moduleInitValueMap.find(value);
+  if (moduleIt != moduleInitValueMap.end())
+    return moduleIt->second;
+
   // For direct signal references not in cache, read the current value.
   if (SignalId sigId = getSignalId(value)) {
     const SignalValue &sv = scheduler.getSignalValue(sigId);
@@ -5940,6 +5950,18 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return InterpretedValue::fromSignalValue(sv);
   }
 
+  // Check if this is an LLVM call at module level (e.g., string conversion)
+  // Execute the call on demand when its result is needed.
+  if (auto callOp = value.getDefiningOp<LLVM::CallOp>()) {
+    // Interpret the call to compute and cache its result
+    if (succeeded(interpretLLVMCall(procId, callOp))) {
+      // Now try to get the cached result
+      auto it = valueMap.find(value);
+      if (it != valueMap.end())
+        return it->second;
+    }
+  }
+
   // Unknown value - return X
   LLVM_DEBUG(llvm::dbgs() << "  Warning: Unknown value, returning X\n");
   return InterpretedValue::makeX(getTypeWidth(value.getType()));
@@ -6145,8 +6167,12 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
 
     // Look up in our dynamic strings registry
     auto it = dynamicStrings.find(ptrVal);
-    if (it != dynamicStrings.end() && it->second.first && it->second.second > 0) {
-      return std::string(it->second.first, it->second.second);
+    if (it != dynamicStrings.end()) {
+      // Found in registry - return the string (may be empty)
+      if (it->second.first && it->second.second > 0)
+        return std::string(it->second.first, it->second.second);
+      // Empty string
+      return "";
     }
 
     // Try reverse address-to-global lookup for string globals
@@ -6609,10 +6635,15 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
                                                       Value ptr) {
   auto &state = processStates[procId];
 
-  // First check if this is a direct alloca result
+  // First check if this is a direct alloca result in process-local memory
   auto it = state.memoryBlocks.find(ptr);
   if (it != state.memoryBlocks.end())
     return &it->second;
+
+  // Check module-level allocas (accessible by all processes)
+  auto moduleIt = moduleLevelAllocas.find(ptr);
+  if (moduleIt != moduleLevelAllocas.end())
+    return &moduleIt->second;
 
   // Check if this is a GEP result - trace back to find the base pointer
   if (auto gepOp = ptr.getDefiningOp<LLVM::GEPOp>()) {
@@ -6624,6 +6655,58 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
     return findMemoryBlock(procId, bitcastOp.getArg());
   }
 
+  return nullptr;
+}
+
+MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
+                                                              ProcessId procId,
+                                                              uint64_t *outOffset) {
+  // Check process-local allocas by looking up their assigned addresses
+  if (procId != static_cast<ProcessId>(-1)) {
+    auto &state = processStates[procId];
+    for (auto &[val, block] : state.memoryBlocks) {
+      // Get the address assigned to this Value
+      auto it = state.valueMap.find(val);
+      if (it != state.valueMap.end()) {
+        uint64_t blockAddr = it->second.getUInt64();
+        if (addr >= blockAddr && addr < blockAddr + block.size) {
+          if (outOffset) *outOffset = addr - blockAddr;
+          return &block;
+        }
+      }
+    }
+  }
+  // Check module-level allocas
+  for (auto &[val, block] : moduleLevelAllocas) {
+    // Check in moduleInitValueMap for the address
+    auto it = moduleInitValueMap.find(val);
+    if (it != moduleInitValueMap.end()) {
+      uint64_t blockAddr = it->second.getUInt64();
+      if (addr >= blockAddr && addr < blockAddr + block.size) {
+        if (outOffset) *outOffset = addr - blockAddr;
+        return &block;
+      }
+    }
+  }
+  // Check malloc'd blocks
+  for (auto &[blockAddr, block] : mallocBlocks) {
+    if (addr >= blockAddr && addr < blockAddr + block.size) {
+      if (outOffset) *outOffset = addr - blockAddr;
+      return &block;
+    }
+  }
+  // Check global memory blocks
+  for (auto &[globalName, globalAddr] : globalAddresses) {
+    auto blockIt = globalMemoryBlocks.find(globalName);
+    if (blockIt != globalMemoryBlocks.end()) {
+      MemoryBlock &block = blockIt->second;
+      if (addr >= globalAddr && addr < globalAddr + block.size) {
+        if (outOffset) *outOffset = addr - globalAddr;
+        return &block;
+      }
+    }
+  }
+  if (outOffset) *outOffset = 0;
   return nullptr;
 }
 
@@ -6646,8 +6729,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
   // Create a memory block
   MemoryBlock block(totalSize, getTypeWidth(elemType));
 
-  // Store the memory block
-  state.memoryBlocks[allocaOp.getResult()] = std::move(block);
+  // Check if this alloca is at module level (not inside an llhd.process)
+  bool isModuleLevel = !allocaOp->getParentOfType<llhd::ProcessOp>();
+
+  if (isModuleLevel) {
+    // Store in module-level allocas (accessible by all processes)
+    moduleLevelAllocas[allocaOp.getResult()] = std::move(block);
+  } else {
+    // Store in process-local memory
+    state.memoryBlocks[allocaOp.getResult()] = std::move(block);
+  }
 
   // Assign a unique address to this pointer (for tracking purposes)
   uint64_t addr = state.nextMemoryAddress;
@@ -6658,7 +6749,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
   LLVM_DEBUG(llvm::dbgs() << "  llvm.alloca: allocated " << totalSize
                           << " bytes at address 0x" << llvm::format_hex(addr, 16)
-                          << "\n");
+                          << (isModuleLevel ? " (module level)" : "") << "\n");
 
   return success();
 }
@@ -6988,6 +7079,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   while (parent && !isa<ModuleOp>(parent))
     parent = parent->getParentOp();
 
+  // If parent is null (e.g., during module-level init), use rootModule
+  if (!parent && rootModule)
+    parent = rootModule.getOperation();
+
   if (!parent) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: could not find module\n");
     for (Value result : callOp.getResults()) {
@@ -7289,6 +7384,283 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                   << scheduler.getCurrentTime().realTime << " fs\n");
         } else {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(0) - no delay\n");
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_queue_push_back - append element to queue
+    // Signature: (queue_ptr_ptr, element_ptr, element_size)
+    // MooreToCore passes pointer-to-pointer for queue argument
+    if (calleeName == "__moore_queue_push_back") {
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t queuePtrPtrAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        if (queuePtrPtrAddr != 0 && elemSize > 0) {
+          // First dereference: get the actual queue pointer
+          uint64_t ptrOffset = 0;
+          auto *ptrBlock = findMemoryBlockByAddress(queuePtrPtrAddr, procId, &ptrOffset);
+          if (!ptrBlock || !ptrBlock->initialized) {
+            LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: ptr block not found\n");
+            return success();
+          }
+          uint64_t queueAddr = 0;
+          for (int i = 0; i < 8; ++i)
+            queueAddr |= static_cast<uint64_t>(ptrBlock->data[ptrOffset + i]) << (i * 8);
+
+          // Second dereference: access the queue struct
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+
+            // Allocate new storage with space for one more element
+            int64_t newLen = queueLen + 1;
+            uint64_t newDataAddr = processStates[procId].nextMemoryAddress;
+            processStates[procId].nextMemoryAddress += newLen * elemSize;
+
+            MemoryBlock newBlock(newLen * elemSize, 64);
+            newBlock.initialized = true;
+
+            // Copy existing elements
+            if (dataPtr != 0 && queueLen > 0) {
+              auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
+              if (oldBlock && oldBlock->initialized) {
+                size_t copySize = std::min(static_cast<size_t>(queueLen * elemSize),
+                                           std::min(oldBlock->data.size(), newBlock.data.size()));
+                std::memcpy(newBlock.data.data(), oldBlock->data.data(), copySize);
+              }
+            }
+
+            // Copy new element to the end
+            uint64_t elemOffset = 0;
+            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
+            if (elemBlock && elemBlock->initialized) {
+              size_t copySize = std::min(static_cast<size_t>(elemSize),
+                                         elemBlock->data.size() - static_cast<size_t>(elemOffset));
+              std::memcpy(newBlock.data.data() + queueLen * elemSize,
+                          elemBlock->data.data() + elemOffset, copySize);
+            }
+
+            mallocBlocks[newDataAddr] = std::move(newBlock);
+
+            // Update queue struct with new ptr and len (with offset)
+            for (int i = 0; i < 8; ++i)
+              queueBlock->data[queueOffset + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+            for (int i = 0; i < 8; ++i)
+              queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+
+            LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
+                                    << llvm::format_hex(queueAddr, 16)
+                                    << " newLen=" << newLen << "\n");
+          } else {
+            LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queue block not found at 0x"
+                                    << llvm::format_hex(queueAddr, 16) << "\n");
+          }
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_queue_size - return queue length
+    // Signature: (queue_ptr) -> i64
+    if (calleeName == "__moore_queue_size") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t queueLen = 0;
+
+        if (queueAddr != 0) {
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          if (queueBlock && queueBlock->initialized) {
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+          }
+        }
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(queueLen), 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_size("
+                                << "queue=0x" << llvm::format_hex(queueAddr, 16)
+                                << ") = " << queueLen << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_queue_clear - clear all elements
+    // Signature: (queue_ptr)
+    if (calleeName == "__moore_queue_clear") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        if (queueAddr != 0) {
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          if (queueBlock && queueBlock->initialized) {
+            // Set data ptr to 0 and len to 0
+            std::memset(queueBlock->data.data(), 0, 16);
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_clear("
+                                    << "queue=0x" << llvm::format_hex(queueAddr, 16)
+                                    << ")\n");
+          }
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_queue_pop_back - remove and return last element
+    // Signature: (queue_ptr, element_size) -> element_value
+    if (calleeName == "__moore_queue_pop_back") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t result = 0;
+
+        if (queueAddr != 0 && elemSize > 0) {
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          if (queueBlock && queueBlock->initialized) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+
+            if (queueLen > 0 && dataPtr != 0) {
+              // Read the last element
+              auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
+              if (dataBlock && dataBlock->initialized) {
+                size_t offset = (queueLen - 1) * elemSize;
+                for (int64_t i = 0; i < std::min(elemSize, int64_t(8)); ++i)
+                  result |= static_cast<uint64_t>(dataBlock->data[offset + i]) << (i * 8);
+              }
+
+              // Decrement length
+              int64_t newLen = queueLen - 1;
+              for (int i = 0; i < 8; ++i)
+                queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            }
+          }
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(result, 64));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_pop_back("
+                                << "queue=0x" << llvm::format_hex(queueAddr, 16)
+                                << ") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_queue_pop_front - remove and return first element
+    // Signature: (queue_ptr, element_size) -> element_value
+    if (calleeName == "__moore_queue_pop_front") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t result = 0;
+
+        if (queueAddr != 0 && elemSize > 0) {
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          if (queueBlock && queueBlock->initialized) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+
+            if (queueLen > 0 && dataPtr != 0) {
+              auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
+              if (dataBlock && dataBlock->initialized) {
+                // Read the first element
+                for (int64_t i = 0; i < std::min(elemSize, int64_t(8)); ++i)
+                  result |= static_cast<uint64_t>(dataBlock->data[i]) << (i * 8);
+
+                // Shift remaining elements forward
+                if (queueLen > 1) {
+                  std::memmove(dataBlock->data.data(),
+                               dataBlock->data.data() + elemSize,
+                               (queueLen - 1) * elemSize);
+                }
+              }
+
+              // Decrement length
+              int64_t newLen = queueLen - 1;
+              for (int i = 0; i < 8; ++i)
+                queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            }
+          }
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(result, 64));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_pop_front("
+                                << "queue=0x" << llvm::format_hex(queueAddr, 16)
+                                << ") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_queue_push_front - prepend element to queue
+    // Signature: (queue_ptr, element_ptr, element_size)
+    if (calleeName == "__moore_queue_push_front") {
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        if (queueAddr != 0 && elemSize > 0) {
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId);
+          if (queueBlock && queueBlock->initialized) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[i]) << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[8 + i]) << (i * 8);
+
+            int64_t newLen = queueLen + 1;
+            uint64_t newDataAddr = processStates[procId].nextMemoryAddress;
+            processStates[procId].nextMemoryAddress += newLen * elemSize;
+
+            MemoryBlock newBlock(newLen * elemSize, 64);
+            newBlock.initialized = true;
+
+            // Copy new element to the front
+            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId);
+            if (elemBlock && elemBlock->initialized) {
+              size_t copySize = std::min(static_cast<size_t>(elemSize), elemBlock->data.size());
+              std::memcpy(newBlock.data.data(), elemBlock->data.data(), copySize);
+            }
+
+            // Copy existing elements after the new one
+            if (dataPtr != 0 && queueLen > 0) {
+              auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
+              if (oldBlock && oldBlock->initialized) {
+                size_t copySize = std::min(static_cast<size_t>(queueLen * elemSize),
+                                           oldBlock->data.size());
+                std::memcpy(newBlock.data.data() + elemSize,
+                            oldBlock->data.data(), copySize);
+              }
+            }
+
+            mallocBlocks[newDataAddr] = std::move(newBlock);
+
+            // Update queue struct
+            for (int i = 0; i < 8; ++i)
+              queueBlock->data[i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+            for (int i = 0; i < 8; ++i)
+              queueBlock->data[8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_push_front("
+                                    << "queue=0x" << llvm::format_hex(queueAddr, 16)
+                                    << ") -> len=" << newLen << "\n");
+          }
         }
       }
       return success();
@@ -7610,6 +7982,84 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executed "
                           << ctorEntries.size() << " global constructors\n");
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
+    hw::HWModuleOp hwModule) {
+  LLVM_DEBUG(llvm::dbgs()
+             << "LLHDProcessInterpreter: Executing module-level LLVM ops\n");
+
+  // Create a temporary process state for executing module-level ops
+  ProcessExecutionState tempState;
+  ProcessId tempProcId = 0;
+
+  // Check if we already have a process with ID 0; if so, use a different ID
+  if (processStates.count(tempProcId)) {
+    tempProcId = processStates.size() + 2000;
+  }
+  processStates[tempProcId] = std::move(tempState);
+
+  unsigned opsExecuted = 0;
+
+  // Walk the module body (but not inside processes) and execute LLVM ops
+  // We need to execute them in order, so iterate through the block directly.
+  for (Operation &op : hwModule.getBody().front()) {
+    // Skip llhd.process and seq.initial - those have their own execution
+    if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp>(&op))
+      continue;
+
+    // Execute LLVM operations that need initialization
+    if (auto allocaOp = dyn_cast<LLVM::AllocaOp>(&op)) {
+      (void)interpretLLVMAlloca(tempProcId, allocaOp);
+      ++opsExecuted;
+    } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(&op)) {
+      (void)interpretLLVMStore(tempProcId, storeOp);
+      ++opsExecuted;
+    } else if (auto callOp = dyn_cast<LLVM::CallOp>(&op)) {
+      (void)interpretLLVMCall(tempProcId, callOp);
+      ++opsExecuted;
+    } else if (auto constOp = dyn_cast<LLVM::ConstantOp>(&op)) {
+      // Evaluate LLVM constants so they're in the value map
+      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        setValue(tempProcId, constOp.getResult(),
+                 InterpretedValue(intAttr.getValue()));
+        ++opsExecuted;
+      }
+    } else if (auto hwConstOp = dyn_cast<hw::ConstantOp>(&op)) {
+      // Evaluate HW constants (used as arguments to LLVM calls)
+      setValue(tempProcId, hwConstOp.getResult(),
+               InterpretedValue(hwConstOp.getValue()));
+      ++opsExecuted;
+    } else if (auto undefOp = dyn_cast<LLVM::UndefOp>(&op)) {
+      unsigned width = getTypeWidth(undefOp.getType());
+      setValue(tempProcId, undefOp.getResult(),
+               InterpretedValue(APInt::getZero(width)));
+      ++opsExecuted;
+    } else if (auto zeroOp = dyn_cast<LLVM::ZeroOp>(&op)) {
+      setValue(tempProcId, zeroOp.getResult(), InterpretedValue(0, 64));
+      ++opsExecuted;
+    } else if (isa<LLVM::InsertValueOp>(&op)) {
+      (void)interpretOperation(tempProcId, &op);
+      ++opsExecuted;
+    }
+  }
+
+  // Copy the module-level value map to a special "module init" state
+  // that processes can access for module-level values
+  moduleInitValueMap = std::move(processStates[tempProcId].valueMap);
+
+  // Copy module-level memory blocks too
+  for (auto &[value, block] : processStates[tempProcId].memoryBlocks) {
+    moduleLevelAllocas[value] = std::move(block);
+  }
+
+  // Clean up the temporary process state
+  processStates.erase(tempProcId);
+
+  LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executed " << opsExecuted
+                          << " module-level LLVM ops\n");
 
   return success();
 }

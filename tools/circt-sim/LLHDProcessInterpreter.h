@@ -647,6 +647,11 @@ private:
   /// Find the memory block for a pointer value.
   MemoryBlock *findMemoryBlock(ProcessId procId, mlir::Value ptr);
 
+  /// Find a memory block by address (searches mallocBlocks).
+  MemoryBlock *findMemoryBlockByAddress(uint64_t addr,
+                                        ProcessId procId = static_cast<ProcessId>(-1),
+                                        uint64_t *outOffset = nullptr);
+
   //===--------------------------------------------------------------------===//
   // Value Management
   //===--------------------------------------------------------------------===//
@@ -768,6 +773,16 @@ private:
   /// Maps address to memory block.
   llvm::DenseMap<uint64_t, MemoryBlock> mallocBlocks;
 
+  /// Memory storage for module-level (hw.module body) allocas.
+  /// These are allocas defined outside of llhd.process blocks but inside
+  /// the hw.module body, accessible by all processes in the module.
+  llvm::DenseMap<mlir::Value, MemoryBlock> moduleLevelAllocas;
+
+  /// Value map for module-level initialization values.
+  /// This stores values computed during executeModuleLevelLLVMOps() so
+  /// processes can access values defined at module level.
+  llvm::DenseMap<mlir::Value, InterpretedValue> moduleInitValueMap;
+
   /// Map from simulated addresses to function names (for vtable entries).
   /// When a vtable entry is loaded, we store the function name it maps to.
   llvm::DenseMap<uint64_t, std::string> addressToFunction;
@@ -789,6 +804,11 @@ private:
   /// This calls functions like __moore_global_init_* that initialize
   /// UVM globals (e.g., uvm_top) at simulation startup.
   mlir::LogicalResult executeGlobalConstructors();
+
+  /// Execute module-level LLVM operations (alloca, call, store) that are
+  /// defined in the hw.module body but outside of llhd.process blocks.
+  /// This initializes module-level string variables and other dynamic state.
+  mlir::LogicalResult executeModuleLevelLLVMOps(hw::HWModuleOp hwModule);
 
   /// Interpret an llvm.mlir.addressof operation.
   mlir::LogicalResult interpretLLVMAddressOf(ProcessId procId,

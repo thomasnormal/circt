@@ -9,10 +9,13 @@
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
 #include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
+#include "circt/Support/LTLSequenceNFA.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/Namespace.h"
@@ -22,13 +25,18 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Dialect/SMT/IR/SMTTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include <functional>
+#include <limits>
+#include <optional>
 
 namespace circt {
 #define GEN_PASS_DEF_CONVERTVERIFTOSMT
@@ -65,22 +73,37 @@ static Value gateSMTWithEnable(Value property, Value enable, bool isCover,
   return smt::OrOp::create(builder, loc, notEnable, property);
 }
 
-static void maybeAssertKnownInput(Type originalTy, Value smtVal, Location loc,
-                                  OpBuilder &builder) {
+static bool isFourStateStruct(Type originalTy, int64_t &valueWidth,
+                              int64_t &unknownWidth) {
   auto structTy = dyn_cast<hw::StructType>(originalTy);
   if (!structTy)
-    return;
+    return false;
   auto elements = structTy.getElements();
   if (elements.size() != 2)
-    return;
+    return false;
   if (!elements[0].name || !elements[1].name)
-    return;
+    return false;
   if (elements[0].name.getValue() != "value" ||
       elements[1].name.getValue() != "unknown")
-    return;
-  int64_t valueWidth = hw::getBitWidth(elements[0].type);
-  int64_t unknownWidth = hw::getBitWidth(elements[1].type);
+    return false;
+  valueWidth = hw::getBitWidth(elements[0].type);
+  unknownWidth = hw::getBitWidth(elements[1].type);
   if (valueWidth <= 0 || unknownWidth <= 0 || valueWidth != unknownWidth)
+    return false;
+  return true;
+}
+
+static bool isFourStateStruct(Type originalTy) {
+  int64_t valueWidth = 0;
+  int64_t unknownWidth = 0;
+  return isFourStateStruct(originalTy, valueWidth, unknownWidth);
+}
+
+static void maybeAssertKnownInput(Type originalTy, Value smtVal, Location loc,
+                                  OpBuilder &builder) {
+  int64_t valueWidth = 0;
+  int64_t unknownWidth = 0;
+  if (!isFourStateStruct(originalTy, valueWidth, unknownWidth))
     return;
   auto bvTy = dyn_cast<smt::BitVectorType>(smtVal.getType());
   if (!bvTy || bvTy.getWidth() !=
@@ -321,40 +344,40 @@ struct LTLBooleanConstantOpConversion
   }
 };
 
+/// Convert ltl.clock to SMT boolean.
+/// The clocking itself is handled by BMC-specific gating; for SMT lowering we
+/// drop the clock annotation and lower the input.
+struct LTLClockOpConversion : OpConversionPattern<ltl::ClockOp> {
+  using OpConversionPattern<ltl::ClockOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ltl::ClockOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Value input =
+        materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
+                           op.getLoc());
+    if (!input)
+      return failure();
+    rewriter.replaceOp(op, input);
+    return success();
+  }
+};
+
 /// Convert ltl.delay to SMT boolean.
 ///
-/// CURRENT LIMITATION (as of Iteration 45):
-/// For BMC, delay(seq, N) with N>0 represents a sequence that starts N cycles
-/// later. However, the current implementation does NOT properly track delayed
-/// obligations across time steps. Instead:
-///   - delay(seq, 0) → seq (correct: no delay)
-///   - delay(seq, N>0) → true (INCORRECT: should track obligation)
+/// NOTE:
+/// For generic SMT lowering (outside the BMC pipeline), delay(seq, N>0) is
+/// approximated as true. This keeps the conversion total but is UNSOUND for
+/// temporal reasoning. The BMC pipeline handles delay semantics separately by
+/// inserting delay buffers and rewriting ltl.delay ops before this pattern
+/// runs, so BMC correctness does not rely on this approximation.
 ///
-/// This means temporal properties like "req |-> ##1 ack" (ack must hold 1 cycle
-/// after req) are NOT properly verified. The delay is treated as trivially true.
+/// For non-BMC uses that require temporal correctness, a dedicated delay
+/// buffering scheme is still needed.
 ///
-/// WHY THIS IS HARD TO FIX:
-/// The BMC infrastructure converts the circuit to a function before this
-/// pattern runs. The function is then called in an scf.for loop, but:
-/// 1. This pattern has no access to the loop's iter_args
-/// 2. Delay tracking would require threading "obligation buffers" through the loop
-/// 3. The architecture separates function extraction from delay conversion
-///
-/// WORKAROUND (proven in test/Conversion/VerifToSMT/bmc-manual-multistep.mlir):
-/// Use explicit registers to store previous cycle values:
-///   %prev_req = seq.compreg %req, %clk
-///   %prop = comb.or %not_prev_req, %ack  // !prev_req || ack
-/// This manually implements "req |-> ##1 ack" and BMC can verify it.
-///
-/// TODO(Future): Implement proper delay tracking:
-/// 1. Before function extraction, scan circuit for ltl.delay operations
-/// 2. Allocate delay_buffer[] slots in scf.for iter_args (one per delay)
-/// 3. Initialize buffers to false in init region
-/// 4. Shift buffers each iteration: buffer[i] = buffer[i+1], buffer[N-1] = prop
-/// 5. Modify this conversion to return buffer[delay-1] for delay > 0
-/// 6. Assert buffer[0] values (mature obligations)
-///
-/// See BMC_MULTISTEP_DESIGN.md for detailed architecture proposal.
+/// See BMC_MULTISTEP_DESIGN.md for the buffered BMC architecture.
 struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
   using OpConversionPattern<ltl::DelayOp>::OpConversionPattern;
 
@@ -957,6 +980,21 @@ struct LogicEquivalenceCheckingOpConversion
         return originalArgTypes[index];
       return Type{};
     };
+    if (!assumeKnownInputs) {
+      bool hasFourStateInputs = false;
+      for (unsigned i = 0, e = originalArgTypes.size(); i < e; ++i) {
+        if (auto originalTy = getOriginalType(i);
+            originalTy && isFourStateStruct(originalTy)) {
+          hasFourStateInputs = true;
+          break;
+        }
+      }
+      if (hasFourStateInputs) {
+        op.emitWarning(
+            "4-state inputs are unconstrained; consider "
+            "--assume-known-inputs or full X-propagation support");
+      }
+    }
 
     // First, convert the block arguments of the miter bodies.
     if (failed(rewriter.convertRegionTypes(&adaptor.getFirstCircuit(),
@@ -995,10 +1033,63 @@ struct LogicEquivalenceCheckingOpConversion
                          inputs);
     rewriter.setInsertionPointToEnd(solver.getBody());
 
+    ArrayAttr outputNames = op->getAttrOfType<ArrayAttr>("lec.output_names");
+    auto getOutputBaseName = [&](unsigned index) -> std::string {
+      if (outputNames && index < outputNames.size()) {
+        if (auto strAttr = dyn_cast<StringAttr>(outputNames[index])) {
+          if (!strAttr.getValue().empty())
+            return strAttr.getValue().str();
+        }
+      }
+      return (Twine("out") + Twine(index)).str();
+    };
+
+    auto materializeOutput = [&](Value value) -> Value {
+      auto targetTy = typeConverter->convertType(value.getType());
+      if (!targetTy)
+        return Value();
+      return typeConverter->materializeTargetConversion(rewriter, loc, targetTy,
+                                                        value);
+    };
+
+    SmallVector<Value> outputSymbolsA;
+    SmallVector<Value> outputSymbolsB;
+    for (auto [index, outPair] :
+         llvm::enumerate(llvm::zip(firstOutputs->getOperands(),
+                                   secondOutputs->getOperands()))) {
+      auto [out1, out2] = outPair;
+      Value out1Conv = materializeOutput(out1);
+      Value out2Conv = materializeOutput(out2);
+      if (!out1Conv || !out2Conv)
+        return failure();
+      std::string base = getOutputBaseName(index);
+      auto nameA = rewriter.getStringAttr((Twine("c1_") + base).str());
+      auto nameB = rewriter.getStringAttr((Twine("c2_") + base).str());
+      Value symA =
+          smt::DeclareFunOp::create(rewriter, loc, out1Conv.getType(), nameA);
+      Value symB =
+          smt::DeclareFunOp::create(rewriter, loc, out2Conv.getType(), nameB);
+      outputSymbolsA.push_back(symA);
+      outputSymbolsB.push_back(symB);
+      smt::AssertOp::create(
+          rewriter, loc, smt::EqOp::create(rewriter, loc, symA, out1Conv));
+      smt::AssertOp::create(
+          rewriter, loc, smt::EqOp::create(rewriter, loc, symB, out2Conv));
+    }
+
     // Fourth, build the assertion.
     SmallVector<Value> outputsDifferent;
-    createOutputsDifferentOps(firstOutputs, secondOutputs, loc, rewriter,
-                              outputsDifferent);
+    if (!outputSymbolsA.empty() &&
+        outputSymbolsA.size() == outputSymbolsB.size()) {
+      for (auto [symA, symB] :
+           llvm::zip(outputSymbolsA, outputSymbolsB)) {
+        outputsDifferent.emplace_back(
+            smt::DistinctOp::create(rewriter, loc, symA, symB));
+      }
+    } else {
+      createOutputsDifferentOps(firstOutputs, secondOutputs, loc, rewriter,
+                                outputsDifferent);
+    }
 
     rewriter.eraseOp(firstOutputs);
     rewriter.eraseOp(secondOutputs);
@@ -1172,6 +1263,9 @@ struct DelayInfo {
   uint64_t length;           // Additional range length (0 for exact delay)
   uint64_t bufferSize;       // Total buffer slots (delay + length)
   size_t bufferStartIndex;   // Index into the delay buffer iter_args
+  StringAttr clockName;      // Optional clock name for buffer updates
+  std::optional<ltl::ClockEdge> edge; // Optional clock edge for buffer updates
+  Value clockValue;          // Optional i1 clock value for buffer updates
 };
 
 /// Information about a ltl.past operation that needs multi-step tracking.
@@ -1183,7 +1277,37 @@ struct PastInfo {
   uint64_t delay;            // How many cycles ago (N)
   uint64_t bufferSize;       // Buffer slots needed (same as delay)
   size_t bufferStartIndex;   // Index into the past buffer iter_args
+  StringAttr clockName;      // Optional clock name for buffer updates
+  std::optional<ltl::ClockEdge> edge; // Optional clock edge for buffer updates
+  Value clockValue;          // Optional i1 clock value for buffer updates
 };
+
+/// Information about an NFA sequence lowered for BMC tracking.
+struct SequenceNFAInfo {
+  Value root;                // Root sequence value
+  size_t stateStartIndex;    // Index into the NFA state slot vector
+  size_t numStates;          // Number of NFA states
+  unsigned tickArgIndex;     // Circuit argument index for the tick input
+  StringAttr clockName;      // Optional clock name for tick gating
+  std::optional<ltl::ClockEdge> edge; // Optional clock edge for tick gating
+  Value clockValue;          // Optional i1 clock value for tick gating
+};
+
+static void collectSequenceOpsForBMC(Value seq,
+                                     llvm::DenseSet<Operation *> &ops,
+                                     llvm::DenseSet<Value> &visited) {
+  if (!seq || !isa<ltl::SequenceType>(seq.getType()))
+    return;
+  if (!visited.insert(seq).second)
+    return;
+  Operation *def = seq.getDefiningOp();
+  if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
+    return;
+  ops.insert(def);
+  for (Value operand : def->getOperands())
+    if (isa<ltl::SequenceType>(operand.getType()))
+      collectSequenceOpsForBMC(operand, ops, visited);
+}
 
 /// Rewrite ltl.implication with an exact delayed consequent into a past-form
 /// implication for BMC. This allows the BMC loop to use past buffers instead
@@ -1283,6 +1407,169 @@ static void expandRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
   }
 }
 
+struct SequenceLengthBounds {
+  uint64_t min = 0;
+  uint64_t max = 0;
+};
+
+static bool safeAdd(uint64_t a, uint64_t b, uint64_t &out) {
+  if (a > std::numeric_limits<uint64_t>::max() - b)
+    return false;
+  out = a + b;
+  return true;
+}
+
+static bool safeMul(uint64_t a, uint64_t b, uint64_t &out) {
+  if (a == 0 || b == 0) {
+    out = 0;
+    return true;
+  }
+  if (a > std::numeric_limits<uint64_t>::max() / b)
+    return false;
+  out = a * b;
+  return true;
+}
+
+static std::optional<SequenceLengthBounds>
+getSequenceLengthBoundsForBMC(Value seq, uint64_t boundValue) {
+  if (!seq)
+    return SequenceLengthBounds{0, 0};
+  if (!isa<ltl::SequenceType>(seq.getType()))
+    return SequenceLengthBounds{1, 1};
+
+  Operation *def = seq.getDefiningOp();
+  if (!def)
+    return std::nullopt;
+
+  if (auto clockOp = dyn_cast<ltl::ClockOp>(def))
+    return getSequenceLengthBoundsForBMC(clockOp.getInput(), boundValue);
+  if (auto pastOp = dyn_cast<ltl::PastOp>(def))
+    return getSequenceLengthBoundsForBMC(pastOp.getInput(), boundValue);
+  if (auto notOp = dyn_cast<ltl::NotOp>(def))
+    return getSequenceLengthBoundsForBMC(notOp.getInput(), boundValue);
+  if (auto delayOp = dyn_cast<ltl::DelayOp>(def)) {
+    auto inputBounds =
+        getSequenceLengthBoundsForBMC(delayOp.getInput(), boundValue);
+    if (!inputBounds)
+      return std::nullopt;
+    uint64_t minDelay = delayOp.getDelay();
+    uint64_t maxDelay = minDelay;
+    if (auto lengthAttr = delayOp.getLengthAttr()) {
+      uint64_t length = lengthAttr.getValue().getZExtValue();
+      if (!safeAdd(minDelay, length, maxDelay))
+        return std::nullopt;
+    } else if (boundValue > 0 && minDelay < boundValue) {
+      uint64_t length = boundValue - 1 - minDelay;
+      if (!safeAdd(minDelay, length, maxDelay))
+        return std::nullopt;
+    }
+    uint64_t minLen = 0;
+    uint64_t maxLen = 0;
+    if (!safeAdd(inputBounds->min, minDelay, minLen))
+      return std::nullopt;
+    if (!safeAdd(inputBounds->max, maxDelay, maxLen))
+      return std::nullopt;
+    return SequenceLengthBounds{minLen, maxLen};
+  }
+  if (auto concatOp = dyn_cast<ltl::ConcatOp>(def)) {
+    uint64_t minLen = 0;
+    uint64_t maxLen = 0;
+    for (Value input : concatOp.getInputs()) {
+      auto bounds = getSequenceLengthBoundsForBMC(input, boundValue);
+      if (!bounds)
+        return std::nullopt;
+      if (!safeAdd(minLen, bounds->min, minLen))
+        return std::nullopt;
+      if (!safeAdd(maxLen, bounds->max, maxLen))
+        return std::nullopt;
+    }
+    return SequenceLengthBounds{minLen, maxLen};
+  }
+  if (auto repeatOp = dyn_cast<ltl::RepeatOp>(def)) {
+    auto bounds =
+        getSequenceLengthBoundsForBMC(repeatOp.getInput(), boundValue);
+    if (!bounds)
+      return std::nullopt;
+    uint64_t base = repeatOp.getBase();
+    uint64_t maxRepeat = base;
+    if (auto moreAttr = repeatOp.getMoreAttr()) {
+      uint64_t more = moreAttr.getValue().getZExtValue();
+      if (!safeAdd(base, more, maxRepeat))
+        return std::nullopt;
+    } else if (boundValue > base) {
+      maxRepeat = boundValue;
+    }
+    uint64_t minLen = 0;
+    uint64_t maxLen = 0;
+    if (!safeMul(bounds->min, base, minLen))
+      return std::nullopt;
+    if (!safeMul(bounds->max, maxRepeat, maxLen))
+      return std::nullopt;
+    return SequenceLengthBounds{minLen, maxLen};
+  }
+  if (auto orOp = dyn_cast<ltl::OrOp>(def)) {
+    std::optional<uint64_t> minLen;
+    std::optional<uint64_t> maxLen;
+    for (Value input : orOp.getInputs()) {
+      auto bounds = getSequenceLengthBoundsForBMC(input, boundValue);
+      if (!bounds)
+        return std::nullopt;
+      if (!minLen) {
+        minLen = bounds->min;
+        maxLen = bounds->max;
+      } else {
+        minLen = std::min(*minLen, bounds->min);
+        maxLen = std::max(*maxLen, bounds->max);
+      }
+    }
+    if (!minLen || !maxLen)
+      return std::nullopt;
+    return SequenceLengthBounds{*minLen, *maxLen};
+  }
+  if (auto andOp = dyn_cast<ltl::AndOp>(def)) {
+    std::optional<uint64_t> minLen;
+    std::optional<uint64_t> maxLen;
+    for (Value input : andOp.getInputs()) {
+      auto bounds = getSequenceLengthBoundsForBMC(input, boundValue);
+      if (!bounds)
+        return std::nullopt;
+      if (!minLen) {
+        minLen = bounds->min;
+        maxLen = bounds->max;
+      } else {
+        minLen = std::max(*minLen, bounds->min);
+        maxLen = std::max(*maxLen, bounds->max);
+      }
+    }
+    if (!minLen || !maxLen)
+      return std::nullopt;
+    return SequenceLengthBounds{*minLen, *maxLen};
+  }
+  if (auto intersectOp = dyn_cast<ltl::IntersectOp>(def)) {
+    std::optional<uint64_t> minLen;
+    std::optional<uint64_t> maxLen;
+    for (Value input : intersectOp.getInputs()) {
+      auto bounds = getSequenceLengthBoundsForBMC(input, boundValue);
+      if (!bounds)
+        return std::nullopt;
+      if (!minLen) {
+        minLen = bounds->min;
+        maxLen = bounds->max;
+      } else {
+        minLen = std::max(*minLen, bounds->min);
+        maxLen = std::min(*maxLen, bounds->max);
+      }
+    }
+    if (!minLen || !maxLen || *minLen > *maxLen)
+      return std::nullopt;
+    return SequenceLengthBounds{*minLen, *maxLen};
+  }
+  if (auto firstMatch = dyn_cast<ltl::FirstMatchOp>(def))
+    return getSequenceLengthBoundsForBMC(firstMatch.getInput(), boundValue);
+
+  return std::nullopt;
+}
+
 static Value buildSequenceConstant(OpBuilder &builder, Location loc,
                                    bool value) {
   auto cst = hw::ConstantOp::create(builder, loc, builder.getI1Type(),
@@ -1307,6 +1594,130 @@ static Value buildSequenceOr(OpBuilder &builder, Location loc,
   if (inputs.size() == 1)
     return inputs.front();
   return ltl::OrOp::create(builder, loc, inputs).getResult();
+}
+
+static LogicalResult expandConcatOpsInBMC(
+    verif::BoundedModelCheckingOp bmcOp, RewriterBase &rewriter) {
+  auto &circuitBlock = bmcOp.getCircuit().front();
+  SmallVector<ltl::ConcatOp> concatOps;
+  circuitBlock.walk([&](ltl::ConcatOp concatOp) {
+    concatOps.push_back(concatOp);
+  });
+  if (concatOps.empty())
+    return success();
+
+  uint64_t boundValue = bmcOp.getBound();
+
+  for (auto concatOp : concatOps) {
+    auto inputs = concatOp.getInputs();
+    if (inputs.size() < 2)
+      continue;
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(concatOp);
+    Location loc = concatOp.getLoc();
+
+    SmallVector<SequenceLengthBounds> bounds;
+    bounds.reserve(inputs.size());
+    bool hasBounds = true;
+    for (Value input : inputs) {
+      auto maybeBounds = getSequenceLengthBoundsForBMC(input, boundValue);
+      if (!maybeBounds) {
+        hasBounds = false;
+        break;
+      }
+      bounds.push_back(*maybeBounds);
+    }
+    if (!hasBounds) {
+      concatOp.emitError("concat expansion requires bounded sequence lengths");
+      return failure();
+    }
+
+    constexpr uint64_t kMaxCombos = 16384;
+    uint64_t comboCount = 1;
+    for (size_t idx = 0; idx + 1 < bounds.size(); ++idx) {
+      auto rangeSize = bounds[idx].max - bounds[idx].min + 1;
+      if (rangeSize == 0)
+        rangeSize = 1;
+      if (comboCount > kMaxCombos / rangeSize) {
+        concatOp.emitError("concat expansion too large; reduce the BMC bound "
+                           "or simplify the sequence ranges");
+        return failure();
+      }
+      comboCount *= rangeSize;
+    }
+    bool lastCanBeEmpty = bounds.back().min == 0;
+    bool lastCanBeNonEmpty = bounds.back().max > 0;
+    if (lastCanBeEmpty && lastCanBeNonEmpty &&
+        comboCount > kMaxCombos / 2) {
+      concatOp.emitError("concat expansion too large; reduce the BMC bound "
+                         "or simplify the sequence ranges");
+      return failure();
+    }
+
+    SmallVector<Value> choices;
+    SmallVector<Value> terms;
+    terms.reserve(inputs.size());
+
+    std::function<void(size_t, uint64_t)> expandPrefixes =
+        [&](size_t idx, uint64_t offset) {
+          if (idx + 1 == inputs.size()) {
+            auto addChoice = [&](bool includeLast) {
+              if (includeLast) {
+                Value term = inputs.back();
+                if (offset > 0) {
+                  auto delayAttr = rewriter.getI64IntegerAttr(offset);
+                  auto zeroAttr = rewriter.getI64IntegerAttr(0);
+                  term =
+                      ltl::DelayOp::create(rewriter, loc, term, delayAttr,
+                                           zeroAttr)
+                          .getResult();
+                }
+                terms.push_back(term);
+              }
+              choices.push_back(buildSequenceAnd(rewriter, loc, terms));
+              if (includeLast)
+                terms.pop_back();
+            };
+            if (lastCanBeEmpty)
+              addChoice(false);
+            if (lastCanBeNonEmpty)
+              addChoice(true);
+            return;
+          }
+
+          auto range = bounds[idx];
+          for (uint64_t len = range.min; len <= range.max; ++len) {
+            bool includeTerm = len != 0;
+            if (includeTerm) {
+              Value term = inputs[idx];
+              if (offset > 0) {
+                auto delayAttr = rewriter.getI64IntegerAttr(offset);
+                auto zeroAttr = rewriter.getI64IntegerAttr(0);
+                term =
+                    ltl::DelayOp::create(rewriter, loc, term, delayAttr,
+                                         zeroAttr)
+                        .getResult();
+              }
+              terms.push_back(term);
+            }
+            uint64_t increment = 0;
+            if (len > 0)
+              increment = len - 1;
+            expandPrefixes(idx + 1, offset + increment);
+            if (includeTerm)
+              terms.pop_back();
+            if (len == range.max)
+              break;
+          }
+        };
+
+    expandPrefixes(0, 0);
+    Value replacement = buildSequenceOr(rewriter, loc, choices);
+    rewriter.replaceOp(concatOp, replacement);
+  }
+
+  return success();
 }
 
 static bool exceedsCombinationLimit(uint64_t n, uint64_t k, uint64_t limit) {
@@ -1426,15 +1837,19 @@ struct VerifBoundedModelCheckingOpConversion
 
   VerifBoundedModelCheckingOpConversion(
       TypeConverter &converter, MLIRContext *context, Namespace &names,
-      bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
+      bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
+      SmallVectorImpl<Operation *> &propertylessBMCOps,
       SmallVectorImpl<Operation *> &coverBMCOps)
       : OpConversionPattern(converter, context), names(names),
         risingClocksOnly(risingClocksOnly),
+        assumeKnownInputs(assumeKnownInputs),
+        forSMTLIBExport(forSMTLIBExport),
         propertylessBMCOps(propertylessBMCOps), coverBMCOps(coverBMCOps) {}
   LogicalResult
   matchAndRewrite(verif::BoundedModelCheckingOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    bool emitSMTLIB = forSMTLIBExport;
 
     bool isCoverCheck =
         std::find(coverBMCOps.begin(), coverBMCOps.end(), op) !=
@@ -1452,21 +1867,331 @@ struct VerifBoundedModelCheckingOpConversion
     }
 
     auto &circuitBlock = op.getCircuit().front();
-    // Expand non-consecutive repetitions into bounded delay patterns so BMC
-    // can model them with delay buffers.
-    if (failed(expandGotoRepeatOpsInBMC(op, rewriter)))
-      return failure();
-    // Expand repeat ops inside the BMC circuit before delay scanning so
-    // delay buffers can be allocated for the resulting ltl.delay ops.
-    expandRepeatOpsInBMC(op, rewriter);
-    // Rewrite implication with exact delayed consequent to a past-form
-    // implication so the BMC delay buffers can track the antecedent history.
-    rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
+    // Sequence NFAs provide exact multi-step semantics for repeat/concat/goto
+    // constructs, so we avoid expanding them into delay buffers here.
 
-    // Combine multiple non-final properties into a single check value so BMC
-    // can detect any violating property.
+    // Clone LTL subtrees per property when they are shared across assertions.
+    // This avoids accidental clock domain sharing for delay/past buffers.
+    auto cloneSharedLTLSubtrees = [&]() {
+      struct PropRef {
+        Operation *op;
+        Value prop;
+      };
+      SmallVector<PropRef> props;
+      circuitBlock.walk([&](verif::AssertOp assertOp) {
+        props.push_back({assertOp.getOperation(), assertOp.getProperty()});
+      });
+      circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+        props.push_back({assumeOp.getOperation(), assumeOp.getProperty()});
+      });
+      circuitBlock.walk([&](verif::CoverOp coverOp) {
+        props.push_back({coverOp.getOperation(), coverOp.getProperty()});
+      });
+      if (props.empty())
+        return;
+
+      DenseMap<Operation *, llvm::SmallDenseSet<unsigned, 4>> opUseMap;
+      for (auto [idx, prop] : llvm::enumerate(props)) {
+        DenseSet<Operation *> visited;
+        SmallVector<Operation *> worklist;
+        if (Operation *def = prop.prop.getDefiningOp())
+          worklist.push_back(def);
+        while (!worklist.empty()) {
+          Operation *cur = worklist.pop_back_val();
+          if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+            continue;
+          if (!visited.insert(cur).second)
+            continue;
+          opUseMap[cur].insert(idx);
+          for (Value operand : cur->getOperands()) {
+            if (Operation *def = operand.getDefiningOp())
+              worklist.push_back(def);
+          }
+        }
+      }
+
+      SmallVector<bool> needsClone(props.size(), false);
+      for (auto &entry : opUseMap) {
+        if (entry.second.size() <= 1)
+          continue;
+        for (unsigned idx : entry.second)
+          needsClone[idx] = true;
+      }
+
+      auto cloneLTLSubtree = [&](Value root, Operation *insertBefore) -> Value {
+        Operation *def = root.getDefiningOp();
+        if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
+          return root;
+        DenseSet<Operation *> visited;
+        SmallVector<Operation *> postorder;
+        std::function<void(Operation *)> dfs = [&](Operation *cur) {
+          if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+            return;
+          if (!visited.insert(cur).second)
+            return;
+          for (Value operand : cur->getOperands()) {
+            if (Operation *defOp = operand.getDefiningOp())
+              dfs(defOp);
+          }
+          postorder.push_back(cur);
+        };
+        dfs(def);
+        OpBuilder builder(insertBefore);
+        IRMapping mapping;
+        for (Operation *cur : postorder) {
+          Operation *cloned = builder.clone(*cur, mapping);
+          for (auto [oldResult, newResult] :
+               llvm::zip(cur->getResults(), cloned->getResults()))
+            mapping.map(oldResult, newResult);
+        }
+        return mapping.lookupOrDefault(root);
+      };
+
+      for (auto [idx, prop] : llvm::enumerate(props)) {
+        if (!needsClone[idx])
+          continue;
+        Value cloned = cloneLTLSubtree(prop.prop, prop.op);
+        if (cloned == prop.prop)
+          continue;
+        prop.op->setOperand(0, cloned);
+      }
+    };
+
+    cloneSharedLTLSubtrees();
+
+    struct ClockInfo {
+      StringAttr clockName;
+      std::optional<ltl::ClockEdge> edge;
+      Value clockValue;
+      bool seen = false;
+    };
+
+    DenseMap<Operation *, ClockInfo> ltlClockInfo;
+
+    auto mergeClockInfo = [&](ClockInfo &dst, const ClockInfo &src) {
+      dst.seen |= src.seen;
+      if (src.clockName) {
+        if (!dst.clockName)
+          dst.clockName = src.clockName;
+        else if (dst.clockName != src.clockName)
+          dst.clockName = StringAttr{};
+      }
+      if (src.edge) {
+        if (!dst.edge)
+          dst.edge = src.edge;
+        else if (dst.edge != src.edge)
+          dst.edge.reset();
+      }
+      if (src.clockValue) {
+        if (!dst.clockValue)
+          dst.clockValue = src.clockValue;
+        else if (dst.clockValue != src.clockValue)
+          dst.clockValue = Value{};
+      }
+    };
+
+    auto hasClockContext = [&](const ClockInfo &info) {
+      return info.clockName || info.clockValue;
+    };
+
+    auto effectiveEdge =
+        [&](const ClockInfo &info) -> std::optional<ltl::ClockEdge> {
+      if (!hasClockContext(info))
+        return std::nullopt;
+      return info.edge.value_or(ltl::ClockEdge::Pos);
+    };
+
+    auto clockInfoConflict = [&](const ClockInfo &a, const ClockInfo &b) {
+      if (!a.seen || !b.seen)
+        return false;
+      if (a.clockName && b.clockName && a.clockName != b.clockName)
+        return true;
+      if (a.clockValue && b.clockValue && a.clockValue != b.clockValue)
+        return true;
+      auto edgeA = effectiveEdge(a);
+      auto edgeB = effectiveEdge(b);
+      if (edgeA && edgeB && edgeA != edgeB)
+        return true;
+      return false;
+    };
+
+    bool clockConflict = false;
+    auto reportClockConflict = [&](Operation *op) {
+      if (clockConflict)
+        return;
+      op->emitError("ltl.delay/ltl.past used with conflicting clock "
+                    "information; ensure each property uses a single "
+                    "clock/edge");
+      clockConflict = true;
+    };
+
+    auto recordClockForProperty = [&](Value prop, const ClockInfo &info) {
+      if (clockConflict)
+        return;
+      if (!prop)
+        return;
+      SmallVector<std::pair<Operation *, ClockInfo>> worklist;
+      if (auto *def = prop.getDefiningOp())
+        worklist.push_back({def, info});
+      DenseMap<Operation *, ClockInfo> seenInfo;
+      while (!worklist.empty()) {
+        auto [cur, curInfo] = worklist.pop_back_val();
+        if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+          continue;
+        auto it = seenInfo.find(cur);
+        if (it != seenInfo.end()) {
+          ClockInfo merged = it->second;
+          mergeClockInfo(merged, curInfo);
+          bool changed = (merged.clockName != it->second.clockName) ||
+                         (merged.edge != it->second.edge) ||
+                         (merged.clockValue != it->second.clockValue);
+          if (!changed)
+            continue;
+          it->second = merged;
+          curInfo = merged;
+        } else {
+          seenInfo.insert({cur, curInfo});
+        }
+
+        if (auto clockOp = dyn_cast<ltl::ClockOp>(cur)) {
+          ClockInfo childInfo;
+          childInfo.edge = clockOp.getEdge();
+          childInfo.clockValue = clockOp.getClock();
+          childInfo.seen = true;
+          if (auto *def = clockOp.getInput().getDefiningOp())
+            worklist.push_back({def, childInfo});
+          continue;
+        }
+
+        if (isa<ltl::DelayOp, ltl::PastOp>(cur)) {
+          ClockInfo &slot = ltlClockInfo[cur];
+          ClockInfo opInfo;
+          opInfo.clockName = cur->getAttrOfType<StringAttr>("bmc.clock");
+          if (auto edgeAttr =
+                  cur->getAttrOfType<ltl::ClockEdgeAttr>("bmc.clock_edge"))
+            opInfo.edge = edgeAttr.getValue();
+          opInfo.seen = opInfo.clockName || opInfo.edge;
+          if (opInfo.seen) {
+            if (clockInfoConflict(slot, opInfo)) {
+              reportClockConflict(cur);
+              return;
+            }
+            mergeClockInfo(slot, opInfo);
+          }
+          if (clockInfoConflict(slot, curInfo)) {
+            reportClockConflict(cur);
+            return;
+          }
+          mergeClockInfo(slot, curInfo);
+        }
+
+        for (Value operand : cur->getOperands()) {
+          if (!isa<ltl::PropertyType, ltl::SequenceType>(operand.getType()))
+            continue;
+          if (Operation *def = operand.getDefiningOp())
+            worklist.push_back({def, curInfo});
+        }
+      }
+    };
+
+    auto getClockInfoFromOp = [&](Operation *op) {
+      ClockInfo info;
+      info.clockName = op->getAttrOfType<StringAttr>("bmc.clock");
+      if (auto edgeAttr =
+              op->getAttrOfType<ltl::ClockEdgeAttr>("bmc.clock_edge"))
+        info.edge = edgeAttr.getValue();
+      info.seen = info.clockName || info.edge;
+      return info;
+    };
+
+    circuitBlock.walk([&](verif::AssertOp assertOp) {
+      recordClockForProperty(assertOp.getProperty(),
+                             getClockInfoFromOp(assertOp));
+    });
+    circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+      recordClockForProperty(assumeOp.getProperty(),
+                             getClockInfoFromOp(assumeOp));
+    });
+    circuitBlock.walk([&](verif::CoverOp coverOp) {
+      recordClockForProperty(coverOp.getProperty(),
+                             getClockInfoFromOp(coverOp));
+    });
+
+    if (clockConflict)
+      return failure();
+
+    DenseSet<Value> sequenceRootSet;
+    DenseMap<Value, ClockInfo> sequenceRootClocks;
+    auto addSequenceRoot = [&](Value seq, const ClockInfo &info) {
+      if (!seq || !isa<ltl::SequenceType>(seq.getType()))
+        return;
+      auto &slot = sequenceRootClocks[seq];
+      if (!slot.seen) {
+        slot = info;
+        slot.seen = info.seen;
+      } else {
+        if (clockInfoConflict(slot, info)) {
+          if (Operation *def = seq.getDefiningOp())
+            reportClockConflict(def);
+          else
+            clockConflict = true;
+          return;
+        }
+        mergeClockInfo(slot, info);
+      }
+      sequenceRootSet.insert(seq);
+    };
+    auto collectSequenceRoots = [&](Value prop, const ClockInfo &info) {
+      if (!prop || clockConflict)
+        return;
+      SmallVector<Value> worklist;
+      DenseSet<Value> visited;
+      worklist.push_back(prop);
+      while (!worklist.empty()) {
+        Value cur = worklist.pop_back_val();
+        if (!visited.insert(cur).second)
+          continue;
+        if (isa<ltl::SequenceType>(cur.getType())) {
+          addSequenceRoot(cur, info);
+          continue;
+        }
+        Operation *def = cur.getDefiningOp();
+        if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
+          continue;
+        for (Value operand : def->getOperands())
+          worklist.push_back(operand);
+      }
+    };
+
+    circuitBlock.walk([&](verif::AssertOp assertOp) {
+      collectSequenceRoots(assertOp.getProperty(),
+                           getClockInfoFromOp(assertOp));
+    });
+    circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+      collectSequenceRoots(assumeOp.getProperty(),
+                           getClockInfoFromOp(assumeOp));
+    });
+    circuitBlock.walk([&](verif::CoverOp coverOp) {
+      collectSequenceRoots(coverOp.getProperty(), getClockInfoFromOp(coverOp));
+    });
+
+    if (clockConflict)
+      return failure();
+
+    DenseSet<Operation *> nfaSequenceOps;
+    DenseSet<Value> visitedSequenceOps;
+    for (Value seqRoot : sequenceRootSet)
+      collectSequenceOpsForBMC(seqRoot, nfaSequenceOps, visitedSequenceOps);
+
+    struct NonFinalCheckInfo {
+      StringAttr clockName;
+      std::optional<ltl::ClockEdge> edge;
+    };
+
+    // Collect non-final properties so BMC can detect any violating property.
     SmallVector<Operation *> nonFinalOps;
     SmallVector<Value> checkProps;
+    SmallVector<NonFinalCheckInfo> nonFinalCheckInfos;
     if (isCoverCheck) {
       circuitBlock.walk([&](verif::CoverOp coverOp) {
         if (coverOp->hasAttr("bmc.final"))
@@ -1478,6 +2203,12 @@ struct VerifBoundedModelCheckingOpConversion
             gatePropertyWithEnable(coverOp.getProperty(), coverOp.getEnable(),
                                    /*isCover=*/true, rewriter,
                                    coverOp.getLoc()));
+        NonFinalCheckInfo info;
+        info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
+        if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          info.edge = edgeAttr.getValue();
+        nonFinalCheckInfos.push_back(info);
       });
     } else {
       circuitBlock.walk([&](verif::AssertOp assertOp) {
@@ -1490,20 +2221,19 @@ struct VerifBoundedModelCheckingOpConversion
             gatePropertyWithEnable(assertOp.getProperty(), assertOp.getEnable(),
                                    /*isCover=*/false, rewriter,
                                    assertOp.getLoc()));
+        NonFinalCheckInfo info;
+        info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
+        if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          info.edge = edgeAttr.getValue();
+        nonFinalCheckInfos.push_back(info);
       });
     }
     SmallVector<Value> nonFinalCheckValues;
     if (!nonFinalOps.empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(circuitBlock.getTerminator());
-      Value combined = checkProps.front();
-      if (checkProps.size() > 1) {
-        combined = isCoverCheck
-                       ? ltl::OrOp::create(rewriter, loc, checkProps).getResult()
-                       : ltl::AndOp::create(rewriter, loc, checkProps)
-                             .getResult();
-      }
-      nonFinalCheckValues.push_back(combined);
+      nonFinalCheckValues.append(checkProps.begin(), checkProps.end());
       for (auto *opToErase : nonFinalOps)
         rewriter.eraseOp(opToErase);
     }
@@ -1511,7 +2241,9 @@ struct VerifBoundedModelCheckingOpConversion
     // Hoist any final-only checks into circuit outputs so we can check them
     // only at the final step.
     SmallVector<Value> finalCheckValues;
+    SmallVector<Value> finalCheckProps;
     SmallVector<bool> finalCheckIsCover;
+    SmallVector<NonFinalCheckInfo> finalCheckInfos;
     SmallVector<Operation *> opsToErase;
     circuitBlock.walk([&](Operation *curOp) {
       if (!curOp->hasAttr("bmc.final"))
@@ -1523,7 +2255,14 @@ struct VerifBoundedModelCheckingOpConversion
             gatePropertyWithEnable(assertOp.getProperty(), assertOp.getEnable(),
                                    /*isCover=*/false, rewriter,
                                    assertOp.getLoc()));
+        finalCheckProps.push_back(assertOp.getProperty());
         finalCheckIsCover.push_back(false);
+        NonFinalCheckInfo info;
+        info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
+        if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          info.edge = edgeAttr.getValue();
+        finalCheckInfos.push_back(info);
         opsToErase.push_back(curOp);
         return;
       }
@@ -1534,7 +2273,14 @@ struct VerifBoundedModelCheckingOpConversion
             gatePropertyWithEnable(assumeOp.getProperty(), assumeOp.getEnable(),
                                    /*isCover=*/false, rewriter,
                                    assumeOp.getLoc()));
+        finalCheckProps.push_back(assumeOp.getProperty());
         finalCheckIsCover.push_back(false);
+        NonFinalCheckInfo info;
+        info.clockName = assumeOp->getAttrOfType<StringAttr>("bmc.clock");
+        if (auto edgeAttr = assumeOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          info.edge = edgeAttr.getValue();
+        finalCheckInfos.push_back(info);
         opsToErase.push_back(curOp);
         return;
       }
@@ -1545,7 +2291,14 @@ struct VerifBoundedModelCheckingOpConversion
             gatePropertyWithEnable(coverOp.getProperty(), coverOp.getEnable(),
                                    /*isCover=*/true, rewriter,
                                    coverOp.getLoc()));
+        finalCheckProps.push_back(coverOp.getProperty());
         finalCheckIsCover.push_back(true);
+        NonFinalCheckInfo info;
+        info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
+        if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          info.edge = edgeAttr.getValue();
+        finalCheckInfos.push_back(info);
         opsToErase.push_back(curOp);
         return;
       }
@@ -1560,6 +2313,20 @@ struct VerifBoundedModelCheckingOpConversion
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
+    if (!assumeKnownInputs) {
+      bool hasFourStateInputs = false;
+      for (Type ty : oldCircuitInputTy) {
+        if (isFourStateStruct(ty)) {
+          hasFourStateInputs = true;
+          break;
+        }
+      }
+      if (hasFourStateInputs) {
+        op.emitWarning(
+            "4-state inputs are unconstrained; consider "
+            "--assume-known-inputs or full X-propagation support");
+      }
+    }
     // TODO: the init and loop regions should be able to be concrete instead of
     // symbolic which is probably preferable - just need to convert back and
     // forth
@@ -1605,6 +2372,8 @@ struct VerifBoundedModelCheckingOpConversion
 
     auto maybeAssertKnown = [&](Type originalTy, Value smtVal,
                                 OpBuilder &builder) {
+      if (!assumeKnownInputs)
+        return;
       maybeAssertKnownInput(originalTy, smtVal, loc, builder);
     };
 
@@ -1658,6 +2427,12 @@ struct VerifBoundedModelCheckingOpConversion
       info.length = length;
       info.bufferSize = bufferSize;
       info.bufferStartIndex = totalDelaySlots;
+      if (auto it = ltlClockInfo.find(delayOp.getOperation());
+          it != ltlClockInfo.end()) {
+        info.clockName = it->second.clockName;
+        info.edge = it->second.edge;
+        info.clockValue = it->second.clockValue;
+      }
       delayInfos.push_back(info);
       totalDelaySlots += bufferSize;
     });
@@ -1688,6 +2463,12 @@ struct VerifBoundedModelCheckingOpConversion
       info.delay = delay;
       info.bufferSize = delay;
       info.bufferStartIndex = totalPastSlots;
+      if (auto it = ltlClockInfo.find(pastOp.getOperation());
+          it != ltlClockInfo.end()) {
+        info.clockName = it->second.clockName;
+        info.edge = it->second.edge;
+        info.clockValue = it->second.clockValue;
+      }
       pastInfos.push_back(info);
       totalPastSlots += delay;
     });
@@ -1728,10 +2509,10 @@ struct VerifBoundedModelCheckingOpConversion
         auto toSequenceValue = [&](Value val) -> Value {
           if (isa<ltl::SequenceType>(val.getType()))
             return val;
-          if (isa<IntegerType>(val.getType())) {
-            auto zero = rewriter.getI64IntegerAttr(0);
-            return ltl::DelayOp::create(rewriter, loc, val, zero, zero)
-                .getResult();
+          if (auto intTy = dyn_cast<IntegerType>(val.getType())) {
+            if (intTy.getWidth() == 1)
+              return val;
+            return Value{};
           }
           return Value{};
         };
@@ -1970,13 +2751,49 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
-    auto solver = smt::SolverOp::create(rewriter, loc, rewriter.getI1Type(),
-                                        ValueRange{});
+    auto solver =
+        emitSMTLIB
+            ? smt::SolverOp::create(rewriter, loc, TypeRange{}, ValueRange{})
+            : smt::SolverOp::create(rewriter, loc, rewriter.getI1Type(),
+                                    ValueRange{});
     rewriter.createBlock(&solver.getBodyRegion());
 
+    auto inlineCall = [&](func::FuncOp func,
+                          ValueRange inputs) -> SmallVector<Value> {
+      if (!func || func.getBody().empty())
+        return {};
+      Block &entry = func.getBody().front();
+      if (entry.getNumArguments() != inputs.size())
+        return {};
+      IRMapping mapping;
+      for (auto [arg, input] : llvm::zip(entry.getArguments(), inputs))
+        mapping.map(arg, input);
+      for (Operation &op : entry.without_terminator()) {
+        Operation *cloned = rewriter.clone(op, mapping);
+        for (auto [oldRes, newRes] :
+             llvm::zip(op.getResults(), cloned->getResults()))
+          mapping.map(oldRes, newRes);
+      }
+      auto ret = cast<func::ReturnOp>(entry.getTerminator());
+      SmallVector<Value> results;
+      results.reserve(ret.getNumOperands());
+      for (Value operand : ret.getOperands())
+        results.push_back(mapping.lookup(operand));
+      return results;
+    };
+
+    auto callOrInline = [&](func::FuncOp func,
+                            ValueRange inputs) -> SmallVector<Value> {
+      if (!emitSMTLIB) {
+        auto call = func::CallOp::create(rewriter, loc, func, inputs);
+        return SmallVector<Value>(call.getResults().begin(),
+                                  call.getResults().end());
+      }
+      return inlineCall(func, inputs);
+    };
+
     // Call init func to get initial clock values
-    ValueRange initVals =
-        func::CallOp::create(rewriter, loc, initFuncOp)->getResults();
+    SmallVector<Value> initVals = callOrInline(initFuncOp, ValueRange{});
 
     // InputDecls order should be <circuit arguments> <state arguments>
     // <finalChecks> <wasViolated>
@@ -2089,6 +2906,466 @@ struct VerifBoundedModelCheckingOpConversion
     for (; initIndex < initVals.size(); ++initIndex)
       inputDecls.push_back(initVals[initIndex]);
 
+    DenseMap<StringRef, unsigned> clockNameToPos;
+    for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
+      if (clockIdx < static_cast<int>(inputNamePrefixes.size())) {
+        auto nameAttr = inputNamePrefixes[clockIdx];
+        if (nameAttr && !nameAttr.getValue().empty())
+          clockNameToPos[nameAttr.getValue()] = pos;
+      }
+    }
+
+    struct ClockPosInfo {
+      unsigned pos = 0;
+      bool invert = false;
+    };
+    DenseMap<Value, ClockPosInfo> clockValueToPos;
+    for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
+      if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
+        continue;
+      Value clockArg = circuitBlock.getArgument(clockIdx);
+      for (Operation *user : clockArg.getUsers()) {
+        if (auto fromClock = dyn_cast<seq::FromClockOp>(user))
+          clockValueToPos[fromClock.getResult()] = ClockPosInfo{pos, false};
+      }
+    }
+    // Also map direct i1 clock arguments so ltl.clock on i1 clocks can
+    // resolve a clock position without requiring seq.from_clock.
+    for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
+      if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
+        continue;
+      Value clockArg = circuitBlock.getArgument(clockIdx);
+      if (auto intTy = dyn_cast<IntegerType>(clockArg.getType());
+          intTy && intTy.getWidth() == 1) {
+        clockValueToPos.try_emplace(clockArg, ClockPosInfo{pos, false});
+      }
+    }
+
+    auto getConstI1Value = [&](Value val) -> std::optional<bool> {
+      if (!val)
+        return std::nullopt;
+      if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
+        if (auto intTy = dyn_cast<IntegerType>(cst.getType());
+            intTy && intTy.getWidth() == 1)
+          return cst.getValue().isAllOnes();
+        return std::nullopt;
+      }
+      if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
+        if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
+          return boolAttr.getValue();
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+          if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
+              intTy && intTy.getWidth() == 1)
+            return intAttr.getValue().isAllOnes();
+        }
+      }
+      return std::nullopt;
+    };
+
+    auto isConstEqBool = [&](Value val, bool expected) -> bool {
+      if (auto literal = getConstI1Value(val))
+        return *literal == expected;
+      return false;
+    };
+
+    auto collectXorInfo = [&](Value val, Value &inner,
+                              bool &invert) -> bool {
+      auto xorOp = val.getDefiningOp<comb::XorOp>();
+      if (!xorOp || xorOp.getNumOperands() != 2)
+        return false;
+      Value lhs = xorOp.getOperand(0);
+      Value rhs = xorOp.getOperand(1);
+      if (isConstEqBool(lhs, false) && !getConstI1Value(rhs)) {
+        inner = rhs;
+        invert = false;
+        return true;
+      }
+      if (isConstEqBool(rhs, false) && !getConstI1Value(lhs)) {
+        inner = lhs;
+        invert = false;
+        return true;
+      }
+      if (isConstEqBool(lhs, true) && !getConstI1Value(rhs)) {
+        inner = rhs;
+        invert = true;
+        return true;
+      }
+      if (isConstEqBool(rhs, true) && !getConstI1Value(lhs)) {
+        inner = lhs;
+        invert = true;
+        return true;
+      }
+      return false;
+    };
+
+    auto invertClockEdge = [](ltl::ClockEdge edge) -> ltl::ClockEdge {
+      switch (edge) {
+      case ltl::ClockEdge::Pos:
+        return ltl::ClockEdge::Neg;
+      case ltl::ClockEdge::Neg:
+        return ltl::ClockEdge::Pos;
+      case ltl::ClockEdge::Both:
+        return ltl::ClockEdge::Both;
+      }
+      return edge;
+    };
+
+    std::function<std::optional<ClockPosInfo>(Value)> resolveClockPosInfo =
+        [&](Value clockValue) -> std::optional<ClockPosInfo> {
+      if (!clockValue)
+        return std::nullopt;
+      if (auto it = clockValueToPos.find(clockValue);
+          it != clockValueToPos.end())
+        return it->second;
+      // Handle inversion via XOR with constant (comb dialect uses XorOp for
+      // NOT, there is no dedicated NotOp)
+      {
+        Value inner;
+        bool invert = false;
+        if (collectXorInfo(clockValue, inner, invert)) {
+          auto innerInfo = resolveClockPosInfo(inner);
+          if (!innerInfo)
+            return std::nullopt;
+          if (invert)
+            innerInfo->invert = !innerInfo->invert;
+          return innerInfo;
+        }
+      }
+      return std::nullopt;
+    };
+
+    // Map derived clock expressions that were constrained via assume
+    // equalities to a BMC clock input.
+    bool derivedClockConflict = false;
+    auto isTriviallyTrueEnable = [&](Value enable) -> bool {
+      if (!enable)
+        return true;
+      if (auto literal = getConstI1Value(enable))
+        return *literal;
+      if (auto xorOp = enable.getDefiningOp<comb::XorOp>()) {
+        if (xorOp.getNumOperands() != 2)
+          return false;
+        auto lhs = getConstI1Value(xorOp.getOperand(0));
+        auto rhs = getConstI1Value(xorOp.getOperand(1));
+        if (lhs && rhs)
+          return (*lhs) ^ (*rhs);
+      }
+      return false;
+    };
+
+    circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+      if (derivedClockConflict)
+        return;
+      if (auto enable = assumeOp.getEnable()) {
+        if (!isTriviallyTrueEnable(enable))
+          return;
+      }
+      auto cmpOp =
+          assumeOp.getProperty().getDefiningOp<comb::ICmpOp>();
+      auto mapIfFromClock =
+          [&](Value maybeFrom, Value other, bool invertOtherValue) -> bool {
+        auto info = resolveClockPosInfo(maybeFrom);
+        if (!info)
+          return false;
+        if (!other || other.getType() != maybeFrom.getType())
+          return false;
+        if (invertOtherValue)
+          info->invert = !info->invert;
+        auto insert = clockValueToPos.try_emplace(other, *info);
+        if (!insert.second &&
+            (insert.first->second.pos != info->pos ||
+             insert.first->second.invert != info->invert)) {
+          assumeOp.emitError("derived clock maps to multiple BMC clock inputs");
+          derivedClockConflict = true;
+        }
+        return true;
+      };
+      if (cmpOp) {
+        bool invertOther = false;
+        switch (cmpOp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+          invertOther = false;
+          break;
+        case comb::ICmpPredicate::ne:
+          invertOther = true;
+          break;
+        case comb::ICmpPredicate::ceq:
+          invertOther = false;
+          break;
+        case comb::ICmpPredicate::cne:
+          invertOther = true;
+          break;
+        case comb::ICmpPredicate::weq:
+          invertOther = false;
+          break;
+        case comb::ICmpPredicate::wne:
+          invertOther = true;
+          break;
+        default:
+          return;
+        }
+        if (mapIfFromClock(cmpOp.getLhs(), cmpOp.getRhs(), invertOther))
+          return;
+        mapIfFromClock(cmpOp.getRhs(), cmpOp.getLhs(), invertOther);
+        return;
+      }
+      if (auto xorOp = assumeOp.getProperty().getDefiningOp<comb::XorOp>()) {
+        bool parity = false;
+        SmallVector<Value> nonConst;
+        nonConst.reserve(xorOp.getNumOperands());
+        for (Value operand : xorOp.getOperands()) {
+          if (auto literal = getConstI1Value(operand))
+            parity ^= *literal;
+          else
+            nonConst.push_back(operand);
+        }
+        if (nonConst.size() != 2)
+          return;
+        bool invert = !parity;
+        if (mapIfFromClock(nonConst[0], nonConst[1], invert))
+          return;
+        mapIfFromClock(nonConst[1], nonConst[0], invert);
+      }
+    });
+
+    if (derivedClockConflict)
+      return failure();
+
+    struct InferredClockInfo {
+      std::optional<unsigned> pos;
+      std::optional<ltl::ClockEdge> edge;
+      bool sawClock = false;
+      bool conflict = false;
+    };
+
+    auto inferClockFromProperty = [&](Value prop) -> InferredClockInfo {
+      InferredClockInfo result;
+      if (!prop)
+        return result;
+      SmallVector<Operation *> worklist;
+      if (auto *def = prop.getDefiningOp())
+        worklist.push_back(def);
+      llvm::DenseSet<Operation *> visited;
+      std::optional<unsigned> clockPos;
+      std::optional<ltl::ClockEdge> edge;
+      bool conflict = false;
+      auto mergeEdge = [&](ltl::ClockEdge newEdge) {
+        if (!edge) {
+          edge = newEdge;
+          return;
+        }
+        if (*edge == newEdge)
+          return;
+        if (*edge == ltl::ClockEdge::Both ||
+            newEdge == ltl::ClockEdge::Both) {
+          edge = ltl::ClockEdge::Both;
+          return;
+        }
+        if ((*edge == ltl::ClockEdge::Pos &&
+             newEdge == ltl::ClockEdge::Neg) ||
+            (*edge == ltl::ClockEdge::Neg &&
+             newEdge == ltl::ClockEdge::Pos)) {
+          edge = ltl::ClockEdge::Both;
+          return;
+        }
+        edge.reset();
+      };
+      while (!worklist.empty()) {
+        Operation *cur = worklist.pop_back_val();
+        if (!visited.insert(cur).second)
+          continue;
+        if (!isa<ltl::LTLDialect>(cur->getDialect()))
+          continue;
+        if (auto clockOp = dyn_cast<ltl::ClockOp>(cur)) {
+          result.sawClock = true;
+          if (auto info = resolveClockPosInfo(clockOp.getClock())) {
+            if (!clockPos)
+              clockPos = info->pos;
+            else if (*clockPos != info->pos)
+              conflict = true;
+            mergeEdge(info->invert ? invertClockEdge(clockOp.getEdge())
+                                   : clockOp.getEdge());
+          } else {
+            mergeEdge(clockOp.getEdge());
+          }
+        }
+        for (Value operand : cur->getOperands()) {
+          if (Operation *def = operand.getDefiningOp())
+            worklist.push_back(def);
+        }
+      }
+      if (conflict)
+        return result;
+      result.pos = clockPos;
+      result.edge = edge;
+      return result;
+    };
+
+    bool unmappedClockError = false;
+    auto reportUnmappedClock = [&](Operation *op, StringRef detail) {
+      if (unmappedClockError)
+        return;
+      op->emitError(detail);
+      unmappedClockError = true;
+    };
+
+    auto resolveClockPos = [&](Operation *op, StringAttr clockName,
+                               Value clockValue) -> std::optional<unsigned> {
+      if (risingClocksOnly)
+        return std::nullopt;
+      if (clockName && !clockName.getValue().empty()) {
+        if (clockIndexes.empty()) {
+          reportUnmappedClock(op,
+                              "clock name does not match any BMC clock input");
+          return std::nullopt;
+        }
+        auto it = clockNameToPos.find(clockName.getValue());
+        if (it != clockNameToPos.end())
+          return it->second;
+        reportUnmappedClock(op, "clock name does not match any BMC clock input");
+        return std::nullopt;
+      }
+      if (clockValue) {
+        if (clockIndexes.empty()) {
+          reportUnmappedClock(op,
+                              "clocked property uses a clock that is not a BMC "
+                              "clock input");
+          return std::nullopt;
+        }
+        if (auto info = resolveClockPosInfo(clockValue))
+          return info->pos;
+        reportUnmappedClock(op,
+                            "clocked property uses a clock that is not a BMC "
+                            "clock input");
+        return std::nullopt;
+      }
+      return std::nullopt;
+    };
+
+    auto resolveCheckClockPos =
+        [&](SmallVectorImpl<std::optional<unsigned>> &out,
+            MutableArrayRef<NonFinalCheckInfo> infos,
+            ArrayRef<Value> props, ArrayRef<Operation *> ops) {
+          out.reserve(infos.size());
+          for (size_t idx = 0; idx < infos.size(); ++idx) {
+            auto &info = infos[idx];
+            std::optional<unsigned> pos;
+            auto inferred = inferClockFromProperty(
+                idx < props.size() ? props[idx] : Value{});
+            if (!info.edge && inferred.edge)
+              info.edge = inferred.edge;
+            if (inferred.pos)
+              pos = inferred.pos;
+            if (info.clockName && !info.clockName.getValue().empty()) {
+              auto it = clockNameToPos.find(info.clockName.getValue());
+              if (it != clockNameToPos.end())
+                pos = it->second;
+            } else if (!risingClocksOnly && clockIndexes.size() == 1) {
+              pos = 0;
+            }
+            if (!pos && !risingClocksOnly) {
+              bool explicitClock =
+                  (info.clockName && !info.clockName.getValue().empty()) ||
+                  inferred.sawClock;
+              if (explicitClock) {
+                Operation *reportOp =
+                    idx < ops.size() ? ops[idx] : op.getOperation();
+                reportUnmappedClock(
+                    reportOp, "clocked property uses a clock that is not a BMC clock "
+                        "input");
+              }
+            }
+            out.push_back(pos);
+          }
+        };
+
+    SmallVector<std::optional<unsigned>> nonFinalCheckClockPos;
+    resolveCheckClockPos(nonFinalCheckClockPos, nonFinalCheckInfos, checkProps,
+                         nonFinalOps);
+    SmallVector<std::optional<unsigned>> finalCheckClockPos;
+    resolveCheckClockPos(finalCheckClockPos, finalCheckInfos, finalCheckProps,
+                         opsToErase);
+
+    if (!risingClocksOnly) {
+      for (auto &info : delayInfos) {
+        if (info.clockName || info.clockValue) {
+          (void)resolveClockPos(info.op.getOperation(), info.clockName,
+                                info.clockValue);
+        }
+      }
+      for (auto &info : pastInfos) {
+        if (info.clockName || info.clockValue) {
+          (void)resolveClockPos(info.op.getOperation(), info.clockName,
+                                info.clockValue);
+        }
+      }
+    }
+
+    if (unmappedClockError)
+      return failure();
+
+    if (risingClocksOnly) {
+      auto hasUnsupportedEdge =
+          [](std::optional<ltl::ClockEdge> edge) -> bool {
+        return edge && *edge != ltl::ClockEdge::Pos;
+      };
+      for (const auto &info : nonFinalCheckInfos) {
+        if (hasUnsupportedEdge(info.edge)) {
+          op.emitError("rising-clocks-only does not support negedge/edge "
+                       "properties; rerun without --rising-clocks-only");
+          return failure();
+        }
+      }
+      for (size_t idx = 0; idx < finalCheckInfos.size(); ++idx) {
+        auto edge = finalCheckInfos[idx].edge;
+        if (!edge && idx < finalCheckProps.size()) {
+          auto inferred = inferClockFromProperty(finalCheckProps[idx]);
+          if (inferred.edge)
+            edge = inferred.edge;
+        }
+        if (hasUnsupportedEdge(edge)) {
+          op.emitError("rising-clocks-only does not support negedge/edge "
+                       "properties; rerun without --rising-clocks-only");
+          return failure();
+        }
+      }
+      bool unsupportedAssume = false;
+      circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+        if (unsupportedAssume || assumeOp->hasAttr("bmc.final"))
+          return;
+        std::optional<ltl::ClockEdge> edge;
+        if (auto edgeAttr = assumeOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          edge = edgeAttr.getValue();
+        if (!edge) {
+          auto inferred = inferClockFromProperty(assumeOp.getProperty());
+          if (inferred.edge)
+            edge = inferred.edge;
+        }
+        if (hasUnsupportedEdge(edge)) {
+          op.emitError("rising-clocks-only does not support negedge/edge "
+                       "properties; rerun without --rising-clocks-only");
+          unsupportedAssume = true;
+        }
+      });
+      if (unsupportedAssume)
+        return failure();
+      for (const auto &info : delayInfos) {
+        if (hasUnsupportedEdge(info.edge)) {
+          op.emitError("rising-clocks-only does not support negedge/edge "
+                       "delay buffers; rerun without --rising-clocks-only");
+          return failure();
+        }
+      }
+      for (const auto &info : pastInfos) {
+        if (hasUnsupportedEdge(info.edge)) {
+          op.emitError("rising-clocks-only does not support negedge/edge "
+                       "past buffers; rerun without --rising-clocks-only");
+          return failure();
+        }
+      }
+    }
+
     SmallVector<unsigned> regClockToLoopIndex;
     bool usePerRegClocks =
         !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
@@ -2136,16 +3413,29 @@ struct VerifBoundedModelCheckingOpConversion
       checkFinalAtEnd = false;
     }
 
-    Value lowerBound =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-    Value step =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
-    Value upperBound =
-        arith::ConstantOp::create(rewriter, loc, adaptor.getBoundAttr());
+    Value lowerBound;
+    Value step;
+    Value upperBound;
+    if (!emitSMTLIB) {
+      lowerBound = arith::ConstantOp::create(rewriter, loc,
+                                             rewriter.getI32IntegerAttr(0));
+      step = arith::ConstantOp::create(rewriter, loc,
+                                       rewriter.getI32IntegerAttr(1));
+      upperBound =
+          arith::ConstantOp::create(rewriter, loc, adaptor.getBoundAttr());
+    }
     Value constFalse =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(false));
+        emitSMTLIB
+            ? smt::BoolConstantOp::create(rewriter, loc, false).getResult()
+            : arith::ConstantOp::create(rewriter, loc,
+                                        rewriter.getBoolAttr(false))
+                  .getResult();
     Value constTrue =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
+        emitSMTLIB
+            ? smt::BoolConstantOp::create(rewriter, loc, true).getResult()
+            : arith::ConstantOp::create(rewriter, loc,
+                                        rewriter.getBoolAttr(true))
+                  .getResult();
     // Initialize final check iter_args with false values matching their types
     // (these will be updated with circuit outputs). Types may be !smt.bv<1>
     // for i1 properties or !smt.bool for LTL properties.
@@ -2157,6 +3447,499 @@ struct VerifBoundedModelCheckingOpConversion
         inputDecls.push_back(smt::BVConstantOp::create(rewriter, loc, 0, 1));
     }
     inputDecls.push_back(constFalse); // wasViolated?
+
+    auto ignoreAssertionsUntilAttr =
+        op->getAttrOfType<IntegerAttr>("ignore_asserts_until");
+    std::optional<uint64_t> ignoreAssertionsUntilValue;
+    if (ignoreAssertionsUntilAttr)
+      ignoreAssertionsUntilValue =
+          ignoreAssertionsUntilAttr.getValue().getZExtValue();
+
+    if (emitSMTLIB) {
+      auto combineOr = [&](Value lhs, Value rhs) -> Value {
+        if (!lhs)
+          return rhs;
+        if (!rhs)
+          return lhs;
+        return smt::OrOp::create(rewriter, loc, lhs, rhs);
+      };
+      auto combineAnd = [&](Value lhs, Value rhs) -> Value {
+        if (!lhs)
+          return rhs;
+        if (!rhs)
+          return lhs;
+        return smt::AndOp::create(rewriter, loc, lhs, rhs);
+      };
+
+      SmallVector<Value> iterArgs = inputDecls;
+      for (uint64_t iter = 0; iter < boundValue; ++iter) {
+        ValueRange iterRange(iterArgs);
+
+        // Assert 2-state constraints on the current iteration inputs.
+        size_t numCircuitArgs = circuitFuncOp.getNumArguments();
+        for (auto [oldTy, arg] :
+             llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
+                       iterRange.take_front(numCircuitArgs))) {
+          maybeAssertKnown(oldTy, arg, rewriter);
+        }
+
+        // Execute the circuit.
+        SmallVector<Value> circuitCallOutsVec =
+            callOrInline(circuitFuncOp, iterRange.take_front(numCircuitArgs));
+        ValueRange circuitCallOuts(circuitCallOutsVec);
+
+        ValueRange finalCheckOutputs =
+            numFinalChecks == 0 ? ValueRange{}
+                                : circuitCallOuts.take_back(numFinalChecks);
+        ValueRange beforeFinal =
+            numFinalChecks == 0 ? circuitCallOuts
+                                : circuitCallOuts.drop_back(numFinalChecks);
+        ValueRange nonFinalCheckOutputs =
+            numNonFinalChecks == 0
+                ? ValueRange{}
+                : beforeFinal.take_back(numNonFinalChecks);
+        ValueRange nonFinalOutputs =
+            numNonFinalChecks == 0 ? beforeFinal
+                                   : beforeFinal.drop_back(numNonFinalChecks);
+        ValueRange delayBufferOutputs =
+            nonFinalOutputs.take_back(totalDelaySlots);
+        ValueRange circuitOutputs =
+            nonFinalOutputs.drop_back(totalDelaySlots);
+
+        // Call loop func to update clock & state arg values.
+        SmallVector<Value> loopCallInputs;
+        for (auto index : clockIndexes)
+          loopCallInputs.push_back(iterRange[index]);
+        for (auto stateArg :
+             iterRange.drop_back(1 + numFinalChecks).take_back(numStateArgs))
+          loopCallInputs.push_back(stateArg);
+        SmallVector<Value> loopValsVec = callOrInline(loopFuncOp, loopCallInputs);
+        ValueRange loopVals(loopValsVec);
+
+        // Compute clock edges for this iteration.
+        Value isPosedge;
+        Value isNegedge;
+        SmallVector<Value> posedges;
+        SmallVector<Value> negedges;
+        Value anyPosedge;
+        Value anyNegedge;
+        bool usePosedge = !risingClocksOnly && clockIndexes.size() == 1;
+        bool usePerRegPosedge =
+            !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
+        bool needClockEdges =
+            !risingClocksOnly && !clockIndexes.empty() &&
+            (usePerRegPosedge || totalDelaySlots > 0 ||
+             !nonFinalCheckInfos.empty() || !finalCheckInfos.empty());
+        if (usePosedge) {
+          auto clockIndex = clockIndexes[0];
+          auto oldClock = iterRange[clockIndex];
+          auto newClock = loopVals[0];
+          auto oldClockLow = smt::BVNotOp::create(rewriter, loc, oldClock);
+          auto newClockLow = smt::BVNotOp::create(rewriter, loc, newClock);
+          auto isPosedgeBV =
+              smt::BVAndOp::create(rewriter, loc, oldClockLow, newClock);
+          auto isNegedgeBV =
+              smt::BVAndOp::create(rewriter, loc, oldClock, newClockLow);
+          auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+          isPosedge = smt::EqOp::create(rewriter, loc, isPosedgeBV, trueBV);
+          isNegedge = smt::EqOp::create(rewriter, loc, isNegedgeBV, trueBV);
+          if (needClockEdges) {
+            posedges.push_back(isPosedge);
+            negedges.push_back(isNegedge);
+            anyPosedge = isPosedge;
+            anyNegedge = isNegedge;
+          }
+        } else if (needClockEdges) {
+          posedges.reserve(clockIndexes.size());
+          negedges.reserve(clockIndexes.size());
+          auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+          for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
+            auto oldClock = iterRange[clockIndex];
+            auto newClock = loopVals[idx];
+            auto oldClockLow = smt::BVNotOp::create(rewriter, loc, oldClock);
+            auto newClockLow = smt::BVNotOp::create(rewriter, loc, newClock);
+            auto isPosedgeBV =
+                smt::BVAndOp::create(rewriter, loc, oldClockLow, newClock);
+            auto isNegedgeBV =
+                smt::BVAndOp::create(rewriter, loc, oldClock, newClockLow);
+            posedges.push_back(
+                smt::EqOp::create(rewriter, loc, isPosedgeBV, trueBV));
+            negedges.push_back(
+                smt::EqOp::create(rewriter, loc, isNegedgeBV, trueBV));
+          }
+          if (!posedges.empty()) {
+            anyPosedge = posedges.front();
+            anyNegedge = negedges.front();
+            for (auto [pos, neg] :
+                 llvm::zip(ArrayRef<Value>(posedges).drop_front(),
+                           ArrayRef<Value>(negedges).drop_front())) {
+              anyPosedge =
+                  smt::OrOp::create(rewriter, loc, anyPosedge, pos);
+              anyNegedge =
+                  smt::OrOp::create(rewriter, loc, anyNegedge, neg);
+            }
+          }
+        }
+
+        Value violated = iterRange.back();
+        if (numNonFinalChecks > 0) {
+          bool skipChecks = ignoreAssertionsUntilValue &&
+                            iter < *ignoreAssertionsUntilValue;
+          if (!skipChecks) {
+            Value combinedCheckCond;
+            for (auto [checkIdx, checkVal] :
+                 llvm::enumerate(nonFinalCheckOutputs)) {
+              Value isTrue;
+              if (isa<smt::BoolType>(checkVal.getType())) {
+                isTrue = checkVal;
+              } else {
+                auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+                isTrue = smt::EqOp::create(rewriter, loc, checkVal, trueBV);
+              }
+
+              Value term = isCoverCheck
+                               ? isTrue
+                               : smt::NotOp::create(rewriter, loc, isTrue);
+              Value gate;
+              if (!risingClocksOnly && !clockIndexes.empty() &&
+                  checkIdx < nonFinalCheckInfos.size()) {
+                auto edge = nonFinalCheckInfos[checkIdx].edge.value_or(
+                    ltl::ClockEdge::Pos);
+                auto clockPos =
+                    checkIdx < nonFinalCheckClockPos.size()
+                        ? nonFinalCheckClockPos[checkIdx]
+                        : std::optional<unsigned>{};
+                if (clockPos) {
+                  if (edge == ltl::ClockEdge::Pos) {
+                    if (clockIndexes.size() == 1)
+                      gate = isPosedge;
+                    else if (*clockPos < posedges.size())
+                      gate = posedges[*clockPos];
+                  } else if (edge == ltl::ClockEdge::Neg) {
+                    if (clockIndexes.size() == 1)
+                      gate = isNegedge;
+                    else if (*clockPos < negedges.size())
+                      gate = negedges[*clockPos];
+                  } else if (edge == ltl::ClockEdge::Both) {
+                    if (clockIndexes.size() == 1)
+                      gate = smt::OrOp::create(rewriter, loc, isPosedge,
+                                               isNegedge);
+                    else if (*clockPos < posedges.size())
+                      gate = smt::OrOp::create(rewriter, loc,
+                                               posedges[*clockPos],
+                                               negedges[*clockPos]);
+                  }
+                }
+                if (!gate && anyPosedge) {
+                  if (edge == ltl::ClockEdge::Pos) {
+                    gate = anyPosedge;
+                  } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
+                    gate = anyNegedge;
+                  } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
+                    gate =
+                        smt::OrOp::create(rewriter, loc, anyPosedge, anyNegedge);
+                  }
+                }
+              }
+
+              if (gate)
+                term = smt::AndOp::create(rewriter, loc, gate, term);
+              if (!combinedCheckCond)
+                combinedCheckCond = term;
+              else
+                combinedCheckCond =
+                    smt::OrOp::create(rewriter, loc, combinedCheckCond, term);
+            }
+            if (combinedCheckCond)
+              violated =
+                  smt::OrOp::create(rewriter, loc, violated, combinedCheckCond);
+          }
+        }
+
+        size_t loopIndex = 0;
+        SmallVector<Value> newDecls;
+        size_t nonRegIdx = 0;
+        size_t argIndex = 0;
+        size_t numNonStateArgs =
+            oldCircuitInputTy.size() - numRegs - totalDelaySlots;
+        for (auto [oldTy, newTy] :
+             llvm::zip(TypeRange(oldCircuitInputTy).take_front(numNonStateArgs),
+                       TypeRange(circuitInputTy).take_front(numNonStateArgs))) {
+          bool isI1Type =
+              isa<IntegerType>(oldTy) &&
+              cast<IntegerType>(oldTy).getWidth() == 1;
+          bool isClock =
+              isa<seq::ClockType>(oldTy) ||
+              (isI1Type && nonRegIdx < numInitClocks);
+          if (isClock)
+            newDecls.push_back(loopVals[loopIndex++]);
+          else {
+            auto decl = smt::DeclareFunOp::create(
+                rewriter, loc, newTy,
+                argIndex < inputNamePrefixes.size()
+                    ? inputNamePrefixes[argIndex]
+                    : StringAttr{});
+            newDecls.push_back(decl);
+            maybeAssertKnown(oldTy, decl, rewriter);
+          }
+          nonRegIdx++;
+          argIndex++;
+        }
+
+        if (clockIndexes.size() >= 1) {
+          SmallVector<Value> regInputs = circuitOutputs.take_back(numRegs);
+          if (risingClocksOnly || clockIndexes.size() == 1) {
+            if (risingClocksOnly) {
+              newDecls.append(regInputs);
+            } else {
+              auto regStates =
+                  iterRange.take_front(circuitFuncOp.getNumArguments())
+                      .take_back(numRegs + totalDelaySlots)
+                      .drop_back(totalDelaySlots);
+              SmallVector<Value> nextRegStates;
+              for (auto [regState, regInput] :
+                   llvm::zip(regStates, regInputs)) {
+                nextRegStates.push_back(smt::IteOp::create(
+                    rewriter, loc, isPosedge, regInput, regState));
+              }
+              newDecls.append(nextRegStates);
+            }
+          } else if (usePerRegPosedge) {
+            auto regStates =
+                iterRange.take_front(circuitFuncOp.getNumArguments())
+                    .take_back(numRegs + totalDelaySlots)
+                    .drop_back(totalDelaySlots);
+            SmallVector<Value> nextRegStates;
+            nextRegStates.reserve(numRegs);
+            for (auto [idx, pair] :
+                 llvm::enumerate(llvm::zip(regStates, regInputs))) {
+              auto [regState, regInput] = pair;
+              Value regPosedge = posedges[regClockToLoopIndex[idx]];
+              nextRegStates.push_back(smt::IteOp::create(
+                  rewriter, loc, regPosedge, regInput, regState));
+            }
+            newDecls.append(nextRegStates);
+          }
+        }
+
+        if (totalDelaySlots > 0) {
+          Value defaultDelayGate;
+          if (!risingClocksOnly && !clockIndexes.empty()) {
+            if (usePosedge)
+              defaultDelayGate = isPosedge;
+            else if (anyPosedge)
+              defaultDelayGate = anyPosedge;
+          }
+
+          auto getDelayGate =
+              [&](StringAttr clockName, Value clockValue,
+                  std::optional<ltl::ClockEdge> edge) -> Value {
+            if (risingClocksOnly || clockIndexes.empty())
+              return Value();
+            std::optional<unsigned> pos;
+            if (clockName && !clockName.getValue().empty()) {
+              auto it = clockNameToPos.find(clockName.getValue());
+              if (it != clockNameToPos.end())
+                pos = it->second;
+            } else if (clockValue) {
+              if (auto info = resolveClockPosInfo(clockValue))
+                pos = info->pos;
+            } else if (clockIndexes.size() == 1) {
+              pos = 0;
+            }
+            if (!pos || posedges.empty() || negedges.empty())
+              return defaultDelayGate;
+            Value posedge = posedges[*pos];
+            Value negedge = negedges[*pos];
+            ltl::ClockEdge edgeKind = edge.value_or(ltl::ClockEdge::Pos);
+            if (clockValue) {
+              if (auto info = resolveClockPosInfo(clockValue);
+                  info && info->invert)
+                edgeKind = invertClockEdge(edgeKind);
+            }
+            switch (edgeKind) {
+            case ltl::ClockEdge::Pos:
+              return posedge;
+            case ltl::ClockEdge::Neg:
+              return negedge;
+            case ltl::ClockEdge::Both:
+              return smt::OrOp::create(rewriter, loc, posedge, negedge);
+            }
+            return defaultDelayGate;
+          };
+
+          auto delayStates = iterRange.take_front(circuitFuncOp.getNumArguments())
+                                 .take_back(totalDelaySlots);
+          size_t delayIndex = 0;
+          auto appendDelayUpdates = [&](Value gate, size_t count) {
+            for (size_t i = 0; i < count; ++i) {
+              Value delayState = delayStates[delayIndex + i];
+              Value delayVal = delayBufferOutputs[delayIndex + i];
+              if (gate) {
+                newDecls.push_back(smt::IteOp::create(rewriter, loc, gate,
+                                                     delayVal, delayState));
+              } else {
+                newDecls.push_back(delayVal);
+              }
+            }
+            delayIndex += count;
+          };
+
+          for (const auto &info : delayInfos) {
+            Value gate = getDelayGate(info.clockName, info.clockValue, info.edge);
+            appendDelayUpdates(gate, info.bufferSize);
+          }
+          for (const auto &info : pastInfos) {
+            Value gate = getDelayGate(info.clockName, info.clockValue, info.edge);
+            appendDelayUpdates(gate, info.bufferSize);
+          }
+          for (; delayIndex < totalDelaySlots; ++delayIndex)
+            newDecls.push_back(delayBufferOutputs[delayIndex]);
+        }
+
+        for (; loopIndex < loopVals.size(); ++loopIndex)
+          newDecls.push_back(loopVals[loopIndex]);
+
+        ValueRange finalCheckStates =
+            numFinalChecks == 0 ? ValueRange{}
+                                : iterRange.drop_back(1).take_back(numFinalChecks);
+        auto getCheckGate =
+            [&](size_t checkIdx, ArrayRef<std::optional<unsigned>> clockPoses,
+                ArrayRef<NonFinalCheckInfo> infos) -> Value {
+          if (risingClocksOnly || clockIndexes.empty() ||
+              checkIdx >= infos.size())
+            return Value();
+          auto edge = infos[checkIdx].edge.value_or(ltl::ClockEdge::Pos);
+          auto clockPos = checkIdx < clockPoses.size()
+                              ? clockPoses[checkIdx]
+                              : std::optional<unsigned>{};
+          if (!clockPos) {
+            if (!anyPosedge)
+              return Value();
+            if (edge == ltl::ClockEdge::Pos)
+              return anyPosedge;
+            if (edge == ltl::ClockEdge::Neg && anyNegedge)
+              return anyNegedge;
+            if (edge == ltl::ClockEdge::Both && anyNegedge)
+              return smt::OrOp::create(rewriter, loc, anyPosedge, anyNegedge);
+            return Value();
+          }
+          if (edge == ltl::ClockEdge::Pos) {
+            if (clockIndexes.size() == 1)
+              return isPosedge;
+            if (*clockPos < posedges.size())
+              return posedges[*clockPos];
+          } else if (edge == ltl::ClockEdge::Neg) {
+            if (clockIndexes.size() == 1)
+              return isNegedge;
+            if (*clockPos < negedges.size())
+              return negedges[*clockPos];
+          } else if (edge == ltl::ClockEdge::Both) {
+            if (clockIndexes.size() == 1)
+              return smt::OrOp::create(rewriter, loc, isPosedge, isNegedge);
+            if (*clockPos < posedges.size())
+              return smt::OrOp::create(rewriter, loc, posedges[*clockPos],
+                                       negedges[*clockPos]);
+          }
+          return Value();
+        };
+        for (auto [idx, finalVal] : llvm::enumerate(finalCheckOutputs)) {
+          Value gate = getCheckGate(idx, finalCheckClockPos, finalCheckInfos);
+          if (gate && idx < finalCheckStates.size()) {
+            newDecls.push_back(smt::IteOp::create(rewriter, loc, gate, finalVal,
+                                                 finalCheckStates[idx]));
+          } else {
+            newDecls.push_back(finalVal);
+          }
+        }
+        newDecls.push_back(violated);
+        iterArgs = std::move(newDecls);
+      }
+
+      Value violated = iterArgs.back();
+      Value finalCheckViolated;
+      Value finalCoverHit;
+      if (numFinalChecks > 0 && checkFinalAtEnd) {
+        ValueRange results(iterArgs);
+        size_t finalStart = results.size() - 1 - numFinalChecks;
+        SmallVector<Value> finalAssertOutputs;
+        SmallVector<Value> finalCoverOutputs;
+        finalAssertOutputs.reserve(numFinalChecks);
+        finalCoverOutputs.reserve(numFinalChecks);
+        for (size_t i = 0; i < numFinalChecks; ++i) {
+          Value finalVal = results[finalStart + i];
+          if (finalCheckIsCover[i])
+            finalCoverOutputs.push_back(finalVal);
+          else
+            finalAssertOutputs.push_back(finalVal);
+        }
+
+        if (!finalAssertOutputs.empty()) {
+          for (Value finalVal : finalAssertOutputs) {
+            Value isTrue;
+            if (isa<smt::BoolType>(finalVal.getType())) {
+              isTrue = finalVal;
+            } else {
+              auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+              isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+            }
+            Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
+            finalCheckViolated = combineAnd(finalCheckViolated, isFalse);
+          }
+        }
+
+        if (!finalCoverOutputs.empty()) {
+          SmallVector<Value> coverTerms;
+          coverTerms.reserve(finalCoverOutputs.size());
+          for (Value finalVal : finalCoverOutputs) {
+            if (isa<smt::BoolType>(finalVal.getType())) {
+              coverTerms.push_back(finalVal);
+            } else {
+              auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+              coverTerms.push_back(
+                  smt::EqOp::create(rewriter, loc, finalVal, trueBV));
+            }
+          }
+          finalCoverHit =
+              coverTerms.size() == 1
+                  ? coverTerms.front()
+                  : smt::OrOp::create(rewriter, loc, coverTerms).getResult();
+        }
+      }
+
+      Value overallCond;
+      if (isCoverCheck) {
+        overallCond = combineOr(violated, finalCoverHit);
+      } else {
+        overallCond = combineOr(violated, finalCheckViolated);
+      }
+      if (overallCond)
+        smt::AssertOp::create(rewriter, loc, overallCond);
+
+      auto checkOp = smt::CheckOp::create(rewriter, loc, TypeRange{});
+      {
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.createBlock(&checkOp.getSatRegion());
+        smt::YieldOp::create(rewriter, loc);
+        rewriter.createBlock(&checkOp.getUnknownRegion());
+        smt::YieldOp::create(rewriter, loc);
+        rewriter.createBlock(&checkOp.getUnsatRegion());
+        smt::YieldOp::create(rewriter, loc);
+      }
+      rewriter.setInsertionPointAfter(checkOp);
+      smt::YieldOp::create(rewriter, loc);
+
+      rewriter.setInsertionPointAfter(solver);
+      if (op->getNumResults() == 0) {
+        rewriter.eraseOp(op);
+      } else {
+        auto dummy =
+            arith::ConstantOp::create(rewriter, loc,
+                                      rewriter.getBoolAttr(false));
+        rewriter.replaceOp(op, dummy.getResult());
+      }
+      return success();
+    }
 
     // TODO: swapping to a whileOp here would allow early exit once the property
     // is violated
@@ -2202,6 +3985,87 @@ struct VerifBoundedModelCheckingOpConversion
           ValueRange delayBufferOutputs = nonFinalOutputs.take_back(totalDelaySlots);
           ValueRange circuitOutputs = nonFinalOutputs.drop_back(totalDelaySlots);
 
+          // Call loop func to update clock & state arg values
+          SmallVector<Value> loopCallInputs;
+          // Fetch clock values to feed to loop
+          for (auto index : clockIndexes)
+            loopCallInputs.push_back(iterArgs[index]);
+          // Fetch state args to feed to loop
+          for (auto stateArg :
+               iterArgs.drop_back(1 + numFinalChecks).take_back(numStateArgs))
+            loopCallInputs.push_back(stateArg);
+          ValueRange loopVals =
+              func::CallOp::create(builder, loc, loopFuncOp, loopCallInputs)
+                  ->getResults();
+
+          // Compute clock edges for this iteration.
+          Value isPosedge;
+          Value isNegedge;
+          SmallVector<Value> posedges;
+          SmallVector<Value> negedges;
+          Value anyPosedge;
+          Value anyNegedge;
+          bool usePosedge = !risingClocksOnly && clockIndexes.size() == 1;
+          bool usePerRegPosedge =
+              !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
+          bool needClockEdges =
+              !risingClocksOnly && !clockIndexes.empty() &&
+              (usePerRegPosedge || totalDelaySlots > 0 ||
+               !nonFinalCheckInfos.empty() || !finalCheckInfos.empty());
+          if (usePosedge) {
+            auto clockIndex = clockIndexes[0];
+            auto oldClock = iterArgs[clockIndex];
+            // The clock is necessarily the first value returned by the loop
+            // region
+            auto newClock = loopVals[0];
+            auto oldClockLow = smt::BVNotOp::create(builder, loc, oldClock);
+            auto newClockLow = smt::BVNotOp::create(builder, loc, newClock);
+            auto isPosedgeBV =
+                smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
+            auto isNegedgeBV =
+                smt::BVAndOp::create(builder, loc, oldClock, newClockLow);
+            // Convert edge bv<1> to bool
+            auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
+            isPosedge = smt::EqOp::create(builder, loc, isPosedgeBV, trueBV);
+            isNegedge = smt::EqOp::create(builder, loc, isNegedgeBV, trueBV);
+            if (needClockEdges) {
+              posedges.push_back(isPosedge);
+              negedges.push_back(isNegedge);
+              anyPosedge = isPosedge;
+              anyNegedge = isNegedge;
+            }
+          } else if (needClockEdges) {
+            posedges.reserve(clockIndexes.size());
+            negedges.reserve(clockIndexes.size());
+            auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
+            for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
+              auto oldClock = iterArgs[clockIndex];
+              auto newClock = loopVals[idx];
+              auto oldClockLow =
+                  smt::BVNotOp::create(builder, loc, oldClock);
+              auto newClockLow =
+                  smt::BVNotOp::create(builder, loc, newClock);
+              auto isPosedgeBV =
+                  smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
+              auto isNegedgeBV =
+                  smt::BVAndOp::create(builder, loc, oldClock, newClockLow);
+              posedges.push_back(
+                  smt::EqOp::create(builder, loc, isPosedgeBV, trueBV));
+              negedges.push_back(
+                  smt::EqOp::create(builder, loc, isNegedgeBV, trueBV));
+            }
+            if (!posedges.empty()) {
+              anyPosedge = posedges.front();
+              anyNegedge = negedges.front();
+              for (auto [pos, neg] :
+                   llvm::zip(ArrayRef<Value>(posedges).drop_front(),
+                             ArrayRef<Value>(negedges).drop_front())) {
+                anyPosedge = smt::OrOp::create(builder, loc, anyPosedge, pos);
+                anyNegedge = smt::OrOp::create(builder, loc, anyNegedge, neg);
+              }
+            }
+          }
+
           Value violated = iterArgs.back();
           if (numNonFinalChecks > 0) {
             // If we have a cycle up to which we ignore assertions, we need an
@@ -2210,37 +4074,16 @@ struct VerifBoundedModelCheckingOpConversion
             // We need to still have the yielded result of the op in scope after
             // we've built the check.
             Value yieldedValue;
-            bool gateOnPosedge = !risingClocksOnly && clockIndexes.size() == 1;
             auto ignoreAssertionsUntil =
                 op->getAttrOfType<IntegerAttr>("ignore_asserts_until");
-            if (ignoreAssertionsUntil || gateOnPosedge) {
-              Value shouldSkip;
-              if (ignoreAssertionsUntil) {
-                auto ignoreUntilConstant = arith::ConstantOp::create(
-                    builder, loc,
-                    rewriter.getI32IntegerAttr(
-                        ignoreAssertionsUntil.getValue().getZExtValue()));
-                auto shouldIgnore = arith::CmpIOp::create(
-                    builder, loc, arith::CmpIPredicate::ult, i,
-                    ignoreUntilConstant);
-                shouldSkip = shouldIgnore;
-              }
-              if (gateOnPosedge) {
-                auto one = arith::ConstantOp::create(
-                    builder, loc, rewriter.getI32IntegerAttr(1));
-                auto zero = arith::ConstantOp::create(
-                    builder, loc, rewriter.getI32IntegerAttr(0));
-                auto lsb = arith::AndIOp::create(builder, loc, i, one);
-                // Skip even iterations; with initial clock = 0, posedges occur
-                // on odd loop iterations after toggling.
-                auto isEven = arith::CmpIOp::create(
-                    builder, loc, arith::CmpIPredicate::eq, lsb, zero);
-                if (shouldSkip)
-                  shouldSkip = arith::OrIOp::create(builder, loc, shouldSkip,
-                                                    isEven);
-                else
-                  shouldSkip = isEven;
-              }
+            if (ignoreAssertionsUntil) {
+              auto ignoreUntilConstant = arith::ConstantOp::create(
+                  builder, loc,
+                  rewriter.getI32IntegerAttr(
+                      ignoreAssertionsUntil.getValue().getZExtValue()));
+              auto shouldSkip = arith::CmpIOp::create(
+                  builder, loc, arith::CmpIPredicate::ult, i,
+                  ignoreUntilConstant);
               auto ifShouldSkip = scf::IfOp::create(
                   builder, loc, builder.getI1Type(), shouldSkip, true);
               // If we should skip, yield the existing value.
@@ -2252,20 +4095,73 @@ struct VerifBoundedModelCheckingOpConversion
               yieldedValue = ifShouldSkip.getResult(0);
             }
 
-            // Check the non-final property for this iteration.
-            Value checkVal = nonFinalCheckOutputs.front();
-            Value isTrue;
-            if (isa<smt::BoolType>(checkVal.getType())) {
-              // LTL properties are converted to !smt.bool, use directly
-              isTrue = checkVal;
-            } else {
-              // i1 properties are converted to !smt.bv<1>, compare with 1
-              auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
-              isTrue = smt::EqOp::create(builder, loc, checkVal, trueBV);
+            Value combinedCheckCond;
+            for (auto [checkIdx, checkVal] :
+                 llvm::enumerate(nonFinalCheckOutputs)) {
+              Value isTrue;
+              if (isa<smt::BoolType>(checkVal.getType())) {
+                // LTL properties are converted to !smt.bool, use directly
+                isTrue = checkVal;
+              } else {
+                // i1 properties are converted to !smt.bv<1>, compare with 1
+                auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
+                isTrue = smt::EqOp::create(builder, loc, checkVal, trueBV);
+              }
+
+              Value term = isCoverCheck
+                               ? isTrue
+                               : smt::NotOp::create(builder, loc, isTrue);
+              Value gate;
+              if (!risingClocksOnly && !clockIndexes.empty() &&
+                  checkIdx < nonFinalCheckInfos.size()) {
+                auto edge = nonFinalCheckInfos[checkIdx].edge.value_or(
+                    ltl::ClockEdge::Pos);
+                auto clockPos =
+                    checkIdx < nonFinalCheckClockPos.size()
+                        ? nonFinalCheckClockPos[checkIdx]
+                        : std::optional<unsigned>{};
+                if (clockPos) {
+                  if (edge == ltl::ClockEdge::Pos) {
+                    if (clockIndexes.size() == 1)
+                      gate = isPosedge;
+                    else if (*clockPos < posedges.size())
+                      gate = posedges[*clockPos];
+                  } else if (edge == ltl::ClockEdge::Neg) {
+                    if (clockIndexes.size() == 1)
+                      gate = isNegedge;
+                    else if (*clockPos < negedges.size())
+                      gate = negedges[*clockPos];
+                  } else if (edge == ltl::ClockEdge::Both) {
+                    if (clockIndexes.size() == 1)
+                      gate = smt::OrOp::create(builder, loc, isPosedge,
+                                               isNegedge);
+                    else if (*clockPos < posedges.size())
+                      gate = smt::OrOp::create(builder, loc,
+                                               posedges[*clockPos],
+                                               negedges[*clockPos]);
+                  }
+                }
+                if (!gate && anyPosedge) {
+                  if (edge == ltl::ClockEdge::Pos) {
+                    gate = anyPosedge;
+                  } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
+                    gate = anyNegedge;
+                  } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
+                    gate = smt::OrOp::create(builder, loc, anyPosedge,
+                                             anyNegedge);
+                  }
+                }
+              }
+
+              if (gate)
+                term = smt::AndOp::create(builder, loc, gate, term);
+              if (!combinedCheckCond)
+                combinedCheckCond = term;
+              else
+                combinedCheckCond =
+                    smt::OrOp::create(builder, loc, combinedCheckCond, term);
             }
-            Value checkCond = isCoverCheck
-                                   ? isTrue
-                                   : smt::NotOp::create(builder, loc, isTrue);
+            Value checkCond = combinedCheckCond;
 
             smt::PushOp::create(builder, loc, 1);
             smt::AssertOp::create(builder, loc, checkCond);
@@ -2287,7 +4183,7 @@ struct VerifBoundedModelCheckingOpConversion
 
             // If we've packaged everything in an IfOp, we need to yield the
             // new violated value.
-            if (ignoreAssertionsUntil || gateOnPosedge) {
+            if (ignoreAssertionsUntil) {
               scf::YieldOp::create(builder, loc, newViolated);
               // Replace the variable with the yielded value.
               violated = yieldedValue;
@@ -2299,19 +4195,6 @@ struct VerifBoundedModelCheckingOpConversion
             // again.
             builder.restoreInsertionPoint(insideForPoint);
           }
-
-          // Call loop func to update clock & state arg values
-          SmallVector<Value> loopCallInputs;
-          // Fetch clock values to feed to loop
-          for (auto index : clockIndexes)
-            loopCallInputs.push_back(iterArgs[index]);
-          // Fetch state args to feed to loop
-          for (auto stateArg :
-               iterArgs.drop_back(1 + numFinalChecks).take_back(numStateArgs))
-            loopCallInputs.push_back(stateArg);
-          ValueRange loopVals =
-              func::CallOp::create(builder, loc, loopFuncOp, loopCallInputs)
-                  ->getResults();
 
           size_t loopIndex = 0;
           // Collect decls to yield at end of iteration
@@ -2345,40 +4228,7 @@ struct VerifBoundedModelCheckingOpConversion
             argIndex++;
           }
 
-          // Only update the registers on a clock posedge unless in rising
-          // clocks only mode
-          // Multi-clock designs use per-register clock gating when available.
-          Value isPosedge;
-          SmallVector<Value> posedges;
-          bool usePosedge = !risingClocksOnly && clockIndexes.size() == 1;
-          bool usePerRegPosedge =
-              !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
-          if (usePosedge) {
-            auto clockIndex = clockIndexes[0];
-            auto oldClock = iterArgs[clockIndex];
-            // The clock is necessarily the first value returned by the loop
-            // region
-            auto newClock = loopVals[0];
-            auto oldClockLow = smt::BVNotOp::create(builder, loc, oldClock);
-            auto isPosedgeBV =
-                smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
-            // Convert posedge bv<1> to bool
-            auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
-            isPosedge = smt::EqOp::create(builder, loc, isPosedgeBV, trueBV);
-          } else if (usePerRegPosedge) {
-            posedges.reserve(clockIndexes.size());
-            auto trueBV = smt::BVConstantOp::create(builder, loc, 1, 1);
-            for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
-              auto oldClock = iterArgs[clockIndex];
-              auto newClock = loopVals[idx];
-              auto oldClockLow =
-                  smt::BVNotOp::create(builder, loc, oldClock);
-              auto isPosedgeBV =
-                  smt::BVAndOp::create(builder, loc, oldClockLow, newClock);
-              posedges.push_back(
-                  smt::EqOp::create(builder, loc, isPosedgeBV, trueBV));
-            }
-          }
+          // Update registers using the computed clock edge signals.
           if (clockIndexes.size() >= 1) {
             SmallVector<Value> regInputs = circuitOutputs.take_back(numRegs);
             if (risingClocksOnly || clockIndexes.size() == 1) {
@@ -2423,29 +4273,146 @@ struct VerifBoundedModelCheckingOpConversion
           // Add delay buffer outputs for the next iteration
           // These are the shifted buffer values from the circuit
           if (totalDelaySlots > 0) {
-            if (usePosedge) {
-              auto delayStates =
-                  iterArgs.take_front(circuitFuncOp.getNumArguments())
-                      .take_back(totalDelaySlots);
-              for (auto [delayState, delayVal] :
-                   llvm::zip(delayStates, delayBufferOutputs)) {
-                newDecls.push_back(smt::IteOp::create(builder, loc, isPosedge,
-                                                     delayVal, delayState));
-              }
-            } else {
-              for (Value delayVal : delayBufferOutputs)
-                newDecls.push_back(delayVal);
+            Value defaultDelayGate;
+            if (!risingClocksOnly && !clockIndexes.empty()) {
+              if (usePosedge)
+                defaultDelayGate = isPosedge;
+              else if (anyPosedge)
+                defaultDelayGate = anyPosedge;
             }
+
+            auto getDelayGate = [&](StringAttr clockName, Value clockValue,
+                                    std::optional<ltl::ClockEdge> edge)
+                                    -> Value {
+              if (risingClocksOnly || clockIndexes.empty())
+                return Value();
+              std::optional<unsigned> pos;
+              if (clockName && !clockName.getValue().empty()) {
+                auto it = clockNameToPos.find(clockName.getValue());
+                if (it != clockNameToPos.end())
+                  pos = it->second;
+              } else if (clockValue) {
+                if (auto info = resolveClockPosInfo(clockValue))
+                  pos = info->pos;
+              } else if (clockIndexes.size() == 1) {
+                pos = 0;
+              }
+              if (!pos || posedges.empty() || negedges.empty())
+                return defaultDelayGate;
+              Value posedge = posedges[*pos];
+              Value negedge = negedges[*pos];
+              ltl::ClockEdge edgeKind = edge.value_or(ltl::ClockEdge::Pos);
+              if (clockValue) {
+                if (auto info = resolveClockPosInfo(clockValue);
+                    info && info->invert)
+                  edgeKind = invertClockEdge(edgeKind);
+              }
+              switch (edgeKind) {
+              case ltl::ClockEdge::Pos:
+                return posedge;
+              case ltl::ClockEdge::Neg:
+                return negedge;
+              case ltl::ClockEdge::Both:
+                return smt::OrOp::create(builder, loc, posedge, negedge);
+              }
+              return defaultDelayGate;
+            };
+
+            auto delayStates =
+                iterArgs.take_front(circuitFuncOp.getNumArguments())
+                    .take_back(totalDelaySlots);
+            size_t delayIndex = 0;
+            auto appendDelayUpdates = [&](Value gate, size_t count) {
+              for (size_t i = 0; i < count; ++i) {
+                Value delayState = delayStates[delayIndex + i];
+                Value delayVal = delayBufferOutputs[delayIndex + i];
+                if (gate) {
+                  newDecls.push_back(smt::IteOp::create(builder, loc, gate,
+                                                       delayVal, delayState));
+                } else {
+                  newDecls.push_back(delayVal);
+                }
+              }
+              delayIndex += count;
+            };
+
+            for (const auto &info : delayInfos) {
+              Value gate =
+                  getDelayGate(info.clockName, info.clockValue, info.edge);
+              appendDelayUpdates(gate, info.bufferSize);
+            }
+            for (const auto &info : pastInfos) {
+              Value gate =
+                  getDelayGate(info.clockName, info.clockValue, info.edge);
+              appendDelayUpdates(gate, info.bufferSize);
+            }
+            // Defensive fallback if buffers were not fully covered.
+            for (; delayIndex < totalDelaySlots; ++delayIndex)
+              newDecls.push_back(delayBufferOutputs[delayIndex]);
           }
 
           // Add the rest of the loop state args
           for (; loopIndex < loopVals.size(); ++loopIndex)
             newDecls.push_back(loopVals[loopIndex]);
 
-          // Pass through finalCheckOutputs (already !smt.bv<1>) for next
-          // iteration
-          for (auto finalVal : finalCheckOutputs)
-            newDecls.push_back(finalVal);
+          // Pass through finalCheckOutputs (already !smt.bv<1> or !smt.bool)
+          // for next iteration, gated by their clock edge if available.
+          ValueRange finalCheckStates =
+              numFinalChecks == 0
+                  ? ValueRange{}
+                  : iterArgs.drop_back(1).take_back(numFinalChecks);
+          auto getCheckGate =
+              [&](size_t checkIdx,
+                  ArrayRef<std::optional<unsigned>> clockPoses,
+                  ArrayRef<NonFinalCheckInfo> infos) -> Value {
+            if (risingClocksOnly || clockIndexes.empty() ||
+                checkIdx >= infos.size())
+              return Value();
+            auto edge = infos[checkIdx].edge.value_or(ltl::ClockEdge::Pos);
+            auto clockPos = checkIdx < clockPoses.size()
+                                ? clockPoses[checkIdx]
+                                : std::optional<unsigned>{};
+            if (!clockPos) {
+              if (!anyPosedge)
+                return Value();
+              if (edge == ltl::ClockEdge::Pos)
+                return anyPosedge;
+              if (edge == ltl::ClockEdge::Neg && anyNegedge)
+                return anyNegedge;
+              if (edge == ltl::ClockEdge::Both && anyNegedge)
+                return smt::OrOp::create(builder, loc, anyPosedge,
+                                         anyNegedge);
+              return Value();
+            }
+            if (edge == ltl::ClockEdge::Pos) {
+              if (clockIndexes.size() == 1)
+                return isPosedge;
+              if (*clockPos < posedges.size())
+                return posedges[*clockPos];
+            } else if (edge == ltl::ClockEdge::Neg) {
+              if (clockIndexes.size() == 1)
+                return isNegedge;
+              if (*clockPos < negedges.size())
+                return negedges[*clockPos];
+            } else if (edge == ltl::ClockEdge::Both) {
+              if (clockIndexes.size() == 1)
+                return smt::OrOp::create(builder, loc, isPosedge, isNegedge);
+              if (*clockPos < posedges.size())
+                return smt::OrOp::create(builder, loc, posedges[*clockPos],
+                                         negedges[*clockPos]);
+            }
+            return Value();
+          };
+          for (auto [idx, finalVal] : llvm::enumerate(finalCheckOutputs)) {
+            Value gate =
+                getCheckGate(idx, finalCheckClockPos, finalCheckInfos);
+            if (gate && idx < finalCheckStates.size()) {
+              newDecls.push_back(smt::IteOp::create(
+                  builder, loc, gate, finalVal, finalCheckStates[idx]));
+            } else {
+              newDecls.push_back(finalVal);
+            }
+          }
           newDecls.push_back(violated);
 
           scf::YieldOp::create(builder, loc, newDecls);
@@ -2555,6 +4522,8 @@ struct VerifBoundedModelCheckingOpConversion
 
   Namespace &names;
   bool risingClocksOnly;
+  bool assumeKnownInputs;
+  bool forSMTLIBExport;
   SmallVectorImpl<Operation *> &propertylessBMCOps;
   SmallVectorImpl<Operation *> &coverBMCOps;
 };
@@ -2578,7 +4547,8 @@ static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
   patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLIntersectOpConversion,
                LTLNotOpConversion, LTLImplicationOpConversion,
                LTLEventuallyOpConversion, LTLUntilOpConversion,
-               LTLBooleanConstantOpConversion, LTLDelayOpConversion,
+               LTLBooleanConstantOpConversion, LTLClockOpConversion,
+               LTLDelayOpConversion,
                LTLPastOpConversion, LTLConcatOpConversion,
                LTLRepeatOpConversion, LTLGoToRepeatOpConversion,
                LTLNonConsecutiveRepeatOpConversion>(converter,
@@ -2587,7 +4557,7 @@ static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
 
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, bool assumeKnownInputs,
+    bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
   // Add LTL operation conversion patterns
@@ -2601,6 +4571,8 @@ void circt::populateVerifToSMTConversionPatterns(
       converter, patterns.getContext(), assumeKnownInputs);
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, risingClocksOnly,
+      assumeKnownInputs,
+      forSMTLIBExport,
       propertylessBMCOps, coverBMCOps);
 }
 
@@ -2771,7 +4743,9 @@ void ConvertVerifToSMTPass::runOnOperation() {
                RefinementCheckingOpConversion>(
       converter, patterns.getContext(), assumeKnownInputs);
   patterns.add<VerifBoundedModelCheckingOpConversion>(
-      converter, patterns.getContext(), names, risingClocksOnly,
+      converter, patterns.getContext(), names, (bool)risingClocksOnly,
+      (bool)this->assumeKnownInputs,
+      (bool)this->forSMTLIBExport,
       propertylessBMCOps, coverBMCOps);
 
   if (failed(mlir::applyPartialConversion(getOperation(), verifTarget,
