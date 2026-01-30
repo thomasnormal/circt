@@ -6298,6 +6298,10 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     auto &parentState = processStates[procId];
     childState.valueMap = parentState.valueMap;
 
+    // Copy processOrInitialOp from parent so that the child can look up functions
+    // in the parent module (needed for virtual method dispatch via call_indirect)
+    childState.processOrInitialOp = parentState.processOrInitialOp;
+
     // Store the child state
     processStates[childId] = std::move(childState);
 
@@ -6826,7 +6830,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     // This handles pointers returned from runtime functions like
     // __moore_assoc_get_ref which return real C++ memory addresses.
     uint64_t addr = ptrVal.getUInt64();
-    if (addr != 0) {
+    // Validate address: must be non-zero, above guard page region (0x10000),
+    // and below kernel space boundary on x86-64. Also validate size is reasonable.
+    constexpr uint64_t MIN_VALID_ADDR = 0x10000; // Skip guard pages
+    constexpr uint64_t MAX_VALID_ADDR = 0x7FFFFFFFFFFF; // x86-64 user space
+    constexpr unsigned MAX_LOAD_SIZE = 8192;
+    if (addr >= MIN_VALID_ADDR && addr <= MAX_VALID_ADDR && loadSize <= MAX_LOAD_SIZE) {
       void *nativePtr = reinterpret_cast<void *>(addr);
       uint64_t value = 0;
       if (loadSize <= 8) {
@@ -6850,6 +6859,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
       }
       return success();
     }
+    // Address failed validation - fall through to return X
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: native ptr 0x"
+                            << llvm::format_hex(addr, 16)
+                            << " failed validation, returning X\n");
   }
 
   if (!block) {
@@ -6968,7 +6981,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     // This handles pointers returned from runtime functions like
     // __moore_assoc_get_ref which return real C++ memory addresses.
     uint64_t addr = ptrVal.getUInt64();
-    if (addr != 0 && !storeVal.isX()) {
+    // Validate address: must be non-zero, above guard page region (0x10000),
+    // and below kernel space boundary on x86-64. Also validate size is reasonable.
+    constexpr uint64_t MIN_VALID_ADDR = 0x10000; // Skip guard pages
+    constexpr uint64_t MAX_VALID_ADDR = 0x7FFFFFFFFFFF; // x86-64 user space
+    constexpr unsigned MAX_STORE_SIZE = 8192;
+    if (addr >= MIN_VALID_ADDR && addr <= MAX_VALID_ADDR &&
+        storeSize <= MAX_STORE_SIZE && !storeVal.isX()) {
       void *nativePtr = reinterpret_cast<void *>(addr);
       const APInt &apValue = storeVal.getAPInt();
       if (storeSize <= 8) {
@@ -6988,7 +7007,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                                 << " (" << storeSize << " bytes)\n");
       }
     } else {
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: skipped store to null/X pointer\n");
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: skipped store to invalid ptr 0x"
+                              << llvm::format_hex(addr, 16) << "\n");
     }
     return success();
   }
