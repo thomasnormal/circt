@@ -237,19 +237,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Class inheritance member access: Derived class accesses work
 - Virtual method override with member access: Polymorphism works
 
+5. **`__moore_wait_condition`** (IMPLEMENTED):
+   - FIX: Added handler for `wait(condition)` statements
+   - IMPACT: Fixes process step overflow in UVM fork branches
+
+6. **Output Parameters for Class Types** (FIXED):
+   - FIX: Use `llvm.store` instead of `llhd.drv` for class output params
+   - IMPACT: Class output parameters work correctly
+
 **Remaining Blockers for UVM:**
-1. **Silent Fatal Error in uvm_component::new**: Component hierarchy registration fails
+1. **Class Member llhd.drv Issue**: Class member fields use `llhd.drv` when should use `llvm.store`
+   - ROOT CAUSE: `unrealized_conversion_cast` from `!llvm.ptr` to `!llhd.ref` not recognized as signal
+   - IMPACT: UVM callbacks/iterators fail during initialization (get_first_623)
 2. **Delay Accumulation**: `#delay` statements need explicit call stack (2-3 weeks)
 
 **Current Status:**
 - **Class Member Access**: ✅ FIXED - All test cases pass
 - **Virtual Method Dispatch**: ✅ FIXED - Polymorphism works correctly
-- **APB AVIP**: ✅ No longer crashes, UVM starts initializing
+- **Output Parameters**: ✅ FIXED - task/function output params work
+- **`wait(condition)`**: ✅ FIXED - __moore_wait_condition implemented
+- **APB AVIP**: ⚠️ Runs but fails on llhd.drv for class members
 - **uvm-core Compilation**: ✅ WORKS - 9.4 MB MLIR output generated
-- **AVIP Compilation**: ✅ All 6 AVIPs compile to HW level (APB, UART, AHB, AXI4, I2S, I3C)
-- **OpenTitan Simulation**: ✅ gpio_reg_top, uart_reg_top pass; timer_core simulates (functional issue)
+- **AVIP Compilation**: ✅ All 6 AVIPs compile to HW level
+- **OpenTitan Simulation**: ✅ gpio, uart pass; timer_core has functional issue
 - **External Suites**: yosys-sva 100%, sv-tests 88.5% (23/26), verilator 100% (17/17)
-- **circt-sim Tests**: ✅ 69/69 pass
+- **circt-sim Tests**: ✅ 70/70 pass
 
 **Test Suite Note (Iteration 260):**
 All external test suites are passing at high rates. The 3 sv-tests BMC failures are
