@@ -8944,6 +8944,21 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
           isa<LLVM::LLVMPointerType>(castOp.getInputs()[0].getType())) {
         llvmPtrInput = castOp.getInputs()[0];
       }
+    } else if (auto blockArg = dyn_cast<BlockArgument>(input)) {
+      // Check if this is a function parameter with !llhd.ref<T> type.
+      // Function parameters of ref type are memory pointers, not signals,
+      // so we need to use llvm.load instead of llhd.prb.
+      // The simulator cannot track signal references through function call
+      // boundaries for ref parameters.
+      auto *parentOp = blockArg.getOwner()->getParentOp();
+      if (isa<func::FuncOp>(parentOp) &&
+          isa<llhd::RefType>(input.getType())) {
+        // Cast the !llhd.ref<T> to !llvm.ptr for memory access
+        llvmPtrInput = UnrealizedConversionCastOp::create(
+                           rewriter, op.getLoc(),
+                           LLVM::LLVMPointerType::get(op.getContext()), input)
+                           .getResult(0);
+      }
     }
 
     // If the input was converted to an LLVM pointer (for queues, dynamic
