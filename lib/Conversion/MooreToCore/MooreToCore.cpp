@@ -9345,29 +9345,39 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     bool dstIsBlockArg = isa<BlockArgument>(dst);
 
     if (origIsBlockArg || dstIsBlockArg) {
-      // Check if the converted type is llhd.ref with LLVM pointer inside.
+      // Check if the converted type is llhd.ref - for function parameters,
+      // we need to use LLVM store instead of llhd.drv because the interpreter
+      // doesn't track refs passed through function calls (only signals).
       if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
-        auto nestedType = refType.getNestedType();
-        if (isa<LLVM::LLVMPointerType>(nestedType)) {
-          // Only apply this for function contexts, not for hw.module contexts.
-          // In hw.module, signals are properly tracked by the simulator.
-          // Also check if we're NOT in an llhd.process or seq.initial
-          // (those are inside hw.module and signals work there).
-          bool inFuncOp = op->template getParentOfType<func::FuncOp>() != nullptr;
-          bool inProcess = op->template getParentOfType<llhd::ProcessOp>() != nullptr;
-          bool inInitial = op->template getParentOfType<seq::InitialOp>() != nullptr;
+        // Only apply this for function contexts, not for hw.module contexts.
+        // In hw.module, signals are properly tracked by the simulator.
+        // Also check if we're NOT in an llhd.process or seq.initial
+        // (those are inside hw.module and signals work there).
+        bool inFuncOp = op->template getParentOfType<func::FuncOp>() != nullptr;
+        bool inProcess = op->template getParentOfType<llhd::ProcessOp>() != nullptr;
+        bool inInitial = op->template getParentOfType<seq::InitialOp>() != nullptr;
 
-          if (inFuncOp && !inProcess && !inInitial) {
-            // For function output parameters, use llvm.store instead of llhd.drv.
-            // Convert the ref to an LLVM pointer and store through it.
-            Value refAsPtr = UnrealizedConversionCastOp::create(
-                                 rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
-                                 dst)
-                                 .getResult(0);
-            LLVM::StoreOp::create(rewriter, loc, srcValue, refAsPtr);
-            rewriter.eraseOp(op);
-            return success();
+        if (inFuncOp && !inProcess && !inInitial) {
+          // For function output parameters, use llvm.store instead of llhd.drv.
+          // Convert the ref to an LLVM pointer and store through it.
+          Value refAsPtr = UnrealizedConversionCastOp::create(
+                               rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
+                               dst)
+                               .getResult(0);
+
+          // Convert the source value to LLVM type if needed.
+          Value storeVal = srcValue;
+          Type storeType = storeVal.getType();
+          Type llvmStoreType = convertToLLVMType(storeType);
+          if (storeType != llvmStoreType) {
+            storeVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmStoreType, storeVal)
+                           .getResult(0);
           }
+
+          LLVM::StoreOp::create(rewriter, loc, storeVal, refAsPtr);
+          rewriter.eraseOp(op);
+          return success();
         }
       }
     }
