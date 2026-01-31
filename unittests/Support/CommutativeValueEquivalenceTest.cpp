@@ -81,6 +81,40 @@ TEST(CommutativeValueEquivalenceTest, ICmpCommutation) {
   EXPECT_TRUE(equiv.isEquivalent(cmpAB, cmpBA));
 }
 
+TEST(CommutativeValueEquivalenceTest, XorAssociative) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("a"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("b"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("c"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto argA = top.getBodyBlock()->getArgument(0);
+  auto argB = top.getBodyBlock()->getArgument(1);
+  auto argC = top.getBodyBlock()->getArgument(2);
+
+  auto xorAB = comb::XorOp::create(builder, loc, argA, argB).getResult();
+  auto xorAB_C = comb::XorOp::create(builder, loc, xorAB, argC).getResult();
+
+  auto xorBC = comb::XorOp::create(builder, loc, argB, argC).getResult();
+  auto xorA_BC = comb::XorOp::create(builder, loc, argA, xorBC).getResult();
+
+  CommutativeValueEquivalence equiv;
+  EXPECT_TRUE(equiv.isEquivalent(xorAB_C, xorA_BC));
+}
+
 TEST(CommutativeValueEquivalenceTest, NonEquivalent) {
   MLIRContext context;
   context.loadDialect<hw::HWDialect, comb::CombDialect>();
