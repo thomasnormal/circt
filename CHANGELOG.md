@@ -8,6 +8,27 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
 ### Status
 - **Starting XFAIL count**: 17
 
+### Fixed in this Iteration
+1. **circt-sim Scheduler Abort Checks**:
+   - Propagated abort requests into ProcessScheduler and ParallelScheduler
+   - Ensures wall-clock timeouts/interrupts stop delta-cycle execution loops
+   - **Tests**: `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`,
+     `unittests/Dialect/Sim/ParallelSchedulerTest.cpp`
+   - **Files**: `include/circt/Dialect/Sim/ProcessScheduler.h`,
+     `lib/Dialect/Sim/ProcessScheduler.cpp`,
+     `lib/Dialect/Sim/ParallelScheduler.cpp`,
+     `tools/circt-sim/circt-sim.cpp`
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| CIRCTSimTests (abort tests) | **PASS** | ProcessScheduler/ParallelScheduler abort coverage |
+| sv-tests BMC | **23/23 pass** | 3 xfail, 0 fail (26 total) |
+| yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
+| verilator-verification BMC | **17/17 pass** | No failures |
+| AVIP (APB) circt-verilog | **PASS** | `run_avip_circt_verilog.sh ~/mbit/apb_avip` |
+| OpenTitan prim_count (circt-sim) | **PASS** | `run_opentitan_circt_sim.sh prim_count` |
+
 ---
 
 ## Iteration 274 - January 31, 2026
@@ -236,6 +257,13 @@ Enable UVM with Accellera's uvm-core library by fixing llhd.prb/drv on local var
      LowerToBMC dedup).
    - **TEST**: `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-property.mlir`
    - **UNIT TEST**: `unittests/Support/CommutativeValueEquivalenceTest.cpp`
+3. **circt-sim Wall-Clock Timeout Enforcement**:
+   - **ROOT CAUSE**: Wall-clock timeouts were only checked in the main loop,
+     so long-running process execution (or initialization) could hang forever.
+   - **FIX**: Add abort callbacks/flags checked inside the LLHD interpreter and
+     an external watchdog thread to enforce timeouts; add abort checks to init
+     loops.
+   - **TEST**: `test/Tools/circt-sim/timeout-hang.mlir`
 
 ### Test Results
 | Suite | Status | Notes |
@@ -264,6 +292,7 @@ Enable UVM with Accellera's uvm-core library by fixing llhd.prb/drv on local var
 - **OpenTitan**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts` still timing
   out (ran with `--timeout=30`/`--max-cycles=200` and tool-level timeouts; needs
   investigation).
+- **circt-sim timeout regression**: `build/bin/circt-sim test/Tools/circt-sim/timeout-hang.mlir --max-process-steps=0 --timeout=1 | FileCheck`.
 
 ---
 

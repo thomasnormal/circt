@@ -777,6 +777,14 @@ public:
   // Process Execution Control
   //===--------------------------------------------------------------------===//
 
+  /// Set a callback used to determine whether execution should abort.
+  void setShouldAbortCallback(std::function<bool()> callback) {
+    shouldAbortCallback = std::move(callback);
+  }
+
+  /// Check if an abort has been requested.
+  bool isAbortRequested() const;
+
   /// Mark a process as ready to run.
   void scheduleProcess(ProcessId id, SchedulingRegion region);
 
@@ -912,6 +920,9 @@ private:
 
   // Statistics
   Statistics stats;
+
+  // Optional abort callback.
+  std::function<bool()> shouldAbortCallback;
 
   // Initialization flag
   bool initialized = false;
