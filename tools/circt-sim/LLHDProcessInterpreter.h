@@ -460,9 +460,17 @@ private:
   /// Evaluate a value for continuous assignments by reading from signal state.
   InterpretedValue evaluateContinuousValue(mlir::Value value);
 
-  /// Helper that tracks the recursion stack to detect cycles.
+  /// Helper that tracks the recursion stack to detect cycles and depth.
+  /// Returns X if depth exceeds kMaxContinuousValueDepth to prevent stack
+  /// overflow on complex designs with deep continuous assignment chains.
   InterpretedValue evaluateContinuousValueImpl(
-      mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress);
+      mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress,
+      unsigned depth = 0);
+
+  /// Maximum recursion depth for evaluateContinuousValueImpl.
+  /// Complex OpenTitan IPs can have deep chains of continuous assignments;
+  /// this limit prevents stack overflow while allowing reasonable depth.
+  static constexpr unsigned kMaxContinuousValueDepth = 500;
 
   /// Evaluate an llhd.combinational op and return its yielded values.
   bool evaluateCombinationalOp(llhd::CombinationalOp combOp,

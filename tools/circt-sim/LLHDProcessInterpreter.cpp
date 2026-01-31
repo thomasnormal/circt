@@ -1651,11 +1651,20 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     mlir::Value value) {
   llvm::DenseSet<mlir::Value> inProgress;
-  return evaluateContinuousValueImpl(value, inProgress);
+  return evaluateContinuousValueImpl(value, inProgress, 0);
 }
 
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
-    mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress) {
+    mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress, unsigned depth) {
+  // Depth limiting: prevent stack overflow on complex designs with deep
+  // continuous assignment chains (e.g., complex OpenTitan IPs like gpio, uart).
+  if (depth >= kMaxContinuousValueDepth) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Warning: Maximum recursion depth (" << kMaxContinuousValueDepth
+               << ") exceeded in evaluateContinuousValue\n");
+    return InterpretedValue::makeX(getTypeWidth(value.getType()));
+  }
+
   // Cycle detection: if this value is already on the recursion stack, return X.
   if (!inProgress.insert(value).second) {
     LLVM_DEBUG(llvm::dbgs()
@@ -1671,7 +1680,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   auto instIt = instanceOutputMap.find(value);
   if (instIt != instanceOutputMap.end())
-    return evaluateContinuousValueImpl(instIt->second, inProgress);
+    return evaluateContinuousValueImpl(instIt->second, inProgress, depth + 1);
 
   if (auto result = dyn_cast<OpResult>(value)) {
     if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
@@ -1691,7 +1700,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
     auto argIt = inputValueMap.find(arg);
     if (argIt != inputValueMap.end() && argIt->second != value)
-      return evaluateContinuousValueImpl(argIt->second, inProgress);
+      return evaluateContinuousValueImpl(argIt->second, inProgress, depth + 1);
     SignalId sigId = getSignalId(arg);
     if (sigId != 0) {
       const SignalValue &sv = scheduler.getSignalValue(sigId);
@@ -1718,11 +1727,11 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   }
 
   if (auto toClockOp = value.getDefiningOp<seq::ToClockOp>()) {
-    return evaluateContinuousValueImpl(toClockOp.getInput(), inProgress);
+    return evaluateContinuousValueImpl(toClockOp.getInput(), inProgress, depth + 1);
   }
 
   if (auto fromClockOp = value.getDefiningOp<seq::FromClockOp>()) {
-    return evaluateContinuousValueImpl(fromClockOp.getInput(), inProgress);
+    return evaluateContinuousValueImpl(fromClockOp.getInput(), inProgress, depth + 1);
   }
 
   // Check if this is a probe operation - read from signal state
@@ -1765,7 +1774,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   // Handle struct extract
   if (auto extractOp = value.getDefiningOp<hw::StructExtractOp>()) {
     InterpretedValue inputVal =
-        evaluateContinuousValueImpl(extractOp.getInput(), inProgress);
+        evaluateContinuousValueImpl(extractOp.getInput(), inProgress, depth + 1);
     if (inputVal.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
@@ -1798,9 +1807,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   // Handle array get
   if (auto arrayGetOp = value.getDefiningOp<hw::ArrayGetOp>()) {
     InterpretedValue arrayVal =
-        evaluateContinuousValueImpl(arrayGetOp.getInput(), inProgress);
+        evaluateContinuousValueImpl(arrayGetOp.getInput(), inProgress, depth + 1);
     InterpretedValue indexVal =
-        evaluateContinuousValueImpl(arrayGetOp.getIndex(), inProgress);
+        evaluateContinuousValueImpl(arrayGetOp.getIndex(), inProgress, depth + 1);
     if (arrayVal.isX() || indexVal.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
 
@@ -1828,7 +1837,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     unsigned bitOffset = totalWidth;
     for (size_t i = 0; i < createOp.getInput().size(); ++i) {
       InterpretedValue fieldVal =
-          evaluateContinuousValueImpl(createOp.getInput()[i], inProgress);
+          evaluateContinuousValueImpl(createOp.getInput()[i], inProgress, depth + 1);
       unsigned fieldWidth = getTypeWidth(elements[i].type);
       bitOffset -= fieldWidth;
 
@@ -1846,9 +1855,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto injectOp = value.getDefiningOp<hw::StructInjectOp>()) {
     InterpretedValue structVal =
-        evaluateContinuousValueImpl(injectOp.getInput(), inProgress);
+        evaluateContinuousValueImpl(injectOp.getInput(), inProgress, depth + 1);
     InterpretedValue newVal =
-        evaluateContinuousValueImpl(injectOp.getNewValue(), inProgress);
+        evaluateContinuousValueImpl(injectOp.getNewValue(), inProgress, depth + 1);
     unsigned totalWidth = getTypeWidth(injectOp.getType());
     if (structVal.isX() || newVal.isX())
       return InterpretedValue::makeX(totalWidth);
@@ -1887,9 +1896,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       unsigned fieldIndex = fieldIndexAttr.getValue().getZExtValue();
       auto elements = structType.getElements();
       InterpretedValue structVal =
-          evaluateContinuousValueImpl(input, inProgress);
+          evaluateContinuousValueImpl(input, inProgress, depth + 1);
       InterpretedValue newVal =
-          evaluateContinuousValueImpl(newValue, inProgress);
+          evaluateContinuousValueImpl(newValue, inProgress, depth + 1);
       if (structVal.isX() || newVal.isX())
         return InterpretedValue::makeX(totalWidth);
 
@@ -1911,7 +1920,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   // Handle bitcast
   if (auto bitcastOp = value.getDefiningOp<hw::BitcastOp>()) {
     InterpretedValue inputVal =
-        evaluateContinuousValueImpl(bitcastOp.getInput(), inProgress);
+        evaluateContinuousValueImpl(bitcastOp.getInput(), inProgress, depth + 1);
     unsigned outputWidth = getTypeWidth(bitcastOp.getType());
     if (inputVal.isX())
       return InterpretedValue::makeX(outputWidth);
@@ -1926,9 +1935,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
   // Handle comb operations
   if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
     InterpretedValue lhs =
-        evaluateContinuousValueImpl(xorOp.getOperand(0), inProgress);
+        evaluateContinuousValueImpl(xorOp.getOperand(0), inProgress, depth + 1);
     InterpretedValue rhs =
-        evaluateContinuousValueImpl(xorOp.getOperand(1), inProgress);
+        evaluateContinuousValueImpl(xorOp.getOperand(1), inProgress, depth + 1);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     llvm::APInt lhsVal = lhs.getAPInt();
@@ -1944,7 +1953,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     result.setAllBits();
     for (Value operand : andOp.getOperands()) {
       InterpretedValue opVal =
-          evaluateContinuousValueImpl(operand, inProgress);
+          evaluateContinuousValueImpl(operand, inProgress, depth + 1);
       if (opVal.isX())
         return InterpretedValue::makeX(width);
       llvm::APInt opBits = opVal.getAPInt();
@@ -1962,7 +1971,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     llvm::APInt result(width, 0);
     for (Value operand : orOp.getOperands()) {
       InterpretedValue opVal =
-          evaluateContinuousValueImpl(operand, inProgress);
+          evaluateContinuousValueImpl(operand, inProgress, depth + 1);
       if (opVal.isX())
         return InterpretedValue::makeX(width);
       llvm::APInt opBits = opVal.getAPInt();
@@ -1977,9 +1986,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
     InterpretedValue lhs =
-        evaluateContinuousValueImpl(icmpOp.getLhs(), inProgress);
+        evaluateContinuousValueImpl(icmpOp.getLhs(), inProgress, depth + 1);
     InterpretedValue rhs =
-        evaluateContinuousValueImpl(icmpOp.getRhs(), inProgress);
+        evaluateContinuousValueImpl(icmpOp.getRhs(), inProgress, depth + 1);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(1);
 
@@ -2018,12 +2027,12 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto muxOp = value.getDefiningOp<comb::MuxOp>()) {
     InterpretedValue cond =
-        evaluateContinuousValueImpl(muxOp.getCond(), inProgress);
+        evaluateContinuousValueImpl(muxOp.getCond(), inProgress, depth + 1);
     if (cond.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     if (cond.getUInt64() != 0)
-      return evaluateContinuousValueImpl(muxOp.getTrueValue(), inProgress);
-    return evaluateContinuousValueImpl(muxOp.getFalseValue(), inProgress);
+      return evaluateContinuousValueImpl(muxOp.getTrueValue(), inProgress, depth + 1);
+    return evaluateContinuousValueImpl(muxOp.getFalseValue(), inProgress, depth + 1);
   }
 
   if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
@@ -2032,7 +2041,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     unsigned bitOffset = totalWidth;
     for (Value operand : concatOp.getOperands()) {
       InterpretedValue opVal =
-          evaluateContinuousValueImpl(operand, inProgress);
+          evaluateContinuousValueImpl(operand, inProgress, depth + 1);
       unsigned width = getTypeWidth(operand.getType());
       bitOffset -= width;
       if (opVal.isX())
@@ -2049,7 +2058,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto extractOp = value.getDefiningOp<comb::ExtractOp>()) {
     InterpretedValue inputVal =
-        evaluateContinuousValueImpl(extractOp.getInput(), inProgress);
+        evaluateContinuousValueImpl(extractOp.getInput(), inProgress, depth + 1);
     unsigned width = getTypeWidth(value.getType());
     if (inputVal.isX())
       return InterpretedValue::makeX(width);
@@ -2061,9 +2070,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto addOp = value.getDefiningOp<comb::AddOp>()) {
     InterpretedValue lhs =
-        evaluateContinuousValueImpl(addOp.getOperand(0), inProgress);
+        evaluateContinuousValueImpl(addOp.getOperand(0), inProgress, depth + 1);
     InterpretedValue rhs =
-        evaluateContinuousValueImpl(addOp.getOperand(1), inProgress);
+        evaluateContinuousValueImpl(addOp.getOperand(1), inProgress, depth + 1);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     llvm::APInt lhsVal = lhs.getAPInt();
@@ -2075,9 +2084,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
 
   if (auto subOp = value.getDefiningOp<comb::SubOp>()) {
     InterpretedValue lhs =
-        evaluateContinuousValueImpl(subOp.getOperand(0), inProgress);
+        evaluateContinuousValueImpl(subOp.getOperand(0), inProgress, depth + 1);
     InterpretedValue rhs =
-        evaluateContinuousValueImpl(subOp.getOperand(1), inProgress);
+        evaluateContinuousValueImpl(subOp.getOperand(1), inProgress, depth + 1);
     if (lhs.isX() || rhs.isX())
       return InterpretedValue::makeX(getTypeWidth(value.getType()));
     llvm::APInt lhsVal = lhs.getAPInt();
@@ -4949,6 +4958,90 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       }
     }
 
+    // Handle llhd.sig.struct_extract - probe a field within a struct signal.
+    // We need to read the parent signal and extract the relevant field bits.
+    if (auto sigExtractOp = signal.getDefiningOp<llhd::SigStructExtractOp>()) {
+      // Find the parent signal ID by tracing through nested extracts
+      Value parentSignal = sigExtractOp.getInput();
+      SignalId parentSigId = getSignalId(parentSignal);
+
+      // Handle nested struct extracts by tracing to the root signal
+      llvm::SmallVector<llhd::SigStructExtractOp, 4> extractChain;
+      extractChain.push_back(sigExtractOp);
+
+      while (parentSigId == 0) {
+        if (auto nestedExtract =
+                parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+          extractChain.push_back(nestedExtract);
+          parentSignal = nestedExtract.getInput();
+          parentSigId = getSignalId(parentSignal);
+        } else {
+          break;
+        }
+      }
+
+      if (parentSigId == 0) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Error: Could not find parent signal for struct extract probe\n");
+        return failure();
+      }
+
+      // Get the current value of the parent signal
+      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+
+      // Compute the bit offset by walking the extract chain in reverse
+      // (from root signal to the target field)
+      unsigned bitOffset = 0;
+      Type currentType = parentSignal.getType();
+      if (auto refType = dyn_cast<llhd::RefType>(currentType))
+        currentType = refType.getNestedType();
+
+      for (auto it = extractChain.rbegin(); it != extractChain.rend(); ++it) {
+        auto extractOp = *it;
+        auto structType = cast<hw::StructType>(currentType);
+        auto elements = structType.getElements();
+        StringRef fieldName = extractOp.getField();
+
+        auto fieldIndexOpt = structType.getFieldIndex(fieldName);
+        if (!fieldIndexOpt) {
+          LLVM_DEBUG(llvm::dbgs() << "  Error: Field not found: " << fieldName
+                                  << "\n");
+          return failure();
+        }
+        unsigned fieldIndex = *fieldIndexOpt;
+
+        // Fields are laid out from high bits to low bits
+        // Calculate offset from the low bit of the current struct
+        unsigned fieldOffset = 0;
+        for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+          fieldOffset += getTypeWidth(elements[i].type);
+
+        bitOffset += fieldOffset;
+        currentType = elements[fieldIndex].type;
+      }
+
+      unsigned fieldWidth = getTypeWidth(currentType);
+
+      // Extract the field value from the parent signal
+      InterpretedValue fieldVal;
+      if (parentVal.isX()) {
+        fieldVal = InterpretedValue::makeX(fieldWidth);
+      } else {
+        APInt parentBits = parentVal.getAPInt();
+        APInt fieldBits = parentBits.extractBits(fieldWidth, bitOffset);
+        fieldVal = InterpretedValue(fieldBits);
+      }
+
+      setValue(procId, probeOp.getResult(), fieldVal);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Probe struct field at offset " << bitOffset
+                 << " width " << fieldWidth << " from signal " << parentSigId
+                 << " = " << (fieldVal.isX() ? "X" : std::to_string(fieldVal.getUInt64()))
+                 << "\n");
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in probe\n");
     return failure();
   }
@@ -5046,6 +5139,120 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         }
       }
     }
+
+    // Handle llhd.sig.struct_extract - drive to a field within a struct signal.
+    // We need to read-modify-write the parent signal.
+    if (auto sigExtractOp = signal.getDefiningOp<llhd::SigStructExtractOp>()) {
+      // Find the parent signal ID by tracing through nested extracts
+      Value parentSignal = sigExtractOp.getInput();
+      SignalId parentSigId = getSignalId(parentSignal);
+
+      // Handle nested struct extracts by tracing to the root signal
+      llvm::SmallVector<llhd::SigStructExtractOp, 4> extractChain;
+      extractChain.push_back(sigExtractOp);
+
+      while (parentSigId == 0) {
+        if (auto nestedExtract =
+                parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
+          extractChain.push_back(nestedExtract);
+          parentSignal = nestedExtract.getInput();
+          parentSigId = getSignalId(parentSignal);
+        } else {
+          break;
+        }
+      }
+
+      if (parentSigId == 0) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Error: Could not find parent signal for struct extract\n");
+        return failure();
+      }
+
+      // Get the value to drive
+      InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+      // Get the current value of the parent signal
+      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+
+      // If parent is X, we can still drive a field (result will be X except for
+      // the driven field)
+      unsigned parentWidth = parentVal.getWidth();
+      APInt result = parentVal.isX() ? APInt::getZero(parentWidth)
+                                     : parentVal.getAPInt();
+
+      // Compute the bit offset by walking the extract chain in reverse
+      // (from root signal to the target field)
+      unsigned bitOffset = 0;
+      Type currentType = parentSignal.getType();
+      if (auto refType = dyn_cast<llhd::RefType>(currentType))
+        currentType = refType.getNestedType();
+
+      for (auto it = extractChain.rbegin(); it != extractChain.rend(); ++it) {
+        auto extractOp = *it;
+        auto structType = cast<hw::StructType>(currentType);
+        auto elements = structType.getElements();
+        StringRef fieldName = extractOp.getField();
+
+        auto fieldIndexOpt = structType.getFieldIndex(fieldName);
+        if (!fieldIndexOpt) {
+          LLVM_DEBUG(llvm::dbgs() << "  Error: Field not found: " << fieldName
+                                  << "\n");
+          return failure();
+        }
+        unsigned fieldIndex = *fieldIndexOpt;
+
+        // Fields are laid out from high bits to low bits
+        // Calculate offset from the low bit of the current struct
+        unsigned fieldOffset = 0;
+        for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+          fieldOffset += getTypeWidth(elements[i].type);
+
+        bitOffset += fieldOffset;
+        currentType = elements[fieldIndex].type;
+      }
+
+      unsigned fieldWidth = getTypeWidth(currentType);
+
+      // Insert the new value at the computed bit offset
+      APInt fieldValue = driveVal.isX() ? APInt::getZero(fieldWidth)
+                                        : driveVal.getAPInt();
+      if (fieldValue.getBitWidth() < fieldWidth)
+        fieldValue = fieldValue.zext(fieldWidth);
+      else if (fieldValue.getBitWidth() > fieldWidth)
+        fieldValue = fieldValue.trunc(fieldWidth);
+
+      result.insertBits(fieldValue, bitOffset);
+
+      // Get the delay time
+      SimTime delay = convertTimeValue(procId, driveOp.getTime());
+      SimTime currentTime = scheduler.getCurrentTime();
+      SimTime targetTime = currentTime.advanceTime(delay.realTime);
+      if (delay.deltaStep > 0)
+        targetTime.deltaStep = delay.deltaStep;
+
+      // Use the same driver ID scheme
+      uint64_t driverId = (static_cast<uint64_t>(procId) << 32) |
+                          static_cast<uint64_t>(parentSigId);
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Drive to struct field at offset " << bitOffset
+                 << " width " << fieldWidth << " in signal " << parentSigId
+                 << "\n");
+
+      // Schedule the signal update
+      SignalValue newVal(result);
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::NBA,
+          Event([this, parentSigId, driverId, newVal]() {
+            scheduler.updateSignalWithStrength(parentSigId, driverId, newVal,
+                                               DriveStrength::Strong,
+                                               DriveStrength::Strong);
+          }));
+
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in drive\n");
     return failure();
   }
@@ -7317,9 +7524,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     };
     if (apValue.getBitWidth() > 64) {
       // Handle wide values using APInt operations
+      unsigned bitWidth = apValue.getBitWidth();
       for (unsigned i = 0; i < storeSize; ++i) {
-        storeByte(i, static_cast<uint8_t>(
-                         apValue.extractBits(8, i * 8).getZExtValue()));
+        unsigned bitPos = i * 8;
+        if (bitPos >= bitWidth) {
+          // Beyond the value's bit width - store zero
+          storeByte(i, 0);
+        } else {
+          // Extract available bits (up to 8), remaining bits are zero
+          unsigned bitsAvailable = std::min(8u, bitWidth - bitPos);
+          uint8_t byteVal = static_cast<uint8_t>(
+              apValue.extractBits(bitsAvailable, bitPos).getZExtValue());
+          storeByte(i, byteVal);
+        }
       }
     } else {
       uint64_t value = storeVal.getUInt64();
