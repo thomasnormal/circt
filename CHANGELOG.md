@@ -154,6 +154,12 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - **Tests**: `test/Conversion/VerifToSMT/bmc-concat-*.mlir`
    - **Files**: `include/circt/Support/LTLSequenceNFA.h`
 
+14. **BMC derived clock normalization**:
+   - Simplify neutral boolean ops and `icmp` against constants when resolving
+     clock positions so derived clocks map to the correct BMC input
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-derived-clock-neutral-ops.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|

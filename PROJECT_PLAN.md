@@ -348,6 +348,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   failures; `bmc-repetition.mlir` now passes
 - **BMC concat regressions**: removed XFAILs and updated CHECKs for concat
   sequence tests; sequence-typed block args now emit a deterministic NFA error
+- **BMC derived clock normalization**: simplify neutral boolean ops and
+  `icmp`-with-constant expressions during clock resolution to map derived
+  clocks back to the correct BMC input
 - **LEC result tokens**: `circt-lec --run-smtlib` now emits `LEC_RESULT=...`,
   plus a `--print-counterexample` alias for `--print-solver-output`
 - **yosys-sva LEC runner fix**: removed unsupported `--fail-on-inequivalent`,

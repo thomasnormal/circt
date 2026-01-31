@@ -3523,40 +3523,119 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
-    auto isConstEqBool = [&](Value val, bool expected) -> bool {
-      if (auto literal = getConstI1Value(val))
-        return *literal == expected;
-      return false;
-    };
-
-    auto collectXorInfo = [&](Value val, Value &inner,
-                              bool &invert) -> bool {
-      auto xorOp = val.getDefiningOp<comb::XorOp>();
-      if (!xorOp || xorOp.getNumOperands() != 2)
-        return false;
-      Value lhs = xorOp.getOperand(0);
-      Value rhs = xorOp.getOperand(1);
-      if (isConstEqBool(lhs, false) && !getConstI1Value(rhs)) {
-        inner = rhs;
-        invert = false;
-        return true;
+    auto simplifyClockValue = [&](Value val, bool &invert) -> Value {
+      while (val) {
+        if (auto cast = val.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (cast->getNumOperands() == 1)
+            val = cast->getOperand(0);
+          else
+            break;
+          continue;
+        }
+        if (auto fromClock = val.getDefiningOp<seq::FromClockOp>()) {
+          if (auto toClock =
+                  fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
+            val = toClock.getInput();
+            continue;
+          }
+          break;
+        }
+        if (auto bitcast = val.getDefiningOp<hw::BitcastOp>()) {
+          val = bitcast.getInput();
+          continue;
+        }
+        if (auto xorOp = val.getDefiningOp<comb::XorOp>()) {
+          if (xorOp.getNumOperands() == 2) {
+            if (auto literal = getConstI1Value(xorOp.getOperand(0))) {
+              invert ^= *literal;
+              val = xorOp.getOperand(1);
+              continue;
+            }
+            if (auto literal = getConstI1Value(xorOp.getOperand(1))) {
+              invert ^= *literal;
+              val = xorOp.getOperand(0);
+              continue;
+            }
+          }
+        }
+        if (auto andOp = val.getDefiningOp<comb::AndOp>()) {
+          SmallVector<Value> nonConst;
+          bool sawFalse = false;
+          for (Value operand : andOp.getOperands()) {
+            if (auto literal = getConstI1Value(operand)) {
+              if (!*literal) {
+                sawFalse = true;
+                break;
+              }
+              continue;
+            }
+            nonConst.push_back(operand);
+          }
+          if (sawFalse)
+            return Value();
+          if (nonConst.empty())
+            return Value();
+          if (nonConst.size() == 1) {
+            val = nonConst.front();
+            continue;
+          }
+        }
+        if (auto orOp = val.getDefiningOp<comb::OrOp>()) {
+          SmallVector<Value> nonConst;
+          bool sawTrue = false;
+          for (Value operand : orOp.getOperands()) {
+            if (auto literal = getConstI1Value(operand)) {
+              if (*literal) {
+                sawTrue = true;
+                break;
+              }
+              continue;
+            }
+            nonConst.push_back(operand);
+          }
+          if (sawTrue)
+            return Value();
+          if (nonConst.empty())
+            return Value();
+          if (nonConst.size() == 1) {
+            val = nonConst.front();
+            continue;
+          }
+        }
+        if (auto icmpOp = val.getDefiningOp<comb::ICmpOp>()) {
+          Value other;
+          bool constVal = false;
+          if (auto literal = getConstI1Value(icmpOp.getLhs())) {
+            constVal = *literal;
+            other = icmpOp.getRhs();
+          } else if (auto literal = getConstI1Value(icmpOp.getRhs())) {
+            constVal = *literal;
+            other = icmpOp.getLhs();
+          } else {
+            break;
+          }
+          switch (icmpOp.getPredicate()) {
+          case comb::ICmpPredicate::eq:
+          case comb::ICmpPredicate::ceq:
+          case comb::ICmpPredicate::weq:
+            if (!constVal)
+              invert = !invert;
+            val = other;
+            continue;
+          case comb::ICmpPredicate::ne:
+          case comb::ICmpPredicate::cne:
+          case comb::ICmpPredicate::wne:
+            if (constVal)
+              invert = !invert;
+            val = other;
+            continue;
+          default:
+            break;
+          }
+        }
+        break;
       }
-      if (isConstEqBool(rhs, false) && !getConstI1Value(lhs)) {
-        inner = lhs;
-        invert = false;
-        return true;
-      }
-      if (isConstEqBool(lhs, true) && !getConstI1Value(rhs)) {
-        inner = rhs;
-        invert = true;
-        return true;
-      }
-      if (isConstEqBool(rhs, true) && !getConstI1Value(lhs)) {
-        inner = lhs;
-        invert = true;
-        return true;
-      }
-      return false;
+      return val;
     };
 
     auto invertClockEdge = [](ltl::ClockEdge edge) -> ltl::ClockEdge {
@@ -3640,41 +3719,26 @@ struct VerifBoundedModelCheckingOpConversion
             [&](Value clockValue) -> std::optional<ClockPosInfo> {
       if (!clockValue)
         return std::nullopt;
-      if (auto it = clockValueToPos.find(clockValue);
+      bool invert = false;
+      Value simplified = simplifyClockValue(clockValue, invert);
+      if (!simplified)
+        return std::nullopt;
+      if (auto it = clockValueToPos.find(simplified);
           it != clockValueToPos.end())
         return it->second;
-      if (auto cast = clockValue.getDefiningOp<UnrealizedConversionCastOp>()) {
-        if (cast->getNumOperands() == 1)
-          if (auto info = resolveClockPosInfoSimple(cast->getOperand(0)))
-            return info;
-      }
-      if (auto fromClock = clockValue.getDefiningOp<seq::FromClockOp>()) {
-        if (auto toClock =
-                fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
-          if (auto info = resolveClockPosInfoSimple(toClock.getInput()))
-            return info;
-        }
-      }
-      // Handle inversion via XOR with constant (comb dialect uses XorOp for
-      // NOT, there is no dedicated NotOp)
-      {
-        Value inner;
-        bool invert = false;
-        if (collectXorInfo(clockValue, inner, invert)) {
-          auto innerInfo = resolveClockPosInfoSimple(inner);
-          if (!innerInfo)
-            return std::nullopt;
-          if (invert)
-            innerInfo->invert = !innerInfo->invert;
-          return innerInfo;
-        }
-      }
       for (auto &entry : clockValueToPos) {
-        if (clockEquivalence.isEquivalent(clockValue, entry.first))
-          return entry.second;
+        if (clockEquivalence.isEquivalent(simplified, entry.first)) {
+          ClockPosInfo info = entry.second;
+          if (invert)
+            info.invert = !info.invert;
+          return info;
+        }
       }
-      if (auto info = resolveClockSourcePos(clockValue))
+      if (auto info = resolveClockSourcePos(simplified)) {
+        if (invert)
+          info->invert = !info->invert;
         return info;
+      }
       return std::nullopt;
     };
 
