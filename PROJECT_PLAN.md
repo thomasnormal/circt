@@ -307,6 +307,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   uses per-signal encoding tags to avoid width-based 4-state heuristics
 - **BMC clocked property remap**: `ltl.clock` operands now use derived BMC
   clock inputs to avoid mismatched clock equivalence
+- **Clocked assert metadata**: `LowerLTLToCore` now preserves `bmc.clock` and
+  `bmc.clock_edge` when lowering clocked assertions so BMC gates checks to the
+  correct clock domain
 
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements

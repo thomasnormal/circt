@@ -1001,6 +1001,75 @@ struct LowerLTLToCorePass
 void LowerLTLToCorePass::runOnOperation() {
   auto hwModule = getOperation();
   Value defaultClock;
+  std::function<bool(Value, BlockArgument &)> traceClockRoot =
+      [&](Value value, BlockArgument &root) -> bool {
+    if (!value)
+      return false;
+    if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
+      value = fromClock.getInput();
+    if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
+      value = toClock.getInput();
+    if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+        return traceClockRoot(cast->getOperand(0), root);
+    }
+    if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
+      return traceClockRoot(bitcast.getInput(), root);
+    if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
+      return traceClockRoot(extract.getInput(), root);
+    if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
+      return traceClockRoot(extractOp.getInput(), root);
+    if (auto cst = value.getDefiningOp<hw::ConstantOp>())
+      return true;
+    if (auto cst = value.getDefiningOp<arith::ConstantOp>())
+      return true;
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      if (!root)
+        root = arg;
+      return arg == root;
+    }
+    if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+      for (auto operand : andOp.getOperands())
+        if (!traceClockRoot(operand, root))
+          return false;
+      return true;
+    }
+    if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
+      for (auto operand : orOp.getOperands())
+        if (!traceClockRoot(operand, root))
+          return false;
+      return true;
+    }
+    if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
+      for (auto operand : xorOp.getOperands())
+        if (!traceClockRoot(operand, root))
+          return false;
+      return true;
+    }
+    if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
+      for (auto operand : concatOp.getOperands())
+        if (!traceClockRoot(operand, root))
+          return false;
+      return true;
+    }
+    return false;
+  };
+  auto resolveClockInputName = [&](Value clock) -> StringAttr {
+    if (!clock || !hwModule)
+      return {};
+    BlockArgument root;
+    if (!traceClockRoot(clock, root))
+      return {};
+    if (root.getOwner() != hwModule.getBodyBlock())
+      return {};
+    auto inputNames = hwModule.getInputNames();
+    if (root.getArgNumber() >= inputNames.size())
+      return {};
+    auto nameAttr = dyn_cast<StringAttr>(inputNames[root.getArgNumber()]);
+    if (!nameAttr || nameAttr.getValue().empty())
+      return {};
+    return nameAttr;
+  };
   auto getDefaultClock = [&]() -> Value {
     if (defaultClock || !hwModule)
       return defaultClock;
@@ -1192,6 +1261,7 @@ void LowerLTLToCorePass::runOnOperation() {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
+    auto clockName = resolveClockInputName(op.getClock());
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
@@ -1215,11 +1285,18 @@ void LowerLTLToCorePass::runOnOperation() {
                                                 builder.getI1Type(), 1)),
                                         result.safety},
                                     true);
-    (void)verif::AssertOp::create(builder, op.getLoc(), property,
-                                   Value(), op.getLabelAttr());
+    auto assertOp = verif::AssertOp::create(builder, op.getLoc(), property,
+                                            Value(), op.getLabelAttr());
+    auto edgeAttr = ltl::ClockEdgeAttr::get(builder.getContext(), ltlEdge);
+    if (clockName)
+      assertOp->setAttr("bmc.clock", clockName);
+    assertOp->setAttr("bmc.clock_edge", edgeAttr);
     auto finalAssert = verif::AssertOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(),
         StringAttr{});
+    if (clockName)
+      finalAssert->setAttr("bmc.clock", clockName);
+    finalAssert->setAttr("bmc.clock_edge", edgeAttr);
     finalAssert->setAttr("bmc.final", builder.getUnitAttr());
     op.erase();
   }
@@ -1228,6 +1305,7 @@ void LowerLTLToCorePass::runOnOperation() {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
+    auto clockName = resolveClockInputName(op.getClock());
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
@@ -1250,11 +1328,18 @@ void LowerLTLToCorePass::runOnOperation() {
                                                 builder.getI1Type(), 1)),
                                         result.safety},
                                     true);
-    (void)verif::AssumeOp::create(builder, op.getLoc(), property,
-                                   Value(), op.getLabelAttr());
+    auto assumeOp = verif::AssumeOp::create(builder, op.getLoc(), property,
+                                            Value(), op.getLabelAttr());
+    auto edgeAttr = ltl::ClockEdgeAttr::get(builder.getContext(), ltlEdge);
+    if (clockName)
+      assumeOp->setAttr("bmc.clock", clockName);
+    assumeOp->setAttr("bmc.clock_edge", edgeAttr);
     auto finalAssume = verif::AssumeOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(),
         StringAttr{});
+    if (clockName)
+      finalAssume->setAttr("bmc.clock", clockName);
+    finalAssume->setAttr("bmc.clock_edge", edgeAttr);
     finalAssume->setAttr("bmc.final", builder.getUnitAttr());
     op.erase();
   }
@@ -1263,6 +1348,7 @@ void LowerLTLToCorePass::runOnOperation() {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
+    auto clockName = resolveClockInputName(op.getClock());
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
@@ -1280,10 +1366,17 @@ void LowerLTLToCorePass::runOnOperation() {
                                      SmallVector<Value, 2>{enable,
                                                            result.safety},
                                      true);
-    (void)verif::CoverOp::create(builder, op.getLoc(), property,
-                                  Value(), op.getLabelAttr());
+    auto coverOp = verif::CoverOp::create(builder, op.getLoc(), property,
+                                          Value(), op.getLabelAttr());
+    auto edgeAttr = ltl::ClockEdgeAttr::get(builder.getContext(), ltlEdge);
+    if (clockName)
+      coverOp->setAttr("bmc.clock", clockName);
+    coverOp->setAttr("bmc.clock_edge", edgeAttr);
     auto finalCover = verif::CoverOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(), StringAttr{});
+    if (clockName)
+      finalCover->setAttr("bmc.clock", clockName);
+    finalCover->setAttr("bmc.clock_edge", edgeAttr);
     finalCover->setAttr("bmc.final", builder.getUnitAttr());
     op.erase();
   }
