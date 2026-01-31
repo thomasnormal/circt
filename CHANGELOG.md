@@ -1014,12 +1014,12 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
 9. **BMC Clock-Source Struct Sampling** (VerifToSMT.cpp):
    - **FIX**: Consume `bmc_clock_sources` to substitute 4‑state clock source
      inputs with post‑edge BMC clock values during SMT lowering.
-   - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct.mlir`
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct.mlir` (XFAIL removed)
 
 5. **BMC Clock-Source Mapping for Derived Struct Clocks** (VerifToSMT.cpp):
    - **FIX**: Resolve struct-derived clock expressions to BMC clock positions
      when `bmc_clock_sources` is present (including invert handling).
-   - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct-invert.mlir`
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct-invert.mlir` (XFAIL removed)
 
 6. **PruneBMCRegisters Output-Use Safety** (PruneBMCRegisters.cpp):
    - **FIX**: Keep ops whose results are still used by kept operations to avoid
