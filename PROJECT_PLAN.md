@@ -200,9 +200,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2991/3085 (96.9%)** | All pass, **4 XFAIL** (down from 18 at start) |
-| ImportVerilog | **215/219 (98.17%)** | Near parity |
-| circt-sim | **75/75 (100%)** | continuous-assignments.mlir fixed |
+| Lit Tests | **2991/3085 (96.9%)** | All pass, **3 XFAIL** (down from 18 at start) |
+| ImportVerilog | **216/219 (98.63%)** | Near parity, only 3 XFAIL |
+| circt-sim | **73/75 (97.3%)** | 2 tests hang (timeout mechanism issue) |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
@@ -217,10 +217,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Iteration 277 Focus (2026-01-31) - XFAIL REDUCTION & STABILITY:**
 
 **Iteration 277 Progress:**
-- **XFAIL Reduced**: 18 → 4 (78% reduction from iteration start!)
-- **ImportVerilog**: 215/219 pass (98.17%)
+- **XFAIL Reduced**: 18 → 3 (83% reduction from iteration start!)
+- **ImportVerilog**: 216/219 pass (98.63%)
 - **OpenTitan Coverage**: 17+/21 pass (81%+) - improved from 14/21
-- **circt-sim**: continuous-assignments.mlir fixed, now 75/75 (100%)
+- **circt-sim**: 73/75 pass (97.3%) - 2 tests hang due to timeout mechanism issue
 - **AVIPs**: All 6 pass (APB, AHB, UART, I2S, AXI4, I3C)
 - **External Suites**: 54/54 pass (100%)
 - **All lit tests pass**: No regressions
@@ -232,51 +232,47 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - yosys-sva LEC: 14 pass / 2 skipped (VHDL)
 - verilator-verification BMC: 17 pass
 - verilator-verification LEC: 17 pass
-- ImportVerilog: 215/219 (98.17%)
+- ImportVerilog: 216/219 (98.63%)
 - AVIP: All 6 pass
 - OpenTitan: 17+/21 pass (81%+)
 
-**Remaining 4 XFAIL Tests (All Feature Gaps):**
-1. **bind-interface-port.sv** - Bind scope resolution for interface ports
-2. **bind-nested-definition.sv** - Nested interface definition lookup in bind
+**Remaining 3 XFAIL Tests (All Feature Gaps):**
+1. **bind-interface-port.sv** - Interface port threading across bind scopes
+2. **bind-nested-definition.sv** - Nested module/interface lookup in bind
 3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
-4. **sva-procedural-hoist-no-clock.sv** - Procedural assertion hoisting
 
 **UVM Tests Now Passing (9 tests):**
 - Tests that use UVM features now work with the real Accellera `uvm-core` library
 - This includes virtual interface task calls, class handle formatting, and hierarchical access
 
 **Remaining Limitations (Iteration 277):**
-1. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
+1. **3 XFAIL Tests (Feature Gaps)**: All remaining XFAILs are feature gaps requiring architectural changes:
+   - **bind-interface-port.sv** - Interface port threading across bind scopes
+   - **bind-nested-definition.sv** - Nested module/interface lookup in bind
+   - **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
+2. **circt-sim timeout mechanism**: Two tests hang due to timeout mechanism issue
+   - Need to investigate watchdog/abort callback behavior for these specific cases
+3. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
    now runs without crashing but still times out at 2000 cycles; TL response
    stays invalid (`TL response valid: 0`). Need deeper X-prop/handshake modeling
    to resolve progress.
-2. **Continuous evaluation revalidation**: iterative evaluation avoids recursion
+4. **Continuous evaluation revalidation**: iterative evaluation avoids recursion
    depth limits, but we still need to re-run gpio/uart/aes_reg_top to confirm
    no regressions and acceptable performance (uart_reg_top/aes_reg_top still timeout).
-3. **4 XFAIL Tests (Feature Gaps)**: All remaining XFAILs are feature gaps requiring architectural changes:
-   - bind-interface-port.sv - Bind scope resolution for interface ports
-   - bind-nested-definition.sv - Nested interface definition lookup in bind
-   - dynamic-nonprocedural.sv - always_comb wrapping for dynamic types
-   - sva-procedural-hoist-no-clock.sv - Procedural assertion hoisting
-4. **Instance-scoped signal lookup**: per-instance process execution, module
+5. **Instance-scoped signal lookup**: per-instance process execution, module
    drives, firregs, and instance outputs now run with per-instance signal/value
    maps; an explicit instance-scoped lookup API now exists but still needs
    to be propagated through tooling to avoid ambiguous external queries.
-5. **4-state encoding metadata propagation**: ProcessScheduler now supports
+6. **4-state encoding metadata propagation**: ProcessScheduler now supports
    explicit encoding tags, but some external scheduler clients still register
    signals with `Unknown` and may mis-handle 4-state edges unless they plumb
    encoding metadata.
-6. **VCD tracing scalability**: current VCD writer uses single-character IDs
+7. **VCD tracing scalability**: current VCD writer uses single-character IDs
    (94 signals) and flat names; longer-term support for larger designs and
    hierarchical scopes is needed.
-7. **LLVM data-layout accuracy**: aggregate sizes use byte-rounding without
+8. **LLVM data-layout accuracy**: aggregate sizes use byte-rounding without
    target data-layout padding/alignment; long term we need explicit data-layout
    modeling for correct memory interpretation of packed/unaligned aggregates.
-8. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
-   plus scheduler/parallel delta-loop abort guards and a tool-level wall-clock
-   timeout guard; still need to audit remaining pre-run stall paths once
-   gpio_no_alerts is revalidated.
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
@@ -288,10 +284,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    semantics (tri-state merging + diagnostics) for strict equivalence.
 
 **Iteration 277 Achievements:**
-- **XFAIL Reduced to 4**: Down from 18 at iteration start (78% reduction!)
-- **ImportVerilog**: 215/219 pass (98.17%)
+- **XFAIL Reduced to 3**: Down from 18 at iteration start (83% reduction!)
+- **ImportVerilog**: 216/219 pass (98.63%)
 - **OpenTitan Coverage**: 17+/21 pass (81%+) - improved from 14/21
-- **circt-sim**: continuous-assignments.mlir fixed, now 75/75 (100%)
+- **circt-sim**: 73/75 pass (2 hang due to timeout mechanism issue)
 - **AVIPs**: All 6 pass (APB, AHB, UART, I2S, AXI4, I3C)
 - **All lit tests pass**: No regressions
 
@@ -350,7 +346,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   sequence tests; sequence-typed block args now emit a deterministic NFA error
 - **BMC derived clock normalization**: simplify neutral boolean ops and
   `icmp`-with-constant expressions during clock resolution to map derived
-  clocks back to the correct BMC input
+  clocks back to the correct BMC input (regression:
+  `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`)
 - **LEC result tokens**: `circt-lec --run-smtlib` now emits `LEC_RESULT=...`,
   plus a `--print-counterexample` alias for `--print-solver-output`
 - **yosys-sva LEC runner fix**: removed unsupported `--fail-on-inequivalent`,
@@ -456,50 +453,75 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **AVIPs**: All 6 pass (APB, AHB, UART, I2S, AXI4, I3C)
 - **OpenTitan**: 17+/21 pass (81%+)
 - **External Suites**: 54/54 pass (100%)
-- **Lit Tests**: 2991/3085 pass, 4 XFAIL (down from 18 - 78% reduction!)
-- **ImportVerilog**: 215/219 pass (98.17%)
-- **circt-sim**: 75/75 pass (100%) - continuous-assignments.mlir fixed
+- **Lit Tests**: 2991/3085 pass, 3 XFAIL (down from 18 - 83% reduction!)
+- **ImportVerilog**: 216/219 pass (98.63%)
+- **circt-sim**: 73/75 pass (97.3%) - 2 tests hang due to timeout mechanism
+
+**Remaining 3 XFAIL Feature Gaps:**
+1. **bind-interface-port.sv** - Interface port threading across bind scopes
+2. **bind-nested-definition.sv** - Nested module/interface lookup in bind
+3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
+
+**Remaining Limitations for UVM Parity:**
+1. Bind directive scope resolution for interface ports
+2. Nested interface/module definitions in bind targets
+3. Dynamic type access in continuous assignments
+4. Two circt-sim tests hang (timeout mechanism issue)
 
 **Iteration 277 Next Tasks:**
-1. Address remaining 4 XFAIL feature gaps (bind scope, always_comb wrapping, procedural assertion hoisting)
-2. Continue OpenTitan IP improvements (currently 17+/21)
-3. Test AVIPs with actual UVM test names (`+UVM_TESTNAME`)
-4. Maintain external test suite coverage (54/54)
+1. Address remaining 3 XFAIL feature gaps (bind scope, always_comb wrapping)
+2. Fix circt-sim timeout mechanism for hanging tests
+3. Continue OpenTitan IP improvements (currently 17+/21)
+4. Test AVIPs with actual UVM test names (`+UVM_TESTNAME`)
+5. Maintain external test suite coverage (54/54)
 
 ### Current Track Status & Next Tasks (Iteration 277)
 
 | Track | Status | Next Task |
 |-------|--------|-----------|
-| **Track 1: UVM Parity** | ✅ ~85-90% complete | Address 4 XFAIL feature gaps |
+| **Track 1: UVM Parity** | ✅ ~85-90% complete | Address 3 XFAIL feature gaps |
 | **Track 2: AVIP Testing** | ✅ 6/6 AVIPs pass | Run actual UVM tests with +UVM_TESTNAME |
 | **Track 3: OpenTitan** | ✅ 17+/21 (81%+) | Continue improving pass rate |
 | **Track 4: External Suites** | ✅ 54/54 pass (100%) | Maintain coverage |
+| **Track 5: circt-sim** | 73/75 (97.3%) | Fix timeout mechanism for 2 hanging tests |
 
 ### Remaining Limitations
 
+**Remaining 3 XFAIL Feature Gaps:**
+1. **bind-interface-port.sv** - Interface port threading across bind scopes
+   - Bind directives need to resolve interface ports through target scope
+   - Requires architectural changes to scope resolution
+2. **bind-nested-definition.sv** - Nested module/interface lookup in bind
+   - Nested definitions in bind target modules not found during elaboration
+   - Needs enhanced scope walking for bind contexts
+3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
+   - Dynamic type access in continuous assignments needs always_comb wrapping
+   - Requires analysis to detect dynamic indexing patterns
+
 **Critical for UVM/AVIP:**
-1. **AssocArrayIteratorOpConversion Bug** - ACTIVE FIX NEEDED
+4. **AssocArrayIteratorOpConversion Bug** - ACTIVE FIX NEEDED
    - Compilation now works (factory registration code is generated)
    - Runtime crashes in `llhd.prb` when iterating associative arrays
    - `AssocArrayIteratorOpConversion` uses `llhd.prb/llhd.drv` for ref params
    - Should use `llvm.load/llvm.store` when ref param is a function argument
    - Same pattern as ReadOpConversion fix needed
 
-2. **AVIPs with Source Bugs** (not CIRCT issues):
+5. **AVIPs with Source Bugs** (not CIRCT issues):
    - JTAG: Type conversion error in `JtagTargetDeviceDriverBfm.sv`
    - SPI: Invalid nested class property access, empty `$sformatf` arg
    - AXI4Lite: Missing interface/class source files
 
-3. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
+6. **Delay Accumulation** - Sequential `#delay` in functions only apply last delay
    - Needs explicit call stack (architectural change)
 
 **Medium Priority:**
-4. **Hierarchical Name Access** - ~4 XFAIL tests (reduced from 8)
-5. ~~**Virtual Interface Task Calls**~~ ✅ FIXED - virtual-interface-task.sv now passes
+7. **circt-sim Hanging Tests** - 2 tests hang due to timeout mechanism issue
+   - Watchdog/abort callbacks not triggering for specific patterns
+   - Need to audit and fix timeout mechanism
 
 **Lower Priority:**
-6. **UVM-specific Features** (config_db, factory, sequences)
-7. **Constraint Randomization** (rand, constraint)
+8. **UVM-specific Features** (config_db, factory, sequences)
+9. **Constraint Randomization** (rand, constraint)
 
 ---
 

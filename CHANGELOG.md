@@ -38,6 +38,12 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Updated CHECK pattern for `$stable` to use `moore.case_eq`
    - **Files**: `test/Conversion/ImportVerilog/builtins.sv`
 
+6. **BMC derived clock equivalence (icmp/neutral ops)**:
+   - Normalize derived clock inputs with neutral boolean ops or `icmp`-with-const
+     so they map to the same BMC clock input
+   - **Tests**: `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`
+   - **Files**: `lib/Tools/circt-bmc/LowerToBMC.cpp`
+
 6. **4 UVM Tests Fixed with uvm-core** (`45b46ebf1`):
    - uvm-objection-test.sv: Use get_objection_count() API
    - uvm-report-infrastructure.sv: Remove unavailable methods
