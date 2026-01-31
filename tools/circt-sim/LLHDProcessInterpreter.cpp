@@ -386,7 +386,9 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
               instOp.getInstanceName().str() + "." + outName;
           Type outType = outputOp.getOperand(i).getType();
           unsigned width = getTypeWidth(outType);
-          SignalId outSigId = scheduler.registerSignal(hierName, width);
+          SignalId outSigId =
+              scheduler.registerSignal(hierName, width,
+                                       getSignalEncoding(outType));
           valueToSignal[instOp.getResult(i)] = outSigId;
           signalIdToName[outSigId] = hierName;
           signalIdToType[outSigId] = unwrapSignalType(outType);
@@ -421,7 +423,9 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       Type innerType = sigOp.getInit().getType();
       unsigned width = getTypeWidth(innerType);
 
-      SignalId sigId = scheduler.registerSignal(hierName, width);
+      SignalId sigId =
+          scheduler.registerSignal(hierName, width,
+                                   getSignalEncoding(innerType));
       instanceValueToSignal[instanceId][sigOp.getResult()] = sigId;
       signalIdToName[sigId] = hierName;
       signalIdToType[sigId] = innerType;
@@ -845,7 +849,8 @@ LogicalResult LLHDProcessInterpreter::registerSignals(
       Type innerType = refType.getNestedType();
       unsigned width = getTypeWidth(innerType);
 
-      SignalId sigId = scheduler.registerSignal(name, width);
+      SignalId sigId =
+          scheduler.registerSignal(name, width, getSignalEncoding(innerType));
       signalIdToName[sigId] = name;
       signalIdToType[sigId] = innerType;
 
@@ -879,7 +884,8 @@ LogicalResult LLHDProcessInterpreter::registerSignals(
     Type innerType = outputOp.getValue().getType();
     unsigned width = getTypeWidth(innerType);
 
-    SignalId sigId = scheduler.registerSignal(name, width);
+    SignalId sigId =
+        scheduler.registerSignal(name, width, getSignalEncoding(innerType));
     valueToSignal[outputOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
     signalIdToType[sigId] = innerType;
@@ -905,7 +911,8 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
   unsigned width = getTypeWidth(innerType);
 
   // Register with the scheduler
-  SignalId sigId = scheduler.registerSignal(name, width);
+  SignalId sigId =
+      scheduler.registerSignal(name, width, getSignalEncoding(innerType));
 
   // Store the mapping
   valueToSignal[sigOp.getResult()] = sigId;
@@ -1911,7 +1918,8 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops,
       name = "inst" + std::to_string(instanceId) + "." + baseName;
 
     unsigned width = getTypeWidth(regOp.getType());
-    SignalId sigId = scheduler.registerSignal(name, width);
+    SignalId sigId =
+        scheduler.registerSignal(name, width, getSignalEncoding(regOp.getType()));
     signalMap[regOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
     signalIdToType[sigId] = unwrapSignalType(regOp.getType());
@@ -2186,6 +2194,9 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     Forward,
     StructExtract,
     ArrayGet,
+    ArrayCreate,
+    ArraySlice,
+    ArrayConcat,
     StructCreate,
     StructInject,
     StructInjectLegacy,
@@ -2428,6 +2439,33 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         auto arrayGetOp = current.getDefiningOp<hw::ArrayGetOp>();
         pushValue(arrayGetOp.getInput());
         pushValue(arrayGetOp.getIndex());
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::ArrayCreateOp>()) {
+        frame.kind = EvalKind::ArrayCreate;
+        frame.stage = 1;
+        auto createOp = current.getDefiningOp<hw::ArrayCreateOp>();
+        for (Value input : createOp.getInputs())
+          pushValue(input);
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::ArraySliceOp>()) {
+        frame.kind = EvalKind::ArraySlice;
+        frame.stage = 1;
+        auto sliceOp = current.getDefiningOp<hw::ArraySliceOp>();
+        pushValue(sliceOp.getInput());
+        pushValue(sliceOp.getLowIndex());
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::ArrayConcatOp>()) {
+        frame.kind = EvalKind::ArrayConcat;
+        frame.stage = 1;
+        auto concatOp = current.getDefiningOp<hw::ArrayConcatOp>();
+        for (Value input : concatOp.getInputs())
+          pushValue(input);
         continue;
       }
 
@@ -2694,6 +2732,105 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       unsigned bitOffset = (numElements - 1 - index) * elementWidth;
       APInt result = arrayVal.getAPInt().extractBits(elementWidth, bitOffset);
       finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::ArrayCreate: {
+      auto createOp = current.getDefiningOp<hw::ArrayCreateOp>();
+      auto arrayType = hw::type_cast<hw::ArrayType>(createOp.getType());
+      unsigned elementWidth = getTypeWidth(arrayType.getElementType());
+      unsigned numElements = arrayType.getNumElements();
+      unsigned totalWidth = elementWidth * numElements;
+
+      APInt result(totalWidth, 0);
+      bool hasX = false;
+
+      for (size_t i = 0; i < createOp.getInputs().size(); ++i) {
+        InterpretedValue elem = getCached(createOp.getInputs()[i]);
+        APInt elemVal(elementWidth, 0);
+        if (elem.isX()) {
+          if (auto encoded =
+                  getEncodedUnknownForType(arrayType.getElementType())) {
+            elemVal = encoded->zextOrTrunc(elementWidth);
+          } else {
+            hasX = true;
+            break;
+          }
+        } else {
+          elemVal = elem.getAPInt();
+        }
+        if (elemVal.getBitWidth() < elementWidth)
+          elemVal = elemVal.zext(elementWidth);
+        else if (elemVal.getBitWidth() > elementWidth)
+          elemVal = elemVal.trunc(elementWidth);
+        unsigned offset = (numElements - 1 - i) * elementWidth;
+        result.insertBits(elemVal, offset);
+      }
+
+      if (hasX) {
+        finish(InterpretedValue::makeX(totalWidth));
+      } else {
+        finish(InterpretedValue(result));
+      }
+      break;
+    }
+    case EvalKind::ArraySlice: {
+      auto sliceOp = current.getDefiningOp<hw::ArraySliceOp>();
+      InterpretedValue arrayVal = getCached(sliceOp.getInput());
+      InterpretedValue indexVal = getCached(sliceOp.getLowIndex());
+      auto resultType = hw::type_cast<hw::ArrayType>(sliceOp.getType());
+      if (arrayVal.isX() || indexVal.isX()) {
+        unsigned resultWidth = getTypeWidth(resultType.getElementType()) *
+                               resultType.getNumElements();
+        finish(InterpretedValue::makeX(resultWidth));
+        break;
+      }
+
+      auto inputType =
+          hw::type_cast<hw::ArrayType>(sliceOp.getInput().getType());
+      unsigned elementWidth = getTypeWidth(inputType.getElementType());
+      unsigned inputElements = inputType.getNumElements();
+      unsigned resultElements = resultType.getNumElements();
+      uint64_t lowIdx = indexVal.getAPInt().getZExtValue();
+
+      if (lowIdx + resultElements > inputElements) {
+        unsigned resultWidth = elementWidth * resultElements;
+        finish(InterpretedValue::makeX(resultWidth));
+        break;
+      }
+
+      unsigned offset =
+          (inputElements - (lowIdx + resultElements)) * elementWidth;
+      unsigned sliceWidth = resultElements * elementWidth;
+      APInt slice = arrayVal.getAPInt().extractBits(sliceWidth, offset);
+      finish(InterpretedValue(slice));
+      break;
+    }
+    case EvalKind::ArrayConcat: {
+      auto concatOp = current.getDefiningOp<hw::ArrayConcatOp>();
+      auto resultType = hw::type_cast<hw::ArrayType>(concatOp.getType());
+      unsigned resultWidth = getTypeWidth(resultType.getElementType()) *
+                             resultType.getNumElements();
+
+      APInt result(resultWidth, 0);
+      bool hasX = false;
+      unsigned bitOffset = resultWidth;
+
+      for (Value input : concatOp.getInputs()) {
+        InterpretedValue val = getCached(input);
+        if (val.isX()) {
+          hasX = true;
+          break;
+        }
+        unsigned inputWidth = val.getWidth();
+        bitOffset -= inputWidth;
+        result.insertBits(val.getAPInt(), bitOffset);
+      }
+
+      if (hasX) {
+        finish(InterpretedValue::makeX(resultWidth));
+      } else {
+        finish(InterpretedValue(result));
+      }
       break;
     }
     case EvalKind::StructCreate: {
@@ -3486,7 +3623,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     unsigned width = getTypeWidth(innerType);
 
     // Register with the scheduler
-    SignalId sigId = scheduler.registerSignal(name, width);
+    SignalId sigId =
+        scheduler.registerSignal(name, width, getSignalEncoding(innerType));
 
     // Store the mapping from the signal result to the signal ID
     valueToSignal[sigOp.getResult()] = sigId;
@@ -7829,6 +7967,25 @@ unsigned LLHDProcessInterpreter::getTypeWidth(Type type) {
 
   // Default to 1 bit for unknown types
   return 1;
+}
+
+SignalEncoding LLHDProcessInterpreter::getSignalEncoding(Type type) {
+  if (auto refType = dyn_cast<llhd::RefType>(type))
+    return getSignalEncoding(refType.getNestedType());
+  if (isa<seq::ClockType>(type))
+    return SignalEncoding::TwoState;
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    auto elements = structType.getElements();
+    if (elements.size() == 2 &&
+        elements[0].name.getValue() == "value" &&
+        elements[1].name.getValue() == "unknown") {
+      unsigned valueWidth = getTypeWidth(elements[0].type);
+      unsigned unknownWidth = getTypeWidth(elements[1].type);
+      if (valueWidth == unknownWidth)
+        return SignalEncoding::FourStateStruct;
+    }
+  }
+  return SignalEncoding::TwoState;
 }
 
 //===----------------------------------------------------------------------===//

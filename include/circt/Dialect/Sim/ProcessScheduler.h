@@ -173,8 +173,8 @@ public:
 
   /// Check if this is a 4-state X value using struct encoding.
   /// 4-state encoding uses {value: iN, unknown: iN} flattened to 2N bits:
-  /// - Lower N bits: value bits
-  /// - Upper N bits: unknown flags (1 = unknown/X)
+  /// - Upper N bits: value bits
+  /// - Lower N bits: unknown flags (1 = unknown/X)
   /// Returns true if ALL unknown bits are set (fully X value).
   bool isFourStateX() const {
     // First check the explicit isX flag
@@ -185,13 +185,13 @@ public:
     // Must have even width >= 2 for 4-state encoding
     if (w < 2 || (w % 2) != 0)
       return false;
-    // Check if all upper-half bits (unknown flags) are set
+    // Treat any unknown flag as X when using 4-state encoding.
     uint32_t halfWidth = w / 2;
-    for (uint32_t i = halfWidth; i < w; ++i) {
-      if (!value[i])
-        return false;
+    for (uint32_t i = 0; i < halfWidth; ++i) {
+      if (value[i])
+        return true;
     }
-    return true;
+    return false;
   }
 
   /// Check if two values are equal.
@@ -218,13 +218,13 @@ private:
     // Must have even width >= 2 for 4-state encoding
     if (w < 2 || (w % 2) != 0)
       return false;
-    // Check if all upper-half bits (unknown flags) are set
+    // Treat any unknown flag as X when using 4-state encoding.
     uint32_t halfWidth = w / 2;
-    for (uint32_t i = halfWidth; i < w; ++i) {
-      if (!value[i])
-        return false;
+    for (uint32_t i = 0; i < halfWidth; ++i) {
+      if (value[i])
+        return true;
     }
-    return true;
+    return false;
   }
 
 public:
@@ -272,6 +272,16 @@ public:
 private:
   llvm::APInt value;
   bool isX;
+};
+
+//===----------------------------------------------------------------------===//
+// SignalEncoding - Optional encoding metadata for signals
+//===----------------------------------------------------------------------===//
+
+enum class SignalEncoding : uint8_t {
+  Unknown,
+  TwoState,
+  FourStateStruct
 };
 
 //===----------------------------------------------------------------------===//
@@ -756,6 +766,19 @@ public:
   /// Register a signal for tracking.
   SignalId registerSignal(const std::string &name, uint32_t width = 1);
 
+  /// Register a signal with explicit encoding metadata.
+  SignalId registerSignal(const std::string &name, uint32_t width,
+                          SignalEncoding encoding);
+
+  /// Get the signal encoding for a given signal ID.
+  SignalEncoding getSignalEncoding(SignalId signalId) const;
+
+  /// Set a callback for signal value changes (for waveform tracing).
+  void setSignalChangeCallback(
+      std::function<void(SignalId, const SignalValue &)> callback) {
+    signalChangeCallback = std::move(callback);
+  }
+
   /// Set the maximum delta cycles to execute at a single time.
   void setMaxDeltaCycles(size_t maxDeltaCycles);
 
@@ -772,6 +795,11 @@ public:
 
   /// Get the current value of a signal.
   const SignalValue &getSignalValue(SignalId signalId) const;
+
+  /// Get the registered signal names map.
+  const llvm::DenseMap<SignalId, std::string> &getSignalNames() const {
+    return signalNames;
+  }
 
   //===--------------------------------------------------------------------===//
   // Process Execution Control
@@ -905,6 +933,7 @@ private:
   // Signal management
   llvm::DenseMap<SignalId, SignalState> signalStates;
   llvm::DenseMap<SignalId, std::string> signalNames;
+  llvm::DenseMap<SignalId, SignalEncoding> signalEncodings;
   SignalId nextSigId = 1;
 
   // Maps signals to processes sensitive to them
@@ -923,6 +952,9 @@ private:
 
   // Optional abort callback.
   std::function<bool()> shouldAbortCallback;
+
+  // Optional signal change callback for waveform tracing.
+  std::function<void(SignalId, const SignalValue &)> signalChangeCallback;
 
   // Initialization flag
   bool initialized = false;

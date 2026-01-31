@@ -122,15 +122,15 @@ TEST(SignalValue, DetectEdgeMultiBit) {
 
 TEST(SignalValue, FourStateXDetection) {
   // Test 4-state struct encoding: {value: i1, unknown: i1} flattened to 2 bits
-  // Lower bit = value, upper bit = unknown
-  // 0b00 = 0 (known 0), 0b01 = 1 (known 1), 0b10 = X (unknown, value=0), 0b11 = X (unknown, value=1)
+  // Lower bit = unknown, upper bit = value
+  // 0b00 = 0 (known 0), 0b10 = 1 (known 1), 0b01 = X (unknown, value=0), 0b11 = X (unknown, value=1)
 
-  SignalValue known0(0b00, 2);  // Known 0
-  SignalValue known1(0b01, 2);  // Known 1
-  SignalValue x_val0(0b10, 2);  // X with underlying value=0
-  SignalValue x_val1(0b11, 2);  // X with underlying value=1
+  SignalValue known0(llvm::APInt(2, 0b00));  // Known 0
+  SignalValue known1(llvm::APInt(2, 0b10));  // Known 1
+  SignalValue x_val0(llvm::APInt(2, 0b01));  // X with underlying value=0
+  SignalValue x_val1(llvm::APInt(2, 0b11));  // X with underlying value=1
 
-  // isFourStateX should only be true when ALL unknown bits are set
+  // isFourStateX should be true when any unknown bits are set
   EXPECT_FALSE(known0.isFourStateX());  // unknown=0
   EXPECT_FALSE(known1.isFourStateX());  // unknown=0
   EXPECT_TRUE(x_val0.isFourStateX());   // unknown=1
@@ -150,10 +150,10 @@ TEST(SignalValue, FourStateXDetection) {
   EXPECT_NE(SignalValue::detectEdge(x_val1, known1), EdgeType::None);
 
   // Test wider 4-state values (4-bit value + 4-bit unknown = 8-bit total)
-  // All upper bits set = fully X
-  SignalValue wide_x1(0xF0, 8);  // unknown=0b1111, value=0b0000 -> all X
-  SignalValue wide_x2(0xFF, 8);  // unknown=0b1111, value=0b1111 -> all X
-  SignalValue wide_known(0x05, 8);  // unknown=0b0000, value=0b0101 -> known
+  // All lower bits set = fully X
+  SignalValue wide_x1(llvm::APInt(8, 0x0F));  // unknown=0b1111, value=0b0000 -> all X
+  SignalValue wide_x2(llvm::APInt(8, 0xFF));  // unknown=0b1111, value=0b1111 -> all X
+  SignalValue wide_known(llvm::APInt(8, 0xA0));  // unknown=0b0000, value=0b1010 -> known
 
   EXPECT_TRUE(wide_x1.isFourStateX());
   EXPECT_TRUE(wide_x2.isFourStateX());
@@ -163,10 +163,9 @@ TEST(SignalValue, FourStateXDetection) {
   EXPECT_TRUE(wide_x1 == wide_x2);
   EXPECT_EQ(SignalValue::detectEdge(wide_x1, wide_x2), EdgeType::None);
 
-  // Partially unknown values (not all unknown bits set) should NOT be treated as X
-  SignalValue partial_unknown(0x80, 8);  // unknown=0b1000, value=0b0000 -> only MSB is X
-  EXPECT_FALSE(partial_unknown.isFourStateX());
-  EXPECT_FALSE(partial_unknown == wide_x1);
+  // Partially unknown values should be treated as X
+  SignalValue partial_unknown(llvm::APInt(8, 0x01));  // unknown=0b0001, value=0b0000
+  EXPECT_TRUE(partial_unknown.isFourStateX());
 }
 
 //===----------------------------------------------------------------------===//
@@ -429,6 +428,28 @@ TEST(ProcessScheduler, UpdateSignalNormalizesWidth) {
   const SignalValue &narrowVal = scheduler.getSignalValue(id);
   EXPECT_EQ(narrowVal.getWidth(), 8u);
   EXPECT_EQ(narrowVal.getValue(), 0x0Au);
+}
+
+TEST(ProcessScheduler, FourStateStructPosedgeTriggers) {
+  ProcessScheduler scheduler;
+  SignalId clk = scheduler.registerSignal("clk", 2,
+                                          SignalEncoding::FourStateStruct);
+
+  int counter = 0;
+  ProcessId procId =
+      scheduler.registerProcess("posedge", [&counter]() { ++counter; });
+
+  SensitivityList list;
+  list.addPosedge(clk);
+  scheduler.setSensitivity(procId, list);
+
+  scheduler.updateSignal(clk, SignalValue(llvm::APInt(2, 0b00))); // known 0
+  scheduler.executeDeltaCycle();
+  counter = 0;
+
+  scheduler.updateSignal(clk, SignalValue(llvm::APInt(2, 0b10))); // known 1
+  scheduler.executeDeltaCycle();
+  EXPECT_EQ(counter, 1);
 }
 
 //===----------------------------------------------------------------------===//

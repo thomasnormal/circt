@@ -72,6 +72,7 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/Timing.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
@@ -441,6 +442,12 @@ private:
   /// Record a value change for waveform output.
   void recordValueChange(SignalId signal, const SignalValue &value);
 
+  /// Register a signal for tracing in the VCD file.
+  void registerTracedSignal(SignalId signalId, llvm::StringRef name);
+
+  /// Register traces for requested signals (trace-all or --trace).
+  void registerRequestedTraces();
+
   /// Find the top module in the design.
   hw::HWModuleOp findTopModule(mlir::ModuleOp module, const std::string &name);
 
@@ -472,7 +479,11 @@ private:
 
   // Traced signals for VCD output
   llvm::SmallVector<std::pair<SignalId, char>, 64> tracedSignals;
+  llvm::DenseSet<SignalId> tracedSignalIds;
   char nextVCDId = '!';
+  uint64_t lastVCDTime = 0;
+  bool vcdTimeInitialized = false;
+  bool vcdReady = false;
 
   // Module information
   llvm::SmallVector<std::string, 4> topModuleNames;
@@ -499,6 +510,10 @@ LogicalResult SimulationContext::initialize(
       requestAbort("Interrupt signal received");
     return abortRequested.load();
   });
+  scheduler.setSignalChangeCallback(
+      [this](SignalId signal, const SignalValue &value) {
+        recordValueChange(signal, value);
+      });
 
   // Collect all top modules to simulate
   llvm::SmallVector<hw::HWModuleOp, 4> hwModules;
@@ -550,6 +565,9 @@ LogicalResult SimulationContext::initialize(
     if (failed(buildSimulationModel(hwModule)))
       return failure();
   }
+
+  if (traceAll || !traceSignals.empty())
+    registerRequestedTraces();
 
   // Set up parallel simulation if multiple threads requested
   if (numThreads > 1) {
@@ -604,6 +622,8 @@ hw::HWModuleOp SimulationContext::findTopModule(mlir::ModuleOp module,
 }
 
 LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
+  bool tracePortsOnly = !traceAll && traceSignals.empty();
+
   // Register signals for all ports
   for (auto portInfo : hwModule.getPortList()) {
     // Determine bit width - use getTypeWidth to handle all types including
@@ -615,19 +635,15 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       bitWidth = LLHDProcessInterpreter::getTypeWidth(portInfo.type);
     }
 
+    SignalEncoding encoding =
+        LLHDProcessInterpreter::getSignalEncoding(portInfo.type);
     auto signalId = scheduler.registerSignal(portInfo.getName().str(),
-                                              bitWidth);
+                                             bitWidth, encoding);
     nameToSignal[portInfo.getName()] = signalId;
 
-    // Set up tracing if enabled
-    if (traceAll || traceSignals.empty()) {
-      if (vcdWriter && nextVCDId <= '~') {
-        vcdWriter->declareSignal(portInfo.getName().str(),
-                                 bitWidth,
-                                 nextVCDId);
-        tracedSignals.push_back({signalId, nextVCDId++});
-      }
-    }
+    // Set up default tracing (ports-only) if enabled.
+    if (tracePortsOnly)
+      registerTracedSignal(signalId, portInfo.getName().str());
   }
 
   // Check if this module contains LLHD processes, seq.initial blocks, or
@@ -796,6 +812,71 @@ LogicalResult SimulationContext::setupWaveformTracing() {
   return success();
 }
 
+void SimulationContext::registerTracedSignal(SignalId signalId,
+                                             llvm::StringRef name) {
+  if (!vcdWriter)
+    return;
+  if (nextVCDId > '~')
+    return;
+  if (tracedSignalIds.count(signalId))
+    return;
+
+  tracedSignals.push_back({signalId, nextVCDId++});
+  tracedSignalIds.insert(signalId);
+}
+
+void SimulationContext::registerRequestedTraces() {
+  if (!vcdWriter)
+    return;
+
+  const auto &signalNames = scheduler.getSignalNames();
+
+  if (traceAll) {
+    for (const auto &entry : signalNames)
+      registerTracedSignal(entry.first, entry.second);
+    if (nextVCDId > '~')
+      llvm::errs() << "[circt-sim] Warning: VCD signal limit reached; "
+                      "additional signals are not traced\n";
+    return;
+  }
+
+  if (traceSignals.empty())
+    return;
+
+  llvm::SmallVector<std::string, 4> topPrefixes;
+  topPrefixes.reserve(topModuleNames.size());
+  for (const auto &topName : topModuleNames)
+    topPrefixes.push_back(topName + ".");
+
+  for (const auto &requested : traceSignals) {
+    llvm::StringRef requestedRef(requested);
+    bool matched = false;
+    for (const auto &entry : signalNames) {
+      if (entry.second == requested) {
+        registerTracedSignal(entry.first, entry.second);
+        matched = true;
+      }
+    }
+    if (!matched) {
+      for (const auto &prefix : topPrefixes) {
+        if (!requestedRef.starts_with(prefix))
+          continue;
+        llvm::StringRef stripped = requestedRef.drop_front(prefix.size());
+        for (const auto &entry : signalNames) {
+          if (entry.second == stripped) {
+            registerTracedSignal(entry.first, entry.second);
+            matched = true;
+          }
+        }
+      }
+    }
+    if (!matched) {
+      llvm::errs() << "[circt-sim] Warning: trace signal '" << requested
+                   << "' not found\n";
+    }
+  }
+}
+
 LogicalResult SimulationContext::setupProfiling() {
   if (!profile)
     return success();
@@ -832,8 +913,18 @@ LogicalResult SimulationContext::setupParallelSimulation() {
 
 void SimulationContext::recordValueChange(SignalId signal,
                                            const SignalValue &value) {
-  if (!vcdWriter)
+  if (!vcdWriter || !vcdReady)
     return;
+
+  uint64_t currentTime = scheduler.getCurrentTime().realTime;
+  if (!vcdTimeInitialized) {
+    lastVCDTime = currentTime;
+    vcdTimeInitialized = true;
+  }
+  if (currentTime != lastVCDTime) {
+    vcdWriter->writeTime(currentTime);
+    lastVCDTime = currentTime;
+  }
 
   for (auto &traced : tracedSignals) {
     if (traced.first == signal) {
@@ -859,8 +950,21 @@ LogicalResult SimulationContext::run() {
       vcdTopName = "multi_top";  // Indicate multi-top simulation
     }
     vcdWriter->writeHeader(vcdTopName);
+    const auto &signalNames = scheduler.getSignalNames();
+    for (auto &traced : tracedSignals) {
+      auto it = signalNames.find(traced.first);
+      if (it == signalNames.end()) {
+        llvm::errs() << "[circt-sim] Warning: missing name for signal "
+                     << traced.first << " in VCD trace\n";
+        continue;
+      }
+      const auto &value = scheduler.getSignalValue(traced.first);
+      vcdWriter->declareSignal(it->second, value.getWidth(), traced.second);
+    }
     vcdWriter->endHeader();
     vcdWriter->writeTime(0);
+    lastVCDTime = 0;
+    vcdTimeInitialized = true;
     // Write initial unknown values
     for (auto &traced : tracedSignals) {
       const auto &value = scheduler.getSignalValue(traced.first);
@@ -871,6 +975,7 @@ LogicalResult SimulationContext::run() {
       }
     }
     vcdWriter->endDumpVars();
+    vcdReady = true;
   }
 
   // Start profiling
@@ -883,7 +988,6 @@ LogicalResult SimulationContext::run() {
   llvm::outs().flush();
 
   // Main simulation loop
-  uint64_t lastVCDTime = 0;
   uint64_t loopIterations = 0;
   auto startWallTime = std::chrono::steady_clock::now();
 
@@ -1041,12 +1145,6 @@ LogicalResult SimulationContext::run() {
       dumpLastDeltaProcesses(llvm::errs());
       control.finish(1);
       break;
-    }
-
-    // Write VCD time change
-    if (vcdWriter && currentTime.realTime != lastVCDTime) {
-      vcdWriter->writeTime(currentTime.realTime);
-      lastVCDTime = currentTime.realTime;
     }
 
     // Update control time for message timestamps
