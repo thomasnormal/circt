@@ -53,6 +53,7 @@
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/Version.h"
+#include "circt/Support/WallClockTimeout.h"
 #include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -84,6 +85,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -102,6 +104,7 @@ using namespace circt::sim;
 //===----------------------------------------------------------------------===//
 
 static std::atomic<bool> interruptRequested(false);
+static std::atomic<bool> simulationStarted(false);
 static void signalHandler(int) { interruptRequested.store(true); }
 
 static llvm::cl::OptionCategory mainCategory("circt-sim Options");
@@ -846,6 +849,7 @@ void SimulationContext::recordValueChange(SignalId signal,
 
 LogicalResult SimulationContext::run() {
   startWatchdogThread();
+  simulationStarted.store(true);
 
   // Write VCD header
   if (vcdWriter) {
@@ -1114,6 +1118,18 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 
 static LogicalResult processInput(MLIRContext &context,
                                    llvm::SourceMgr &sourceMgr) {
+  std::unique_ptr<WallClockTimeout> wallClockTimeout;
+  if (timeout > 0) {
+    wallClockTimeout = std::make_unique<WallClockTimeout>(
+        std::chrono::seconds(timeout), []() {
+          llvm::errs()
+              << "[circt-sim] Wall-clock timeout reached (global guard)\n";
+          interruptRequested.store(true);
+          if (!simulationStarted.load())
+            std::_Exit(1);
+        });
+  }
+
   // Parse the input file
   mlir::OwningOpRef<mlir::ModuleOp> module =
       parseSourceFile<ModuleOp>(sourceMgr, &context);

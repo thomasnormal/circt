@@ -19,10 +19,19 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
      `lib/Dialect/Sim/ParallelScheduler.cpp`,
      `tools/circt-sim/circt-sim.cpp`
 
+2. **Global Wall-Clock Timeout Guard**:
+   - Added a wall-clock timeout helper to enforce tool-level timeouts (parse/pass/init)
+   - Global guard triggers interrupt + hard-exit when pre-run phases stall
+   - **Tests**: `unittests/Support/WallClockTimeoutTest.cpp`
+   - **Files**: `include/circt/Support/WallClockTimeout.h`,
+     `lib/Support/WallClockTimeout.cpp`,
+     `tools/circt-sim/circt-sim.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
 | CIRCTSimTests (abort tests) | **PASS** | ProcessScheduler/ParallelScheduler abort coverage |
+| CIRCTSupportTests (wall-clock) | **PASS** | WallClockTimeout unit tests |
 | sv-tests BMC | **23/23 pass** | 3 xfail, 0 fail (26 total) |
 | yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
 | verilator-verification BMC | **17/17 pass** | No failures |

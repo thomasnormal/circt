@@ -221,6 +221,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **AVIPs**: 6/9 simulate (APB, AHB, UART, I2S, AXI4, I3C)
 - **External Suites**: 54/54 pass (100%)
 - **All lit tests pass**: No regressions
+- **Global wall-clock guard**: added tool-level timeout enforcement for pre-run phases
 
 **Iteration 275 Latest Suite Runs (2026-01-31):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)
@@ -243,9 +244,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    still times out even with short `--timeout`/`--max-cycles`, suggesting a
    possible hang or timeout enforcement issue in circt-sim.
 5. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
-   plus scheduler/parallel delta-loop abort guards; `gpio_no_alerts` still
-   hangs before first progress output, so investigate init/constructor paths
-   and any pre-run stalls that bypass abort polling.
+   plus scheduler/parallel delta-loop abort guards and a tool-level wall-clock
+   timeout guard; `gpio_no_alerts` still hangs before first progress output,
+   so investigate init/constructor paths and any pre-run stalls that bypass
+   abort polling.
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
