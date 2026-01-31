@@ -55,6 +55,12 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
      `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`
    - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
+5. **BMC implication delay shift**:
+   - Rewrite exact delayed consequents (`##N` with length=0) onto the antecedent
+     so BMC uses past buffers instead of future lookahead
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
