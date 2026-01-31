@@ -1,7 +1,5 @@
-// RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s
+// RUN: circt-verilog --ir-moore --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s 2>&1 | FileCheck %s
 // REQUIRES: slang
-// XFAIL: *
-// UVM runtime has compilation issues affecting TLM analysis port.
 
 //===----------------------------------------------------------------------===//
 // TLM Analysis Port Test - Iteration 108 Track D
@@ -19,6 +17,8 @@
 // Pattern sources: mbit AHB, APB, AXI4, SPI AVIPs
 //
 //===----------------------------------------------------------------------===//
+
+`timescale 1ns/1ps
 
 `include "uvm_macros.svh"
 
@@ -162,12 +162,12 @@ endclass
 // Simple Checker using uvm_subscriber
 //===----------------------------------------------------------------------===//
 
-class apb_checker extends uvm_subscriber #(apb_transaction);
-  `uvm_component_utils(apb_checker)
+class apb_protocol_checker extends uvm_subscriber #(apb_transaction);
+  `uvm_component_utils(apb_protocol_checker)
 
   int error_count;
 
-  function new(string name = "apb_checker", uvm_component parent = null);
+  function new(string name = "apb_protocol_checker", uvm_component parent = null);
     super.new(name, parent);
     error_count = 0;
   endfunction
@@ -189,7 +189,7 @@ class apb_checker extends uvm_subscriber #(apb_transaction);
   endfunction
 endclass
 
-// CHECK: moore.class.classdecl @apb_checker extends @"uvm_pkg::uvm_subscriber"
+// CHECK: moore.class.classdecl @apb_protocol_checker extends @"uvm_pkg::uvm_subscriber"
 
 //===----------------------------------------------------------------------===//
 // Agent demonstrating port connections (Pattern from mbit AVIPs)
@@ -200,7 +200,7 @@ class apb_master_agent extends uvm_agent;
 
   apb_master_monitor monitor;
   apb_master_coverage coverage;
-  apb_checker checker;
+  apb_protocol_checker protocol_chk;
 
   function new(string name = "apb_master_agent", uvm_component parent = null);
     super.new(name, parent);
@@ -210,7 +210,7 @@ class apb_master_agent extends uvm_agent;
     super.build_phase(phase);
     monitor = apb_master_monitor::type_id::create("monitor", this);
     coverage = apb_master_coverage::type_id::create("coverage", this);
-    checker = apb_checker::type_id::create("checker", this);
+    protocol_chk = apb_protocol_checker::type_id::create("protocol_chk", this);
   endfunction
 
   // Key pattern: connect monitor's analysis_port to subscriber's analysis_export
@@ -220,7 +220,7 @@ class apb_master_agent extends uvm_agent;
     // Monitor broadcasts to multiple subscribers (1-to-N pattern)
     // Both coverage and checker receive the same transactions
     monitor.apb_master_analysis_port.connect(coverage.analysis_export);
-    monitor.apb_master_analysis_port.connect(checker.analysis_export);
+    monitor.apb_master_analysis_port.connect(protocol_chk.analysis_export);
 
     `uvm_info(get_type_name(), "Analysis port connections complete", UVM_HIGH)
   endfunction

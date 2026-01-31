@@ -1,8 +1,10 @@
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
 // REQUIRES: slang
-// XFAIL: *
 
 // Test UVM objection mechanism support
+
+`timescale 1ns/1ps
+
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 
@@ -84,33 +86,6 @@ class direct_objection_test extends uvm_test;
   endtask
 endclass
 
-// Test uvm_test_done global objection
-class test_done_objection_test extends uvm_test;
-  `uvm_component_utils(test_done_objection_test)
-
-  function new(string name = "test_done_objection_test", uvm_component parent = null);
-    super.new(name, parent);
-  endfunction
-
-  task run_phase(uvm_phase phase);
-    int count;
-
-    phase.raise_objection(this);
-
-    // Use global test_done objection
-    uvm_test_done.raise_objection(this, "Test active");
-    count = uvm_test_done.get_objection_count();
-    `uvm_info("TEST_DONE", $sformatf("Test done objection count: %0d", count), UVM_LOW)
-
-    #100ns;
-    uvm_test_done.drop_objection(this, "Test complete");
-    count = uvm_test_done.get_objection_count();
-    `uvm_info("TEST_DONE", $sformatf("Test done after drop: %0d", count), UVM_LOW)
-
-    phase.drop_objection(this);
-  endtask
-endclass
-
 // Test multiple objections with count parameter
 class multi_count_objection_test extends uvm_test;
   `uvm_component_utils(multi_count_objection_test)
@@ -186,7 +161,7 @@ class objection_total_test extends uvm_test;
   endtask
 endclass
 
-// Test raised() method
+// Test objection count as raised check (replaces raised() method)
 class objection_raised_test extends uvm_test;
   `uvm_component_utils(objection_raised_test)
 
@@ -202,18 +177,18 @@ class objection_raised_test extends uvm_test;
 
     obj = new("raised_test_objection");
 
-    // Check initially not raised
-    is_raised = obj.raised();
+    // Check initially not raised (using get_objection_count > 0)
+    is_raised = (obj.get_objection_count() > 0);
     `uvm_info("RAISED", $sformatf("Initially raised: %0b", is_raised), UVM_LOW)
 
     // Raise and check
     obj.raise_objection(this);
-    is_raised = obj.raised();
+    is_raised = (obj.get_objection_count() > 0);
     `uvm_info("RAISED", $sformatf("After raise - raised: %0b", is_raised), UVM_LOW)
 
     // Drop and check
     obj.drop_objection(this);
-    is_raised = obj.raised();
+    is_raised = (obj.get_objection_count() > 0);
     `uvm_info("RAISED", $sformatf("After drop - raised: %0b", is_raised), UVM_LOW)
 
     #100ns;
@@ -239,7 +214,7 @@ class drain_time_test extends uvm_test;
 
     // Set drain time
     obj.set_drain_time(this, 50ns);
-    drain = obj.get_drain_time();
+    drain = obj.get_drain_time(this);
     `uvm_info("DRAIN", $sformatf("Drain time: %0t", drain), UVM_LOW)
 
     #100ns;

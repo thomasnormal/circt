@@ -1,7 +1,9 @@
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
-// XFAIL: *
+// RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
+// REQUIRES: slang
 
 // Test UVM utility classes: cmdline_processor, report_server, report_catcher
+
+`timescale 1ns/1ps
 
 `include "uvm_macros.svh"
 import uvm_pkg::*;
@@ -71,7 +73,7 @@ class report_server_test extends uvm_test;
   endfunction
 endclass
 
-// Test uvm_report_catcher usage
+// Test uvm_report_catcher usage - implements pure virtual catch() method
 class my_error_catcher extends uvm_report_catcher;
   int caught_errors = 0;
 
@@ -79,7 +81,8 @@ class my_error_catcher extends uvm_report_catcher;
     super.new(name);
   endfunction
 
-  virtual function uvm_action_type_e catch_action();
+  // Implement the pure virtual catch() method required by uvm-core
+  virtual function action_e catch();
     // Catch all errors and demote to warnings
     if (get_severity() == UVM_ERROR) begin
       caught_errors++;
@@ -103,7 +106,8 @@ class report_catcher_test extends uvm_test;
   virtual function void build_phase(uvm_phase phase);
     super.build_phase(phase);
     catcher = new("catcher");
-    uvm_report_catcher::add(catcher);
+    // Use uvm_report_cb::add to register the catcher (uvm-core API)
+    uvm_report_cb::add(null, catcher);
   endfunction
 
   virtual task run_phase(uvm_phase phase);
@@ -119,7 +123,7 @@ class report_catcher_test extends uvm_test;
 
   virtual function void report_phase(uvm_phase phase);
     super.report_phase(phase);
-    uvm_report_catcher::remove(catcher);
+    uvm_report_cb::delete(null, catcher);
     `uvm_info("TEST", $sformatf("Catcher caught %0d errors", catcher.caught_errors), UVM_LOW)
   endfunction
 endclass
