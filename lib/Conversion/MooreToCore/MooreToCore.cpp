@@ -15946,6 +15946,8 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
     Value keyAlloca;
     Type keyValueType;     // Original key value type (may be hw.struct)
     Type llvmKeyValueType; // Pure LLVM type for alloca/store/load operations
+    // Track whether keyArg is a function ref parameter (needs llvm.store writeback)
+    bool isFuncRefParam = false;
     if (isa<LLVM::LLVMPointerType>(keyArg.getType())) {
       // String keys are already LLVM pointers (to struct {ptr, i64})
       keyAlloca = keyArg;
@@ -15961,14 +15963,37 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
       keyAlloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmKeyValueType, one);
 
+      // Check if keyArg is a function ref parameter (BlockArgument in func::FuncOp).
+      // Function ref parameters need llvm.load/store, not llhd.prb/drv, since
+      // the simulator cannot track signal references through function call boundaries.
+      if (auto blockArg = dyn_cast<BlockArgument>(keyArg)) {
+        auto *parentOp = blockArg.getOwner()->getParentOp();
+        if (isa<func::FuncOp>(parentOp)) {
+          isFuncRefParam = true;
+        }
+      }
+
       // Read current key value and store to alloca
-      auto currentKey = llhd::ProbeOp::create(rewriter, loc, keyArg);
-      // If types differ, cast the probed value to LLVM type
-      Value keyToStore = currentKey.getResult();
-      if (llvmKeyValueType != keyValueType) {
-        keyToStore = UnrealizedConversionCastOp::create(
-                         rewriter, loc, llvmKeyValueType, ValueRange{keyToStore})
-                         .getResult(0);
+      Value keyToStore;
+      if (isFuncRefParam) {
+        // For function ref parameters, cast to llvm.ptr and use llvm.load
+        Value keyPtr = UnrealizedConversionCastOp::create(rewriter, loc, ptrTy,
+                                                          keyArg)
+                           .getResult(0);
+        auto loadedKey =
+            LLVM::LoadOp::create(rewriter, loc, llvmKeyValueType, keyPtr);
+        keyToStore = loadedKey.getResult();
+      } else {
+        // For signals (llhd.sig), use llhd.prb
+        auto currentKey = llhd::ProbeOp::create(rewriter, loc, keyArg);
+        keyToStore = currentKey.getResult();
+        // If types differ, cast the probed value to LLVM type
+        if (llvmKeyValueType != keyValueType) {
+          keyToStore = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmKeyValueType,
+                           ValueRange{keyToStore})
+                           .getResult(0);
+        }
       }
       LLVM::StoreOp::create(rewriter, loc, keyToStore, keyAlloca);
     } else {
@@ -16003,16 +16028,27 @@ struct AssocArrayIteratorOpConversion : public OpConversionPattern<SourceOp> {
     if (keyValueType) {
       auto updatedKey =
           LLVM::LoadOp::create(rewriter, loc, llvmKeyValueType, keyAlloca);
-      // If types differ, cast the loaded value back to hw type for drive
       Value keyToDrive = updatedKey.getResult();
-      if (llvmKeyValueType != keyValueType) {
-        keyToDrive = UnrealizedConversionCastOp::create(rewriter, loc,
-                                                        keyValueType, ValueRange{keyToDrive})
-                         .getResult(0);
+
+      if (isFuncRefParam) {
+        // For function ref parameters, use llvm.store
+        Value keyPtr = UnrealizedConversionCastOp::create(rewriter, loc, ptrTy,
+                                                          keyArg)
+                           .getResult(0);
+        LLVM::StoreOp::create(rewriter, loc, keyToDrive, keyPtr);
+      } else {
+        // For signals (llhd.sig), use llhd.drv
+        // If types differ, cast the loaded value back to hw type for drive
+        if (llvmKeyValueType != keyValueType) {
+          keyToDrive = UnrealizedConversionCastOp::create(
+                           rewriter, loc, keyValueType, ValueRange{keyToDrive})
+                           .getResult(0);
+        }
+        auto delay = llhd::ConstantTimeOp::create(
+            rewriter, loc, llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
+        llhd::DriveOp::create(rewriter, loc, keyArg, keyToDrive, delay,
+                              Value{});
       }
-      auto delay = llhd::ConstantTimeOp::create(
-          rewriter, loc, llhd::TimeAttr::get(ctx, 0U, "ns", 0, 1));
-      llhd::DriveOp::create(rewriter, loc, keyArg, keyToDrive, delay, Value{});
     }
 
     rewriter.replaceOp(op, call.getResult());
