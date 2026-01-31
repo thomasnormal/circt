@@ -50,7 +50,14 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Enables testing TLUL BFM include patterns
    - **XFAIL reduced to 4**
 
-8. **SignalValue Comparison Fix** (`4ba449ddc`):
+8. **Procedural Assertion Hoisting with Embedded Clocks** (`ef4c20310`):
+   - Assertions with embedded clock specs (e.g., `@(posedge clk)` in `always @(*)`)
+     are now hoisted to module level using `verif::ClockedAssertOp`
+   - Previously only assertions in clocked procedures were hoisted
+   - **XFAIL reduced to 3**
+   - **Files**: `lib/Conversion/ImportVerilog/Statements.cpp`
+
+9. **SignalValue Comparison Fix** (`4ba449ddc`):
    - Fixed operator== incorrectly treating normal values as X
    - Fixes continuous-assignments.mlir test
    - **Files**: `include/circt/Dialect/Sim/ProcessScheduler.h`
