@@ -48,9 +48,25 @@
      input root is available, avoiding a crash in LTLToCore.
    - Added regression: `test/Conversion/LTLToCore/clocked-assert-constant-clock.mlir`.
 
-2. **LTL ClockEdgeAttr duplication build fix**:
-   - Dropped LTL dialect attribute registration to avoid duplicate
-     `ClockEdgeAttr` definitions, aligning LTL with Verif/SVA enum-attr usage.
+2. **LTL clock_edge attribute registration**:
+   - Kept `#ltl<clock_edge ...>` support by generating LTL attribute defs with
+     default attribute parsing while avoiding duplicate `ClockEdgeAttr`
+     definitions via `genSpecializedAttr = 0`.
+
+3. **BMC default clock mapping for unnamed clocked checks**:
+   - When only a single derived BMC clock input exists, clocked asserts/assumes/
+     covers without `bmc.clock` now default to that clock instead of erroring.
+   - Added regression: `test/Tools/circt-bmc/lower-to-bmc-implicit-clock-edge.mlir`.
+
+4. **Moore queue.insert op restoration**:
+   - Restored `moore.queue.insert` to the Moore dialect and added ImportVerilog
+     and MooreToCore regression coverage.
+
+5. **4-state clock gate simplification**:
+   - Treat `{value & ~unknown}` clock gates as equivalent to the base clock for
+     clock resolution so derived 4-state clocks and raw clock inputs map to the
+     same BMC clock.
+   - **Test**: `unittests/Support/I1ValueSimplifierTest.cpp`.
 
 ## Iteration 277 - January 31, 2026
 
