@@ -9,14 +9,17 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
+#include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
+#include "circt/Support/CommutativeValueEquivalence.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
@@ -94,76 +97,46 @@ inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
   return success();
 }
 
-namespace {
-struct ClockInputEquivalence {
-  bool isEquivalent(Value lhs, Value rhs) {
-    if (lhs == rhs)
-      return true;
-    if (lhs.getType() != rhs.getType())
-      return false;
-
-    auto key = std::make_pair(lhs, rhs);
-    if (auto it = memo.find(key); it != memo.end())
-      return it->second;
-
-    // Default to non-equivalent to break potential cycles.
-    memo[key] = false;
-
-    auto *lhsOp = lhs.getDefiningOp();
-    auto *rhsOp = rhs.getDefiningOp();
-    if (!lhsOp || !rhsOp)
-      return false;
-
-    if (lhsOp == rhsOp)
-      return false;
-
-    if (lhsOp->getNumRegions() != 0 || rhsOp->getNumRegions() != 0)
-      return false;
-
-    if (lhsOp->getNumResults() != 1 || rhsOp->getNumResults() != 1)
-      return false;
-
-    if (!isMemoryEffectFree(lhsOp) || !isMemoryEffectFree(rhsOp))
-      return false;
-
-    auto eq = OperationEquivalence::isEquivalentTo(
-        lhsOp, rhsOp,
-        [&](Value a, Value b) {
-          return isEquivalent(a, b) ? success() : failure();
-        },
-        /*markEquivalent=*/nullptr,
-        OperationEquivalence::IgnoreLocations |
-            OperationEquivalence::IgnoreDiscardableAttrs);
-
-    memo[key] = eq;
-    return eq;
-  }
-
-  DenseMap<std::pair<Value, Value>, bool> memo;
-};
-} // namespace
-
 static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp) {
   // Hoist simple top-level drives so probes see current combinational inputs.
   if (!bmcOp.getCircuit().empty()) {
     Block &circuitBlock = bmcOp.getCircuit().front();
-    SmallVector<llhd::DriveOp> hoistDrives;
+    auto isHoistableValue = [](Value value) {
+      return isa<BlockArgument>(value) ||
+             value.getDefiningOp<hw::ConstantOp>() ||
+             value.getDefiningOp<arith::ConstantOp>() ||
+             value.getDefiningOp<hw::AggregateConstantOp>();
+    };
+    DenseMap<Operation *, SmallVector<llhd::DriveOp>> drivesBySignal;
     for (auto drive : circuitBlock.getOps<llhd::DriveOp>()) {
       if (drive.getEnable())
-        continue;
-      if (!isa<BlockArgument>(drive.getValue()))
         continue;
       if (!drive.getTime().getDefiningOp<llhd::ConstantTimeOp>())
         continue;
       auto sigOp = drive.getSignal().getDefiningOp<llhd::SignalOp>();
       if (!sigOp || sigOp->getBlock() != &circuitBlock)
         continue;
+      drivesBySignal[sigOp].push_back(drive);
+    }
+    SmallVector<llhd::DriveOp> hoistDrives;
+    for (auto &entry : drivesBySignal) {
+      if (entry.second.size() != 1)
+        continue;
+      auto drive = entry.second.front();
+      if (!isHoistableValue(drive.getValue()))
+        continue;
       hoistDrives.push_back(drive);
     }
+    DenseMap<Operation *, Operation *> lastAfter;
     for (auto drive : hoistDrives) {
       auto sigOp = drive.getSignal().getDefiningOp<llhd::SignalOp>();
-      if (sigOp)
-        drive->moveAfter(sigOp);
+      if (!sigOp)
+        continue;
+      Operation *insertAfter = sigOp;
+      if (auto it = lastAfter.find(sigOp); it != lastAfter.end())
+        insertAfter = it->second;
+      drive->moveAfter(insertAfter);
+      lastAfter[sigOp] = drive;
     }
   }
 
@@ -364,6 +337,13 @@ void LowerToBMCPass::runOnOperation() {
     moduleOp->emitError("failed to lookup or create printf");
     return signalPassFailure();
   }
+  auto reportFunc = LLVM::lookupOrCreateFn(builder, moduleOp,
+                                           "circt_bmc_report_result",
+                                           {builder.getI1Type()}, voidTy);
+  if (failed(reportFunc)) {
+    moduleOp->emitError("failed to lookup or create circt_bmc_report_result");
+    return signalPassFailure();
+  }
 
   // Replace the top-module with a function performing the BMC
   auto entryFunc = func::FuncOp::create(builder, loc, topModule,
@@ -444,27 +424,204 @@ void LowerToBMCPass::runOnOperation() {
 
   bool hasExplicitClockInput = !explicitClocks.empty();
   bool hasClk = hasExplicitClockInput;
+  SmallVector<Attribute> clockSourceAttrs;
   if (!hasExplicitClockInput) {
     SmallVector<seq::ToClockOp> toClockOps;
+    SmallVector<ltl::ClockOp> ltlClockOps;
     hwModule.walk([&](seq::ToClockOp toClockOp) {
       toClockOps.push_back(toClockOp);
     });
-    if (!toClockOps.empty()) {
-      SmallVector<Value> clockInputs;
-      ClockInputEquivalence equivalence;
-      clockInputs.reserve(toClockOps.size());
-      for (auto toClockOp : toClockOps) {
-        auto input = toClockOp.getInput();
-        // Graph regions can use values before they are defined, which prevents
-        // CSE from collapsing equivalent clock expressions. Deduplicate
-        // structurally equivalent inputs here to avoid spurious multi-clock
-        // errors.
-        if (llvm::any_of(clockInputs, [&](Value existing) {
-              return equivalence.isEquivalent(input, existing);
-            }))
-          continue;
-        clockInputs.push_back(input);
+    hwModule.walk([&](ltl::ClockOp clockOp) { ltlClockOps.push_back(clockOp); });
+    SmallVector<Value> clockInputs;
+    CommutativeValueEquivalence equivalence;
+    clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
+    auto maybeAddClockInput = [&](Value input) {
+      if (!input || input.getType() != builder.getI1Type())
+        return;
+      // Graph regions can use values before they are defined, which prevents
+      // CSE from collapsing equivalent clock expressions. Deduplicate
+      // structurally equivalent inputs here to avoid spurious multi-clock
+      // errors.
+      if (llvm::any_of(clockInputs, [&](Value existing) {
+            return equivalence.isEquivalent(input, existing);
+          }))
+        return;
+      clockInputs.push_back(input);
+    };
+    for (auto toClockOp : toClockOps)
+      maybeAddClockInput(toClockOp.getInput());
+    for (auto clockOp : ltlClockOps)
+      maybeAddClockInput(clockOp.getClock());
+    if (clockInputs.empty()) {
+      if (auto regClocks =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+        DenseSet<StringRef> seenNames;
+        auto inputNames = hwModule.getInputNames();
+        Block &entryBlock = hwModule.getBody().front();
+        Value constTrue;
+        auto ensureConstTrue = [&]() -> Value {
+          if (constTrue)
+            return constTrue;
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(&entryBlock);
+          constTrue =
+              hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+          return constTrue;
+        };
+        for (auto attr : regClocks) {
+          auto nameAttr = dyn_cast<StringAttr>(attr);
+          if (!nameAttr || nameAttr.getValue().empty())
+            continue;
+          if (!seenNames.insert(nameAttr.getValue()).second)
+            continue;
+          std::optional<unsigned> inputIdx;
+          for (auto [idx, name] : llvm::enumerate(inputNames)) {
+            auto str = dyn_cast<StringAttr>(name);
+            if (str && str.getValue() == nameAttr.getValue()) {
+              inputIdx = idx;
+              break;
+            }
+          }
+          if (!inputIdx)
+            continue;
+          Value arg = entryBlock.getArgument(*inputIdx);
+          Value clockVal;
+          if (auto structTy = dyn_cast<hw::StructType>(arg.getType())) {
+            auto valueIdx = structTy.getFieldIndex("value");
+            auto unknownIdx = structTy.getFieldIndex("unknown");
+            if (!valueIdx || !unknownIdx)
+              continue;
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(&entryBlock);
+            Value value =
+                hw::StructExtractOp::create(builder, loc, arg, "value");
+            Value unknown =
+                hw::StructExtractOp::create(builder, loc, arg, "unknown");
+            Value notUnknown = comb::XorOp::create(
+                                   builder, loc, unknown, ensureConstTrue())
+                                   .getResult();
+            clockVal = comb::AndOp::create(builder, loc, value, notUnknown)
+                           .getResult();
+          } else if (auto intTy = dyn_cast<IntegerType>(arg.getType());
+                     intTy && intTy.getWidth() == 1) {
+            clockVal = arg;
+          } else {
+            continue;
+          }
+          maybeAddClockInput(clockVal);
+        }
       }
+    }
+
+    if (!clockInputs.empty()) {
+      auto getConstI1Value = [&](Value val) -> std::optional<bool> {
+        if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
+          if (auto intTy = dyn_cast<IntegerType>(cst.getType());
+              intTy && intTy.getWidth() == 1)
+            return cst.getValue().isAllOnes();
+        }
+        if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
+          if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
+            return boolAttr.getValue();
+          if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+            if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
+                intTy && intTy.getWidth() == 1)
+              return intAttr.getValue().isAllOnes();
+          }
+        }
+        return std::nullopt;
+      };
+
+      std::function<bool(Value, BlockArgument &)> traceRoot =
+          [&](Value value, BlockArgument &root) -> bool {
+        if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
+          value = fromClock.getInput();
+        if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
+          value = toClock.getInput();
+        if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+            return traceRoot(cast->getOperand(0), root);
+        }
+        if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
+          return traceRoot(bitcast.getInput(), root);
+        if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
+          return traceRoot(extract.getInput(), root);
+        if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
+          return traceRoot(extractOp.getInput(), root);
+        if (auto cst = value.getDefiningOp<hw::ConstantOp>())
+          return true;
+        if (auto cst = value.getDefiningOp<arith::ConstantOp>())
+          return true;
+        if (auto arg = dyn_cast<BlockArgument>(value)) {
+          if (!root)
+            root = arg;
+          return arg == root;
+        }
+        if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+          for (auto operand : andOp.getOperands())
+            if (!traceRoot(operand, root))
+              return false;
+          return true;
+        }
+        if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
+          for (auto operand : orOp.getOperands())
+            if (!traceRoot(operand, root))
+              return false;
+          return true;
+        }
+        if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
+          for (auto operand : xorOp.getOperands())
+            if (!traceRoot(operand, root))
+              return false;
+          return true;
+        }
+        if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
+          for (auto operand : concatOp.getOperands())
+            if (!traceRoot(operand, root))
+              return false;
+          return true;
+        }
+        return false;
+      };
+
+      std::function<bool(Value, BlockArgument &)> traceRootSimple =
+          [&](Value value, BlockArgument &root) -> bool {
+        if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
+          return traceRootSimple(fromClock.getInput(), root);
+        if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
+          return traceRootSimple(toClock.getInput(), root);
+        if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+            return traceRootSimple(cast->getOperand(0), root);
+        }
+        if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
+          return traceRootSimple(bitcast.getInput(), root);
+        if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
+          return traceRootSimple(extract.getInput(), root);
+        if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
+          return traceRootSimple(extractOp.getInput(), root);
+        if (auto arg = dyn_cast<BlockArgument>(value)) {
+          if (!root)
+            root = arg;
+          return arg == root;
+        }
+        return false;
+      };
+
+      auto resolveClockInputName = [&](Value input) -> std::string {
+        BlockArgument root;
+        if (!traceRoot(input, root))
+          return {};
+        if (root.getOwner() != hwModule.getBodyBlock())
+          return {};
+        auto inputNames = hwModule.getInputNames();
+        if (root.getArgNumber() >= inputNames.size())
+          return {};
+        if (auto nameAttr =
+                dyn_cast<StringAttr>(inputNames[root.getArgNumber()]))
+          return nameAttr.getValue().str();
+        return {};
+      };
 
       auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
         for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
@@ -479,12 +636,102 @@ void LowerToBMCPass::runOnOperation() {
         return signalPassFailure();
       }
 
+      SmallVector<std::string> clockNames;
+      clockNames.reserve(clockInputs.size());
+      for (auto input : clockInputs)
+        clockNames.push_back(resolveClockInputName(input));
+
+      DenseSet<StringRef> usedClockNames;
+      auto chooseClockName = [&](size_t idx) -> std::string {
+        std::string name;
+        if (idx < clockNames.size())
+          name = clockNames[idx];
+        if (name.empty())
+          name = idx == 0 ? "bmc_clock" : ("bmc_clock_" + Twine(idx)).str();
+        if (usedClockNames.contains(name)) {
+          name = ("bmc_clock_" + Twine(idx)).str();
+          unsigned suffix = static_cast<unsigned>(idx);
+          while (usedClockNames.contains(name))
+            name = ("bmc_clock_" + Twine(++suffix)).str();
+        }
+        usedClockNames.insert(name);
+        return name;
+      };
+
       auto clockTy = seq::ClockType::get(ctx);
       SmallVector<BlockArgument, 4> newClocks(clockInputs.size());
       for (size_t idx = clockInputs.size(); idx-- > 0;) {
-        auto name = idx == 0 ? "bmc_clock"
-                             : ("bmc_clock_" + Twine(idx)).str();
+        auto name = chooseClockName(idx);
         newClocks[idx] = hwModule.prependInput(name, clockTy).second;
+      }
+      auto inputNamesAfter = hwModule.getInputNames();
+      SmallVector<StringAttr> actualClockNames;
+      actualClockNames.reserve(clockInputs.size());
+      for (auto arg : newClocks) {
+        auto argNum = arg.getArgNumber();
+        if (argNum < inputNamesAfter.size()) {
+          if (auto nameAttr = dyn_cast<StringAttr>(inputNamesAfter[argNum]))
+            actualClockNames.push_back(nameAttr);
+          else
+            actualClockNames.push_back(StringAttr{});
+        } else {
+          actualClockNames.push_back(StringAttr{});
+        }
+      }
+      DenseMap<StringAttr, StringAttr> clockNameRemap;
+      for (size_t idx = 0; idx < clockInputs.size(); ++idx) {
+        if (idx >= clockNames.size())
+          continue;
+        if (clockNames[idx].empty())
+          continue;
+        auto origName = builder.getStringAttr(clockNames[idx]);
+        auto actualName = idx < actualClockNames.size() ? actualClockNames[idx]
+                                                        : StringAttr{};
+        if (!actualName || actualName.getValue().empty())
+          continue;
+        if (origName != actualName)
+          clockNameRemap.try_emplace(origName, actualName);
+      }
+
+      if (!clockInputs.empty()) {
+        DenseSet<unsigned> seenSourceArgs;
+        for (auto [idx, clockInput] : llvm::enumerate(clockInputs)) {
+          BlockArgument root;
+          if (!traceRoot(clockInput, root))
+            continue;
+          if (root.getOwner() != hwModule.getBodyBlock())
+            continue;
+          unsigned argIndex = root.getArgNumber();
+          if (!seenSourceArgs.insert(argIndex).second)
+            continue;
+          bool invert = false;
+          if (auto xorOp = clockInput.getDefiningOp<comb::XorOp>()) {
+            if (xorOp.getNumOperands() == 2) {
+              Value lhs = xorOp.getOperand(0);
+              Value rhs = xorOp.getOperand(1);
+              if (auto lhsConst = getConstI1Value(lhs);
+                  lhsConst && *lhsConst) {
+                BlockArgument innerRoot;
+                if (traceRootSimple(rhs, innerRoot) && innerRoot == root)
+                  invert = true;
+              } else if (auto rhsConst = getConstI1Value(rhs);
+                         rhsConst && *rhsConst) {
+                BlockArgument innerRoot;
+                if (traceRootSimple(lhs, innerRoot) && innerRoot == root)
+                  invert = true;
+              }
+            }
+          }
+          auto dict = builder.getDictionaryAttr(
+              {builder.getNamedAttr(
+                   "arg_index", builder.getI32IntegerAttr(argIndex)),
+               builder.getNamedAttr(
+                   "clock_pos",
+                   builder.getI32IntegerAttr(static_cast<unsigned>(idx))),
+               builder.getNamedAttr("invert",
+                                    builder.getBoolAttr(invert))});
+          clockSourceAttrs.push_back(dict);
+        }
       }
 
       // Constrain each derived clock input to match its BMC clock.
@@ -511,11 +758,43 @@ void LowerToBMCPass::runOnOperation() {
         toClockOp.replaceAllUsesWith(newClocks[*idx]);
         toClockOp.erase();
       }
+      if (!clockNameRemap.empty()) {
+        if (auto regClocks =
+                hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+          SmallVector<Attribute> remapped;
+          remapped.reserve(regClocks.size());
+          for (auto attr : regClocks) {
+            auto nameAttr = dyn_cast<StringAttr>(attr);
+            if (!nameAttr) {
+              remapped.push_back(attr);
+              continue;
+            }
+            if (auto it = clockNameRemap.find(nameAttr);
+                it != clockNameRemap.end())
+              remapped.push_back(it->second);
+            else
+              remapped.push_back(nameAttr);
+          }
+          hwModule->setAttr("bmc_reg_clocks",
+                            ArrayAttr::get(ctx, remapped));
+        }
+        hwModule.walk([&](Operation *op) {
+          if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
+            return;
+          auto nameAttr = op->getAttrOfType<StringAttr>("bmc.clock");
+          if (!nameAttr)
+            return;
+          auto it = clockNameRemap.find(nameAttr);
+          if (it == clockNameRemap.end())
+            return;
+          op->setAttr("bmc.clock", it->second);
+        });
+      }
       hasClk = true;
     }
   }
   // Also check for i1 inputs that are converted to clocks via ToClockOp
-  if (!hasClk) {
+    if (!hasClk) {
     hwModule.walk([&](seq::ToClockOp toClockOp) {
       if (auto blockArg = dyn_cast<BlockArgument>(toClockOp.getInput())) {
         if (blockArg.getOwner() == &hwModule.getBody().front()) {
@@ -542,6 +821,9 @@ void LowerToBMCPass::runOnOperation() {
   auto inputNames = hwModule.getInputNames();
   if (!inputNames.empty())
     bmcOp->setAttr("bmc_input_names", builder.getArrayAttr(inputNames));
+  if (!clockSourceAttrs.empty())
+    bmcOp->setAttr("bmc_clock_sources",
+                   builder.getArrayAttr(clockSourceAttrs));
   if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks"))
     bmcOp->setAttr("bmc_reg_clocks", regClocks);
   if (ignoreAssertionsUntil) {
@@ -668,6 +950,192 @@ void LowerToBMCPass::runOnOperation() {
     return signalPassFailure();
   if (failed(inlineLlhdCombinationalOps(bmcOp)))
     return signalPassFailure();
+  // Convert comb.mux producing LLVM types to llvm.select so SMT lowering
+  // doesn't reject non-SMT-compatible muxes (e.g. UVM string helpers).
+  SmallVector<comb::MuxOp> muxesToReplace;
+  moduleOp.walk([&](comb::MuxOp muxOp) {
+    bool inBmc = muxOp->getParentOfType<verif::BoundedModelCheckingOp>();
+    if (inBmc) {
+      if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(muxOp.getType()))
+        muxesToReplace.push_back(muxOp);
+      return;
+    }
+    if (muxOp->getParentOfType<hw::HWModuleOp>())
+      return;
+    if (LLVM::isCompatibleType(muxOp.getType()))
+      muxesToReplace.push_back(muxOp);
+  });
+  for (auto muxOp : muxesToReplace) {
+    OpBuilder muxBuilder(muxOp);
+    auto select = LLVM::SelectOp::create(
+        muxBuilder, muxOp.getLoc(), muxOp.getCond(), muxOp.getTrueValue(),
+        muxOp.getFalseValue());
+    muxOp.replaceAllUsesWith(select.getResult());
+    muxOp.erase();
+  }
+
+  // Lower LLHD signal operations in non-HW contexts to LLVM memory ops so
+  // downstream SMT/LLVM lowering doesn't trip on mixed LLHD usage.
+  SmallVector<llhd::SignalOp> signalsToLower;
+  moduleOp.walk([&](llhd::SignalOp sigOp) {
+    if (sigOp->getParentOfType<hw::HWModuleOp>())
+      return;
+    if (sigOp->getParentOfType<llhd::ProcessOp>())
+      return;
+    signalsToLower.push_back(sigOp);
+  });
+
+  auto getEntryBlock = [](Operation *op) -> Block * {
+    if (auto func = op->getParentOfType<func::FuncOp>())
+      return func.getBody().empty() ? nullptr : &func.getBody().front();
+    if (auto llvmFunc = op->getParentOfType<LLVM::LLVMFuncOp>())
+      return llvmFunc.getBody().empty() ? nullptr : &llvmFunc.getBody().front();
+    return nullptr;
+  };
+
+  for (auto sigOp : signalsToLower) {
+    auto refType = cast<llhd::RefType>(sigOp.getResult().getType());
+    Type nestedType = refType.getNestedType();
+    if (!LLVM::isCompatibleType(nestedType))
+      continue;
+
+    bool hasUnsupportedUse = false;
+    bool hasEnable = false;
+    SmallVector<llhd::DriveOp> drives;
+    SmallVector<llhd::ProbeOp> probes;
+    for (auto *user : sigOp.getResult().getUsers()) {
+      if (auto drive = dyn_cast<llhd::DriveOp>(user)) {
+        drives.push_back(drive);
+        if (drive.getEnable())
+          hasEnable = true;
+      } else if (auto probe = dyn_cast<llhd::ProbeOp>(user)) {
+        probes.push_back(probe);
+      } else {
+        hasUnsupportedUse = true;
+        break;
+      }
+    }
+    if (hasUnsupportedUse || hasEnable)
+      continue;
+
+    Block *entryBlock = getEntryBlock(sigOp.getOperation());
+    if (!entryBlock || sigOp->getBlock() != entryBlock)
+      continue;
+
+    OpBuilder entryBuilder(entryBlock, entryBlock->begin());
+    auto ptrTy = LLVM::LLVMPointerType::get(&getContext());
+    auto one = LLVM::ConstantOp::create(entryBuilder, sigOp.getLoc(),
+                                        entryBuilder.getI64Type(), 1);
+    auto alloca = LLVM::AllocaOp::create(entryBuilder, sigOp.getLoc(), ptrTy,
+                                         nestedType, one);
+    OpBuilder initBuilder(sigOp);
+    initBuilder.setInsertionPointAfter(sigOp);
+    LLVM::StoreOp::create(initBuilder, sigOp.getLoc(), sigOp.getInit(),
+                          alloca);
+
+    for (auto drive : drives) {
+      OpBuilder driveBuilder(drive);
+      LLVM::StoreOp::create(driveBuilder, drive.getLoc(), drive.getValue(),
+                            alloca);
+      drive.erase();
+    }
+
+    for (auto probe : probes) {
+      OpBuilder probeBuilder(probe);
+      auto load = LLVM::LoadOp::create(probeBuilder, probe.getLoc(),
+                                       nestedType, alloca);
+      probe.replaceAllUsesWith(load.getResult());
+      probe.erase();
+    }
+
+    if (sigOp.use_empty())
+      sigOp.erase();
+  }
+
+  SmallVector<llhd::DriveOp> refDrives;
+  SmallVector<llhd::ProbeOp> refProbes;
+  moduleOp.walk([&](Operation *op) {
+    if (op->getParentOfType<hw::HWModuleOp>())
+      return;
+    if (op->getParentOfType<llhd::ProcessOp>())
+      return;
+    if (auto drive = dyn_cast<llhd::DriveOp>(op))
+      refDrives.push_back(drive);
+    if (auto probe = dyn_cast<llhd::ProbeOp>(op))
+      refProbes.push_back(probe);
+  });
+
+  for (auto drive : refDrives) {
+    if (drive.getEnable())
+      continue;
+    auto castOp =
+        drive.getSignal().getDefiningOp<UnrealizedConversionCastOp>();
+    if (!castOp || castOp.getNumOperands() != 1 ||
+        castOp.getNumResults() != 1)
+      continue;
+    if (!isa<LLVM::LLVMPointerType>(castOp.getOperand(0).getType()))
+      continue;
+    if (!isa<llhd::RefType>(castOp.getResultTypes().front()))
+      continue;
+    OpBuilder builder(drive);
+    LLVM::StoreOp::create(builder, drive.getLoc(), drive.getValue(),
+                          castOp.getOperand(0));
+    drive.erase();
+    if (castOp.use_empty())
+      castOp.erase();
+  }
+
+  for (auto probe : refProbes) {
+    auto castOp =
+        probe.getSignal().getDefiningOp<UnrealizedConversionCastOp>();
+    if (!castOp || castOp.getNumOperands() != 1 ||
+        castOp.getNumResults() != 1)
+      continue;
+    if (!isa<LLVM::LLVMPointerType>(castOp.getOperand(0).getType()))
+      continue;
+    if (!isa<llhd::RefType>(castOp.getResultTypes().front()))
+      continue;
+    OpBuilder builder(probe);
+    auto load =
+        LLVM::LoadOp::create(builder, probe.getLoc(), probe.getType(),
+                             castOp.getOperand(0));
+    probe.replaceAllUsesWith(load.getResult());
+    probe.erase();
+    if (castOp.use_empty())
+      castOp.erase();
+  }
+
+  SmallVector<llhd::TimeToIntOp> timeToIntOps;
+  moduleOp.walk([&](llhd::TimeToIntOp op) {
+    if (op->getParentOfType<hw::HWModuleOp>())
+      return;
+    if (op->getParentOfType<llhd::ProcessOp>())
+      return;
+    timeToIntOps.push_back(op);
+  });
+  for (auto op : timeToIntOps) {
+    auto currentTime = op.getInput().getDefiningOp<llhd::CurrentTimeOp>();
+    if (!currentTime)
+      continue;
+    OpBuilder builder(op);
+    auto zero = LLVM::ConstantOp::create(builder, op.getLoc(), op.getType(), 0);
+    op.replaceAllUsesWith(zero.getResult());
+    op.erase();
+    if (currentTime.use_empty())
+      currentTime.erase();
+  }
+
+  SmallVector<llhd::ConstantTimeOp> constantTimes;
+  moduleOp.walk([&](llhd::ConstantTimeOp op) {
+    if (op->getParentOfType<hw::HWModuleOp>())
+      return;
+    if (op->getParentOfType<llhd::ProcessOp>())
+      return;
+    if (op.use_empty())
+      constantTimes.push_back(op);
+  });
+  for (auto op : constantTimes)
+    op.erase();
 
   // Define global string constants to print on success/failure
   auto createUniqueStringGlobal = [&](StringRef str) -> FailureOr<Value> {
@@ -704,6 +1172,8 @@ void LowerToBMCPass::runOnOperation() {
 
   LLVM::CallOp::create(builder, loc, printfFunc.value(),
                        ValueRange{formatString});
+  LLVM::CallOp::create(builder, loc, reportFunc.value(),
+                       ValueRange{bmcOp.getResult()});
   func::ReturnOp::create(builder, loc);
 
   if (insertMainFunc) {
