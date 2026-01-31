@@ -693,6 +693,12 @@ void LowerToBMCPass::runOnOperation() {
           clockNameRemap.try_emplace(origName, actualName);
       }
 
+      DenseSet<StringRef> validClockNames;
+      for (auto nameAttr : actualClockNames) {
+        if (nameAttr && !nameAttr.getValue().empty())
+          validClockNames.insert(nameAttr.getValue());
+      }
+
       if (!clockInputs.empty()) {
         DenseSet<unsigned> seenSourceArgs;
         for (auto [idx, clockInput] : llvm::enumerate(clockInputs)) {
@@ -808,6 +814,48 @@ void LowerToBMCPass::runOnOperation() {
             return;
           op->setAttr("bmc.clock", it->second);
         });
+      }
+      // If there is a single derived BMC clock input, remap any explicit
+      // bmc.clock attributes that don't match an inserted clock name to the
+      // new clock. This avoids rejecting clocked properties when the clock
+      // expression cannot be traced back to a named module input.
+      if (newClocks.size() == 1 && !actualClockNames.empty()) {
+        auto defaultClockName = actualClockNames.front();
+        if (defaultClockName && !defaultClockName.getValue().empty()) {
+          auto remapIfUnknown = [&](StringAttr nameAttr) -> StringAttr {
+            if (!nameAttr || nameAttr.getValue().empty())
+              return nameAttr;
+            if (validClockNames.contains(nameAttr.getValue()))
+              return nameAttr;
+            return defaultClockName;
+          };
+          if (auto regClocks =
+                  hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+            SmallVector<Attribute> remapped;
+            remapped.reserve(regClocks.size());
+            for (auto attr : regClocks) {
+              auto nameAttr = dyn_cast<StringAttr>(attr);
+              if (!nameAttr) {
+                remapped.push_back(attr);
+                continue;
+              }
+              auto updated = remapIfUnknown(nameAttr);
+              remapped.push_back(updated ? updated : nameAttr);
+            }
+            hwModule->setAttr("bmc_reg_clocks",
+                              ArrayAttr::get(ctx, remapped));
+          }
+          hwModule.walk([&](Operation *op) {
+            if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
+              return;
+            auto nameAttr = op->getAttrOfType<StringAttr>("bmc.clock");
+            if (!nameAttr)
+              return;
+            auto updated = remapIfUnknown(nameAttr);
+            if (updated && updated != nameAttr)
+              op->setAttr("bmc.clock", updated);
+          });
+        }
       }
       hasClk = true;
     }

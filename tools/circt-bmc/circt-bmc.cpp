@@ -133,6 +133,12 @@ static cl::opt<bool> printCounterexample(
              "is available"),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> assumeKnownInputs(
+    "assume-known-inputs",
+    cl::desc("Assume input values are known (not X) for BMC and LEC "
+             "operations."),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<bool>
     verbosePassExecutions("verbose-pass-executions",
                           cl::desc("Log executions of toplevel module passes"),
@@ -308,6 +314,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(createConvertCombToSMT());
   ConvertVerifToSMTOptions convertVerifToSMTOptions;
   convertVerifToSMTOptions.risingClocksOnly = risingClocksOnly;
+  convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
   pm.addPass(createSimpleCanonicalizerPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());

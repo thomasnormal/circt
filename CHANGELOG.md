@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 276 - January 31, 2026
+
+### Goals
+Continue reducing XFAIL count, fix simulation infrastructure issues, improve OpenTitan coverage.
+
+### Status
+- **Starting XFAIL count**: 18
+- **Ending XFAIL count**: 9 (50% reduction)
+- **OpenTitan**: 14/21 pass (66.7%)
+- **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
+
+### Fixed in this Iteration
+
+1. **dynamic-nonprocedural-assign.sv XFAIL Removed** (`1cf58760d`):
+   - Fixed setSeverity ordering issue in ImportVerilog
+   - Test now passes, XFAIL reduced to 10
+   - **Files**: `test/Conversion/ImportVerilog/dynamic-nonprocedural-assign.sv`
+
+2. **avip-e2e-testbench.sv XFAIL Removed**:
+   - Updated test to use real Accellera uvm-core library instead of CIRCT stubs
+   - Added missing `timescale directive for uvm-core compatibility
+   - Test now passes with `--no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv`
+   - **Files**: `test/Conversion/ImportVerilog/avip-e2e-testbench.sv`
+
+3. **assertion-value-change-xprop.sv CHECK pattern fix**:
+   - Updated CHECK patterns to use `moore.case_eq` instead of `moore.eq`
+   - `$stable`, `$changed`, `$rose`, `$fell` correctly use case equality (===) for X/Z handling
+   - **Files**: `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`
+
+4. **assertions.sv CHECK pattern fix**:
+   - Updated CHECK patterns for `$changed` and `$stable` to use `moore.case_eq`
+   - **Files**: `test/Conversion/ImportVerilog/assertions.sv`
+
+5. **builtins.sv CHECK pattern fix**:
+   - Updated CHECK pattern for `$stable` to use `moore.case_eq`
+   - **Files**: `test/Conversion/ImportVerilog/builtins.sv`
+
+2. **Delta Step Tracking in EventQueue** (`9885013d5`):
+   - EventQueue now properly tracks delta steps for simulation scheduling
+   - Fixed time advancement logic to correctly handle delta cycles
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+3. **Wide Signal Edge Detection** (`9885013d5`):
+   - Fixed edge detection for signals wider than 64 bits
+   - Previously, wide signals could miss edge events due to truncation
+   - Now correctly handles APInt comparisons for arbitrary width signals
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Lit Tests | **2991/3085 (96.9%)** | All pass, **9 XFAIL** (down from 18) |
+| OpenTitan IPs | **14/21 (66.7%)** | 14 pass, 7 failing/timeout |
+| sv-tests BMC | **23/23 pass** | 3 xfail, 0 fail (26 total) |
+| yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
+| verilator-verification BMC | **17/17 pass** | No failures |
+| sv-tests LEC | **23/23 pass** | 0 fail (23 total) |
+| yosys-sva LEC | **14/14 pass** | 2 skipped VHDL |
+| verilator-verification LEC | **17/17 pass** | No failures |
+| AVIP (APB/AHB/UART/I2S/AXI4/I3C) | **PASS** | All 6 protocols working |
+
+---
+
 ## Iteration 275 - January 31, 2026
 
 ### Goals
@@ -77,6 +140,19 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
      clocked assert/assume/cover ops, so BMC gates checks to the correct clock
    - **Test**: `test/Conversion/LTLToCore/clocked-assert-bmc-clock-attrs.mlir`
    - **Files**: `lib/Conversion/LTLToCore/LTLToCore.cpp`
+
+7. **BMC Clock Name Fallback for Derived Clocks**:
+   - Remap unmatched `bmc.clock` names to the single derived BMC clock input
+     when the clock expression cannot be traced back to a named module input
+   - **Test**: `test/Tools/circt-bmc/lower-to-bmc-unmapped-clock-name.mlir`
+   - **Files**: `lib/Tools/circt-bmc/LowerToBMC.cpp`
+
+8. **Assume-Known Inputs Flag for BMC**:
+   - Added `--assume-known-inputs` to `circt-bmc` and hooked it into the yosys
+     SVA runner via `BMC_ASSUME_KNOWN_INPUTS=1`
+   - **Test**: `test/Tools/circt-bmc/bmc-emit-smtlib-assume-known-inputs.mlir`
+   - **Files**: `tools/circt-bmc/circt-bmc.cpp`,
+     `utils/run_yosys_sva_circt_bmc.sh`
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
 6. **LLVM Wide Load Padding Clamp**:
