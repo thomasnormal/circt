@@ -7,8 +7,8 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
 
 ### Status
 - **Starting XFAIL count**: 18
-- **Ending XFAIL count**: 4 (78% reduction!)
-- **ImportVerilog**: 215/219 pass (98.17%)
+- **Ending XFAIL count**: 3 (83% reduction!)
+- **ImportVerilog**: 216/219 pass (98.63%)
 - **OpenTitan**: 17/21 pass (81%) - stack overflow fix enabled 3 more IPs
 - **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
 
@@ -1024,6 +1024,9 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
 10. **BMC i1 Clocked Checks** (VerifToSMT.cpp):
    - **TEST**: `test/Conversion/VerifToSMT/bmc-delay-i1-clock.mlir` (XFAIL removed)
    - **TEST**: `test/Conversion/VerifToSMT/bmc-nonfinal-check-i1-clock.mlir` (XFAIL removed)
+
+11. **BMC Final Clock-Edge Checks** (VerifToSMT.cpp):
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-final-check-edge.mlir` (XFAIL removed)
 
 6. **PruneBMCRegisters Output-Use Safety** (PruneBMCRegisters.cpp):
    - **FIX**: Keep ops whose results are still used by kept operations to avoid
