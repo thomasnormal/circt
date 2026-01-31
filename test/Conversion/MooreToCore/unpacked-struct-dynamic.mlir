@@ -33,10 +33,12 @@ func.func @NestedUnpackedStructWithString() {
   return
 }
 
-// Test that unpacked structs without dynamic types get eliminated when unused
-// (DCE removes the unreferenced variable)
+// Test that unpacked structs without dynamic types use llvm.alloca in functions
+// (local variables have immediate memory semantics)
 // CHECK-LABEL: func.func @UnpackedStructWithoutDynamic
-// CHECK-NEXT: return
+// CHECK: llvm.alloca {{.*}} x !llvm.struct<(i32, i32)>
+// CHECK: llvm.store
+// CHECK: return
 func.func @UnpackedStructWithoutDynamic() {
   %var = moore.variable name "var" : <ustruct<{a: i32, b: i32}>>
   return

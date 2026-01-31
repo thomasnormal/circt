@@ -50,7 +50,8 @@ func.func @UnrealizedConversionCast(%arg0: !moore.i8) -> !moore.i16 {
 func.func @Expressions(%arg0: !moore.i1, %arg1: !moore.l1, %arg2: !moore.i6, %arg3: !moore.i5, %arg4: !moore.i1, %arg5: !moore.array<5 x i32>, %arg6: !moore.ref<i1>, %arg7: !moore.ref<array<5 x i32>>) {
   // CHECK: hw.aggregate_constant
   // CHECK: hw.aggregate_constant
-  // CHECK: llhd.constant_time
+  // Local variables in functions use llvm.alloca instead of llhd.sig
+  // CHECK: llvm.mlir.constant(1 : i64)
   // CHECK: hw.constant 0 : i12
   moore.concat %arg0, %arg0 : (!moore.i1, !moore.i1) -> !moore.i2
   moore.concat %arg1, %arg1 : (!moore.l1, !moore.l1) -> !moore.l2
@@ -166,8 +167,9 @@ func.func @Expressions(%arg0: !moore.i1, %arg1: !moore.l1, %arg2: !moore.i6, %ar
 
   // CHECK: hw.struct_extract %arg1["value"]
   // CHECK: scf.if
-  // CHECK:   llhd.sig
-  // CHECK:   llhd.drv
+  // Local variable in function uses llvm.alloca + llvm.store
+  // CHECK:   llvm.alloca
+  // CHECK:   llvm.store
   // CHECK:   scf.yield
   // CHECK: scf.yield
   %k1 = moore.conditional %arg1 : l1 -> l6 {
@@ -230,11 +232,12 @@ func.func @AdvancedConversion(%arg0: !moore.array<5 x struct<{exp_bits: i32, man
 
 // CHECK-LABEL: func @Statements
 func.func @Statements(%arg0: !moore.i42) {
-  // CHECK: %x = llhd.sig
+  // Local variables in functions use llvm.alloca for immediate memory semantics
+  // CHECK: llvm.alloca
   %x = moore.variable : !moore.ref<i42>
-  // CHECK: llhd.drv %x, %arg0 after
+  // CHECK: llvm.store %arg0
   moore.blocking_assign %x, %arg0 : i42
-  // CHECK: llhd.drv %x, %arg0 after
+  // CHECK: llvm.store %arg0
   moore.nonblocking_assign %x, %arg0 : i42
   // CHECK: return
   return
@@ -604,10 +607,9 @@ moore.module @WaitEvent() {
   // CHECK:   llhd.wait ^[[CHECK:.+]]
   // CHECK: ^[[CHECK]]:
   // CHECK:   func.call @dummyB()
-  // CHECK:   cf.br ^[[WAIT:.+]]
-  // CHECK: ^[[RESUME:.+]]:
+  // CHECK:   cf.br
   // CHECK:   func.call @dummyC()
-  // CHECK:   llhd.prb %a
+  // Unused moore.read is dropped (no llhd.prb generated)
   // CHECK:   llhd.halt
   // CHECK: }
   moore.procedure initial {
