@@ -1789,7 +1789,13 @@ void LLHDProcessInterpreter::collectSignalIds(
     }
 
     if (auto combOp = item.value.getDefiningOp<llhd::CombinationalOp>()) {
-      collectSignalIdsFromCombinational(combOp, signals);
+      // Add all operands from operations inside the combinational block to the
+      // worklist. This avoids recursion through collectSignalIdsFromCombinational
+      // which can cause stack overflow on large designs (e.g., OpenTitan IPs).
+      combOp.walk([&](Operation *op) {
+        for (Value operand : op->getOperands())
+          worklist.push_back({operand, item.inputMap, item.instanceId});
+      });
       continue;
     }
 
@@ -1885,14 +1891,10 @@ void LLHDProcessInterpreter::collectProcessIds(
   }
 }
 
-void LLHDProcessInterpreter::collectSignalIdsFromCombinational(
-    llhd::CombinationalOp combOp,
-    llvm::SmallVectorImpl<SignalId> &signals) const {
-  combOp.walk([&](Operation *op) {
-    for (Value operand : op->getOperands())
-      collectSignalIds(operand, signals);
-  });
-}
+// NOTE: collectSignalIdsFromCombinational has been inlined into collectSignalIds
+// to avoid stack overflow from mutual recursion on large designs (e.g., OpenTitan
+// hmac_reg_top, rv_timer_reg_top, spi_host_reg_top). The logic now adds operands
+// directly to the worklist when encountering a CombinationalOp.
 
 void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops,
                                              InstanceId instanceId,

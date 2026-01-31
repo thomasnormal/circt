@@ -515,10 +515,8 @@ private:
   void collectProcessIds(mlir::Value value,
                          llvm::SmallVectorImpl<ProcessId> &processIds) const;
 
-  /// Collect signal IDs referenced inside an llhd.combinational op.
-  void collectSignalIdsFromCombinational(
-      llhd::CombinationalOp combOp,
-      llvm::SmallVectorImpl<SignalId> &signals) const;
+  // NOTE: collectSignalIdsFromCombinational was removed and inlined into
+  // collectSignalIds to prevent stack overflow on large designs.
 
   /// Execute a single continuous assignment (static module-level drive).
   void executeContinuousAssignment(llhd::DriveOp driveOp);
