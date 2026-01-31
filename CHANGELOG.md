@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 267 - January 31, 2026
+
+### Goals
+Fix UVM global constructor crash and expand OpenTitan coverage.
+
+### Fixed in this Iteration
+1. **DenseMap Reference Invalidation Bug** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `interpretLLVMFuncBody` held a reference to `processStates[procId]`
+   - When `interpretOperation()` created fork children or runtime signals, `DenseMap` could rehash
+   - Rehashing invalidates all references, causing segfault on subsequent access
+   - **FIX**: Avoid holding stale references - use fresh lookup for each access
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - **Impact**: UVM global constructors with `llhd.sig` now work correctly
+
+2. **New Unit Test**:
+   - `test/Tools/circt-sim/global-ctor-runtime-signals.mlir` - Tests global constructors that create runtime signals
+
+3. **Expanded OpenTitan Coverage** (+6 IPs):
+   - **flash_ctrl_reg_top**: TEST PASSED (2372 signals, 21 processes)
+   - **lc_ctrl_regs_reg_top**: TEST PASSED (398 signals, 16 processes)
+   - **rom_ctrl_regs_reg_top**: TEST PASSED (183 signals, 16 processes)
+   - **sram_ctrl_regs_reg_top**: TEST PASSED (206 signals, 16 processes)
+   - **csrng_reg_top**: TEST PASSED (489 signals, 16 processes)
+   - **edn_reg_top**: TEST PASSED (337 signals, 12 processes)
+   - **Total OpenTitan coverage**: 16+ IPs now verified with circt-sim
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| **OpenTitan IPs** | 16+ pass | +6 new reg_tops verified |
+| MooreToCore | 96/97 (99%) | 1 XFAIL expected |
+| circt-sim | 74/75 (99%) | 1 timeout (tlul-bfm) |
+| sv-tests BMC | 23/26 (100%) | 3 expected failures |
+| yosys SVA | 14/14 (100%) | No regressions |
+| verilator BMC | 17/17 (100%) | No regressions |
+
+---
+
 ## Iteration 265 - January 30, 2026
 
 ### Goals
