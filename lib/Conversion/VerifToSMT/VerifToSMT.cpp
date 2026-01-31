@@ -2407,12 +2407,14 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<DelayInfo> delayInfos;
     size_t totalDelaySlots = 0;
     bool delaySetupFailed = false;
+    SmallVector<Value> delayRootOverrides;
 
     // First pass: collect all delay ops with meaningful temporal ranges.
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
       if (delayOp.use_empty())
         return;
-      if (nfaSequenceOps.contains(delayOp.getOperation()))
+      bool isSequenceRoot = sequenceRootSet.contains(delayOp.getResult());
+      if (nfaSequenceOps.contains(delayOp.getOperation()) && !isSequenceRoot)
         return;
       uint64_t delay = delayOp.getDelay();
 
@@ -2450,10 +2452,16 @@ struct VerifBoundedModelCheckingOpConversion
       }
       delayInfos.push_back(info);
       totalDelaySlots += bufferSize;
+      if (isSequenceRoot)
+        delayRootOverrides.push_back(delayOp.getResult());
     });
 
     // Track delay buffer names (added immediately after original inputs).
     size_t delaySlots = totalDelaySlots;
+    for (Value root : delayRootOverrides) {
+      sequenceRootSet.erase(root);
+      sequenceRootClocks.erase(root);
+    }
 
     // =========================================================================
     // Past operation tracking for $rose/$fell:
