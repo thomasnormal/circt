@@ -7,7 +7,9 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
 
 ### Status
 - **Starting XFAIL count**: 18
-- **Ending XFAIL count**: 9 (dramatic 50% reduction!)
+- **Ending XFAIL count**: 11 (39% reduction)
+- **OpenTitan**: 4 previously hanging IPs now pass (gpio_no_alerts, uart_reg_top, usbdev, usbdev_reg_top)
+- **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
 - **9 UVM tests now passing**: Tests that use UVM features work with real Accellera `uvm-core` library
 
 ### Fixed in this Iteration
@@ -38,6 +40,17 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
    - Convert between LLVM aggregate layout (low-to-high) and HW aggregate layout
      (high-to-low) when `llvm.load`/`llvm.store` access `llhd.ref` signals
    - Adds signal type tracking to drive conversions for structs/arrays
+
+5. **Fix comb.mux on llhd.ref Types (OpenTitan Hang Fix)**:
+   - MooreToCore: Keep `arith.select` for `llhd::RefType` instead of `comb.mux`
+   - Prevents illegal `comb.mux(!llhd.ref)` pattern that caused interpreter hangs
+   - **Impact**: 4 OpenTitan IPs that were hanging now pass
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+
+6. **hierarchical-interface-task.sv XFAIL Fix**:
+   - Test now properly expects error with helpful message
+   - Reduces XFAIL count to 11
+   - **Files**: `test/Conversion/ImportVerilog/hierarchical-interface-task.sv`
 
 5. **circt-sim Per-Instance Execution Contexts**:
    - Process execution, instance outputs, module drives, and firregs now use
