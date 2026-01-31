@@ -95,16 +95,35 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
    - **Tests Fixed**: `hw-instance-output.mlir`, `llhd-instance-probe-read.mlir`
 
-### Remaining UVM Limitations (Iteration 268 - Updated)
+### Remaining UVM Limitations (Iteration 271 - Updated)
 
-**Immediate Blockers:**
-1. **Local Variable llhd.prb Issue** 🟡 MEDIUM (Iteration 268):
+**RESOLVED Blockers:**
+1. **Local Variable llhd.prb Issue** ✅ FIXED (Iteration 270):
    - Local variables in class methods are backed by `llvm.alloca`
    - Cast to `!llhd.ref` for type compatibility
-   - `llhd.prb` operations fail because they expect real LLHD signals
-   - **Pattern**: `%alloca = llvm.alloca` → `unrealized_cast to !llhd.ref` → `llhd.prb` fails
-   - **Impact**: UVM report_summarize and other class methods don't complete
-   - **Fix needed**: LLHDProcessInterpreter should handle `llhd.prb` on allocas
+   - **FIX**: Added AllocaOp handling in interpretProbe and interpretDrive
+   - **Pattern**: `%alloca = llvm.alloca` → `unrealized_cast to !llhd.ref` → `llhd.prb/drv` now works
+   - **Impact**: UVM with uvm-core now works! APB AVIP simulates successfully
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+2. **llhd.drv/llhd.prb on Struct Types** ✅ FIXED (Iteration 271):
+   - Struct signals now handled via `llhd.sig.struct_extract` for field access
+   - `llhd.drv` now properly drives struct fields through extracted signal refs
+   - `llhd.prb` works with struct types via field extraction
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+3. **Wide Value Store Bug** ✅ FIXED (Iteration 271):
+   - Assertion failure in `interpretLLVMStore` for values > 64 bits
+   - Now properly handles wide values using `getAPInt()` instead of `getUInt64()`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+**Immediate Blockers:**
+1. **Stack Overflow in evaluateContinuousValueImpl** 🔴 CRITICAL (Iteration 271):
+   - Complex OpenTitan IPs crash with stack overflow during continuous evaluation
+   - **Affected IPs**: gpio, uart, aes_reg_top
+   - **Working IPs**: prim_count, prim_fifo_sync, timer_core
+   - Deep recursion through combinational logic chains
+   - **Fix needed**: Iterative evaluation or memoization to limit recursion depth
 
 2. **AVIP Dominance Errors** ✅ RESOLVED:
    - Fixed in commit `5cb9aed08` - "Improve fork/join import with variable declaration support"
@@ -155,7 +174,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 270 - Updated 2026-01-31)
+### Test Suite Status (Iteration 271 - Updated 2026-01-31)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
@@ -163,14 +182,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Lit Tests | **2980/3085 (96.6%)** | 12 SMT/LEC failures, 38 XFAIL, 55 unsupported |
 | circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
-| sv-tests BMC | **23/26 (100%)** | 3 are XFAIL (expected failures) |
+| sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **~33/42 IPs pass** | +10 more verified in Iteration 267 |
+| OpenTitan IPs | **~33/42 IPs pass** | Stack overflow affects complex IPs (gpio, uart, aes_reg_top) |
 | AVIPs | **6/9 simulate** | APB, AHB, AXI4, UART, I2S, I3C work; AXI4Lite/SPI/JTAG have source bugs |
-| **UVM with uvm-core** | **PASS** | 🎉 **MAJOR MILESTONE - UVM now works!** |
+| **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
+
+**Iteration 271 Achievements:**
+- **Struct type handling**: llhd.drv/llhd.prb on struct types via llhd.sig.struct_extract
+- **Wide value store fix**: interpretLLVMStore handles values > 64 bits
+- **AllocaOp unit test**: test/Tools/circt-sim/llvm-alloca-ref-probe-drive.mlir
+- **New blocker identified**: Stack overflow in evaluateContinuousValueImpl for complex IPs
 
 **Iteration 270 Achievements:**
 - **MAJOR**: AllocaOp handling for llhd.prb/drv enables UVM with uvm-core

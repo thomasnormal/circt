@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 271 - January 31, 2026
+
+### Goals
+Fix struct type handling in llhd.drv/llhd.prb and wide value store bug.
+
+### Fixed in this Iteration
+1. **Struct Type Handling in llhd.drv/llhd.prb** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Struct signals were not properly handled in drive/probe operations
+   - Struct fields accessed via `llhd.sig.struct_extract` for proper signal references
+   - `llhd.drv` now properly drives struct fields through extracted signal refs
+   - `llhd.prb` works with struct types via field extraction
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+2. **Wide Value Store Bug** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `interpretLLVMStore` used `getUInt64()` which asserts for values > 64 bits
+   - **FIX**: Use `getAPInt()` to properly handle arbitrarily wide values
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+3. **AllocaOp Unit Test** (llvm-alloca-ref-probe-drive.mlir):
+   - New test verifies AllocaOp handling for llhd.prb/drv operations
+   - **Files**: `test/Tools/circt-sim/llvm-alloca-ref-probe-drive.mlir`
+
+### New Blocker Identified
+- **Stack Overflow in evaluateContinuousValueImpl**:
+  - Complex OpenTitan IPs crash with stack overflow during continuous evaluation
+  - Affected: gpio, uart, aes_reg_top
+  - Working: prim_count, prim_fifo_sync, timer_core
+  - Cause: Deep recursion through combinational logic chains
+  - Fix needed: Iterative evaluation or memoization
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| yosys-sva BMC | **14/14 (100%)** | All pass |
+| sv-tests BMC | **23/23 (100%)** | All pass |
+| Verilator BMC | **17/17 (100%)** | All pass |
+| OpenTitan simple IPs | PASS | prim_count, prim_fifo_sync, timer_core |
+| OpenTitan complex IPs | BLOCKED | gpio, uart, aes_reg_top - stack overflow |
+
+---
+
 ## Iteration 270 - January 31, 2026
 
 ### Goals

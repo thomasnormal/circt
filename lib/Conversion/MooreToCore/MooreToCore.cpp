@@ -13814,6 +13814,11 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
       // Handle hw::ArrayType
       if (auto hwArrayTy = dyn_cast<hw::ArrayType>(input.getType())) {
+        // Adjust index width to match array size requirements
+        unsigned idxWidth = llvm::Log2_64_Ceil(hwArrayTy.getNumElements());
+        if (idxWidth == 0)
+          idxWidth = 1; // at least 1 bit needed
+        index = adjustIntegerWidth(rewriter, index, idxWidth, loc);
         return hw::ArrayGetOp::create(rewriter, loc, input, index);
       }
 
