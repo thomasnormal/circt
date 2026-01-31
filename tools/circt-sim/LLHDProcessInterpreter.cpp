@@ -8059,6 +8059,50 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Coverage function stubs (coverage not supported in interpreter)
+    // These are needed to run UVM-based testbenches that use covergroups.
+    if (calleeName == "__moore_covergroup_create") {
+      // Return a dummy covergroup handle (0)
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+      }
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_create() -> 0 (stub)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_covergroup_get_coverage") {
+      // Return 0.0 coverage (represented as 0 in fixed-point or just zero bits)
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+      }
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_get_coverage() -> 0.0 (stub)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_init") {
+      // No-op: coverpoint initialization is not supported
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_init() (stub, no-op)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_sample") {
+      // No-op: coverpoint sampling is not supported
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_sample() (stub, no-op)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_add_ignore_bin") {
+      // No-op: ignore bin configuration is not supported
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_add_ignore_bin() (stub, no-op)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_add_illegal_bin") {
+      // No-op: illegal bin configuration is not supported
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_add_illegal_bin() (stub, no-op)\n");
+      return success();
+    }
+
     // Handle __moore_delay - delay in class method context or fork branches.
     // This is called when a #delay statement appears in a class task/method
     // or inside a fork branch. We accumulate the delay in pendingDelayFs and
