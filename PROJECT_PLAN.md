@@ -155,7 +155,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 269 - Updated 2026-01-31)
+### Test Suite Status (Iteration 270 - Updated 2026-01-31)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
@@ -169,7 +169,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | OpenTitan IPs | **~33/42 IPs pass** | +10 more verified in Iteration 267 |
-| AVIPs | **6/9 simulate** | APB (restored), AHB, AXI4, UART, I2S, I3C work; AXI4Lite/SPI/JTAG have source bugs |
+| AVIPs | **6/9 simulate** | APB, AHB, AXI4, UART, I2S, I3C work; AXI4Lite/SPI/JTAG have source bugs |
+| **UVM with uvm-core** | **PASS** | 🎉 **MAJOR MILESTONE - UVM now works!** |
+
+**Iteration 270 Achievements:**
+- **MAJOR**: AllocaOp handling for llhd.prb/drv enables UVM with uvm-core
+- UVM_INFO messages print correctly
+- Report server summarization works
+- Simulation terminates cleanly
 
 **Iteration 269 Fixes:**
 - Fixed APB AVIP regression (uninitialized assoc array access crash)
