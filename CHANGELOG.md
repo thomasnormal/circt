@@ -1021,6 +1021,10 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
      when `bmc_clock_sources` is present (including invert handling).
    - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct-invert.mlir` (XFAIL removed)
 
+10. **BMC i1 Clocked Checks** (VerifToSMT.cpp):
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-delay-i1-clock.mlir` (XFAIL removed)
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-nonfinal-check-i1-clock.mlir` (XFAIL removed)
+
 6. **PruneBMCRegisters Output-Use Safety** (PruneBMCRegisters.cpp):
    - **FIX**: Keep ops whose results are still used by kept operations to avoid
      erasing live defs during register pruning.

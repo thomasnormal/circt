@@ -328,6 +328,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   `bmc-clock-op-inverted-posedge*.mlir` and `bmc-clock-op-xor-false-posedge.mlir`
 - **BMC clock-source struct tests**: removed XFAILs for
   `bmc-clock-source-struct*.mlir` (struct-derived clock inputs now verified)
+- **BMC i1 clock checks**: removed XFAILs for
+  `bmc-delay-i1-clock.mlir` and `bmc-nonfinal-check-i1-clock.mlir`
 - **BMC ltl.clock delay buffers**: clocked delay buffers now treat `ltl.clock`
   as a transparent wrapper, fixing explicit clock gating in delay-buffer tests
   (`bmc-delay-buffer-clock-op-negedge.mlir`, `bmc-delay-buffer-clock-op-edge-both.mlir`)
