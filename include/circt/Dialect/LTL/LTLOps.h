@@ -14,6 +14,10 @@
 #include "circt/Dialect/LTL/LTLDialect.h"
 #include "circt/Dialect/LTL/LTLTypes.h"
 
+// Include attribute definitions (ClockEdgeAttr) before op classes
+#define GET_ATTRDEF_CLASSES
+#include "circt/Dialect/LTL/LTLAttributes.h.inc"
+
 #define GET_OP_CLASSES
 #include "circt/Dialect/LTL/LTL.h.inc"
 
