@@ -254,8 +254,15 @@ Enable UVM with Accellera's uvm-core library by fixing llhd.prb/drv on local var
   `utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification`.
 - **AVIP (APB)**: `utils/run_avip_circt_verilog.sh ~/mbit/apb_avip` (exit 0, log:
   `avip-circt-verilog.log`).
+- **AVIP (AHB)**: `utils/run_avip_circt_verilog.sh ~/mbit/ahb_avip` (exit 0, log:
+  `avip-circt-verilog.log`).
+- **AVIP (UART)**: `utils/run_avip_circt_verilog.sh ~/mbit/uart_avip` (exit 0, log:
+  `avip-circt-verilog.log`).
 - **OpenTitan**: `utils/run_opentitan_circt_sim.sh prim_count` (PASS, log:
   `opentitan-prim_count_sim_output.log`).
+- **OpenTitan**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts` still timing
+  out (ran with `--timeout=30`/`--max-cycles=200` and tool-level timeouts; needs
+  investigation).
 
 ---
 
