@@ -4912,7 +4912,11 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
 
     // For supply0/supply1 nets, initialize to the appropriate constant value.
     // supply0 = always 0 (ground), supply1 = always 1 (all ones).
+    // For nets with an assignment (e.g., from module inputs), use the assigned
+    // value as the initial value to avoid initialization order issues where
+    // probes read zero before drives take effect.
     Value init;
+    Value assignedValue = adaptor.getAssignment();
     if (kind == NetKind::Supply0) {
       auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
       init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
@@ -4920,6 +4924,11 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
       auto constOne =
           hw::ConstantOp::create(rewriter, loc, APInt::getAllOnes(width));
       init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constOne);
+    } else if (assignedValue) {
+      // Use the assigned value as initial value to fix initialization order.
+      // This ensures signals driven from module inputs have the correct value
+      // from t=0, rather than zero that would be overwritten with epsilon delay.
+      init = assignedValue;
     } else {
       auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
       init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
@@ -4928,7 +4937,10 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     auto signal = rewriter.replaceOpWithNewOp<llhd::SignalOp>(
         op, resultType, op.getNameAttr(), init);
 
-    if (auto assignedValue = adaptor.getAssignment()) {
+    // For nets with assigned values, also emit a continuous drive to handle
+    // dynamic updates. The initial value handles t=0, the drive handles
+    // subsequent changes.
+    if (assignedValue) {
       auto timeAttr = llhd::TimeAttr::get(resultType.getContext(), 0U,
                                           llvm::StringRef("ns"), 0, 1);
       auto time = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
@@ -9207,10 +9219,19 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     Value delay;
     if constexpr (std::is_same_v<OpTy, ContinuousAssignOp> ||
                   std::is_same_v<OpTy, BlockingAssignOp>) {
-      // Blocking and continuous assignments get a 0ns 0d 1e delay.
+      // Blocking and continuous assignments normally get a 0ns 0d 1e delay.
+      // However, for assignments from module inputs (block arguments), use
+      // zero epsilon delay (0ns 0d 0e) to fix initialization order issues.
+      // This ensures that signals driven from inputs have the correct value
+      // at t=0, rather than zero being read before the drive takes effect.
+      unsigned epsilon = 1;
+      if constexpr (std::is_same_v<OpTy, ContinuousAssignOp>) {
+        if (isa<BlockArgument>(op.getSrc()))
+          epsilon = 0;
+      }
       delay = llhd::ConstantTimeOp::create(
           rewriter, op->getLoc(),
-          llhd::TimeAttr::get(op->getContext(), 0U, "ns", 0, 1));
+          llhd::TimeAttr::get(op->getContext(), 0U, "ns", 0, epsilon));
     } else if constexpr (std::is_same_v<OpTy, NonBlockingAssignOp>) {
       // Non-blocking assignments get a 0ns 1d 0e delay.
       delay = llhd::ConstantTimeOp::create(
