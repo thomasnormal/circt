@@ -5162,6 +5162,132 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         }
       }
 
+      // If still not found, try resolveSignalId which handles more cases
+      // like tracing through UnrealizedConversionCastOp, block arguments, etc.
+      if (parentSigId == 0) {
+        parentSigId = resolveSignalId(parentSignal);
+      }
+
+      // Check if the parent is actually a memory location (llvm.alloca via cast)
+      // rather than an actual LLHD signal. This happens in combinational blocks
+      // where structs are built up by driving individual fields.
+      if (parentSigId == 0) {
+        if (auto castOp =
+                parentSignal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+          if (castOp.getInputs().size() == 1) {
+            Value input = castOp.getInputs()[0];
+            if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+              // This is a drive to a field within a memory-backed struct.
+              // We need to do a read-modify-write of the memory block.
+
+              // Get the value to drive
+              InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+              // Find the memory block for this alloca
+              MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+              if (!block) {
+                auto &state = processStates[procId];
+                auto it = state.memoryBlocks.find(allocaOp.getResult());
+                if (it != state.memoryBlocks.end()) {
+                  block = &it->second;
+                }
+              }
+
+              if (!block) {
+                LLVM_DEBUG(llvm::dbgs()
+                           << "  Drive to struct field in alloca failed - "
+                              "memory not found\n");
+                return failure();
+              }
+
+              // Compute the bit offset by walking the extract chain in reverse
+              unsigned bitOffset = 0;
+              Type currentType = parentSignal.getType();
+              if (auto refType = dyn_cast<llhd::RefType>(currentType))
+                currentType = refType.getNestedType();
+
+              for (auto it = extractChain.rbegin(); it != extractChain.rend();
+                   ++it) {
+                auto extractOp = *it;
+                auto structType = cast<hw::StructType>(currentType);
+                auto elements = structType.getElements();
+                StringRef fieldName = extractOp.getField();
+
+                auto fieldIndexOpt = structType.getFieldIndex(fieldName);
+                if (!fieldIndexOpt) {
+                  LLVM_DEBUG(llvm::dbgs()
+                             << "  Error: Field not found: " << fieldName
+                             << "\n");
+                  return failure();
+                }
+                unsigned fieldIndex = *fieldIndexOpt;
+
+                // Fields are laid out from high bits to low bits
+                unsigned fieldOffset = 0;
+                for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+                  fieldOffset += getTypeWidth(elements[i].type);
+
+                bitOffset += fieldOffset;
+                currentType = elements[fieldIndex].type;
+              }
+
+              unsigned fieldWidth = getTypeWidth(currentType);
+              unsigned parentWidth = getTypeWidth(parentSignal.getType());
+              unsigned storeSize = (parentWidth + 7) / 8;
+
+              if (storeSize > block->size) {
+                LLVM_DEBUG(llvm::dbgs()
+                           << "  Drive to struct field in alloca: out of bounds\n");
+                return failure();
+              }
+
+              // Read the current value from memory
+              APInt currentVal = APInt::getZero(parentWidth);
+              for (unsigned i = 0; i < storeSize && i < block->data.size();
+                   ++i) {
+                unsigned insertPos = i * 8;
+                unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
+                if (bitsToInsert > 0 && insertPos < parentWidth) {
+                  APInt byteVal(bitsToInsert,
+                                block->data[i] & ((1u << bitsToInsert) - 1));
+                  currentVal.insertBits(byteVal, insertPos);
+                }
+              }
+
+              // Insert the new field value at the computed bit offset
+              APInt fieldValue = driveVal.isX() ? APInt::getZero(fieldWidth)
+                                                : driveVal.getAPInt();
+              if (fieldValue.getBitWidth() < fieldWidth)
+                fieldValue = fieldValue.zext(fieldWidth);
+              else if (fieldValue.getBitWidth() > fieldWidth)
+                fieldValue = fieldValue.trunc(fieldWidth);
+
+              currentVal.insertBits(fieldValue, bitOffset);
+
+              // Write the modified value back to memory
+              for (unsigned i = 0; i < storeSize; ++i) {
+                unsigned extractPos = i * 8;
+                unsigned bitsToExtract =
+                    std::min(8u, parentWidth - extractPos);
+                if (bitsToExtract > 0 && extractPos < parentWidth) {
+                  block->data[i] =
+                      currentVal.extractBits(bitsToExtract, extractPos)
+                          .getZExtValue();
+                } else {
+                  block->data[i] = 0;
+                }
+              }
+              block->initialized = !driveVal.isX();
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Drive to struct field in alloca at offset "
+                         << bitOffset << " width " << fieldWidth << "\n");
+              return success();
+            }
+          }
+        }
+      }
+
       if (parentSigId == 0) {
         LLVM_DEBUG(llvm::dbgs()
                    << "  Error: Could not find parent signal for struct extract\n");
@@ -5253,8 +5379,19 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       return success();
     }
 
-    LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in drive\n");
-    return failure();
+    // Try resolveSignalId which handles more cases like tracing through
+    // UnrealizedConversionCastOp, block arguments, instance outputs, etc.
+    // This is needed for direct struct drives where the signal reference
+    // might not be in the direct valueToSignal map.
+    sigId = resolveSignalId(signal);
+    if (sigId != 0) {
+      LLVM_DEBUG(llvm::dbgs() << "  Resolved signal via resolveSignalId: "
+                              << sigId << "\n");
+      // Fall through to the normal drive handling below
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in drive\n");
+      return failure();
+    }
   }
 
   // Check enable condition if present
@@ -8621,6 +8758,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
+        // Validate that the array address is a properly initialized associative array
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists - uninitialized array at 0x"
+                                  << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
+          return success();
+        }
+
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         // Read key from interpreter memory
@@ -8676,6 +8821,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
+        // Validate that the array address is a properly initialized associative array
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_first - uninitialized array at 0x"
+                                  << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
+          return success();
+        }
+
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         // Find key output memory block
@@ -8684,10 +8837,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         // Determine key type from array header
         bool isStringKey = false;
-        if (arrayPtr) {
-          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
-          isStringKey = (header->type == AssocArrayType_StringKey);
-        }
+        auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+        isStringKey = (header->type == AssocArrayType_StringKey);
 
         bool result = false;
         if (isStringKey) {

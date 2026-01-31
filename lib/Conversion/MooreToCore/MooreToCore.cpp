@@ -168,11 +168,15 @@ static Value convertValueToLLVMType(Value value, Location loc,
 
     // Extract each element from the hw array and insert into LLVM array
     int64_t numElements = hwArrayTy.getNumElements();
-    auto idxTy = builder.getI32Type();
+    // hw.array_get requires index width to be ceil(log2(numElements)), or 1 if
+    // numElements <= 1
+    unsigned idxWidth = llvm::Log2_64_Ceil(numElements);
+    if (idxWidth == 0)
+      idxWidth = 1;
     for (int64_t i = 0; i < numElements; ++i) {
-      // Create constant index
+      // Create constant index with correct width for hw.array_get
       Value idx = hw::ConstantOp::create(builder, loc,
-                                         APInt(32, numElements - 1 - i));
+                                         APInt(idxWidth, numElements - 1 - i));
       // Extract the element from the hw array (hw.array uses reverse indexing)
       Value elemVal = hw::ArrayGetOp::create(builder, loc, value, idx);
       // Recursively convert if the element is also a composite type
