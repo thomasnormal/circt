@@ -192,4 +192,6 @@ def DelayOp : LLHDOp<"delay", [Pure, SameOperandsAndResultType]> {
   let results = (outs HWNonInOutType:$result);
 
   let assemblyFormat = "$input `by` $delay attr-dict `:` type($result)";
+
+  let hasFolder = 1;
 }

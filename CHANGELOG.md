@@ -30,6 +30,16 @@ Continue reducing XFAIL count, add unit tests for recent bug fixes, improve BMC 
    - Updated pass rates: 216/219 ImportVerilog tests pass (98.63%)
    - Documented remaining 3 XFAIL tests and their root causes
 
+4. **LLHD Zero-Delay Folding for BMC Clocks**:
+   - Canonicalize `llhd.delay` with zero time to its input, unblocking BMC
+     pipelines that see zero-delay clocks from `circt-verilog --ir-llhd`.
+   - ExternalizeRegisters now traces clock roots through zero-delay `llhd.delay`.
+   - **Tests**: `test/Dialect/LLHD/Transforms/canonicalize-delay.mlir`,
+     `test/Tools/circt-bmc/externalize-registers-llhd-delay-clock.mlir`
+   - **Files**: `lib/Dialect/LLHD/IR/LLHDOps.cpp`,
+     `include/circt/Dialect/LLHD/IR/LLHDSignalOps.td`,
+     `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
+
 ### Key Findings
 
 1. **TL-UL Initialization Order Issue** (Root Cause Identified):
@@ -110,6 +120,12 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - **Files**: `include/circt/Support/I1ValueSimplifier.h`,
      `lib/Tools/circt-bmc/LowerToBMC.cpp`,
      `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+7. **BMC LLHD delay clock roots**:
+   - Allow clocks passing through zero-delay `llhd.delay` ops to map back to
+     their block-arg roots during register externalization
+   - **Tests**: `test/Tools/circt-bmc/externalize-registers-llhd-delay-clock.mlir`
+   - **Files**: `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
 
 6. **4 UVM Tests Fixed with uvm-core** (`45b46ebf1`):
    - uvm-objection-test.sv: Use get_objection_count() API

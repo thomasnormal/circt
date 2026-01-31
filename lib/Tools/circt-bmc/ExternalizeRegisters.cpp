@@ -60,6 +60,11 @@ static bool isConstantInt(Value value, bool wantAllOnes) {
   return false;
 }
 
+static bool isZeroTime(llhd::TimeAttr time) {
+  return time.getTime() == 0 && time.getDelta() == 0 &&
+         time.getEpsilon() == 0;
+}
+
 static bool traceClockRoot(Value value, Value &root);
 static StringAttr getClockPortName(HWModuleOp module, Value clock) {
   auto arg = dyn_cast<BlockArgument>(clock);
@@ -125,6 +130,11 @@ static bool traceClockRoot(Value value, Value &root) {
     return traceClockRoot(bitcast.getArg(), root);
   if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
     return traceClockRoot(toClock.getInput(), root);
+  if (auto delay = value.getDefiningOp<llhd::DelayOp>()) {
+    if (isZeroTime(delay.getDelayAttr()))
+      return traceClockRoot(delay.getInput(), root);
+    return false;
+  }
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     if (!root)
       root = arg;
