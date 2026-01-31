@@ -1,8 +1,8 @@
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
-// XFAIL: *
+// RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
 
 // Test UVM stubs with APB AVIP testbench style patterns
 
+`timescale 1ns/1ps
 `include "uvm_macros.svh"
 
 // Global parameters package (like APB AVIP's apb_global_pkg)

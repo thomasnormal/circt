@@ -1,7 +1,6 @@
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
-// RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s --check-prefix=MOORE
+// RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
+// RUN: circt-verilog --ir-moore --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s 2>&1 | FileCheck %s --check-prefix=MOORE
 // REQUIRES: slang
-// XFAIL: *
 
 //===----------------------------------------------------------------------===//
 // Test uvm_get_report_object global function
