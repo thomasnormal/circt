@@ -4893,6 +4893,59 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                      << " = " << value << " (width=" << width << ")\n");
           return success();
         }
+        // Handle AllocaOp - local variables in functions backed by llvm.alloca
+        // Pattern: %alloca = llvm.alloca -> unrealized_cast to !llhd.ref -> llhd.prb
+        // This happens when local variables inside class methods are cast to refs.
+        if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+          unsigned width = getTypeWidth(probeOp.getResult().getType());
+          unsigned loadSize = (width + 7) / 8;
+
+          // Find the memory block for this alloca
+          MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+          if (!block) {
+            // Try finding by alloca result in process-local memory blocks
+            auto &state = processStates[procId];
+            auto it = state.memoryBlocks.find(allocaOp.getResult());
+            if (it != state.memoryBlocks.end()) {
+              block = &it->second;
+              LLVM_DEBUG(llvm::dbgs() << "  Probe: found local alloca memory\n");
+            }
+          }
+
+          if (!block) {
+            LLVM_DEBUG(llvm::dbgs() << "  Probe of alloca failed - memory not found\n");
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            return success();
+          }
+
+          if (loadSize > block->size) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe: out of bounds (size=" << loadSize
+                       << " block=" << block->size << ")\n");
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            return success();
+          }
+
+          if (!block->initialized) {
+            LLVM_DEBUG(llvm::dbgs() << "  Probe: reading uninitialized alloca memory\n");
+            setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+            return success();
+          }
+
+          // Read the value from memory
+          uint64_t value = 0;
+          for (unsigned i = 0; i < loadSize; ++i) {
+            value |= (static_cast<uint64_t>(block->data[i]) << (i * 8));
+          }
+          // Mask to the exact bit width
+          if (width < 64)
+            value &= (1ULL << width) - 1;
+
+          setValue(procId, probeOp.getResult(), InterpretedValue(value, width));
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Probe of alloca = " << value << " (width=" << width << ")\n");
+          return success();
+        }
       }
     }
 
@@ -4932,6 +4985,67 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   // Get the signal ID
   SignalId sigId = getSignalId(driveOp.getSignal());
   if (sigId == 0) {
+    // Check if this is a local variable access via UnrealizedConversionCastOp
+    // This happens when local variables in functions are accessed - they're
+    // backed by llvm.alloca and cast to !llhd.ref, not actual LLHD signals.
+    Value signal = driveOp.getSignal();
+    if (auto castOp = signal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() == 1) {
+        Value input = castOp.getInputs()[0];
+
+        // Handle AllocaOp - local variables backed by llvm.alloca
+        if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+          // Get the value to drive
+          InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+          // Find the memory block for this alloca
+          MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+          if (!block) {
+            // Try finding by alloca result in process-local memory blocks
+            auto &state = processStates[procId];
+            auto it = state.memoryBlocks.find(allocaOp.getResult());
+            if (it != state.memoryBlocks.end()) {
+              block = &it->second;
+              LLVM_DEBUG(llvm::dbgs() << "  Drive: found local alloca memory\n");
+            }
+          }
+
+          if (!block) {
+            LLVM_DEBUG(llvm::dbgs() << "  Drive to alloca failed - memory not found\n");
+            return failure();
+          }
+
+          unsigned width = driveVal.getWidth();
+          unsigned storeSize = (width + 7) / 8;
+
+          if (storeSize > block->size) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Drive: out of bounds (size=" << storeSize
+                       << " block=" << block->size << ")\n");
+            return failure();
+          }
+
+          // Write the value to memory
+          if (driveVal.isX()) {
+            // Write X pattern (all 1s as marker)
+            std::fill(block->data.begin(), block->data.begin() + storeSize, 0xFF);
+            block->initialized = false;
+          } else {
+            uint64_t value = driveVal.getUInt64();
+            for (unsigned i = 0; i < storeSize; ++i) {
+              block->data[i] = (value >> (i * 8)) & 0xFF;
+            }
+            block->initialized = true;
+          }
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Drive to alloca: "
+                     << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
+                     << " (width=" << width << ")\n");
+          return success();
+        }
+      }
+    }
     LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in drive\n");
     return failure();
   }
