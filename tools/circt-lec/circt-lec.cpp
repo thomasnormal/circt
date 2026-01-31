@@ -136,6 +136,11 @@ static cl::opt<bool> printSolverOutput(
              "prove/disprove."),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> printCounterexample(
+    "print-counterexample",
+    cl::desc("Alias for --print-solver-output (deprecated)"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<bool> flattenHWModules(
     "flatten-hw",
     cl::desc("Inline private hw.modules before equivalence checking"),
@@ -432,6 +437,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   DefaultTimingManager tm;
   applyDefaultTimingManagerCLOptions(tm);
   auto ts = tm.getRootScope();
+  bool wantSolverOutput = printSolverOutput || printCounterexample;
 
   auto parsedModule = parseAndMergeModules(context, ts);
   if (failed(parsedModule))
@@ -440,7 +446,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
 
   SmallVector<std::string> lecInputNames;
-  if (outputFormat == OutputRunSMTLIB && printSolverOutput) {
+  if (outputFormat == OutputRunSMTLIB && wantSolverOutput) {
     if (auto moduleA =
             module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
       for (auto name : moduleA.getInputNames())
@@ -548,7 +554,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
       outputFormat != OutputRunSMTLIB) {
     LowerSMTToZ3LLVMOptions options;
-    options.debug = printSolverOutput;
+    options.debug = wantSolverOutput;
     pm.addPass(createLowerSMTToZ3LLVM(options));
     pm.addPass(createCSEPass());
     pm.addPass(createSimpleCanonicalizerPass());
@@ -633,7 +639,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
     SmallVector<StringRef, 4> args;
     args.push_back(*z3Program);
-    if (printSolverOutput)
+    if (wantSolverOutput)
       args.push_back("-model");
     args.push_back(smtPath);
     std::string errMsg;
@@ -660,7 +666,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
       combinedOutput.append("\n");
       combinedOutput.append(errBuffer.get()->getBuffer().str());
     }
-    if (printSolverOutput) {
+    if (wantSolverOutput) {
       llvm::errs() << "z3 output:\n" << combinedOutput << "\n";
     }
 
@@ -683,7 +689,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
     auto token = findResultToken(combinedOutput);
     auto maybePrintCounterexample = [&](StringRef result) {
-      if (!printSolverOutput)
+      if (!wantSolverOutput)
         return;
       if (result != "sat" && result != "unknown")
         return;
@@ -728,8 +734,11 @@ static LogicalResult executeLEC(MLIRContext &context) {
     };
     if (token && *token == "unsat") {
       outputFile.value()->os() << "c1 == c2\n";
+      outputFile.value()->os() << "LEC_RESULT=EQ\n";
     } else if (token && (*token == "sat" || *token == "unknown")) {
       outputFile.value()->os() << "c1 != c2\n";
+      outputFile.value()->os()
+          << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
       maybePrintCounterexample(*token);
     } else {
       llvm::errs() << "unexpected z3 output: " << combinedOutput << "\n";
