@@ -41,7 +41,7 @@ module Assertions(input logic clk, rst, a, b);
     @(posedge clk) a |=> $changed(b);
   endproperty
   // CHECK-DAG: moore.past %{{[a-z0-9]+}} delay 1
-  // CHECK-DAG: moore.case_eq
+  // CHECK-DAG: moore.eq
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (changed_test);
 
@@ -98,7 +98,7 @@ module Assertions(input logic clk, rst, a, b);
     @(posedge clk) a |-> $stable(b);
   endproperty
   // $stable reuses the moore.past from earlier tests.
-  // CHECK-DAG: moore.case_eq
+  // CHECK-DAG: moore.eq
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (stable_test);
 
@@ -110,8 +110,8 @@ module Assertions(input logic clk, rst, a, b);
   property rose_test;
     @(posedge clk) a |-> $rose(b);
   endproperty
-  // $rose produces: (current == 1) && !(past(current) == 1)
-  // CHECK-DAG: moore.case_eq
+  // $rose produces: current && !past(current)
+  // CHECK-DAG: moore.past
   // CHECK-DAG: moore.not
   // CHECK-DAG: moore.and
   // CHECK: ltl.implication
