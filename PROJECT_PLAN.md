@@ -199,7 +199,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2981/3085 (96.6%)** | All pass, 20 XFAIL |
+| Lit Tests | **2982/3085 (96.6%)** | All pass, 19 XFAIL |
 | circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/23 (100%)** | All pass |
@@ -224,7 +224,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 1. **Stack overflow in evaluateContinuousValueImpl**: Complex OpenTitan IPs (gpio, uart, aes_reg_top) crash due to deep recursion through combinational logic chains
 2. **~8 Hierarchical Name XFAIL Tests**: Signal access through instance hierarchy incomplete for some patterns
 3. ~~**Virtual Interface Task Calls**~~: ✅ FIXED - virtual-interface-task.sv now passes
-4. **20 XFAIL Tests**: Expected failures that require architectural changes to fix
+4. **19 XFAIL Tests**: Expected failures that require architectural changes to fix
 
 **Iteration 273 Achievements:**
 - **format-class-handle.sv XFAIL Removed**: Test now passes, reduced XFAIL count from 22 to 21
@@ -320,7 +320,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **AVIPs**: 6/9 simulate (APB, AHB, UART, I2S, AXI4, I3C)
 - **OpenTitan**: 16/16 tested IPs pass (100%)
 - **External Suites**: 54/54 pass (100%)
-- **Lit Tests**: 2981/3085 pass, 20 XFAIL
+- **Lit Tests**: 2982/3085 pass, 19 XFAIL
 - **circt-sim**: 74/75 pass (1 timeout)
 
 **Next Tasks:**
@@ -380,7 +380,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    | Suite | Status | Notes |
    |-------|--------|-------|
    | Unit Tests | 1373/1373 (100%) | All pass |
-   | Lit Tests | 2981/3085 (96.6%) | 20 XFAIL |
+   | Lit Tests | 2982/3085 (96.6%) | 19 XFAIL |
    | circt-sim | 74/75 (99%) | 1 timeout (tlul-bfm) |
    | External Suites | 54/54 (100%) | sv-tests + Verilator + yosys-sva |
    | OpenTitan | 16/16 tested (100%) | All tested IPs pass |
@@ -390,7 +390,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Stack overflow in evaluateContinuousValueImpl**: Complex IPs (gpio, uart, aes_reg_top) crash
    - **~8 Hierarchical Name XFAIL Tests**: Instance hierarchy access incomplete
    - ~~**Virtual Interface Task Calls**~~: ✅ FIXED - virtual-interface-task.sv now passes
-   - **20 XFAIL Tests**: Expected failures requiring architectural changes
+   - **19 XFAIL Tests**: Expected failures requiring architectural changes
 
 4. **Working AVIPs (6/9):**
    - APB, AHB, UART, I2S, AXI4, I3C compile and simulate
