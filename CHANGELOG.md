@@ -48,6 +48,13 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Now correctly handles APInt comparisons for arbitrary width signals
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
+4. **BMC Implication Delay Shift**:
+   - Rewrites `ltl.implication` with exact delayed consequents (`##N`) to shift
+     the delay onto the antecedent for BMC evaluation
+   - Preserves `bmc.clock` / `bmc.clock_edge` attributes on the rewritten delay
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
