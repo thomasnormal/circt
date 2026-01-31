@@ -115,6 +115,17 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
      and `bmc-delay-buffer-clock-op-negedge.mlir`
    - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
+10. **BMC derived clock mapping via assume constraints**:
+   - Map derived i1 clocks constrained by `assume` eq/ne/ceq/cne/weq/wne or XOR
+     parity to BMC clock inputs (including inverted clocks)
+   - Treat XOR-with-constant as a definitional equivalence when resolving clock
+     positions so derived clocks reach their base clock
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-derived-clock-mapping.mlir`,
+     `test/Conversion/VerifToSMT/bmc-derived-clock-xor-true.mlir`,
+     `test/Conversion/VerifToSMT/bmc-derived-inverted-clock-xor.mlir`,
+     `test/Conversion/VerifToSMT/bmc-derived-clock-conflict.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|

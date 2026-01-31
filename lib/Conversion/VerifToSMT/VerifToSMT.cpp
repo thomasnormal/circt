@@ -1879,6 +1879,93 @@ struct VerifBoundedModelCheckingOpConversion
     }
 
     auto &circuitBlock = op.getCircuit().front();
+    struct ClockEquivalenceUF {
+      DenseMap<Value, Value> parent;
+      DenseMap<Value, bool> parity;
+      bool conflict = false;
+
+      bool has(Value value) const { return parent.contains(value); }
+
+      Value find(Value value, bool &invert) {
+        auto it = parent.find(value);
+        if (it == parent.end()) {
+          parent.try_emplace(value, value);
+          parity.try_emplace(value, false);
+          invert = false;
+          return value;
+        }
+        Value root = it->second;
+        if (root == value) {
+          invert = parity.lookup(value);
+          return root;
+        }
+        bool parentInvert = false;
+        Value newRoot = find(root, parentInvert);
+        bool newInvert = parity.lookup(value) ^ parentInvert;
+        parent[value] = newRoot;
+        parity[value] = newInvert;
+        invert = newInvert;
+        return newRoot;
+      }
+
+      void unite(Value lhs, Value rhs, bool invert) {
+        if (conflict)
+          return;
+        bool lhsInvert = false;
+        bool rhsInvert = false;
+        Value lhsRoot = find(lhs, lhsInvert);
+        Value rhsRoot = find(rhs, rhsInvert);
+        if (lhsRoot == rhsRoot) {
+          if ((lhsInvert ^ rhsInvert) != invert)
+            conflict = true;
+          return;
+        }
+        parent[rhsRoot] = lhsRoot;
+        parity[rhsRoot] = lhsInvert ^ rhsInvert ^ invert;
+      }
+    };
+    ClockEquivalenceUF clockEquivalenceUF;
+
+    auto getConstI1Value = [&](Value val) -> std::optional<bool> {
+      if (!val)
+        return std::nullopt;
+      if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
+        if (auto intTy = dyn_cast<IntegerType>(cst.getType());
+            intTy && intTy.getWidth() == 1)
+          return cst.getValue().isAllOnes();
+        return std::nullopt;
+      }
+      if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
+        if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
+          return boolAttr.getValue();
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+          if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
+              intTy && intTy.getWidth() == 1)
+            return intAttr.getValue().isAllOnes();
+        }
+      }
+      return std::nullopt;
+    };
+
+    auto isI1Value = [](Value val) -> bool {
+      if (!val)
+        return false;
+      if (auto intTy = dyn_cast<IntegerType>(val.getType()))
+        return intTy.getWidth() == 1;
+      return false;
+    };
+
+    bool derivedClockConflict = false;
+    auto reportDerivedClockConflict = [&](Operation *context,
+                                          StringRef message) {
+      if (derivedClockConflict)
+        return;
+      if (context)
+        context->emitError(message);
+      else
+        op.emitError(message);
+      derivedClockConflict = true;
+    };
     // Sequence NFAs provide exact multi-step semantics for repeat/concat/goto
     // constructs, so we avoid expanding them into delay buffers here.
 
@@ -2248,6 +2335,125 @@ struct VerifBoundedModelCheckingOpConversion
 
     if (clockConflict)
       return failure();
+
+    // Capture derived clock equivalences from assume constraints before any
+    // verification ops are erased.
+    auto isTriviallyTrueEnable = [&](Value enable) -> bool {
+      if (!enable)
+        return true;
+      if (auto literal = getConstI1Value(enable))
+        return *literal;
+      if (auto xorOp = enable.getDefiningOp<comb::XorOp>()) {
+        if (xorOp.getNumOperands() != 2)
+          return false;
+        auto lhs = getConstI1Value(xorOp.getOperand(0));
+        auto rhs = getConstI1Value(xorOp.getOperand(1));
+        if (lhs && rhs)
+          return (*lhs) ^ (*rhs);
+      }
+      return false;
+    };
+
+    auto registerEquivalence = [&](Value lhs, Value rhs, bool invert,
+                                   Operation *context) {
+      if (!lhs || !rhs)
+        return;
+      if (lhs.getType() != rhs.getType())
+        return;
+      if (!isI1Value(lhs))
+        return;
+      if (getConstI1Value(lhs) || getConstI1Value(rhs))
+        return;
+      clockEquivalenceUF.unite(lhs, rhs, invert);
+      if (clockEquivalenceUF.conflict)
+        reportDerivedClockConflict(
+            context, "derived clock assumptions are inconsistent");
+    };
+
+    // Record definitional equivalences for XOR with constants, e.g. (x ^ 0) == x
+    // and (x ^ 1) == !x, so assume-based mapping can reach the base clock.
+    circuitBlock.walk([&](comb::XorOp xorOp) {
+      if (derivedClockConflict)
+        return;
+      if (!isI1Value(xorOp.getResult()))
+        return;
+      bool parity = false;
+      SmallVector<Value> nonConst;
+      nonConst.reserve(xorOp.getNumOperands());
+      for (Value operand : xorOp.getOperands()) {
+        if (auto literal = getConstI1Value(operand))
+          parity ^= *literal;
+        else
+          nonConst.push_back(operand);
+      }
+      if (nonConst.size() != 1)
+        return;
+      registerEquivalence(xorOp.getResult(), nonConst[0], parity,
+                          xorOp.getOperation());
+    });
+
+    circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+      if (derivedClockConflict)
+        return;
+      if (auto enable = assumeOp.getEnable()) {
+        if (!isTriviallyTrueEnable(enable))
+          return;
+      }
+      auto cmpOp = assumeOp.getProperty().getDefiningOp<comb::ICmpOp>();
+      if (cmpOp) {
+        bool invertOther = false;
+        switch (cmpOp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+          invertOther = false;
+          break;
+        case comb::ICmpPredicate::ne:
+          invertOther = true;
+          break;
+        case comb::ICmpPredicate::ceq:
+          invertOther = false;
+          break;
+        case comb::ICmpPredicate::cne:
+          invertOther = true;
+          break;
+        case comb::ICmpPredicate::weq:
+          invertOther = false;
+          break;
+        case comb::ICmpPredicate::wne:
+          invertOther = true;
+          break;
+        default:
+          return;
+        }
+        registerEquivalence(cmpOp.getLhs(), cmpOp.getRhs(), invertOther,
+                            assumeOp.getOperation());
+        return;
+      }
+      if (auto xorOp = assumeOp.getProperty().getDefiningOp<comb::XorOp>()) {
+        bool parity = false;
+        SmallVector<Value> nonConst;
+        nonConst.reserve(xorOp.getNumOperands());
+        for (Value operand : xorOp.getOperands()) {
+          if (auto literal = getConstI1Value(operand))
+            parity ^= *literal;
+          else
+            nonConst.push_back(operand);
+        }
+        if (nonConst.size() != 2)
+          return;
+        bool invert = !parity;
+        registerEquivalence(nonConst[0], nonConst[1], invert,
+                            assumeOp.getOperation());
+      }
+    });
+
+    if (derivedClockConflict)
+      return failure();
+
+    if (clockEquivalenceUF.conflict) {
+      reportDerivedClockConflict(op.getOperation(),
+                                 "derived clock assumptions are inconsistent");
+      return failure();
+    }
 
     DenseSet<Operation *> nfaSequenceOps;
     DenseSet<Value> visitedSequenceOps;
@@ -3279,6 +3485,7 @@ struct VerifBoundedModelCheckingOpConversion
       bool invert = false;
     };
     DenseMap<Value, ClockPosInfo> clockValueToPos;
+    DenseMap<Value, ClockPosInfo> clockRootToPos;
     CommutativeValueEquivalence clockEquivalence;
     for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
       if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
@@ -3315,27 +3522,6 @@ struct VerifBoundedModelCheckingOpConversion
             clockArg, ClockPosInfo{static_cast<unsigned>(pos), false});
       }
     }
-
-    auto getConstI1Value = [&](Value val) -> std::optional<bool> {
-      if (!val)
-        return std::nullopt;
-      if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
-        if (auto intTy = dyn_cast<IntegerType>(cst.getType());
-            intTy && intTy.getWidth() == 1)
-          return cst.getValue().isAllOnes();
-        return std::nullopt;
-      }
-      if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
-        if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
-          return boolAttr.getValue();
-        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
-          if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
-              intTy && intTy.getWidth() == 1)
-            return intAttr.getValue().isAllOnes();
-        }
-      }
-      return std::nullopt;
-    };
 
     auto isConstEqBool = [&](Value val, bool expected) -> bool {
       if (auto literal = getConstI1Value(val))
@@ -3449,8 +3635,9 @@ struct VerifBoundedModelCheckingOpConversion
       return ClockPosInfo{it->second.pos, it->second.invert};
     };
 
-    std::function<std::optional<ClockPosInfo>(Value)> resolveClockPosInfo =
-        [&](Value clockValue) -> std::optional<ClockPosInfo> {
+    std::function<std::optional<ClockPosInfo>(Value)>
+        resolveClockPosInfoSimple =
+            [&](Value clockValue) -> std::optional<ClockPosInfo> {
       if (!clockValue)
         return std::nullopt;
       if (auto it = clockValueToPos.find(clockValue);
@@ -3458,12 +3645,13 @@ struct VerifBoundedModelCheckingOpConversion
         return it->second;
       if (auto cast = clockValue.getDefiningOp<UnrealizedConversionCastOp>()) {
         if (cast->getNumOperands() == 1)
-          if (auto info = resolveClockPosInfo(cast->getOperand(0)))
+          if (auto info = resolveClockPosInfoSimple(cast->getOperand(0)))
             return info;
       }
       if (auto fromClock = clockValue.getDefiningOp<seq::FromClockOp>()) {
-        if (auto toClock = fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
-          if (auto info = resolveClockPosInfo(toClock.getInput()))
+        if (auto toClock =
+                fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
+          if (auto info = resolveClockPosInfoSimple(toClock.getInput()))
             return info;
         }
       }
@@ -3473,7 +3661,7 @@ struct VerifBoundedModelCheckingOpConversion
         Value inner;
         bool invert = false;
         if (collectXorInfo(clockValue, inner, invert)) {
-          auto innerInfo = resolveClockPosInfo(inner);
+          auto innerInfo = resolveClockPosInfoSimple(inner);
           if (!innerInfo)
             return std::nullopt;
           if (invert)
@@ -3490,115 +3678,58 @@ struct VerifBoundedModelCheckingOpConversion
       return std::nullopt;
     };
 
-    auto resolveClockPosInfoForAssume =
+    std::function<std::optional<ClockPosInfo>(Value)> resolveClockPosInfo =
         [&](Value clockValue) -> std::optional<ClockPosInfo> {
-      if (auto info = resolveClockPosInfo(clockValue))
+      if (auto info = resolveClockPosInfoSimple(clockValue))
         return info;
-      if (auto fromClock = clockValue.getDefiningOp<seq::FromClockOp>()) {
-        if (auto arg = dyn_cast<BlockArgument>(fromClock.getInput())) {
-          auto it = llvm::find(clockIndexes,
-                               static_cast<int>(arg.getArgNumber()));
-          if (it != clockIndexes.end())
-            return ClockPosInfo{
-                static_cast<unsigned>(it - clockIndexes.begin()), false};
+      if (clockEquivalenceUF.has(clockValue)) {
+        bool invert = false;
+        Value root = clockEquivalenceUF.find(clockValue, invert);
+        auto it = clockRootToPos.find(root);
+        if (it != clockRootToPos.end()) {
+          ClockPosInfo info = it->second;
+          if (invert)
+            info.invert = !info.invert;
+          return info;
         }
       }
       return std::nullopt;
     };
 
-    // Map derived clock expressions that were constrained via assume
-    // equalities to a BMC clock input.
-    bool derivedClockConflict = false;
-    auto isTriviallyTrueEnable = [&](Value enable) -> bool {
-      if (!enable)
-        return true;
-      if (auto literal = getConstI1Value(enable))
-        return *literal;
-      if (auto xorOp = enable.getDefiningOp<comb::XorOp>()) {
-        if (xorOp.getNumOperands() != 2)
-          return false;
-        auto lhs = getConstI1Value(xorOp.getOperand(0));
-        auto rhs = getConstI1Value(xorOp.getOperand(1));
-        if (lhs && rhs)
-          return (*lhs) ^ (*rhs);
+    for (auto &entry : clockValueToPos) {
+      bool invert = false;
+      Value root = clockEquivalenceUF.find(entry.first, invert);
+      ClockPosInfo info = entry.second;
+      if (invert)
+        info.invert = !info.invert;
+      auto insert = clockRootToPos.try_emplace(root, info);
+      if (!insert.second &&
+          (insert.first->second.pos != info.pos ||
+           insert.first->second.invert != info.invert)) {
+        reportDerivedClockConflict(
+            op.getOperation(),
+            "derived clock maps to multiple BMC clock inputs");
       }
-      return false;
-    };
+    }
 
-    circuitBlock.walk([&](verif::AssumeOp assumeOp) {
-      if (derivedClockConflict)
-        return;
-      if (auto enable = assumeOp.getEnable()) {
-        if (!isTriviallyTrueEnable(enable))
-          return;
-      }
-      auto cmpOp =
-          assumeOp.getProperty().getDefiningOp<comb::ICmpOp>();
-      auto mapIfFromClock =
-          [&](Value maybeFrom, Value other, bool invertOtherValue) -> bool {
-        auto info = resolveClockPosInfoForAssume(maybeFrom);
+    if (!clockEquivalenceUF.parent.empty()) {
+      SmallVector<Value> ufValues;
+      ufValues.reserve(clockEquivalenceUF.parent.size());
+      for (auto &entry : clockEquivalenceUF.parent)
+        ufValues.push_back(entry.first);
+      for (Value value : ufValues) {
+        bool invert = false;
+        Value root = clockEquivalenceUF.find(value, invert);
+        if (clockRootToPos.contains(root))
+          continue;
+        auto info = resolveClockPosInfoSimple(value);
         if (!info)
-          return false;
-        if (!other || other.getType() != maybeFrom.getType())
-          return false;
-        if (invertOtherValue)
+          continue;
+        if (invert)
           info->invert = !info->invert;
-        auto insert = clockValueToPos.try_emplace(other, *info);
-        if (!insert.second &&
-            (insert.first->second.pos != info->pos ||
-             insert.first->second.invert != info->invert)) {
-          assumeOp.emitError("derived clock maps to multiple BMC clock inputs");
-          derivedClockConflict = true;
-        }
-        return true;
-      };
-      if (cmpOp) {
-        bool invertOther = false;
-        switch (cmpOp.getPredicate()) {
-        case comb::ICmpPredicate::eq:
-          invertOther = false;
-          break;
-        case comb::ICmpPredicate::ne:
-          invertOther = true;
-          break;
-        case comb::ICmpPredicate::ceq:
-          invertOther = false;
-          break;
-        case comb::ICmpPredicate::cne:
-          invertOther = true;
-          break;
-        case comb::ICmpPredicate::weq:
-          invertOther = false;
-          break;
-        case comb::ICmpPredicate::wne:
-          invertOther = true;
-          break;
-        default:
-          return;
-        }
-        if (mapIfFromClock(cmpOp.getLhs(), cmpOp.getRhs(), invertOther))
-          return;
-        mapIfFromClock(cmpOp.getRhs(), cmpOp.getLhs(), invertOther);
-        return;
+        clockRootToPos.try_emplace(root, *info);
       }
-      if (auto xorOp = assumeOp.getProperty().getDefiningOp<comb::XorOp>()) {
-        bool parity = false;
-        SmallVector<Value> nonConst;
-        nonConst.reserve(xorOp.getNumOperands());
-        for (Value operand : xorOp.getOperands()) {
-          if (auto literal = getConstI1Value(operand))
-            parity ^= *literal;
-          else
-            nonConst.push_back(operand);
-        }
-        if (nonConst.size() != 2)
-          return;
-        bool invert = !parity;
-        if (mapIfFromClock(nonConst[0], nonConst[1], invert))
-          return;
-        mapIfFromClock(nonConst[1], nonConst[0], invert);
-      }
-    });
+    }
 
     if (derivedClockConflict)
       return failure();
