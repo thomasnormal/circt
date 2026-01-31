@@ -250,8 +250,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. **~4 Hierarchical Name XFAIL Tests**: Signal access through instance hierarchy incomplete for some patterns
 3. **9 XFAIL Tests**: Expected failures that require architectural changes to fix (reduced from 18!)
 4. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
-   still times out even with short `--timeout`/`--max-cycles`, suggesting a
-   possible hang or timeout enforcement issue in circt-sim.
+   still times out even with short `--timeout`/`--max-cycles`; likely tied to
+   LLVM aggregate load/store layout mismatches on `llhd.ref` signals in the
+   TL-UL testbench (now fixed in interpreter), pending validation.
 5. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
    plus scheduler/parallel delta-loop abort guards and a tool-level wall-clock
    timeout guard; `gpio_no_alerts` still hangs before first progress output,
@@ -271,6 +272,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **past-clocking.sv XFAIL Removed**: Test now passes, reduced XFAIL count from 19 to 18
 - **OpenTitan Coverage Expanded**: 35/39 pass (89.7%), up from 16/16 tested
 - **All lit tests pass**: No regressions
+- **circt-sim LLVM aggregate layout bridging**: `llvm.load`/`llvm.store` on
+  `llhd.ref` signals now convert between LLVM and HW aggregate layouts; added
+  interpreter unit test coverage
 
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
