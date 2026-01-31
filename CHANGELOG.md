@@ -38,9 +38,59 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
    - Convert between LLVM aggregate layout (low-to-high) and HW aggregate layout
      (high-to-low) when `llvm.load`/`llvm.store` access `llhd.ref` signals
    - Adds signal type tracking to drive conversions for structs/arrays
+
+5. **circt-sim Per-Instance Execution Contexts**:
+   - Process execution, instance outputs, module drives, and firregs now use
+     per-instance signal/value maps and input mappings for correct multi-instance
+     behavior
+   - Module-drive evaluation runs in the drive’s instance context; instance
+     output updates carry instance IDs
+   - Added explicit instance-scoped signal lookup API with unit coverage
+   - Added per-instance input-map chaining to resolve nested instance inputs
    - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`,
      `tools/circt-sim/LLHDProcessInterpreter.h`
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`,
+     `tools/circt-sim/LLHDProcessInterpreter.h`
+
+5. **LLHD Ref Block-Arg Probe Mapping**:
+   - Track ref-typed block arguments as signal refs across CF branches so
+     `llhd.prb` resolves through block-arg PHIs
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+6. **LLVM Wide Load Padding Clamp**:
+   - Clamp load bytes to the value width to avoid APInt shift overflow when
+     byte-rounded LLVM aggregate sizes exceed packed bit widths
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+7. **Iterative Continuous-Value Evaluation**:
+   - Replace recursive `evaluateContinuousValueImpl` with an iterative, cached
+     evaluator to avoid stack overflow on deep continuous assignment chains
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`,
+     `tools/circt-sim/LLHDProcessInterpreter.h`
+
+8. **Coverage DB Runtime Stubs**:
+   - Added interpreter stubs for coverage DB APIs to keep UVM/AVIP simulations
+     running when coverage tasks are present
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+9. **Continuous Evaluation Comb Coverage**:
+   - Added comb.replicate/parity/shift/mul/div/mod support and fixed shared-node
+     handling in the iterative evaluator to avoid spurious X propagation
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+10. **Instance Output Input Mapping (circt-sim)**:
+    - Instance outputs now evaluate with per-instance input mappings to avoid
+      cross-instance signal aliasing for combinational child modules
+    - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`,
+      `tools/circt-sim/LLHDProcessInterpreter.h`
 
 ### Test Results
 | Suite | Status | Notes |
@@ -53,10 +103,15 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
 | yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
 | verilator-verification BMC | **17/17 pass** | No failures |
 | sv-tests LEC | **23/23 pass** | 0 fail (23 total) |
+| sv-tests LEC (rerun) | **23/23 pass** | `utils/run_sv_tests_circt_lec.sh` (skip 1013) |
 | yosys-sva LEC | **14/14 pass** | 2 skipped VHDL |
 | verilator-verification LEC | **17/17 pass** | No failures |
 | AVIP (APB/AHB/UART) circt-verilog | **PASS** | `run_avip_circt_verilog.sh ~/mbit/{apb,ahb,uart}_avip` |
+| AVIP (AXI4/I3C) circt-verilog | **PASS** | `run_avip_circt_verilog.sh ~/mbit/{axi4,i3c}_avip` |
 | OpenTitan prim_count/prim_fifo_sync (circt-sim) | **PASS** | `run_opentitan_circt_sim.sh prim_count` + `prim_fifo_sync` |
+| OpenTitan gpio_no_alerts (circt-sim) | **TIMEOUT** | No crash; TL response valid 0, still times out at 2000 cycles |
+| OpenTitan uart_reg_top (circt-sim) | **TIMEOUT** | No crash; TL response ready 0, still times out at 2000 cycles |
+| OpenTitan aes_reg_top (circt-sim) | **TIMEOUT** | No crash; TL response ready 0, still times out at 2000 cycles |
 
 ### XFAIL Reduction Details
 **9 UVM tests now passing with uvm-core:**

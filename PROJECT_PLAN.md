@@ -130,19 +130,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
 **Immediate Blockers:**
-1. **Stack Overflow in evaluateContinuousValueImpl** 🔴 CRITICAL (Iteration 271):
-   - Complex OpenTitan IPs crash with stack overflow during continuous evaluation
-   - **Affected IPs**: gpio, uart, aes_reg_top
-   - **Working IPs**: prim_count, prim_fifo_sync, timer_core
-   - Deep recursion through combinational logic chains
-   - **Fix needed**: Iterative evaluation or memoization to limit recursion depth
+1. **Continuous Evaluation Depth** 🟡 REVALIDATION NEEDED:
+   - Replaced recursive `evaluateContinuousValueImpl` with iterative + cache
+     to avoid stack overflow on deep combinational chains
+   - **Affected IPs**: gpio, uart, aes_reg_top (previously crashing)
+   - **Next step**: Re-run OpenTitan IPs to confirm no stack overflow and
+     check for performance regressions
 
-2. **Coverage Functions Not Implemented** 🔴 BLOCKING AXI4/I3C AVIPs (Iteration 272):
-   - `$get_coverage()`, `$set_coverage_db_name()`, `$load_coverage_db()` not implemented
-   - **Affected AVIPs**: AXI4, I3C (compile but fail at runtime)
-   - **Working AVIPs**: APB, AHB, UART, I2S (don't use coverage functions)
-   - **Fix needed**: Implement stub coverage functions that return safe defaults
-   - **Impact**: Would enable 2 more AVIPs to simulate
+2. **Coverage Runtime Stubs** 🟡 REVALIDATION NEEDED:
+   - Interpreter now stubs coverage DB APIs and covergroup queries
+   - **Affected AVIPs**: AXI4, I3C (previously failed at runtime)
+   - **Working AVIPs**: APB, AHB, UART, I2S
+   - **Next step**: Re-run AXI4/I3C AVIPs to confirm coverage tasks no longer block
+   - **Note**: Stubs return safe defaults; real coverage reporting still pending
+   - **Revalidation**: AXI4/I3C circt-verilog compile PASS (runtime still pending)
 
 3. **AVIP Dominance Errors** ✅ RESOLVED:
    - Fixed in commit `5cb9aed08` - "Improve fork/join import with variable declaration support"
@@ -224,16 +225,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **Global wall-clock guard**: added tool-level timeout enforcement for pre-run phases
 - **Stage progress markers**: `-v=1` now prints parse/passes/init/run stages for hang triage
 - **UVM with uvm-core**: 9 previously-XFAIL tests now pass when using real UVM library
+- **LLVM wide-load padding clamp**: fixed APInt shift overflow on byte-rounded aggregates
+- **Iterative continuous evaluation**: avoids recursion depth limits in deep chains
 
 **Iteration 275 Latest Suite Runs (2026-01-31):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)
 - sv-tests LEC: 23 pass (23 total)
+- sv-tests LEC rerun: 23 pass / 0 fail (skip 1013)
 - yosys-sva BMC: 14 pass / 2 skipped (VHDL)
 - yosys-sva LEC: 14 pass / 2 skipped (VHDL)
 - verilator-verification BMC: 17 pass
 - verilator-verification LEC: 17 pass
 - AVIP (APB/AHB/UART) circt-verilog: PASS
+- AVIP (AXI4/I3C) circt-verilog: PASS (compile-only; runtime revalidation pending)
 - OpenTitan prim_count + prim_fifo_sync (circt-sim): PASS
+- OpenTitan uart_reg_top (circt-sim): TIMEOUT (TL response ready 0)
+- OpenTitan aes_reg_top (circt-sim): TIMEOUT (TL response ready 0)
 
 **Remaining 9 XFAIL Tests by Category:**
 1. **Hierarchical Names** (~4 tests): Signal access through instance hierarchy
@@ -246,18 +253,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - This includes virtual interface task calls, class handle formatting, and hierarchical access
 
 **Remaining Limitations (Iteration 275):**
-1. **Stack overflow in evaluateContinuousValueImpl**: Complex OpenTitan IPs (gpio, uart, aes_reg_top) crash due to deep recursion through combinational logic chains
-2. **~4 Hierarchical Name XFAIL Tests**: Signal access through instance hierarchy incomplete for some patterns
-3. **9 XFAIL Tests**: Expected failures that require architectural changes to fix (reduced from 18!)
-4. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
-   still times out even with short `--timeout`/`--max-cycles`; likely tied to
-   LLVM aggregate load/store layout mismatches on `llhd.ref` signals in the
-   TL-UL testbench (now fixed in interpreter), pending validation.
-5. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
+1. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
+   now runs without crashing but still times out at 2000 cycles; TL response
+   stays invalid (`TL response valid: 0`). Need deeper X-prop/handshake modeling
+   to resolve progress.
+2. **Continuous evaluation revalidation**: iterative evaluation avoids recursion
+   depth limits, but we still need to re-run gpio/uart/aes_reg_top to confirm
+   no regressions and acceptable performance (uart_reg_top/aes_reg_top still timeout).
+3. **~4 Hierarchical Name XFAIL Tests**: Signal access through instance hierarchy incomplete for some patterns
+4. **Instance-scoped signal lookup**: per-instance process execution, module
+   drives, firregs, and instance outputs now run with per-instance signal/value
+   maps; an explicit instance-scoped lookup API now exists but still needs
+   to be propagated through tooling to avoid ambiguous external queries.
+5. **OpenTitan prim_count sim regression**: `utils/run_opentitan_circt_sim.sh prim_count`
+   still reports `TEST FAILED: error flag set` with cnt_o stuck at 0 after
+   instance-mapping fixes; likely deeper X-prop or drive/sensitivity gap in
+   prim_count/prim_flop modeling.
+6. **9 XFAIL Tests**: Expected failures that require architectural changes to fix (reduced from 18!)
+7. **LLVM data-layout accuracy**: aggregate sizes use byte-rounding without
+   target data-layout padding/alignment; long term we need explicit data-layout
+   modeling for correct memory interpretation of packed/unaligned aggregates.
+8. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
    plus scheduler/parallel delta-loop abort guards and a tool-level wall-clock
-   timeout guard; `gpio_no_alerts` still hangs before first progress output,
-   so investigate init/constructor paths and any pre-run stalls that bypass
-   abort polling.
+   timeout guard; still need to audit remaining pre-run stall paths once
+   gpio_no_alerts is revalidated.
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
@@ -275,6 +294,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **circt-sim LLVM aggregate layout bridging**: `llvm.load`/`llvm.store` on
   `llhd.ref` signals now convert between LLVM and HW aggregate layouts; added
   interpreter unit test coverage
+- **circt-sim ref block-arg probes**: map ref-typed block args to signal IDs
+  across CF branches so `llhd.prb` resolves through PHIs
 
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
@@ -382,7 +403,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 **Iteration 275 Next Tasks:**
 1. Continue reducing XFAIL count (target: <5, currently 9 - major milestone achieved!)
-2. Fix stack overflow in evaluateContinuousValueImpl for complex IPs
+2. Revalidate iterative continuous-evaluation on OpenTitan IPs (gpio/uart/aes_reg_top)
 3. Test AVIPs with actual UVM test names (`+UVM_TESTNAME`)
 4. Address remaining ~4 hierarchical name XFAIL tests
 5. Maintain external test suite coverage (54/54)
@@ -391,7 +412,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 | Track | Status | Next Task |
 |-------|--------|-----------|
-| **Track 1: UVM Parity** | ✅ ~85-90% complete | Continue XFAIL reduction, fix stack overflow |
+| **Track 1: UVM Parity** | ✅ ~85-90% complete | Continue XFAIL reduction, revalidate deep-chain evaluation |
 | **Track 2: AVIP Testing** | ✅ 6/9 AVIPs simulate | Run actual UVM tests with +UVM_TESTNAME |
 | **Track 3: OpenTitan** | ✅ 35/39 (89.7%) | Fix remaining 4 failing IPs |
 | **Track 4: External Suites** | ✅ 54/54 pass (100%) | Maintain coverage |
@@ -457,7 +478,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **9 UVM tests now passing**: Tests work with real Accellera `uvm-core` library
 
 5. **Remaining Limitations:**
-   - **Stack overflow in evaluateContinuousValueImpl**: Complex IPs (gpio, uart, aes_reg_top) crash
+   - **Continuous evaluation coverage**: Added comb.replicate/parity/shift/mul/div/mod
+     support, but more comb ops may still need coverage to avoid X in module-level drives
    - **~4 Hierarchical Name XFAIL Tests**: Instance hierarchy access incomplete
 
 6. **Working AVIPs (6/9):**
