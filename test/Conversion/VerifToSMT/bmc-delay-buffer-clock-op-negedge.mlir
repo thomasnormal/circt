@@ -1,20 +1,17 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
-// XFAIL: *
-// Known conversion bug: ltl.clock with explicit clock signal causes SSA dominance violation
-
 // Test that delay buffer updates are gated by negedge derived from ltl.clock.
 // The negedge is computed as: old_clock AND NOT new_clock.
 
 // CHECK-LABEL: func.func @bmc_delay_buffer_clock_op_negedge() -> i1
 // CHECK: scf.for
-// Circuit returns outputs + delay buffer + !smt.bool for the property
-// CHECK:   func.call @bmc_circuit
-// CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 // CHECK:   func.call @bmc_loop
+// Circuit returns outputs + delay buffer + !smt.bool for the property
 // Negedge detection: old_clock AND NOT new_clock
 // CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
 // CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:   func.call @bmc_circuit
+// CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 // Delay buffer update conditioned on negedge
 // CHECK:   smt.ite {{%.+}}, {{%.+}}, {{%.+}} : !smt.bv<1>
 func.func @bmc_delay_buffer_clock_op_negedge() -> i1 {

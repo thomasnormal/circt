@@ -313,6 +313,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   correct clock domain
 - **BMC derived clock fallback**: unmatched `bmc.clock` names now remap to the
   single derived BMC clock input to avoid spurious unmapped-clock errors
+- **BMC ltl.clock delay buffers**: clocked delay buffers now treat `ltl.clock`
+  as a transparent wrapper, fixing explicit clock gating in delay-buffer tests
+  (`bmc-delay-buffer-clock-op-negedge.mlir`, `bmc-delay-buffer-clock-op-edge-both.mlir`)
 - **BMC assume-known inputs**: `circt-bmc` now supports `--assume-known-inputs`,
   with `BMC_ASSUME_KNOWN_INPUTS=1` hook added for yosys SVA runs
 - **BMC delay root handling**: sequence-root `ltl.delay` ops now use delay

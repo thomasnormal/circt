@@ -2184,6 +2184,19 @@ struct VerifBoundedModelCheckingOpConversion
           seenInfo.insert({cur, curInfo});
         }
         if (isa<ltl::SequenceType>(cur.getType())) {
+          if (auto clockOp = cur.getDefiningOp<ltl::ClockOp>()) {
+            ClockInfo clockInfo;
+            clockInfo.edge = clockOp.getEdge();
+            clockInfo.clockValue = clockOp.getClock();
+            clockInfo.seen = clockInfo.clockValue || clockInfo.edge;
+            if (clockInfoConflict(curInfo, clockInfo)) {
+              reportClockConflict(clockOp);
+              return;
+            }
+            mergeClockInfo(curInfo, clockInfo);
+            worklist.push_back({clockOp.getInput(), curInfo});
+            continue;
+          }
           if (auto delayOp = cur.getDefiningOp<ltl::DelayOp>()) {
             if (delayOp.getDelay() == 0) {
               auto lengthAttr = delayOp.getLengthAttr();
@@ -3271,10 +3284,23 @@ struct VerifBoundedModelCheckingOpConversion
       if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
         continue;
       Value clockArg = circuitBlock.getArgument(clockIdx);
-      for (Operation *user : clockArg.getUsers()) {
-        if (auto fromClock = dyn_cast<seq::FromClockOp>(user))
-          clockValueToPos[fromClock.getResult()] =
-              ClockPosInfo{static_cast<unsigned>(pos), false};
+      SmallVector<Value> worklist{clockArg};
+      DenseSet<Value> visited;
+      while (!worklist.empty()) {
+        Value cur = worklist.pop_back_val();
+        if (!visited.insert(cur).second)
+          continue;
+        for (Operation *user : cur.getUsers()) {
+          if (auto fromClock = dyn_cast<seq::FromClockOp>(user)) {
+            clockValueToPos[fromClock.getResult()] =
+                ClockPosInfo{static_cast<unsigned>(pos), false};
+            continue;
+          }
+          if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
+            if (cast->getNumResults() == 1)
+              worklist.push_back(cast->getResult(0));
+          }
+        }
       }
     }
     // Also map direct i1 clock arguments so ltl.clock on i1 clocks can
@@ -3430,6 +3456,17 @@ struct VerifBoundedModelCheckingOpConversion
       if (auto it = clockValueToPos.find(clockValue);
           it != clockValueToPos.end())
         return it->second;
+      if (auto cast = clockValue.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() == 1)
+          if (auto info = resolveClockPosInfo(cast->getOperand(0)))
+            return info;
+      }
+      if (auto fromClock = clockValue.getDefiningOp<seq::FromClockOp>()) {
+        if (auto toClock = fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
+          if (auto info = resolveClockPosInfo(toClock.getInput()))
+            return info;
+        }
+      }
       // Handle inversion via XOR with constant (comb dialect uses XorOp for
       // NOT, there is no dedicated NotOp)
       {
