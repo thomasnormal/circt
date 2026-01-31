@@ -40,6 +40,11 @@ Continue reducing XFAIL count, add unit tests for recent bug fixes, improve BMC 
      `include/circt/Dialect/LLHD/IR/LLHDSignalOps.td`,
      `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
 
+5. **Yosys SVA BMC Harness Defaults to 2-State Inputs**:
+   - Default `BMC_ASSUME_KNOWN_INPUTS=1` for yosys SVA runs to avoid
+     X-driven false violations on 2-state suites.
+   - **File**: `utils/run_yosys_sva_circt_bmc.sh`
+
 ### Key Findings
 
 1. **TL-UL Initialization Order Issue** (Root Cause Identified):

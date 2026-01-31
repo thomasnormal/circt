@@ -7,7 +7,9 @@ CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
-BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-0}"
+# Yosys SVA tests are 2-state; default to known inputs to avoid X-driven
+# counterexamples. Set BMC_ASSUME_KNOWN_INPUTS=0 to exercise 4-state behavior.
+BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
 BOUND="${BOUND:-10}"
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
