@@ -320,6 +320,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   `bmc-delay-posedge.mlir` legalization
 - **BMC implication delay shift**: exact delayed consequents are shifted onto
   the antecedent so BMC checks use past buffers (non-overlapping implication)
+- **LEC result tokens**: `circt-lec --run-smtlib` now emits `LEC_RESULT=...`,
+  plus a `--print-counterexample` alias for `--print-solver-output`
+- **yosys-sva LEC runner fix**: removed unsupported `--fail-on-inequivalent`,
+  LEC suite passes 14/14 (2 VHDL skipped)
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
 - **Virtual Interface Task Calls Confirmed Working**: virtual-interface-task.sv passes

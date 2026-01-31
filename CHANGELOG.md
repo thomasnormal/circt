@@ -67,6 +67,14 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - **Tests**: `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`
    - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
+6. **LEC result tokens + compat flag**:
+   - `circt-lec --run-smtlib` now emits `LEC_RESULT=EQ|NEQ|UNKNOWN` alongside
+     `c1 == c2` / `c1 != c2`
+   - Added `--print-counterexample` alias for `--print-solver-output`
+   - Updated yosys SVA LEC runner to remove unsupported `--fail-on-inequivalent`
+   - **Files**: `tools/circt-lec/circt-lec.cpp`,
+     `utils/run_yosys_sva_circt_lec.sh`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
