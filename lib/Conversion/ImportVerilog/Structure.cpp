@@ -1246,94 +1246,17 @@ struct ModuleVisitor : public BaseVisitor {
   LogicalResult visit(const slang::ast::ContinuousAssignSymbol &assignNode) {
     const auto *expr =
         assignNode.getAssignment().as_if<slang::ast::AssignmentExpression>();
+    // When allowNonProceduralDynamic is enabled (the default), slang downgrades
+    // DynamicNotProcedural errors to warnings. This allows slang to still produce
+    // a valid AssignmentExpression that we can convert normally. The dynamic type
+    // member accesses (like class property accesses) are handled by the standard
+    // conversion path below.
     if (!expr) {
-      if (context.options.allowNonProceduralDynamic.value_or(false)) {
-        // When DynamicNotProcedural is downgraded to a warning, slang wraps
-        // the expression in an InvalidExpression. The problem is that slang
-        // wraps just the base expression (e.g., "obj"), not the full member
-        // access ("obj.val"). To recover the full expression, we re-bind from
-        // syntax in a procedural context (without NonProcedural flag).
-        const auto *syntax = assignNode.getSyntax();
-        if (syntax && context.currentScope) {
-          // Get the expression syntax from the continuous assign
-          const auto *exprSyntax =
-              syntax->as_if<slang::syntax::ExpressionSyntax>();
-          if (exprSyntax) {
-            // Create an AST context without NonProcedural flag - this allows
-            // dynamic type access to succeed
-            slang::ast::ASTContext astContext(
-                *context.currentScope, slang::ast::LookupLocation::max);
-
-            // Re-bind the expression in the new (procedural) context
-            const auto &reboundExpr = slang::ast::Expression::bind(
-                *exprSyntax, astContext, slang::ast::ASTFlags::AssignmentAllowed);
-            if (!reboundExpr.bad()) {
-              // The re-bound expression should now be a valid
-              // AssignmentExpression
-              const auto *assignExpr =
-                  reboundExpr.as_if<slang::ast::AssignmentExpression>();
-              if (assignExpr) {
-                // Convert to always_comb for procedural context
-                auto procOp = moore::ProcedureOp::create(
-                    builder, loc, moore::ProcedureKind::AlwaysComb);
-                OpBuilder::InsertionGuard guard(builder);
-                builder.setInsertionPointToEnd(
-                    &procOp.getBody().emplaceBlock());
-                Context::ValueSymbolScope scope(context.valueSymbols);
-
-                auto lhs = context.convertLvalueExpression(assignExpr->left());
-                if (!lhs) {
-                  procOp.erase();
-                  mlir::emitWarning(loc)
-                      << "skipping continuous assignment: failed to convert "
-                         "LHS in always_comb fallback";
-                  return success();
-                }
-
-                // Get the nested type from the lvalue
-                Type lhsNestedType;
-                if (auto refType = dyn_cast<moore::RefType>(lhs.getType()))
-                  lhsNestedType = refType.getNestedType();
-                else if (isa<moore::ClassHandleType>(lhs.getType()))
-                  lhsNestedType = lhs.getType();
-                else {
-                  procOp.erase();
-                  mlir::emitWarning(loc)
-                      << "skipping continuous assignment: unsupported LHS "
-                         "type in always_comb fallback";
-                  return success();
-                }
-
-                auto rhs = context.convertRvalueExpression(assignExpr->right(),
-                                                           lhsNestedType);
-                if (!rhs) {
-                  procOp.erase();
-                  mlir::emitWarning(loc)
-                      << "skipping continuous assignment: failed to convert "
-                         "RHS in always_comb fallback";
-                  return success();
-                }
-
-                moore::BlockingAssignOp::create(builder, loc, lhs, rhs);
-                moore::ReturnOp::create(builder, loc);
-
-                mlir::emitRemark(loc)
-                    << "converted continuous assignment with dynamic type "
-                       "access to always_comb block";
-                return success();
-              }
-            }
-          }
-        }
-        mlir::emitWarning(loc)
-            << "skipping continuous assignment without an assignment "
-               "expression after DynamicNotProcedural downgrade";
-        return success();
-      }
       mlir::emitError(loc)
           << "expected assignment expression in continuous assignment";
       return failure();
     }
+
     auto lhs = context.convertLvalueExpression(expr->left());
     if (!lhs)
       return failure();
