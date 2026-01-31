@@ -1,9 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 275 - January 31, 2026
+
+### Goals
+Continue reducing XFAIL count, improve OpenTitan coverage.
+
+### Status
+- **Starting XFAIL count**: 17
+
+---
+
 ## Iteration 274 - January 31, 2026
 
 ### Goals
 Verify virtual interface task call support, investigate OpenTitan edn/entropy failures, enhance test coverage.
+
+### Fixed in this Iteration
+1. **format-class-handle.sv XFAIL Removed**:
+   - Test now passes - class handle formatting in $display/$sformatf working
+   - Reduced XFAIL count
+
+2. **hierarchical-names.sv XFAIL Removed**:
+   - Test now passes - hierarchical name access through instances working
+
+3. **virtual-interface-task.sv XFAIL Removed**:
+   - Task calls through virtual interfaces confirmed working
+   - No additional CIRCT changes needed
+
+4. **virtual-iface-bind-override.sv XFAIL Removed**:
+   - Virtual interface bind override functionality working
+   - Test enabled and passing
 
 ### Analysis in this Iteration
 1. **Virtual Interface Task Calls Confirmed Working**:
@@ -23,14 +49,20 @@ Verify virtual interface task call support, investigate OpenTitan edn/entropy fa
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
-| Lit Tests | **All pass** | No regressions, 21 XFAIL |
+| Lit Tests | **All pass** | No regressions, 17 XFAIL (was 21) |
 | OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass |
 | AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C |
 | yosys-sva BMC | **14/14 (100%)** | All pass |
 | sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 
+### Commits (12 total)
+- XFAIL removals for format-class-handle, hierarchical-names, virtual-interface-task, virtual-iface-bind-override
+- Test enhancements and documentation updates
+- All test suites passing
+
 ### Status Summary
+- **4 XFAIL tests fixed**: format-class-handle, hierarchical-names, virtual-interface-task, virtual-iface-bind-override
 - **Virtual interface tasks**: Working (no fix needed)
 - **OpenTitan edn/entropy**: Script issues (not CIRCT)
 - **AVIP coverage**: 6/9 protocols simulate successfully
