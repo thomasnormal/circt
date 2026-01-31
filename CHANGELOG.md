@@ -138,8 +138,21 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
      inverted clocks and XOR-with-false clocks
    - Removed XFAILs for `bmc-clock-op-inverted-posedge*.mlir` and
      `bmc-clock-op-xor-false-posedge.mlir`
-   - **Files**: `test/Conversion/VerifToSMT/bmc-clock-op-inverted-posedge*.mlir`,
-     `test/Conversion/VerifToSMT/bmc-clock-op-xor-false-posedge.mlir`
+
+12. **BMC NFA sequence lowering enabled in VerifToSMT**:
+   - Marked Comb/HW/Seq dialects legal in the first Verif→SMT phase so NFA
+     construction for repeat/concat/goto sequences can introduce comb/hw ops
+   - Fixes `verif.bmc` legalization failures for repetition/concat tests
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-repetition.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+13. **BMC concat/repeat regression updates**:
+   - Removed XFAILs and updated checks for concat sequence tests now that the
+     NFA path is active
+   - Added a deterministic error for sequence-typed block arguments in NFA
+     lowering (avoids crashes)
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-concat-*.mlir`
+   - **Files**: `include/circt/Support/LTLSequenceNFA.h`
 
 ### Test Results
 | Suite | Status | Notes |
