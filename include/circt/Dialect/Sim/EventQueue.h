@@ -283,8 +283,38 @@ public:
 private:
   struct Slot {
     uint64_t baseTime;
-    DeltaCycleQueue deltaQueue;
+    /// Map from delta step to event queue for that delta.
+    /// This allows scheduling events at different delta steps within the same
+    /// real time.
+    std::map<uint32_t, DeltaCycleQueue> deltaQueues;
     bool hasEvents = false;
+
+    /// Get or create a delta queue for the given delta step.
+    DeltaCycleQueue &getDeltaQueue(uint32_t deltaStep) {
+      return deltaQueues[deltaStep];
+    }
+
+    /// Check if there are any events in any delta queue.
+    bool hasAnyEvents() const {
+      for (const auto &[delta, queue] : deltaQueues)
+        if (queue.hasAnyEvents())
+          return true;
+      return false;
+    }
+
+    /// Get the minimum delta step with events.
+    uint32_t getMinDeltaStep() const {
+      for (const auto &[delta, queue] : deltaQueues)
+        if (queue.hasAnyEvents())
+          return delta;
+      return UINT32_MAX;
+    }
+
+    /// Clear all delta queues.
+    void clear() {
+      deltaQueues.clear();
+      hasEvents = false;
+    }
   };
 
   struct Level {

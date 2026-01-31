@@ -136,17 +136,18 @@ void TimeWheel::schedule(const SimTime &time, SchedulingRegion region,
   size_t slotIndex = getSlotIndex(targetTime, level);
   auto &slot = levels[level].slots[slotIndex];
 
-  // If this is the current time, just add to delta queue
+  // Determine the delta step to use.
+  // If scheduling at current real time, use the requested delta step, but at
+  // minimum use the current delta step (can't schedule in the past).
+  // If scheduling at a future real time, always use delta step 0.
+  uint32_t deltaStep = 0;
   if (time.realTime == currentTime.realTime) {
-    // For same real time, handle delta cycles properly
-    slot.deltaQueue.schedule(region, std::move(event));
-    slot.hasEvents = true;
-    slot.baseTime = targetTime;
-    ++totalEvents;
-    return;
+    // For same real time, use the max of requested delta and current delta
+    deltaStep = std::max(time.deltaStep, currentTime.deltaStep);
   }
+  // For future real times, deltaStep remains 0
 
-  slot.deltaQueue.schedule(region, std::move(event));
+  slot.getDeltaQueue(deltaStep).schedule(region, std::move(event));
   slot.hasEvents = true;
   slot.baseTime = targetTime;
   ++totalEvents;
@@ -169,29 +170,38 @@ void TimeWheel::cascade(size_t fromLevel) {
     return;
 
   // Move events from this slot to lower levels
-  if (slot.deltaQueue.hasAnyEvents()) {
-    // Re-schedule all events at the correct lower level
-    for (size_t regionIdx = 0;
-         regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
-         ++regionIdx) {
-      auto region = static_cast<SchedulingRegion>(regionIdx);
-      auto events = slot.deltaQueue.popRegionEvents(region);
-      for (auto &event : events) {
-        SimTime eventTime(slot.baseTime, 0, static_cast<uint8_t>(regionIdx));
-        // Decrement total since schedule will increment it again
-        --totalEvents;
-        schedule(eventTime, region, std::move(event));
+  if (slot.hasAnyEvents()) {
+    // Re-schedule all events at the correct lower level, preserving delta steps
+    for (auto &[deltaStep, deltaQueue] : slot.deltaQueues) {
+      for (size_t regionIdx = 0;
+           regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
+           ++regionIdx) {
+        auto region = static_cast<SchedulingRegion>(regionIdx);
+        auto events = deltaQueue.popRegionEvents(region);
+        for (auto &event : events) {
+          SimTime eventTime(slot.baseTime, deltaStep,
+                            static_cast<uint8_t>(regionIdx));
+          // Decrement total since schedule will increment it again
+          --totalEvents;
+          schedule(eventTime, region, std::move(event));
+        }
       }
     }
   }
-  slot.hasEvents = false;
+  slot.clear();
 }
 
 bool TimeWheel::findNextEventTime(SimTime &nextTime) {
-  // First check current time's delta queue
-  if (levels[0].slots[levels[0].currentSlot].deltaQueue.hasAnyEvents()) {
-    nextTime = currentTime;
-    return true;
+  // First check current time's slot for any events at or after current delta
+  auto &currentSlot = levels[0].slots[levels[0].currentSlot];
+  if (currentSlot.hasEvents) {
+    // Check if there are events at or after the current delta step
+    for (auto &[deltaStep, queue] : currentSlot.deltaQueues) {
+      if (deltaStep >= currentTime.deltaStep && queue.hasAnyEvents()) {
+        nextTime = SimTime(currentTime.realTime, deltaStep, 0);
+        return true;
+      }
+    }
   }
 
   // Search through all levels and find the minimum time with events
@@ -204,6 +214,9 @@ bool TimeWheel::findNextEventTime(SimTime &nextTime) {
     for (size_t i = 0; i < config.slotsPerLevel; ++i) {
       auto &slot = lvl.slots[i];
       if (slot.hasEvents && slot.baseTime >= currentTime.realTime) {
+        // For slots at the current real time, we already checked above
+        if (slot.baseTime == currentTime.realTime)
+          continue;
         if (slot.baseTime < minTime) {
           minTime = slot.baseTime;
           found = true;
@@ -273,19 +286,29 @@ size_t TimeWheel::processCurrentRegion() {
   size_t slotIdx = getSlotIndex(currentTime.realTime, 0);
   auto &slot = levels[0].slots[slotIdx];
 
+  // Get the delta queue for the current delta step
+  auto it = slot.deltaQueues.find(currentTime.deltaStep);
+  if (it == slot.deltaQueues.end()) {
+    // No events at current delta step
+    slot.hasEvents = slot.hasAnyEvents();
+    return 0;
+  }
+
+  auto &deltaQueue = it->second;
+
   // Find the next non-empty region starting from current region
-  auto region = slot.deltaQueue.getNextNonEmptyRegion(
+  auto region = deltaQueue.getNextNonEmptyRegion(
       static_cast<SchedulingRegion>(currentTime.region));
   if (region == SchedulingRegion::NumRegions) {
     // No events to process in current or later regions
-    slot.hasEvents = false;
+    slot.hasEvents = slot.hasAnyEvents();
     return 0;
   }
 
   // Update current region to match
   currentTime.region = static_cast<uint8_t>(region);
 
-  auto events = slot.deltaQueue.popRegionEvents(region);
+  auto events = deltaQueue.popRegionEvents(region);
   size_t count = events.size();
   totalEvents -= count;
 
@@ -293,14 +316,14 @@ size_t TimeWheel::processCurrentRegion() {
     event.execute();
 
   // Advance to next region
-  auto nextRegion = slot.deltaQueue.getNextNonEmptyRegion(
+  auto nextRegion = deltaQueue.getNextNonEmptyRegion(
       static_cast<SchedulingRegion>(currentTime.region + 1));
   if (nextRegion != SchedulingRegion::NumRegions) {
     currentTime.region = static_cast<uint8_t>(nextRegion);
   } else {
     // No more events in this delta, check if we need to start a new delta
     // This will be handled by the scheduler
-    slot.hasEvents = slot.deltaQueue.hasAnyEvents();
+    slot.hasEvents = slot.hasAnyEvents();
   }
 
   return count;
@@ -311,23 +334,33 @@ size_t TimeWheel::processCurrentDelta() {
   size_t slotIdx = getSlotIndex(currentTime.realTime, 0);
   auto &slot = levels[0].slots[slotIdx];
 
-  for (size_t regionIdx = static_cast<size_t>(currentTime.region);
-       regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
-       ++regionIdx) {
-    auto region = static_cast<SchedulingRegion>(regionIdx);
-    auto events = slot.deltaQueue.popRegionEvents(region);
-    size_t count = events.size();
-    totalEvents -= count;
-    total += count;
+  // Get the delta queue for the current delta step
+  auto it = slot.deltaQueues.find(currentTime.deltaStep);
+  if (it != slot.deltaQueues.end()) {
+    auto &deltaQueue = it->second;
 
-    for (auto &event : events)
-      event.execute();
+    for (size_t regionIdx = static_cast<size_t>(currentTime.region);
+         regionIdx < static_cast<size_t>(SchedulingRegion::NumRegions);
+         ++regionIdx) {
+      auto region = static_cast<SchedulingRegion>(regionIdx);
+      auto events = deltaQueue.popRegionEvents(region);
+      size_t count = events.size();
+      totalEvents -= count;
+      total += count;
+
+      for (auto &event : events)
+        event.execute();
+    }
+
+    // Clean up empty delta queue
+    if (!deltaQueue.hasAnyEvents())
+      slot.deltaQueues.erase(it);
   }
 
   // Reset region to start of next delta
   currentTime.region = 0;
   currentTime.deltaStep++;
-  slot.hasEvents = slot.deltaQueue.hasAnyEvents();
+  slot.hasEvents = slot.hasAnyEvents();
 
   return total;
 }
@@ -353,8 +386,7 @@ size_t TimeWheel::getEventCount() const { return totalEvents; }
 void TimeWheel::clear() {
   for (auto &level : levels) {
     for (auto &slot : level.slots) {
-      slot.deltaQueue.clear();
-      slot.hasEvents = false;
+      slot.clear();
     }
     level.currentSlot = 0;
   }
