@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 268 - January 31, 2026
+
+### Goals
+Fix AssocArrayIteratorOpConversion for function ref parameters.
+
+### Fixed in this Iteration
+1. **AssocArrayIteratorOpConversion Function Ref Parameter Fix** (MooreToCore.cpp):
+   - **ROOT CAUSE**: `first()`, `next()`, `last()`, `prev()` on associative arrays used `llhd.prb/drv`
+   - When key ref parameter is a function argument (BlockArgument in func::FuncOp), these LLHD operations fail at runtime
+   - The simulator cannot track signal references through function call boundaries
+   - **FIX**: Detect function ref parameters and use `llvm.load/store` instead of `llhd.prb/drv`
+   - Same pattern as ReadOpConversion and AssignOpConversion fixes
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - **Test**: `test/Conversion/MooreToCore/assoc-array-iterator-func-param.mlir`
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| MooreToCore | 97/97+1 (100%) | New test passes, 1 XFAIL expected |
+| sv-tests BMC | 23/26 (100%) | 3 expected failures (XFAIL) |
+| verilator BMC | 17/17 (100%) | All pass |
+| yosys SVA BMC | 14/14 (100%) | 2 VHDL skipped |
+
+---
+
 ## Iteration 267 - January 31, 2026
 
 ### Goals
