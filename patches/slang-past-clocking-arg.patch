@@ -1,0 +1,29 @@
+diff --git a/source/ast/builtins/NonConstFuncs.cpp b/source/ast/builtins/NonConstFuncs.cpp
+index e993d7cb9..617c93b30 100644
+--- a/source/ast/builtins/NonConstFuncs.cpp
++++ b/source/ast/builtins/NonConstFuncs.cpp
+@@ -350,7 +350,11 @@ public:
+     }
+ 
+     bool allowEmptyArgument(size_t argIndex) const final { return argIndex == 1 || argIndex == 2; }
+-    bool allowClockingArgument(size_t argIndex) const final { return argIndex == 3; }
++    // Allow clocking argument at both position 2 and 3.
++    // IEEE 1800-2017 specifies $past(expr, [numTicks], [gating], [clocking])
++    // but in practice users often omit the gating expression and put clocking
++    // in position 3 (index 2): $past(expr, numTicks, @(posedge clk))
++    bool allowClockingArgument(size_t argIndex) const final { return argIndex == 2 || argIndex == 3; }
+ 
+     const Type& checkArguments(const ASTContext& context, const Args& args, SourceRange range,
+                                const Expression*) const final {
+@@ -370,7 +374,10 @@ public:
+                 context.addDiag(diag::PastNumTicksInvalid, args[1]->sourceRange);
+         }
+ 
+-        if (args.size() > 2 && args[2]->kind != ExpressionKind::EmptyArgument) {
++        // Position 2 can be either a gating expression (boolean) or a clocking event.
++        // If it's a clocking event, skip the boolean check.
++        if (args.size() > 2 && args[2]->kind != ExpressionKind::EmptyArgument &&
++            args[2]->kind != ExpressionKind::ClockingEvent) {
+             if (!context.requireBooleanConvertible(*args[2]))
+                 return comp.getErrorType();
+         }
