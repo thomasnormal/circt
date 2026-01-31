@@ -33,6 +33,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include <optional>
 
 // Forward declarations for SCF, Func, and LLVM dialects
 namespace mlir {
@@ -151,10 +152,26 @@ struct MemoryBlock {
       : data(sz, 0), size(sz), elementBitWidth(elemBits), initialized(false) {}
 };
 
+using InstanceId = uint32_t;
+
+struct InstanceInputMappingEntry {
+  mlir::BlockArgument arg;
+  mlir::Value value;
+  InstanceId instanceId = 0;
+};
+
+using InstanceInputMapping = llvm::SmallVector<InstanceInputMappingEntry, 8>;
+
 /// Execution state for an LLHD process or seq.initial block being interpreted.
 struct ProcessExecutionState {
   /// The process operation being executed (either llhd.process or seq.initial).
   mlir::Operation *processOrInitialOp = nullptr;
+
+  /// Instance context for this process.
+  InstanceId instanceId = 0;
+
+  /// Per-instance input mapping for module block arguments.
+  InstanceInputMapping inputMap;
 
   /// Current basic block being executed.
   mlir::Block *currentBlock = nullptr;
@@ -337,10 +354,15 @@ public:
   /// Initialize child module instances using pre-discovered operations.
   /// This uses the pre-discovered hw.instance operations and registers
   /// signals/processes from the referenced modules iteratively.
-  mlir::LogicalResult initializeChildInstances(const DiscoveredOps &ops);
+  mlir::LogicalResult initializeChildInstances(const DiscoveredOps &ops,
+                                               InstanceId parentInstanceId);
 
   /// Get the signal ID for an MLIR value (signal reference).
   SignalId getSignalId(mlir::Value signalRef) const;
+
+  /// Get the signal ID for an MLIR value within an explicit instance context.
+  SignalId getSignalIdInInstance(mlir::Value signalRef,
+                                 InstanceId instanceId) const;
 
   /// Get the signal name for a signal ID.
   llvm::StringRef getSignalName(SignalId id) const;
@@ -352,6 +374,8 @@ public:
   size_t getNumProcesses() const { return processStates.size(); }
 
   friend class LLHDProcessInterpreterTest;
+  friend struct ScopedInstanceContext;
+  friend struct ScopedInputValueMap;
 
   /// Dump process execution state for diagnostics.
   void dumpProcessStates(llvm::raw_ostream &os) const;
@@ -396,6 +420,12 @@ public:
   static unsigned getTypeWidth(mlir::Type type);
 
 private:
+  struct InstanceOutputInfo {
+    mlir::Value outputValue;
+    InstanceInputMapping inputMap;
+    InstanceId instanceId = 0;
+  };
+
   //===--------------------------------------------------------------------===//
   // Iterative Operation Discovery (Stack Overflow Prevention)
   //===--------------------------------------------------------------------===//
@@ -434,7 +464,8 @@ private:
   ProcessId registerInitialBlock(seq::InitialOp initialOp);
 
   /// Register a module-level drive operation.
-  void registerModuleDrive(llhd::DriveOp driveOp);
+  void registerModuleDrive(llhd::DriveOp driveOp, InstanceId instanceId,
+                           const InstanceInputMapping &inputMap);
 
   /// Execute module-level drives for a process after it yields.
   void executeModuleDrives(ProcessId procId);
@@ -444,13 +475,16 @@ private:
 
   /// Register combinational processes for static module-level drives.
   /// These drives need to re-execute when their input signals change.
-  void registerContinuousAssignments(hw::HWModuleOp hwModule);
+  void registerContinuousAssignments(hw::HWModuleOp hwModule,
+                                     InstanceId instanceId,
+                                     const InstanceInputMapping &inputMap);
 
   /// Register seq.firreg operations using pre-discovered operations.
-  void registerFirRegs(const DiscoveredOps &ops);
+  void registerFirRegs(const DiscoveredOps &ops, InstanceId instanceId,
+                       const InstanceInputMapping &inputMap);
 
   /// Execute a single seq.firreg register update.
-  void executeFirReg(seq::FirRegOp regOp);
+  void executeFirReg(seq::FirRegOp regOp, InstanceId instanceId);
 
   /// Resolve a signal ID from an arbitrary value.
   SignalId resolveSignalId(mlir::Value value) const;
@@ -463,10 +497,17 @@ private:
                                     mlir::Type hwType) const;
   llvm::APInt convertHWToLLVMLayout(llvm::APInt value, mlir::Type hwType,
                                     mlir::Type llvmType) const;
+  /// Build an encoded unknown value for 4-state types, or return nullopt
+  /// if the type cannot represent X/Z via explicit unknown bits.
+  std::optional<llvm::APInt> getEncodedUnknownForType(mlir::Type type) const;
 
   /// Collect signal IDs referenced by a value expression.
   void collectSignalIds(mlir::Value value,
                         llvm::SmallVectorImpl<SignalId> &signals) const;
+
+  /// Look up a mapped input value and its instance context, if present.
+  bool lookupInputMapping(mlir::BlockArgument arg, mlir::Value &mappedValue,
+                          InstanceId &mappedInstance) const;
 
   /// Collect process IDs that a value depends on (via llhd.process results).
   void collectProcessIds(mlir::Value value,
@@ -481,22 +522,15 @@ private:
   void executeContinuousAssignment(llhd::DriveOp driveOp);
 
   /// Schedule a combinational update of an instance output signal.
-  void scheduleInstanceOutputUpdate(SignalId signalId, mlir::Value outputValue);
+  void scheduleInstanceOutputUpdate(
+      SignalId signalId, mlir::Value outputValue, InstanceId instanceId,
+      const InstanceInputMapping *inputMap);
 
   /// Evaluate a value for continuous assignments by reading from signal state.
   InterpretedValue evaluateContinuousValue(mlir::Value value);
 
-  /// Helper that tracks the recursion stack to detect cycles and depth.
-  /// Returns X if depth exceeds kMaxContinuousValueDepth to prevent stack
-  /// overflow on complex designs with deep continuous assignment chains.
-  InterpretedValue evaluateContinuousValueImpl(
-      mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress,
-      unsigned depth = 0);
-
-  /// Maximum recursion depth for evaluateContinuousValueImpl.
-  /// Complex OpenTitan IPs can have deep chains of continuous assignments;
-  /// this limit prevents stack overflow while allowing reasonable depth.
-  static constexpr unsigned kMaxContinuousValueDepth = 500;
+  /// Helper for iterative continuous-value evaluation with cycle detection.
+  InterpretedValue evaluateContinuousValueImpl(mlir::Value value);
 
   /// Evaluate an llhd.combinational op and return its yielded values.
   bool evaluateCombinationalOp(llhd::CombinationalOp combOp,
@@ -739,6 +773,12 @@ private:
   /// Name of the top module (for hierarchical path construction).
   std::string moduleName;
 
+  /// Active instance context for signal/process resolution.
+  InstanceId activeInstanceId = 0;
+
+  /// Next instance ID to allocate for a hw.instance.
+  InstanceId nextInstanceId = 1;
+
   /// Root MLIR module (for symbol table lookups).
   mlir::ModuleOp rootModule;
 
@@ -746,21 +786,52 @@ private:
   /// processing the same module multiple times for different instances).
   llvm::StringSet<> processedModules;
 
+  /// Cache of discovered operations per module to avoid repeated walks.
+  llvm::StringMap<DiscoveredOps> discoveredOpsCache;
+
   /// Map from MLIR signal values to signal IDs.
   llvm::DenseMap<mlir::Value, SignalId> valueToSignal;
 
-  /// Map from instance result values to child module output values.
-  llvm::DenseMap<mlir::Value, mlir::Value> instanceOutputMap;
+  /// Map from instance IDs to per-instance signal maps.
+  llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Value, SignalId>>
+      instanceValueToSignal;
+
+  /// Map from instance IDs to input mappings (block args -> parent values).
+  llvm::DenseMap<InstanceId, InstanceInputMapping> instanceInputMaps;
+
+  /// Map from instance IDs to per-instance process maps.
+  llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, ProcessId>>
+      instanceOpToProcessId;
+
+  struct FirRegState {
+    SignalId signalId = 0;
+    InterpretedValue prevClock;
+    bool hasPrevClock = false;
+    InstanceId instanceId = 0;
+    InstanceInputMapping inputMap;
+  };
+
+  /// Map from instance IDs to per-instance firreg state maps.
+  llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, FirRegState>>
+      instanceFirRegStates;
+
+  /// Map from instance IDs to instance result maps (result value -> output info).
+  llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Value, InstanceOutputInfo>>
+      instanceOutputMap;
 
   struct InstanceOutputUpdate {
     SignalId signalId = 0;
     mlir::Value outputValue;
+    InstanceId instanceId = 0;
     llvm::SmallVector<ProcessId, 4> processIds;
+    InstanceInputMapping inputMap;
   };
   llvm::SmallVector<InstanceOutputUpdate, 16> instanceOutputUpdates;
 
   /// Map from child module input block arguments to instance operand values.
-  llvm::DenseMap<mlir::Value, mlir::Value> inputValueMap;
+  mutable llvm::DenseMap<mlir::Value, mlir::Value> inputValueMap;
+  /// Map from child module input block arguments to instance IDs.
+  mutable llvm::DenseMap<mlir::Value, InstanceId> inputValueInstanceMap;
 
   /// Map from signal IDs to signal names.
   llvm::DenseMap<SignalId, std::string> signalIdToName;
@@ -789,17 +860,21 @@ private:
   bool collectOpStats = false;
 
   /// Module-level drives connected to process results.
-  /// Each entry is a pair of (DriveOp, ProcessId).
-  llvm::SmallVector<std::pair<llhd::DriveOp, ProcessId>, 4> moduleDrives;
+  struct ModuleDrive {
+    llhd::DriveOp driveOp;
+    ProcessId procId = InvalidProcessId;
+    InstanceId instanceId = 0;
+    InstanceInputMapping inputMap;
+  };
+  llvm::SmallVector<ModuleDrive, 4> moduleDrives;
 
   /// Static module-level drives (not connected to process results).
-  llvm::SmallVector<llhd::DriveOp, 4> staticModuleDrives;
-
-  struct FirRegState {
-    SignalId signalId = 0;
-    InterpretedValue prevClock;
-    bool hasPrevClock = false;
+  struct StaticModuleDrive {
+    llhd::DriveOp driveOp;
+    InstanceId instanceId = 0;
+    InstanceInputMapping inputMap;
   };
+  llvm::SmallVector<StaticModuleDrive, 4> staticModuleDrives;
 
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;

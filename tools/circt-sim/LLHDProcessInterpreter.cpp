@@ -46,6 +46,71 @@ static Type unwrapSignalType(Type type) {
   return type;
 }
 
+namespace circt::sim {
+
+struct ScopedInstanceContext {
+  ScopedInstanceContext(LLHDProcessInterpreter &interpreter, InstanceId instance)
+      : interpreter(interpreter),
+        previous(interpreter.activeInstanceId) {
+    interpreter.activeInstanceId = instance;
+  }
+
+  ~ScopedInstanceContext() { interpreter.activeInstanceId = previous; }
+
+  ScopedInstanceContext(const ScopedInstanceContext &) = delete;
+  ScopedInstanceContext &operator=(const ScopedInstanceContext &) = delete;
+
+private:
+  LLHDProcessInterpreter &interpreter;
+  InstanceId previous = 0;
+};
+
+struct ScopedInputValueMap {
+  explicit ScopedInputValueMap(
+      LLHDProcessInterpreter &interpreter,
+      const InstanceInputMapping &mapping)
+      : interpreter(interpreter) {
+    for (const auto &entry : mapping) {
+      auto it = interpreter.inputValueMap.find(entry.arg);
+      if (it != interpreter.inputValueMap.end())
+        previous.emplace_back(entry.arg, it->second);
+      else
+        added.push_back(entry.arg);
+      interpreter.inputValueMap[entry.arg] = entry.value;
+
+      auto instIt = interpreter.inputValueInstanceMap.find(entry.arg);
+      if (instIt != interpreter.inputValueInstanceMap.end())
+        previousInstances.emplace_back(entry.arg, instIt->second);
+      else
+        addedInstances.push_back(entry.arg);
+      interpreter.inputValueInstanceMap[entry.arg] = entry.instanceId;
+    }
+  }
+
+  ~ScopedInputValueMap() {
+    for (const auto &entry : previous)
+      interpreter.inputValueMap[entry.first] = entry.second;
+    for (const auto &key : added)
+      interpreter.inputValueMap.erase(key);
+    for (const auto &entry : previousInstances)
+      interpreter.inputValueInstanceMap[entry.first] = entry.second;
+    for (const auto &key : addedInstances)
+      interpreter.inputValueInstanceMap.erase(key);
+  }
+
+  ScopedInputValueMap(const ScopedInputValueMap &) = delete;
+  ScopedInputValueMap &operator=(const ScopedInputValueMap &) = delete;
+
+private:
+  LLHDProcessInterpreter &interpreter;
+  llvm::SmallVector<std::pair<mlir::Value, mlir::Value>, 8> previous;
+  llvm::SmallVector<mlir::Value, 8> added;
+  llvm::SmallVector<std::pair<mlir::Value, InstanceId>, 8> previousInstances;
+  llvm::SmallVector<mlir::Value, 8> addedInstances;
+};
+
+} // namespace circt::sim
+
 static bool getMaskedUInt64(const InterpretedValue &value,
                             unsigned targetWidth, uint64_t &out) {
   if (value.isX() || targetWidth > 64)
@@ -192,7 +257,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     return failure();
 
   // Register seq.firreg operations before processes (using pre-discovered ops).
-  registerFirRegs(discoveredOps);
+  registerFirRegs(discoveredOps, 0, InstanceInputMapping{});
 
   // Export signals to MooreRuntime signal registry for DPI/VPI access
   exportSignalsToRegistry();
@@ -204,12 +269,12 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Recursively process child module instances before registering
   // continuous assignments so instance outputs are mapped.
   // Note: initializeChildInstances does its own iterative discovery for each child
-  if (failed(initializeChildInstances(discoveredOps)))
+  if (failed(initializeChildInstances(discoveredOps, 0)))
     return failure();
 
   // Register combinational processes for static module-level drives
   // (continuous assignments like port connections).
-  registerContinuousAssignments(hwModule);
+  registerContinuousAssignments(hwModule, 0, InstanceInputMapping{});
 
   // Initialize LLVM global variables (especially vtables) using iterative discovery
   if (failed(initializeGlobals()))
@@ -233,7 +298,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 }
 
 LogicalResult
-LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
+LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
+                                                 InstanceId parentInstanceId) {
   // Process all pre-discovered hw.instance operations (no walk() needed)
   for (hw::InstanceOp instOp : ops.instances) {
     // Get the referenced module name
@@ -256,13 +322,47 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
       continue;
     }
 
+    InstanceId instanceId = nextInstanceId++;
+
     llvm::SmallVector<std::string, 8> outputNames;
     for (auto portInfo : childModule.getPortList()) {
       if (!portInfo.isInput())
         outputNames.push_back(portInfo.getName().str());
     }
 
-    llvm::SmallVector<std::pair<SignalId, Value>, 8> pendingInstanceOutputs;
+    InstanceInputMapping instanceInputMap;
+    llvm::SmallVector<std::pair<SignalId, InstanceOutputInfo>, 8>
+        pendingInstanceOutputs;
+
+    // Map child module input block arguments to parent signals for EACH instance.
+    // This is needed so that when we evaluate instance outputs, the input mappings
+    // are available (and to allow firreg reset init to see the parent signals).
+    auto &childBody = childModule.getBody();
+    if (!childBody.empty()) {
+      for (auto portInfo : childModule.getPortList()) {
+        if (!portInfo.isInput())
+          continue;
+        unsigned operandIdx = portInfo.argNum;
+        if (operandIdx >= instOp.getNumOperands())
+          continue;
+        auto childArg = cast<mlir::BlockArgument>(
+            childBody.getArgument(operandIdx));
+        Value operand = instOp.getOperand(operandIdx);
+        instanceInputMap.push_back({childArg, operand, parentInstanceId});
+        SignalId sigId = 0;
+        {
+          ScopedInstanceContext scope(*this, parentInstanceId);
+          sigId = resolveSignalId(operand);
+        }
+        if (sigId != 0) {
+          instanceValueToSignal[instanceId][childArg] = sigId;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "    Mapped child input '"
+                     << portInfo.getName() << "' to signal " << sigId << "\n");
+        }
+      }
+    }
+    instanceInputMaps[instanceId] = instanceInputMap;
 
     // Map instance results to child module outputs for instance evaluation.
     if (auto *bodyBlock = childModule.getBodyBlock()) {
@@ -272,7 +372,11 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
         unsigned outputCount = outputOp.getNumOperands();
         unsigned mapCount = std::min(resultCount, outputCount);
         for (unsigned i = 0; i < mapCount; ++i) {
-          instanceOutputMap[instOp.getResult(i)] = outputOp.getOperand(i);
+          InstanceOutputInfo info;
+          info.outputValue = outputOp.getOperand(i);
+          info.inputMap = instanceInputMap;
+          info.instanceId = instanceId;
+          instanceOutputMap[parentInstanceId][instOp.getResult(i)] = info;
           std::string outName;
           if (i < outputNames.size() && !outputNames[i].empty())
             outName = outputNames[i];
@@ -287,8 +391,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
           signalIdToName[outSigId] = hierName;
           signalIdToType[outSigId] = unwrapSignalType(outType);
 
-          pendingInstanceOutputs.push_back(
-              {outSigId, outputOp.getOperand(i)});
+          pendingInstanceOutputs.push_back({outSigId, info});
         }
         if (resultCount != outputCount) {
           LLVM_DEBUG(llvm::dbgs()
@@ -299,144 +402,143 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
       }
     }
 
-    // For the first instance of a module, discover ops and register signals.
-    // For subsequent instances of the same module, skip this (signals already exist).
-    bool isFirstInstance = !processedModules.contains(childModuleName);
     DiscoveredOps childOps;
-
-    if (isFirstInstance) {
-      processedModules.insert(childModuleName);
-
-      // === Use iterative discovery for child module (stack overflow prevention) ===
+    auto cacheIt = discoveredOpsCache.find(childModuleName);
+    if (cacheIt == discoveredOpsCache.end()) {
       discoverOpsIteratively(childModule, childOps);
-
-      // Register signals from child module using pre-discovered ops
-      for (llhd::SignalOp sigOp : childOps.signals) {
-        // Use hierarchical name for child signals
-        std::string name = sigOp.getName().value_or("").str();
-        if (name.empty()) {
-          name = "sig_" + std::to_string(valueToSignal.size());
-        }
-        std::string hierName = instOp.getInstanceName().str() + "." + name;
-
-        Type innerType = sigOp.getInit().getType();
-        unsigned width = getTypeWidth(innerType);
-
-        SignalId sigId = scheduler.registerSignal(hierName, width);
-        valueToSignal[sigOp.getResult()] = sigId;
-        signalIdToName[sigId] = hierName;
-        signalIdToType[sigId] = innerType;
-
-        llvm::APInt initValue;
-        if (getSignalInitValue(sigOp.getInit(), width, initValue))
-          scheduler.updateSignal(sigId, SignalValue(initValue));
-
-        LLVM_DEBUG(llvm::dbgs() << "    Registered child signal '" << hierName
-                                << "' with ID " << sigId << "\n");
-      }
-
-      // Register seq.firreg operations for the child module using pre-discovered ops.
-      registerFirRegs(childOps);
-
-      // Register processes from child module using pre-discovered ops
-      for (llhd::ProcessOp processOp : childOps.processes) {
-        std::string procName = instOp.getInstanceName().str() + ".llhd_process_" +
-                               std::to_string(processStates.size());
-
-        ProcessExecutionState state(processOp);
-        state.cacheable = isProcessCacheableBody(processOp);
-        ProcessId procId =
-            scheduler.registerProcess(procName, []() {});
-        if (auto *process = scheduler.getProcess(procId))
-          process->setCallback([this, procId]() { executeProcess(procId); });
-
-        state.currentBlock = &processOp.getBody().front();
-        state.currentOp = state.currentBlock->begin();
-        processStates[procId] = std::move(state);
-        opToProcessId[processOp.getOperation()] = procId;
-
-        LLVM_DEBUG(llvm::dbgs() << "    Registered child process '" << procName
-                                << "' with ID " << procId << "\n");
-
-        scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-      }
-
-      // Register module-level llhd.drv operations using pre-discovered ops.
-      for (llhd::DriveOp driveOp : childOps.moduleDrives) {
-        registerModuleDrive(driveOp);
-      }
-
-      // Register seq.initial blocks from child module using pre-discovered ops
-      for (seq::InitialOp initialOp : childOps.initials) {
-        std::string initName = instOp.getInstanceName().str() + ".seq_initial_" +
-                               std::to_string(processStates.size());
-
-        ProcessExecutionState state(initialOp);
-        state.cacheable = false;
-        ProcessId procId =
-            scheduler.registerProcess(initName, []() {});
-        if (auto *process = scheduler.getProcess(procId))
-          process->setCallback([this, procId]() { executeProcess(procId); });
-
-        state.currentBlock = initialOp.getBodyBlock();
-        state.currentOp = state.currentBlock->begin();
-        processStates[procId] = std::move(state);
-        opToProcessId[initialOp.getOperation()] = procId;
-
-        LLVM_DEBUG(llvm::dbgs() << "    Registered child initial block '" << initName
-                                << "' with ID " << procId << "\n");
-
-        scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-      }
-
-      // Recursively process child module's instances using discovered ops
-      (void)initializeChildInstances(childOps);
-    } // end if (isFirstInstance)
-
-    // Map child module input block arguments to parent signals for EACH instance.
-    // This is needed so that when we evaluate instance outputs, the input mappings
-    // are available. For multiple instances of the same module with the same inputs,
-    // try_emplace will keep the first mapping which is fine.
-    auto &childBody = childModule.getBody();
-    if (!childBody.empty()) {
-      for (auto portInfo : childModule.getPortList()) {
-        if (!portInfo.isInput())
-          continue;
-        unsigned operandIdx = portInfo.argNum;
-        if (operandIdx >= instOp.getNumOperands())
-          continue;
-        Value childArg = childBody.getArgument(operandIdx);
-        Value operand = instOp.getOperand(operandIdx);
-        inputValueMap.try_emplace(childArg, operand);
-        SignalId sigId = resolveSignalId(operand);
-        if (sigId != 0) {
-          valueToSignal[childArg] = sigId;
-          LLVM_DEBUG(llvm::dbgs()
-                     << "    Mapped child input '"
-                     << portInfo.getName() << "' to signal " << sigId << "\n");
-        }
-      }
+      discoveredOpsCache.try_emplace(childModuleName, childOps);
+    } else {
+      childOps = cacheIt->second;
     }
+
+    // Register signals from child module using pre-discovered ops (per instance)
+    for (llhd::SignalOp sigOp : childOps.signals) {
+      std::string name = sigOp.getName().value_or("").str();
+      if (name.empty())
+        name = "sig_" + std::to_string(valueToSignal.size());
+      std::string hierName = instOp.getInstanceName().str() + "." + name;
+
+      Type innerType = sigOp.getInit().getType();
+      unsigned width = getTypeWidth(innerType);
+
+      SignalId sigId = scheduler.registerSignal(hierName, width);
+      instanceValueToSignal[instanceId][sigOp.getResult()] = sigId;
+      signalIdToName[sigId] = hierName;
+      signalIdToType[sigId] = innerType;
+
+      llvm::APInt initValue;
+      if (getSignalInitValue(sigOp.getInit(), width, initValue))
+        scheduler.updateSignal(sigId, SignalValue(initValue));
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child signal '" << hierName
+                              << "' with ID " << sigId << "\n");
+    }
+
+    // Register seq.firreg operations for the child module (per instance).
+    registerFirRegs(childOps, instanceId, instanceInputMap);
+
+    // Register processes from child module using pre-discovered ops
+    for (llhd::ProcessOp processOp : childOps.processes) {
+      std::string procName = instOp.getInstanceName().str() + ".llhd_process_" +
+                             std::to_string(processStates.size());
+
+      ProcessExecutionState state(processOp);
+      state.instanceId = instanceId;
+      state.inputMap = instanceInputMap;
+      state.cacheable = isProcessCacheableBody(processOp);
+      ProcessId procId = scheduler.registerProcess(procName, []() {});
+      if (auto *process = scheduler.getProcess(procId))
+        process->setCallback([this, procId]() { executeProcess(procId); });
+
+      state.currentBlock = &processOp.getBody().front();
+      state.currentOp = state.currentBlock->begin();
+      processStates[procId] = std::move(state);
+      instanceOpToProcessId[instanceId][processOp.getOperation()] = procId;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child process '" << procName
+                              << "' with ID " << procId << "\n");
+
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    }
+
+    // Register module-level llhd.drv operations using pre-discovered ops.
+    for (llhd::DriveOp driveOp : childOps.moduleDrives) {
+      registerModuleDrive(driveOp, instanceId, instanceInputMap);
+    }
+
+    // Register seq.initial blocks from child module using pre-discovered ops
+    for (seq::InitialOp initialOp : childOps.initials) {
+      std::string initName = instOp.getInstanceName().str() + ".seq_initial_" +
+                             std::to_string(processStates.size());
+
+      ProcessExecutionState state(initialOp);
+      state.instanceId = instanceId;
+      state.inputMap = instanceInputMap;
+      state.cacheable = false;
+      ProcessId procId = scheduler.registerProcess(initName, []() {});
+      if (auto *process = scheduler.getProcess(procId))
+        process->setCallback([this, procId]() { executeProcess(procId); });
+
+      state.currentBlock = initialOp.getBodyBlock();
+      state.currentOp = state.currentBlock->begin();
+      processStates[procId] = std::move(state);
+      instanceOpToProcessId[instanceId][initialOp.getOperation()] = procId;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Registered child initial block '" << initName
+                              << "' with ID " << procId << "\n");
+
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    }
+
+    // Recursively process child module's instances using discovered ops
+    (void)initializeChildInstances(childOps, instanceId);
 
     // Process pendingInstanceOutputs for EACH instance. Each instance needs its
     // own output updates even if they reference the same child module outputs.
     for (const auto &pending : pendingInstanceOutputs) {
       InstanceOutputUpdate update;
       update.signalId = pending.first;
-      update.outputValue = pending.second;
-      collectProcessIds(update.outputValue, update.processIds);
+      update.outputValue = pending.second.outputValue;
+      update.instanceId = pending.second.instanceId;
+      update.inputMap = pending.second.inputMap;
+      {
+        ScopedInstanceContext instScope(*this, update.instanceId);
+        if (update.inputMap.empty()) {
+          collectProcessIds(update.outputValue, update.processIds);
+        } else {
+          ScopedInputValueMap scope(*this, update.inputMap);
+          collectProcessIds(update.outputValue, update.processIds);
+        }
+      }
       instanceOutputUpdates.push_back(update);
 
       llvm::SmallVector<SignalId, 4> sourceSignals;
-      collectSignalIds(update.outputValue, sourceSignals);
+      {
+        ScopedInstanceContext instScope(*this, update.instanceId);
+        if (update.inputMap.empty()) {
+          collectSignalIds(update.outputValue, sourceSignals);
+        } else {
+          ScopedInputValueMap scope(*this, update.inputMap);
+          collectSignalIds(update.outputValue, sourceSignals);
+        }
+      }
       if (sourceSignals.empty() && update.processIds.empty()) {
-        scheduleInstanceOutputUpdate(update.signalId, update.outputValue);
+        scheduleInstanceOutputUpdate(update.signalId, update.outputValue,
+                                     update.instanceId,
+                                     update.inputMap.empty()
+                                         ? nullptr
+                                         : &update.inputMap);
       } else if (!sourceSignals.empty()) {
         std::string procName = "inst_out_" + std::to_string(update.signalId);
+        auto inputMap = update.inputMap;
+        InstanceId instanceId = update.instanceId;
         ProcessId procId = scheduler.registerProcess(
             procName, [this, signalId = update.signalId,
-                       outputValue = update.outputValue]() {
-              scheduleInstanceOutputUpdate(signalId, outputValue);
+                       outputValue = update.outputValue, instanceId,
+                       inputMap]() {
+              scheduleInstanceOutputUpdate(
+                  signalId, outputValue, instanceId,
+                  inputMap.empty() ? nullptr : &inputMap);
             });
         auto *process = scheduler.getProcess(procId);
         if (process) {
@@ -444,7 +546,11 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
           for (SignalId srcSigId : sourceSignals)
             scheduler.addSensitivity(procId, srcSigId);
         }
-        scheduleInstanceOutputUpdate(update.signalId, update.outputValue);
+        scheduleInstanceOutputUpdate(update.signalId, update.outputValue,
+                                     update.instanceId,
+                                     update.inputMap.empty()
+                                         ? nullptr
+                                         : &update.inputMap);
         scheduler.scheduleProcess(procId, SchedulingRegion::Active);
       }
     }
@@ -452,9 +558,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
     // Register combinational processes for static module-level drives in child.
     // This MUST happen after input mapping so that collectSignalIds can resolve
     // child input block arguments to parent signals for proper sensitivity setup.
-    if (isFirstInstance) {
-      registerContinuousAssignments(childModule);
-    }
+    registerContinuousAssignments(childModule, instanceId, instanceInputMap);
   }
 
   return success();
@@ -821,6 +925,33 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
 }
 
 SignalId LLHDProcessInterpreter::getSignalId(Value signalRef) const {
+  SignalId sigId = getSignalIdInInstance(signalRef, activeInstanceId);
+  if (sigId != 0)
+    return sigId;
+  SignalId uniqueSigId = 0;
+  for (const auto &ctx : instanceValueToSignal) {
+    auto instIt = ctx.second.find(signalRef);
+    if (instIt == ctx.second.end())
+      continue;
+    if (uniqueSigId != 0 && uniqueSigId != instIt->second)
+      return 0;
+    uniqueSigId = instIt->second;
+  }
+  if (uniqueSigId != 0)
+    return uniqueSigId;
+  return 0; // Invalid signal ID
+}
+
+SignalId LLHDProcessInterpreter::getSignalIdInInstance(Value signalRef,
+                                                       InstanceId instanceId) const {
+  if (instanceId != 0) {
+    auto ctxIt = instanceValueToSignal.find(instanceId);
+    if (ctxIt != instanceValueToSignal.end()) {
+      auto it = ctxIt->second.find(signalRef);
+      if (it != ctxIt->second.end())
+        return it->second;
+    }
+  }
   auto it = valueToSignal.find(signalRef);
   if (it != valueToSignal.end())
     return it->second;
@@ -841,6 +972,12 @@ Type LLHDProcessInterpreter::getSignalValueType(SignalId sigId) const {
   for (const auto &entry : valueToSignal) {
     if (entry.second == sigId)
       return unwrapSignalType(entry.first.getType());
+  }
+  for (const auto &ctx : instanceValueToSignal) {
+    for (const auto &entry : ctx.second) {
+      if (entry.second == sigId)
+        return unwrapSignalType(entry.first.getType());
+    }
   }
   return Type();
 }
@@ -963,6 +1100,60 @@ llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
   }
 
   return adjustAPIntWidth(value, llvmWidth);
+}
+
+std::optional<llvm::APInt>
+LLHDProcessInterpreter::getEncodedUnknownForType(Type type) const {
+  if (auto refType = dyn_cast<llhd::RefType>(type))
+    return getEncodedUnknownForType(refType.getNestedType());
+
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    auto elements = structType.getElements();
+    unsigned totalWidth = getTypeWidth(structType);
+
+    if (elements.size() == 2 &&
+        elements[0].name.getValue() == "value" &&
+        elements[1].name.getValue() == "unknown") {
+      unsigned unknownWidth = getTypeWidth(elements[1].type);
+      APInt result(totalWidth, 0);
+      if (unknownWidth == 0)
+        return result;
+      APInt unknownMask = APInt::getLowBitsSet(totalWidth, unknownWidth);
+      result |= unknownMask;
+      return result;
+    }
+
+    APInt result(totalWidth, 0);
+    unsigned bitOffset = totalWidth;
+    for (auto element : elements) {
+      auto fieldOpt = getEncodedUnknownForType(element.type);
+      if (!fieldOpt)
+        return std::nullopt;
+      unsigned fieldWidth = getTypeWidth(element.type);
+      bitOffset -= fieldWidth;
+      APInt fieldBits = fieldOpt->zextOrTrunc(fieldWidth);
+      result.insertBits(fieldBits, bitOffset);
+    }
+    return result;
+  }
+
+  if (auto arrayType = dyn_cast<hw::ArrayType>(type)) {
+    unsigned elemWidth = getTypeWidth(arrayType.getElementType());
+    unsigned count = arrayType.getNumElements();
+    unsigned totalWidth = elemWidth * count;
+    auto elemOpt = getEncodedUnknownForType(arrayType.getElementType());
+    if (!elemOpt)
+      return std::nullopt;
+    APInt elemBits = elemOpt->zextOrTrunc(elemWidth);
+    APInt result(totalWidth, 0);
+    for (unsigned i = 0; i < count; ++i) {
+      unsigned offset = (count - 1 - i) * elemWidth;
+      result.insertBits(elemBits, offset);
+    }
+    return result;
+  }
+
+  return std::nullopt;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1122,7 +1313,7 @@ LLHDProcessInterpreter::registerProcesses(const DiscoveredOps &ops) {
   // Handle pre-discovered module-level llhd.drv operations (no walk() needed)
   // Note: The iterative discovery already filters for module-level drives
   for (llhd::DriveOp driveOp : ops.moduleDrives) {
-    registerModuleDrive(driveOp);
+    registerModuleDrive(driveOp, 0, InstanceInputMapping{});
   }
 
   return success();
@@ -1184,7 +1375,11 @@ ProcessId LLHDProcessInterpreter::registerInitialBlock(seq::InitialOp initialOp)
   return procId;
 }
 
-void LLHDProcessInterpreter::registerModuleDrive(llhd::DriveOp driveOp) {
+void LLHDProcessInterpreter::registerModuleDrive(
+    llhd::DriveOp driveOp, InstanceId instanceId,
+    const InstanceInputMapping &inputMap) {
+  ScopedInstanceContext instScope(*this, instanceId);
+  ScopedInputValueMap inputScope(*this, inputMap);
   // Module-level drives need special handling:
   // The drive value comes from process results which are populated when
   // the process executes llhd.wait yield or llhd.halt with yield operands.
@@ -1195,26 +1390,42 @@ void LLHDProcessInterpreter::registerModuleDrive(llhd::DriveOp driveOp) {
   // 3. Schedule the drive when the process yields
 
   Value driveValue = driveOp.getValue();
+  InstanceId driveInstance = instanceId;
 
   // Resolve the drive value through inputValueMap if it's a block argument.
   // This handles the case where a child module's input is mapped to a parent's
   // process result, e.g.: hw.instance @child(in: %proc_val) where %proc_val is
   // the result of an llhd.process in the parent module.
   if (auto arg = dyn_cast<mlir::BlockArgument>(driveValue)) {
-    auto argIt = inputValueMap.find(arg);
-    if (argIt != inputValueMap.end())
-      driveValue = argIt->second;
+    Value mappedValue;
+    InstanceId mappedInstance = instanceId;
+    if (lookupInputMapping(arg, mappedValue, mappedInstance)) {
+      driveValue = mappedValue;
+      driveInstance = mappedInstance;
+    }
   }
 
   // Check if the drive value comes from a process result
   if (auto processOp = driveValue.getDefiningOp<llhd::ProcessOp>()) {
     // Find the process ID for this process
-    auto procIt = opToProcessId.find(processOp.getOperation());
-    if (procIt != opToProcessId.end()) {
-      ProcessId procId = procIt->second;
+    ProcessId procId = InvalidProcessId;
+    if (driveInstance != 0) {
+      auto ctxIt = instanceOpToProcessId.find(driveInstance);
+      if (ctxIt != instanceOpToProcessId.end()) {
+        auto procIt = ctxIt->second.find(processOp.getOperation());
+        if (procIt != ctxIt->second.end())
+          procId = procIt->second;
+      }
+    }
+    if (procId == InvalidProcessId) {
+      auto procIt = opToProcessId.find(processOp.getOperation());
+      if (procIt != opToProcessId.end())
+        procId = procIt->second;
+    }
+    if (procId != InvalidProcessId) {
 
       // Store this drive for later execution when the process yields
-      moduleDrives.push_back({driveOp, procId});
+      moduleDrives.push_back({driveOp, procId, instanceId, inputMap});
 
       LLVM_DEBUG(llvm::dbgs() << "  Registered module-level drive connected to "
                               << "process " << procId << "\n");
@@ -1224,7 +1435,7 @@ void LLHDProcessInterpreter::registerModuleDrive(llhd::DriveOp driveOp) {
     // This handles static/constant drives at module level
     LLVM_DEBUG(llvm::dbgs() << "  Found module-level drive (static)\n");
     // These will be handled during initialization
-    staticModuleDrives.push_back(driveOp);
+    staticModuleDrives.push_back({driveOp, instanceId, inputMap});
   }
 }
 
@@ -1239,17 +1450,24 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
   }
   auto cleanup = llvm::make_scope_exit([&]() { inProgress.erase(procId); });
 
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end())
+    return;
+
   LLVM_DEBUG(llvm::dbgs() << "executeModuleDrives proc " << procId
                           << " moduleDrives=" << moduleDrives.size() << "\n");
 
   // Execute all module-level drives connected to this process
   size_t drivesProcessed = 0;
   size_t driveIdx = 0;
-  for (auto &[driveOp, driveProcId] : moduleDrives) {
+  for (auto &entry : moduleDrives) {
     ++driveIdx;
-    if (driveProcId != procId)
+    if (entry.procId != procId)
       continue;
     ++drivesProcessed;
+    ScopedInstanceContext instScope(*this, entry.instanceId);
+    ScopedInputValueMap inputScope(*this, entry.inputMap);
+    llhd::DriveOp driveOp = entry.driveOp;
 
     // Get the signal ID
     SignalId sigId = getSignalId(driveOp.getSignal());
@@ -1314,21 +1532,34 @@ void LLHDProcessInterpreter::executeInstanceOutputUpdates(ProcessId procId) {
       }
     }
     if (dependsOnProc)
-      scheduleInstanceOutputUpdate(entry.signalId, entry.outputValue);
+      scheduleInstanceOutputUpdate(entry.signalId, entry.outputValue,
+                                   entry.instanceId,
+                                   entry.inputMap.empty()
+                                       ? nullptr
+                                       : &entry.inputMap);
   }
 }
 
 void LLHDProcessInterpreter::registerContinuousAssignments(
-    hw::HWModuleOp hwModule) {
+    hw::HWModuleOp hwModule, InstanceId instanceId,
+    const InstanceInputMapping &inputMap) {
   // For each static module-level drive, we need to:
   // 1. Find which signals the drive value depends on (via llhd.prb)
   // 2. Create a combinational process that re-executes when those signals change
   // 3. The process evaluates the drive value and schedules the signal update
 
-  for (llhd::DriveOp driveOp : staticModuleDrives) {
+  for (const auto &entry : staticModuleDrives) {
+    if (entry.instanceId != instanceId)
+      continue;
+    llhd::DriveOp driveOp = entry.driveOp;
     if (driveOp->getParentOfType<hw::HWModuleOp>() != hwModule)
       continue;
     // Find the signal being driven
+    const InstanceInputMapping &driveInputMap =
+        entry.inputMap.empty() ? inputMap : entry.inputMap;
+    ScopedInstanceContext instScope(*this, instanceId);
+    ScopedInputValueMap inputScope(*this, driveInputMap);
+
     SignalId targetSigId = getSignalId(driveOp.getSignal());
     if (targetSigId == 0) {
       LLVM_DEBUG(llvm::dbgs()
@@ -1353,13 +1584,14 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
       for (ProcessId procId : processIds) {
         bool alreadyRegistered = false;
         for (const auto &entry : moduleDrives) {
-          if (entry.first == driveOp && entry.second == procId) {
+          if (entry.driveOp == driveOp && entry.procId == procId &&
+              entry.instanceId == instanceId) {
             alreadyRegistered = true;
             break;
           }
         }
         if (!alreadyRegistered)
-          moduleDrives.push_back({driveOp, procId});
+          moduleDrives.push_back({driveOp, procId, instanceId, driveInputMap});
       }
     }
 
@@ -1387,7 +1619,12 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
 
     // Register a combinational process that executes the drive
     ProcessId procId = scheduler.registerProcess(
-        processName, [this, driveOp]() { executeContinuousAssignment(driveOp); });
+        processName,
+        [this, driveOp, instanceId, driveInputMap]() {
+          ScopedInstanceContext scope(*this, instanceId);
+          ScopedInputValueMap inputScope(*this, driveInputMap);
+          executeContinuousAssignment(driveOp);
+        });
 
     // Mark as combinational and add sensitivities to all source signals
     auto *process = scheduler.getProcess(procId);
@@ -1411,14 +1648,30 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
 SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
   if (SignalId sigId = getSignalId(value))
     return sigId;
-  if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
-    auto argIt = inputValueMap.find(arg);
-    if (argIt != inputValueMap.end() && argIt->second != value)
-      return resolveSignalId(argIt->second);
+  auto instMapIt = instanceOutputMap.find(activeInstanceId);
+  if (instMapIt != instanceOutputMap.end()) {
+    auto instIt = instMapIt->second.find(value);
+    if (instIt != instMapIt->second.end()) {
+      const auto &info = instIt->second;
+      if (info.inputMap.empty())
+        return resolveSignalId(info.outputValue);
+      ScopedInputValueMap scope(
+        *const_cast<LLHDProcessInterpreter *>(this), info.inputMap);
+      ScopedInstanceContext instScope(
+          *const_cast<LLHDProcessInterpreter *>(this), info.instanceId);
+      return resolveSignalId(info.outputValue);
+    }
   }
-  auto instIt = instanceOutputMap.find(value);
-  if (instIt != instanceOutputMap.end())
-    return resolveSignalId(instIt->second);
+  if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
+    Value mappedValue;
+    InstanceId mappedInstance = activeInstanceId;
+    if (lookupInputMapping(arg, mappedValue, mappedInstance) &&
+        mappedValue != value) {
+      ScopedInstanceContext scope(
+          *const_cast<LLHDProcessInterpreter *>(this), mappedInstance);
+      return resolveSignalId(mappedValue);
+    }
+  }
   if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
     return resolveSignalId(probeOp.getSignal());
   }
@@ -1433,96 +1686,194 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
   return 0;
 }
 
+bool LLHDProcessInterpreter::lookupInputMapping(
+    mlir::BlockArgument arg, mlir::Value &mappedValue,
+    InstanceId &mappedInstance) const {
+  auto argIt = inputValueMap.find(arg);
+  if (argIt != inputValueMap.end()) {
+    mappedValue = argIt->second;
+    auto instIt = inputValueInstanceMap.find(arg);
+    mappedInstance =
+        (instIt != inputValueInstanceMap.end()) ? instIt->second
+                                                : activeInstanceId;
+    return true;
+  }
+  auto instanceIt = instanceInputMaps.find(activeInstanceId);
+  if (instanceIt == instanceInputMaps.end())
+    return false;
+  for (const auto &entry : instanceIt->second) {
+    if (entry.arg != arg)
+      continue;
+    mappedValue = entry.value;
+    mappedInstance = entry.instanceId;
+    return true;
+  }
+  return false;
+}
+
 void LLHDProcessInterpreter::collectSignalIds(
     mlir::Value value, llvm::SmallVectorImpl<SignalId> &signals) const {
-  llvm::SmallVector<mlir::Value, 8> worklist;
-  llvm::DenseSet<mlir::Value> visited;
-  worklist.push_back(value);
+  struct WorkItem {
+    mlir::Value value;
+    const InstanceInputMapping *inputMap = nullptr;
+    InstanceId instanceId = 0;
+  };
+
+  llvm::SmallVector<WorkItem, 8> worklist;
+  llvm::SmallVector<WorkItem, 16> visited;
+  worklist.push_back({value, nullptr, activeInstanceId});
 
   while (!worklist.empty()) {
-    mlir::Value val = worklist.pop_back_val();
-    if (!visited.insert(val).second)
+    WorkItem item = worklist.pop_back_val();
+    ScopedInstanceContext instScope(
+        *const_cast<LLHDProcessInterpreter *>(this), item.instanceId);
+    bool seen = false;
+    for (const auto &entry : visited) {
+      if (entry.value == item.value && entry.inputMap == item.inputMap &&
+          entry.instanceId == item.instanceId) {
+        seen = true;
+        break;
+      }
+    }
+    if (seen)
       continue;
+    visited.push_back(item);
 
-    if (SignalId sigId = resolveSignalId(val)) {
+    if (SignalId sigId = getSignalId(item.value)) {
       signals.push_back(sigId);
       continue;
     }
 
-    if (auto arg = dyn_cast<mlir::BlockArgument>(val)) {
-      auto argIt = inputValueMap.find(arg);
-      if (argIt != inputValueMap.end()) {
-        worklist.push_back(argIt->second);
+    auto instMapIt = instanceOutputMap.find(item.instanceId);
+    if (instMapIt != instanceOutputMap.end()) {
+      auto instIt = instMapIt->second.find(item.value);
+      if (instIt != instMapIt->second.end()) {
+        const auto &info = instIt->second;
+        worklist.push_back({info.outputValue, &info.inputMap, info.instanceId});
         continue;
       }
     }
 
-    auto instIt = instanceOutputMap.find(val);
-    if (instIt != instanceOutputMap.end()) {
-      worklist.push_back(instIt->second);
+    if (auto arg = dyn_cast<mlir::BlockArgument>(item.value)) {
+      if (item.inputMap) {
+        for (const auto &entry : *item.inputMap) {
+          if (entry.arg == arg) {
+            worklist.push_back({entry.value, nullptr, entry.instanceId});
+            break;
+          }
+        }
+      }
+      Value mappedValue;
+      InstanceId mappedInstance = item.instanceId;
+      if (lookupInputMapping(arg, mappedValue, mappedInstance)) {
+        worklist.push_back({mappedValue, nullptr, mappedInstance});
+        continue;
+      }
+    }
+
+    if (auto toClock = item.value.getDefiningOp<seq::ToClockOp>()) {
+      worklist.push_back({toClock.getInput(), item.inputMap, item.instanceId});
       continue;
     }
 
-    if (auto toClock = val.getDefiningOp<seq::ToClockOp>()) {
-      worklist.push_back(toClock.getInput());
+    if (auto fromClock = item.value.getDefiningOp<seq::FromClockOp>()) {
+      worklist.push_back({fromClock.getInput(), item.inputMap, item.instanceId});
       continue;
     }
 
-    if (auto fromClock = val.getDefiningOp<seq::FromClockOp>()) {
-      worklist.push_back(fromClock.getInput());
-      continue;
-    }
-
-    if (auto combOp = val.getDefiningOp<llhd::CombinationalOp>()) {
+    if (auto combOp = item.value.getDefiningOp<llhd::CombinationalOp>()) {
       collectSignalIdsFromCombinational(combOp, signals);
       continue;
     }
 
-    if (Operation *defOp = val.getDefiningOp()) {
+    if (Operation *defOp = item.value.getDefiningOp()) {
       for (Value operand : defOp->getOperands())
-        worklist.push_back(operand);
+        worklist.push_back({operand, item.inputMap, item.instanceId});
     }
   }
 }
 
 void LLHDProcessInterpreter::collectProcessIds(
     mlir::Value value, llvm::SmallVectorImpl<ProcessId> &processIds) const {
-  llvm::SmallVector<mlir::Value, 8> worklist;
-  llvm::DenseSet<mlir::Value> visited;
+  struct WorkItem {
+    mlir::Value value;
+    const InstanceInputMapping *inputMap = nullptr;
+    InstanceId instanceId = 0;
+  };
+
+  llvm::SmallVector<WorkItem, 8> worklist;
+  llvm::SmallVector<WorkItem, 16> visited;
   llvm::DenseSet<ProcessId> seen;
-  worklist.push_back(value);
+  worklist.push_back({value, nullptr, activeInstanceId});
 
   while (!worklist.empty()) {
-    mlir::Value val = worklist.pop_back_val();
-    if (!visited.insert(val).second)
+    WorkItem item = worklist.pop_back_val();
+    ScopedInstanceContext instScope(
+        *const_cast<LLHDProcessInterpreter *>(this), item.instanceId);
+    bool seenValue = false;
+    for (const auto &entry : visited) {
+      if (entry.value == item.value && entry.inputMap == item.inputMap &&
+          entry.instanceId == item.instanceId) {
+        seenValue = true;
+        break;
+      }
+    }
+    if (seenValue)
       continue;
+    visited.push_back(item);
 
-    if (auto arg = dyn_cast<mlir::BlockArgument>(val)) {
-      auto argIt = inputValueMap.find(arg);
-      if (argIt != inputValueMap.end()) {
-        worklist.push_back(argIt->second);
+    auto instMapIt = instanceOutputMap.find(item.instanceId);
+    if (instMapIt != instanceOutputMap.end()) {
+      auto instIt = instMapIt->second.find(item.value);
+      if (instIt != instMapIt->second.end()) {
+        const auto &info = instIt->second;
+        worklist.push_back({info.outputValue, &info.inputMap, info.instanceId});
         continue;
       }
     }
 
-    auto instIt = instanceOutputMap.find(val);
-    if (instIt != instanceOutputMap.end()) {
-      worklist.push_back(instIt->second);
-      continue;
+    if (auto arg = dyn_cast<mlir::BlockArgument>(item.value)) {
+      if (item.inputMap) {
+        for (const auto &entry : *item.inputMap) {
+          if (entry.arg == arg) {
+            worklist.push_back({entry.value, nullptr, entry.instanceId});
+            break;
+          }
+        }
+      }
+      Value mappedValue;
+      InstanceId mappedInstance = item.instanceId;
+      if (lookupInputMapping(arg, mappedValue, mappedInstance)) {
+        worklist.push_back({mappedValue, nullptr, mappedInstance});
+        continue;
+      }
     }
 
-    if (auto result = dyn_cast<OpResult>(val)) {
+    if (auto result = dyn_cast<OpResult>(item.value)) {
       if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
-        auto procIt = opToProcessId.find(processOp.getOperation());
-        if (procIt != opToProcessId.end() && seen.insert(procIt->second).second)
-          processIds.push_back(procIt->second);
+        ProcessId procId = InvalidProcessId;
+        if (item.instanceId != 0) {
+          auto ctxIt = instanceOpToProcessId.find(item.instanceId);
+          if (ctxIt != instanceOpToProcessId.end()) {
+            auto procIt = ctxIt->second.find(processOp.getOperation());
+            if (procIt != ctxIt->second.end())
+              procId = procIt->second;
+          }
+        }
+        if (procId == InvalidProcessId) {
+          auto procIt = opToProcessId.find(processOp.getOperation());
+          if (procIt != opToProcessId.end())
+            procId = procIt->second;
+        }
+        if (procId != InvalidProcessId && seen.insert(procId).second)
+          processIds.push_back(procId);
         continue;
       }
     }
 
-    if (Operation *defOp = val.getDefiningOp()) {
+    if (Operation *defOp = item.value.getDefiningOp()) {
       for (Value operand : defOp->getOperands())
-        worklist.push_back(operand);
+        worklist.push_back({operand, item.inputMap, item.instanceId});
     }
   }
 }
@@ -1536,21 +1887,32 @@ void LLHDProcessInterpreter::collectSignalIdsFromCombinational(
   });
 }
 
-void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
+void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops,
+                                             InstanceId instanceId,
+                                             const InstanceInputMapping &inputMap) {
+  ScopedInstanceContext instScope(*this, instanceId);
+  ScopedInputValueMap inputScope(*this, inputMap);
+  auto &firRegMap =
+      (instanceId == 0) ? firRegStates : instanceFirRegStates[instanceId];
+  auto &signalMap =
+      (instanceId == 0) ? valueToSignal : instanceValueToSignal[instanceId];
   // Register all pre-discovered seq.firreg operations (no walk() needed)
   for (seq::FirRegOp regOp : ops.firRegs) {
-    if (firRegStates.contains(regOp.getOperation()))
+    if (firRegMap.contains(regOp.getOperation()))
       continue;
 
-    std::string name;
+    std::string baseName;
     if (auto nameAttr = regOp.getNameAttr())
-      name = nameAttr.str();
+      baseName = nameAttr.str();
     else
-      name = "firreg_" + std::to_string(firRegStates.size());
+      baseName = "firreg_" + std::to_string(firRegMap.size());
+    std::string name = baseName;
+    if (instanceId != 0)
+      name = "inst" + std::to_string(instanceId) + "." + baseName;
 
     unsigned width = getTypeWidth(regOp.getType());
     SignalId sigId = scheduler.registerSignal(name, width);
-    valueToSignal[regOp.getResult()] = sigId;
+    signalMap[regOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
     signalIdToType[sigId] = unwrapSignalType(regOp.getType());
 
@@ -1580,11 +1942,17 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
 
     FirRegState state;
     state.signalId = sigId;
-    firRegStates[regOp.getOperation()] = state;
+    state.instanceId = instanceId;
+    state.inputMap = inputMap;
+    firRegMap[regOp.getOperation()] = state;
 
     std::string procName = "firreg_" + name;
     ProcessId procId = scheduler.registerProcess(
-        procName, [this, regOp]() { executeFirReg(regOp); });
+        procName, [this, regOp, instanceId, inputMap]() {
+          ScopedInstanceContext scope(*this, instanceId);
+          ScopedInputValueMap inputScope(*this, inputMap);
+          executeFirReg(regOp, instanceId);
+        });
     if (auto *process = scheduler.getProcess(procId)) {
       // Schedule firreg updates after combinational propagation in the time slot.
       process->setPreferredRegion(SchedulingRegion::NBA);
@@ -1608,12 +1976,17 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
   }
 }
 
-void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp) {
-  auto it = firRegStates.find(regOp.getOperation());
-  if (it == firRegStates.end())
+void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
+                                           InstanceId instanceId) {
+  auto &firRegMap =
+      (instanceId == 0) ? firRegStates : instanceFirRegStates[instanceId];
+  auto it = firRegMap.find(regOp.getOperation());
+  if (it == firRegMap.end())
     return;
 
   FirRegState &state = it->second;
+  ScopedInstanceContext instScope(*this, state.instanceId);
+  ScopedInputValueMap inputScope(*this, state.inputMap);
 
   InterpretedValue clkVal = evaluateContinuousValue(regOp.getClk());
   bool clockPosedge = false;
@@ -1729,7 +2102,18 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
 }
 
 void LLHDProcessInterpreter::scheduleInstanceOutputUpdate(
-    SignalId signalId, mlir::Value outputValue) {
+    SignalId signalId, mlir::Value outputValue, InstanceId instanceId,
+    const InstanceInputMapping *inputMap) {
+  ScopedInstanceContext instScope(*this, instanceId);
+  if (inputMap && !inputMap->empty()) {
+    ScopedInputValueMap scope(*this, *inputMap);
+    InterpretedValue driveVal = evaluateContinuousValue(outputValue);
+    SignalValue newVal = driveVal.toSignalValue();
+    if (scheduler.getSignalValue(signalId) == newVal)
+      return;
+    scheduler.updateSignal(signalId, newVal);
+    return;
+  }
   InterpretedValue driveVal = evaluateContinuousValue(outputValue);
   SignalValue newVal = driveVal.toSignalValue();
   if (scheduler.getSignalValue(signalId) == newVal)
@@ -1792,258 +2176,566 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
 /// state.
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValue(
     mlir::Value value) {
-  llvm::DenseSet<mlir::Value> inProgress;
-  return evaluateContinuousValueImpl(value, inProgress, 0);
+  return evaluateContinuousValueImpl(value);
 }
 
 InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
-    mlir::Value value, llvm::DenseSet<mlir::Value> &inProgress, unsigned depth) {
-  // Depth limiting: prevent stack overflow on complex designs with deep
-  // continuous assignment chains (e.g., complex OpenTitan IPs like gpio, uart).
-  if (depth >= kMaxContinuousValueDepth) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Warning: Maximum recursion depth (" << kMaxContinuousValueDepth
-               << ") exceeded in evaluateContinuousValue\n");
-    return InterpretedValue::makeX(getTypeWidth(value.getType()));
-  }
+    mlir::Value value) {
+  enum class EvalKind {
+    None,
+    Forward,
+    StructExtract,
+    ArrayGet,
+    StructCreate,
+    StructInject,
+    StructInjectLegacy,
+    Bitcast,
+    Xor,
+    And,
+    Or,
+    ICmp,
+    Mux,
+    Concat,
+    Extract,
+    Add,
+    Sub,
+    Replicate,
+    Parity,
+    Shl,
+    ShrU,
+    ShrS,
+    Mul,
+    DivS,
+    DivU,
+    ModS,
+    ModU
+  };
 
-  // Cycle detection: if this value is already on the recursion stack, return X.
-  if (!inProgress.insert(value).second) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Warning: Cycle detected in evaluateContinuousValue\n");
-    return InterpretedValue::makeX(getTypeWidth(value.getType()));
-  }
-  auto cleanup = llvm::make_scope_exit([&]() { inProgress.erase(value); });
+  struct EvalFrame {
+    mlir::Value value;
+    EvalKind kind = EvalKind::None;
+    unsigned stage = 0;
+    mlir::Value aux;
+  };
 
-  if (SignalId sigId = getSignalId(value)) {
-    const SignalValue &sv = scheduler.getSignalValue(sigId);
-    return InterpretedValue::fromSignalValue(sv);
-  }
+  llvm::DenseSet<mlir::Value> inProgress;
+  llvm::DenseMap<mlir::Value, InterpretedValue> cache;
+  llvm::SmallVector<EvalFrame, 64> stack;
 
-  auto instIt = instanceOutputMap.find(value);
-  if (instIt != instanceOutputMap.end())
-    return evaluateContinuousValueImpl(instIt->second, inProgress, depth + 1);
+  auto makeUnknown = [&](mlir::Value v) -> InterpretedValue {
+    return InterpretedValue::makeX(getTypeWidth(v.getType()));
+  };
 
-  if (auto result = dyn_cast<OpResult>(value)) {
-    if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
-      auto procIt = opToProcessId.find(processOp.getOperation());
-      if (procIt != opToProcessId.end()) {
-        auto stateIt = processStates.find(procIt->second);
-        if (stateIt != processStates.end()) {
-          auto valIt = stateIt->second.valueMap.find(value);
-          if (valIt != stateIt->second.valueMap.end())
-            return valIt->second;
+  auto pushValue = [&](mlir::Value v) {
+    if (!v)
+      return;
+    if (cache.find(v) != cache.end())
+      return;
+    if (!inProgress.insert(v).second) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Warning: Cycle detected in evaluateContinuousValue\n");
+      return;
+    }
+    stack.push_back(EvalFrame{v});
+  };
+
+  pushValue(value);
+
+  while (!stack.empty()) {
+    EvalFrame &frame = stack.back();
+    mlir::Value current = frame.value;
+    if (cache.find(current) != cache.end()) {
+      inProgress.erase(current);
+      stack.pop_back();
+      continue;
+    }
+
+    auto finish = [&](InterpretedValue result) {
+      cache[current] = result;
+      inProgress.erase(current);
+      stack.pop_back();
+    };
+
+    auto getCached = [&](mlir::Value v) -> InterpretedValue {
+      auto it = cache.find(v);
+      if (it != cache.end())
+        return it->second;
+      return makeUnknown(v);
+    };
+
+    if (frame.stage == 0) {
+      if (SignalId sigId = getSignalId(current)) {
+        const SignalValue &sv = scheduler.getSignalValue(sigId);
+        if (sv.isUnknown()) {
+          if (auto encoded = getEncodedUnknownForType(current.getType()))
+            finish(InterpretedValue(*encoded));
+          else
+            finish(makeUnknown(current));
+        } else {
+          finish(InterpretedValue::fromSignalValue(sv));
+        }
+        continue;
+      }
+
+      auto instMapIt = instanceOutputMap.find(activeInstanceId);
+      if (instMapIt != instanceOutputMap.end()) {
+        auto instIt = instMapIt->second.find(current);
+        if (instIt != instMapIt->second.end()) {
+          const auto &info = instIt->second;
+          ScopedInstanceContext instScope(*this, info.instanceId);
+          if (info.inputMap.empty()) {
+            finish(evaluateContinuousValue(info.outputValue));
+          } else {
+            ScopedInputValueMap scope(*this, info.inputMap);
+            finish(evaluateContinuousValue(info.outputValue));
+          }
+          continue;
         }
       }
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-    }
-  }
 
-  if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
-    auto argIt = inputValueMap.find(arg);
-    if (argIt != inputValueMap.end() && argIt->second != value)
-      return evaluateContinuousValueImpl(argIt->second, inProgress, depth + 1);
-    SignalId sigId = getSignalId(arg);
-    if (sigId != 0) {
-      const SignalValue &sv = scheduler.getSignalValue(sigId);
-      return InterpretedValue::fromSignalValue(sv);
-    }
-  }
-
-  if (auto regOp = value.getDefiningOp<seq::FirRegOp>()) {
-    SignalId sigId = getSignalId(regOp.getResult());
-    if (sigId != 0) {
-      const SignalValue &sv = scheduler.getSignalValue(sigId);
-      return InterpretedValue::fromSignalValue(sv);
-    }
-    return InterpretedValue::makeX(getTypeWidth(value.getType()));
-  }
-
-  if (auto combOp = value.getDefiningOp<llhd::CombinationalOp>()) {
-    llvm::SmallVector<InterpretedValue, 4> results;
-    (void)evaluateCombinationalOp(combOp, results);
-    auto result = dyn_cast<OpResult>(value);
-    if (result && result.getResultNumber() < results.size())
-      return results[result.getResultNumber()];
-    return InterpretedValue::makeX(getTypeWidth(value.getType()));
-  }
-
-  if (auto toClockOp = value.getDefiningOp<seq::ToClockOp>()) {
-    return evaluateContinuousValueImpl(toClockOp.getInput(), inProgress, depth + 1);
-  }
-
-  if (auto fromClockOp = value.getDefiningOp<seq::FromClockOp>()) {
-    return evaluateContinuousValueImpl(fromClockOp.getInput(), inProgress, depth + 1);
-  }
-
-  // Check if this is a probe operation - read from signal state
-  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
-    SignalId sigId = resolveSignalId(probeOp.getSignal());
-    if (sigId != 0) {
-      const SignalValue &sv = scheduler.getSignalValue(sigId);
-      return InterpretedValue::fromSignalValue(sv);
-    }
-    return InterpretedValue::makeX(getTypeWidth(value.getType()));
-  }
-
-  if (auto result = dyn_cast<OpResult>(value)) {
-    if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
-      auto procIt = opToProcessId.find(processOp.getOperation());
-      if (procIt != opToProcessId.end()) {
-        auto stateIt = processStates.find(procIt->second);
-        if (stateIt != processStates.end()) {
-          auto &valueMap = stateIt->second.valueMap;
-          auto valIt = valueMap.find(result);
-          if (valIt != valueMap.end())
-            return valIt->second;
+      if (auto result = dyn_cast<OpResult>(current)) {
+        if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
+          ProcessId procId = InvalidProcessId;
+          if (activeInstanceId != 0) {
+            auto ctxIt = instanceOpToProcessId.find(activeInstanceId);
+            if (ctxIt != instanceOpToProcessId.end()) {
+              auto procIt = ctxIt->second.find(processOp.getOperation());
+              if (procIt != ctxIt->second.end())
+                procId = procIt->second;
+            }
+          }
+          if (procId == InvalidProcessId) {
+            auto procIt = opToProcessId.find(processOp.getOperation());
+            if (procIt != opToProcessId.end())
+              procId = procIt->second;
+          }
+          if (procId != InvalidProcessId) {
+            auto stateIt = processStates.find(procId);
+            if (stateIt != processStates.end()) {
+              auto valIt = stateIt->second.valueMap.find(current);
+              if (valIt != stateIt->second.valueMap.end()) {
+                finish(valIt->second);
+                continue;
+              }
+            }
+          }
+          finish(makeUnknown(current));
+          continue;
         }
       }
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+
+      if (auto arg = dyn_cast<mlir::BlockArgument>(current)) {
+        Value mappedValue;
+        InstanceId mappedInstance = activeInstanceId;
+        if (lookupInputMapping(arg, mappedValue, mappedInstance) &&
+            mappedValue != current) {
+          if (mappedInstance != activeInstanceId) {
+            ScopedInstanceContext scope(*this, mappedInstance);
+            finish(evaluateContinuousValue(mappedValue));
+            continue;
+          }
+          frame.kind = EvalKind::Forward;
+          frame.aux = mappedValue;
+          frame.stage = 1;
+          pushValue(frame.aux);
+          continue;
+        }
+        SignalId sigId = getSignalId(arg);
+        if (sigId != 0) {
+          const SignalValue &sv = scheduler.getSignalValue(sigId);
+          if (sv.isUnknown()) {
+            if (auto encoded = getEncodedUnknownForType(arg.getType()))
+              finish(InterpretedValue(*encoded));
+            else
+              finish(makeUnknown(current));
+          } else {
+            finish(InterpretedValue::fromSignalValue(sv));
+          }
+          continue;
+        }
+      }
+
+      if (auto regOp = current.getDefiningOp<seq::FirRegOp>()) {
+        SignalId sigId = getSignalId(regOp.getResult());
+        if (sigId != 0) {
+          const SignalValue &sv = scheduler.getSignalValue(sigId);
+          finish(InterpretedValue::fromSignalValue(sv));
+        } else {
+          finish(makeUnknown(current));
+        }
+        continue;
+      }
+
+      if (auto combOp = current.getDefiningOp<llhd::CombinationalOp>()) {
+        llvm::SmallVector<InterpretedValue, 4> results;
+        (void)evaluateCombinationalOp(combOp, results);
+        auto result = dyn_cast<OpResult>(current);
+        if (result && result.getResultNumber() < results.size())
+          finish(results[result.getResultNumber()]);
+        else
+          finish(makeUnknown(current));
+        continue;
+      }
+
+      if (auto toClockOp = current.getDefiningOp<seq::ToClockOp>()) {
+        frame.kind = EvalKind::Forward;
+        frame.aux = toClockOp.getInput();
+        frame.stage = 1;
+        pushValue(frame.aux);
+        continue;
+      }
+
+      if (auto fromClockOp = current.getDefiningOp<seq::FromClockOp>()) {
+        frame.kind = EvalKind::Forward;
+        frame.aux = fromClockOp.getInput();
+        frame.stage = 1;
+        pushValue(frame.aux);
+        continue;
+      }
+
+      if (auto probeOp = current.getDefiningOp<llhd::ProbeOp>()) {
+        SignalId sigId = resolveSignalId(probeOp.getSignal());
+        if (sigId != 0) {
+          const SignalValue &sv = scheduler.getSignalValue(sigId);
+          finish(InterpretedValue::fromSignalValue(sv));
+        } else {
+          finish(makeUnknown(current));
+        }
+        continue;
+      }
+
+      if (auto constOp = current.getDefiningOp<hw::ConstantOp>()) {
+        finish(InterpretedValue(constOp.getValue()));
+        continue;
+      }
+
+      if (auto aggConstOp = current.getDefiningOp<hw::AggregateConstantOp>()) {
+        llvm::APInt flatValue = flattenAggregateConstant(aggConstOp);
+        finish(InterpretedValue(flatValue));
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::StructExtractOp>()) {
+        frame.kind = EvalKind::StructExtract;
+        frame.stage = 1;
+        pushValue(current.getDefiningOp<hw::StructExtractOp>().getInput());
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::ArrayGetOp>()) {
+        frame.kind = EvalKind::ArrayGet;
+        frame.stage = 1;
+        auto arrayGetOp = current.getDefiningOp<hw::ArrayGetOp>();
+        pushValue(arrayGetOp.getInput());
+        pushValue(arrayGetOp.getIndex());
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::StructCreateOp>()) {
+        frame.kind = EvalKind::StructCreate;
+        frame.stage = 1;
+        auto createOp = current.getDefiningOp<hw::StructCreateOp>();
+        for (Value input : createOp.getInput())
+          pushValue(input);
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::StructInjectOp>()) {
+        frame.kind = EvalKind::StructInject;
+        frame.stage = 1;
+        auto injectOp = current.getDefiningOp<hw::StructInjectOp>();
+        pushValue(injectOp.getInput());
+        pushValue(injectOp.getNewValue());
+        continue;
+      }
+
+      if (auto *defOp = current.getDefiningOp()) {
+        if (defOp->getName().getStringRef() == "hw.struct_inject") {
+          frame.kind = EvalKind::StructInjectLegacy;
+          frame.stage = 1;
+          pushValue(defOp->getOperand(0));
+          pushValue(defOp->getOperand(1));
+          continue;
+        }
+      }
+
+      if (current.getDefiningOp<hw::BitcastOp>()) {
+        frame.kind = EvalKind::Bitcast;
+        frame.stage = 1;
+        pushValue(current.getDefiningOp<hw::BitcastOp>().getInput());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::XorOp>()) {
+        frame.kind = EvalKind::Xor;
+        frame.stage = 1;
+        auto xorOp = current.getDefiningOp<comb::XorOp>();
+        pushValue(xorOp.getOperand(0));
+        pushValue(xorOp.getOperand(1));
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::AndOp>()) {
+        frame.kind = EvalKind::And;
+        frame.stage = 1;
+        auto andOp = current.getDefiningOp<comb::AndOp>();
+        for (Value operand : andOp.getOperands())
+          pushValue(operand);
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::OrOp>()) {
+        frame.kind = EvalKind::Or;
+        frame.stage = 1;
+        auto orOp = current.getDefiningOp<comb::OrOp>();
+        for (Value operand : orOp.getOperands())
+          pushValue(operand);
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ICmpOp>()) {
+        frame.kind = EvalKind::ICmp;
+        frame.stage = 1;
+        auto icmpOp = current.getDefiningOp<comb::ICmpOp>();
+        pushValue(icmpOp.getLhs());
+        pushValue(icmpOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::MuxOp>()) {
+        frame.kind = EvalKind::Mux;
+        frame.stage = 1;
+        auto muxOp = current.getDefiningOp<comb::MuxOp>();
+        frame.aux = muxOp.getCond();
+        pushValue(frame.aux);
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ConcatOp>()) {
+        frame.kind = EvalKind::Concat;
+        frame.stage = 1;
+        auto concatOp = current.getDefiningOp<comb::ConcatOp>();
+        for (Value operand : concatOp.getOperands())
+          pushValue(operand);
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ExtractOp>()) {
+        frame.kind = EvalKind::Extract;
+        frame.stage = 1;
+        pushValue(current.getDefiningOp<comb::ExtractOp>().getInput());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::AddOp>()) {
+        frame.kind = EvalKind::Add;
+        frame.stage = 1;
+        auto addOp = current.getDefiningOp<comb::AddOp>();
+        pushValue(addOp.getOperand(0));
+        pushValue(addOp.getOperand(1));
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::SubOp>()) {
+        frame.kind = EvalKind::Sub;
+        frame.stage = 1;
+        auto subOp = current.getDefiningOp<comb::SubOp>();
+        pushValue(subOp.getOperand(0));
+        pushValue(subOp.getOperand(1));
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ReplicateOp>()) {
+        frame.kind = EvalKind::Replicate;
+        frame.stage = 1;
+        auto replOp = current.getDefiningOp<comb::ReplicateOp>();
+        pushValue(replOp.getInput());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ParityOp>()) {
+        frame.kind = EvalKind::Parity;
+        frame.stage = 1;
+        auto parityOp = current.getDefiningOp<comb::ParityOp>();
+        pushValue(parityOp.getInput());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ShlOp>()) {
+        frame.kind = EvalKind::Shl;
+        frame.stage = 1;
+        auto shlOp = current.getDefiningOp<comb::ShlOp>();
+        pushValue(shlOp.getLhs());
+        pushValue(shlOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ShrUOp>()) {
+        frame.kind = EvalKind::ShrU;
+        frame.stage = 1;
+        auto shrOp = current.getDefiningOp<comb::ShrUOp>();
+        pushValue(shrOp.getLhs());
+        pushValue(shrOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ShrSOp>()) {
+        frame.kind = EvalKind::ShrS;
+        frame.stage = 1;
+        auto shrOp = current.getDefiningOp<comb::ShrSOp>();
+        pushValue(shrOp.getLhs());
+        pushValue(shrOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::MulOp>()) {
+        frame.kind = EvalKind::Mul;
+        frame.stage = 1;
+        auto mulOp = current.getDefiningOp<comb::MulOp>();
+        for (Value operand : mulOp.getOperands())
+          pushValue(operand);
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::DivSOp>()) {
+        frame.kind = EvalKind::DivS;
+        frame.stage = 1;
+        auto divOp = current.getDefiningOp<comb::DivSOp>();
+        pushValue(divOp.getLhs());
+        pushValue(divOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::DivUOp>()) {
+        frame.kind = EvalKind::DivU;
+        frame.stage = 1;
+        auto divOp = current.getDefiningOp<comb::DivUOp>();
+        pushValue(divOp.getLhs());
+        pushValue(divOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ModSOp>()) {
+        frame.kind = EvalKind::ModS;
+        frame.stage = 1;
+        auto modOp = current.getDefiningOp<comb::ModSOp>();
+        pushValue(modOp.getLhs());
+        pushValue(modOp.getRhs());
+        continue;
+      }
+
+      if (current.getDefiningOp<comb::ModUOp>()) {
+        frame.kind = EvalKind::ModU;
+        frame.stage = 1;
+        auto modOp = current.getDefiningOp<comb::ModUOp>();
+        pushValue(modOp.getLhs());
+        pushValue(modOp.getRhs());
+        continue;
+      }
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Warning: Cannot evaluate continuous value for "
+                 << *current.getDefiningOp() << "\n");
+      finish(makeUnknown(current));
+      continue;
     }
-  }
 
-  // Handle constants
-  if (auto constOp = value.getDefiningOp<hw::ConstantOp>()) {
-    return InterpretedValue(constOp.getValue());
-  }
-
-  // Handle aggregate constants
-  if (auto aggConstOp = value.getDefiningOp<hw::AggregateConstantOp>()) {
-    llvm::APInt flatValue = flattenAggregateConstant(aggConstOp);
-    return InterpretedValue(flatValue);
-  }
-
-  // Handle struct extract
-  if (auto extractOp = value.getDefiningOp<hw::StructExtractOp>()) {
-    InterpretedValue inputVal =
-        evaluateContinuousValueImpl(extractOp.getInput(), inProgress, depth + 1);
-    if (inputVal.isX())
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-
-    auto structType = hw::type_cast<hw::StructType>(extractOp.getInput().getType());
-    StringRef fieldName = extractOp.getFieldName();
-
-    // Find the field offset and width
-    unsigned bitOffset = 0;
-    unsigned fieldWidth = 0;
-    auto elements = structType.getElements();
-    // Struct fields are packed from high bits to low bits
-    unsigned totalWidth = getTypeWidth(structType);
-    for (auto &element : elements) {
-      unsigned elemWidth = getTypeWidth(element.type);
-      if (element.name == fieldName) {
-        fieldWidth = elemWidth;
+    switch (frame.kind) {
+    case EvalKind::Forward: {
+      InterpretedValue forwarded = getCached(frame.aux);
+      finish(forwarded);
+      break;
+    }
+    case EvalKind::StructExtract: {
+      auto extractOp = current.getDefiningOp<hw::StructExtractOp>();
+      InterpretedValue inputVal = getCached(extractOp.getInput());
+      if (inputVal.isX()) {
+        finish(makeUnknown(current));
         break;
       }
-      bitOffset += elemWidth;
-    }
-
-    // Extract the field value
-    // bitOffset is from the MSB, so we need to adjust
-    unsigned shiftAmount = totalWidth - bitOffset - fieldWidth;
-    llvm::APInt fieldVal =
-        inputVal.getAPInt().extractBits(fieldWidth, shiftAmount);
-    return InterpretedValue(fieldVal);
-  }
-
-  // Handle array get
-  if (auto arrayGetOp = value.getDefiningOp<hw::ArrayGetOp>()) {
-    InterpretedValue arrayVal =
-        evaluateContinuousValueImpl(arrayGetOp.getInput(), inProgress, depth + 1);
-    InterpretedValue indexVal =
-        evaluateContinuousValueImpl(arrayGetOp.getIndex(), inProgress, depth + 1);
-    if (arrayVal.isX() || indexVal.isX())
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-
-    auto arrayType = hw::type_cast<hw::ArrayType>(arrayGetOp.getInput().getType());
-    unsigned elementWidth = getTypeWidth(arrayType.getElementType());
-    unsigned numElements = arrayType.getNumElements();
-
-    uint64_t index = indexVal.getAPInt().getZExtValue();
-    if (index >= numElements)
-      return InterpretedValue::makeX(elementWidth);
-
-    // Extract element (arrays store element 0 at highest bits)
-    unsigned bitOffset = (numElements - 1 - index) * elementWidth;
-    APInt result = arrayVal.getAPInt().extractBits(elementWidth, bitOffset);
-    return InterpretedValue(result);
-  }
-
-  // Handle struct create
-  if (auto createOp = value.getDefiningOp<hw::StructCreateOp>()) {
-    auto structType = hw::type_cast<hw::StructType>(createOp.getType());
-    unsigned totalWidth = getTypeWidth(structType);
-    llvm::APInt result(totalWidth, 0);
-
-    auto elements = structType.getElements();
-    unsigned bitOffset = totalWidth;
-    for (size_t i = 0; i < createOp.getInput().size(); ++i) {
-      InterpretedValue fieldVal =
-          evaluateContinuousValueImpl(createOp.getInput()[i], inProgress, depth + 1);
-      unsigned fieldWidth = getTypeWidth(elements[i].type);
-      bitOffset -= fieldWidth;
-
-      if (!fieldVal.isX()) {
-        APInt fieldBits = fieldVal.getAPInt();
-        if (fieldBits.getBitWidth() < fieldWidth)
-          fieldBits = fieldBits.zext(fieldWidth);
-        else if (fieldBits.getBitWidth() > fieldWidth)
-          fieldBits = fieldBits.trunc(fieldWidth);
-        result.insertBits(fieldBits, bitOffset);
-      }
-    }
-    return InterpretedValue(result);
-  }
-
-  if (auto injectOp = value.getDefiningOp<hw::StructInjectOp>()) {
-    InterpretedValue structVal =
-        evaluateContinuousValueImpl(injectOp.getInput(), inProgress, depth + 1);
-    InterpretedValue newVal =
-        evaluateContinuousValueImpl(injectOp.getNewValue(), inProgress, depth + 1);
-    unsigned totalWidth = getTypeWidth(injectOp.getType());
-    if (structVal.isX() || newVal.isX())
-      return InterpretedValue::makeX(totalWidth);
-
-    auto structType = cast<hw::StructType>(injectOp.getInput().getType());
-    auto fieldIndexOpt = structType.getFieldIndex(injectOp.getFieldName());
-    if (!fieldIndexOpt)
-      return InterpretedValue::makeX(totalWidth);
-    unsigned fieldIndex = *fieldIndexOpt;
-    auto elements = structType.getElements();
-
-    unsigned fieldOffset = 0;
-    for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
-      fieldOffset += getTypeWidth(elements[i].type);
-
-    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
-    llvm::APInt result = structVal.getAPInt();
-    llvm::APInt fieldValue = newVal.getAPInt();
-    if (fieldValue.getBitWidth() < fieldWidth)
-      fieldValue = fieldValue.zext(fieldWidth);
-    else if (fieldValue.getBitWidth() > fieldWidth)
-      fieldValue = fieldValue.trunc(fieldWidth);
-    result.insertBits(fieldValue, fieldOffset);
-    return InterpretedValue(result);
-  }
-
-  if (auto *defOp = value.getDefiningOp()) {
-    if (defOp->getName().getStringRef() == "hw.struct_inject") {
-      Value input = defOp->getOperand(0);
-      Value newValue = defOp->getOperand(1);
-      auto structType = cast<hw::StructType>(input.getType());
-      unsigned totalWidth = getTypeWidth(structType);
-      auto fieldIndexAttr = defOp->getAttrOfType<IntegerAttr>("fieldIndex");
-      if (!fieldIndexAttr)
-        return InterpretedValue::makeX(totalWidth);
-      unsigned fieldIndex = fieldIndexAttr.getValue().getZExtValue();
+      auto structType =
+          hw::type_cast<hw::StructType>(extractOp.getInput().getType());
+      StringRef fieldName = extractOp.getFieldName();
+      unsigned bitOffset = 0;
+      unsigned fieldWidth = 0;
       auto elements = structType.getElements();
-      InterpretedValue structVal =
-          evaluateContinuousValueImpl(input, inProgress, depth + 1);
-      InterpretedValue newVal =
-          evaluateContinuousValueImpl(newValue, inProgress, depth + 1);
-      if (structVal.isX() || newVal.isX())
-        return InterpretedValue::makeX(totalWidth);
-
+      unsigned totalWidth = getTypeWidth(structType);
+      for (auto &element : elements) {
+        unsigned elemWidth = getTypeWidth(element.type);
+        if (element.name == fieldName) {
+          fieldWidth = elemWidth;
+          break;
+        }
+        bitOffset += elemWidth;
+      }
+      unsigned shiftAmount = totalWidth - bitOffset - fieldWidth;
+      llvm::APInt fieldVal =
+          inputVal.getAPInt().extractBits(fieldWidth, shiftAmount);
+      finish(InterpretedValue(fieldVal));
+      break;
+    }
+    case EvalKind::ArrayGet: {
+      auto arrayGetOp = current.getDefiningOp<hw::ArrayGetOp>();
+      InterpretedValue arrayVal = getCached(arrayGetOp.getInput());
+      InterpretedValue indexVal = getCached(arrayGetOp.getIndex());
+      if (arrayVal.isX() || indexVal.isX()) {
+        finish(makeUnknown(current));
+        break;
+      }
+      auto arrayType =
+          hw::type_cast<hw::ArrayType>(arrayGetOp.getInput().getType());
+      unsigned elementWidth = getTypeWidth(arrayType.getElementType());
+      unsigned numElements = arrayType.getNumElements();
+      uint64_t index = indexVal.getAPInt().getZExtValue();
+      if (index >= numElements) {
+        finish(InterpretedValue::makeX(elementWidth));
+        break;
+      }
+      unsigned bitOffset = (numElements - 1 - index) * elementWidth;
+      APInt result = arrayVal.getAPInt().extractBits(elementWidth, bitOffset);
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::StructCreate: {
+      auto createOp = current.getDefiningOp<hw::StructCreateOp>();
+      auto structType = hw::type_cast<hw::StructType>(createOp.getType());
+      unsigned totalWidth = getTypeWidth(structType);
+      llvm::APInt result(totalWidth, 0);
+      auto elements = structType.getElements();
+      unsigned bitOffset = totalWidth;
+      for (size_t i = 0; i < createOp.getInput().size(); ++i) {
+        InterpretedValue fieldVal = getCached(createOp.getInput()[i]);
+        unsigned fieldWidth = getTypeWidth(elements[i].type);
+        bitOffset -= fieldWidth;
+        if (!fieldVal.isX()) {
+          APInt fieldBits = fieldVal.getAPInt();
+          if (fieldBits.getBitWidth() < fieldWidth)
+            fieldBits = fieldBits.zext(fieldWidth);
+          else if (fieldBits.getBitWidth() > fieldWidth)
+            fieldBits = fieldBits.trunc(fieldWidth);
+          result.insertBits(fieldBits, bitOffset);
+        }
+      }
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::StructInject: {
+      auto injectOp = current.getDefiningOp<hw::StructInjectOp>();
+      InterpretedValue structVal = getCached(injectOp.getInput());
+      InterpretedValue newVal = getCached(injectOp.getNewValue());
+      unsigned totalWidth = getTypeWidth(injectOp.getType());
+      if (structVal.isX() || newVal.isX()) {
+        finish(InterpretedValue::makeX(totalWidth));
+        break;
+      }
+      auto structType = cast<hw::StructType>(injectOp.getInput().getType());
+      auto fieldIndexOpt = structType.getFieldIndex(injectOp.getFieldName());
+      if (!fieldIndexOpt) {
+        finish(InterpretedValue::makeX(totalWidth));
+        break;
+      }
+      unsigned fieldIndex = *fieldIndexOpt;
+      auto elements = structType.getElements();
       unsigned fieldOffset = 0;
       for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
         fieldOffset += getTypeWidth(elements[i].type);
@@ -2055,193 +2747,403 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       else if (fieldValue.getBitWidth() > fieldWidth)
         fieldValue = fieldValue.trunc(fieldWidth);
       result.insertBits(fieldValue, fieldOffset);
-      return InterpretedValue(result);
-    }
-  }
-
-  // Handle bitcast
-  if (auto bitcastOp = value.getDefiningOp<hw::BitcastOp>()) {
-    InterpretedValue inputVal =
-        evaluateContinuousValueImpl(bitcastOp.getInput(), inProgress, depth + 1);
-    unsigned outputWidth = getTypeWidth(bitcastOp.getType());
-    if (inputVal.isX())
-      return InterpretedValue::makeX(outputWidth);
-    llvm::APInt result = inputVal.getAPInt();
-    if (result.getBitWidth() < outputWidth)
-      result = result.zext(outputWidth);
-    else if (result.getBitWidth() > outputWidth)
-      result = result.trunc(outputWidth);
-    return InterpretedValue(result);
-  }
-
-  // Handle comb operations
-  if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
-    InterpretedValue lhs =
-        evaluateContinuousValueImpl(xorOp.getOperand(0), inProgress, depth + 1);
-    InterpretedValue rhs =
-        evaluateContinuousValueImpl(xorOp.getOperand(1), inProgress, depth + 1);
-    if (lhs.isX() || rhs.isX())
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-    llvm::APInt lhsVal = lhs.getAPInt();
-    llvm::APInt rhsVal = rhs.getAPInt();
-    unsigned width = getTypeWidth(value.getType());
-    normalizeWidths(lhsVal, rhsVal, width);
-    return InterpretedValue(lhsVal ^ rhsVal);
-  }
-
-  if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
-    unsigned width = getTypeWidth(value.getType());
-    llvm::APInt result(width, 0);
-    result.setAllBits();
-    for (Value operand : andOp.getOperands()) {
-      InterpretedValue opVal =
-          evaluateContinuousValueImpl(operand, inProgress, depth + 1);
-      if (opVal.isX())
-        return InterpretedValue::makeX(width);
-      llvm::APInt opBits = opVal.getAPInt();
-      if (opBits.getBitWidth() < width)
-        opBits = opBits.zext(width);
-      else if (opBits.getBitWidth() > width)
-        opBits = opBits.trunc(width);
-      result &= opBits;
-    }
-    return InterpretedValue(result);
-  }
-
-  if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
-    unsigned width = getTypeWidth(value.getType());
-    llvm::APInt result(width, 0);
-    for (Value operand : orOp.getOperands()) {
-      InterpretedValue opVal =
-          evaluateContinuousValueImpl(operand, inProgress, depth + 1);
-      if (opVal.isX())
-        return InterpretedValue::makeX(width);
-      llvm::APInt opBits = opVal.getAPInt();
-      if (opBits.getBitWidth() < width)
-        opBits = opBits.zext(width);
-      else if (opBits.getBitWidth() > width)
-        opBits = opBits.trunc(width);
-      result |= opBits;
-    }
-    return InterpretedValue(result);
-  }
-
-  if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
-    InterpretedValue lhs =
-        evaluateContinuousValueImpl(icmpOp.getLhs(), inProgress, depth + 1);
-    InterpretedValue rhs =
-        evaluateContinuousValueImpl(icmpOp.getRhs(), inProgress, depth + 1);
-    if (lhs.isX() || rhs.isX())
-      return InterpretedValue::makeX(1);
-
-    bool result = false;
-    llvm::APInt lVal = lhs.getAPInt();
-    llvm::APInt rVal = rhs.getAPInt();
-    unsigned compareWidth = std::max(lVal.getBitWidth(), rVal.getBitWidth());
-    normalizeWidths(lVal, rVal, compareWidth);
-
-    switch (icmpOp.getPredicate()) {
-    case comb::ICmpPredicate::eq:
-      result = (lVal == rVal);
-      break;
-    case comb::ICmpPredicate::ne:
-      result = (lVal != rVal);
-      break;
-    case comb::ICmpPredicate::ult:
-      result = lVal.ult(rVal);
-      break;
-    case comb::ICmpPredicate::ule:
-      result = lVal.ule(rVal);
-      break;
-    case comb::ICmpPredicate::ugt:
-      result = lVal.ugt(rVal);
-      break;
-    case comb::ICmpPredicate::uge:
-      result = lVal.uge(rVal);
-      break;
-    default:
-      // Signed comparisons would need sign extension handling
-      result = false;
+      finish(InterpretedValue(result));
       break;
     }
-    return InterpretedValue(result ? 1ULL : 0ULL, 1);
-  }
-
-  if (auto muxOp = value.getDefiningOp<comb::MuxOp>()) {
-    InterpretedValue cond =
-        evaluateContinuousValueImpl(muxOp.getCond(), inProgress, depth + 1);
-    if (cond.isX())
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-    if (cond.getUInt64() != 0)
-      return evaluateContinuousValueImpl(muxOp.getTrueValue(), inProgress, depth + 1);
-    return evaluateContinuousValueImpl(muxOp.getFalseValue(), inProgress, depth + 1);
-  }
-
-  if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
-    unsigned totalWidth = getTypeWidth(value.getType());
-    llvm::APInt result(totalWidth, 0);
-    unsigned bitOffset = totalWidth;
-    for (Value operand : concatOp.getOperands()) {
-      InterpretedValue opVal =
-          evaluateContinuousValueImpl(operand, inProgress, depth + 1);
-      unsigned width = getTypeWidth(operand.getType());
-      bitOffset -= width;
-      if (opVal.isX())
+    case EvalKind::StructInjectLegacy: {
+      auto *defOp = current.getDefiningOp();
+      Value input = defOp->getOperand(0);
+      Value newValue = defOp->getOperand(1);
+      auto structType = cast<hw::StructType>(input.getType());
+      unsigned totalWidth = getTypeWidth(structType);
+      auto fieldIndexAttr = defOp->getAttrOfType<IntegerAttr>("fieldIndex");
+      if (!fieldIndexAttr) {
+        finish(InterpretedValue::makeX(totalWidth));
+        break;
+      }
+      unsigned fieldIndex = fieldIndexAttr.getValue().getZExtValue();
+      auto elements = structType.getElements();
+      InterpretedValue structVal = getCached(input);
+      InterpretedValue newVal = getCached(newValue);
+      if (structVal.isX() || newVal.isX()) {
+        finish(InterpretedValue::makeX(totalWidth));
+        break;
+      }
+      unsigned fieldOffset = 0;
+      for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+        fieldOffset += getTypeWidth(elements[i].type);
+      unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+      llvm::APInt result = structVal.getAPInt();
+      llvm::APInt fieldValue = newVal.getAPInt();
+      if (fieldValue.getBitWidth() < fieldWidth)
+        fieldValue = fieldValue.zext(fieldWidth);
+      else if (fieldValue.getBitWidth() > fieldWidth)
+        fieldValue = fieldValue.trunc(fieldWidth);
+      result.insertBits(fieldValue, fieldOffset);
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::Bitcast: {
+      auto bitcastOp = current.getDefiningOp<hw::BitcastOp>();
+      InterpretedValue inputVal = getCached(bitcastOp.getInput());
+      unsigned outputWidth = getTypeWidth(bitcastOp.getType());
+      if (inputVal.isX()) {
+        finish(InterpretedValue::makeX(outputWidth));
+        break;
+      }
+      llvm::APInt result = inputVal.getAPInt();
+      if (result.getBitWidth() < outputWidth)
+        result = result.zext(outputWidth);
+      else if (result.getBitWidth() > outputWidth)
+        result = result.trunc(outputWidth);
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::Xor: {
+      auto xorOp = current.getDefiningOp<comb::XorOp>();
+      InterpretedValue lhs = getCached(xorOp.getOperand(0));
+      InterpretedValue rhs = getCached(xorOp.getOperand(1));
+      if (lhs.isX() || rhs.isX()) {
+        finish(makeUnknown(current));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      unsigned width = getTypeWidth(current.getType());
+      normalizeWidths(lhsVal, rhsVal, width);
+      finish(InterpretedValue(lhsVal ^ rhsVal));
+      break;
+    }
+    case EvalKind::And: {
+      auto andOp = current.getDefiningOp<comb::AndOp>();
+      unsigned width = getTypeWidth(current.getType());
+      llvm::APInt result(width, 0);
+      result.setAllBits();
+      bool sawX = false;
+      for (Value operand : andOp.getOperands()) {
+        InterpretedValue opVal = getCached(operand);
+        if (opVal.isX()) {
+          sawX = true;
+          break;
+        }
+        llvm::APInt opBits = opVal.getAPInt();
+        if (opBits.getBitWidth() < width)
+          opBits = opBits.zext(width);
+        else if (opBits.getBitWidth() > width)
+          opBits = opBits.trunc(width);
+        result &= opBits;
+      }
+      if (sawX)
+        finish(InterpretedValue::makeX(width));
+      else
+        finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::Or: {
+      auto orOp = current.getDefiningOp<comb::OrOp>();
+      unsigned width = getTypeWidth(current.getType());
+      llvm::APInt result(width, 0);
+      bool sawX = false;
+      for (Value operand : orOp.getOperands()) {
+        InterpretedValue opVal = getCached(operand);
+        if (opVal.isX()) {
+          sawX = true;
+          break;
+        }
+        llvm::APInt opBits = opVal.getAPInt();
+        if (opBits.getBitWidth() < width)
+          opBits = opBits.zext(width);
+        else if (opBits.getBitWidth() > width)
+          opBits = opBits.trunc(width);
+        result |= opBits;
+      }
+      if (sawX)
+        finish(InterpretedValue::makeX(width));
+      else
+        finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::ICmp: {
+      auto icmpOp = current.getDefiningOp<comb::ICmpOp>();
+      InterpretedValue lhs = getCached(icmpOp.getLhs());
+      InterpretedValue rhs = getCached(icmpOp.getRhs());
+      if (lhs.isX() || rhs.isX()) {
+        finish(InterpretedValue::makeX(1));
+        break;
+      }
+      bool result = false;
+      llvm::APInt lVal = lhs.getAPInt();
+      llvm::APInt rVal = rhs.getAPInt();
+      unsigned compareWidth = std::max(lVal.getBitWidth(), rVal.getBitWidth());
+      normalizeWidths(lVal, rVal, compareWidth);
+      switch (icmpOp.getPredicate()) {
+      case comb::ICmpPredicate::eq:
+        result = (lVal == rVal);
+        break;
+      case comb::ICmpPredicate::ne:
+        result = (lVal != rVal);
+        break;
+      case comb::ICmpPredicate::ult:
+        result = lVal.ult(rVal);
+        break;
+      case comb::ICmpPredicate::ule:
+        result = lVal.ule(rVal);
+        break;
+      case comb::ICmpPredicate::ugt:
+        result = lVal.ugt(rVal);
+        break;
+      case comb::ICmpPredicate::uge:
+        result = lVal.uge(rVal);
+        break;
+      default:
+        result = false;
+        break;
+      }
+      finish(InterpretedValue(result ? 1ULL : 0ULL, 1));
+      break;
+    }
+    case EvalKind::Mux: {
+      auto muxOp = current.getDefiningOp<comb::MuxOp>();
+      if (frame.stage == 1) {
+        InterpretedValue cond = getCached(frame.aux);
+        if (cond.isX()) {
+          finish(makeUnknown(current));
+          break;
+        }
+        Value selected = cond.getUInt64() != 0 ? muxOp.getTrueValue()
+                                               : muxOp.getFalseValue();
+        frame.aux = selected;
+        frame.stage = 2;
+        pushValue(selected);
         continue;
-      llvm::APInt bits = opVal.getAPInt();
-      if (bits.getBitWidth() < width)
-        bits = bits.zext(width);
-      else if (bits.getBitWidth() > width)
-        bits = bits.trunc(width);
-      result.insertBits(bits, bitOffset);
+      }
+      InterpretedValue selectedVal = getCached(frame.aux);
+      finish(selectedVal);
+      break;
     }
-    return InterpretedValue(result);
+    case EvalKind::Concat: {
+      auto concatOp = current.getDefiningOp<comb::ConcatOp>();
+      unsigned totalWidth = getTypeWidth(current.getType());
+      llvm::APInt result(totalWidth, 0);
+      unsigned bitOffset = totalWidth;
+      for (Value operand : concatOp.getOperands()) {
+        InterpretedValue opVal = getCached(operand);
+        unsigned width = getTypeWidth(operand.getType());
+        bitOffset -= width;
+        if (opVal.isX())
+          continue;
+        llvm::APInt bits = opVal.getAPInt();
+        if (bits.getBitWidth() < width)
+          bits = bits.zext(width);
+        else if (bits.getBitWidth() > width)
+          bits = bits.trunc(width);
+        result.insertBits(bits, bitOffset);
+      }
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::Extract: {
+      auto extractOp = current.getDefiningOp<comb::ExtractOp>();
+      InterpretedValue inputVal = getCached(extractOp.getInput());
+      unsigned width = getTypeWidth(current.getType());
+      if (inputVal.isX()) {
+        finish(InterpretedValue::makeX(width));
+        break;
+      }
+      unsigned lowBit = extractOp.getLowBit();
+      llvm::APInt input = inputVal.getAPInt();
+      llvm::APInt sliced = input.extractBits(width, lowBit);
+      finish(InterpretedValue(sliced));
+      break;
+    }
+    case EvalKind::Add: {
+      auto addOp = current.getDefiningOp<comb::AddOp>();
+      InterpretedValue lhs = getCached(addOp.getOperand(0));
+      InterpretedValue rhs = getCached(addOp.getOperand(1));
+      if (lhs.isX() || rhs.isX()) {
+        finish(makeUnknown(current));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      unsigned width = getTypeWidth(current.getType());
+      normalizeWidths(lhsVal, rhsVal, width);
+      finish(InterpretedValue(lhsVal + rhsVal));
+      break;
+    }
+    case EvalKind::Sub: {
+      auto subOp = current.getDefiningOp<comb::SubOp>();
+      InterpretedValue lhs = getCached(subOp.getOperand(0));
+      InterpretedValue rhs = getCached(subOp.getOperand(1));
+      if (lhs.isX() || rhs.isX()) {
+        finish(makeUnknown(current));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      unsigned width = getTypeWidth(current.getType());
+      normalizeWidths(lhsVal, rhsVal, width);
+      finish(InterpretedValue(lhsVal - rhsVal));
+      break;
+    }
+    case EvalKind::Replicate: {
+      auto replOp = current.getDefiningOp<comb::ReplicateOp>();
+      InterpretedValue input = getCached(replOp.getInput());
+      if (input.isX()) {
+        finish(InterpretedValue::makeX(getTypeWidth(current.getType())));
+        break;
+      }
+      unsigned inputWidth = input.getWidth();
+      unsigned multiple = replOp.getMultiple();
+      llvm::APInt result(getTypeWidth(current.getType()), 0);
+      for (unsigned i = 0; i < multiple; ++i) {
+        llvm::APInt chunk = input.getAPInt().zext(result.getBitWidth());
+        result = result.shl(inputWidth) | chunk;
+      }
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::Parity: {
+      auto parityOp = current.getDefiningOp<comb::ParityOp>();
+      InterpretedValue input = getCached(parityOp.getInput());
+      if (input.isX()) {
+        finish(InterpretedValue::makeX(1));
+        break;
+      }
+      bool parity = (input.getAPInt().popcount() & 1) != 0;
+      finish(InterpretedValue(parity, 1));
+      break;
+    }
+    case EvalKind::Shl: {
+      auto shlOp = current.getDefiningOp<comb::ShlOp>();
+      InterpretedValue lhs = getCached(shlOp.getLhs());
+      InterpretedValue rhs = getCached(shlOp.getRhs());
+      if (lhs.isX() || rhs.isX()) {
+        finish(InterpretedValue::makeX(getTypeWidth(current.getType())));
+        break;
+      }
+      uint64_t shift = rhs.getAPInt().getLimitedValue();
+      finish(InterpretedValue(lhs.getAPInt().shl(shift)));
+      break;
+    }
+    case EvalKind::ShrU: {
+      auto shrOp = current.getDefiningOp<comb::ShrUOp>();
+      InterpretedValue lhs = getCached(shrOp.getLhs());
+      InterpretedValue rhs = getCached(shrOp.getRhs());
+      if (lhs.isX() || rhs.isX()) {
+        finish(InterpretedValue::makeX(getTypeWidth(current.getType())));
+        break;
+      }
+      uint64_t shift = rhs.getAPInt().getLimitedValue();
+      finish(InterpretedValue(lhs.getAPInt().lshr(shift)));
+      break;
+    }
+    case EvalKind::ShrS: {
+      auto shrOp = current.getDefiningOp<comb::ShrSOp>();
+      InterpretedValue lhs = getCached(shrOp.getLhs());
+      InterpretedValue rhs = getCached(shrOp.getRhs());
+      if (lhs.isX() || rhs.isX()) {
+        finish(InterpretedValue::makeX(getTypeWidth(current.getType())));
+        break;
+      }
+      uint64_t shift = rhs.getAPInt().getLimitedValue();
+      finish(InterpretedValue(lhs.getAPInt().ashr(shift)));
+      break;
+    }
+    case EvalKind::Mul: {
+      auto mulOp = current.getDefiningOp<comb::MulOp>();
+      unsigned targetWidth = getTypeWidth(current.getType());
+      llvm::APInt result(targetWidth, 1);
+      bool sawX = false;
+      for (Value operand : mulOp.getOperands()) {
+        InterpretedValue value = getCached(operand);
+        if (value.isX()) {
+          sawX = true;
+          break;
+        }
+        llvm::APInt operandVal = value.getAPInt();
+        if (operandVal.getBitWidth() < targetWidth)
+          operandVal = operandVal.zext(targetWidth);
+        else if (operandVal.getBitWidth() > targetWidth)
+          operandVal = operandVal.trunc(targetWidth);
+        result *= operandVal;
+      }
+      if (sawX)
+        finish(InterpretedValue::makeX(targetWidth));
+      else
+        finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::DivS: {
+      auto divOp = current.getDefiningOp<comb::DivSOp>();
+      InterpretedValue lhs = getCached(divOp.getLhs());
+      InterpretedValue rhs = getCached(divOp.getRhs());
+      unsigned targetWidth = getTypeWidth(current.getType());
+      if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
+        finish(InterpretedValue::makeX(targetWidth));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
+      finish(InterpretedValue(lhsVal.sdiv(rhsVal)));
+      break;
+    }
+    case EvalKind::DivU: {
+      auto divOp = current.getDefiningOp<comb::DivUOp>();
+      InterpretedValue lhs = getCached(divOp.getLhs());
+      InterpretedValue rhs = getCached(divOp.getRhs());
+      unsigned targetWidth = getTypeWidth(current.getType());
+      if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
+        finish(InterpretedValue::makeX(targetWidth));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
+      finish(InterpretedValue(lhsVal.udiv(rhsVal)));
+      break;
+    }
+    case EvalKind::ModS: {
+      auto modOp = current.getDefiningOp<comb::ModSOp>();
+      InterpretedValue lhs = getCached(modOp.getLhs());
+      InterpretedValue rhs = getCached(modOp.getRhs());
+      unsigned targetWidth = getTypeWidth(current.getType());
+      if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
+        finish(InterpretedValue::makeX(targetWidth));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
+      finish(InterpretedValue(lhsVal.srem(rhsVal)));
+      break;
+    }
+    case EvalKind::ModU: {
+      auto modOp = current.getDefiningOp<comb::ModUOp>();
+      InterpretedValue lhs = getCached(modOp.getLhs());
+      InterpretedValue rhs = getCached(modOp.getRhs());
+      unsigned targetWidth = getTypeWidth(current.getType());
+      if (lhs.isX() || rhs.isX() || rhs.getAPInt().isZero()) {
+        finish(InterpretedValue::makeX(targetWidth));
+        break;
+      }
+      llvm::APInt lhsVal = lhs.getAPInt();
+      llvm::APInt rhsVal = rhs.getAPInt();
+      normalizeWidths(lhsVal, rhsVal, targetWidth);
+      finish(InterpretedValue(lhsVal.urem(rhsVal)));
+      break;
+    }
+    case EvalKind::None:
+      finish(makeUnknown(current));
+      break;
+    }
   }
 
-  if (auto extractOp = value.getDefiningOp<comb::ExtractOp>()) {
-    InterpretedValue inputVal =
-        evaluateContinuousValueImpl(extractOp.getInput(), inProgress, depth + 1);
-    unsigned width = getTypeWidth(value.getType());
-    if (inputVal.isX())
-      return InterpretedValue::makeX(width);
-    unsigned lowBit = extractOp.getLowBit();
-    llvm::APInt input = inputVal.getAPInt();
-    llvm::APInt sliced = input.extractBits(width, lowBit);
-    return InterpretedValue(sliced);
-  }
-
-  if (auto addOp = value.getDefiningOp<comb::AddOp>()) {
-    InterpretedValue lhs =
-        evaluateContinuousValueImpl(addOp.getOperand(0), inProgress, depth + 1);
-    InterpretedValue rhs =
-        evaluateContinuousValueImpl(addOp.getOperand(1), inProgress, depth + 1);
-    if (lhs.isX() || rhs.isX())
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-    llvm::APInt lhsVal = lhs.getAPInt();
-    llvm::APInt rhsVal = rhs.getAPInt();
-    unsigned width = getTypeWidth(value.getType());
-    normalizeWidths(lhsVal, rhsVal, width);
-    return InterpretedValue(lhsVal + rhsVal);
-  }
-
-  if (auto subOp = value.getDefiningOp<comb::SubOp>()) {
-    InterpretedValue lhs =
-        evaluateContinuousValueImpl(subOp.getOperand(0), inProgress, depth + 1);
-    InterpretedValue rhs =
-        evaluateContinuousValueImpl(subOp.getOperand(1), inProgress, depth + 1);
-    if (lhs.isX() || rhs.isX())
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
-    llvm::APInt lhsVal = lhs.getAPInt();
-    llvm::APInt rhsVal = rhs.getAPInt();
-    unsigned width = getTypeWidth(value.getType());
-    normalizeWidths(lhsVal, rhsVal, width);
-    return InterpretedValue(lhsVal - rhsVal);
-  }
-
-  // Default: return unknown
-  LLVM_DEBUG(llvm::dbgs() << "  Warning: Cannot evaluate continuous value for "
-                          << *value.getDefiningOp() << "\n");
-  return InterpretedValue::makeX(getTypeWidth(value.getType()));
+  auto it = cache.find(value);
+  if (it != cache.end())
+    return it->second;
+  return makeUnknown(value);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2307,6 +3209,8 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   }
 
   ProcessExecutionState &state = it->second;
+  ScopedInstanceContext instScope(*this, state.instanceId);
+  ScopedInputValueMap inputScope(*this, state.inputMap);
 
   if ((state.waiting || state.destBlock) &&
       canSkipCachedProcess(state, scheduler)) {
@@ -2675,6 +3579,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     for (auto [arg, operand] : llvm::zip(state.currentBlock->getArguments(),
                                           branchOp.getDestOperands())) {
       state.valueMap[arg] = getValue(procId, operand);
+      if (isa<llhd::RefType>(arg.getType())) {
+        if (SignalId sigId = resolveSignalId(operand))
+          valueToSignal[arg] = sigId;
+        else
+          valueToSignal.erase(arg);
+      }
     }
     return success();
   }
@@ -2691,6 +3601,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
            llvm::zip(state.currentBlock->getArguments(),
                      condBranchOp.getTrueDestOperands())) {
         state.valueMap[arg] = getValue(procId, operand);
+        if (isa<llhd::RefType>(arg.getType())) {
+          if (SignalId sigId = resolveSignalId(operand))
+            valueToSignal[arg] = sigId;
+          else
+            valueToSignal.erase(arg);
+        }
       }
     } else {
       // False branch (or X treated as false)
@@ -2700,6 +3616,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
            llvm::zip(state.currentBlock->getArguments(),
                      condBranchOp.getFalseDestOperands())) {
         state.valueMap[arg] = getValue(procId, operand);
+        if (isa<llhd::RefType>(arg.getType())) {
+          if (SignalId sigId = resolveSignalId(operand))
+            valueToSignal[arg] = sigId;
+          else
+            valueToSignal.erase(arg);
+        }
       }
     }
     return success();
@@ -3831,11 +4753,17 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     // Elements are stored in reverse order (index 0 at the LSB)
     for (size_t i = 0; i < numElements; ++i) {
       InterpretedValue elem = getValue(procId, arrayCreateOp.getInputs()[i]);
+      APInt elemVal(elementWidth, 0);
       if (elem.isX()) {
-        hasX = true;
-        break;
+        if (auto encoded = getEncodedUnknownForType(arrayType.getElementType())) {
+          elemVal = encoded->zextOrTrunc(elementWidth);
+        } else {
+          hasX = true;
+          break;
+        }
+      } else {
+        elemVal = elem.getAPInt();
       }
-      APInt elemVal = elem.getAPInt();
       if (elemVal.getBitWidth() < elementWidth)
         elemVal = elemVal.zext(elementWidth);
       else if (elemVal.getBitWidth() > elementWidth)
@@ -3859,7 +4787,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     InterpretedValue arrayVal = getValue(procId, arrayGetOp.getInput());
     InterpretedValue indexVal = getValue(procId, arrayGetOp.getIndex());
 
-    if (arrayVal.isX() || indexVal.isX()) {
+    if (indexVal.isX()) {
       setValue(procId, arrayGetOp.getResult(),
                InterpretedValue::makeX(getTypeWidth(arrayGetOp.getType())));
       return success();
@@ -3874,6 +4802,17 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       // Out of bounds - return X
       setValue(procId, arrayGetOp.getResult(),
                InterpretedValue::makeX(elementWidth));
+      return success();
+    }
+
+    if (arrayVal.isX()) {
+      if (auto encoded = getEncodedUnknownForType(arrayType.getElementType())) {
+        setValue(procId, arrayGetOp.getResult(),
+                 InterpretedValue(encoded->zextOrTrunc(elementWidth)));
+      } else {
+        setValue(procId, arrayGetOp.getResult(),
+                 InterpretedValue::makeX(elementWidth));
+      }
       return success();
     }
 
@@ -3955,8 +4894,13 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto structExtractOp = dyn_cast<hw::StructExtractOp>(op)) {
     InterpretedValue structVal = getValue(procId, structExtractOp.getInput());
     if (structVal.isX()) {
-      setValue(procId, structExtractOp.getResult(),
-               InterpretedValue::makeX(getTypeWidth(structExtractOp.getType())));
+      if (auto encoded = getEncodedUnknownForType(structExtractOp.getType())) {
+        setValue(procId, structExtractOp.getResult(),
+                 InterpretedValue(*encoded));
+      } else {
+        setValue(procId, structExtractOp.getResult(),
+                 InterpretedValue::makeX(getTypeWidth(structExtractOp.getType())));
+      }
       return success();
     }
 
@@ -3989,12 +4933,16 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
     for (size_t i = 0; i < structCreateOp.getInput().size(); ++i) {
       InterpretedValue val = getValue(procId, structCreateOp.getInput()[i]);
+      unsigned fieldWidth = getTypeWidth(elements[i].type);
+      bitOffset -= fieldWidth;
       if (val.isX()) {
+        if (auto encoded = getEncodedUnknownForType(elements[i].type)) {
+          result.insertBits(encoded->zextOrTrunc(fieldWidth), bitOffset);
+          continue;
+        }
         hasX = true;
         break;
       }
-      unsigned fieldWidth = getTypeWidth(elements[i].type);
-      bitOffset -= fieldWidth;
       result.insertBits(val.getAPInt(), bitOffset);
     }
 
@@ -5271,7 +6219,16 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
   const SignalValue &sigVal = scheduler.getSignalValue(sigId);
 
   // Convert to InterpretedValue and store
-  InterpretedValue val = InterpretedValue::fromSignalValue(sigVal);
+  InterpretedValue val;
+  if (sigVal.isUnknown()) {
+    if (auto encoded = getEncodedUnknownForType(probeOp.getResult().getType()))
+      val = InterpretedValue(*encoded);
+    else
+      val = InterpretedValue::makeX(
+          getTypeWidth(probeOp.getResult().getType()));
+  } else {
+    val = InterpretedValue::fromSignalValue(sigVal);
+  }
   setValue(procId, probeOp.getResult(), val);
 
   LLVM_DEBUG(llvm::dbgs() << "  Probed signal " << sigId << " = "
@@ -5750,14 +6707,16 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     // reads signal X, then both Z and X are "self-driven" and should be
     // filtered from the sensitivity list to prevent zero-delta loops.
     for (auto &entry : moduleDrives) {
-      if (entry.second != procId)
+      if (entry.procId != procId)
         continue;
-      SignalId drivenId = getSignalId(entry.first.getSignal());
+      ScopedInstanceContext instScope(*this, entry.instanceId);
+      ScopedInputValueMap inputScope(*this, entry.inputMap);
+      SignalId drivenId = getSignalId(entry.driveOp.getSignal());
       if (drivenId != 0)
         selfDrivenSignals.insert(drivenId);
       // Collect transitive dependencies from the drive value expression.
       llvm::SmallVector<SignalId, 4> transitiveSignals;
-      collectSignalIds(entry.first.getValue(), transitiveSignals);
+      collectSignalIds(entry.driveOp.getValue(), transitiveSignals);
       for (SignalId sigId : transitiveSignals)
         selfDrivenSignals.insert(sigId);
     }
@@ -5811,9 +6770,20 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
           return sigId;
 
         // Trace through instance results to child outputs.
-        auto instIt = instanceOutputMap.find(value);
-        if (instIt != instanceOutputMap.end())
-          return traceToSignal(instIt->second, depth + 1);
+        auto instMapIt = instanceOutputMap.find(activeInstanceId);
+        if (instMapIt != instanceOutputMap.end()) {
+          auto instIt = instMapIt->second.find(value);
+          if (instIt != instMapIt->second.end()) {
+            const auto &info = instIt->second;
+            ScopedInstanceContext instScope(
+                *const_cast<LLHDProcessInterpreter *>(this), info.instanceId);
+            if (info.inputMap.empty())
+              return traceToSignal(info.outputValue, depth + 1);
+            ScopedInputValueMap scope(
+                *const_cast<LLHDProcessInterpreter *>(this), info.inputMap);
+            return traceToSignal(info.outputValue, depth + 1);
+          }
+        }
 
         // Direct probe case
         if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
@@ -5827,6 +6797,14 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
 
         // Block argument - trace through predecessors
         if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+          Value mappedValue;
+          InstanceId mappedInstance = activeInstanceId;
+          if (lookupInputMapping(blockArg, mappedValue, mappedInstance) &&
+              mappedValue != value) {
+            ScopedInstanceContext scope(
+                *const_cast<LLHDProcessInterpreter *>(this), mappedInstance);
+            return traceToSignal(mappedValue, depth + 1);
+          }
           Block *block = blockArg.getOwner();
           unsigned argIdx = blockArg.getArgNumber();
 
@@ -6520,31 +7498,65 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   // For direct signal references not in cache, read the current value.
   if (SignalId sigId = getSignalId(value)) {
     const SignalValue &sv = scheduler.getSignalValue(sigId);
-    InterpretedValue iv = InterpretedValue::fromSignalValue(sv);
+    InterpretedValue iv;
+    if (sv.isUnknown()) {
+      if (auto encoded = getEncodedUnknownForType(value.getType()))
+        iv = InterpretedValue(*encoded);
+      else
+        iv = InterpretedValue::makeX(getTypeWidth(value.getType()));
+    } else {
+      iv = InterpretedValue::fromSignalValue(sv);
+    }
     valueMap[value] = iv;
     return iv;
   }
 
-  auto instIt = instanceOutputMap.find(value);
-  if (instIt != instanceOutputMap.end())
-    return getValue(procId, instIt->second);
+  auto instMapIt = instanceOutputMap.find(activeInstanceId);
+  if (instMapIt != instanceOutputMap.end()) {
+    auto instIt = instMapIt->second.find(value);
+    if (instIt != instMapIt->second.end()) {
+      const auto &info = instIt->second;
+      ScopedInstanceContext instScope(*this, info.instanceId);
+      if (info.inputMap.empty())
+        return getValue(procId, info.outputValue);
+      ScopedInputValueMap scope(*this, info.inputMap);
+      return getValue(procId, info.outputValue);
+    }
+  }
 
   // Handle block arguments that are mapped via inputValueMap (child module
   // inputs mapped to parent values). This is needed when a child module's input
   // is used in a drive and the parent passes a process result as the input.
   if (auto arg = dyn_cast<mlir::BlockArgument>(value)) {
-    auto argIt = inputValueMap.find(arg);
-    if (argIt != inputValueMap.end() && argIt->second != value)
-      return getValue(procId, argIt->second);
+    Value mappedValue;
+    InstanceId mappedInstance = activeInstanceId;
+    if (lookupInputMapping(arg, mappedValue, mappedInstance) &&
+        mappedValue != value) {
+      ScopedInstanceContext scope(*this, mappedInstance);
+      return getValue(procId, mappedValue);
+    }
   }
 
   // Handle process results. When a value is the result of an llhd::ProcessOp,
   // look up the yielded value from that process's valueMap.
   if (auto result = dyn_cast<OpResult>(value)) {
     if (auto processOp = dyn_cast<llhd::ProcessOp>(result.getOwner())) {
-      auto procIt = opToProcessId.find(processOp.getOperation());
-      if (procIt != opToProcessId.end()) {
-        auto stateIt = processStates.find(procIt->second);
+      ProcessId procId = InvalidProcessId;
+      if (activeInstanceId != 0) {
+        auto ctxIt = instanceOpToProcessId.find(activeInstanceId);
+        if (ctxIt != instanceOpToProcessId.end()) {
+          auto procIt = ctxIt->second.find(processOp.getOperation());
+          if (procIt != ctxIt->second.end())
+            procId = procIt->second;
+        }
+      }
+      if (procId == InvalidProcessId) {
+        auto procIt = opToProcessId.find(processOp.getOperation());
+        if (procIt != opToProcessId.end())
+          procId = procIt->second;
+      }
+      if (procId != InvalidProcessId) {
+        auto stateIt = processStates.find(procId);
         if (stateIt != processStates.end()) {
           auto valIt = stateIt->second.valueMap.find(value);
           if (valIt != stateIt->second.valueMap.end())
@@ -6761,29 +7773,6 @@ void LLHDProcessInterpreter::setValue(ProcessId procId, Value value,
   auto it = processStates.find(procId);
   if (it == processStates.end())
     return;
-
-  if (!val.isX()) {
-    if (auto structType = dyn_cast<hw::StructType>(value.getType())) {
-      auto elements = structType.getElements();
-      if (elements.size() == 2 &&
-          elements[0].name.getValue() == "value" &&
-          elements[1].name.getValue() == "unknown") {
-        auto valueType = dyn_cast<IntegerType>(elements[0].type);
-        auto unknownType = dyn_cast<IntegerType>(elements[1].type);
-        if (valueType && unknownType &&
-            valueType.getWidth() == unknownType.getWidth()) {
-          unsigned totalWidth = valueType.getWidth() + unknownType.getWidth();
-          llvm::APInt bits = val.getAPInt();
-          if (bits.getBitWidth() == totalWidth) {
-            llvm::APInt unknownMask =
-                llvm::APInt::getLowBitsSet(totalWidth, unknownType.getWidth());
-            bits &= ~unknownMask;
-            val = InterpretedValue(bits);
-          }
-        }
-      }
-    }
-  }
 
   it->second.valueMap[value] = val;
 }
@@ -7793,16 +8782,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     return nativePtr[i];
   };
 
-  // Read bytes from memory and construct the value (little-endian)
+  // Read bytes from memory and construct the value (little-endian).
+  // Clamp to the number of bytes needed for the value width to avoid
+  // shifting past the APInt width when loadSize includes padding.
+  unsigned bytesForValue = std::min(loadSize, (bitWidth + 7) / 8);
   uint64_t value = 0;
-  for (unsigned i = 0; i < loadSize && i < 8; ++i) {
+  for (unsigned i = 0; i < bytesForValue && i < 8; ++i) {
     value |= static_cast<uint64_t>(readByte(i)) << (i * 8);
   }
 
   // For values larger than 64 bits, use APInt directly
   if (bitWidth > 64) {
     APInt apValue(bitWidth, 0);
-    for (unsigned i = 0; i < loadSize; ++i) {
+    for (unsigned i = 0; i < bytesForValue; ++i) {
       APInt byteVal(bitWidth, readByte(i));
       apValue |= byteVal.shl(i * 8);
     }
@@ -8546,6 +9538,52 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_coverpoint_add_illegal_bin") {
       // No-op: illegal bin configuration is not supported
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_add_illegal_bin() (stub, no-op)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverage_set_test_name") {
+      // No-op: ignore coverage test name in interpreter.
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_set_test_name() (stub, no-op)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverage_load_db") {
+      // Return null handle.
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_load_db() -> 0 (stub)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverage_merge_db") {
+      // Return success (0).
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_merge_db() -> 0 (stub)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverage_save_db") {
+      // Return success (0).
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_save_db() -> 0 (stub)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverage_load") {
+      // Return null handle.
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_load() -> 0 (stub)\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverage_merge") {
+      // Return success (0).
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_merge() -> 0 (stub)\n");
       return success();
     }
 
