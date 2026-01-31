@@ -246,6 +246,17 @@ Enable UVM with Accellera's uvm-core library by fixing llhd.prb/drv on local var
 | yosys SVA BMC | 14/14 (100%) | 2 VHDL skipped |
 | llvm-assoc-native-ref-load-store | PASS | assoc_val=99 output correct |
 
+- **yosys-sva BMC re-run**: 14 tests, failures=0, skipped=2 (VHDL) via
+  `utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva`.
+- **sv-tests BMC re-run**: total=26 pass=23 xfail=3 skip=1010 via
+  `utils/run_sv_tests_circt_bmc.sh ~/sv-tests`.
+- **verilator-verification BMC re-run**: total=17 pass=17 fail=0 via
+  `utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification`.
+- **AVIP (APB)**: `utils/run_avip_circt_verilog.sh ~/mbit/apb_avip` (exit 0, log:
+  `avip-circt-verilog.log`).
+- **OpenTitan**: `utils/run_opentitan_circt_sim.sh prim_count` (PASS, log:
+  `opentitan-prim_count_sim_output.log`).
+
 ---
 
 ## Iteration 269 - January 31, 2026
