@@ -318,6 +318,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **BMC delay root handling**: sequence-root `ltl.delay` ops now use delay
   buffers instead of NFAs to avoid null implication operands; fixes
   `bmc-delay-posedge.mlir` legalization
+- **BMC implication delay shift**: exact delayed consequents are shifted onto
+  the antecedent so BMC checks use past buffers (non-overlapping implication)
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
 - **Virtual Interface Task Calls Confirmed Working**: virtual-interface-task.sv passes
