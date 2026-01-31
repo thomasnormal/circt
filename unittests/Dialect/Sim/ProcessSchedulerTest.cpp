@@ -124,46 +124,63 @@ TEST(SignalValue, FourStateXDetection) {
   // Test 4-state struct encoding: {value: i1, unknown: i1} flattened to 2 bits
   // Lower bit = unknown, upper bit = value
   // 0b00 = 0 (known 0), 0b10 = 1 (known 1), 0b01 = X (unknown, value=0), 0b11 = X (unknown, value=1)
+  //
+  // IMPORTANT (post-fix 4ba449ddc): The operator== and detectEdge() methods
+  // only use the explicit isX flag, NOT isFourStateX(). This is because
+  // isFourStateX() would incorrectly treat normal 2-state values with set
+  // lower-half bits as X. 4-state comparisons require SignalEncoding metadata
+  // which is not available at the SignalValue level.
+  //
+  // The isFourStateX() method is still useful for probing potential 4-state
+  // encoding, but equality and edge detection operate on explicit isX flag only.
 
   SignalValue known0(llvm::APInt(2, 0b00));  // Known 0
   SignalValue known1(llvm::APInt(2, 0b10));  // Known 1
-  SignalValue x_val0(llvm::APInt(2, 0b01));  // X with underlying value=0
-  SignalValue x_val1(llvm::APInt(2, 0b11));  // X with underlying value=1
+  SignalValue x_val0(llvm::APInt(2, 0b01));  // Might be X with 4-state encoding
+  SignalValue x_val1(llvm::APInt(2, 0b11));  // Might be X with 4-state encoding
 
-  // isFourStateX should be true when any unknown bits are set
+  // isFourStateX should detect potential 4-state X encoding
   EXPECT_FALSE(known0.isFourStateX());  // unknown=0
   EXPECT_FALSE(known1.isFourStateX());  // unknown=0
-  EXPECT_TRUE(x_val0.isFourStateX());   // unknown=1
-  EXPECT_TRUE(x_val1.isFourStateX());   // unknown=1
+  EXPECT_TRUE(x_val0.isFourStateX());   // unknown=1 (potential 4-state X)
+  EXPECT_TRUE(x_val1.isFourStateX());   // unknown=1 (potential 4-state X)
 
-  // Two X values should be equal even with different underlying value bits
-  EXPECT_TRUE(x_val0 == x_val1);
+  // operator== uses explicit isX flag ONLY - these are different APInt values
+  // so they should NOT be equal (no explicit isX flag set)
+  EXPECT_FALSE(x_val0 == x_val1)
+      << "Without explicit isX flag, different APInt values should not be equal";
 
-  // X to X should NOT trigger an edge
-  EXPECT_EQ(SignalValue::detectEdge(x_val0, x_val1), EdgeType::None);
-  EXPECT_EQ(SignalValue::detectEdge(x_val1, x_val0), EdgeType::None);
+  // detectEdge uses explicit isX flag ONLY - these are different APInt values
+  // so an edge should be detected (change from 0b01 to 0b11)
+  EXPECT_NE(SignalValue::detectEdge(x_val0, x_val1), EdgeType::None)
+      << "Without explicit isX flag, value changes should trigger edge";
+  EXPECT_NE(SignalValue::detectEdge(x_val1, x_val0), EdgeType::None)
+      << "Without explicit isX flag, value changes should trigger edge";
 
-  // Known to X or X to Known SHOULD trigger an edge
-  EXPECT_NE(SignalValue::detectEdge(known0, x_val0), EdgeType::None);
-  EXPECT_NE(SignalValue::detectEdge(x_val0, known0), EdgeType::None);
-  EXPECT_NE(SignalValue::detectEdge(known1, x_val1), EdgeType::None);
-  EXPECT_NE(SignalValue::detectEdge(x_val1, known1), EdgeType::None);
+  // For true X handling, use SignalValue::makeX() which sets the explicit flag
+  SignalValue explicitX1 = SignalValue::makeX(2);
+  SignalValue explicitX2 = SignalValue::makeX(2);
+  EXPECT_TRUE(explicitX1 == explicitX2)
+      << "Explicit X values should be equal";
+  EXPECT_EQ(SignalValue::detectEdge(explicitX1, explicitX2), EdgeType::None)
+      << "X to X should not trigger edge";
 
-  // Test wider 4-state values (4-bit value + 4-bit unknown = 8-bit total)
-  // All lower bits set = fully X
-  SignalValue wide_x1(llvm::APInt(8, 0x0F));  // unknown=0b1111, value=0b0000 -> all X
-  SignalValue wide_x2(llvm::APInt(8, 0xFF));  // unknown=0b1111, value=0b1111 -> all X
-  SignalValue wide_known(llvm::APInt(8, 0xA0));  // unknown=0b0000, value=0b1010 -> known
+  // Test wider values - isFourStateX still works for detection
+  SignalValue wide_potential_x1(llvm::APInt(8, 0x0F));  // Lower nibble set
+  SignalValue wide_potential_x2(llvm::APInt(8, 0xFF));  // All bits set
+  SignalValue wide_known(llvm::APInt(8, 0xA0));  // No lower nibble bits
 
-  EXPECT_TRUE(wide_x1.isFourStateX());
-  EXPECT_TRUE(wide_x2.isFourStateX());
+  EXPECT_TRUE(wide_potential_x1.isFourStateX());
+  EXPECT_TRUE(wide_potential_x2.isFourStateX());
   EXPECT_FALSE(wide_known.isFourStateX());
 
-  // Two fully-X values should be equal
-  EXPECT_TRUE(wide_x1 == wide_x2);
-  EXPECT_EQ(SignalValue::detectEdge(wide_x1, wide_x2), EdgeType::None);
+  // But equality still uses explicit flag - different values are NOT equal
+  EXPECT_FALSE(wide_potential_x1 == wide_potential_x2)
+      << "Different APInt values should not be equal without explicit isX";
+  EXPECT_NE(SignalValue::detectEdge(wide_potential_x1, wide_potential_x2), EdgeType::None)
+      << "Value changes should trigger edge without explicit isX";
 
-  // Partially unknown values should be treated as X
+  // Partially unknown values should still be detected by isFourStateX
   SignalValue partial_unknown(llvm::APInt(8, 0x01));  // unknown=0b0001, value=0b0000
   EXPECT_TRUE(partial_unknown.isFourStateX());
 }
@@ -1226,6 +1243,229 @@ TEST(SignalStrengthResolution, MultipleDriversSameValue) {
   const SignalValue &val = scheduler.getSignalValue(sig);
   EXPECT_FALSE(val.isUnknown());
   EXPECT_EQ(val.getValue(), 1u);
+}
+
+//===----------------------------------------------------------------------===//
+// SignalValue Comparison Regression Tests (Fix 4ba449ddc)
+//===----------------------------------------------------------------------===//
+
+TEST(SignalValueComparisonFix, NormalIntegersNotTreatedAsX) {
+  // Regression test for commit 4ba449ddc:
+  // "Fix SignalValue comparison for continuous assignment propagation"
+  //
+  // The bug: operator== was using isFourStateXInternal() which treated
+  // normal 2-state integer values as X if any lower-half bits were set.
+  // This caused continuous assignments to skip updates incorrectly.
+  //
+  // This test verifies that normal integer values with various bit patterns
+  // are NOT treated as unknown (X) values.
+
+  // Values with bits set in the lower half should NOT be treated as X
+  SignalValue val_0x01(llvm::APInt(8, 0x01));  // Lower bit set
+  SignalValue val_0x0F(llvm::APInt(8, 0x0F));  // All lower nibble set
+  SignalValue val_0x55(llvm::APInt(8, 0x55));  // Alternating bits
+  SignalValue val_0xAA(llvm::APInt(8, 0xAA));  // Alternating bits (inverted)
+  SignalValue val_0xFF(llvm::APInt(8, 0xFF));  // All bits set
+
+  // None of these should be unknown - they are all valid 2-state values
+  EXPECT_FALSE(val_0x01.isUnknown())
+      << "Value 0x01 should NOT be treated as unknown";
+  EXPECT_FALSE(val_0x0F.isUnknown())
+      << "Value 0x0F should NOT be treated as unknown";
+  EXPECT_FALSE(val_0x55.isUnknown())
+      << "Value 0x55 should NOT be treated as unknown";
+  EXPECT_FALSE(val_0xAA.isUnknown())
+      << "Value 0xAA should NOT be treated as unknown";
+  EXPECT_FALSE(val_0xFF.isUnknown())
+      << "Value 0xFF should NOT be treated as unknown";
+
+  // Equality comparisons should work correctly
+  SignalValue val_0x01_copy(llvm::APInt(8, 0x01));
+  EXPECT_TRUE(val_0x01 == val_0x01_copy)
+      << "Identical values should be equal";
+  EXPECT_FALSE(val_0x01 == val_0x0F)
+      << "Different values should not be equal";
+
+  // Edge detection should work correctly (not return None due to false X)
+  SignalValue zero8(llvm::APInt(8, 0x00));
+  EXPECT_EQ(SignalValue::detectEdge(zero8, val_0x01), EdgeType::Posedge)
+      << "Edge from 0 to 1 should be posedge";
+  EXPECT_EQ(SignalValue::detectEdge(val_0x01, zero8), EdgeType::Negedge)
+      << "Edge from 1 to 0 should be negedge";
+
+  // Wide values with lower bits set should also work correctly
+  SignalValue wide_lower(llvm::APInt(64, 0x00000001'00000000ULL));
+  SignalValue wide_both(llvm::APInt(64, 0x00000001'00000001ULL));
+  EXPECT_FALSE(wide_lower.isUnknown())
+      << "Wide value with upper bit set should not be unknown";
+  EXPECT_FALSE(wide_both.isUnknown())
+      << "Wide value with both upper and lower bits set should not be unknown";
+  EXPECT_FALSE(wide_lower == wide_both)
+      << "Different wide values should not be equal";
+}
+
+TEST(SignalValueComparisonFix, ContinuousAssignmentPropagation) {
+  // Regression test for the continuous assignment skip bug.
+  // This simulates the scenario where continuous assignments were
+  // skipping updates because values were incorrectly treated as X.
+
+  ProcessScheduler scheduler;
+  int triggerCount = 0;
+
+  SignalId input = scheduler.registerSignal("input", 8);
+  ProcessId proc = scheduler.registerProcess("cont_assign",
+                                             [&triggerCount]() {
+                                               triggerCount++;
+                                             });
+
+  SensitivityList sens;
+  sens.addLevel(input);
+  scheduler.setSensitivity(proc, sens);
+
+  scheduler.initialize();
+  scheduler.executeDeltaCycle();
+  int initialCount = triggerCount;
+
+  // Update signal with a value that has lower-half bits set.
+  // Before the fix, this might be incorrectly treated as X,
+  // causing the update to be skipped.
+  scheduler.updateSignal(input, SignalValue(llvm::APInt(8, 0x0F)));
+  scheduler.executeDeltaCycle();
+
+  EXPECT_GT(triggerCount, initialCount)
+      << "Process should be triggered by value change (not skipped due to false X detection)";
+
+  int afterFirstUpdate = triggerCount;
+
+  // Update to another value with lower-half bits
+  scheduler.updateSignal(input, SignalValue(llvm::APInt(8, 0x03)));
+  scheduler.executeDeltaCycle();
+
+  EXPECT_GT(triggerCount, afterFirstUpdate)
+      << "Process should be triggered by second value change";
+}
+
+//===----------------------------------------------------------------------===//
+// Delta Step Tracking Regression Tests (Fix 9885013d5)
+//===----------------------------------------------------------------------===//
+
+TEST(DeltaStepTrackingFix, EpsilonDelaysProperlyScheduled) {
+  // Regression test for commit 9885013d5:
+  // "Fix delta step tracking and wide signal edge detection"
+  //
+  // The bug: EventQueue used a single DeltaCycleQueue per slot instead of
+  // a map<uint32_t, DeltaCycleQueue>, which failed to track events at
+  // different delta steps within the same real time.
+  //
+  // This test verifies that events scheduled at different delta steps
+  // within the same real time are properly ordered and executed.
+
+  ProcessScheduler scheduler;
+  std::vector<int> executionOrder;
+
+  // Schedule events at the same real time but different delta steps
+  SimTime baseTime = scheduler.getCurrentTime();
+
+  // Schedule at delta 2 first (should execute second)
+  scheduler.getEventScheduler().schedule(
+      SimTime(baseTime.realTime, 2, 0), SchedulingRegion::Active,
+      Event([&executionOrder]() { executionOrder.push_back(2); }));
+
+  // Schedule at delta 1 (should execute first)
+  scheduler.getEventScheduler().schedule(
+      SimTime(baseTime.realTime, 1, 0), SchedulingRegion::Active,
+      Event([&executionOrder]() { executionOrder.push_back(1); }));
+
+  // Schedule at delta 3 (should execute third)
+  scheduler.getEventScheduler().schedule(
+      SimTime(baseTime.realTime, 3, 0), SchedulingRegion::Active,
+      Event([&executionOrder]() { executionOrder.push_back(3); }));
+
+  // Process all events
+  while (!scheduler.getEventScheduler().isComplete()) {
+    scheduler.getEventScheduler().stepDelta();
+  }
+
+  ASSERT_EQ(executionOrder.size(), 3u)
+      << "All three events should have been executed";
+  EXPECT_EQ(executionOrder[0], 1)
+      << "Delta 1 event should execute first";
+  EXPECT_EQ(executionOrder[1], 2)
+      << "Delta 2 event should execute second";
+  EXPECT_EQ(executionOrder[2], 3)
+      << "Delta 3 event should execute third";
+}
+
+TEST(DeltaStepTrackingFix, MixedRealTimeAndDeltaEvents) {
+  // Test that events at different real times AND different delta steps
+  // are all properly tracked and executed in correct order.
+  //
+  // Note: Events at a specific real time must have delta >= current delta.
+  // The scheduler ensures events are always scheduled at or after current time.
+  // Here we use future real times to ensure proper ordering.
+
+  ProcessScheduler scheduler;
+  std::vector<std::pair<uint64_t, uint32_t>> executedEvents; // (realTime, delta)
+
+  // Schedule events at various future times and deltas in random order
+  // Using distinct real times to avoid confusion with delta ordering at same time
+  scheduler.getEventScheduler().schedule(
+      SimTime(1000, 0, 0), SchedulingRegion::Active,
+      Event([&executedEvents]() { executedEvents.push_back({1000, 0}); }));
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(500, 0, 0), SchedulingRegion::Active,
+      Event([&executedEvents]() { executedEvents.push_back({500, 0}); }));
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(750, 0, 0), SchedulingRegion::Active,
+      Event([&executedEvents]() { executedEvents.push_back({750, 0}); }));
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(1500, 0, 0), SchedulingRegion::Active,
+      Event([&executedEvents]() { executedEvents.push_back({1500, 0}); }));
+
+  // Run simulation
+  scheduler.getEventScheduler().runUntil(2000);
+
+  ASSERT_EQ(executedEvents.size(), 4u)
+      << "All four events should have been executed";
+
+  // Verify ordering by real time: 500 < 750 < 1000 < 1500
+  EXPECT_EQ(executedEvents[0], (std::pair<uint64_t, uint32_t>{500, 0}))
+      << "Event at t=500 should execute first";
+  EXPECT_EQ(executedEvents[1], (std::pair<uint64_t, uint32_t>{750, 0}))
+      << "Event at t=750 should execute second";
+  EXPECT_EQ(executedEvents[2], (std::pair<uint64_t, uint32_t>{1000, 0}))
+      << "Event at t=1000 should execute third";
+  EXPECT_EQ(executedEvents[3], (std::pair<uint64_t, uint32_t>{1500, 0}))
+      << "Event at t=1500 should execute fourth";
+}
+
+TEST(DeltaStepTrackingFix, WideSignalEdgeDetection) {
+  // Regression test for the second part of 9885013d5:
+  // detectEdge() should only check explicit isX flag, not isFourStateX()
+  // which caused false positives for wide signals.
+
+  // Create wide signal values (greater than 64 bits)
+  SignalValue wide1(llvm::APInt(128, 0x12345678));
+  SignalValue wide2(llvm::APInt(128, 0x12345679));
+
+  // These are NOT unknown values
+  EXPECT_FALSE(wide1.isUnknown())
+      << "Wide value should not be unknown";
+  EXPECT_FALSE(wide2.isUnknown())
+      << "Wide value should not be unknown";
+
+  // Edge detection should work correctly
+  EdgeType edge = SignalValue::detectEdge(wide1, wide2);
+  EXPECT_NE(edge, EdgeType::None)
+      << "Edge should be detected between different wide values";
+
+  // Same values should show no edge
+  EdgeType noEdge = SignalValue::detectEdge(wide1, wide1);
+  EXPECT_EQ(noEdge, EdgeType::None)
+      << "No edge should be detected for identical wide values";
 }
 
 } // namespace

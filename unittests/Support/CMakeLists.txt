@@ -5,6 +5,7 @@ add_circt_unittest(CIRCTSupportTests
   CoverageReportGeneratorTest.cpp
   DiagnosticsTest.cpp
   FVIntTest.cpp
+  I1ValueSimplifierTest.cpp
   JSONTest.cpp
   NPNClassTest.cpp
   PrettyPrinterTest.cpp
@@ -17,6 +18,7 @@ target_link_libraries(CIRCTSupportTests
   PRIVATE
   CIRCTComb
   CIRCTHW
+  CIRCTSeq
   CIRCTSupport
   MLIRIR
 )
