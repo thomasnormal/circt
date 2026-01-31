@@ -7,6 +7,7 @@ CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
+BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-0}"
 BOUND="${BOUND:-10}"
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
@@ -84,6 +85,9 @@ run_case() {
   fi
   if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
     bmc_args+=("--allow-multi-clock")
+  fi
+  if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+    bmc_args+=("--assume-known-inputs")
   fi
   if [[ -n "$CIRCT_BMC_ARGS" ]]; then
     read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
