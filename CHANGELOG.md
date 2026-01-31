@@ -3,17 +3,30 @@
 ## Iteration 273 - January 31, 2026
 
 ### Goals
-Fix associative array validation to prevent AXI4/I3C crashes, enable hierarchical-names.sv test.
+Fix associative array validation to prevent AXI4/I3C crashes, enable hierarchical-names.sv test, expand AVIP coverage.
 
 ### Fixed in this Iteration
-1. **Associative Array Validation Fix** (LLHDProcessInterpreter.cpp):
+1. **format-class-handle.sv XFAIL Removed**:
+   - Test now passes - class handle formatting in $display/$sformatf working
+   - Reduced XFAIL count from 22 to 21
+
+2. **AVIP Status Improved to 6/9**:
+   - **AXI4**: Now compiles and simulates successfully
+   - **I3C**: Now compiles and simulates successfully
+   - **Working AVIPs**: APB, AHB, UART, I2S, AXI4, I3C
+   - **Remaining blockers**: SPI/JTAG/AXI4Lite have source bugs (not CIRCT issues)
+
+3. **AXI4 and I3C Test Files Generated**:
+   - New test files created for expanded AVIP testing coverage
+
+4. **Associative Array Validation Fix** (LLHDProcessInterpreter.cpp):
    - **ROOT CAUSE**: Uninitialized associative array pointers caused crashes in AXI4/I3C AVIPs
    - **FIX**: Added `validAssocArrayAddresses` tracking to validate array pointers before access
    - Only accept addresses returned by `__moore_assoc_create`
    - Return null for uninitialized arrays instead of crashing
    - **Impact**: Prevents AXI4/I3C simulation crashes from assoc array access
 
-2. **hierarchical-names.sv XFAIL Removed**:
+5. **hierarchical-names.sv XFAIL Removed**:
    - Test now passes - hierarchical name access through instances working
    - Reduced XFAIL count from 23 to 22
    - **Commit**: `6856689e4`
@@ -21,9 +34,9 @@ Fix associative array validation to prevent AXI4/I3C crashes, enable hierarchica
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
-| Lit Tests | **All pass** | No regressions, 22 XFAIL (was 23) |
+| Lit Tests | **All pass** | No regressions, 21 XFAIL (was 22) |
 | OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass |
-| AVIPs | **4/9 simulate** | +2 blocked by coverage functions |
+| AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C |
 | yosys-sva BMC | **14/14 (100%)** | All pass |
 | sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
@@ -31,6 +44,7 @@ Fix associative array validation to prevent AXI4/I3C crashes, enable hierarchica
 ### Commits
 - `6856689e4` - Remove XFAIL from hierarchical-names.sv (now passing)
 - New commit - Associative array validation fix for AXI4/I3C
+- New commit - Remove XFAIL from format-class-handle.sv
 
 ---
 
@@ -211,6 +225,13 @@ Fix AssocArrayIteratorOpConversion for function ref parameters.
    - Same pattern as ReadOpConversion and AssignOpConversion fixes
    - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
    - **Test**: `test/Conversion/MooreToCore/assoc-array-iterator-func-param.mlir`
+2. **BMC $rose/$fell/$stable X/Z propagation** (AssertionExpr.cpp):
+   - Use logical equality for `$stable/$changed` and logical boolean casting for `$rose/$fell`.
+   - Ensures value-change functions propagate unknowns instead of collapsing to 2-state.
+   - **Files**: `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+   - **Tests**:
+     - `test/Tools/circt-bmc/sva-xprop-rose-fell-sat-e2e.sv`
+     - `test/Tools/circt-bmc/sva-xprop-stable-sat-e2e.sv`
 
 ### Test Results
 | Suite | Status | Notes |

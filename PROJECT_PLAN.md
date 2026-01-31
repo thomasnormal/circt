@@ -199,7 +199,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2980/3085 (96.6%)** | All pass, 22 XFAIL (was 23) |
+| Lit Tests | **2980/3085 (96.6%)** | All pass, 21 XFAIL (was 22) |
 | circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/23 (100%)** | All pass |
@@ -208,10 +208,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass successfully |
-| AVIPs | **4/9 simulate** | APB, AHB, UART, I2S compile+simulate; AXI4, I3C blocked by coverage functions; SPI/JTAG/AXI4Lite have source bugs |
+| AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C compile+simulate; SPI/JTAG/AXI4Lite have source bugs |
 | **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
 
 **Iteration 273 Achievements:**
+- **format-class-handle.sv XFAIL Removed**: Test now passes, reduced XFAIL count from 22 to 21
+- **AVIP Status Improved**: 6/9 AVIPs now simulate (APB, AHB, UART, I2S, AXI4, I3C)
+- **AXI4 and I3C Test Files Generated**: New test files created for expanded AVIP testing
 - **Assoc Array Validation Fix**: Added `validAssocArrayAddresses` tracking to prevent AXI4/I3C crashes from uninitialized associative arrays
 - **hierarchical-names.sv XFAIL Removed**: Test now passes, reduced XFAIL count from 23 to 22
 - **OpenTitan: 16/16 tested**: All tested IPs pass successfully (100%)
@@ -1618,7 +1621,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 2. **sv-tests moore.conversion** - Fix remaining type conversion tests [Track C]
 3. **Hierarchical interface task calls** - Unblock AHB AVIP [Track A]
 4. ✅ **System call stubs** - $ferror, $fgets, $ungetc done; remaining: $fread, $fscanf, $fpos
-5. **BMC sequence patterns** - Complete value-change X/Z semantics [Track B]
+5. ✅ **BMC sequence patterns** - Complete value-change X/Z semantics [Track B]
 6. **Runtime DPI stubs** - Complete UVM runtime function stubs [Track D]
 
 **Remaining Limitations**:
@@ -1634,7 +1637,7 @@ circt-verilog --uvm-path ~/uvm-core/src \
 | ✅ Derived clocks | Multiple derived clocks constrained to single BMC clock |
 | ✅ **Yosys SVA BMC** | **82%** (up from 75% in Iter 91) - **7% improvement!** |
 | ⚠️ SVA defaults | Default clocking/disable iff reset LTL state; property instances avoid double defaults |
-| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops mostly fixed (changed/rose/wide). Remaining: value_change_sim X/Z edge semantics, extnets |
+| ⚠️ Sequence patterns | Fixed ##N concat delays; yosys counter passes; value-change ops X/Z semantics fixed (changed/rose/stable/fell). Remaining: extnets |
 
 **Track C: Test Suite Validation**
 | Test Suite | Location | Purpose | Agent |
