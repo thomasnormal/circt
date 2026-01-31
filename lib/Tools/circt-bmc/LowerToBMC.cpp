@@ -432,21 +432,160 @@ void LowerToBMCPass::runOnOperation() {
       toClockOps.push_back(toClockOp);
     });
     hwModule.walk([&](ltl::ClockOp clockOp) { ltlClockOps.push_back(clockOp); });
-    SmallVector<Value> clockInputs;
+    struct ClockInputInfo {
+      Value value;
+      Value canonical;
+      bool invert = false;
+    };
+    SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
     clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
+    auto getConstI1Value = [&](Value val) -> std::optional<bool> {
+      if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
+        if (auto intTy = dyn_cast<IntegerType>(cst.getType());
+            intTy && intTy.getWidth() == 1)
+          return cst.getValue().isAllOnes();
+      }
+      if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
+        if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
+          return boolAttr.getValue();
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+          if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
+              intTy && intTy.getWidth() == 1)
+            return intAttr.getValue().isAllOnes();
+        }
+      }
+      return std::nullopt;
+    };
+    auto simplifyClockInput = [&](Value val, bool &invert) -> Value {
+      while (val) {
+        if (auto cast = val.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (cast->getNumOperands() == 1) {
+            val = cast->getOperand(0);
+            continue;
+          }
+        }
+        if (auto bitcast = val.getDefiningOp<hw::BitcastOp>()) {
+          val = bitcast.getInput();
+          continue;
+        }
+        if (auto extract = val.getDefiningOp<hw::StructExtractOp>()) {
+          val = extract.getInput();
+          continue;
+        }
+        if (auto extractOp = val.getDefiningOp<comb::ExtractOp>()) {
+          val = extractOp.getInput();
+          continue;
+        }
+        if (auto xorOp = val.getDefiningOp<comb::XorOp>()) {
+          if (xorOp.getNumOperands() == 2) {
+            if (auto literal = getConstI1Value(xorOp.getOperand(0))) {
+              invert ^= *literal;
+              val = xorOp.getOperand(1);
+              continue;
+            }
+            if (auto literal = getConstI1Value(xorOp.getOperand(1))) {
+              invert ^= *literal;
+              val = xorOp.getOperand(0);
+              continue;
+            }
+          }
+        }
+        if (auto andOp = val.getDefiningOp<comb::AndOp>()) {
+          SmallVector<Value> nonConst;
+          bool sawFalse = false;
+          for (Value operand : andOp.getOperands()) {
+            if (auto literal = getConstI1Value(operand)) {
+              if (!*literal) {
+                sawFalse = true;
+                break;
+              }
+              continue;
+            }
+            nonConst.push_back(operand);
+          }
+          if (sawFalse || nonConst.empty())
+            break;
+          if (nonConst.size() == 1) {
+            val = nonConst.front();
+            continue;
+          }
+        }
+        if (auto orOp = val.getDefiningOp<comb::OrOp>()) {
+          SmallVector<Value> nonConst;
+          bool sawTrue = false;
+          for (Value operand : orOp.getOperands()) {
+            if (auto literal = getConstI1Value(operand)) {
+              if (*literal) {
+                sawTrue = true;
+                break;
+              }
+              continue;
+            }
+            nonConst.push_back(operand);
+          }
+          if (sawTrue || nonConst.empty())
+            break;
+          if (nonConst.size() == 1) {
+            val = nonConst.front();
+            continue;
+          }
+        }
+        if (auto icmpOp = val.getDefiningOp<comb::ICmpOp>()) {
+          Value other;
+          bool constVal = false;
+          if (auto literal = getConstI1Value(icmpOp.getLhs())) {
+            constVal = *literal;
+            other = icmpOp.getRhs();
+          } else if (auto literal = getConstI1Value(icmpOp.getRhs())) {
+            constVal = *literal;
+            other = icmpOp.getLhs();
+          } else {
+            break;
+          }
+          auto otherTy = dyn_cast<IntegerType>(other.getType());
+          if (!otherTy || otherTy.getWidth() != 1)
+            break;
+          switch (icmpOp.getPredicate()) {
+          case comb::ICmpPredicate::eq:
+          case comb::ICmpPredicate::ceq:
+          case comb::ICmpPredicate::weq:
+            if (!constVal)
+              invert = !invert;
+            val = other;
+            continue;
+          case comb::ICmpPredicate::ne:
+          case comb::ICmpPredicate::cne:
+          case comb::ICmpPredicate::wne:
+            if (constVal)
+              invert = !invert;
+            val = other;
+            continue;
+          default:
+            break;
+          }
+        }
+        break;
+      }
+      return val;
+    };
     auto maybeAddClockInput = [&](Value input) {
       if (!input || input.getType() != builder.getI1Type())
         return;
+      bool invert = false;
+      Value canonical = simplifyClockInput(input, invert);
+      if (!canonical)
+        canonical = input;
       // Graph regions can use values before they are defined, which prevents
       // CSE from collapsing equivalent clock expressions. Deduplicate
       // structurally equivalent inputs here to avoid spurious multi-clock
       // errors.
-      if (llvm::any_of(clockInputs, [&](Value existing) {
-            return equivalence.isEquivalent(input, existing);
+      if (llvm::any_of(clockInputs, [&](const ClockInputInfo &existing) {
+            return invert == existing.invert &&
+                   equivalence.isEquivalent(canonical, existing.canonical);
           }))
         return;
-      clockInputs.push_back(input);
+      clockInputs.push_back({input, canonical, invert});
     };
     for (auto toClockOp : toClockOps)
       maybeAddClockInput(toClockOp.getInput());
@@ -514,24 +653,6 @@ void LowerToBMCPass::runOnOperation() {
     }
 
     if (!clockInputs.empty()) {
-      auto getConstI1Value = [&](Value val) -> std::optional<bool> {
-        if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
-          if (auto intTy = dyn_cast<IntegerType>(cst.getType());
-              intTy && intTy.getWidth() == 1)
-            return cst.getValue().isAllOnes();
-        }
-        if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
-          if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
-            return boolAttr.getValue();
-          if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
-            if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
-                intTy && intTy.getWidth() == 1)
-              return intAttr.getValue().isAllOnes();
-          }
-        }
-        return std::nullopt;
-      };
-
       std::function<bool(Value, BlockArgument &)> traceRoot =
           [&](Value value, BlockArgument &root) -> bool {
         if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
@@ -575,6 +696,30 @@ void LowerToBMCPass::runOnOperation() {
               return false;
           return true;
         }
+        if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
+          Value other;
+          if (getConstI1Value(icmpOp.getLhs()))
+            other = icmpOp.getRhs();
+          else if (getConstI1Value(icmpOp.getRhs()))
+            other = icmpOp.getLhs();
+          else
+            return false;
+          auto otherTy = dyn_cast<IntegerType>(other.getType());
+          if (!otherTy || otherTy.getWidth() != 1)
+            return false;
+          switch (icmpOp.getPredicate()) {
+          case comb::ICmpPredicate::eq:
+          case comb::ICmpPredicate::ceq:
+          case comb::ICmpPredicate::weq:
+          case comb::ICmpPredicate::ne:
+          case comb::ICmpPredicate::cne:
+          case comb::ICmpPredicate::wne:
+            return traceRoot(other, root);
+          default:
+            break;
+          }
+          return false;
+        }
         if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
           for (auto operand : concatOp.getOperands())
             if (!traceRoot(operand, root))
@@ -584,33 +729,11 @@ void LowerToBMCPass::runOnOperation() {
         return false;
       };
 
-      std::function<bool(Value, BlockArgument &)> traceRootSimple =
-          [&](Value value, BlockArgument &root) -> bool {
-        if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
-          return traceRootSimple(fromClock.getInput(), root);
-        if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
-          return traceRootSimple(toClock.getInput(), root);
-        if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
-          if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
-            return traceRootSimple(cast->getOperand(0), root);
-        }
-        if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
-          return traceRootSimple(bitcast.getInput(), root);
-        if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
-          return traceRootSimple(extract.getInput(), root);
-        if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
-          return traceRootSimple(extractOp.getInput(), root);
-        if (auto arg = dyn_cast<BlockArgument>(value)) {
-          if (!root)
-            root = arg;
-          return arg == root;
-        }
-        return false;
-      };
-
-      auto resolveClockInputName = [&](Value input) -> std::string {
+      auto resolveClockInputName =
+          [&](const ClockInputInfo &input) -> std::string {
         BlockArgument root;
-        if (!traceRoot(input, root))
+        if (!traceRoot(input.canonical, root) &&
+            !traceRoot(input.value, root))
           return {};
         if (root.getOwner() != hwModule.getBodyBlock())
           return {};
@@ -624,8 +747,14 @@ void LowerToBMCPass::runOnOperation() {
       };
 
       auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
+        bool invert = false;
+        Value canonical = simplifyClockInput(input, invert);
+        if (!canonical)
+          canonical = input;
         for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
-          if (equivalence.isEquivalent(input, existing))
+          if (invert != existing.invert)
+            continue;
+          if (equivalence.isEquivalent(canonical, existing.canonical))
             return idx;
         }
         return std::nullopt;
@@ -638,7 +767,7 @@ void LowerToBMCPass::runOnOperation() {
 
       SmallVector<std::string> clockNames;
       clockNames.reserve(clockInputs.size());
-      for (auto input : clockInputs)
+      for (const auto &input : clockInputs)
         clockNames.push_back(resolveClockInputName(input));
 
       DenseSet<StringRef> usedClockNames;
@@ -703,31 +832,15 @@ void LowerToBMCPass::runOnOperation() {
         DenseSet<unsigned> seenSourceArgs;
         for (auto [idx, clockInput] : llvm::enumerate(clockInputs)) {
           BlockArgument root;
-          if (!traceRoot(clockInput, root))
+          if (!traceRoot(clockInput.canonical, root) &&
+              !traceRoot(clockInput.value, root))
             continue;
           if (root.getOwner() != hwModule.getBodyBlock())
             continue;
           unsigned argIndex = root.getArgNumber();
           if (!seenSourceArgs.insert(argIndex).second)
             continue;
-          bool invert = false;
-          if (auto xorOp = clockInput.getDefiningOp<comb::XorOp>()) {
-            if (xorOp.getNumOperands() == 2) {
-              Value lhs = xorOp.getOperand(0);
-              Value rhs = xorOp.getOperand(1);
-              if (auto lhsConst = getConstI1Value(lhs);
-                  lhsConst && *lhsConst) {
-                BlockArgument innerRoot;
-                if (traceRootSimple(rhs, innerRoot) && innerRoot == root)
-                  invert = true;
-              } else if (auto rhsConst = getConstI1Value(rhs);
-                         rhsConst && *rhsConst) {
-                BlockArgument innerRoot;
-                if (traceRootSimple(lhs, innerRoot) && innerRoot == root)
-                  invert = true;
-              }
-            }
-          }
+          bool invert = clockInput.invert;
           auto dict = builder.getDictionaryAttr(
               {builder.getNamedAttr(
                    "arg_index", builder.getI32IntegerAttr(argIndex)),
@@ -743,15 +856,15 @@ void LowerToBMCPass::runOnOperation() {
       // Constrain each derived clock input to match its BMC clock.
       for (auto [idx, clockInput] : llvm::enumerate(clockInputs)) {
         OpBuilder::InsertionGuard guard(builder);
-        if (auto *def = clockInput.getDefiningOp()) {
+        if (auto *def = clockInput.value.getDefiningOp()) {
           builder.setInsertionPointAfter(def);
         } else {
-          builder.setInsertionPointToStart(clockInput.getParentBlock());
+          builder.setInsertionPointToStart(clockInput.value.getParentBlock());
         }
         auto fromClk =
             seq::FromClockOp::create(builder, loc, newClocks[idx]);
         auto eq = comb::ICmpOp::create(builder, loc, comb::ICmpPredicate::eq,
-                                       fromClk, clockInput);
+                                       fromClk, clockInput.value);
         verif::AssumeOp::create(builder, loc, eq, Value(), StringAttr());
       }
 
