@@ -1009,7 +1009,9 @@ moore.module @MultiDimensionalSlice(in %in : !moore.array<2 x array<2 x l2>>, ou
 // CHECK-SAME: in %b : i42
 // CHECK-SAME: in %c : i64
 moore.module @ContinuousAssignment(in %a: !moore.ref<i42>, in %b: !moore.i42, in %c: !moore.time) {
-  // CHECK-NEXT: [[DELTA:%.+]] = llhd.constant_time <0ns, 0d, 1e>
+  // For continuous assignments from block arguments, use zero epsilon delay
+  // to fix initialization order issues (signals read correct value at t=0).
+  // CHECK-NEXT: [[DELTA:%.+]] = llhd.constant_time <0ns, 0d, 0e>
   // CHECK-NEXT: llhd.drv %a, %b after [[DELTA]]
   moore.assign %a, %b : i42
   // CHECK-NEXT: [[TIME:%.+]] = llhd.int_to_time %c
