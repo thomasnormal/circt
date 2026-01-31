@@ -58,6 +58,12 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
    - Track ref-typed block arguments as signal refs across CF branches so
      `llhd.prb` resolves through block-arg PHIs
    - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+
+6. **Clocked Assertions Preserve BMC Clock Info**:
+   - `LowerLTLToCore` now attaches `bmc.clock`/`bmc.clock_edge` when lowering
+     clocked assert/assume/cover ops, so BMC gates checks to the correct clock
+   - **Test**: `test/Conversion/LTLToCore/clocked-assert-bmc-clock-attrs.mlir`
+   - **Files**: `lib/Conversion/LTLToCore/LTLToCore.cpp`
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
 6. **LLVM Wide Load Padding Clamp**:
