@@ -685,10 +685,11 @@ struct ExprVisitor {
                              << indexValue.getType();
         return {};
       }
-      if (isLvalue)
+      if (isLvalue) {
+        context.captureRef(value);
         return moore::DynExtractRefOp::create(builder, loc, resultType, value,
                                               indexValue);
-      else
+      } else
         return moore::DynExtractOp::create(builder, loc, resultType, value,
                                            indexValue);
     }
@@ -701,10 +702,11 @@ struct ExprVisitor {
       assert(constValue->size() <= 32);
 
       auto lowBit = constValue->integer().as<uint32_t>().value();
-      if (isLvalue)
+      if (isLvalue) {
+        context.captureRef(value);
         return moore::ExtractRefOp::create(builder, loc, resultType, value,
                                            range.translateIndex(lowBit));
-      else
+      } else
         return moore::ExtractOp::create(builder, loc, resultType, value,
                                         range.translateIndex(lowBit));
     }
@@ -713,10 +715,11 @@ struct ExprVisitor {
     if (!lowBit)
       return {};
     lowBit = getSelectIndex(context, loc, lowBit, range);
-    if (isLvalue)
+    if (isLvalue) {
+      context.captureRef(value);
       return moore::DynExtractRefOp::create(builder, loc, resultType, value,
                                             lowBit);
-    else
+    } else
       return moore::DynExtractOp::create(builder, loc, resultType, value,
                                          lowBit);
   }
@@ -926,6 +929,7 @@ struct ExprVisitor {
     if (offsetDyn) {
       offsetDyn = getSelectIndex(context, loc, offsetDyn, range);
       if (isLvalue) {
+        context.captureRef(value);
         return moore::DynExtractRefOp::create(builder, loc, resultType, value,
                                               offsetDyn);
       } else {
@@ -935,6 +939,7 @@ struct ExprVisitor {
     } else {
       offsetConst = range.translateIndex(offsetConst);
       if (isLvalue) {
+        context.captureRef(value);
         return moore::ExtractRefOp::create(builder, loc, resultType, value,
                                            offsetConst);
       } else {
@@ -999,8 +1004,11 @@ struct ExprVisitor {
         return {};
       operands.push_back(value);
     }
-    if (isLvalue)
+    if (isLvalue) {
+      for (auto operand : operands)
+        context.captureRef(operand);
       return moore::ConcatRefOp::create(builder, loc, operands);
+    }
     else if (isStringConcat) {
       // Normalize operands to string type (handles format strings).
       SmallVector<Value> stringOps;
@@ -1040,9 +1048,11 @@ struct ExprVisitor {
       if (!value)
         return {};
 
-      if (isLvalue)
+      if (isLvalue) {
+        context.captureRef(value);
         return moore::StructExtractRefOp::create(builder, loc, resultType,
                                                  memberName, value);
+      }
       return moore::StructExtractOp::create(builder, loc, resultType,
                                             memberName, value);
     }
@@ -1083,6 +1093,7 @@ struct ExprVisitor {
         }
 
         if (isLvalue) {
+          context.captureRef(value);
           // Extract reference to data field, then reference to union member
           auto dataRefType = moore::RefType::get(
               cast<moore::UnpackedType>(unionType));
@@ -1100,9 +1111,11 @@ struct ExprVisitor {
                                              dataValue);
       }
 
-      if (isLvalue)
+      if (isLvalue) {
+        context.captureRef(value);
         return moore::UnionExtractRefOp::create(builder, loc, resultType,
                                                 memberName, value);
+      }
       return moore::UnionExtractOp::create(builder, loc, type, memberName,
                                            value);
     }
@@ -6738,6 +6751,8 @@ struct LvalueExprVisitor : public ExprVisitor {
       // error.
       value = operands.front();
     } else {
+      for (auto operand : operands)
+        context.captureRef(operand);
       value = moore::ConcatRefOp::create(builder, loc, operands).getResult();
     }
 
@@ -6778,6 +6793,7 @@ struct LvalueExprVisitor : public ExprVisitor {
       auto extractResultType = moore::RefType::get(moore::IntType::get(
           context.getContext(), expr.getSliceSize(), domain));
 
+      context.captureRef(value);
       auto extracted = moore::ExtractRefOp::create(
           builder, loc, extractResultType, value, i * expr.getSliceSize());
       slicedOperands.push_back(extracted);
@@ -6787,12 +6803,15 @@ struct LvalueExprVisitor : public ExprVisitor {
       auto extractResultType = moore::RefType::get(
           moore::IntType::get(context.getContext(), remainSize, domain));
 
+      context.captureRef(value);
       auto extracted =
           moore::ExtractRefOp::create(builder, loc, extractResultType, value,
                                       iterMax * expr.getSliceSize());
       slicedOperands.push_back(extracted);
     }
 
+    for (auto operand : slicedOperands)
+      context.captureRef(operand);
     return moore::ConcatRefOp::create(builder, loc, slicedOperands);
   }
 
@@ -7032,6 +7051,16 @@ Value Context::convertToSimpleBitVector(Value value) {
     auto intTy = moore::IntType::getInt(getContext(), 1);
     mlir::emitRemark(value.getLoc())
         << "treating queue value as zero in bit-vector context";
+    return moore::ConstantOp::create(builder, value.getLoc(), intTy, 0);
+  }
+
+  // Class handles in bit-vector context (e.g., $display formatting) are
+  // represented as 64-bit integers (pointer size). Return zero as a
+  // placeholder since actual pointer values are runtime-dependent.
+  if (isa<moore::ClassHandleType>(value.getType())) {
+    auto intTy = moore::IntType::getInt(getContext(), 64);
+    mlir::emitRemark(value.getLoc())
+        << "treating class handle as zero in bit-vector context";
     return moore::ConstantOp::create(builder, value.getLoc(), intTy, 0);
   }
 
