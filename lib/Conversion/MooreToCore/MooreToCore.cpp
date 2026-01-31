@@ -124,6 +124,71 @@ static Type convertToLLVMType(Type type) {
   return type;
 }
 
+/// Helper function to convert an SSA value from hw dialect types (hw::StructType,
+/// hw::ArrayType) to equivalent LLVM types. This is needed when storing values
+/// to LLVM alloca, since llvm.store requires LLVM-typed operands.
+/// Returns the original value if no conversion is needed.
+static Value convertValueToLLVMType(Value value, Location loc,
+                                    OpBuilder &builder) {
+  Type origType = value.getType();
+  Type llvmType = convertToLLVMType(origType);
+
+  // If the type didn't change, return the original value
+  if (origType == llvmType)
+    return value;
+
+  // Handle hw::StructType -> LLVM::LLVMStructType
+  if (auto hwStructTy = dyn_cast<hw::StructType>(origType)) {
+    auto llvmStructTy = cast<LLVM::LLVMStructType>(llvmType);
+
+    // Create an undef of the target LLVM struct type
+    Value result = LLVM::UndefOp::create(builder, loc, llvmStructTy);
+
+    // Extract each field from the hw struct and insert into LLVM struct
+    auto fields = hwStructTy.getElements();
+    for (size_t i = 0; i < fields.size(); ++i) {
+      // Extract the field from the hw struct
+      Value fieldVal = hw::StructExtractOp::create(builder, loc, value,
+                                                   fields[i].name);
+      // Recursively convert if the field is also a composite type
+      fieldVal = convertValueToLLVMType(fieldVal, loc, builder);
+      // Insert into the LLVM struct
+      result = LLVM::InsertValueOp::create(builder, loc, result, fieldVal,
+                                           ArrayRef<int64_t>{(int64_t)i});
+    }
+    return result;
+  }
+
+  // Handle hw::ArrayType -> LLVM::LLVMArrayType
+  if (auto hwArrayTy = dyn_cast<hw::ArrayType>(origType)) {
+    auto llvmArrayTy = cast<LLVM::LLVMArrayType>(llvmType);
+
+    // Create an undef of the target LLVM array type
+    Value result = LLVM::UndefOp::create(builder, loc, llvmArrayTy);
+
+    // Extract each element from the hw array and insert into LLVM array
+    int64_t numElements = hwArrayTy.getNumElements();
+    auto idxTy = builder.getI32Type();
+    for (int64_t i = 0; i < numElements; ++i) {
+      // Create constant index
+      Value idx = hw::ConstantOp::create(builder, loc,
+                                         APInt(32, numElements - 1 - i));
+      // Extract the element from the hw array (hw.array uses reverse indexing)
+      Value elemVal = hw::ArrayGetOp::create(builder, loc, value, idx);
+      // Recursively convert if the element is also a composite type
+      elemVal = convertValueToLLVMType(elemVal, loc, builder);
+      // Insert into the LLVM array
+      result = LLVM::InsertValueOp::create(builder, loc, result, elemVal,
+                                           ArrayRef<int64_t>{i});
+    }
+    return result;
+  }
+
+  // For other types that don't need deep conversion, return as-is
+  // (integers, pointers, etc. are already LLVM-compatible)
+  return value;
+}
+
 namespace {
 
 /// Cache for identified structs and field GEP paths keyed by class symbol.
@@ -4782,13 +4847,21 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       auto ptrTy = LLVM::LLVMPointerType::get(ctx);
       auto elementType = refType.getNestedType();
 
+      // Convert the element type to LLVM type if it's an hw type (e.g.,
+      // hw::StructType for 4-state values gets converted to LLVM::LLVMStructType)
+      Type llvmElementType = convertToLLVMType(elementType);
+
       // Create an alloca for the variable
       auto one = LLVM::ConstantOp::create(rewriter, loc,
                                           rewriter.getI64IntegerAttr(1));
-      auto alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, elementType, one);
+      auto alloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmElementType, one);
+
+      // Convert the init value to LLVM type if needed (e.g., hw.struct -> llvm.struct)
+      Value storeVal = convertValueToLLVMType(init, loc, rewriter);
 
       // Store the initial value
-      LLVM::StoreOp::create(rewriter, loc, init, alloca);
+      LLVM::StoreOp::create(rewriter, loc, storeVal, alloca);
 
       rewriter.replaceOp(op, alloca.getResult());
       return success();
@@ -8960,12 +9033,15 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
     // Check if the input is an LLVM pointer (possibly through unrealized cast).
     // This handles class member access (from GEP), queues, dynamic arrays, etc.
     Value llvmPtrInput;
+
     if (isa<LLVM::LLVMPointerType>(input.getType())) {
       llvmPtrInput = input;
     } else if (auto castOp = input.getDefiningOp<UnrealizedConversionCastOp>()) {
       // Look through unrealized_conversion_cast to find LLVM pointer.
-      // This handles class member access where GEP returns !llvm.ptr which is
-      // then cast to !llhd.ref<T> for type compatibility.
+      // This handles:
+      // 1. Class member access where GEP returns !llvm.ptr cast to !llhd.ref<T>
+      // 2. Local variables in func/process where alloca !llvm.ptr is cast to
+      //    !llhd.ref<T> for type compatibility during conversion.
       if (castOp.getInputs().size() == 1 &&
           isa<LLVM::LLVMPointerType>(castOp.getInputs()[0].getType())) {
         llvmPtrInput = castOp.getInputs()[0];
@@ -9093,17 +9169,9 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
 
     if (llvmPtrDst) {
       // Convert source to LLVM-compatible type if needed
-      // For 4-state hw.struct<value, unknown>, convert to llvm.struct<(i, i)>
-      Value storeVal = adaptor.getSrc();
-      Type storeType = storeVal.getType();
-      Type llvmStoreType = convertToLLVMType(storeType);
-
-      // If types differ, we need to cast through unrealized_conversion_cast
-      if (storeType != llvmStoreType) {
-        storeVal = UnrealizedConversionCastOp::create(
-                       rewriter, op.getLoc(), llvmStoreType, storeVal)
-                       .getResult(0);
-      }
+      // For 4-state hw.struct<value, unknown>, decompose and rebuild as llvm.struct
+      Value storeVal = convertValueToLLVMType(adaptor.getSrc(), op.getLoc(),
+                                              rewriter);
       LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, llvmPtrDst);
       rewriter.eraseOp(op);
       return success();
@@ -9123,15 +9191,7 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                                rewriter, loc, ptrType, dst)
                                .getResult(0);
 
-          Value storeVal = adaptor.getSrc();
-          Type storeType = storeVal.getType();
-          Type llvmStoreType = convertToLLVMType(storeType);
-
-          if (storeType != llvmStoreType) {
-            storeVal = UnrealizedConversionCastOp::create(
-                           rewriter, loc, llvmStoreType, storeVal)
-                           .getResult(0);
-          }
+          Value storeVal = convertValueToLLVMType(adaptor.getSrc(), loc, rewriter);
           LLVM::StoreOp::create(rewriter, loc, storeVal, ptrValue);
           rewriter.eraseOp(op);
           return success();
