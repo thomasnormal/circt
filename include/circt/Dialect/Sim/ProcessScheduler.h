@@ -195,16 +195,18 @@ public:
   }
 
   /// Check if two values are equal.
-  /// Handles both explicit isX and 4-state struct encoding.
+  /// Only uses the explicit isX flag - 4-state encoding checks should be done
+  /// at a higher level where SignalEncoding metadata is available.
   bool operator==(const SignalValue &other) const {
-    // Check if either value is X (explicit flag or 4-state encoding)
-    bool thisIsX = isX || isFourStateXInternal();
-    bool otherIsX = other.isX || other.isFourStateXInternal();
-    // Two X values are equal
-    if (thisIsX && otherIsX)
+    // Check if either value is X (using explicit flag only)
+    // Note: We don't use isFourStateXInternal() here because it incorrectly
+    // treats 2-state values with set bits in the lower half as X values.
+    // The 4-state check should only be used when we know the signal uses
+    // 4-state encoding (via SignalEncoding metadata), which is not available
+    // at this level.
+    if (isX && other.isX)
       return true;
-    // X and non-X are not equal
-    if (thisIsX || otherIsX)
+    if (isX || other.isX)
       return false;
     // Both are known values, compare directly
     return value == other.value;
