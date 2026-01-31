@@ -1,22 +1,19 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
-// XFAIL: *
-// Known conversion bug: ltl.clock with explicit clock signal causes SSA dominance violation
-
 // Test that delay buffer updates are gated by posedge OR negedge from ltl.clock.
 
 // CHECK-LABEL: func.func @bmc_delay_buffer_clock_op_edge_both() -> i1
 // CHECK: scf.for
+// CHECK:   func.call @bmc_loop
 // Circuit returns outputs + delay buffer + !smt.bool for the property
+// Edge detection: posedge OR negedge
+// CHECK-DAG:   smt.bv.not {{%.+}} : !smt.bv<1>
+// CHECK-DAG:   smt.bv.not {{%.+}} : !smt.bv<1>
+// CHECK-DAG:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK-DAG:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK-DAG:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK-DAG:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:   func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
-// CHECK:   func.call @bmc_loop
-// Edge detection: posedge OR negedge
-// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:   smt.or {{%.+}}, {{%.+}}
 // Delay buffer update conditioned on edge
 // CHECK:   smt.ite {{%.+}}, {{%.+}}, {{%.+}} : !smt.bv<1>
