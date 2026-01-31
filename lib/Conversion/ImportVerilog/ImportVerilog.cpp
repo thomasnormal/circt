@@ -294,11 +294,16 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
 
   driver.options.singleUnit = options.singleUnit;
 
+  if (!driver.processOptions())
+    return failure();
+
+  // Set DynamicNotProcedural severity AFTER processOptions() so it doesn't
+  // get overwritten by the default warning option processing.
   if (options.allowNonProceduralDynamic.value_or(false))
     driver.diagEngine.setSeverity(slang::diag::DynamicNotProcedural,
                                   slang::DiagnosticSeverity::Warning);
 
-  return success(driver.processOptions());
+  return success();
 }
 
 /// Parse and elaborate the prepared source files, and populate the given MLIR
