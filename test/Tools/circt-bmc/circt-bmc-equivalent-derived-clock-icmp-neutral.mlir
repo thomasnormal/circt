@@ -1,6 +1,7 @@
 // RUN: circt-bmc --emit-mlir -b 1 --module icmp_eq %s | FileCheck %s --check-prefix=ICMP
 // RUN: circt-bmc --emit-mlir -b 1 --module neutral_ops %s | FileCheck %s --check-prefix=NEUTRAL
 // RUN: circt-bmc --emit-mlir -b 1 --module mux_const %s | FileCheck %s --check-prefix=MUX
+// RUN: circt-bmc --emit-mlir -b 1 --module xor_const %s | FileCheck %s --check-prefix=XORCONST
 
 // Ensure derived clock expressions that simplify to the same signal map to a
 // single BMC clock input.
@@ -45,8 +46,21 @@ module {
     verif.assert %r1 : i1
     hw.output
   }
+
+  hw.module @xor_const(in %clk_in: i1, in %in: i1) {
+    %c0 = seq.to_clock %clk_in
+    %r0 = seq.compreg %in, %c0 : i1
+
+    %seq = ltl.delay %in, 0, 0 : i1
+    %true = hw.constant true
+    %xor = comb.xor %clk_in, %true, %true : i1
+    %clocked = ltl.clock %seq, posedge %xor : !ltl.sequence
+    verif.assert %clocked : !ltl.sequence
+    hw.output
+  }
 }
 
 // ICMP: func.func @icmp_eq
 // NEUTRAL: func.func @neutral_ops
 // MUX: func.func @mux_const
+// XORCONST: func.func @xor_const

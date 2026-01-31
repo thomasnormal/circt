@@ -45,6 +45,12 @@ Continue reducing XFAIL count, add unit tests for recent bug fixes, improve BMC 
      X-driven false violations on 2-state suites.
    - **File**: `utils/run_yosys_sva_circt_bmc.sh`
 
+6. **Derived Clock Simplification Handles XOR Const Parity**:
+   - Collapse XOR chains with constant parity so derived clocks map correctly.
+   - **Tests**: `unittests/Support/I1ValueSimplifierTest.cpp`,
+     `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`
+   - **File**: `include/circt/Support/I1ValueSimplifier.h`
+
 ### Key Findings
 
 1. **TL-UL Initialization Order Issue** (Root Cause Identified):
