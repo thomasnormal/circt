@@ -160,12 +160,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **16+ IPs pass** | +6 reg_tops in Iteration 267 |
+| OpenTitan IPs | **~33/42 IPs pass** | +10 more verified in Iteration 267 |
 | AVIPs | **6/9 simulate** | APB, AHB, AXI4, UART, I2S, I3C work; AXI4Lite/SPI/JTAG have source bugs |
 
 **OpenTitan Simulation Verified (Iteration 267):**
-- **reg_top IPs** (16+): hmac, kmac, flash_ctrl, otp_ctrl, keymgr, lc_ctrl, otbn, csrng, entropy_src, pwm, pattgen, rom_ctrl, sram_ctrl, edn, aes, spi_device
-- **Full IPs** (7+): gpio, uart, timer_core, keymgr_dpe, ascon, i2c, prim_count
+- **reg_top IPs** (20+): hmac, kmac, flash_ctrl, otp_ctrl, keymgr, lc_ctrl, otbn, csrng, entropy_src, pwm, pattgen, rom_ctrl, sram_ctrl, edn, aes, spi_device, usbdev, aon_timer, sysrst_ctrl, alert_handler
+- **Full IPs** (13+): gpio, uart, timer_core, keymgr_dpe, ascon, i2c, prim_count, mbx, rv_dm, dma, prim_fifo_sync, spi_device_full, gpio_no_alerts
+- **Total: ~33 of 42 testbenches verified working**
 
 **AVIP Simulation Verified (Iteration 246):**
 - **APB**: 10us simulation works, 545 signals, 9 processes
@@ -230,17 +231,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 | Track | Status | Next Task |
 |-------|--------|-----------|
-| **Track 1: UVM Parity** | ✅ Global ctor crash fixed | Test with `+UVM_TESTNAME` |
-| **Track 2: AVIP Testing** | ✅ 6/9 AVIPs pass | Run actual UVM tests |
-| **Track 3: OpenTitan** | ✅ 16+ IPs pass | Continue validation (42 available) |
+| **Track 1: UVM Parity** | ⚠️ Factory registration broken | Debug `uvm_component_utils` macro expansion |
+| **Track 2: AVIP Testing** | ✅ 6/9 AVIPs compile/simulate | Fix factory registration for actual tests |
+| **Track 3: OpenTitan** | ✅ ~33/42 IPs pass | Continue validation (9 remaining) |
 | **Track 4: External Suites** | ✅ 100% pass | Maintain coverage |
 
 ### Remaining Limitations
 
 **Critical for UVM/AVIP:**
-1. **UVM Test Execution** - Need to test with `+UVM_TESTNAME`
-   - AVIPs currently terminate at time 0 without actual test name
-   - Global constructor crash is now fixed
+1. **UVM Factory Registration** - ACTIVE DEBUGGING
+   - Test classes NOT registered with factory (BDTYP warning)
+   - `\`uvm_component_utils` macro not properly expanding/executing
+   - Global constructor crash is fixed - singleton patterns work
+   - Issue is that macro-expanded proxy objects don't register correctly
 
 2. **AVIPs with Source Bugs** (not CIRCT issues):
    - JTAG: Type conversion error in `JtagTargetDeviceDriverBfm.sv`
