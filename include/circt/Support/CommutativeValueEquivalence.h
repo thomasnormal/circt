@@ -17,6 +17,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include <functional>
 #include <utility>
 
 namespace circt {
@@ -110,28 +111,50 @@ private:
     return true;
   }
 
+  void collectAssociativeOperands(mlir::Operation *op,
+                                  llvm::SmallVector<mlir::Value> &out) {
+    std::function<void(mlir::Value)> addOperand = [&](mlir::Value value) {
+      if (auto *def = value.getDefiningOp()) {
+        if (def->getName() == op->getName()) {
+          for (mlir::Value nested : def->getOperands())
+            addOperand(nested);
+          return;
+        }
+      }
+      out.push_back(value);
+    };
+    for (mlir::Value operand : op->getOperands())
+      addOperand(operand);
+  }
+
+  bool operandsEquivalentAssociative(mlir::Operation *lhsOp,
+                                     mlir::Operation *rhsOp) {
+    llvm::SmallVector<mlir::Value> lhsOperands;
+    llvm::SmallVector<mlir::Value> rhsOperands;
+    collectAssociativeOperands(lhsOp, lhsOperands);
+    collectAssociativeOperands(rhsOp, rhsOperands);
+    return operandsEquivalentCommutative(lhsOperands, rhsOperands);
+  }
+
   bool isCommutativeEquivalent(mlir::Operation *lhsOp,
                                mlir::Operation *rhsOp) {
     if (auto lhs = mlir::dyn_cast<circt::comb::AndOp>(lhsOp)) {
       auto rhs = mlir::dyn_cast<circt::comb::AndOp>(rhsOp);
       if (!rhs)
         return false;
-      return operandsEquivalentCommutative(lhs.getOperands(),
-                                            rhs.getOperands());
+      return operandsEquivalentAssociative(lhsOp, rhsOp);
     }
     if (auto lhs = mlir::dyn_cast<circt::comb::OrOp>(lhsOp)) {
       auto rhs = mlir::dyn_cast<circt::comb::OrOp>(rhsOp);
       if (!rhs)
         return false;
-      return operandsEquivalentCommutative(lhs.getOperands(),
-                                            rhs.getOperands());
+      return operandsEquivalentAssociative(lhsOp, rhsOp);
     }
     if (auto lhs = mlir::dyn_cast<circt::comb::XorOp>(lhsOp)) {
       auto rhs = mlir::dyn_cast<circt::comb::XorOp>(rhsOp);
       if (!rhs)
         return false;
-      return operandsEquivalentCommutative(lhs.getOperands(),
-                                            rhs.getOperands());
+      return operandsEquivalentAssociative(lhsOp, rhsOp);
     }
     if (auto lhs = mlir::dyn_cast<circt::comb::ICmpOp>(lhsOp)) {
       auto rhs = mlir::dyn_cast<circt::comb::ICmpOp>(rhsOp);

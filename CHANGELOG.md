@@ -231,8 +231,9 @@ Enable UVM with Accellera's uvm-core library by fixing llhd.prb/drv on local var
    - **ROOT CAUSE**: Equivalent derived clock expressions could be distinct SSA values
      (including commuted operands) and fail to map to a BMC clock input, causing
      clocked properties to error.
-   - **FIX**: Use structural + commutative equivalence to match equivalent clock
-     expressions during clock position resolution (and LowerToBMC dedup).
+   - **FIX**: Use structural + commutative/associative equivalence to match
+     equivalent clock expressions during clock position resolution (and
+     LowerToBMC dedup).
    - **TEST**: `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-property.mlir`
    - **UNIT TEST**: `unittests/Support/CommutativeValueEquivalenceTest.cpp`
 
