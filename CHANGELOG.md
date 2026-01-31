@@ -34,6 +34,14 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
    - **Test**: `test/Tools/circt-sim/progress-stages.mlir`
    - **Files**: `tools/circt-sim/circt-sim.cpp`
 
+4. **LLHD Signal LLVM Aggregate Layout Bridging**:
+   - Convert between LLVM aggregate layout (low-to-high) and HW aggregate layout
+     (high-to-low) when `llvm.load`/`llvm.store` access `llhd.ref` signals
+   - Adds signal type tracking to drive conversions for structs/arrays
+   - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`,
+     `tools/circt-sim/LLHDProcessInterpreter.h`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
