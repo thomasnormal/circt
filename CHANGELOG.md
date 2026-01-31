@@ -82,6 +82,11 @@ Continue reducing XFAIL count, add unit tests for recent bug fixes, improve BMC 
 | verilator-verification LEC | **17/17 pass** | No failures |
 | AVIP (APB/AHB/UART/I2S/AXI4/I3C) | **PASS** | All 6 protocols working |
 
+Additional Runs (2026-01-31):
+- `CIRCTSupportTests --gtest_filter=I1ValueSimplifierTest.*` (5/5 pass)
+- `circt-bmc` regression: `circt-bmc-equivalent-derived-clock-icmp-neutral.mlir` (xor_const)
+- sv-tests BMC smoke (`BMC_SMOKE_ONLY=1 TEST_FILTER=16.12--property`): total=5 pass=2 error=3
+
 ---
 
 ## Iteration 276 - January 31, 2026
