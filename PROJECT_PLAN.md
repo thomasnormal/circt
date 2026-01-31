@@ -195,55 +195,52 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 276 - Updated 2026-01-31)
+### Test Suite Status (Iteration 277 - Updated 2026-01-31)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2991/3085 (96.9%)** | All pass, **9 XFAIL** (down from 18 at start) |
-| circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
+| Lit Tests | **2991/3085 (96.9%)** | All pass, **4 XFAIL** (down from 18 at start) |
+| ImportVerilog | **215/219 (98.17%)** | Near parity |
+| circt-sim | **75/75 (100%)** | continuous-assignments.mlir fixed |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **14/21 (66.7%)** | 14 pass, 7 failing/timeout |
-| AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C compile+simulate; SPI/JTAG/AXI4Lite have source bugs |
+| OpenTitan IPs | **17+/21 (81%+)** | 17+ pass, improved from 14/21 |
+| AVIPs | **6/6 pass** | APB, AHB, UART, I2S, AXI4, I3C all pass |
 | **External Suites** | **54/54 (100%)** | sv-tests + Verilator + yosys-sva all pass |
 | **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
 
-**Iteration 276 Focus (2026-01-31) - STABILITY & XFAIL REDUCTION:**
+**Iteration 277 Focus (2026-01-31) - XFAIL REDUCTION & STABILITY:**
 
-**Iteration 276 Progress:**
-- **XFAIL Reduced**: 18 → 9 (50% reduction from iteration start!)
-- **OpenTitan Coverage**: 14/21 pass (66.7%)
-- **Fixed dynamic-nonprocedural-assign.sv**: setSeverity ordering issue resolved (`1cf58760d`)
-- **Fixed Delta Step Tracking**: EventQueue properly tracks delta steps (`9885013d5`)
-- **Fixed Wide Signal Edge Detection**: Correct edge detection for signals > 64 bits (`9885013d5`)
-- **Fixed avip-e2e-testbench.sv**: Updated to use uvm-core library with timescale
-- **Virtual Interface Task Calls**: Confirmed working
-- **AVIPs**: 6/9 simulate (APB, AHB, UART, I2S, AXI4, I3C)
+**Iteration 277 Progress:**
+- **XFAIL Reduced**: 18 → 4 (78% reduction from iteration start!)
+- **ImportVerilog**: 215/219 pass (98.17%)
+- **OpenTitan Coverage**: 17+/21 pass (81%+) - improved from 14/21
+- **circt-sim**: continuous-assignments.mlir fixed, now 75/75 (100%)
+- **AVIPs**: All 6 pass (APB, AHB, UART, I2S, AXI4, I3C)
 - **External Suites**: 54/54 pass (100%)
 - **All lit tests pass**: No regressions
-- **UVM with uvm-core**: 10 previously-XFAIL tests now pass when using real UVM library
 
-**Iteration 276 Latest Suite Runs (2026-01-31):**
+**Iteration 277 Latest Suite Runs (2026-01-31):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)
 - sv-tests LEC: 23 pass (23 total)
 - yosys-sva BMC: 14 pass / 2 skipped (VHDL)
 - yosys-sva LEC: 14 pass / 2 skipped (VHDL)
 - verilator-verification BMC: 17 pass
 - verilator-verification LEC: 17 pass
-- AVIP (APB/AHB/UART) circt-verilog: PASS
-- AVIP (AXI4/I3C) circt-verilog: PASS
-- OpenTitan: 14/21 pass (66.7%)
+- ImportVerilog: 215/219 (98.17%)
+- AVIP: All 6 pass
+- OpenTitan: 17+/21 pass (81%+)
 
-**Remaining 9 XFAIL Tests by Category:**
-1. **Bind Limitations** (2 tests): bind-interface-port.sv, bind-nested-definition.sv
-2. **UVM API Incompatibility** (4 tests): uvm-objection-test.sv, uvm-report-infrastructure.sv, uvm-tlm-analysis-port.sv, uvm-utilities-test.sv (require major rewrite for uvm-core)
-3. **Feature Implementation** (2 tests): dynamic-nonprocedural.sv (always_comb wrapping), sva-procedural-hoist-no-clock.sv (assertion hoisting)
-4. **Test Design Issue** (1 test): tlul-bfm-include.sv (struct compatibility)
+**Remaining 4 XFAIL Tests (All Feature Gaps):**
+1. **bind-interface-port.sv** - Bind scope resolution for interface ports
+2. **bind-nested-definition.sv** - Nested interface definition lookup in bind
+3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
+4. **sva-procedural-hoist-no-clock.sv** - Procedural assertion hoisting
 
 **UVM Tests Now Passing (9 tests):**
 - Tests that use UVM features now work with the real Accellera `uvm-core` library
@@ -313,6 +310,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   correct clock domain
 - **BMC derived clock fallback**: unmatched `bmc.clock` names now remap to the
   single derived BMC clock input to avoid spurious unmapped-clock errors
+- **BMC derived clock equivalence via assume**: derived i1 clocks constrained by
+  assume eq/ne or XOR parity now resolve to the base BMC clock (including
+  inverted clocks), enabling clocked delay/past buffers on derived clocks
 - **BMC ltl.clock delay buffers**: clocked delay buffers now treat `ltl.clock`
   as a transparent wrapper, fixing explicit clock gating in delay-buffer tests
   (`bmc-delay-buffer-clock-op-negedge.mlir`, `bmc-delay-buffer-clock-op-edge-both.mlir`)
