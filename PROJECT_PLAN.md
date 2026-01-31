@@ -225,10 +225,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 **Iteration 275 Latest Suite Runs (2026-01-31):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)
+- sv-tests LEC: 23 pass (23 total)
 - yosys-sva BMC: 14 pass / 2 skipped (VHDL)
+- yosys-sva LEC: 14 pass / 2 skipped (VHDL)
 - verilator-verification BMC: 17 pass
-- AVIP (APB) circt-verilog: PASS
-- OpenTitan prim_count (circt-sim): PASS
+- verilator-verification LEC: 17 pass
+- AVIP (APB/AHB/UART) circt-verilog: PASS
+- OpenTitan prim_count + prim_fifo_sync (circt-sim): PASS
 
 **Remaining 18 XFAIL Tests by Category:**
 1. **Hierarchical Names** (~8 tests): Signal access through instance hierarchy
