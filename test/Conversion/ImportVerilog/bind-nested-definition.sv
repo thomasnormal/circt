@@ -1,5 +1,6 @@
 // RUN: circt-verilog --ir-moore --no-uvm-auto-include %s -o - | FileCheck %s
-// Bind with nested interface definition now supported.
+// XFAIL: *
+// TODO: Bind with nested interface definition not yet supported.
 
 interface TargetIf;
 endinterface

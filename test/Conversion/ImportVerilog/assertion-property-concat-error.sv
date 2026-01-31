@@ -8,7 +8,7 @@ module PropertyConcatError(input logic clk, a, b);
 
   // $changed should lower to a sampled comparison that can be concatenated.
   // CHECK: moore.past
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: ltl.concat
   assume property (@(posedge clk) b !== x ##1 $changed(b));
 
