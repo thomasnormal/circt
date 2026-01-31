@@ -9,7 +9,7 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
 - **Starting XFAIL count**: 18
 - **Ending XFAIL count**: 9 (50% reduction!)
 - **ImportVerilog**: 210/219 pass (95.89%)
-- **OpenTitan**: 14/21 pass (66.7%)
+- **OpenTitan**: 17/21 pass (81%) - stack overflow fix enabled 3 more IPs
 - **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
 
 ### Fixed in this Iteration
@@ -81,6 +81,22 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Updated yosys SVA LEC runner to remove unsupported `--fail-on-inequivalent`
    - **Files**: `tools/circt-lec/circt-lec.cpp`,
      `utils/run_yosys_sva_circt_lec.sh`
+
+8. **BMC derived clock equivalence through to/from conversions**:
+   - Treat `seq.from_clock(seq.to_clock(x))` as equivalent to `x` when
+     resolving clock positions for explicit clocked properties
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-derived-clock-from-to-equivalence.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+9. **BMC clocked delay buffers with explicit ltl.clock**:
+   - Treat `ltl.clock` as a transparent sequence wrapper when collecting
+     sequence roots, so delay buffers handle clocked sequences without
+     introducing NFA state slots
+   - Track `seq.from_clock` users through unrealized casts when mapping
+     clock values to BMC inputs
+   - Removed XFAIL and updated CHECKs for `bmc-delay-buffer-clock-op-edge-both.mlir`
+     and `bmc-delay-buffer-clock-op-negedge.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 ### Test Results
 | Suite | Status | Notes |
