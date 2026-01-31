@@ -7,8 +7,8 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
 
 ### Status
 - **Starting XFAIL count**: 18
-- **Ending XFAIL count**: 9 (50% reduction!)
-- **ImportVerilog**: 210/219 pass (95.89%)
+- **Ending XFAIL count**: 4 (78% reduction!)
+- **ImportVerilog**: 215/219 pass (98.17%)
 - **OpenTitan**: 17/21 pass (81%) - stack overflow fix enabled 3 more IPs
 - **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
 
@@ -38,7 +38,24 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Updated CHECK pattern for `$stable` to use `moore.case_eq`
    - **Files**: `test/Conversion/ImportVerilog/builtins.sv`
 
-6. **Stack Overflow Fix in collectSignalIds** (`0ec18eccf`):
+6. **4 UVM Tests Fixed with uvm-core** (`45b46ebf1`):
+   - uvm-objection-test.sv: Use get_objection_count() API
+   - uvm-report-infrastructure.sv: Remove unavailable methods
+   - uvm-tlm-analysis-port.sv: Rename reserved 'checker' keyword
+   - uvm-utilities-test.sv: Use uvm_report_cb API
+   - **XFAIL reduced from 9 to 5**
+
+7. **tlul-bfm-include.sv Test Added** (`997ac394f`):
+   - Added complete prim_mubi_pkg and tlul_pkg stubs
+   - Enables testing TLUL BFM include patterns
+   - **XFAIL reduced to 4**
+
+8. **SignalValue Comparison Fix** (`4ba449ddc`):
+   - Fixed operator== incorrectly treating normal values as X
+   - Fixes continuous-assignments.mlir test
+   - **Files**: `include/circt/Dialect/Sim/ProcessScheduler.h`
+
+9. **Stack Overflow Fix in collectSignalIds** (`0ec18eccf`):
    - Inlined collectSignalIdsFromCombinational to avoid mutual recursion
    - Fixes stack overflow on large OpenTitan IPs (hmac_reg_top, rv_timer_reg_top, spi_host_reg_top)
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
