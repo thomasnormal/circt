@@ -1326,6 +1326,10 @@ static void rewriteImplicationDelaysForBMC(Block &circuitBlock,
     auto delayOp = implOp.getConsequent().getDefiningOp<ltl::DelayOp>();
     if (!delayOp)
       continue;
+    auto inputTy = delayOp.getInput().getType();
+    auto intTy = dyn_cast<IntegerType>(inputTy);
+    if (!intTy || intTy.getWidth() != 1)
+      continue;
     uint64_t delay = delayOp.getDelay();
     if (delay == 0)
       continue;
@@ -2180,6 +2184,16 @@ struct VerifBoundedModelCheckingOpConversion
           seenInfo.insert({cur, curInfo});
         }
         if (isa<ltl::SequenceType>(cur.getType())) {
+          if (auto delayOp = cur.getDefiningOp<ltl::DelayOp>()) {
+            if (delayOp.getDelay() == 0) {
+              auto lengthAttr = delayOp.getLengthAttr();
+              if (lengthAttr &&
+                  lengthAttr.getValue().getZExtValue() == 0) {
+                worklist.push_back({delayOp.getInput(), curInfo});
+                continue;
+              }
+            }
+          }
           addSequenceRoot(cur, curInfo);
           continue;
         }
@@ -2443,7 +2457,6 @@ struct VerifBoundedModelCheckingOpConversion
     size_t totalDelaySlots = 0;
     bool delaySetupFailed = false;
     SmallVector<Value> delayRootOverrides;
-
     // First pass: collect all delay ops with meaningful temporal ranges.
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
       if (delayOp.use_empty())

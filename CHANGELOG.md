@@ -67,7 +67,14 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - **Tests**: `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`
    - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
-6. **LEC result tokens + compat flag**:
+6. **BMC delay range handling**:
+   - Keep buffer-based approximation for `##[m:n]`/`##[m:$]` delays within the BMC bound
+   - Exact `##0` sequences are skipped as sequence roots
+   - Implication delay shift now only applies to i1 consequents
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-multistep-delay.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+7. **LEC result tokens + compat flag**:
    - `circt-lec --run-smtlib` now emits `LEC_RESULT=EQ|NEQ|UNKNOWN` alongside
      `c1 == c2` / `c1 != c2`
    - Added `--print-counterexample` alias for `--print-solver-output`
