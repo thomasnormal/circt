@@ -18,10 +18,6 @@ using namespace circt;
 using namespace ltl;
 
 void LTLDialect::initialize() {
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "circt/Dialect/LTL/LTLAttributes.cpp.inc"
-      >();
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "circt/Dialect/LTL/LTLTypes.cpp.inc"
@@ -44,9 +40,6 @@ Operation *LTLDialect::materializeConstant(OpBuilder &builder, Attribute value,
 
 #include "circt/Dialect/LTL/LTLDialect.cpp.inc"
 #include "circt/Dialect/LTL/LTLEnums.cpp.inc"
-
-#define GET_ATTRDEF_CLASSES
-#include "circt/Dialect/LTL/LTLAttributes.cpp.inc"
 
 #define GET_TYPEDEF_CLASSES
 #include "circt/Dialect/LTL/LTLTypes.cpp.inc"

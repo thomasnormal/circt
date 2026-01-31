@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Final Session Summary - January 31, 2026
+
+### Final Achievement
+- **ImportVerilog**: 217/219 pass (99.09%)
+- **XFAIL reduction**: 18 → 2 (89% reduction)
+- **Tests fixed this session**: 16
+- **OpenTitan**: TL-UL timing fix applied
+- **AVIP**: All 6 protocols compile and simulate with UVM
+
+### Key Fixes This Session
+1. **dynamic-nonprocedural.sv** - Fixed setSeverity ordering issue
+2. **sva-procedural-hoist-no-clock.sv** - Fixed assertion hoisting without clock context
+3. **4 UVM tests** - Fixed with uvm-core library integration
+4. **tlul-bfm-include.sv** - Added complete stubs for TL-UL BFM infrastructure
+5. **SignalValue comparison** - Fixed operator== for simulation correctness
+6. **Stack overflow in collectSignalIds** - Fixed infinite recursion
+7. **Delta step tracking** - Fixed EventQueue behavior
+8. **TL-UL initialization timing** - Improved response validity propagation
+
+### Remaining Work
+- **2 bind directive XFAILs** (architectural limitation - interface port threading across bind scopes)
+- **TL-UL a_ready signal propagation** for OpenTitan IP simulation
+- **circt-sim timeout mechanism** (2 hanging tests need graceful termination)
+
+### Test Suite Summary
+| Suite | Status | Notes |
+|-------|--------|-------|
+| ImportVerilog | **217/219 (99.09%)** | Only 2 XFAIL remain |
+| OpenTitan IPs | **17+/21 (81%+)** | TL-UL init timing identified |
+| AVIP Protocols | **6/6 (100%)** | APB, AHB, UART, I2S, AXI4, I3C |
+| BMC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
+| LEC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
+
+---
+
+## Iteration 278 - January 31, 2026
+
+### Goals
+- Fix sv-tests BMC crash in LTL lowering.
+- Add regression coverage for constant-clocked assertions.
+
+### Fixed in this Iteration
+
+1. **LTLToCore clocked-assert crash on constant clocks**:
+   - Guarded clock input resolution when the clock traces to a constant and no
+     input root is available, avoiding a crash in LTLToCore.
+   - Added regression: `test/Conversion/LTLToCore/clocked-assert-constant-clock.mlir`.
+
+2. **LTL ClockEdgeAttr duplication build fix**:
+   - Dropped LTL dialect attribute registration to avoid duplicate
+     `ClockEdgeAttr` definitions, aligning LTL with Verif/SVA enum-attr usage.
+
 ## Iteration 277 - January 31, 2026
 
 ### Goals

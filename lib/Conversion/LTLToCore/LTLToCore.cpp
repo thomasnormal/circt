@@ -1060,6 +1060,8 @@ void LowerLTLToCorePass::runOnOperation() {
     BlockArgument root;
     if (!traceClockRoot(clock, root))
       return {};
+    if (!root)
+      return {};
     if (root.getOwner() != hwModule.getBodyBlock())
       return {};
     auto inputNames = hwModule.getInputNames();
