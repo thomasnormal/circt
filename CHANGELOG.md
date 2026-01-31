@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 269 - January 31, 2026
+
+### Goals
+Fix interpreter crashes in circt-sim for uninitialized values and associative arrays.
+
+### Fixed in this Iteration
+1. **Uninitialized String Pointer Handling** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `__moore_string_cmp` and `__moore_string_len` crashed on X (uninitialized) pointers
+   - Calling `getUInt64()` on X values returns garbage, causing segfault on dereference
+   - **FIX**: Check `isX()` before accessing pointer values, return safe defaults (0)
+   - **Impact**: Prevents crashes when comparing/measuring uninitialized strings
+
+2. **Uninitialized Associative Array Crash** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: `__moore_assoc_get_ref` crashed when array pointer was uninitialized
+   - Class member associative arrays not initialized with `__moore_assoc_create` contain interpreter virtual addresses
+   - Accessing these as real C++ pointers causes segfault
+   - **FIX**: Track valid array addresses in `validAssocArrayAddresses` set
+   - Only accept addresses returned by `__moore_assoc_create`
+   - Return null instead of crashing for uninitialized arrays
+   - **Files**: `LLHDProcessInterpreter.h`, `LLHDProcessInterpreter.cpp`
+   - **Impact**: APB AVIP simulation restored (was crashing after previous changes)
+
+3. **Key Block Bounds Checking** (LLHDProcessInterpreter.cpp):
+   - Added safety check for `keyOffset > keyBlock->data.size()` to prevent underflow
+
+4. **Prompt Simulation Termination** (circt-sim.cpp):
+   - Check `shouldContinue()` immediately after `executeCurrentTime()`
+   - Ensures `$finish` is honored before further processing
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| APB AVIP | PASS | Simulation completes successfully |
+| sv-tests BMC | 23/26 (100%) | 3 expected failures (XFAIL) |
+| verilator BMC | 17/17 (100%) | All pass |
+| yosys SVA BMC | 14/14 (100%) | 2 VHDL skipped |
+| OpenTitan prim_count | PASS | Simulation completes successfully |
+| llvm-assoc-native-ref-load-store | PASS | Restored by tracking valid array addresses |
+
+---
+
 ## Iteration 268 - January 31, 2026
 
 ### Goals
