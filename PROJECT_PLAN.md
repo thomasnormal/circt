@@ -95,10 +95,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
    - **Tests Fixed**: `hw-instance-output.mlir`, `llhd-instance-probe-read.mlir`
 
-### Remaining UVM Limitations (Iteration 236)
+### Remaining UVM Limitations (Iteration 268 - Updated)
 
 **Immediate Blockers:**
-1. **AVIP Dominance Errors** ✅ RESOLVED:
+1. **Local Variable llhd.prb Issue** 🟡 MEDIUM (Iteration 268):
+   - Local variables in class methods are backed by `llvm.alloca`
+   - Cast to `!llhd.ref` for type compatibility
+   - `llhd.prb` operations fail because they expect real LLHD signals
+   - **Pattern**: `%alloca = llvm.alloca` → `unrealized_cast to !llhd.ref` → `llhd.prb` fails
+   - **Impact**: UVM report_summarize and other class methods don't complete
+   - **Fix needed**: LLHDProcessInterpreter should handle `llhd.prb` on allocas
+
+2. **AVIP Dominance Errors** ✅ RESOLVED:
    - Fixed in commit `5cb9aed08` - "Improve fork/join import with variable declaration support"
    - Automatic variable declarations in fork bodies now properly handled
    - Variable scope now correctly created within fork regions
@@ -147,14 +155,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 267 - Updated 2026-01-31)
+### Test Suite Status (Iteration 268 - Updated 2026-01-31)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
 | Lit Tests | **2980/3085 (96.6%)** | 12 SMT/LEC failures, 38 XFAIL, 55 unsupported |
 | circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
-| MooreToCore | **96/97 (99%)** | 1 expected failure (XFAIL) |
+| MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/26 (100%)** | 3 are XFAIL (expected failures) |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
@@ -231,19 +239,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 | Track | Status | Next Task |
 |-------|--------|-----------|
-| **Track 1: UVM Parity** | ⚠️ Factory registration broken | Debug `uvm_component_utils` macro expansion |
-| **Track 2: AVIP Testing** | ✅ 6/9 AVIPs compile/simulate | Fix factory registration for actual tests |
-| **Track 3: OpenTitan** | ✅ ~33/42 IPs pass | Continue validation (9 remaining) |
+| **Track 1: UVM Parity** | ⚠️ AssocArrayIterator bug | Fix llhd.prb for func ref params |
+| **Track 2: AVIP Testing** | ✅ 6/9 AVIPs compile | Fix runtime to run actual tests |
+| **Track 3: OpenTitan** | ✅ 40/42 IPs pass (95%) | Verify remaining IPs |
 | **Track 4: External Suites** | ✅ 100% pass | Maintain coverage |
 
 ### Remaining Limitations
 
 **Critical for UVM/AVIP:**
-1. **UVM Factory Registration** - ACTIVE DEBUGGING
-   - Test classes NOT registered with factory (BDTYP warning)
-   - `\`uvm_component_utils` macro not properly expanding/executing
-   - Global constructor crash is fixed - singleton patterns work
-   - Issue is that macro-expanded proxy objects don't register correctly
+1. **AssocArrayIteratorOpConversion Bug** - ACTIVE FIX NEEDED
+   - Compilation now works (factory registration code is generated)
+   - Runtime crashes in `llhd.prb` when iterating associative arrays
+   - `AssocArrayIteratorOpConversion` uses `llhd.prb/llhd.drv` for ref params
+   - Should use `llvm.load/llvm.store` when ref param is a function argument
+   - Same pattern as ReadOpConversion fix needed
 
 2. **AVIPs with Source Bugs** (not CIRCT issues):
    - JTAG: Type conversion error in `JtagTargetDeviceDriverBfm.sv`
