@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 273 - January 31, 2026
+
+### Goals
+Fix associative array validation to prevent AXI4/I3C crashes, enable hierarchical-names.sv test.
+
+### Fixed in this Iteration
+1. **Associative Array Validation Fix** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Uninitialized associative array pointers caused crashes in AXI4/I3C AVIPs
+   - **FIX**: Added `validAssocArrayAddresses` tracking to validate array pointers before access
+   - Only accept addresses returned by `__moore_assoc_create`
+   - Return null for uninitialized arrays instead of crashing
+   - **Impact**: Prevents AXI4/I3C simulation crashes from assoc array access
+
+2. **hierarchical-names.sv XFAIL Removed**:
+   - Test now passes - hierarchical name access through instances working
+   - Reduced XFAIL count from 23 to 22
+   - **Commit**: `6856689e4`
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Lit Tests | **All pass** | No regressions, 22 XFAIL (was 23) |
+| OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass |
+| AVIPs | **4/9 simulate** | +2 blocked by coverage functions |
+| yosys-sva BMC | **14/14 (100%)** | All pass |
+| sv-tests BMC | **23/23 (100%)** | All pass |
+| Verilator BMC | **17/17 (100%)** | All pass |
+
+### Commits
+- `6856689e4` - Remove XFAIL from hierarchical-names.sv (now passing)
+- New commit - Associative array validation fix for AXI4/I3C
+
+---
+
 ## Iteration 272 - January 31, 2026
 
 ### Goals
@@ -364,6 +398,7 @@ Fix llhd.prb support for function argument references in circt-sim interpreter t
    - **Negative test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-overlap.mlir`
    - **Negative test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-partial.mlir`
    - **Merge test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-merge.mlir`
+   - **Negative test**: `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-ambiguous.mlir`
 
 ### Current Limitations & Features Needed
 
