@@ -8884,6 +8884,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyRefAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
+        // Validate that the array address is a properly initialized associative array
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_next - uninitialized array at 0x"
+                                  << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
+          return success();
+        }
+
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         // Find key memory block
@@ -8891,11 +8899,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto *keyRefBlock = findMemoryBlockByAddress(keyRefAddr, procId, &keyRefOffset);
 
         // Determine key type from array header
-        bool isStringKey = false;
-        if (arrayPtr) {
-          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
-          isStringKey = (header->type == AssocArrayType_StringKey);
-        }
+        auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+        bool isStringKey = (header->type == AssocArrayType_StringKey);
 
         bool result = false;
         if (isStringKey) {
@@ -8953,6 +8958,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_assoc_size") {
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        // Validate that the array address is a properly initialized associative array
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_size - uninitialized array at 0x"
+                                  << llvm::format_hex(arrayAddr, 16) << ", returning 0\n");
+          return success();
+        }
+
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         int64_t result = __moore_assoc_size(arrayPtr);
