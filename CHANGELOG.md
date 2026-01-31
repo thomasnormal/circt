@@ -21,6 +21,12 @@ Fix UVM global constructor crash, expand OpenTitan coverage, fix UVM factory reg
    - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
    - **Impact**: UVM factory registration now works - `__deferred_init()` executes correctly
 
+3. **hw.struct Value Conversion to LLVM** (MooreToCore.cpp):
+   - Added `convertValueToLLVMType()` helper function
+   - Properly decomposes `hw.struct` values field-by-field using `hw::StructExtractOp`
+   - Rebuilds as LLVM struct using `llvm::insertvalue` operations
+   - Fixes llvm.store type mismatch errors with 4-state struct types
+
 3. **Expanded OpenTitan Coverage** (40/42 = 95%):
    - **reg_top IPs** (27 pass): All major register interfaces work
    - **Full IPs** (13 pass): gpio, uart, timer_core, keymgr_dpe, i2c, prim_count, mbx, rv_dm, dma, etc.
