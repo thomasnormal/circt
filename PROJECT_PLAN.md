@@ -2069,6 +2069,7 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-31 | yosys/tests/sva | BMC | total=14 pass=9 fail=5 xfail=0 xpass=0 error=0 skip=2 | regression |
 | 2026-01-31 | yosys/tests/sva | BMC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | assume-known-inputs |
 | 2026-01-30 | yosys/tests/sva | LEC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green |
+| 2026-01-31 | yosys/tests/sva | LEC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green (runner fix) |
 | 2026-01-30 | opentitan | LEC | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | aes_sbox_canright |
 | 2026-01-30 | opentitan | LEC | total=3 pass=3 fail=0 xfail=0 xpass=0 error=0 skip=0 | include-masked |
 | 2026-01-30 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
