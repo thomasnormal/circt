@@ -410,7 +410,7 @@ module SampleValueBuiltins #() (
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));
