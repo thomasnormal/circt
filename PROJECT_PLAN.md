@@ -315,6 +315,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   single derived BMC clock input to avoid spurious unmapped-clock errors
 - **BMC assume-known inputs**: `circt-bmc` now supports `--assume-known-inputs`,
   with `BMC_ASSUME_KNOWN_INPUTS=1` hook added for yosys SVA runs
+- **BMC delay root handling**: sequence-root `ltl.delay` ops now use delay
+  buffers instead of NFAs to avoid null implication operands; fixes
+  `bmc-delay-posedge.mlir` legalization
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
 - **Virtual Interface Task Calls Confirmed Working**: virtual-interface-task.sv passes
@@ -1975,7 +1978,6 @@ baselines, correct temporal semantics, and actionable diagnostics.
 6. **Rising-clocks-only limitation**: `--rising-clocks-only` rejects negedge
    and edge-triggered properties; full edge modeling is required for suites
    that include them.
-
 ### Long-Term Features to Build (Ambitious + Needed)
 1. **True multi-step BMC** with proper delay buffering and sampled-value timing,
    including `$past`/`$rose`/`$fell` alignment and `##[m:$]` correctness.

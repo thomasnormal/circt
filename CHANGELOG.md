@@ -48,6 +48,13 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Now correctly handles APInt comparisons for arbitrary width signals
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
+4. **BMC delay root handling**:
+   - Treat sequence-root `ltl.delay` ops as delay buffers instead of NFAs
+   - Fixes `verif.bmc` legalization for delay implication tests
+   - **Tests**: `test/Conversion/VerifToSMT/bmc-delay-posedge.mlir`,
+     `test/Conversion/VerifToSMT/bmc-nonoverlap-implication.mlir`
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
