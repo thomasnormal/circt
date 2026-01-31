@@ -8,7 +8,9 @@
 
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/LTL/LTLTypes.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
