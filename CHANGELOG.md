@@ -126,6 +126,14 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
      `test/Conversion/VerifToSMT/bmc-derived-clock-conflict.mlir`
    - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
+11. **BMC clock-op inversion checks**:
+   - Updated CHECK patterns to match current negedge/posedge gating for
+     inverted clocks and XOR-with-false clocks
+   - Removed XFAILs for `bmc-clock-op-inverted-posedge*.mlir` and
+     `bmc-clock-op-xor-false-posedge.mlir`
+   - **Files**: `test/Conversion/VerifToSMT/bmc-clock-op-inverted-posedge*.mlir`,
+     `test/Conversion/VerifToSMT/bmc-clock-op-xor-false-posedge.mlir`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
