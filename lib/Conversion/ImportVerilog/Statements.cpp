@@ -2062,6 +2062,72 @@ struct StmtVisitor {
     if (!property)
       return failure();
 
+    // If the property has its own clock and we're inside a procedure, hoist
+    // the assertion to module level using clocked verif ops.
+    if (auto clockOp = property.getDefiningOp<ltl::ClockOp>()) {
+      if (enclosingProc) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointAfter(enclosingProc);
+
+        // Clone the clock op and its dependencies to the module level.
+        IRMapping mapping;
+        llvm::DenseSet<Operation *> active;
+        auto *moduleBlock = builder.getInsertionBlock();
+        auto hoistedProperty = cloneAssertionValueIntoBlock(
+            property, builder, moduleBlock, mapping, active);
+        if (!hoistedProperty) {
+          mlir::emitWarning(loc)
+              << "unable to hoist assertion property; emitting inside "
+                 "procedure";
+        } else {
+          // Get the clock op again from the hoisted property.
+          auto hoistedClockOp =
+              hoistedProperty.getDefiningOp<ltl::ClockOp>();
+          if (hoistedClockOp) {
+            auto edge = static_cast<verif::ClockEdge>(
+                static_cast<int>(hoistedClockOp.getEdge()));
+            auto clockVal = hoistedClockOp.getClock();
+            auto innerProperty = hoistedClockOp.getInput();
+
+            // Handle assertion guard if present.
+            Value enable;
+            if (context.currentAssertionGuard) {
+              enable = cloneAssertionValueIntoBlock(
+                  context.currentAssertionGuard, builder, moduleBlock,
+                  mapping, active);
+              if (enable)
+                enable = moore::ToBuiltinBoolOp::create(builder, loc, enable);
+              else
+                mlir::emitWarning(loc)
+                    << "unable to hoist assertion guard; emitting unguarded "
+                       "assert";
+            }
+
+            switch (stmt.assertionKind) {
+            case slang::ast::AssertionKind::Assert:
+              verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
+                                             clockVal, enable, StringAttr{});
+              return success();
+            case slang::ast::AssertionKind::Assume:
+              verif::ClockedAssumeOp::create(builder, loc, innerProperty, edge,
+                                             clockVal, enable, StringAttr{});
+              return success();
+            case slang::ast::AssertionKind::CoverProperty:
+              verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
+                                            clockVal, enable, StringAttr{});
+              return success();
+            case slang::ast::AssertionKind::Expect:
+              verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
+                                             clockVal, enable, StringAttr{});
+              return success();
+            default:
+              break;
+            }
+          }
+        }
+      }
+    }
+
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:
       verif::AssertOp::create(builder, loc, property, Value(), StringAttr{});
