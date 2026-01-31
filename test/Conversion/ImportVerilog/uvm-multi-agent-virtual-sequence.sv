@@ -1,6 +1,5 @@
-// RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s
+// RUN: circt-verilog --ir-moore --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s 2>&1 | FileCheck %s
 // REQUIRES: slang
-// XFAIL: *
 
 //===----------------------------------------------------------------------===//
 // Multi-Agent Virtual Sequence Test - Iteration 107 Track D
@@ -23,6 +22,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+`timescale 1ns/1ps
 `include "uvm_macros.svh"
 
 import uvm_pkg::*;

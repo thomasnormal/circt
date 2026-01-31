@@ -1,10 +1,10 @@
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
-// XFAIL: *
+// RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
 
 // Test that uvm_action and UVM_FILE types are properly defined in the UVM stubs.
 // These types are used throughout UVM reporting infrastructure for action flags
 // and file handles.
 
+`timescale 1ns/1ps
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 

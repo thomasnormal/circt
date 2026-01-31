@@ -1,9 +1,9 @@
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
-// XFAIL: *
+// RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
 
 // Test that UVM stub classes compile correctly and can be used
 // in typical UVM testbench patterns
 
+`timescale 1ns/1ps
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 

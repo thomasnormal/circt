@@ -1,7 +1,6 @@
-// RUN: circt-verilog --ir-moore -I %S/../../../lib/Runtime/uvm \
-// XFAIL: *
-// RUN:   %S/../../../lib/Runtime/uvm/uvm_pkg.sv %s | FileCheck %s
+// RUN: circt-verilog --ir-moore --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s | FileCheck %s
 
+`timescale 1ns/1ps
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 
