@@ -35,8 +35,11 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
 | sv-tests BMC | **23/23 pass** | 3 xfail, 0 fail (26 total) |
 | yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
 | verilator-verification BMC | **17/17 pass** | No failures |
-| AVIP (APB) circt-verilog | **PASS** | `run_avip_circt_verilog.sh ~/mbit/apb_avip` |
-| OpenTitan prim_count (circt-sim) | **PASS** | `run_opentitan_circt_sim.sh prim_count` |
+| sv-tests LEC | **23/23 pass** | 0 fail (23 total) |
+| yosys-sva LEC | **14/14 pass** | 2 skipped VHDL |
+| verilator-verification LEC | **17/17 pass** | No failures |
+| AVIP (APB/AHB/UART) circt-verilog | **PASS** | `run_avip_circt_verilog.sh ~/mbit/{apb,ahb,uart}_avip` |
+| OpenTitan prim_count/prim_fifo_sync (circt-sim) | **PASS** | `run_opentitan_circt_sim.sh prim_count` + `prim_fifo_sync` |
 
 ---
 
