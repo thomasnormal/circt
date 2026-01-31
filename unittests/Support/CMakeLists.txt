@@ -10,6 +10,7 @@ add_circt_unittest(CIRCTSupportTests
   PrettyPrinterTest.cpp
   ProjectConfigTest.cpp
   TestReportingTest.cpp
+  WallClockTimeoutTest.cpp
 )
 
 target_link_libraries(CIRCTSupportTests

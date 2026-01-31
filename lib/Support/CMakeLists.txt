@@ -24,7 +24,9 @@ add_circt_library(CIRCTSupport
   PrettyPrinterHelpers.cpp
   ProjectConfig.cpp
   SymCache.cpp
+  SMTModel.cpp
   TestReporting.cpp
+  WallClockTimeout.cpp
   ValueMapper.cpp
   "${VERSION_CPP}"
 
