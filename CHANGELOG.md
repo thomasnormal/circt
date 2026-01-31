@@ -27,11 +27,17 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
      `lib/Support/WallClockTimeout.cpp`,
      `tools/circt-sim/circt-sim.cpp`
 
+3. **circt-sim Stage Progress Markers**:
+   - Emit stage markers (parse/passes/init/run) when `-v=1` for hang triage
+   - **Test**: `test/Tools/circt-sim/progress-stages.mlir`
+   - **Files**: `tools/circt-sim/circt-sim.cpp`
+
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
 | CIRCTSimTests (abort tests) | **PASS** | ProcessScheduler/ParallelScheduler abort coverage |
 | CIRCTSupportTests (wall-clock) | **PASS** | WallClockTimeout unit tests |
+| circt-sim stage progress | **PASS** | `test/Tools/circt-sim/progress-stages.mlir` |
 | sv-tests BMC | **23/23 pass** | 3 xfail, 0 fail (26 total) |
 | yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
 | verilator-verification BMC | **17/17 pass** | No failures |

@@ -222,6 +222,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **External Suites**: 54/54 pass (100%)
 - **All lit tests pass**: No regressions
 - **Global wall-clock guard**: added tool-level timeout enforcement for pre-run phases
+- **Stage progress markers**: `-v=1` now prints parse/passes/init/run stages for hang triage
 
 **Iteration 275 Latest Suite Runs (2026-01-31):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)

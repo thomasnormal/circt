@@ -1118,6 +1118,11 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 
 static LogicalResult processInput(MLIRContext &context,
                                    llvm::SourceMgr &sourceMgr) {
+  auto reportStage = [](llvm::StringRef stage) {
+    if (verbosity >= 1)
+      llvm::errs() << "[circt-sim] Stage: " << stage << "\n";
+  };
+
   std::unique_ptr<WallClockTimeout> wallClockTimeout;
   if (timeout > 0) {
     wallClockTimeout = std::make_unique<WallClockTimeout>(
@@ -1130,6 +1135,7 @@ static LogicalResult processInput(MLIRContext &context,
         });
   }
 
+  reportStage("parse");
   // Parse the input file
   mlir::OwningOpRef<mlir::ModuleOp> module =
       parseSourceFile<ModuleOp>(sourceMgr, &context);
@@ -1353,6 +1359,7 @@ static LogicalResult processInput(MLIRContext &context,
     return success();
   }
 
+  reportStage("passes");
   // Run preprocessing passes if needed
   PassManager pm(&context);
   pm.enableVerifier(verifyPasses);
@@ -1372,6 +1379,7 @@ static LogicalResult processInput(MLIRContext &context,
     tops.push_back(top);
   }
 
+  reportStage("init");
   SimulationContext simContext;
   simContext.setMaxDeltaCycles(maxDeltas);
   simContext.setMaxProcessSteps(maxProcessSteps);
@@ -1380,6 +1388,7 @@ static LogicalResult processInput(MLIRContext &context,
   }
 
   // Run the simulation
+  reportStage("run");
   if (failed(simContext.run())) {
     return failure();
   }
