@@ -76,4 +76,12 @@ def StripUnreachableSymbols : Pass<"strip-unreachable-symbols",
   ];
 }
 
+def PruneBMCRegisters : Pass<"prune-bmc-registers", "::mlir::ModuleOp"> {
+  let summary = "Prune unused BMC register ports for property-only designs";
+  let dependentDialects = [
+    "circt::hw::HWDialect", "circt::llhd::LLHDDialect",
+    "circt::verif::VerifDialect"
+  ];
+}
+
 #endif // CIRCT_TOOLS_CIRCT_BMC_PASSES_TD

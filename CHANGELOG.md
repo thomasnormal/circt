@@ -79,6 +79,42 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
    - **Tests**: `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
 
+9. **circt-sim VCD Tracing + Signal Change Callback**:
+   - VCD tracing now captures internal signals and records value changes via
+     a scheduler callback; VCD header ordering fixed
+   - **Tests**: `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`
+   - **Files**: `tools/circt-sim/circt-sim.cpp`,
+     `include/circt/Dialect/Sim/ProcessScheduler.h`,
+     `lib/Dialect/Sim/ProcessScheduler.cpp`
+
+10. **4-State Encoding Metadata + Array Ops in Continuous Eval**:
+   - Corrected 4-state encoding detection (unknown flags in low half), added
+     per-signal encoding tags for edge detection, and implemented
+     array create/slice/concat support in continuous evaluation
+   - Fixes OpenTitan `prim_count` regression and improves waveform debug
+   - **Tests**: `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`
+   - **Files**: `include/circt/Dialect/Sim/ProcessScheduler.h`,
+     `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+11. **BMC Clocked Property Mapping**:
+    - `ltl.clock` operands now rewrite to the derived BMC clock input to avoid
+      clock equivalence mismatches when properties use raw i1 clocks
+    - **Tests**: `test/Tools/circt-bmc/lower-to-bmc-ltl-clock-inputs.mlir`
+    - **Files**: `lib/Tools/circt-bmc/LowerToBMC.cpp`
+
+12. **SV Inout Elimination Option Fix**:
+    - Added missing `allow-multiple-writers-same-value` option so the pass
+      options match the implementation (fixes build break)
+    - **Tests**: `test/Dialect/SV/hw-eliminate-inout-ports-options.mlir`
+    - **Files**: `include/circt/Dialect/SV/SVPasses.td`
+
+13. **BMC Pass Registration Fix**:
+    - Declared `prune-bmc-registers` in the pass registry so generated
+      registration code compiles again
+    - **Tests**: `test/Tools/circt-bmc/prune-bmc-registers-pass.mlir`
+    - **Files**: `include/circt/Tools/circt-bmc/Passes.td`,
+      `include/circt/Tools/circt-bmc/Passes.h`
+
 9. **Continuous Evaluation Comb Coverage**:
    - Added comb.replicate/parity/shift/mul/div/mod support and fixed shared-node
      handling in the iterative evaluator to avoid spurious X propagation

@@ -26,7 +26,8 @@ class Namespace;
 /// Get the Verif to SMT conversion patterns.
 void populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, SmallVectorImpl<Operation *> &propertylessBMCOps,
+    bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
+    SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps);
 
 /// Create a pass to lower clocked assertions with i1 properties to unclocked

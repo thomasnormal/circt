@@ -758,6 +758,25 @@ void LowerToBMCPass::runOnOperation() {
         toClockOp.replaceAllUsesWith(newClocks[*idx]);
         toClockOp.erase();
       }
+
+      // Rewrite ltl.clock operands to reference the corresponding BMC clock
+      // input. This avoids treating structurally equivalent clock expressions
+      // as unrelated to the inserted clock ports.
+      for (auto clockOp : ltlClockOps) {
+        auto idx = lookupClockInputIndex(clockOp.getClock());
+        if (!idx) {
+          clockOp.emitError("failed to map clocked property input");
+          return signalPassFailure();
+        }
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPoint(clockOp);
+        auto fromClk =
+            seq::FromClockOp::create(builder, loc, newClocks[*idx]);
+        auto rebuilt = ltl::ClockOp::create(builder, loc, clockOp.getInput(),
+                                            clockOp.getEdge(), fromClk);
+        clockOp.replaceAllUsesWith(rebuilt.getResult());
+        clockOp.erase();
+      }
       if (!clockNameRemap.empty()) {
         if (auto regClocks =
                 hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {

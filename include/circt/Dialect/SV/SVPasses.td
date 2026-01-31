@@ -162,7 +162,10 @@ def HWEliminateInOutPorts : Pass<"hw-eliminate-inout-ports",
     Option<"readSuffix", "read-suffix", "std::string", "\"_rd\"",
            "Suffix to be used for the port when the inout port has readers">,
     Option<"writeSuffix", "write-suffix", "std::string", "\"_wr\"",
-            "Suffix to be used for the port when the inout port has writers">
+            "Suffix to be used for the port when the inout port has writers">,
+    Option<"allowMultipleWritersSameValue", "allow-multiple-writers-same-value",
+           "bool", "false",
+           "Allow multiple writers if all drive the same value">
   ];
 }
 

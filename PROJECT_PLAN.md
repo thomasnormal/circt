@@ -265,15 +265,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    drives, firregs, and instance outputs now run with per-instance signal/value
    maps; an explicit instance-scoped lookup API now exists but still needs
    to be propagated through tooling to avoid ambiguous external queries.
-5. **OpenTitan prim_count sim regression**: `utils/run_opentitan_circt_sim.sh prim_count`
-   still reports `TEST FAILED: error flag set` with cnt_o stuck at 0 after
-   instance-mapping fixes; likely deeper X-prop or drive/sensitivity gap in
-   prim_count/prim_flop modeling.
-6. **9 XFAIL Tests**: Expected failures that require architectural changes to fix (reduced from 18!)
-7. **LLVM data-layout accuracy**: aggregate sizes use byte-rounding without
+5. **4-state encoding metadata propagation**: ProcessScheduler now supports
+   explicit encoding tags, but some external scheduler clients still register
+   signals with `Unknown` and may mis-handle 4-state edges unless they plumb
+   encoding metadata.
+6. **VCD tracing scalability**: current VCD writer uses single-character IDs
+   (94 signals) and flat names; longer-term support for larger designs and
+   hierarchical scopes is needed.
+7. **9 XFAIL Tests**: Expected failures that require architectural changes to fix (reduced from 18!)
+8. **LLVM data-layout accuracy**: aggregate sizes use byte-rounding without
    target data-layout padding/alignment; long term we need explicit data-layout
    modeling for correct memory interpretation of packed/unaligned aggregates.
-8. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
+9. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
    plus scheduler/parallel delta-loop abort guards and a tool-level wall-clock
    timeout guard; still need to audit remaining pre-run stall paths once
    gpio_no_alerts is revalidated.
@@ -296,6 +299,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   interpreter unit test coverage
 - **circt-sim ref block-arg probes**: map ref-typed block args to signal IDs
   across CF branches so `llhd.prb` resolves through PHIs
+- **OpenTitan prim_count sim fix**: corrected 4-state encoding detection and
+  added array ops to continuous evaluation; prim_count now passes
+- **VCD waveform tracing**: now traces internal signals and records value
+  changes via scheduler callbacks (usable for OpenTitan debug)
+- **Explicit signal encoding metadata**: ProcessScheduler edge detection now
+  uses per-signal encoding tags to avoid width-based 4-state heuristics
+- **BMC clocked property remap**: `ltl.clock` operands now use derived BMC
+  clock inputs to avoid mismatched clock equivalence
 
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
@@ -2035,6 +2046,7 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-29 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | added by script |
 | 2026-01-29 | opentitan | LEC | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | added by script |
 | 2026-01-30 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
+| 2026-01-31 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
 | 2026-01-30 | sv-tests | LEC | total=23 pass=23 fail=0 xfail=0 xpass=0 error=0 skip=1013 | green |
 | 2026-01-30 | verilator-verification | BMC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-01-30 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
