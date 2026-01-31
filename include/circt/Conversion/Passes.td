@@ -792,8 +792,14 @@ def ConvertVerifToSMT : Pass<"convert-verif-to-smt", "mlir::ModuleOp"> {
   let options = [
     Option<"risingClocksOnly", "rising-clocks-only", "bool",
            /*default=*/"false",
-           "When lowering verif.bmc ops, only consider the circuit and property"
+           "When lowering verif.bmc ops, only consider the circuit and property "
            "on rising clock edges.">,
+    Option<"assumeKnownInputs", "assume-known-inputs", "bool",
+           /*default=*/"false",
+           "Assume input values are known (not X) for BMC and LEC operations.">,
+    Option<"forSMTLIBExport", "for-smtlib-export", "bool",
+           /*default=*/"false",
+           "Generate output suitable for SMT-LIB export.">,
   ];
 }
 
@@ -827,6 +833,8 @@ def LowerSMTToZ3LLVM : Pass<"lower-smt-to-z3-llvm", "mlir::ModuleOp"> {
     Option<"debug", "debug", "bool", "false",
            "Insert additional printf calls printing the solver's state to "
            "stdout (e.g. at check-sat operations) for debugging purposes">,
+    Option<"printModelInputs", "print-model-inputs", "bool", "false",
+           "Print model inputs when a SAT result is found.">,
   ];
 }
 

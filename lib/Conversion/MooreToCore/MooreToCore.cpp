@@ -19746,6 +19746,11 @@ static void populateLegality(ConversionTarget &target,
     // LLVM types should stay as arith.select since comb.mux doesn't support them
     if (isa<LLVM::LLVMStructType, LLVM::LLVMPointerType>(type))
       return true;
+    // LLHD ref types should stay as arith.select since comb.mux doesn't support
+    // them. This handles cases like `sel ? reg_a : reg_b` where reg_a/reg_b are
+    // signal references.
+    if (isa<llhd::RefType>(type))
+      return true;
     return converter.isLegal(type);
   });
 
