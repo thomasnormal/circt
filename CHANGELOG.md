@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 270 - January 31, 2026
+
+### Goals
+Enable UVM with Accellera's uvm-core library by fixing llhd.prb/drv on local variables.
+
+### Fixed in this Iteration
+1. **AllocaOp Handling in interpretProbe and interpretDrive** (LLHDProcessInterpreter.cpp):
+   - **ROOT CAUSE**: Local variables in functions are backed by `llvm.alloca`, then cast to `!llhd.ref`
+   - When accessing these via `llhd.prb` or `llhd.drv`, the interpreter couldn't find the signal
+   - Pattern: `%alloca = llvm.alloca` → `unrealized_cast to !llhd.ref` → `llhd.prb/drv`
+   - **FIX**: Added AllocaOp detection in interpretProbe and interpretDrive
+   - Look up alloca's memory block in `processStates.memoryBlocks` and read/write directly
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - **MAJOR IMPACT**: UVM with uvm-core now runs successfully!
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| UVM with uvm-core | **PASS** | UVM_INFO messages print, report server works, clean termination |
+| APB AVIP | PASS | Simulation completes successfully |
+| sv-tests BMC | 23/26 (100%) | 3 expected failures (XFAIL) |
+| verilator BMC | 17/17 (100%) | All pass |
+| yosys SVA BMC | 14/14 (100%) | 2 VHDL skipped |
+| llvm-assoc-native-ref-load-store | PASS | assoc_val=99 output correct |
+
+---
+
 ## Iteration 269 - January 31, 2026
 
 ### Goals
