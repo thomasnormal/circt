@@ -80,7 +80,8 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
 
 ### Status
 - **Starting XFAIL count**: 18
-- **Ending XFAIL count**: 3 (83% reduction!)
+- **Ending XFAIL count**: 2 (89% reduction!)
+- **Pass Rate**: 217/219 (99.09%)
 - **ImportVerilog**: 216/219 pass (98.63%)
 - **OpenTitan**: 17/21 pass (81%) - stack overflow fix enabled 3 more IPs
 - **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
