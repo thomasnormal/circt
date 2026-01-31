@@ -199,7 +199,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2982/3085 (96.6%)** | All pass, 19 XFAIL (was 23) |
+| Lit Tests | **2982/3085 (96.6%)** | All pass, 18 XFAIL (was 19) |
 | circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/23 (100%)** | All pass |
@@ -207,21 +207,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass successfully |
+| OpenTitan IPs | **35/39 (89.7%)** | 35 pass, 4 failing |
 | AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C compile+simulate; SPI/JTAG/AXI4Lite have source bugs |
 | **External Suites** | **54/54 (100%)** | sv-tests + Verilator + yosys-sva all pass |
 | **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
 
 **Iteration 275 Focus (2026-01-31) - STABILITY & XFAIL REDUCTION:**
 
-**Iteration 274 Final Status:**
-- **XFAIL Reduced**: 23 → 19 (4 tests fixed)
+**Iteration 275 Progress:**
+- **XFAIL Reduced**: 19 → 18 (past-clocking.sv now passes)
+- **OpenTitan Coverage**: 35/39 pass (89.7%)
 - **Virtual Interface Task Calls**: Confirmed working
 - **AVIPs**: 6/9 simulate (APB, AHB, UART, I2S, AXI4, I3C)
 - **External Suites**: 54/54 pass (100%)
 - **All lit tests pass**: No regressions
 
-**Remaining 19 XFAIL Tests by Category:**
+**Iteration 275 Latest Suite Runs (2026-01-31):**
+- sv-tests BMC: 23 pass / 3 xfail (26 total)
+- yosys-sva BMC: 14 pass / 2 skipped (VHDL)
+- verilator-verification BMC: 17 pass
+- AVIP (APB) circt-verilog: PASS
+- OpenTitan prim_count (circt-sim): PASS
+
+**Remaining 18 XFAIL Tests by Category:**
 1. **Hierarchical Names** (~8 tests): Signal access through instance hierarchy
 2. **Interface Port Patterns** (~4 tests): Complex interface modport access
 3. **Class/OOP Features** (~4 tests): Virtual methods, class hierarchy edge cases
@@ -230,10 +238,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Remaining Limitations (Iteration 275):**
 1. **Stack overflow in evaluateContinuousValueImpl**: Complex OpenTitan IPs (gpio, uart, aes_reg_top) crash due to deep recursion through combinational logic chains
 2. **~8 Hierarchical Name XFAIL Tests**: Signal access through instance hierarchy incomplete for some patterns
-3. **19 XFAIL Tests**: Expected failures that require architectural changes to fix
+3. **18 XFAIL Tests**: Expected failures that require architectural changes to fix
 4. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
    still times out even with short `--timeout`/`--max-cycles`, suggesting a
    possible hang or timeout enforcement issue in circt-sim.
+5. **circt-sim timeout robustness**: added abort callbacks + watchdog checks,
+   plus scheduler/parallel delta-loop abort guards; `gpio_no_alerts` still
+   hangs before first progress output, so investigate init/constructor paths
+   and any pre-run stalls that bypass abort polling.
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
@@ -243,6 +255,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    unknown propagation with SV semantics; add end-to-end regressions.
 3. **LEC strict resolution**: implement sound multi-driver/inout resolution
    semantics (tri-state merging + diagnostics) for strict equivalence.
+
+**Iteration 275 Achievements (In Progress):**
+- **past-clocking.sv XFAIL Removed**: Test now passes, reduced XFAIL count from 19 to 18
+- **OpenTitan Coverage Expanded**: 35/39 pass (89.7%), up from 16/16 tested
+- **All lit tests pass**: No regressions
 
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
@@ -343,13 +360,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Current Status:**
 - **UVM Parity**: ~85-90% complete - core infrastructure works
 - **AVIPs**: 6/9 simulate (APB, AHB, UART, I2S, AXI4, I3C)
-- **OpenTitan**: 16/16 tested IPs pass (100%)
+- **OpenTitan**: 35/39 pass (89.7%)
 - **External Suites**: 54/54 pass (100%)
-- **Lit Tests**: 2982/3085 pass, 19 XFAIL (reduced from 23)
+- **Lit Tests**: 2982/3085 pass, 18 XFAIL (reduced from 19)
 - **circt-sim**: 74/75 pass (1 timeout)
 
 **Iteration 275 Next Tasks:**
-1. Continue reducing XFAIL count (target: <15)
+1. Continue reducing XFAIL count (target: <15, currently 18)
 2. Fix stack overflow in evaluateContinuousValueImpl for complex IPs
 3. Test AVIPs with actual UVM test names (`+UVM_TESTNAME`)
 4. Address remaining ~8 hierarchical name XFAIL tests
@@ -361,7 +378,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 |-------|--------|-----------|
 | **Track 1: UVM Parity** | ✅ ~85-90% complete | Continue XFAIL reduction, fix stack overflow |
 | **Track 2: AVIP Testing** | ✅ 6/9 AVIPs simulate | Run actual UVM tests with +UVM_TESTNAME |
-| **Track 3: OpenTitan** | ✅ 16/16 tested (100%) | Test remaining IPs, fix stack overflow |
+| **Track 3: OpenTitan** | ✅ 35/39 (89.7%) | Fix remaining 4 failing IPs |
 | **Track 4: External Suites** | ✅ 54/54 pass (100%) | Maintain coverage |
 
 ### Remaining Limitations
@@ -404,20 +421,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. **Track Status Summary:**
    - **Track 1 (UVM Parity)**: ~85-90% complete - core UVM infrastructure works with uvm-core
    - **Track 2 (AVIP Testing)**: 6/9 AVIPs simulate successfully
-   - **Track 3 (OpenTitan)**: 16/16 tested IPs pass (100%)
+   - **Track 3 (OpenTitan)**: 35/39 pass (89.7%)
    - **Track 4 (External Suites)**: 54/54 tests pass (100%)
 
 3. **Test Results:**
    | Suite | Status | Notes |
    |-------|--------|-------|
    | Unit Tests | 1373/1373 (100%) | All pass |
-   | Lit Tests | 2982/3085 (96.6%) | 19 XFAIL (was 23) |
+   | Lit Tests | 2982/3085 (96.6%) | 18 XFAIL (was 19) |
    | circt-sim | 74/75 (99%) | 1 timeout (tlul-bfm) |
    | External Suites | 54/54 (100%) | sv-tests + Verilator + yosys-sva |
-   | OpenTitan | 16/16 tested (100%) | All tested IPs pass |
+   | OpenTitan | 35/39 (89.7%) | 35 pass, 4 failing |
    | AVIPs | 6/9 simulate | APB, AHB, UART, I2S, AXI4, I3C |
 
-4. **Remaining 19 XFAIL Tests by Category:**
+4. **Remaining 18 XFAIL Tests by Category:**
    - **Hierarchical Names** (~8 tests): Signal access through instance hierarchy
    - **Interface Port Patterns** (~4 tests): Complex interface modport access
    - **Class/OOP Features** (~4 tests): Virtual methods, class hierarchy edge cases

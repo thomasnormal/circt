@@ -81,10 +81,13 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <fstream>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 using namespace mlir;
 using namespace circt;
@@ -93,6 +96,13 @@ using namespace circt::sim;
 //===----------------------------------------------------------------------===//
 // Command Line Arguments
 //===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// Signal Handler for Clean Shutdown
+//===----------------------------------------------------------------------===//
+
+static std::atomic<bool> interruptRequested(false);
+static void signalHandler(int) { interruptRequested.store(true); }
 
 static llvm::cl::OptionCategory mainCategory("circt-sim Options");
 static llvm::cl::OptionCategory simCategory("Simulation Options");
@@ -370,6 +380,7 @@ public:
         profiler(nullptr), vcdWriter(nullptr), parallelScheduler(nullptr) {}
 
   ~SimulationContext() {
+    stopWatchdogThread();
     if (parallelScheduler) {
       parallelScheduler->stopWorkers();
     }
@@ -433,6 +444,18 @@ private:
   /// Build the simulation model from HW module.
   LogicalResult buildSimulationModel(hw::HWModuleOp hwModule);
 
+  /// Request an abort from another thread or signal handler.
+  void requestAbort(llvm::StringRef reason);
+
+  /// Handle a pending abort request on the simulation thread.
+  void handleAbort();
+
+  /// Start a wall-clock watchdog thread if timeout is enabled.
+  void startWatchdogThread();
+
+  /// Stop and join the watchdog thread.
+  void stopWatchdogThread();
+
   ProcessScheduler scheduler;
   SimulationControl control;
   std::unique_ptr<PerformanceProfiler> profiler;
@@ -454,12 +477,25 @@ private:
 
   // LLHD Process interpreter
   std::unique_ptr<LLHDProcessInterpreter> llhdInterpreter;
+
+  std::atomic<bool> abortRequested{false};
+  std::atomic<bool> abortHandled{false};
+  std::atomic<bool> stopWatchdog{false};
+  std::mutex abortMutex;
+  std::string abortReason;
+  std::thread watchdogThread;
 };
 
 LogicalResult SimulationContext::initialize(
     mlir::ModuleOp module,
     const llvm::SmallVector<std::string, 4> &tops) {
+  startWatchdogThread();
   rootModule = module;
+  scheduler.setShouldAbortCallback([this]() {
+    if (interruptRequested.load())
+      requestAbort("Interrupt signal received");
+    return abortRequested.load();
+  });
 
   // Collect all top modules to simulate
   llvm::SmallVector<hw::HWModuleOp, 4> hwModules;
@@ -603,7 +639,9 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
 
   // Walk all operations in the module body
   // Use walk to recursively find all operations
-  hwModule.getOperation()->walk([&](Operation *op) {
+  hwModule.getOperation()->walk([&](Operation *op) -> WalkResult {
+    if (abortRequested.load())
+      return WalkResult::interrupt();
     totalOpsCount++;
     if (isa<llhd::ProcessOp>(op)) {
       hasLLHDProcesses = true;
@@ -615,7 +653,10 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       hasInstances = true;
       instanceCount++;
     }
+    return WalkResult::advance();
   });
+  if (abortRequested.load())
+    return failure();
 
   llvm::outs() << "[circt-sim] Found " << llhdProcessCount << " LLHD processes"
                << ", " << seqInitialCount << " seq.initial blocks"
@@ -632,6 +673,12 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
       llhdInterpreter->setMaxProcessSteps(maxProcessSteps);
       llhdInterpreter->setCollectOpStats(printOpStats);
+      llhdInterpreter->setShouldAbortCallback([this]() {
+        if (interruptRequested.load())
+          requestAbort("Interrupt signal received");
+        return abortRequested.load();
+      });
+      llhdInterpreter->setAbortCallback([this]() { handleAbort(); });
 
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
@@ -678,6 +725,61 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
   }
 
   return success();
+}
+
+void SimulationContext::requestAbort(llvm::StringRef reason) {
+  std::lock_guard<std::mutex> lock(abortMutex);
+  if (abortRequested.load())
+    return;
+  abortReason = reason.str();
+  abortRequested.store(true);
+}
+
+void SimulationContext::handleAbort() {
+  if (!abortRequested.load())
+    return;
+  if (abortHandled.exchange(true))
+    return;
+  std::string reason;
+  {
+    std::lock_guard<std::mutex> lock(abortMutex);
+    reason = abortReason;
+  }
+  if (reason.empty())
+    reason = "Abort requested";
+  llvm::errs() << "[circt-sim] " << reason << "\n";
+  if (llhdInterpreter)
+    llhdInterpreter->dumpProcessStates(llvm::errs());
+  control.finish(1);
+}
+
+void SimulationContext::startWatchdogThread() {
+  if (timeout == 0)
+    return;
+  if (watchdogThread.joinable())
+    return;
+  stopWatchdog.store(false);
+  watchdogThread = std::thread([this]() {
+    auto start = std::chrono::steady_clock::now();
+    while (!stopWatchdog.load()) {
+      if (abortRequested.load() || interruptRequested.load())
+        break;
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed =
+          std::chrono::duration_cast<std::chrono::seconds>(now - start);
+      if (static_cast<uint64_t>(elapsed.count()) >= timeout) {
+        requestAbort("Wall-clock timeout reached");
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  });
+}
+
+void SimulationContext::stopWatchdogThread() {
+  stopWatchdog.store(true);
+  if (watchdogThread.joinable())
+    watchdogThread.join();
 }
 
 LogicalResult SimulationContext::setupWaveformTracing() {
@@ -743,6 +845,8 @@ void SimulationContext::recordValueChange(SignalId signal,
 }
 
 LogicalResult SimulationContext::run() {
+  startWatchdogThread();
+
   // Write VCD header
   if (vcdWriter) {
     // Use combined name for multiple top modules
@@ -786,6 +890,12 @@ LogicalResult SimulationContext::run() {
   constexpr uint64_t maxZeroIterations = 1000;
 
   while (control.shouldContinue()) {
+    if (interruptRequested.load())
+      requestAbort("Interrupt signal received");
+    if (abortRequested.load()) {
+      handleAbort();
+      break;
+    }
     ++loopIterations;
     if (verbosity >= 3 && loopIterations <= 10) {
       llvm::outs() << "[circt-sim] Loop iteration " << loopIterations
@@ -799,9 +909,8 @@ LogicalResult SimulationContext::run() {
       auto elapsed =
           std::chrono::duration_cast<std::chrono::seconds>(now - startWallTime);
       if (static_cast<uint64_t>(elapsed.count()) >= timeout) {
-        control.warning("TIMEOUT", "Wall-clock timeout reached");
-        if (llhdInterpreter)
-          llhdInterpreter->dumpProcessStates(llvm::errs());
+        requestAbort("Wall-clock timeout reached");
+        handleAbort();
         break;
       }
     }
@@ -958,6 +1067,8 @@ LogicalResult SimulationContext::run() {
   llvm::outs() << "[circt-sim] Simulation completed at time "
                << finalTime.realTime << " fs\n";
 
+  stopWatchdogThread();
+
   return success();
 }
 
@@ -996,14 +1107,6 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 
   os << "=============================\n";
 }
-
-//===----------------------------------------------------------------------===//
-// Signal Handler for Clean Shutdown
-//===----------------------------------------------------------------------===//
-
-static std::atomic<bool> interruptRequested(false);
-
-static void signalHandler(int) { interruptRequested.store(true); }
 
 //===----------------------------------------------------------------------===//
 // Main Processing Pipeline

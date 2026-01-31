@@ -313,6 +313,8 @@ size_t ParallelScheduler::executePartitionProcesses(Partition &partition) {
   size_t eventsProcessed = 0;
 
   for (ProcessId pid : partition.getProcesses()) {
+    if (baseScheduler.isAbortRequested())
+      break;
     Process *process = baseScheduler.getProcess(pid);
     if (!process)
       continue;
@@ -333,6 +335,8 @@ size_t ParallelScheduler::executePartitionProcesses(Partition &partition) {
 }
 
 bool ParallelScheduler::executeParallelDeltaCycle() {
+  if (baseScheduler.isAbortRequested())
+    return false;
   stats.totalDeltaCycles.fetch_add(1);
 
   // Activate partitions that have work
@@ -377,6 +381,8 @@ bool ParallelScheduler::executeParallelDeltaCycle() {
 }
 
 size_t ParallelScheduler::executeCurrentTimeParallel() {
+  if (baseScheduler.isAbortRequested())
+    return 0;
   size_t deltaCycles = 0;
   while (executeParallelDeltaCycle()) {
     deltaCycles++;

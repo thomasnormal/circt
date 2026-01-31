@@ -388,3 +388,23 @@ TEST(PartitionBalancerTest, NeedsRebalancing) {
 
   EXPECT_TRUE(PartitionBalancer::needsRebalancing(partitions, 1.5));
 }
+
+TEST(ParallelSchedulerTest, AbortStopsExecution) {
+  ProcessScheduler scheduler;
+  int counter = 0;
+  ProcessId pid = 0;
+
+  pid = scheduler.registerProcess("test", [&]() { counter++; });
+  (void)pid;
+  scheduler.setShouldAbortCallback([]() { return true; });
+  scheduler.initialize();
+
+  ParallelScheduler::Config config;
+  config.numThreads = 1;
+  ParallelScheduler parallel(scheduler, config);
+  parallel.autoPartition();
+
+  size_t deltas = parallel.executeCurrentTimeParallel();
+  EXPECT_EQ(deltas, 0u);
+  EXPECT_EQ(counter, 0);
+}

@@ -362,6 +362,10 @@ const SignalValue &ProcessScheduler::getSignalValue(SignalId signalId) const {
   return it->second.getCurrentValue();
 }
 
+bool ProcessScheduler::isAbortRequested() const {
+  return shouldAbortCallback && shouldAbortCallback();
+}
+
 void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
                                                  const SignalValue &oldVal,
                                                  const SignalValue &newVal) {
@@ -520,6 +524,8 @@ void ProcessScheduler::initialize() {
 }
 
 bool ProcessScheduler::executeDeltaCycle() {
+  if (isAbortRequested())
+    return false;
   if (!initialized)
     initialize();
 
@@ -562,6 +568,8 @@ bool ProcessScheduler::executeDeltaCycle() {
 }
 
 size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
+  if (isAbortRequested())
+    return 0;
   auto &queue = readyQueues[static_cast<size_t>(region)];
   if (queue.empty())
     return 0;
@@ -572,6 +580,8 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
 
   size_t executed = 0;
   for (ProcessId id : toExecute) {
+    if (isAbortRequested())
+      break;
     Process *proc = getProcess(id);
     if (!proc)
       continue;
@@ -608,6 +618,8 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
 }
 
 size_t ProcessScheduler::executeCurrentTime() {
+  if (isAbortRequested())
+    return 0;
   size_t totalDeltas = 0;
 
   while (executeDeltaCycle()) {
@@ -626,6 +638,8 @@ size_t ProcessScheduler::executeCurrentTime() {
 }
 
 bool ProcessScheduler::advanceTime() {
+  if (isAbortRequested())
+    return false;
   // First, process any ready processes
   executeCurrentTime();
 
@@ -647,6 +661,8 @@ bool ProcessScheduler::advanceTime() {
   // ProcessScheduler after each event time so it can execute processes
   // that were scheduled by the events.
   while (!eventScheduler->isComplete()) {
+    if (isAbortRequested())
+      return false;
     // Try to step a delta cycle at the current time
     if (eventScheduler->stepDelta()) {
       didWork = true;
@@ -689,6 +705,8 @@ SimTime ProcessScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
     initialize();
 
   while (!isComplete()) {
+    if (isAbortRequested())
+      break;
     // Execute current time delta cycles
     executeCurrentTime();
 

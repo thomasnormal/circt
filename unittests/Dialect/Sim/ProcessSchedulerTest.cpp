@@ -447,6 +447,17 @@ TEST(ProcessScheduler, ExecuteSingleProcess) {
   EXPECT_EQ(counter, 1);
 }
 
+TEST(ProcessScheduler, AbortStopsExecution) {
+  ProcessScheduler scheduler;
+  int counter = 0;
+
+  scheduler.registerProcess("test", [&counter]() { counter++; });
+  scheduler.setShouldAbortCallback([]() { return true; });
+
+  EXPECT_FALSE(scheduler.executeDeltaCycle());
+  EXPECT_EQ(counter, 0);
+}
+
 TEST(ProcessScheduler, ExecuteMultipleProcesses) {
   ProcessScheduler scheduler;
   std::vector<int> order;
