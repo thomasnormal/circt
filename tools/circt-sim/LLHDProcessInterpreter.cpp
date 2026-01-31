@@ -40,6 +40,11 @@ static bool getSignalInitValue(Value initValue, unsigned width,
                                llvm::APInt &outValue);
 static size_t countRegionOps(mlir::Region &region);
 static bool isProcessCacheableBody(Operation *op);
+static Type unwrapSignalType(Type type) {
+  if (auto refType = dyn_cast<llhd::RefType>(type))
+    return refType.getNestedType();
+  return type;
+}
 
 static bool getMaskedUInt64(const InterpretedValue &value,
                             unsigned targetWidth, uint64_t &out) {
@@ -280,6 +285,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
           SignalId outSigId = scheduler.registerSignal(hierName, width);
           valueToSignal[instOp.getResult(i)] = outSigId;
           signalIdToName[outSigId] = hierName;
+          signalIdToType[outSigId] = unwrapSignalType(outType);
 
           pendingInstanceOutputs.push_back(
               {outSigId, outputOp.getOperand(i)});
@@ -319,6 +325,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops) {
         SignalId sigId = scheduler.registerSignal(hierName, width);
         valueToSignal[sigOp.getResult()] = sigId;
         signalIdToName[sigId] = hierName;
+        signalIdToType[sigId] = innerType;
 
         llvm::APInt initValue;
         if (getSignalInitValue(sigOp.getInit(), width, initValue))
@@ -736,6 +743,7 @@ LogicalResult LLHDProcessInterpreter::registerSignals(
 
       SignalId sigId = scheduler.registerSignal(name, width);
       signalIdToName[sigId] = name;
+      signalIdToType[sigId] = innerType;
 
       // Map the block argument to the signal
       if (portInfo.isInput()) {
@@ -770,6 +778,7 @@ LogicalResult LLHDProcessInterpreter::registerSignals(
     SignalId sigId = scheduler.registerSignal(name, width);
     valueToSignal[outputOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
+    signalIdToType[sigId] = innerType;
 
     LLVM_DEBUG(llvm::dbgs() << "  Registered output signal '" << name
                             << "' with ID " << sigId << " (width=" << width
@@ -797,6 +806,7 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
   // Store the mapping
   valueToSignal[sigOp.getResult()] = sigId;
   signalIdToName[sigId] = name;
+  signalIdToType[sigId] = innerType;
 
   llvm::APInt initValue;
   if (getSignalInitValue(sigOp.getInit(), width, initValue)) {
@@ -822,6 +832,137 @@ llvm::StringRef LLHDProcessInterpreter::getSignalName(SignalId id) const {
   if (it != signalIdToName.end())
     return it->second;
   return "";
+}
+
+Type LLHDProcessInterpreter::getSignalValueType(SignalId sigId) const {
+  auto it = signalIdToType.find(sigId);
+  if (it != signalIdToType.end())
+    return it->second;
+  for (const auto &entry : valueToSignal) {
+    if (entry.second == sigId)
+      return unwrapSignalType(entry.first.getType());
+  }
+  return Type();
+}
+
+static llvm::APInt adjustAPIntWidth(llvm::APInt value, unsigned targetWidth) {
+  if (value.getBitWidth() == targetWidth)
+    return value;
+  if (value.getBitWidth() < targetWidth)
+    return value.zext(targetWidth);
+  return value.trunc(targetWidth);
+}
+
+llvm::APInt LLHDProcessInterpreter::convertLLVMToHWLayout(
+    llvm::APInt value, Type llvmType, Type hwType) const {
+  unsigned llvmWidth = getTypeWidth(llvmType);
+  unsigned hwWidth = getTypeWidth(hwType);
+  value = adjustAPIntWidth(value, llvmWidth);
+
+  if (auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(llvmType)) {
+    if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
+      APInt result = APInt::getZero(hwWidth);
+      auto hwElements = hwStructType.getElements();
+      auto llvmBody = llvmStructType.getBody();
+      size_t count = std::min(hwElements.size(), llvmBody.size());
+
+      unsigned llvmOffset = 0;
+      unsigned hwOffset = hwWidth;
+      for (size_t i = 0; i < count; ++i) {
+        unsigned llvmFieldWidth = getTypeWidth(llvmBody[i]);
+        unsigned hwFieldWidth = getTypeWidth(hwElements[i].type);
+        hwOffset -= hwFieldWidth;
+        APInt fieldBits = value.extractBits(llvmFieldWidth, llvmOffset);
+        APInt converted =
+            convertLLVMToHWLayout(fieldBits, llvmBody[i], hwElements[i].type);
+        converted = adjustAPIntWidth(converted, hwFieldWidth);
+        result.insertBits(converted, hwOffset);
+        llvmOffset += llvmFieldWidth;
+      }
+      return adjustAPIntWidth(result, hwWidth);
+    }
+  }
+
+  if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(llvmType)) {
+    if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
+      unsigned llvmElemWidth = getTypeWidth(llvmArrayType.getElementType());
+      unsigned hwElemWidth = getTypeWidth(hwArrayType.getElementType());
+      unsigned numElements = hwArrayType.getNumElements();
+      unsigned llvmElements = llvmArrayType.getNumElements();
+      size_t count = std::min(numElements, llvmElements);
+
+      APInt result = APInt::getZero(hwWidth);
+      for (size_t i = 0; i < count; ++i) {
+        unsigned llvmOffset = i * llvmElemWidth;
+        unsigned hwOffset = (numElements - 1 - i) * hwElemWidth;
+        APInt fieldBits = value.extractBits(llvmElemWidth, llvmOffset);
+        APInt converted = convertLLVMToHWLayout(
+            fieldBits, llvmArrayType.getElementType(),
+            hwArrayType.getElementType());
+        converted = adjustAPIntWidth(converted, hwElemWidth);
+        result.insertBits(converted, hwOffset);
+      }
+      return adjustAPIntWidth(result, hwWidth);
+    }
+  }
+
+  return adjustAPIntWidth(value, hwWidth);
+}
+
+llvm::APInt LLHDProcessInterpreter::convertHWToLLVMLayout(
+    llvm::APInt value, Type hwType, Type llvmType) const {
+  unsigned hwWidth = getTypeWidth(hwType);
+  unsigned llvmWidth = getTypeWidth(llvmType);
+  value = adjustAPIntWidth(value, hwWidth);
+
+  if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
+    if (auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(llvmType)) {
+      APInt result = APInt::getZero(llvmWidth);
+      auto hwElements = hwStructType.getElements();
+      auto llvmBody = llvmStructType.getBody();
+      size_t count = std::min(hwElements.size(), llvmBody.size());
+
+      unsigned hwOffset = hwWidth;
+      unsigned llvmOffset = 0;
+      for (size_t i = 0; i < count; ++i) {
+        unsigned hwFieldWidth = getTypeWidth(hwElements[i].type);
+        unsigned llvmFieldWidth = getTypeWidth(llvmBody[i]);
+        hwOffset -= hwFieldWidth;
+        APInt fieldBits = value.extractBits(hwFieldWidth, hwOffset);
+        APInt converted = convertHWToLLVMLayout(
+            fieldBits, hwElements[i].type, llvmBody[i]);
+        converted = adjustAPIntWidth(converted, llvmFieldWidth);
+        result.insertBits(converted, llvmOffset);
+        llvmOffset += llvmFieldWidth;
+      }
+      return adjustAPIntWidth(result, llvmWidth);
+    }
+  }
+
+  if (auto hwArrayType = dyn_cast<hw::ArrayType>(hwType)) {
+    if (auto llvmArrayType = dyn_cast<LLVM::LLVMArrayType>(llvmType)) {
+      unsigned hwElemWidth = getTypeWidth(hwArrayType.getElementType());
+      unsigned llvmElemWidth = getTypeWidth(llvmArrayType.getElementType());
+      unsigned numElements = hwArrayType.getNumElements();
+      unsigned llvmElements = llvmArrayType.getNumElements();
+      size_t count = std::min(numElements, llvmElements);
+
+      APInt result = APInt::getZero(llvmWidth);
+      for (size_t i = 0; i < count; ++i) {
+        unsigned hwOffset = (numElements - 1 - i) * hwElemWidth;
+        unsigned llvmOffset = i * llvmElemWidth;
+        APInt fieldBits = value.extractBits(hwElemWidth, hwOffset);
+        APInt converted = convertHWToLLVMLayout(
+            fieldBits, hwArrayType.getElementType(),
+            llvmArrayType.getElementType());
+        converted = adjustAPIntWidth(converted, llvmElemWidth);
+        result.insertBits(converted, llvmOffset);
+      }
+      return adjustAPIntWidth(result, llvmWidth);
+    }
+  }
+
+  return adjustAPIntWidth(value, llvmWidth);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1411,6 +1552,7 @@ void LLHDProcessInterpreter::registerFirRegs(const DiscoveredOps &ops) {
     SignalId sigId = scheduler.registerSignal(name, width);
     valueToSignal[regOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
+    signalIdToType[sigId] = unwrapSignalType(regOp.getType());
 
     bool initSet = false;
     if (regOp.hasReset() && regOp.getIsAsync()) {
@@ -2445,6 +2587,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     // Store the mapping from the signal result to the signal ID
     valueToSignal[sigOp.getResult()] = sigId;
     signalIdToName[sigId] = name;
+    signalIdToType[sigId] = innerType;
 
     // Set the initial value
     if (!initVal.isX()) {
@@ -4687,6 +4830,19 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     if (castOp.getNumOperands() == castOp.getNumResults()) {
       // Simple 1:1 mapping
       for (auto [input, output] : llvm::zip(castOp.getInputs(), castOp.getOutputs())) {
+        // Special case: !llvm.ptr to !llhd.ref casts should NOT cache the value.
+        // The !llhd.ref semantics mean we need to read from memory at probe time,
+        // not reuse a cached pointer address value.
+        Type inputType = input.getType();
+        Type outputType = output.getType();
+        if (isa<LLVM::LLVMPointerType>(inputType) &&
+            isa<llhd::RefType>(outputType)) {
+          // Skip caching for ptr->ref casts - let llhd.prb handle the memory read
+          LLVM_DEBUG(llvm::dbgs() << "  builtin.unrealized_conversion_cast: "
+                                  << "skipping ptr->ref cast (will read at probe)\n");
+          continue;
+        }
+
         InterpretedValue val = getValue(procId, input);
         // Adjust width if needed
         unsigned outputWidth = getTypeWidth(output.getType());
@@ -4753,13 +4909,23 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                                                       llhd::ProbeOp probeOp) {
+  Value signal = probeOp.getSignal();
+  while (auto muxOp = signal.getDefiningOp<comb::MuxOp>()) {
+    InterpretedValue cond = getValue(procId, muxOp.getCond());
+    if (cond.isX()) {
+      setValue(procId, probeOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(probeOp.getResult().getType())));
+      return success();
+    }
+    signal = cond.getUInt64() != 0 ? muxOp.getTrueValue() : muxOp.getFalseValue();
+  }
+
   // Get the signal ID for the probed signal
-  SignalId sigId = resolveSignalId(probeOp.getSignal());
+  SignalId sigId = resolveSignalId(signal);
   if (sigId == 0) {
     // Check if this is a global variable access via UnrealizedConversionCastOp
     // This happens when static class properties are accessed - they're stored
     // in LLVM globals, not LLHD signals.
-    Value signal = probeOp.getSignal();
     if (auto castOp =
             signal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
       if (castOp.getInputs().size() == 1) {
@@ -4941,18 +5107,61 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             return success();
           }
 
-          // Read the value from memory
-          uint64_t value = 0;
-          for (unsigned i = 0; i < loadSize; ++i) {
-            value |= (static_cast<uint64_t>(block->data[i]) << (i * 8));
+          // Read the value from memory (little-endian byte order)
+          APInt memValue = APInt::getZero(width);
+          for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
+            unsigned bitsToInsert = std::min(8u, width - i * 8);
+            APInt byteVal(bitsToInsert,
+                          block->data[i] & ((1u << bitsToInsert) - 1));
+            memValue.insertBits(byteVal, i * 8);
           }
-          // Mask to the exact bit width
-          if (width < 64)
-            value &= (1ULL << width) - 1;
 
-          setValue(procId, probeOp.getResult(), InterpretedValue(value, width));
+          // Check if we need to convert from LLVM struct layout to HW struct
+          // layout. LLVM struct fields are at low-to-high bits, while HW struct
+          // fields are at high-to-low bits.
+          Type resultType = probeOp.getResult().getType();
+          if (auto hwStructType = dyn_cast<hw::StructType>(resultType)) {
+            Type allocaElemType = allocaOp.getElemType();
+            if (auto llvmStructType =
+                    dyn_cast<LLVM::LLVMStructType>(allocaElemType)) {
+              // Convert from LLVM layout to HW layout
+              auto hwElements = hwStructType.getElements();
+              auto llvmBody = llvmStructType.getBody();
+
+              // Build the HW struct value by extracting fields from LLVM
+              // positions and inserting at HW positions
+              APInt hwValue = APInt::getZero(width);
+              unsigned llvmBitOffset = 0;
+              unsigned hwBitOffset = width;
+
+              for (size_t i = 0; i < hwElements.size() && i < llvmBody.size();
+                   ++i) {
+                unsigned fieldWidth = getTypeWidth(hwElements[i].type);
+                hwBitOffset -= fieldWidth;
+
+                // Extract from LLVM position (low-to-high)
+                APInt fieldVal = memValue.extractBits(fieldWidth, llvmBitOffset);
+                // Insert at HW position (high-to-low)
+                hwValue.insertBits(fieldVal, hwBitOffset);
+
+                llvmBitOffset += fieldWidth;
+              }
+
+              setValue(procId, probeOp.getResult(), InterpretedValue(hwValue));
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Probe of alloca (LLVM->HW struct conversion) = 0x"
+                         << llvm::format_hex(hwValue.getZExtValue(), 0)
+                         << " (width=" << width << ")\n");
+              return success();
+            }
+          }
+
+          // No struct conversion needed - use value as-is
+          setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
           LLVM_DEBUG(llvm::dbgs()
-                     << "  Probe of alloca = " << value << " (width=" << width << ")\n");
+                     << "  Probe of alloca = 0x"
+                     << llvm::format_hex(memValue.getZExtValue(), 0)
+                     << " (width=" << width << ")\n");
           return success();
         }
       }
@@ -5200,7 +5409,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 return failure();
               }
 
-              // Compute the bit offset by walking the extract chain in reverse
+              // Compute the bit offset by walking the extract chain in reverse.
+              // For memory-backed structs (LLVM alloca), we use LLVM layout
+              // where fields are at low-to-high bits (field 0 at bit 0).
               unsigned bitOffset = 0;
               Type currentType = parentSignal.getType();
               if (auto refType = dyn_cast<llhd::RefType>(currentType))
@@ -5222,9 +5433,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 }
                 unsigned fieldIndex = *fieldIndexOpt;
 
-                // Fields are laid out from high bits to low bits
+                // For LLVM struct layout: fields are at low-to-high bits.
+                // Field 0 starts at bit 0, field 1 starts after field 0, etc.
                 unsigned fieldOffset = 0;
-                for (size_t i = fieldIndex + 1; i < elements.size(); ++i)
+                for (size_t i = 0; i < fieldIndex; ++i)
                   fieldOffset += getTypeWidth(elements[i].type);
 
                 bitOffset += fieldOffset;
@@ -7414,6 +7626,57 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
                                                          LLVM::LoadOp loadOp) {
+  // If this is a load from an llhd.ref converted to an LLVM pointer,
+  // treat it as a signal probe instead of a memory read.
+  if (SignalId sigId = resolveSignalId(loadOp.getAddr())) {
+    InterpretedValue signalVal;
+    auto pendingIt = pendingEpsilonDrives.find(sigId);
+    if (pendingIt != pendingEpsilonDrives.end()) {
+      signalVal = pendingIt->second;
+    } else {
+      const SignalValue &sv = scheduler.getSignalValue(sigId);
+      signalVal = InterpretedValue::fromSignalValue(sv);
+    }
+
+    Type signalType = getSignalValueType(sigId);
+    if (!signalType) {
+      if (auto castOp =
+              loadOp.getAddr()
+                  .getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() == 1) {
+          if (auto refType =
+                  dyn_cast<llhd::RefType>(castOp.getInputs()[0].getType()))
+            signalType = refType.getNestedType();
+        }
+      }
+    }
+    Type llvmType = loadOp.getType();
+    if (!signalVal.isX() && signalType &&
+        (isa<hw::StructType, hw::ArrayType>(signalType)) &&
+        (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType))) {
+      APInt converted =
+          convertHWToLLVMLayout(signalVal.getAPInt(), signalType, llvmType);
+      signalVal = InterpretedValue(converted);
+    }
+
+    unsigned targetWidth = getTypeWidth(loadOp.getType());
+    if (signalVal.isX()) {
+      signalVal = InterpretedValue::makeX(targetWidth);
+    } else if (signalVal.getWidth() != targetWidth) {
+      APInt apVal = signalVal.getAPInt();
+      if (apVal.getBitWidth() < targetWidth)
+        apVal = apVal.zext(targetWidth);
+      else if (apVal.getBitWidth() > targetWidth)
+        apVal = apVal.trunc(targetWidth);
+      signalVal = InterpretedValue(apVal);
+    }
+
+    setValue(procId, loadOp.getResult(), signalVal);
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.load: read signal " << sigId
+                            << " (width=" << targetWidth << ")\n");
+    return success();
+  }
+
   // Get the pointer value
   InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
   Type resultType = loadOp.getType();
@@ -7558,6 +7821,52 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     ProcessId procId, LLVM::StoreOp storeOp) {
+  // If this is a store to an llhd.ref converted to an LLVM pointer,
+  // treat it as a signal drive instead of a memory write.
+  if (SignalId sigId = resolveSignalId(storeOp.getAddr())) {
+    InterpretedValue storeVal = getValue(procId, storeOp.getValue());
+    const SignalValue &current = scheduler.getSignalValue(sigId);
+    unsigned targetWidth = current.getWidth();
+
+    Type signalType = getSignalValueType(sigId);
+    if (!signalType) {
+      if (auto castOp =
+              storeOp.getAddr()
+                  .getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() == 1) {
+          if (auto refType =
+                  dyn_cast<llhd::RefType>(castOp.getInputs()[0].getType()))
+            signalType = refType.getNestedType();
+        }
+      }
+    }
+    Type llvmType = storeOp.getValue().getType();
+    if (!storeVal.isX() && signalType &&
+        (isa<hw::StructType, hw::ArrayType>(signalType)) &&
+        (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmType))) {
+      APInt converted =
+          convertLLVMToHWLayout(storeVal.getAPInt(), llvmType, signalType);
+      storeVal = InterpretedValue(converted);
+    }
+
+    if (storeVal.isX()) {
+      storeVal = InterpretedValue::makeX(targetWidth);
+    } else if (storeVal.getWidth() != targetWidth) {
+      APInt apVal = storeVal.getAPInt();
+      if (apVal.getBitWidth() < targetWidth)
+        apVal = apVal.zext(targetWidth);
+      else if (apVal.getBitWidth() > targetWidth)
+        apVal = apVal.trunc(targetWidth);
+      storeVal = InterpretedValue(apVal);
+    }
+
+    pendingEpsilonDrives[sigId] = storeVal;
+    scheduler.updateSignal(sigId, storeVal.toSignalValue());
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.store: wrote signal " << sigId
+                            << " (width=" << targetWidth << ")\n");
+    return success();
+  }
+
   // Get the pointer value first
   InterpretedValue ptrVal = getValue(procId, storeOp.getAddr());
 

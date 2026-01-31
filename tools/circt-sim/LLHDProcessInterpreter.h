@@ -351,6 +351,8 @@ public:
   /// Get the number of registered processes.
   size_t getNumProcesses() const { return processStates.size(); }
 
+  friend class LLHDProcessInterpreterTest;
+
   /// Dump process execution state for diagnostics.
   void dumpProcessStates(llvm::raw_ostream &os) const;
 
@@ -374,6 +376,21 @@ public:
 
   /// Check if termination has been requested.
   bool isTerminationRequested() const { return terminationRequested; }
+
+  /// Set a callback to check if abort has been requested (e.g., by timeout).
+  void setShouldAbortCallback(std::function<bool()> callback) {
+    shouldAbortCallback = std::move(callback);
+  }
+
+  /// Set a callback to invoke when abort is triggered.
+  void setAbortCallback(std::function<void()> callback) {
+    abortCallback = std::move(callback);
+  }
+
+  /// Check if abort has been requested (calls the shouldAbortCallback).
+  bool isAbortRequested() const {
+    return shouldAbortCallback && shouldAbortCallback();
+  }
 
   /// Get the bit width of a type. Made public for use by helper functions.
   static unsigned getTypeWidth(mlir::Type type);
@@ -437,6 +454,15 @@ private:
 
   /// Resolve a signal ID from an arbitrary value.
   SignalId resolveSignalId(mlir::Value value) const;
+
+  /// Get the stored signal value type for a signal ID (nested type).
+  mlir::Type getSignalValueType(SignalId sigId) const;
+
+  /// Convert aggregate values between LLVM and HW layout conventions.
+  llvm::APInt convertLLVMToHWLayout(llvm::APInt value, mlir::Type llvmType,
+                                    mlir::Type hwType) const;
+  llvm::APInt convertHWToLLVMLayout(llvm::APInt value, mlir::Type hwType,
+                                    mlir::Type llvmType) const;
 
   /// Collect signal IDs referenced by a value expression.
   void collectSignalIds(mlir::Value value,
@@ -739,6 +765,9 @@ private:
   /// Map from signal IDs to signal names.
   llvm::DenseMap<SignalId, std::string> signalIdToName;
 
+  /// Map from signal IDs to their nested value types.
+  llvm::DenseMap<SignalId, mlir::Type> signalIdToType;
+
   /// Pending epsilon drives - for immediate blocking assignment semantics.
   /// When a signal is driven with epsilon delay within the same process,
   /// this map holds the value so subsequent probes can see it immediately.
@@ -777,6 +806,12 @@ private:
 
   /// Callback for sim.terminate operation.
   std::function<void(bool, bool)> terminateCallback;
+
+  /// Callback to check if abort has been requested.
+  std::function<bool()> shouldAbortCallback;
+
+  /// Callback to invoke when abort is triggered.
+  std::function<void()> abortCallback;
 
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;
