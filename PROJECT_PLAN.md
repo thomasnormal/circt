@@ -226,6 +226,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **AVIPs**: All 6 pass (APB, AHB, UART, I2S, AXI4, I3C)
 - **External Suites**: 54/54 pass (100%)
 - **All lit tests pass**: No regressions
+- **BMC LLHD zero-delay folding**: zero-time `llhd.delay` now folds to its input,
+  and ExternalizeRegisters traces through zero-delay clocks.
 
 **Iteration 277 Latest Suite Runs (2026-01-31):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)
@@ -258,6 +260,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Affects gpio_no_alerts, uart_reg_top, aes_reg_top and other OpenTitan IPs
    - **Next Step**: Implement proper TL-UL handshake initialization sequence
 3. **circt-sim timeout mechanism**: Two tests hang due to timeout mechanism issue
+4. **BMC 4-state vs 2-state inputs**:
+   - 2-state suites (yosys-sva) require `BMC_ASSUME_KNOWN_INPUTS=1` to avoid
+     spurious X-driven counterexamples.
+   - Full 4-state modeling coverage for remaining ops/extnets is still pending.
    - Need to investigate watchdog/abort callback behavior for these specific cases
 4. **Continuous evaluation revalidation**: iterative evaluation avoids recursion
    depth limits, but we still need to re-run gpio/uart/aes_reg_top to confirm
@@ -352,6 +358,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   derived clocks back to the correct BMC input (regression:
   `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`,
   unit test: `unittests/Support/I1ValueSimplifierTest.cpp`)
+- **BMC LLHD delay clock roots**: treat zero-delay `llhd.delay` as transparent
+  for clock root tracing during register externalization (regression:
+  `test/Tools/circt-bmc/externalize-registers-llhd-delay-clock.mlir`)
 - **LEC result tokens**: `circt-lec --run-smtlib` now emits `LEC_RESULT=...`,
   plus a `--print-counterexample` alias for `--print-solver-output`
 - **yosys-sva LEC runner fix**: removed unsupported `--fail-on-inequivalent`,

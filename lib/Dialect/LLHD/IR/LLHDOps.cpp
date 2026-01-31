@@ -72,6 +72,18 @@ void llhd::ConstantTimeOp::build(OpBuilder &builder, OperationState &result,
 }
 
 //===----------------------------------------------------------------------===//
+// DelayOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult llhd::DelayOp::fold(FoldAdaptor adaptor) {
+  auto delay = getDelayAttr();
+  if (delay.getTime() == 0 && delay.getDelta() == 0 &&
+      delay.getEpsilon() == 0)
+    return getInput();
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
 // SignalOp
 //===----------------------------------------------------------------------===//
 
