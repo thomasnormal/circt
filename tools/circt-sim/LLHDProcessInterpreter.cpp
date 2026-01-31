@@ -1281,6 +1281,14 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
   if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
     return resolveSignalId(probeOp.getSignal());
   }
+  // Trace through UnrealizedConversionCastOp - these are used to convert
+  // between !llhd.ref types and LLVM pointer types when passing signals
+  // as function arguments.
+  if (auto castOp = value.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+    if (castOp.getInputs().size() == 1) {
+      return resolveSignalId(castOp.getInputs()[0]);
+    }
+  }
   return 0;
 }
 
@@ -6861,6 +6869,15 @@ bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
   if (strLen > kMaxStringKeyBytes)
     return false;
 
+  // Check dynamicStrings registry first (for strings from __moore_packed_string_to_string)
+  auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtrVal));
+  if (dynIt != dynamicStrings.end() && dynIt->second.first && dynIt->second.second > 0) {
+    size_t effectiveLen = std::min(static_cast<size_t>(strLen),
+                                   static_cast<size_t>(dynIt->second.second));
+    out.assign(dynIt->second.first, effectiveLen);
+    return true;
+  }
+
   uint64_t offset = 0;
   if (auto *block = findMemoryBlockByAddress(strPtrVal, procId, &offset)) {
     if (!block->initialized)
@@ -7401,6 +7418,112 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                        llvm::dbgs().write(result.data, result.len);
                      llvm::dbgs() << "\"\n");
         }
+      }
+      return success();
+    }
+
+    // Handle string comparison - crucial for UVM factory registration
+    if (calleeName == "__moore_string_cmp") {
+      // Signature: __moore_string_cmp(ptr to struct{ptr,i64}, ptr to struct{ptr,i64}) -> i32
+      // The arguments are pointers to MooreString structs in memory
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        InterpretedValue lhsPtrVal = getValue(procId, callOp.getOperand(0));
+        InterpretedValue rhsPtrVal = getValue(procId, callOp.getOperand(1));
+
+        // Helper to extract string data from a pointer to {ptr, i64} struct
+        auto extractString = [&](uint64_t structAddr) -> std::pair<const char*, int64_t> {
+          // Load the struct from memory - it's 16 bytes: {ptr (8 bytes), len (8 bytes)}
+          uint64_t blockOffset = 0;
+          MemoryBlock *block = findMemoryBlockByAddress(structAddr, procId, &blockOffset);
+
+          if (block && block->size >= blockOffset + 16) {
+            // Extract ptr (first 8 bytes) and len (next 8 bytes)
+            uint64_t dataPtr = 0;
+            int64_t len = 0;
+            for (int i = 0; i < 8; i++) {
+              dataPtr |= (static_cast<uint64_t>(block->data[blockOffset + i]) << (i * 8));
+              len |= (static_cast<int64_t>(block->data[blockOffset + 8 + i]) << (i * 8));
+            }
+
+            // Empty string case (ptr=0, len=0)
+            if (dataPtr == 0 || len <= 0) {
+              return {nullptr, 0};
+            }
+
+            // Look up the actual string data from dynamicStrings registry
+            auto dynIt = dynamicStrings.find(static_cast<int64_t>(dataPtr));
+            if (dynIt != dynamicStrings.end()) {
+              return {dynIt->second.first, std::min(len, static_cast<int64_t>(dynIt->second.second))};
+            }
+
+            // Try to find in global memory (for string literals)
+            uint64_t strOffset = 0;
+            MemoryBlock *strBlock = findMemoryBlockByAddress(dataPtr, procId, &strOffset);
+            if (strBlock && strBlock->size >= strOffset + len) {
+              return {reinterpret_cast<const char*>(strBlock->data.data() + strOffset), len};
+            }
+          }
+          return {nullptr, -1};  // Error case
+        };
+
+        auto [lhsData, lhsLen] = extractString(lhsPtrVal.getUInt64());
+        auto [rhsData, rhsLen] = extractString(rhsPtrVal.getUInt64());
+
+        // Perform comparison
+        int32_t result = 0;
+        bool lhsEmpty = (lhsData == nullptr || lhsLen <= 0);
+        bool rhsEmpty = (rhsData == nullptr || rhsLen <= 0);
+
+        if (lhsEmpty && rhsEmpty) {
+          result = 0;  // Both empty, equal
+        } else if (lhsEmpty) {
+          result = -1;  // LHS empty, RHS not
+        } else if (rhsEmpty) {
+          result = 1;  // LHS not empty, RHS empty
+        } else {
+          // Both have data, compare lexicographically
+          size_t minLen = std::min(static_cast<size_t>(lhsLen), static_cast<size_t>(rhsLen));
+          result = std::memcmp(lhsData, rhsData, minLen);
+          if (result == 0 && lhsLen != rhsLen) {
+            result = (lhsLen < rhsLen) ? -1 : 1;
+          }
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(APInt(32, result, true)));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_cmp(\"";
+                   if (lhsData && lhsLen > 0) llvm::dbgs().write(lhsData, lhsLen);
+                   llvm::dbgs() << "\", \"";
+                   if (rhsData && rhsLen > 0) llvm::dbgs().write(rhsData, rhsLen);
+                   llvm::dbgs() << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // Handle string length
+    if (calleeName == "__moore_string_len") {
+      // Signature: __moore_string_len(ptr to struct{ptr,i64}) -> i32
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue ptrVal = getValue(procId, callOp.getOperand(0));
+        uint64_t structAddr = ptrVal.getUInt64();
+
+        // Load the struct from memory
+        uint64_t blockOffset = 0;
+        MemoryBlock *block = findMemoryBlockByAddress(structAddr, procId, &blockOffset);
+        int32_t len = 0;
+
+        if (block && block->size >= blockOffset + 16) {
+          // Extract len (bytes 8-15)
+          int64_t rawLen = 0;
+          for (int i = 0; i < 8; i++) {
+            rawLen |= (static_cast<int64_t>(block->data[blockOffset + 8 + i]) << (i * 8));
+          }
+          len = static_cast<int32_t>(rawLen);
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(APInt(32, len, true)));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_len() = " << len << "\n");
       }
       return success();
     }
@@ -8278,10 +8401,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     return success();
   }
 
-  // Gather argument values
+  // Gather argument values and operands (for signal reference tracking)
   SmallVector<InterpretedValue, 4> args;
+  SmallVector<Value, 4> callOperands;
   for (Value arg : callOp.getArgOperands()) {
     args.push_back(getValue(procId, arg));
+    callOperands.push_back(arg);
   }
 
   // Check call depth to prevent stack overflow from unbounded recursion.
@@ -8303,9 +8428,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Increment call depth before entering function
   ++state.callDepth;
 
-  // Interpret the function body
+  // Interpret the function body, passing call operands for signal mapping
   SmallVector<InterpretedValue, 2> results;
-  LogicalResult funcResult = interpretLLVMFuncBody(procId, funcOp, args, results);
+  LogicalResult funcResult =
+      interpretLLVMFuncBody(procId, funcOp, args, results, callOperands);
 
   // Decrement call depth after returning
   --state.callDepth;
@@ -8325,14 +8451,42 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     ProcessId procId, LLVM::LLVMFuncOp funcOp, ArrayRef<InterpretedValue> args,
-    SmallVectorImpl<InterpretedValue> &results) {
-  auto &state = processStates[procId];
+    SmallVectorImpl<InterpretedValue> &results, ArrayRef<Value> callOperands) {
+  // IMPORTANT: Do NOT hold a reference to processStates[procId] across operations
+  // that may modify processStates (e.g., interpretOperation can create fork
+  // children or runtime signals). DenseMap may reallocate, invalidating refs.
 
   // Map arguments to block arguments
   Block &entryBlock = funcOp.getBody().front();
-  for (auto [blockArg, argVal] : llvm::zip(entryBlock.getArguments(), args)) {
-    state.valueMap[blockArg] = argVal;
+
+  // Track signal mappings created for this call (to clean up later)
+  SmallVector<Value, 4> tempSignalMappings;
+
+  for (auto [idx, blockArg] :
+       llvm::enumerate(entryBlock.getArguments())) {
+    if (idx < args.size())
+      processStates[procId].valueMap[blockArg] = args[idx];
+
+    // If call operands are provided, create signal mappings for BlockArguments
+    // when the corresponding call operand resolves to a signal ID.
+    // This allows llhd.prb to work on signal references passed as function args.
+    if (idx < callOperands.size()) {
+      if (SignalId sigId = resolveSignalId(callOperands[idx])) {
+        valueToSignal[blockArg] = sigId;
+        tempSignalMappings.push_back(blockArg);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Created temp signal mapping for BlockArg " << idx
+                   << " -> signal " << sigId << "\n");
+      }
+    }
   }
+
+  // Helper to clean up temporary signal mappings before returning
+  auto cleanupTempMappings = [&]() {
+    for (Value v : tempSignalMappings) {
+      valueToSignal.erase(v);
+    }
+  };
 
   // Execute the function body with operation limit to prevent infinite loops
   Block *currentBlock = &entryBlock;
@@ -8347,6 +8501,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
                                 << funcOp.getName()
                                 << "' reached max operations (" << maxOps
                                 << ")\n");
+        cleanupTempMappings();
         return failure();
       }
 
@@ -8355,6 +8510,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         for (Value retVal : returnOp.getOperands()) {
           results.push_back(getValue(procId, retVal));
         }
+        cleanupTempMappings();
         return success();
       }
 
@@ -8363,7 +8519,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         currentBlock = branchOp.getDest();
         for (auto [blockArg, operand] :
              llvm::zip(currentBlock->getArguments(), branchOp.getDestOperands())) {
-          state.valueMap[blockArg] = getValue(procId, operand);
+          processStates[procId].valueMap[blockArg] = getValue(procId, operand);
         }
         break;
       }
@@ -8376,14 +8532,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
           for (auto [blockArg, operand] :
                llvm::zip(currentBlock->getArguments(),
                         condBrOp.getTrueDestOperands())) {
-            state.valueMap[blockArg] = getValue(procId, operand);
+            processStates[procId].valueMap[blockArg] = getValue(procId, operand);
           }
         } else {
           currentBlock = condBrOp.getFalseDest();
           for (auto [blockArg, operand] :
                llvm::zip(currentBlock->getArguments(),
                         condBrOp.getFalseDestOperands())) {
-            state.valueMap[blockArg] = getValue(procId, operand);
+            processStates[procId].valueMap[blockArg] = getValue(procId, operand);
           }
         }
         break;
@@ -8398,6 +8554,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
         llvm::errs() << "\n";
         llvm::errs() << "  Location: " << op.getLoc() << "\n";
+        cleanupTempMappings();
         return failure();
       }
 
@@ -8406,6 +8563,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       if (it != processStates.end() && it->second.halted) {
         LLVM_DEBUG(llvm::dbgs() << "  Process halted during LLVM function body - "
                                 << "returning early\n");
+        cleanupTempMappings();
         return success();
       }
     }
@@ -8417,6 +8575,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   }
 
   // If no return was encountered, return nothing
+  cleanupTempMappings();
   return success();
 }
 
