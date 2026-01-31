@@ -96,7 +96,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
    - **Tests Fixed**: `hw-instance-output.mlir`, `llhd-instance-probe-read.mlir`
 
-### Remaining UVM Limitations (Iteration 273 - Updated)
+### Remaining UVM Limitations (Iteration 274 - Updated)
 
 **RESOLVED Blockers:**
 1. **Local Variable llhd.prb Issue** ✅ FIXED (Iteration 270):
@@ -194,12 +194,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 273 - Updated 2026-01-31)
+### Test Suite Status (Iteration 274 - Updated 2026-01-31)
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2980/3085 (96.6%)** | All pass, 21 XFAIL (was 22) |
+| Lit Tests | **2980/3085 (96.6%)** | All pass, 21 XFAIL |
 | circt-sim | **74/75 (99%)** | 1 timeout (tlul-bfm) |
 | MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
 | sv-tests BMC | **23/23 (100%)** | All pass |
@@ -209,6 +209,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass successfully |
 | AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C compile+simulate; SPI/JTAG/AXI4Lite have source bugs |
+| **External Suites** | **54/54 (100%)** | sv-tests + Verilator + yosys-sva all pass |
 | **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
 
 **Iteration 273 Achievements:**
