@@ -1,8 +1,6 @@
 // Test that --allow-virtual-iface-with-override allows bind targets to be assigned to virtual interfaces
 // RUN: circt-verilog --no-uvm-auto-include --allow-virtual-iface-with-override --ir-moore %s | FileCheck %s
 // REQUIRES: slang
-// XFAIL: *
-// Interface K is not emitted due to bind to sub-interface optimization.
 
 //===----------------------------------------------------------------------===//
 // Test: Virtual interface assignment with defparam/bind directive override
@@ -22,6 +20,9 @@
 // Without this flag, the code would produce the error:
 //   "interface instance cannot be assigned to a virtual interface because
 //    it is the target of a defparam or bind directive"
+//
+// Note: Interface K is optimized away since the bind target is a sub-interface
+// and K has no observable signals.
 
 // Inner interface with a parameter (will be defparam target)
 // CHECK-LABEL: moore.interface @J
@@ -37,7 +38,7 @@ interface I;
 endinterface
 
 // Interface to bind (empty interface for binding test)
-// CHECK-LABEL: moore.interface @K
+// Note: K is optimized away since it binds to a sub-interface and has no signals
 interface K;
 endinterface
 
@@ -48,7 +49,7 @@ endinterface
 // CHECK-LABEL: moore.module private @test_defparam
 module test_defparam;
   // Interface instance - its sub-interface j will be defparam target
-  // CHECK: moore.interface.instance @I
+  // CHECK: %i1 = moore.interface.instance @I
   I i1();
 
   // Virtual interface assignment from defparam-targeted instance
@@ -70,7 +71,7 @@ endmodule
 // CHECK-LABEL: moore.module private @test_bind
 module test_bind;
   // Interface instance - its sub-interface j will be bind target
-  // CHECK: moore.interface.instance @I
+  // CHECK: %i2 = moore.interface.instance @I
   I i2();
 
   // Virtual interface assignment from bind-targeted instance
@@ -99,7 +100,7 @@ endclass
 // CHECK-LABEL: moore.module private @test_class_binding
 module test_class_binding;
   // Interface with defparam on sub-interface
-  // CHECK: moore.interface.instance @I
+  // CHECK: %bus = moore.interface.instance @I
   I bus();
   defparam bus.j.q = 100;
 
