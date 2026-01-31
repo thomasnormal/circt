@@ -37,6 +37,87 @@ SignalValue normalizeSignalValueWidth(const SignalValue &value,
     return value;
   return SignalValue(apInt.zextOrTrunc(width));
 }
+
+bool isFourStateUnknown(const SignalValue &value) {
+  if (value.isUnknown())
+    return true;
+  uint32_t width = value.getWidth();
+  if (width < 2 || (width % 2) != 0)
+    return false;
+  uint32_t halfWidth = width / 2;
+  const auto &bits = value.getAPInt();
+  for (uint32_t i = 0; i < halfWidth; ++i) {
+    if (bits[i])
+      return true;
+  }
+  return false;
+}
+
+bool getFourStateValueLSB(const SignalValue &value) {
+  uint32_t width = value.getWidth();
+  if (width < 2 || (width % 2) != 0)
+    return value.getLSB();
+  uint32_t halfWidth = width / 2;
+  return value.getAPInt()[halfWidth];
+}
+
+EdgeType detectEdgeWithEncoding(const SignalValue &oldVal,
+                                const SignalValue &newVal,
+                                SignalEncoding encoding) {
+  if (encoding != SignalEncoding::FourStateStruct)
+    return SignalValue::detectEdge(oldVal, newVal);
+
+  if (!oldVal.isUnknown() && !newVal.isUnknown() &&
+      oldVal.getAPInt() == newVal.getAPInt())
+    return EdgeType::None;
+
+  bool oldIsX = isFourStateUnknown(oldVal);
+  bool newIsX = isFourStateUnknown(newVal);
+
+  if (oldIsX || newIsX) {
+    if (oldIsX && newIsX)
+      return EdgeType::None;
+    if (oldIsX) {
+      bool newBit = getFourStateValueLSB(newVal);
+      return newBit ? EdgeType::Posedge : EdgeType::Negedge;
+    }
+    return EdgeType::AnyEdge;
+  }
+
+  bool oldBit = getFourStateValueLSB(oldVal);
+  bool newBit = getFourStateValueLSB(newVal);
+
+  if (!oldBit && newBit)
+    return EdgeType::Posedge;
+  if (oldBit && !newBit)
+    return EdgeType::Negedge;
+  return EdgeType::AnyEdge;
+}
+
+bool sensitivityTriggered(const SensitivityList &list, SignalId signalId,
+                          EdgeType actualEdge) {
+  if (actualEdge == EdgeType::None)
+    return false;
+  for (const auto &entry : list.getEntries()) {
+    if (entry.signalId != signalId)
+      continue;
+    switch (entry.edge) {
+    case EdgeType::None:
+      return true;
+    case EdgeType::AnyEdge:
+      return true;
+    case EdgeType::Posedge:
+      if (actualEdge == EdgeType::Posedge)
+        return true;
+      break;
+    case EdgeType::Negedge:
+      if (actualEdge == EdgeType::Negedge)
+        return true;
+      break;
+    }
+  }
+  return false;
+}
 } // namespace
 
 // Static member initialization
@@ -166,14 +247,28 @@ void ProcessScheduler::clearSensitivity(ProcessId id) {
 
 SignalId ProcessScheduler::registerSignal(const std::string &name,
                                           uint32_t width) {
+  return registerSignal(name, width, SignalEncoding::Unknown);
+}
+
+SignalId ProcessScheduler::registerSignal(const std::string &name,
+                                          uint32_t width,
+                                          SignalEncoding encoding) {
   SignalId id = nextSignalId();
   signalStates[id] = SignalState(width);
   signalNames[id] = name;
+  signalEncodings[id] = encoding;
 
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width << "\n");
 
   return id;
+}
+
+SignalEncoding ProcessScheduler::getSignalEncoding(SignalId signalId) const {
+  auto it = signalEncodings.find(signalId);
+  if (it == signalEncodings.end())
+    return SignalEncoding::Unknown;
+  return it->second;
 }
 
 void ProcessScheduler::setMaxDeltaCycles(size_t maxDeltaCycles) {
@@ -193,7 +288,10 @@ void ProcessScheduler::updateSignal(SignalId signalId,
   SignalValue normalizedValue =
       normalizeSignalValueWidth(newValue, signalWidth);
   SignalValue oldValue = it->second.getCurrentValue();
-  EdgeType edge = it->second.updateValue(normalizedValue);
+  (void)it->second.updateValue(normalizedValue);
+  EdgeType edge =
+      detectEdgeWithEncoding(oldValue, normalizedValue,
+                             getSignalEncoding(signalId));
 
   ++stats.signalUpdates;
 
@@ -201,6 +299,8 @@ void ProcessScheduler::updateSignal(SignalId signalId,
     ++stats.edgesDetected;
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
+    if (signalChangeCallback)
+      signalChangeCallback(signalId, normalizedValue);
     triggerSensitiveProcesses(signalId, oldValue, normalizedValue);
     recordSignalChange(signalId);
   }
@@ -232,7 +332,10 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
       normalizeSignalValueWidth(resolvedValue, signalWidth);
 
   // Update the signal with the resolved value
-  EdgeType edge = it->second.updateValue(normalizedResolved);
+  (void)it->second.updateValue(normalizedResolved);
+  EdgeType edge =
+      detectEdgeWithEncoding(oldValue, normalizedResolved,
+                             getSignalEncoding(signalId));
 
   ++stats.signalUpdates;
 
@@ -261,6 +364,8 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
     ++stats.edgesDetected;
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
+    if (signalChangeCallback)
+      signalChangeCallback(signalId, normalizedResolved);
     triggerSensitiveProcesses(signalId, oldValue, normalizedResolved);
     recordSignalChange(signalId);
   }
@@ -373,6 +478,11 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
   if (it == signalToProcesses.end())
     return;
 
+  EdgeType actualEdge =
+      detectEdgeWithEncoding(oldVal, newVal, getSignalEncoding(signalId));
+  if (actualEdge == EdgeType::None)
+    return;
+
   for (ProcessId procId : it->second) {
     Process *proc = getProcess(procId);
     if (!proc)
@@ -386,8 +496,8 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
 
     // For waiting processes, check the waiting sensitivity
     if (proc->getState() == ProcessState::Waiting) {
-      if (proc->getWaitingSensitivity().isTriggeredBy(signalId, oldVal,
-                                                       newVal)) {
+      if (sensitivityTriggered(proc->getWaitingSensitivity(), signalId,
+                               actualEdge)) {
         proc->clearWaiting();
         recordTriggerSignal(procId, signalId);
         scheduleProcess(procId, proc->getPreferredRegion());
@@ -398,7 +508,8 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
     }
 
     // For suspended/ready processes, check the main sensitivity list
-    if (proc->getSensitivityList().isTriggeredBy(signalId, oldVal, newVal)) {
+    if (sensitivityTriggered(proc->getSensitivityList(), signalId,
+                             actualEdge)) {
       recordTriggerSignal(procId, signalId);
       scheduleProcess(procId, proc->getPreferredRegion());
       LLVM_DEBUG(llvm::dbgs() << "Process " << procId << " triggered\n");
@@ -760,6 +871,7 @@ void ProcessScheduler::reset() {
   // Clear signals
   signalStates.clear();
   signalNames.clear();
+  signalEncodings.clear();
   nextSigId = 1;
 
   // Clear mappings

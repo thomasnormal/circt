@@ -418,6 +418,8 @@ public:
 
   /// Get the bit width of a type. Made public for use by helper functions.
   static unsigned getTypeWidth(mlir::Type type);
+  /// Determine signal encoding based on the type.
+  static SignalEncoding getSignalEncoding(mlir::Type type);
 
 private:
   struct InstanceOutputInfo {
