@@ -5440,7 +5440,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
   verifTarget.addIllegalDialect<verif::VerifDialect>();
   verifTarget.addLegalDialect<smt::SMTDialect, arith::ArithDialect,
                               scf::SCFDialect, func::FuncDialect,
-                              ltl::LTLDialect>();
+                              ltl::LTLDialect, comb::CombDialect,
+                              hw::HWDialect, seq::SeqDialect>();
   verifTarget.addLegalOp<UnrealizedConversionCastOp>();
 
   // Check BMC ops contain only one assertion (done outside pattern to avoid
