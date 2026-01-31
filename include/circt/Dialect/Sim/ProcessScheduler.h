@@ -232,16 +232,13 @@ public:
   bool operator!=(const SignalValue &other) const { return !(*this == other); }
 
   /// Detect edge between old and new values.
-  /// Handles both explicit isX and 4-state struct encoding.
+  /// Only uses the explicit isX flag for unknown detection.
+  /// For 4-state struct encoding, use detectEdgeWithEncoding() instead.
   static EdgeType detectEdge(const SignalValue &oldVal,
                              const SignalValue &newVal) {
-    // No edge if values are the same (handles X==X via operator==)
-    if (oldVal == newVal)
-      return EdgeType::None;
-
-    // Check for unknown values using both explicit flag and 4-state encoding
-    bool oldIsX = oldVal.isUnknown() || oldVal.isFourStateX();
-    bool newIsX = newVal.isUnknown() || newVal.isFourStateX();
+    // Check for explicit unknown values first
+    bool oldIsX = oldVal.isUnknown();
+    bool newIsX = newVal.isUnknown();
 
     // For unknown values, detect edges conservatively per IEEE 1800.
     if (oldIsX || newIsX) {
@@ -258,6 +255,10 @@ public:
       // known -> X: use AnyEdge since we can't determine direction
       return EdgeType::AnyEdge;
     }
+
+    // Both values are known - compare APInts directly
+    if (oldVal.getAPInt() == newVal.getAPInt())
+      return EdgeType::None;
 
     bool oldBit = oldVal.getLSB();
     bool newBit = newVal.getLSB();
