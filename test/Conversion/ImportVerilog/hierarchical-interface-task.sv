@@ -1,11 +1,11 @@
-// RUN: circt-verilog %s --ir-moore 2>&1 | FileCheck %s
-// XFAIL: *
+// RUN: not circt-verilog %s --ir-moore 2>&1 | FileCheck %s
 
 // Test hierarchical interface task calls through module.interface.task() pattern
 // This is common in UVM verification environments like AHB AVIP
-// For now, we emit a helpful error message instead of a generic failure.
+// We emit a helpful error message for this unsupported pattern.
 
 // CHECK: error: hierarchical interface method calls through module instances are not yet supported
+// CHECK-SAME: consider using a virtual interface passed through module ports instead
 
 interface DriverBFM(input bit clk, input bit resetn);
   logic [7:0] data;
@@ -56,6 +56,4 @@ module TopLevel;
     agentBFM.driverBFM.waitForResetn();
     agentBFM.driverBFM.driveToBFM(8'hCD);
   end
-
-  // CHECK: moore.procedure.initial
 endmodule
