@@ -155,4 +155,40 @@ TEST(I1ValueSimplifierTest, MuxSimplification) {
   EXPECT_EQ(simplifiedSame.value, alt);
 }
 
+TEST(I1ValueSimplifierTest, XorConstParity) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("clk"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto clk = top.getBodyBlock()->getArgument(0);
+  auto one = hw::ConstantOp::create(builder, loc, i1, 1);
+  auto xorInvert =
+      comb::XorOp::create(builder, loc, ValueRange{clk, one}, false)
+          .getResult();
+  auto xorCancel =
+      comb::XorOp::create(builder, loc, ValueRange{clk, one, one}, false)
+          .getResult();
+
+  auto simplifiedInvert = simplifyI1Value(xorInvert);
+  EXPECT_TRUE(simplifiedInvert.value);
+  EXPECT_EQ(simplifiedInvert.value, clk);
+  EXPECT_TRUE(simplifiedInvert.invert);
+
+  auto simplifiedCancel = simplifyI1Value(xorCancel);
+  EXPECT_TRUE(simplifiedCancel.value);
+  EXPECT_EQ(simplifiedCancel.value, clk);
+  EXPECT_FALSE(simplifiedCancel.invert);
+}
+
 } // namespace

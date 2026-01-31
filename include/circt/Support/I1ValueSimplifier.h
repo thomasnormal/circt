@@ -16,6 +16,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/SmallVector.h"
 #include <optional>
 
 namespace circt {
@@ -72,17 +73,21 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
       continue;
     }
     if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
-      if (xorOp.getNumOperands() == 2) {
-        if (auto literal = getConstI1Value(xorOp.getOperand(0))) {
-          invert ^= *literal;
-          value = xorOp.getOperand(1);
+      llvm::SmallVector<mlir::Value, 4> nonConst;
+      bool constParity = false;
+      for (mlir::Value operand : xorOp.getOperands()) {
+        if (auto literal = getConstI1Value(operand)) {
+          constParity ^= *literal;
           continue;
         }
-        if (auto literal = getConstI1Value(xorOp.getOperand(1))) {
-          invert ^= *literal;
-          value = xorOp.getOperand(0);
-          continue;
-        }
+        nonConst.push_back(operand);
+      }
+      if (nonConst.empty())
+        return {mlir::Value(), invert};
+      if (nonConst.size() == 1) {
+        invert ^= constParity;
+        value = nonConst.front();
+        continue;
       }
     }
     if (auto muxOp = value.getDefiningOp<comb::MuxOp>()) {
