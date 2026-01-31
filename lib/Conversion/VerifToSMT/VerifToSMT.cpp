@@ -1313,40 +1313,6 @@ static void collectSequenceOpsForBMC(Value seq,
       collectSequenceOpsForBMC(operand, ops, visited);
 }
 
-/// Rewrite ltl.implication with an exact delayed consequent into a past-form
-/// implication for BMC. This allows the BMC loop to use past buffers instead
-/// of looking ahead into future time steps.
-[[maybe_unused]] static void rewriteImplicationDelaysForBMC(
-    Block &circuitBlock, RewriterBase &rewriter) {
-  SmallVector<ltl::ImplicationOp> implicationOps;
-  circuitBlock.walk(
-      [&](ltl::ImplicationOp op) { implicationOps.push_back(op); });
-
-  for (auto implOp : implicationOps) {
-    auto delayOp = implOp.getConsequent().getDefiningOp<ltl::DelayOp>();
-    if (!delayOp)
-      continue;
-    uint64_t delay = delayOp.getDelay();
-    if (delay == 0)
-      continue;
-    auto lengthAttr = delayOp.getLengthAttr();
-    if (!lengthAttr || lengthAttr.getValue().getZExtValue() != 0)
-      continue;
-
-    OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPoint(implOp);
-    auto shiftedAntecedent = ltl::DelayOp::create(
-        rewriter, implOp.getLoc(), implOp.getAntecedent(), delay,
-        rewriter.getI64IntegerAttr(0));
-    if (auto clockAttr = delayOp->getAttr("bmc.clock"))
-      shiftedAntecedent->setAttr("bmc.clock", clockAttr);
-    if (auto edgeAttr = delayOp->getAttr("bmc.clock_edge"))
-      shiftedAntecedent->setAttr("bmc.clock_edge", edgeAttr);
-    implOp.setOperand(0, shiftedAntecedent.getResult());
-    implOp.setOperand(1, delayOp.getInput());
-  }
-}
-
 /// Expand ltl.repeat into explicit delay/and/or sequences inside a BMC circuit.
 [[maybe_unused]] static void expandRepeatOpsInBMC(
     verif::BoundedModelCheckingOp bmcOp, RewriterBase &rewriter) {
@@ -1966,7 +1932,6 @@ struct VerifBoundedModelCheckingOpConversion
     };
 
     cloneSharedLTLSubtrees();
-    rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
 
     struct ClockInfo {
       StringAttr clockName;

@@ -315,9 +315,6 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   single derived BMC clock input to avoid spurious unmapped-clock errors
 - **BMC assume-known inputs**: `circt-bmc` now supports `--assume-known-inputs`,
   with `BMC_ASSUME_KNOWN_INPUTS=1` hook added for yosys SVA runs
-- **BMC implication delay shift**: exact delayed consequents (`##N`) are rewritten
-  to shift the delay onto the antecedent so BMC uses past buffers correctly
-
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
 - **Virtual Interface Task Calls Confirmed Working**: virtual-interface-task.sv passes
