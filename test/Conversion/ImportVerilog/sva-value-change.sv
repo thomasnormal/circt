@@ -6,7 +6,11 @@ module test_value_change(input logic clk, a);
 endmodule
 
 // CHECK-LABEL: moore.module @test_value_change
-// CHECK: moore.case_eq {{.*}} : l1
-// CHECK: moore.case_eq {{.*}} : l1
-// CHECK: moore.not {{.*}} : i1
-// CHECK: moore.and {{.*}}, {{.*}} : i1
+// $fell(a) = !a && $past(a)
+// CHECK: moore.past {{.*}} delay 1 : l1
+// CHECK: moore.not {{.*}} : l1
+// CHECK: moore.and {{.*}}, {{.*}} : l1
+// $rose(a) = a && !$past(a)
+// CHECK: moore.past {{.*}} delay 1 : l1
+// CHECK: moore.not {{.*}} : l1
+// CHECK: moore.and {{.*}}, {{.*}} : l1
