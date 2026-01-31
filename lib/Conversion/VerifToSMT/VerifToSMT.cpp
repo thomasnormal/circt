@@ -16,6 +16,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Support/LTLSequenceNFA.h"
+#include "circt/Support/I1ValueSimplifier.h"
 #include "circt/Support/CommutativeValueEquivalence.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
@@ -3524,118 +3525,9 @@ struct VerifBoundedModelCheckingOpConversion
     }
 
     auto simplifyClockValue = [&](Value val, bool &invert) -> Value {
-      while (val) {
-        if (auto cast = val.getDefiningOp<UnrealizedConversionCastOp>()) {
-          if (cast->getNumOperands() == 1)
-            val = cast->getOperand(0);
-          else
-            break;
-          continue;
-        }
-        if (auto fromClock = val.getDefiningOp<seq::FromClockOp>()) {
-          if (auto toClock =
-                  fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
-            val = toClock.getInput();
-            continue;
-          }
-          break;
-        }
-        if (auto bitcast = val.getDefiningOp<hw::BitcastOp>()) {
-          val = bitcast.getInput();
-          continue;
-        }
-        if (auto xorOp = val.getDefiningOp<comb::XorOp>()) {
-          if (xorOp.getNumOperands() == 2) {
-            if (auto literal = getConstI1Value(xorOp.getOperand(0))) {
-              invert ^= *literal;
-              val = xorOp.getOperand(1);
-              continue;
-            }
-            if (auto literal = getConstI1Value(xorOp.getOperand(1))) {
-              invert ^= *literal;
-              val = xorOp.getOperand(0);
-              continue;
-            }
-          }
-        }
-        if (auto andOp = val.getDefiningOp<comb::AndOp>()) {
-          SmallVector<Value> nonConst;
-          bool sawFalse = false;
-          for (Value operand : andOp.getOperands()) {
-            if (auto literal = getConstI1Value(operand)) {
-              if (!*literal) {
-                sawFalse = true;
-                break;
-              }
-              continue;
-            }
-            nonConst.push_back(operand);
-          }
-          if (sawFalse)
-            return Value();
-          if (nonConst.empty())
-            return Value();
-          if (nonConst.size() == 1) {
-            val = nonConst.front();
-            continue;
-          }
-        }
-        if (auto orOp = val.getDefiningOp<comb::OrOp>()) {
-          SmallVector<Value> nonConst;
-          bool sawTrue = false;
-          for (Value operand : orOp.getOperands()) {
-            if (auto literal = getConstI1Value(operand)) {
-              if (*literal) {
-                sawTrue = true;
-                break;
-              }
-              continue;
-            }
-            nonConst.push_back(operand);
-          }
-          if (sawTrue)
-            return Value();
-          if (nonConst.empty())
-            return Value();
-          if (nonConst.size() == 1) {
-            val = nonConst.front();
-            continue;
-          }
-        }
-        if (auto icmpOp = val.getDefiningOp<comb::ICmpOp>()) {
-          Value other;
-          bool constVal = false;
-          if (auto literal = getConstI1Value(icmpOp.getLhs())) {
-            constVal = *literal;
-            other = icmpOp.getRhs();
-          } else if (auto literal = getConstI1Value(icmpOp.getRhs())) {
-            constVal = *literal;
-            other = icmpOp.getLhs();
-          } else {
-            break;
-          }
-          switch (icmpOp.getPredicate()) {
-          case comb::ICmpPredicate::eq:
-          case comb::ICmpPredicate::ceq:
-          case comb::ICmpPredicate::weq:
-            if (!constVal)
-              invert = !invert;
-            val = other;
-            continue;
-          case comb::ICmpPredicate::ne:
-          case comb::ICmpPredicate::cne:
-          case comb::ICmpPredicate::wne:
-            if (constVal)
-              invert = !invert;
-            val = other;
-            continue;
-          default:
-            break;
-          }
-        }
-        break;
-      }
-      return val;
+      auto simplified = simplifyI1Value(val);
+      invert = simplified.invert;
+      return simplified.value;
     };
 
     auto invertClockEdge = [](ltl::ClockEdge edge) -> ltl::ClockEdge {

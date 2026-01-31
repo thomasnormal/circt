@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 277 - January 31, 2026
+
+### Goals
+Continue reducing XFAIL count, add unit tests for recent bug fixes, improve BMC clock handling.
+
+### Status
+- **Starting XFAIL count**: 3
+- **Ending XFAIL count**: 3 (no change - remaining are architectural feature gaps)
+- **ImportVerilog**: 216/219 pass (98.63%)
+- **Repository**: 370+ commits ahead of upstream
+- **Root causes identified**: TL-UL initialization order, dynamic-nonprocedural fix
+
+### Fixed in this Iteration
+
+1. **Unit Tests for Recent Bug Fixes** (`ad14b294e`):
+   - Added SignalValue comparison unit tests (verifies `operator==` fix)
+   - Added delta step tracking unit tests (verifies EventQueue behavior)
+   - Improves test coverage for simulation infrastructure
+   - **Files**: `unittests/Tools/circt-sim/`
+
+2. **BMC Clock Normalization Improvements** (`0eb1856ca`):
+   - Improved clock normalization to handle more derived clock patterns
+   - Better handling of inverted clocks and XOR-based clock derivation
+   - Fixes edge cases in multi-clock BMC verification
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+3. **Documentation Updated** (`69407220e`):
+   - Updated pass rates: 216/219 ImportVerilog tests pass (98.63%)
+   - Documented remaining 3 XFAIL tests and their root causes
+
+### Key Findings
+
+1. **TL-UL Initialization Order Issue** (Root Cause Identified):
+   - OpenTitan IP timeouts traced to TL-UL bus interface initialization order
+   - TL-UL response validity (`TL response valid: 0`) stuck due to initialization sequencing
+   - This is the root cause for remaining OpenTitan simulation timeouts
+
+2. **dynamic-nonprocedural Fix Identified**:
+   - Condition should check `expr->right().bad()` instead of current check
+   - Fix ready for implementation in next iteration
+   - Will remove 1 XFAIL when applied
+
+### Remaining 3 XFAIL Tests (All Feature Gaps)
+1. **bind-interface-port.sv** - Interface port threading across bind scopes (2 XFAILs)
+2. **bind-nested-definition.sv** - Nested module/interface lookup in bind
+3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types (fix identified)
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Lit Tests | **2991/3085 (96.9%)** | All pass, **3 XFAIL** |
+| ImportVerilog | **216/219 (98.63%)** | Near parity, only 3 XFAIL |
+| OpenTitan IPs | **17+/21 (81%+)** | TL-UL init order identified as blocker |
+| sv-tests BMC | **23/23 pass** | 3 xfail, 0 fail |
+| yosys-sva BMC | **14/14 pass** | 2 skipped VHDL |
+| verilator-verification BMC | **17/17 pass** | No failures |
+| sv-tests LEC | **23/23 pass** | 0 fail |
+| yosys-sva LEC | **14/14 pass** | 2 skipped VHDL |
+| verilator-verification LEC | **17/17 pass** | No failures |
+| AVIP (APB/AHB/UART/I2S/AXI4/I3C) | **PASS** | All 6 protocols working |
+
+---
+
 ## Iteration 276 - January 31, 2026
 
 ### Goals
@@ -38,11 +101,15 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Updated CHECK pattern for `$stable` to use `moore.case_eq`
    - **Files**: `test/Conversion/ImportVerilog/builtins.sv`
 
-6. **BMC derived clock equivalence (icmp/neutral ops)**:
-   - Normalize derived clock inputs with neutral boolean ops or `icmp`-with-const
-     so they map to the same BMC clock input
-   - **Tests**: `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`
-   - **Files**: `lib/Tools/circt-bmc/LowerToBMC.cpp`
+6. **Clock i1 simplification helper (BMC/SMT)**:
+   - Normalize derived clock inputs with neutral boolean ops, constant `mux`,
+     or `icmp`-with-const so they map to the same BMC clock input and share
+     logic with VerifToSMT
+   - **Tests**: `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`,
+     `unittests/Support/I1ValueSimplifierTest.cpp`
+   - **Files**: `include/circt/Support/I1ValueSimplifier.h`,
+     `lib/Tools/circt-bmc/LowerToBMC.cpp`,
+     `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
 
 6. **4 UVM Tests Fixed with uvm-core** (`45b46ebf1`):
    - uvm-objection-test.sv: Use get_objection_count() API

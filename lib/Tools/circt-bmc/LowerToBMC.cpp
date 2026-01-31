@@ -15,6 +15,7 @@
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/CommutativeValueEquivalence.h"
+#include "circt/Support/I1ValueSimplifier.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-bmc/Passes.h"
@@ -440,142 +441,12 @@ void LowerToBMCPass::runOnOperation() {
     SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
     clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
-    auto getConstI1Value = [&](Value val) -> std::optional<bool> {
-      if (auto cst = val.getDefiningOp<hw::ConstantOp>()) {
-        if (auto intTy = dyn_cast<IntegerType>(cst.getType());
-            intTy && intTy.getWidth() == 1)
-          return cst.getValue().isAllOnes();
-      }
-      if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
-        if (auto boolAttr = dyn_cast<BoolAttr>(cst.getValue()))
-          return boolAttr.getValue();
-        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
-          if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
-              intTy && intTy.getWidth() == 1)
-            return intAttr.getValue().isAllOnes();
-        }
-      }
-      return std::nullopt;
-    };
-    auto simplifyClockInput = [&](Value val, bool &invert) -> Value {
-      while (val) {
-        if (auto cast = val.getDefiningOp<UnrealizedConversionCastOp>()) {
-          if (cast->getNumOperands() == 1) {
-            val = cast->getOperand(0);
-            continue;
-          }
-        }
-        if (auto bitcast = val.getDefiningOp<hw::BitcastOp>()) {
-          val = bitcast.getInput();
-          continue;
-        }
-        if (auto extract = val.getDefiningOp<hw::StructExtractOp>()) {
-          val = extract.getInput();
-          continue;
-        }
-        if (auto extractOp = val.getDefiningOp<comb::ExtractOp>()) {
-          val = extractOp.getInput();
-          continue;
-        }
-        if (auto xorOp = val.getDefiningOp<comb::XorOp>()) {
-          if (xorOp.getNumOperands() == 2) {
-            if (auto literal = getConstI1Value(xorOp.getOperand(0))) {
-              invert ^= *literal;
-              val = xorOp.getOperand(1);
-              continue;
-            }
-            if (auto literal = getConstI1Value(xorOp.getOperand(1))) {
-              invert ^= *literal;
-              val = xorOp.getOperand(0);
-              continue;
-            }
-          }
-        }
-        if (auto andOp = val.getDefiningOp<comb::AndOp>()) {
-          SmallVector<Value> nonConst;
-          bool sawFalse = false;
-          for (Value operand : andOp.getOperands()) {
-            if (auto literal = getConstI1Value(operand)) {
-              if (!*literal) {
-                sawFalse = true;
-                break;
-              }
-              continue;
-            }
-            nonConst.push_back(operand);
-          }
-          if (sawFalse || nonConst.empty())
-            break;
-          if (nonConst.size() == 1) {
-            val = nonConst.front();
-            continue;
-          }
-        }
-        if (auto orOp = val.getDefiningOp<comb::OrOp>()) {
-          SmallVector<Value> nonConst;
-          bool sawTrue = false;
-          for (Value operand : orOp.getOperands()) {
-            if (auto literal = getConstI1Value(operand)) {
-              if (*literal) {
-                sawTrue = true;
-                break;
-              }
-              continue;
-            }
-            nonConst.push_back(operand);
-          }
-          if (sawTrue || nonConst.empty())
-            break;
-          if (nonConst.size() == 1) {
-            val = nonConst.front();
-            continue;
-          }
-        }
-        if (auto icmpOp = val.getDefiningOp<comb::ICmpOp>()) {
-          Value other;
-          bool constVal = false;
-          if (auto literal = getConstI1Value(icmpOp.getLhs())) {
-            constVal = *literal;
-            other = icmpOp.getRhs();
-          } else if (auto literal = getConstI1Value(icmpOp.getRhs())) {
-            constVal = *literal;
-            other = icmpOp.getLhs();
-          } else {
-            break;
-          }
-          auto otherTy = dyn_cast<IntegerType>(other.getType());
-          if (!otherTy || otherTy.getWidth() != 1)
-            break;
-          switch (icmpOp.getPredicate()) {
-          case comb::ICmpPredicate::eq:
-          case comb::ICmpPredicate::ceq:
-          case comb::ICmpPredicate::weq:
-            if (!constVal)
-              invert = !invert;
-            val = other;
-            continue;
-          case comb::ICmpPredicate::ne:
-          case comb::ICmpPredicate::cne:
-          case comb::ICmpPredicate::wne:
-            if (constVal)
-              invert = !invert;
-            val = other;
-            continue;
-          default:
-            break;
-          }
-        }
-        break;
-      }
-      return val;
-    };
     auto maybeAddClockInput = [&](Value input) {
       if (!input || input.getType() != builder.getI1Type())
         return;
-      bool invert = false;
-      Value canonical = simplifyClockInput(input, invert);
-      if (!canonical)
-        canonical = input;
+      auto simplified = simplifyI1Value(input);
+      bool invert = simplified.invert;
+      Value canonical = simplified.value ? simplified.value : input;
       // Graph regions can use values before they are defined, which prevents
       // CSE from collapsing equivalent clock expressions. Deduplicate
       // structurally equivalent inputs here to avoid spurious multi-clock
@@ -747,10 +618,9 @@ void LowerToBMCPass::runOnOperation() {
       };
 
       auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
-        bool invert = false;
-        Value canonical = simplifyClockInput(input, invert);
-        if (!canonical)
-          canonical = input;
+        auto simplified = simplifyI1Value(input);
+        bool invert = simplified.invert;
+        Value canonical = simplified.value ? simplified.value : input;
         for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
           if (invert != existing.invert)
             continue;

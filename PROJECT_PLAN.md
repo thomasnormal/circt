@@ -197,6 +197,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### Test Suite Status (Iteration 277 - Updated 2026-01-31)
 
+**Repository Status**: 370+ commits ahead of upstream CIRCT
+
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
@@ -209,7 +211,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **17+/21 (81%+)** | 17+ pass, improved from 14/21 |
+| OpenTitan IPs | **17+/21 (81%+)** | 17+ pass, TL-UL init order identified as blocker |
 | AVIPs | **6/6 pass** | APB, AHB, UART, I2S, AXI4, I3C all pass |
 | **External Suites** | **54/54 (100%)** | sv-tests + Verilator + yosys-sva all pass |
 | **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
@@ -237,25 +239,26 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - OpenTitan: 17+/21 pass (81%+)
 
 **Remaining 3 XFAIL Tests (All Feature Gaps):**
-1. **bind-interface-port.sv** - Interface port threading across bind scopes
-2. **bind-nested-definition.sv** - Nested module/interface lookup in bind
-3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
+1. **bind-interface-port.sv** - Interface port threading across bind scopes (bind directive scope resolution)
+2. **bind-nested-definition.sv** - Nested module/interface lookup in bind (bind directive scope resolution)
+3. **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types (FIX IDENTIFIED: check `expr->right().bad()`)
 
 **UVM Tests Now Passing (9 tests):**
 - Tests that use UVM features now work with the real Accellera `uvm-core` library
 - This includes virtual interface task calls, class handle formatting, and hierarchical access
 
-**Remaining Limitations (Iteration 277):**
+**Remaining Limitations (Iteration 277 - Updated):**
 1. **3 XFAIL Tests (Feature Gaps)**: All remaining XFAILs are feature gaps requiring architectural changes:
-   - **bind-interface-port.sv** - Interface port threading across bind scopes
+   - **bind-interface-port.sv** - Interface port threading across bind scopes (2 XFAILs for bind directive scope resolution)
    - **bind-nested-definition.sv** - Nested module/interface lookup in bind
-   - **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types
-2. **circt-sim timeout mechanism**: Two tests hang due to timeout mechanism issue
+   - **dynamic-nonprocedural.sv** - always_comb wrapping for dynamic types (fix identified: check `expr->right().bad()`)
+2. **TL-UL Initialization Order** (ROOT CAUSE IDENTIFIED):
+   - OpenTitan IP simulation timeouts traced to TL-UL bus interface initialization order
+   - TL response stays invalid (`TL response valid: 0`) due to initialization sequencing
+   - Affects gpio_no_alerts, uart_reg_top, aes_reg_top and other OpenTitan IPs
+   - **Next Step**: Implement proper TL-UL handshake initialization sequence
+3. **circt-sim timeout mechanism**: Two tests hang due to timeout mechanism issue
    - Need to investigate watchdog/abort callback behavior for these specific cases
-3. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
-   now runs without crashing but still times out at 2000 cycles; TL response
-   stays invalid (`TL response valid: 0`). Need deeper X-prop/handshake modeling
-   to resolve progress.
 4. **Continuous evaluation revalidation**: iterative evaluation avoids recursion
    depth limits, but we still need to re-run gpio/uart/aes_reg_top to confirm
    no regressions and acceptable performance (uart_reg_top/aes_reg_top still timeout).
@@ -344,10 +347,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   failures; `bmc-repetition.mlir` now passes
 - **BMC concat regressions**: removed XFAILs and updated CHECKs for concat
   sequence tests; sequence-typed block args now emit a deterministic NFA error
-- **BMC derived clock normalization**: simplify neutral boolean ops and
-  `icmp`-with-constant expressions during clock resolution to map derived
-  clocks back to the correct BMC input (regression:
-  `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`)
+- **Clock i1 simplifier (BMC/SMT)**: simplify neutral boolean ops, constant
+  `mux`, and `icmp`-with-constant expressions during clock resolution to map
+  derived clocks back to the correct BMC input (regression:
+  `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`,
+  unit test: `unittests/Support/I1ValueSimplifierTest.cpp`)
 - **LEC result tokens**: `circt-lec --run-smtlib` now emits `LEC_RESULT=...`,
   plus a `--print-counterexample` alias for `--print-solver-output`
 - **yosys-sva LEC runner fix**: removed unsupported `--fail-on-inequivalent`,
