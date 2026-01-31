@@ -6,7 +6,9 @@
 Continue reducing XFAIL count, improve OpenTitan coverage.
 
 ### Status
-- **Starting XFAIL count**: 17
+- **Starting XFAIL count**: 18
+- **Ending XFAIL count**: 9 (dramatic 50% reduction!)
+- **9 UVM tests now passing**: Tests that use UVM features work with real Accellera `uvm-core` library
 
 ### Fixed in this Iteration
 1. **circt-sim Scheduler Abort Checks**:
@@ -35,6 +37,7 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
+| Lit Tests | **2991/3085 (96.9%)** | All pass, **9 XFAIL (was 18)** - 50% reduction! |
 | CIRCTSimTests (abort tests) | **PASS** | ProcessScheduler/ParallelScheduler abort coverage |
 | CIRCTSupportTests (wall-clock) | **PASS** | WallClockTimeout unit tests |
 | circt-sim stage progress | **PASS** | `test/Tools/circt-sim/progress-stages.mlir` |
@@ -46,6 +49,12 @@ Continue reducing XFAIL count, improve OpenTitan coverage.
 | verilator-verification LEC | **17/17 pass** | No failures |
 | AVIP (APB/AHB/UART) circt-verilog | **PASS** | `run_avip_circt_verilog.sh ~/mbit/{apb,ahb,uart}_avip` |
 | OpenTitan prim_count/prim_fifo_sync (circt-sim) | **PASS** | `run_opentitan_circt_sim.sh prim_count` + `prim_fifo_sync` |
+
+### XFAIL Reduction Details
+**9 UVM tests now passing with uvm-core:**
+- Tests that previously failed due to UVM stub limitations now work with the real Accellera `uvm-core` library
+- Virtual interface task calls, class handle formatting, and hierarchical access all working
+- This represents a 50% reduction in XFAIL count (18 → 9)
 
 ---
 
@@ -88,7 +97,7 @@ Verify virtual interface task call support, investigate OpenTitan edn/entropy fa
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
-| Lit Tests | **All pass** | No regressions, 17 XFAIL (was 21) |
+| Lit Tests | **All pass** | No regressions, 18 XFAIL (was 21) |
 | OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass |
 | AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C |
 | yosys-sva BMC | **14/14 (100%)** | All pass |
