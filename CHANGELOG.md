@@ -7,7 +7,8 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
 
 ### Status
 - **Starting XFAIL count**: 18
-- **Ending XFAIL count**: 9 (50% reduction)
+- **Ending XFAIL count**: 9 (50% reduction!)
+- **ImportVerilog**: 210/219 pass (95.89%)
 - **OpenTitan**: 14/21 pass (66.7%)
 - **AVIP**: All 6 protocols pass (APB, AHB, UART, I2S, AXI4, I3C) - no regressions
 
@@ -37,7 +38,12 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
    - Updated CHECK pattern for `$stable` to use `moore.case_eq`
    - **Files**: `test/Conversion/ImportVerilog/builtins.sv`
 
-2. **Delta Step Tracking in EventQueue** (`9885013d5`):
+6. **Stack Overflow Fix in collectSignalIds** (`0ec18eccf`):
+   - Inlined collectSignalIdsFromCombinational to avoid mutual recursion
+   - Fixes stack overflow on large OpenTitan IPs (hmac_reg_top, rv_timer_reg_top, spi_host_reg_top)
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+7. **Delta Step Tracking in EventQueue** (`9885013d5`):
    - EventQueue now properly tracks delta steps for simulation scheduling
    - Fixed time advancement logic to correctly handle delta cycles
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
