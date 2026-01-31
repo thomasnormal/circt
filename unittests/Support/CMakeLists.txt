@@ -1,4 +1,6 @@
 add_circt_unittest(CIRCTSupportTests
+  BoolConditionTest.cpp
+  CommutativeValueEquivalenceTest.cpp
   CoverageDatabaseTest.cpp
   CoverageReportGeneratorTest.cpp
   DiagnosticsTest.cpp
@@ -12,6 +14,8 @@ add_circt_unittest(CIRCTSupportTests
 
 target_link_libraries(CIRCTSupportTests
   PRIVATE
+  CIRCTComb
+  CIRCTHW
   CIRCTSupport
   MLIRIR
 )

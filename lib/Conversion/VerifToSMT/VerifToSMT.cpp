@@ -16,6 +16,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Support/LTLSequenceNFA.h"
+#include "circt/Support/CommutativeValueEquivalence.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/Namespace.h"
@@ -370,9 +371,12 @@ struct LTLClockOpConversion : OpConversionPattern<ltl::ClockOp> {
 /// NOTE:
 /// For generic SMT lowering (outside the BMC pipeline), delay(seq, N>0) is
 /// approximated as true. This keeps the conversion total but is UNSOUND for
-/// temporal reasoning. The BMC pipeline handles delay semantics separately by
-/// inserting delay buffers and rewriting ltl.delay ops before this pattern
-/// runs, so BMC correctness does not rely on this approximation.
+/// temporal reasoning.
+///
+/// The BMC pipeline handles delay semantics separately:
+/// - Delay/past buffers for standalone temporal ops.
+/// - Sequence NFAs for multi-step sequence operators (concat/repeat/goto/etc.).
+/// Any ltl.delay that survives BMC rewriting is therefore a fallback path.
 ///
 /// For non-BMC uses that require temporal correctness, a dedicated delay
 /// buffering scheme is still needed.
@@ -398,10 +402,7 @@ struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
         return failure();
       rewriter.replaceOp(op, input);
     } else {
-      // LIMITATION: For BMC with delay > 0, we return true (trivially satisfied).
-      // This is INCORRECT for bounded model checking but required by the current
-      // architecture. The proper fix requires significant refactoring.
-      // See documentation above for workarounds and future implementation.
+      // Fallback (non-BMC or unhandled BMC cases): approximate as true.
       rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
     }
     return success();
@@ -446,11 +447,9 @@ struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
 };
 
 /// Convert ltl.concat to SMT boolean.
-/// Concatenation in LTL joins sequences end-to-end. For BMC at a single
-/// time step, concat(a, b) means: a holds at its time range, then b holds
-/// at its time range. When flattened to a single step check, if both
-/// sequences are instantaneous (booleans), this is equivalent to AND.
-/// For sequences with duration, BMC tracks them across steps.
+/// Concatenation in LTL joins sequences end-to-end. In BMC, multi-step
+/// semantics are handled by sequence NFAs and delay buffers; this pattern
+/// is a fallback for cases that reach generic SMT lowering.
 struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
   using OpConversionPattern<ltl::ConcatOp>::OpConversionPattern;
 
@@ -488,11 +487,8 @@ struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
 
 /// Convert ltl.repeat to SMT boolean.
 /// Repetition in LTL means the sequence must match N times consecutively.
-/// For BMC at a single step:
-/// - repeat(seq, 0, 0) is an empty sequence (true)
-/// - repeat(seq, N, 0) with N>0 means seq must hold N times
-/// For a single-step check where seq is a boolean, this is just seq
-/// (the sequence holding once is the same as holding N times at that instant).
+/// In BMC, multi-step semantics are handled by sequence NFAs; this pattern
+/// is a fallback for generic SMT lowering.
 struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
   using OpConversionPattern<ltl::RepeatOp>::OpConversionPattern;
 
@@ -1293,6 +1289,14 @@ struct SequenceNFAInfo {
   Value clockValue;          // Optional i1 clock value for tick gating
 };
 
+struct NFATickGateInfo {
+  unsigned tickArgIndex = 0;
+  std::optional<unsigned> clockPos;
+  bool invert = false;
+  ltl::ClockEdge edge = ltl::ClockEdge::Pos;
+  bool hasExplicitClock = false;
+};
+
 static void collectSequenceOpsForBMC(Value seq,
                                      llvm::DenseSet<Operation *> &ops,
                                      llvm::DenseSet<Value> &visited) {
@@ -1312,8 +1316,8 @@ static void collectSequenceOpsForBMC(Value seq,
 /// Rewrite ltl.implication with an exact delayed consequent into a past-form
 /// implication for BMC. This allows the BMC loop to use past buffers instead
 /// of looking ahead into future time steps.
-static void rewriteImplicationDelaysForBMC(Block &circuitBlock,
-                                           RewriterBase &rewriter) {
+[[maybe_unused]] static void rewriteImplicationDelaysForBMC(
+    Block &circuitBlock, RewriterBase &rewriter) {
   SmallVector<ltl::ImplicationOp> implicationOps;
   circuitBlock.walk(
       [&](ltl::ImplicationOp op) { implicationOps.push_back(op); });
@@ -1340,8 +1344,8 @@ static void rewriteImplicationDelaysForBMC(Block &circuitBlock,
 }
 
 /// Expand ltl.repeat into explicit delay/and/or sequences inside a BMC circuit.
-static void expandRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
-                                 RewriterBase &rewriter) {
+[[maybe_unused]] static void expandRepeatOpsInBMC(
+    verif::BoundedModelCheckingOp bmcOp, RewriterBase &rewriter) {
   auto &circuitBlock = bmcOp.getCircuit().front();
   SmallVector<ltl::RepeatOp> repeatOps;
   circuitBlock.walk([&](ltl::RepeatOp repeatOp) { repeatOps.push_back(repeatOp); });
@@ -1596,7 +1600,7 @@ static Value buildSequenceOr(OpBuilder &builder, Location loc,
   return ltl::OrOp::create(builder, loc, inputs).getResult();
 }
 
-static LogicalResult expandConcatOpsInBMC(
+[[maybe_unused]] static LogicalResult expandConcatOpsInBMC(
     verif::BoundedModelCheckingOp bmcOp, RewriterBase &rewriter) {
   auto &circuitBlock = bmcOp.getCircuit().front();
   SmallVector<ltl::ConcatOp> concatOps;
@@ -1738,7 +1742,7 @@ static bool exceedsCombinationLimit(uint64_t n, uint64_t k, uint64_t limit) {
   return count > limit;
 }
 
-static LogicalResult
+[[maybe_unused]] static LogicalResult
 expandGotoRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
                          RewriterBase &rewriter) {
   auto &circuitBlock = bmcOp.getCircuit().front();
@@ -2144,22 +2148,57 @@ struct VerifBoundedModelCheckingOpConversion
     auto collectSequenceRoots = [&](Value prop, const ClockInfo &info) {
       if (!prop || clockConflict)
         return;
-      SmallVector<Value> worklist;
-      DenseSet<Value> visited;
-      worklist.push_back(prop);
+      SmallVector<std::pair<Value, ClockInfo>> worklist;
+      DenseMap<Value, ClockInfo> seenInfo;
+      worklist.push_back({prop, info});
       while (!worklist.empty()) {
-        Value cur = worklist.pop_back_val();
-        if (!visited.insert(cur).second)
-          continue;
+        auto [cur, curInfo] = worklist.pop_back_val();
+        auto it = seenInfo.find(cur);
+        if (it != seenInfo.end()) {
+          if (clockInfoConflict(it->second, curInfo)) {
+            if (Operation *def = cur.getDefiningOp())
+              reportClockConflict(def);
+            else
+              clockConflict = true;
+            return;
+          }
+          ClockInfo merged = it->second;
+          mergeClockInfo(merged, curInfo);
+          bool changed = (merged.clockName != it->second.clockName) ||
+                         (merged.edge != it->second.edge) ||
+                         (merged.clockValue != it->second.clockValue);
+          if (!changed)
+            continue;
+          it->second = merged;
+          curInfo = merged;
+        } else {
+          seenInfo.insert({cur, curInfo});
+        }
         if (isa<ltl::SequenceType>(cur.getType())) {
-          addSequenceRoot(cur, info);
+          addSequenceRoot(cur, curInfo);
           continue;
         }
         Operation *def = cur.getDefiningOp();
         if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
           continue;
-        for (Value operand : def->getOperands())
-          worklist.push_back(operand);
+        if (auto clockOp = dyn_cast<ltl::ClockOp>(def)) {
+          ClockInfo clockInfo;
+          clockInfo.edge = clockOp.getEdge();
+          clockInfo.clockValue = clockOp.getClock();
+          clockInfo.seen = clockInfo.clockValue || clockInfo.edge;
+          if (clockInfoConflict(curInfo, clockInfo)) {
+            reportClockConflict(def);
+            return;
+          }
+          mergeClockInfo(curInfo, clockInfo);
+          worklist.push_back({clockOp.getInput(), curInfo});
+          continue;
+        }
+        for (Value operand : def->getOperands()) {
+          if (!isa<ltl::PropertyType, ltl::SequenceType>(operand.getType()))
+            continue;
+          worklist.push_back({operand, curInfo});
+        }
       }
     };
 
@@ -2377,6 +2416,10 @@ struct VerifBoundedModelCheckingOpConversion
       maybeAssertKnownInput(originalTy, smtVal, loc, builder);
     };
 
+    SmallVector<SequenceNFAInfo> nfaInfos;
+    SmallVector<bool> nfaStartStates;
+    size_t totalNFAStateSlots = 0;
+
     // =========================================================================
     // Multi-step delay tracking:
     // Scan the circuit for ltl.delay operations with delay > 0 and set up
@@ -2398,6 +2441,8 @@ struct VerifBoundedModelCheckingOpConversion
     // First pass: collect all delay ops with meaningful temporal ranges.
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
       if (delayOp.use_empty())
+        return;
+      if (nfaSequenceOps.contains(delayOp.getOperation()))
         return;
       uint64_t delay = delayOp.getDelay();
 
@@ -2660,9 +2705,212 @@ struct VerifBoundedModelCheckingOpConversion
       totalDelaySlots += totalPastSlots;
     }
 
+    // =========================================================================
+    // NFA-based sequence tracking for multi-step semantics.
+    // Build a per-sequence NFA and carry its state through the BMC loop.
+    // =========================================================================
+    SmallVector<Value> nfaStateOutputs;
+    if (!sequenceRootSet.empty()) {
+      auto i1Type = rewriter.getI1Type();
+      size_t registerStartIndex =
+          oldCircuitInputTy.size() - totalDelaySlots - numRegs;
+
+      auto computeSequenceClockInfo = [&](Value seq, ClockInfo info)
+          -> std::optional<ClockInfo> {
+        SmallVector<Operation *> worklist;
+        DenseSet<Operation *> visited;
+        if (Operation *def = seq.getDefiningOp())
+          worklist.push_back(def);
+        while (!worklist.empty()) {
+          Operation *cur = worklist.pop_back_val();
+          if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+            continue;
+          if (!visited.insert(cur).second)
+            continue;
+
+          if (auto clockOp = dyn_cast<ltl::ClockOp>(cur)) {
+            ClockInfo clockInfo;
+            clockInfo.edge = clockOp.getEdge();
+            clockInfo.clockValue = clockOp.getClock();
+            clockInfo.seen = clockInfo.clockValue || clockInfo.edge;
+            if (clockInfoConflict(info, clockInfo))
+              return std::nullopt;
+            mergeClockInfo(info, clockInfo);
+            if (Operation *def = clockOp.getInput().getDefiningOp())
+              worklist.push_back(def);
+            continue;
+          }
+
+          for (Value operand : cur->getOperands()) {
+            if (!isa<ltl::SequenceType>(operand.getType()))
+              continue;
+            if (Operation *def = operand.getDefiningOp())
+              worklist.push_back(def);
+          }
+        }
+        return info;
+      };
+
+      // Collect sequence roots in a deterministic order.
+      SmallVector<Value> sequenceRoots;
+      circuitBlock.walk([&](Operation *op) {
+        for (Value result : op->getResults())
+          if (sequenceRootSet.contains(result))
+            sequenceRoots.push_back(result);
+      });
+
+      for (Value seqRoot : sequenceRoots) {
+        if (!seqRoot || !isa<ltl::SequenceType>(seqRoot.getType()))
+          continue;
+        Operation *rootDef = seqRoot.getDefiningOp();
+        if (!rootDef || !isa<ltl::LTLDialect>(rootDef->getDialect()))
+          continue;
+
+        ClockInfo baseInfo;
+        if (auto it = sequenceRootClocks.find(seqRoot);
+            it != sequenceRootClocks.end())
+          baseInfo = it->second;
+        auto maybeInfo = computeSequenceClockInfo(seqRoot, baseInfo);
+        if (!maybeInfo) {
+          rootDef->emitError(
+              "ltl.sequence uses conflicting clock annotations");
+          return failure();
+        }
+
+        // Build the NFA for this sequence.
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointAfter(rootDef);
+        auto trueVal = hw::ConstantOp::create(rewriter, loc, i1Type, 1);
+        auto falseVal = hw::ConstantOp::create(rewriter, loc, i1Type, 0);
+        auto [nfa, fragment] = ltl::NFABuilder::buildEpsilonFreeNFA(
+            seqRoot, loc, trueVal, rewriter);
+        size_t numStates = nfa.states.size();
+        if (numStates == 0) {
+          auto zeroAttr = rewriter.getI64IntegerAttr(0);
+          auto seqFalse =
+              ltl::DelayOp::create(rewriter, loc, falseVal, zeroAttr, zeroAttr)
+                  .getResult();
+          seqRoot.replaceAllUsesWith(seqFalse);
+          continue;
+        }
+
+        // Insert a tick argument before the register block arguments.
+        unsigned tickIndex = registerStartIndex;
+        auto tickArg = circuitBlock.insertArgument(
+            registerStartIndex, i1Type, loc);
+        oldCircuitInputTy.insert(oldCircuitInputTy.begin() + registerStartIndex,
+                                 i1Type);
+        if (inputNamePrefixes.size() < registerStartIndex)
+          inputNamePrefixes.resize(registerStartIndex, StringAttr{});
+        inputNamePrefixes.insert(
+            inputNamePrefixes.begin() + registerStartIndex,
+            rewriter.getStringAttr("nfa_tick_" +
+                                   Twine(nfaInfos.size()).str()));
+        registerStartIndex++;
+
+        SmallVector<Value> stateArgs;
+        stateArgs.reserve(numStates);
+        for (size_t i = 0; i < numStates; ++i) {
+          auto arg = circuitBlock.addArgument(i1Type, loc);
+          stateArgs.push_back(arg);
+          oldCircuitInputTy.push_back(i1Type);
+        }
+
+        SmallVector<SmallVector<SmallVector<Value, 4>, 4>, 8> incoming;
+        incoming.resize(numStates);
+        for (size_t from = 0; from < numStates; ++from) {
+          for (auto &tr : nfa.states[from].transitions) {
+            if (tr.isEpsilon)
+              continue;
+            Value cond = nfa.conditions[tr.condIndex];
+            auto intTy = dyn_cast<IntegerType>(cond.getType());
+            if (!intTy || intTy.getWidth() != 1) {
+              rootDef->emitError(
+                  "sequence NFA conditions must be i1 values");
+              return failure();
+            }
+            incoming[tr.to].push_back(
+                SmallVector<Value, 4>{stateArgs[from], cond});
+          }
+        }
+
+        Value oneVal = hw::ConstantOp::create(rewriter, loc, i1Type, 1).getResult();
+        Value notTick = comb::XorOp::create(rewriter, loc, tickArg, oneVal).getResult();
+        Value trueResult = trueVal.getResult();
+        Value falseResult = falseVal.getResult();
+
+        SmallVector<Value> nextVals;
+        nextVals.resize(numStates, falseResult);
+        for (size_t i = 0; i < numStates; ++i) {
+          SmallVector<Value, 8> orInputs;
+          if (static_cast<int>(i) == fragment.start)
+            orInputs.push_back(trueResult);
+
+          Value hold = comb::AndOp::create(
+              rewriter, loc, SmallVector<Value, 2>{stateArgs[i], notTick},
+              true).getResult();
+          orInputs.push_back(hold);
+
+          for (auto &edgeVals : incoming[i]) {
+            SmallVector<Value, 4> andInputs(edgeVals.begin(),
+                                            edgeVals.end());
+            andInputs.push_back(tickArg);
+            Value andVal =
+                comb::AndOp::create(rewriter, loc, andInputs, true).getResult();
+            orInputs.push_back(andVal);
+          }
+
+          if (orInputs.empty())
+            nextVals[i] = falseResult;
+          else
+            nextVals[i] = comb::OrOp::create(rewriter, loc, orInputs, true).getResult();
+        }
+
+        SmallVector<Value, 8> accepting;
+        for (size_t i = 0; i < numStates; ++i)
+          if (nfa.states[i].accepting)
+            accepting.push_back(nextVals[i]);
+        Value match =
+            accepting.empty()
+                ? falseVal.getResult()
+                : comb::OrOp::create(rewriter, loc, accepting, true)
+                      .getResult();
+
+        auto zeroAttr = rewriter.getI64IntegerAttr(0);
+        auto seqMatch =
+            ltl::DelayOp::create(rewriter, loc, match, zeroAttr, zeroAttr)
+                .getResult();
+        seqRoot.replaceAllUsesWith(seqMatch);
+
+        size_t stateStartIndex = totalNFAStateSlots;
+        totalNFAStateSlots += numStates;
+        for (size_t i = 0; i < numStates; ++i)
+          nfaStartStates.push_back(static_cast<int>(i) == fragment.start);
+        nfaStateOutputs.append(nextVals.begin(), nextVals.end());
+        SequenceNFAInfo info;
+        info.root = seqRoot;
+        info.stateStartIndex = stateStartIndex;
+        info.numStates = numStates;
+        info.tickArgIndex = tickIndex;
+        info.clockName = maybeInfo->clockName;
+        info.edge = maybeInfo->edge;
+        info.clockValue = maybeInfo->clockValue;
+        nfaInfos.push_back(info);
+      }
+    }
+
+    if (!nfaStateOutputs.empty()) {
+      auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
+      SmallVector<Value> newYieldOperands(yieldOp.getOperands().begin(),
+                                          yieldOp.getOperands().end());
+      newYieldOperands.append(nfaStateOutputs.begin(), nfaStateOutputs.end());
+      yieldOp->setOperands(newYieldOperands);
+    }
+
     // Append non-final and final check outputs after delay/past buffers so
     // circuit outputs are ordered as:
-    // [original outputs] [delay/past buffers] [non-final checks] [final checks]
+    // [original outputs] [delay/past buffers] [nfa states]
+    // [non-final checks] [final checks]
     if (!nonFinalCheckValues.empty() || !finalCheckValues.empty()) {
       auto yieldOp = cast<verif::YieldOp>(circuitBlock.getTerminator());
       SmallVector<Value> newYieldOperands(yieldOp.getOperands());
@@ -2675,7 +2923,7 @@ struct VerifBoundedModelCheckingOpConversion
 
     // Extend name list with delay/past buffer slots appended to the circuit
     // arguments. These slots are appended after the original inputs.
-    if (inputNamePrefixes.size() != originalArgCount)
+    if (inputNamePrefixes.size() < originalArgCount)
       inputNamePrefixes.resize(originalArgCount, StringAttr{});
     if (delaySlots > 0) {
       for (size_t i = 0; i < delaySlots; ++i) {
@@ -2688,6 +2936,13 @@ struct VerifBoundedModelCheckingOpConversion
       for (size_t i = 0; i < totalPastSlots; ++i) {
         auto name =
             rewriter.getStringAttr("past_buf_" + Twine(i).str());
+        inputNamePrefixes.push_back(name);
+      }
+    }
+    if (totalNFAStateSlots > 0) {
+      for (size_t i = 0; i < totalNFAStateSlots; ++i) {
+        auto name =
+            rewriter.getStringAttr("nfa_state_" + Twine(i).str());
         inputNamePrefixes.push_back(name);
       }
     }
@@ -2799,34 +3054,55 @@ struct VerifBoundedModelCheckingOpConversion
     // <finalChecks> <wasViolated>
     // Get list of clock indexes in circuit args
     //
-    // Circuit arguments layout (after delay buffer modification):
-    // [original args (clocks, inputs, regs)] [delay buffer slots]
+    // Circuit arguments layout (after delay buffer & NFA modification):
+    // [original args (clocks, inputs, regs, ticks)] [delay/past slots] [nfa states]
     //
-    // Original args have size: oldCircuitInputTy.size() - totalDelaySlots
-    // Delay buffer slots have size: totalDelaySlots
-    size_t origCircuitArgsSize = oldCircuitInputTy.size() - totalDelaySlots;
+    // Original args have size: oldCircuitInputTy.size() - totalDelaySlots - totalNFAStateSlots
+    // Delay/past slots have size: totalDelaySlots
+    // NFA state slots have size: totalNFAStateSlots
+    size_t origCircuitArgsSize =
+        oldCircuitInputTy.size() - totalDelaySlots - totalNFAStateSlots;
 
     size_t initIndex = 0;
     SmallVector<Value> inputDecls;
     SmallVector<int> clockIndexes;
     size_t nonRegIndex = 0; // Track position among non-register inputs
+    DenseSet<unsigned> tickArgIndices;
+    for (const auto &info : nfaInfos)
+      tickArgIndices.insert(info.tickArgIndex);
+    size_t delayStartIndex = origCircuitArgsSize;
+    size_t nfaStartIndex = origCircuitArgsSize + totalDelaySlots;
+    auto makeBoolConstant = [&](Type ty, bool value) -> Value {
+      if (isa<smt::BoolType>(ty))
+        return smt::BoolConstantOp::create(rewriter, loc, value);
+      if (auto bvTy = dyn_cast<smt::BitVectorType>(ty))
+        return smt::BVConstantOp::create(rewriter, loc, value ? 1 : 0,
+                                         bvTy.getWidth());
+      op.emitError("unsupported boolean type in BMC conversion");
+      return Value();
+    };
     for (auto [curIndex, oldTy, newTy] :
          llvm::enumerate(oldCircuitInputTy, circuitInputTy)) {
-      // Check if this is a delay buffer slot (added at the end)
-      bool isDelayBuffer = curIndex >= origCircuitArgsSize;
+      // Check if this is a delay buffer or NFA state slot (added at the end)
+      bool isNFAState = curIndex >= nfaStartIndex;
+      bool isDelayBuffer =
+          curIndex >= delayStartIndex && curIndex < nfaStartIndex;
       if (isDelayBuffer) {
         // Initialize delay buffers to false (no prior history at step 0)
-        if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
-          auto initVal =
-              smt::BVConstantOp::create(rewriter, loc, 0, bvTy.getWidth());
-          inputDecls.push_back(initVal);
-        } else if (isa<smt::BoolType>(newTy)) {
-          auto initVal = smt::BoolConstantOp::create(rewriter, loc, false);
-          inputDecls.push_back(initVal);
-        } else {
-          op.emitError("unsupported delay buffer type in BMC conversion");
+        Value initVal = makeBoolConstant(newTy, false);
+        if (!initVal)
           return failure();
-        }
+        inputDecls.push_back(initVal);
+        continue;
+      }
+      if (isNFAState) {
+        size_t stateIndex = curIndex - nfaStartIndex;
+        bool isStart =
+            stateIndex < nfaStartStates.size() && nfaStartStates[stateIndex];
+        Value initVal = makeBoolConstant(newTy, isStart);
+        if (!initVal)
+          return failure();
+        inputDecls.push_back(initVal);
         continue;
       }
 
@@ -2841,6 +3117,14 @@ struct VerifBoundedModelCheckingOpConversion
       bool isClock = isa<seq::ClockType>(oldTy) ||
                      (!isRegister && isI1Type && nonRegIndex < numInitClocks);
 
+      if (tickArgIndices.contains(curIndex)) {
+        Value initVal = makeBoolConstant(newTy, false);
+        if (!initVal)
+          return failure();
+        inputDecls.push_back(initVal);
+        nonRegIndex++;
+        continue;
+      }
       if (isClock) {
         inputDecls.push_back(initVals[initIndex++]);
         clockIndexes.push_back(curIndex);
@@ -2915,18 +3199,56 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
+    struct ClockSourceInfo {
+      unsigned pos = 0;
+      bool invert = false;
+    };
+    DenseMap<unsigned, ClockSourceInfo> clockSourceInputs;
+    if (auto sources = op->getAttrOfType<ArrayAttr>("bmc_clock_sources")) {
+      for (auto attr : sources) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict) {
+          op.emitError("invalid bmc_clock_sources attribute");
+          return failure();
+        }
+        auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
+        auto posAttr = dyn_cast<IntegerAttr>(dict.get("clock_pos"));
+        auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
+        if (!argAttr || !posAttr || !invertAttr) {
+          op.emitError("invalid bmc_clock_sources entry");
+          return failure();
+        }
+        unsigned argIndex = argAttr.getValue().getZExtValue();
+        unsigned clockPos = posAttr.getValue().getZExtValue();
+        if (clockPos >= clockIndexes.size()) {
+          op.emitError("bmc_clock_sources clock_pos out of range");
+          return failure();
+        }
+        ClockSourceInfo info{clockPos, invertAttr.getValue()};
+        auto insert = clockSourceInputs.try_emplace(argIndex, info);
+        if (!insert.second &&
+            (insert.first->second.pos != info.pos ||
+             insert.first->second.invert != info.invert)) {
+          op.emitError("clock source maps to multiple BMC clock inputs");
+          return failure();
+        }
+      }
+    }
+
     struct ClockPosInfo {
       unsigned pos = 0;
       bool invert = false;
     };
     DenseMap<Value, ClockPosInfo> clockValueToPos;
+    CommutativeValueEquivalence clockEquivalence;
     for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
       if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
         continue;
       Value clockArg = circuitBlock.getArgument(clockIdx);
       for (Operation *user : clockArg.getUsers()) {
         if (auto fromClock = dyn_cast<seq::FromClockOp>(user))
-          clockValueToPos[fromClock.getResult()] = ClockPosInfo{pos, false};
+          clockValueToPos[fromClock.getResult()] =
+              ClockPosInfo{static_cast<unsigned>(pos), false};
       }
     }
     // Also map direct i1 clock arguments so ltl.clock on i1 clocks can
@@ -2937,7 +3259,8 @@ struct VerifBoundedModelCheckingOpConversion
       Value clockArg = circuitBlock.getArgument(clockIdx);
       if (auto intTy = dyn_cast<IntegerType>(clockArg.getType());
           intTy && intTy.getWidth() == 1) {
-        clockValueToPos.try_emplace(clockArg, ClockPosInfo{pos, false});
+        clockValueToPos.try_emplace(
+            clockArg, ClockPosInfo{static_cast<unsigned>(pos), false});
       }
     }
 
@@ -3010,6 +3333,70 @@ struct VerifBoundedModelCheckingOpConversion
       return edge;
     };
 
+    std::function<bool(Value, BlockArgument &)> traceClockRoot =
+        [&](Value value, BlockArgument &root) -> bool {
+      if (!value)
+        return false;
+      if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
+        return traceClockRoot(fromClock.getInput(), root);
+      if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
+        return traceClockRoot(toClock.getInput(), root);
+      if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+          return traceClockRoot(cast->getOperand(0), root);
+      }
+      if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
+        return traceClockRoot(bitcast.getInput(), root);
+      if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
+        return traceClockRoot(extract.getInput(), root);
+      if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
+        return traceClockRoot(extractOp.getInput(), root);
+      if (value.getDefiningOp<hw::ConstantOp>() ||
+          value.getDefiningOp<arith::ConstantOp>())
+        return true;
+      if (auto arg = dyn_cast<BlockArgument>(value)) {
+        if (!root)
+          root = arg;
+        return arg == root;
+      }
+      if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+        for (auto operand : andOp.getOperands())
+          if (!traceClockRoot(operand, root))
+            return false;
+        return true;
+      }
+      if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
+        for (auto operand : orOp.getOperands())
+          if (!traceClockRoot(operand, root))
+            return false;
+        return true;
+      }
+      if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
+        for (auto operand : xorOp.getOperands())
+          if (!traceClockRoot(operand, root))
+            return false;
+        return true;
+      }
+      if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
+        for (auto operand : concatOp.getOperands())
+          if (!traceClockRoot(operand, root))
+            return false;
+        return true;
+      }
+      return false;
+    };
+
+    auto resolveClockSourcePos = [&](Value clockValue)
+        -> std::optional<ClockPosInfo> {
+      BlockArgument root;
+      if (!traceClockRoot(clockValue, root))
+        return std::nullopt;
+      auto it = clockSourceInputs.find(root.getArgNumber());
+      if (it == clockSourceInputs.end())
+        return std::nullopt;
+      return ClockPosInfo{it->second.pos, it->second.invert};
+    };
+
     std::function<std::optional<ClockPosInfo>(Value)> resolveClockPosInfo =
         [&](Value clockValue) -> std::optional<ClockPosInfo> {
       if (!clockValue)
@@ -3029,6 +3416,28 @@ struct VerifBoundedModelCheckingOpConversion
           if (invert)
             innerInfo->invert = !innerInfo->invert;
           return innerInfo;
+        }
+      }
+      for (auto &entry : clockValueToPos) {
+        if (clockEquivalence.isEquivalent(clockValue, entry.first))
+          return entry.second;
+      }
+      if (auto info = resolveClockSourcePos(clockValue))
+        return info;
+      return std::nullopt;
+    };
+
+    auto resolveClockPosInfoForAssume =
+        [&](Value clockValue) -> std::optional<ClockPosInfo> {
+      if (auto info = resolveClockPosInfo(clockValue))
+        return info;
+      if (auto fromClock = clockValue.getDefiningOp<seq::FromClockOp>()) {
+        if (auto arg = dyn_cast<BlockArgument>(fromClock.getInput())) {
+          auto it = llvm::find(clockIndexes,
+                               static_cast<int>(arg.getArgNumber()));
+          if (it != clockIndexes.end())
+            return ClockPosInfo{
+                static_cast<unsigned>(it - clockIndexes.begin()), false};
         }
       }
       return std::nullopt;
@@ -3064,7 +3473,7 @@ struct VerifBoundedModelCheckingOpConversion
           assumeOp.getProperty().getDefiningOp<comb::ICmpOp>();
       auto mapIfFromClock =
           [&](Value maybeFrom, Value other, bool invertOtherValue) -> bool {
-        auto info = resolveClockPosInfo(maybeFrom);
+        auto info = resolveClockPosInfoForAssume(maybeFrom);
         if (!info)
           return false;
         if (!other || other.getType() != maybeFrom.getType())
@@ -3130,6 +3539,28 @@ struct VerifBoundedModelCheckingOpConversion
 
     if (derivedClockConflict)
       return failure();
+
+    SmallVector<NFATickGateInfo> nfaTickGateInfos;
+    nfaTickGateInfos.reserve(nfaInfos.size());
+    for (const auto &info : nfaInfos) {
+      NFATickGateInfo gateInfo;
+      gateInfo.tickArgIndex = info.tickArgIndex;
+      gateInfo.edge = info.edge.value_or(ltl::ClockEdge::Pos);
+      gateInfo.hasExplicitClock = info.clockName || info.clockValue;
+      if (info.clockName && !info.clockName.getValue().empty()) {
+        auto it = clockNameToPos.find(info.clockName.getValue());
+        if (it != clockNameToPos.end())
+          gateInfo.clockPos = it->second;
+      } else if (info.clockValue) {
+        if (auto posInfo = resolveClockPosInfo(info.clockValue)) {
+          gateInfo.clockPos = posInfo->pos;
+          gateInfo.invert = posInfo->invert;
+        }
+      } else if (clockIndexes.size() == 1) {
+        gateInfo.clockPos = 0;
+      }
+      nfaTickGateInfos.push_back(gateInfo);
+    }
 
     struct InferredClockInfo {
       std::optional<unsigned> pos;
@@ -3483,29 +3914,6 @@ struct VerifBoundedModelCheckingOpConversion
           maybeAssertKnown(oldTy, arg, rewriter);
         }
 
-        // Execute the circuit.
-        SmallVector<Value> circuitCallOutsVec =
-            callOrInline(circuitFuncOp, iterRange.take_front(numCircuitArgs));
-        ValueRange circuitCallOuts(circuitCallOutsVec);
-
-        ValueRange finalCheckOutputs =
-            numFinalChecks == 0 ? ValueRange{}
-                                : circuitCallOuts.take_back(numFinalChecks);
-        ValueRange beforeFinal =
-            numFinalChecks == 0 ? circuitCallOuts
-                                : circuitCallOuts.drop_back(numFinalChecks);
-        ValueRange nonFinalCheckOutputs =
-            numNonFinalChecks == 0
-                ? ValueRange{}
-                : beforeFinal.take_back(numNonFinalChecks);
-        ValueRange nonFinalOutputs =
-            numNonFinalChecks == 0 ? beforeFinal
-                                   : beforeFinal.drop_back(numNonFinalChecks);
-        ValueRange delayBufferOutputs =
-            nonFinalOutputs.take_back(totalDelaySlots);
-        ValueRange circuitOutputs =
-            nonFinalOutputs.drop_back(totalDelaySlots);
-
         // Call loop func to update clock & state arg values.
         SmallVector<Value> loopCallInputs;
         for (auto index : clockIndexes)
@@ -3529,7 +3937,8 @@ struct VerifBoundedModelCheckingOpConversion
         bool needClockEdges =
             !risingClocksOnly && !clockIndexes.empty() &&
             (usePerRegPosedge || totalDelaySlots > 0 ||
-             !nonFinalCheckInfos.empty() || !finalCheckInfos.empty());
+             totalNFAStateSlots > 0 || !nonFinalCheckInfos.empty() ||
+             !finalCheckInfos.empty());
         if (usePosedge) {
           auto clockIndex = clockIndexes[0];
           auto oldClock = iterRange[clockIndex];
@@ -3580,6 +3989,176 @@ struct VerifBoundedModelCheckingOpConversion
             }
           }
         }
+
+        Value defaultDelayGate;
+        if (!risingClocksOnly && !clockIndexes.empty()) {
+          if (usePosedge)
+            defaultDelayGate = isPosedge;
+          else if (anyPosedge)
+            defaultDelayGate = anyPosedge;
+        }
+
+        auto getDelayGate =
+            [&](StringAttr clockName, Value clockValue,
+                std::optional<ltl::ClockEdge> edge) -> Value {
+          if (risingClocksOnly || clockIndexes.empty())
+            return Value();
+          std::optional<unsigned> pos;
+          if (clockName && !clockName.getValue().empty()) {
+            auto it = clockNameToPos.find(clockName.getValue());
+            if (it != clockNameToPos.end())
+              pos = it->second;
+          } else if (clockValue) {
+            if (auto info = resolveClockPosInfo(clockValue))
+              pos = info->pos;
+          } else if (clockIndexes.size() == 1) {
+            pos = 0;
+          }
+          if (!pos || posedges.empty() || negedges.empty())
+            return defaultDelayGate;
+          Value posedge = posedges[*pos];
+          Value negedge = negedges[*pos];
+          ltl::ClockEdge edgeKind = edge.value_or(ltl::ClockEdge::Pos);
+          if (clockValue) {
+            if (auto info = resolveClockPosInfo(clockValue);
+                info && info->invert)
+              edgeKind = invertClockEdge(edgeKind);
+          }
+          switch (edgeKind) {
+          case ltl::ClockEdge::Pos:
+            return posedge;
+          case ltl::ClockEdge::Neg:
+            return negedge;
+          case ltl::ClockEdge::Both:
+            return smt::OrOp::create(rewriter, loc, posedge, negedge);
+          }
+          return defaultDelayGate;
+        };
+
+        auto materializeTickValue = [&](Type argTy, Value tickBool) -> Value {
+          if (!tickBool)
+            return tickBool;
+          if (isa<smt::BoolType>(argTy))
+            return tickBool;
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(argTy)) {
+            if (bvTy.getWidth() == 1) {
+              auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+              auto zero = smt::BVConstantOp::create(rewriter, loc, 0, 1);
+              return smt::IteOp::create(rewriter, loc, tickBool, one, zero);
+            }
+          }
+          return tickBool;
+        };
+
+        auto getNFATickGate = [&](const NFATickGateInfo &info) -> Value {
+          if (risingClocksOnly || clockIndexes.empty())
+            return Value();
+          if (info.clockPos && *info.clockPos < posedges.size() &&
+              *info.clockPos < negedges.size()) {
+            Value posedge = posedges[*info.clockPos];
+            Value negedge = negedges[*info.clockPos];
+            ltl::ClockEdge edgeKind = info.edge;
+            if (info.invert)
+              edgeKind = invertClockEdge(edgeKind);
+            switch (edgeKind) {
+            case ltl::ClockEdge::Pos:
+              return posedge;
+            case ltl::ClockEdge::Neg:
+              return negedge;
+            case ltl::ClockEdge::Both:
+              return smt::OrOp::create(rewriter, loc, posedge, negedge);
+            }
+          }
+          if (info.hasExplicitClock)
+            return defaultDelayGate;
+          return defaultDelayGate;
+        };
+
+        SmallVector<Value> circuitInputs(
+            iterRange.take_front(numCircuitArgs).begin(),
+            iterRange.take_front(numCircuitArgs).end());
+        // Use post-edge clock values for property/circuit evaluation so
+        // clocked expressions observe the sampled clock value.
+        if (!clockIndexes.empty()) {
+          for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
+            if (static_cast<size_t>(clockIndex) < circuitInputs.size() &&
+                static_cast<size_t>(idx) < loopVals.size())
+              circuitInputs[clockIndex] = loopVals[idx];
+          }
+        }
+        if (!clockSourceInputs.empty()) {
+          for (auto [argIndex, info] : clockSourceInputs) {
+            if (argIndex >= circuitInputs.size() ||
+                info.pos >= loopVals.size())
+              continue;
+            int64_t valueWidth = 0;
+            int64_t unknownWidth = 0;
+            if (!isFourStateStruct(oldCircuitInputTy[argIndex], valueWidth,
+                                   unknownWidth))
+              continue;
+            if (valueWidth != 1)
+              continue;
+            auto bvTy =
+                dyn_cast<smt::BitVectorType>(circuitInputs[argIndex].getType());
+            if (!bvTy || bvTy.getWidth() !=
+                             static_cast<unsigned>(valueWidth + unknownWidth))
+              continue;
+            Value valueBit = loopVals[info.pos];
+            if (info.invert)
+              valueBit = smt::BVNotOp::create(rewriter, loc, valueBit);
+            auto unkTy =
+                smt::BitVectorType::get(rewriter.getContext(), unknownWidth);
+            Value unknownBits =
+                smt::ExtractOp::create(rewriter, loc, unkTy, 0,
+                                       circuitInputs[argIndex]);
+            circuitInputs[argIndex] =
+                smt::ConcatOp::create(rewriter, loc, valueBit, unknownBits);
+          }
+        }
+        if (!nfaTickGateInfos.empty()) {
+          for (const auto &tickInfo : nfaTickGateInfos) {
+            if (tickInfo.tickArgIndex >= circuitInputs.size())
+              continue;
+            Value gate = getNFATickGate(tickInfo);
+            Value tick = gate ? gate : constTrue;
+            Type argTy = circuitInputTy[tickInfo.tickArgIndex];
+            circuitInputs[tickInfo.tickArgIndex] =
+                materializeTickValue(argTy, tick);
+          }
+        }
+
+        // Execute the circuit.
+        SmallVector<Value> circuitCallOutsVec =
+            callOrInline(circuitFuncOp, circuitInputs);
+        ValueRange circuitCallOuts(circuitCallOutsVec);
+
+        ValueRange finalCheckOutputs =
+            numFinalChecks == 0 ? ValueRange{}
+                                : circuitCallOuts.take_back(numFinalChecks);
+        ValueRange beforeFinal =
+            numFinalChecks == 0 ? circuitCallOuts
+                                : circuitCallOuts.drop_back(numFinalChecks);
+        ValueRange nonFinalCheckOutputs =
+            numNonFinalChecks == 0
+                ? ValueRange{}
+                : beforeFinal.take_back(numNonFinalChecks);
+        ValueRange nonFinalOutputs =
+            numNonFinalChecks == 0 ? beforeFinal
+                                   : beforeFinal.drop_back(numNonFinalChecks);
+        ValueRange nfaStateOutputs =
+            totalNFAStateSlots == 0
+                ? ValueRange{}
+                : nonFinalOutputs.take_back(totalNFAStateSlots);
+        ValueRange beforeNFA =
+            totalNFAStateSlots == 0
+                ? nonFinalOutputs
+                : nonFinalOutputs.drop_back(totalNFAStateSlots);
+        ValueRange delayBufferOutputs =
+            totalDelaySlots == 0 ? ValueRange{}
+                                 : beforeNFA.take_back(totalDelaySlots);
+        ValueRange circuitOutputs =
+            totalDelaySlots == 0 ? beforeNFA
+                                 : beforeNFA.drop_back(totalDelaySlots);
 
         Value violated = iterRange.back();
         if (numNonFinalChecks > 0) {
@@ -3660,8 +4239,8 @@ struct VerifBoundedModelCheckingOpConversion
         SmallVector<Value> newDecls;
         size_t nonRegIdx = 0;
         size_t argIndex = 0;
-        size_t numNonStateArgs =
-            oldCircuitInputTy.size() - numRegs - totalDelaySlots;
+        size_t numNonStateArgs = oldCircuitInputTy.size() - numRegs -
+                                 totalDelaySlots - totalNFAStateSlots;
         for (auto [oldTy, newTy] :
              llvm::zip(TypeRange(oldCircuitInputTy).take_front(numNonStateArgs),
                        TypeRange(circuitInputTy).take_front(numNonStateArgs))) {
@@ -3671,9 +4250,14 @@ struct VerifBoundedModelCheckingOpConversion
           bool isClock =
               isa<seq::ClockType>(oldTy) ||
               (isI1Type && nonRegIdx < numInitClocks);
-          if (isClock)
+          if (tickArgIndices.contains(argIndex)) {
+            Value initVal = makeBoolConstant(newTy, false);
+            if (!initVal)
+              return failure();
+            newDecls.push_back(initVal);
+          } else if (isClock) {
             newDecls.push_back(loopVals[loopIndex++]);
-          else {
+          } else {
             auto decl = smt::DeclareFunOp::create(
                 rewriter, loc, newTy,
                 argIndex < inputNamePrefixes.size()
@@ -3694,8 +4278,8 @@ struct VerifBoundedModelCheckingOpConversion
             } else {
               auto regStates =
                   iterRange.take_front(circuitFuncOp.getNumArguments())
-                      .take_back(numRegs + totalDelaySlots)
-                      .drop_back(totalDelaySlots);
+                      .take_back(numRegs + totalDelaySlots + totalNFAStateSlots)
+                      .drop_back(totalDelaySlots + totalNFAStateSlots);
               SmallVector<Value> nextRegStates;
               for (auto [regState, regInput] :
                    llvm::zip(regStates, regInputs)) {
@@ -3707,8 +4291,8 @@ struct VerifBoundedModelCheckingOpConversion
           } else if (usePerRegPosedge) {
             auto regStates =
                 iterRange.take_front(circuitFuncOp.getNumArguments())
-                    .take_back(numRegs + totalDelaySlots)
-                    .drop_back(totalDelaySlots);
+                    .take_back(numRegs + totalDelaySlots + totalNFAStateSlots)
+                    .drop_back(totalDelaySlots + totalNFAStateSlots);
             SmallVector<Value> nextRegStates;
             nextRegStates.reserve(numRegs);
             for (auto [idx, pair] :
@@ -3723,53 +4307,11 @@ struct VerifBoundedModelCheckingOpConversion
         }
 
         if (totalDelaySlots > 0) {
-          Value defaultDelayGate;
-          if (!risingClocksOnly && !clockIndexes.empty()) {
-            if (usePosedge)
-              defaultDelayGate = isPosedge;
-            else if (anyPosedge)
-              defaultDelayGate = anyPosedge;
-          }
 
-          auto getDelayGate =
-              [&](StringAttr clockName, Value clockValue,
-                  std::optional<ltl::ClockEdge> edge) -> Value {
-            if (risingClocksOnly || clockIndexes.empty())
-              return Value();
-            std::optional<unsigned> pos;
-            if (clockName && !clockName.getValue().empty()) {
-              auto it = clockNameToPos.find(clockName.getValue());
-              if (it != clockNameToPos.end())
-                pos = it->second;
-            } else if (clockValue) {
-              if (auto info = resolveClockPosInfo(clockValue))
-                pos = info->pos;
-            } else if (clockIndexes.size() == 1) {
-              pos = 0;
-            }
-            if (!pos || posedges.empty() || negedges.empty())
-              return defaultDelayGate;
-            Value posedge = posedges[*pos];
-            Value negedge = negedges[*pos];
-            ltl::ClockEdge edgeKind = edge.value_or(ltl::ClockEdge::Pos);
-            if (clockValue) {
-              if (auto info = resolveClockPosInfo(clockValue);
-                  info && info->invert)
-                edgeKind = invertClockEdge(edgeKind);
-            }
-            switch (edgeKind) {
-            case ltl::ClockEdge::Pos:
-              return posedge;
-            case ltl::ClockEdge::Neg:
-              return negedge;
-            case ltl::ClockEdge::Both:
-              return smt::OrOp::create(rewriter, loc, posedge, negedge);
-            }
-            return defaultDelayGate;
-          };
-
-          auto delayStates = iterRange.take_front(circuitFuncOp.getNumArguments())
-                                 .take_back(totalDelaySlots);
+          auto delayStates =
+              iterRange.take_front(circuitFuncOp.getNumArguments())
+                  .take_back(totalDelaySlots + totalNFAStateSlots)
+                  .drop_back(totalNFAStateSlots);
           size_t delayIndex = 0;
           auto appendDelayUpdates = [&](Value gate, size_t count) {
             for (size_t i = 0; i < count; ++i) {
@@ -3796,6 +4338,9 @@ struct VerifBoundedModelCheckingOpConversion
           for (; delayIndex < totalDelaySlots; ++delayIndex)
             newDecls.push_back(delayBufferOutputs[delayIndex]);
         }
+
+        if (totalNFAStateSlots > 0)
+          newDecls.append(nfaStateOutputs.begin(), nfaStateOutputs.end());
 
         for (; loopIndex < loopVals.size(); ++loopIndex)
           newDecls.push_back(loopVals[loopIndex]);
@@ -3955,36 +4500,6 @@ struct VerifBoundedModelCheckingOpConversion
             maybeAssertKnown(oldTy, arg, builder);
           }
 
-          // Execute the circuit
-          ValueRange circuitCallOuts =
-              func::CallOp::create(
-                  builder, loc, circuitFuncOp,
-                  iterArgs.take_front(circuitFuncOp.getNumArguments()))
-                  ->getResults();
-
-          // Circuit outputs are ordered as:
-          // [original outputs (registers)] [delay buffer outputs]
-          // [non-final checks] [final checks]
-          //
-          // Note: totalDelaySlots is captured from the outer scope
-          ValueRange finalCheckOutputs =
-              numFinalChecks == 0 ? ValueRange{}
-                                  : circuitCallOuts.take_back(numFinalChecks);
-          ValueRange beforeFinal =
-              numFinalChecks == 0 ? circuitCallOuts
-                                  : circuitCallOuts.drop_back(numFinalChecks);
-          ValueRange nonFinalCheckOutputs =
-              numNonFinalChecks == 0
-                  ? ValueRange{}
-                  : beforeFinal.take_back(numNonFinalChecks);
-          ValueRange nonFinalOutputs =
-              numNonFinalChecks == 0
-                  ? beforeFinal
-                  : beforeFinal.drop_back(numNonFinalChecks);
-          // Split non-final outputs into register outputs and delay buffer outputs
-          ValueRange delayBufferOutputs = nonFinalOutputs.take_back(totalDelaySlots);
-          ValueRange circuitOutputs = nonFinalOutputs.drop_back(totalDelaySlots);
-
           // Call loop func to update clock & state arg values
           SmallVector<Value> loopCallInputs;
           // Fetch clock values to feed to loop
@@ -4011,7 +4526,8 @@ struct VerifBoundedModelCheckingOpConversion
           bool needClockEdges =
               !risingClocksOnly && !clockIndexes.empty() &&
               (usePerRegPosedge || totalDelaySlots > 0 ||
-               !nonFinalCheckInfos.empty() || !finalCheckInfos.empty());
+               totalNFAStateSlots > 0 || !nonFinalCheckInfos.empty() ||
+               !finalCheckInfos.empty());
           if (usePosedge) {
             auto clockIndex = clockIndexes[0];
             auto oldClock = iterArgs[clockIndex];
@@ -4065,6 +4581,185 @@ struct VerifBoundedModelCheckingOpConversion
               }
             }
           }
+
+          Value defaultDelayGate;
+          if (!risingClocksOnly && !clockIndexes.empty()) {
+            if (usePosedge)
+              defaultDelayGate = isPosedge;
+            else if (anyPosedge)
+              defaultDelayGate = anyPosedge;
+          }
+
+          auto getDelayGate = [&](StringAttr clockName, Value clockValue,
+                                  std::optional<ltl::ClockEdge> edge) -> Value {
+            if (risingClocksOnly || clockIndexes.empty())
+              return Value();
+            std::optional<unsigned> pos;
+            if (clockName && !clockName.getValue().empty()) {
+              auto it = clockNameToPos.find(clockName.getValue());
+              if (it != clockNameToPos.end())
+                pos = it->second;
+            } else if (clockValue) {
+              if (auto info = resolveClockPosInfo(clockValue))
+                pos = info->pos;
+            } else if (clockIndexes.size() == 1) {
+              pos = 0;
+            }
+            if (!pos || posedges.empty() || negedges.empty())
+              return defaultDelayGate;
+            Value posedge = posedges[*pos];
+            Value negedge = negedges[*pos];
+            ltl::ClockEdge edgeKind = edge.value_or(ltl::ClockEdge::Pos);
+            if (clockValue) {
+              if (auto info = resolveClockPosInfo(clockValue);
+                  info && info->invert)
+                edgeKind = invertClockEdge(edgeKind);
+            }
+            switch (edgeKind) {
+            case ltl::ClockEdge::Pos:
+              return posedge;
+            case ltl::ClockEdge::Neg:
+              return negedge;
+            case ltl::ClockEdge::Both:
+              return smt::OrOp::create(builder, loc, posedge, negedge);
+            }
+            return defaultDelayGate;
+          };
+
+          auto materializeTickValue = [&](Type argTy, Value tickBool) -> Value {
+            if (!tickBool)
+              return tickBool;
+            if (isa<smt::BoolType>(argTy))
+              return tickBool;
+            if (auto bvTy = dyn_cast<smt::BitVectorType>(argTy)) {
+              if (bvTy.getWidth() == 1) {
+                auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
+                auto zero = smt::BVConstantOp::create(builder, loc, 0, 1);
+                return smt::IteOp::create(builder, loc, tickBool, one, zero);
+              }
+            }
+            return tickBool;
+          };
+
+          auto getNFATickGate = [&](const NFATickGateInfo &info) -> Value {
+            if (risingClocksOnly || clockIndexes.empty())
+              return Value();
+            if (info.clockPos && *info.clockPos < posedges.size() &&
+                *info.clockPos < negedges.size()) {
+              Value posedge = posedges[*info.clockPos];
+              Value negedge = negedges[*info.clockPos];
+              ltl::ClockEdge edgeKind = info.edge;
+              if (info.invert)
+                edgeKind = invertClockEdge(edgeKind);
+              switch (edgeKind) {
+              case ltl::ClockEdge::Pos:
+                return posedge;
+              case ltl::ClockEdge::Neg:
+                return negedge;
+              case ltl::ClockEdge::Both:
+                return smt::OrOp::create(builder, loc, posedge, negedge);
+              }
+            }
+            if (info.hasExplicitClock)
+              return defaultDelayGate;
+            return defaultDelayGate;
+          };
+
+          SmallVector<Value> circuitInputs(
+              iterArgs.take_front(numCircuitArgs).begin(),
+              iterArgs.take_front(numCircuitArgs).end());
+          // Use post-edge clock values for property/circuit evaluation so
+          // clocked expressions observe the sampled clock value.
+          if (!clockIndexes.empty()) {
+            for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
+              if (static_cast<size_t>(clockIndex) < circuitInputs.size() &&
+                  static_cast<size_t>(idx) < loopVals.size())
+                circuitInputs[clockIndex] = loopVals[idx];
+            }
+          }
+          if (!clockSourceInputs.empty()) {
+            for (auto [argIndex, info] : clockSourceInputs) {
+              if (argIndex >= circuitInputs.size() ||
+                  info.pos >= loopVals.size())
+                continue;
+              int64_t valueWidth = 0;
+              int64_t unknownWidth = 0;
+              if (!isFourStateStruct(oldCircuitInputTy[argIndex], valueWidth,
+                                     unknownWidth))
+                continue;
+              if (valueWidth != 1)
+                continue;
+              auto bvTy = dyn_cast<smt::BitVectorType>(
+                  circuitInputs[argIndex].getType());
+              if (!bvTy || bvTy.getWidth() !=
+                               static_cast<unsigned>(valueWidth +
+                                                     unknownWidth))
+                continue;
+              Value valueBit = loopVals[info.pos];
+              if (info.invert)
+                valueBit = smt::BVNotOp::create(builder, loc, valueBit);
+              auto unkTy =
+                  smt::BitVectorType::get(builder.getContext(), unknownWidth);
+              Value unknownBits =
+                  smt::ExtractOp::create(builder, loc, unkTy, 0,
+                                         circuitInputs[argIndex]);
+              circuitInputs[argIndex] =
+                  smt::ConcatOp::create(builder, loc, valueBit, unknownBits);
+            }
+          }
+          if (!nfaTickGateInfos.empty()) {
+            auto trueTick =
+                smt::BoolConstantOp::create(builder, loc, true).getResult();
+            for (const auto &tickInfo : nfaTickGateInfos) {
+              if (tickInfo.tickArgIndex >= circuitInputs.size())
+                continue;
+              Value gate = getNFATickGate(tickInfo);
+              Value tick = gate ? gate : trueTick;
+              Type argTy = circuitInputTy[tickInfo.tickArgIndex];
+              circuitInputs[tickInfo.tickArgIndex] =
+                  materializeTickValue(argTy, tick);
+            }
+          }
+
+          // Execute the circuit
+          ValueRange circuitCallOuts =
+              func::CallOp::create(builder, loc, circuitFuncOp, circuitInputs)
+                  ->getResults();
+
+          // Circuit outputs are ordered as:
+          // [original outputs (registers)] [delay buffer outputs] [nfa states]
+          // [non-final checks] [final checks]
+          //
+          // Note: totalDelaySlots is captured from the outer scope
+          ValueRange finalCheckOutputs =
+              numFinalChecks == 0 ? ValueRange{}
+                                  : circuitCallOuts.take_back(numFinalChecks);
+          ValueRange beforeFinal =
+              numFinalChecks == 0 ? circuitCallOuts
+                                  : circuitCallOuts.drop_back(numFinalChecks);
+          ValueRange nonFinalCheckOutputs =
+              numNonFinalChecks == 0
+                  ? ValueRange{}
+                  : beforeFinal.take_back(numNonFinalChecks);
+          ValueRange nonFinalOutputs =
+              numNonFinalChecks == 0
+                  ? beforeFinal
+                  : beforeFinal.drop_back(numNonFinalChecks);
+          // Split non-final outputs into register outputs, delay buffers, and NFA states.
+          ValueRange nfaStateOutputs =
+              totalNFAStateSlots == 0
+                  ? ValueRange{}
+                  : nonFinalOutputs.take_back(totalNFAStateSlots);
+          ValueRange beforeNFA =
+              totalNFAStateSlots == 0
+                  ? nonFinalOutputs
+                  : nonFinalOutputs.drop_back(totalNFAStateSlots);
+          ValueRange delayBufferOutputs =
+              totalDelaySlots == 0 ? ValueRange{}
+                                   : beforeNFA.take_back(totalDelaySlots);
+          ValueRange circuitOutputs =
+              totalDelaySlots == 0 ? beforeNFA
+                                   : beforeNFA.drop_back(totalDelaySlots);
 
           Value violated = iterArgs.back();
           if (numNonFinalChecks > 0) {
@@ -4201,9 +4896,11 @@ struct VerifBoundedModelCheckingOpConversion
           SmallVector<Value> newDecls;
           size_t nonRegIdx = 0;
           size_t argIndex = 0;
-          // Circuit args are: [clocks, inputs] [registers] [delay buffers]
-          // Drop both registers and delay buffers to get just clocks and inputs
-          size_t numNonStateArgs = oldCircuitInputTy.size() - numRegs - totalDelaySlots;
+          // Circuit args are: [clocks, inputs, ticks] [registers]
+          // [delay buffers] [nfa states]
+          // Drop registers/buffers/nfa to get just clocks and inputs
+          size_t numNonStateArgs = oldCircuitInputTy.size() - numRegs -
+                                   totalDelaySlots - totalNFAStateSlots;
           for (auto [oldTy, newTy] :
                llvm::zip(TypeRange(oldCircuitInputTy).take_front(numNonStateArgs),
                          TypeRange(circuitInputTy).take_front(numNonStateArgs))) {
@@ -4213,9 +4910,13 @@ struct VerifBoundedModelCheckingOpConversion
                             cast<IntegerType>(oldTy).getWidth() == 1;
             bool isClock = isa<seq::ClockType>(oldTy) ||
                            (isI1Type && nonRegIdx < numInitClocks);
-            if (isClock)
+            if (tickArgIndices.contains(argIndex)) {
+              Value initVal = makeBoolConstant(newTy, false);
+              assert(initVal && "expected makeBoolConstant to succeed for tick arg");
+              newDecls.push_back(initVal);
+            } else if (isClock) {
               newDecls.push_back(loopVals[loopIndex++]);
-            else {
+            } else {
               auto decl = smt::DeclareFunOp::create(
                   builder, loc, newTy,
                   argIndex < inputNamePrefixes.size()
@@ -4229,18 +4930,19 @@ struct VerifBoundedModelCheckingOpConversion
           }
 
           // Update registers using the computed clock edge signals.
+          ValueRange regInputs =
+              numRegs == 0 ? ValueRange{} : circuitOutputs.take_back(numRegs);
           if (clockIndexes.size() >= 1) {
-            SmallVector<Value> regInputs = circuitOutputs.take_back(numRegs);
             if (risingClocksOnly || clockIndexes.size() == 1) {
               if (risingClocksOnly) {
                 // In rising clocks only mode we don't need to worry about
                 // whether there was a posedge.
-                newDecls.append(regInputs);
+                newDecls.append(regInputs.begin(), regInputs.end());
               } else {
                 auto regStates =
                     iterArgs.take_front(circuitFuncOp.getNumArguments())
-                        .take_back(numRegs + totalDelaySlots)
-                        .drop_back(totalDelaySlots);
+                        .take_back(numRegs + totalDelaySlots + totalNFAStateSlots)
+                        .drop_back(totalDelaySlots + totalNFAStateSlots);
                 SmallVector<Value> nextRegStates;
                 for (auto [regState, regInput] :
                      llvm::zip(regStates, regInputs)) {
@@ -4255,8 +4957,8 @@ struct VerifBoundedModelCheckingOpConversion
             } else if (usePerRegPosedge) {
               auto regStates =
                   iterArgs.take_front(circuitFuncOp.getNumArguments())
-                      .take_back(numRegs + totalDelaySlots)
-                      .drop_back(totalDelaySlots);
+                      .take_back(numRegs + totalDelaySlots + totalNFAStateSlots)
+                      .drop_back(totalDelaySlots + totalNFAStateSlots);
               SmallVector<Value> nextRegStates;
               nextRegStates.reserve(numRegs);
               for (auto [idx, pair] :
@@ -4268,59 +4970,19 @@ struct VerifBoundedModelCheckingOpConversion
               }
               newDecls.append(nextRegStates);
             }
+          } else if (numRegs > 0) {
+            // If no clock inputs were detected, keep register state flowing so
+            // the BMC loop arity remains consistent.
+            newDecls.append(regInputs.begin(), regInputs.end());
           }
 
           // Add delay buffer outputs for the next iteration
           // These are the shifted buffer values from the circuit
           if (totalDelaySlots > 0) {
-            Value defaultDelayGate;
-            if (!risingClocksOnly && !clockIndexes.empty()) {
-              if (usePosedge)
-                defaultDelayGate = isPosedge;
-              else if (anyPosedge)
-                defaultDelayGate = anyPosedge;
-            }
-
-            auto getDelayGate = [&](StringAttr clockName, Value clockValue,
-                                    std::optional<ltl::ClockEdge> edge)
-                                    -> Value {
-              if (risingClocksOnly || clockIndexes.empty())
-                return Value();
-              std::optional<unsigned> pos;
-              if (clockName && !clockName.getValue().empty()) {
-                auto it = clockNameToPos.find(clockName.getValue());
-                if (it != clockNameToPos.end())
-                  pos = it->second;
-              } else if (clockValue) {
-                if (auto info = resolveClockPosInfo(clockValue))
-                  pos = info->pos;
-              } else if (clockIndexes.size() == 1) {
-                pos = 0;
-              }
-              if (!pos || posedges.empty() || negedges.empty())
-                return defaultDelayGate;
-              Value posedge = posedges[*pos];
-              Value negedge = negedges[*pos];
-              ltl::ClockEdge edgeKind = edge.value_or(ltl::ClockEdge::Pos);
-              if (clockValue) {
-                if (auto info = resolveClockPosInfo(clockValue);
-                    info && info->invert)
-                  edgeKind = invertClockEdge(edgeKind);
-              }
-              switch (edgeKind) {
-              case ltl::ClockEdge::Pos:
-                return posedge;
-              case ltl::ClockEdge::Neg:
-                return negedge;
-              case ltl::ClockEdge::Both:
-                return smt::OrOp::create(builder, loc, posedge, negedge);
-              }
-              return defaultDelayGate;
-            };
-
             auto delayStates =
                 iterArgs.take_front(circuitFuncOp.getNumArguments())
-                    .take_back(totalDelaySlots);
+                    .take_back(totalDelaySlots + totalNFAStateSlots)
+                    .drop_back(totalNFAStateSlots);
             size_t delayIndex = 0;
             auto appendDelayUpdates = [&](Value gate, size_t count) {
               for (size_t i = 0; i < count; ++i) {
@@ -4350,6 +5012,9 @@ struct VerifBoundedModelCheckingOpConversion
             for (; delayIndex < totalDelaySlots; ++delayIndex)
               newDecls.push_back(delayBufferOutputs[delayIndex]);
           }
+
+          if (totalNFAStateSlots > 0)
+            newDecls.append(nfaStateOutputs.begin(), nfaStateOutputs.end());
 
           // Add the rest of the loop state args
           for (; loopIndex < loopVals.size(); ++loopIndex)
