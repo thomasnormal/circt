@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 274 - January 31, 2026
+
+### Goals
+Verify virtual interface task call support, investigate OpenTitan edn/entropy failures, enhance test coverage.
+
+### Analysis in this Iteration
+1. **Virtual Interface Task Calls Confirmed Working**:
+   - Previously thought to be missing functionality
+   - Task calls through virtual interfaces are actually supported
+   - No CIRCT changes needed for this feature
+
+2. **OpenTitan edn/entropy Script Updates Needed**:
+   - Failures are due to wrapper script issues, not CIRCT bugs
+   - Scripts need updates for proper port/parameter handling
+   - Not blocking CIRCT development
+
+3. **format-class-handle Test Enhanced**:
+   - Additional test coverage for class handle formatting
+   - Validates $display/$sformatf with class handles
+
+### Test Results
+| Suite | Status | Notes |
+|-------|--------|-------|
+| Lit Tests | **All pass** | No regressions, 21 XFAIL |
+| OpenTitan IPs | **16/16 tested (100%)** | All tested IPs pass |
+| AVIPs | **6/9 simulate** | APB, AHB, UART, I2S, AXI4, I3C |
+| yosys-sva BMC | **14/14 (100%)** | All pass |
+| sv-tests BMC | **23/23 (100%)** | All pass |
+| Verilator BMC | **17/17 (100%)** | All pass |
+
+### Status Summary
+- **Virtual interface tasks**: Working (no fix needed)
+- **OpenTitan edn/entropy**: Script issues (not CIRCT)
+- **AVIP coverage**: 6/9 protocols simulate successfully
+- **Remaining AVIP blockers**: SPI/JTAG/AXI4Lite have source bugs
+
+---
+
 ## Iteration 273 - January 31, 2026
 
 ### Goals
@@ -231,7 +269,7 @@ Fix AssocArrayIteratorOpConversion for function ref parameters.
    - **Files**: `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
    - **Tests**:
      - `test/Tools/circt-bmc/sva-xprop-rose-fell-sat-e2e.sv`
-     - `test/Tools/circt-bmc/sva-xprop-stable-sat-e2e.sv`
+     - `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`
 
 ### Test Results
 | Suite | Status | Notes |
