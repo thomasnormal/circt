@@ -1338,6 +1338,10 @@ static void collectSequenceOpsForBMC(Value seq,
     auto shiftedAntecedent = ltl::DelayOp::create(
         rewriter, implOp.getLoc(), implOp.getAntecedent(), delay,
         rewriter.getI64IntegerAttr(0));
+    if (auto clockAttr = delayOp->getAttr("bmc.clock"))
+      shiftedAntecedent->setAttr("bmc.clock", clockAttr);
+    if (auto edgeAttr = delayOp->getAttr("bmc.clock_edge"))
+      shiftedAntecedent->setAttr("bmc.clock_edge", edgeAttr);
     implOp.setOperand(0, shiftedAntecedent.getResult());
     implOp.setOperand(1, delayOp.getInput());
   }
@@ -1962,6 +1966,7 @@ struct VerifBoundedModelCheckingOpConversion
     };
 
     cloneSharedLTLSubtrees();
+    rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
 
     struct ClockInfo {
       StringAttr clockName;

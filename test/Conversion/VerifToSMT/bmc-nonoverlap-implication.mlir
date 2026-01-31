@@ -1,6 +1,8 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
 // CHECK-LABEL: func.func @bmc_circuit
+// Delay buffer should be sourced from the antecedent after shift-rewrite.
+// CHECK: return %arg0, %arg1, %arg0, {{%.+}}
 // Returns: orig outputs + delay buffer + non-final check (!smt.bool)
 // CHECK: return {{.*}} : !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool
 func.func @test_nonoverlap() -> i1 {
