@@ -4767,13 +4767,17 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
         return failure();
     }
 
-    // For local variables inside procedural blocks (llhd.process), use LLVM
-    // alloca instead of llhd.sig. This gives immediate memory semantics,
-    // which is required when variables are passed as ref parameters to
-    // functions. Signal semantics (with delta-cycle delays) don't work
-    // correctly with function inlining because the function expects immediate
-    // memory access.
-    if (op->getParentOfType<llhd::ProcessOp>()) {
+    // For local variables inside procedural blocks (llhd.process) or inside
+    // functions (func.func), use LLVM alloca instead of llhd.sig. This gives
+    // immediate memory semantics, which is required when:
+    // 1. Variables are passed as ref parameters to functions
+    // 2. Functions are inlined (they expect immediate memory access)
+    // 3. Functions are called from global constructors (llvm.global_ctors),
+    //    where no LLHD simulation context exists
+    // Signal semantics (with delta-cycle delays) only work correctly within
+    // the LLHD simulation runtime.
+    if (op->getParentOfType<llhd::ProcessOp>() ||
+        op->getParentOfType<func::FuncOp>()) {
       auto *ctx = rewriter.getContext();
       auto ptrTy = LLVM::LLVMPointerType::get(ctx);
       auto elementType = refType.getNestedType();
