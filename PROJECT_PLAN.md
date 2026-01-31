@@ -331,6 +331,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **BMC i1 clock checks**: removed XFAILs for
   `bmc-delay-i1-clock.mlir` and `bmc-nonfinal-check-i1-clock.mlir`
 - **BMC final edge check**: removed XFAIL for `bmc-final-check-edge.mlir`
+- **BMC multiclock past-buffer XFAIL**: corrected `bmc-multiclock-past-buffer-edge-conflict.mlir`
+  to use `!ltl.sequence` asserts (XFAIL retained; past lowering unsupported)
 - **BMC ltl.clock delay buffers**: clocked delay buffers now treat `ltl.clock`
   as a transparent wrapper, fixing explicit clock gating in delay-buffer tests
   (`bmc-delay-buffer-clock-op-negedge.mlir`, `bmc-delay-buffer-clock-op-edge-both.mlir`)

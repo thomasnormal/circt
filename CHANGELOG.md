@@ -1028,6 +1028,10 @@ Fix class member llhd.drv issue blocking UVM callbacks/iterators.
      when `bmc_clock_sources` is present (including invert handling).
    - **TEST**: `test/Conversion/VerifToSMT/bmc-clock-source-struct-invert.mlir` (XFAIL removed)
 
+12. **BMC Multiclock Past Buffer XFAIL Cleanup** (VerifToSMT.cpp):
+   - **TEST**: `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-edge-conflict.mlir`
+     corrected to assert `!ltl.sequence` (XFAIL retained; past lowering still unsupported).
+
 10. **BMC i1 Clocked Checks** (VerifToSMT.cpp):
    - **TEST**: `test/Conversion/VerifToSMT/bmc-delay-i1-clock.mlir` (XFAIL removed)
    - **TEST**: `test/Conversion/VerifToSMT/bmc-nonfinal-check-i1-clock.mlir` (XFAIL removed)
