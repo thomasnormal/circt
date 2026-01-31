@@ -3,7 +3,7 @@
 ## Iteration 267 - January 31, 2026
 
 ### Goals
-Fix UVM global constructor crash and expand OpenTitan coverage.
+Fix UVM global constructor crash, expand OpenTitan coverage, fix UVM factory registration.
 
 ### Fixed in this Iteration
 1. **DenseMap Reference Invalidation Bug** (LLHDProcessInterpreter.cpp):
@@ -14,27 +14,32 @@ Fix UVM global constructor crash and expand OpenTitan coverage.
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
    - **Impact**: UVM global constructors with `llhd.sig` now work correctly
 
-2. **New Unit Test**:
-   - `test/Tools/circt-sim/global-ctor-runtime-signals.mlir` - Tests global constructors that create runtime signals
+2. **Local Variable Lowering in Functions** (MooreToCore.cpp):
+   - **ROOT CAUSE**: Local variables inside `func::FuncOp` were using `llhd.sig` + `llhd.drv`
+   - When functions are called from global constructors (`llvm.global_ctors`), no LLHD runtime exists
+   - **FIX**: Extend alloca fix to cover `func::FuncOp` (not just `llhd::ProcessOp`)
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - **Impact**: UVM factory registration now works - `__deferred_init()` executes correctly
 
-3. **Expanded OpenTitan Coverage** (+6 IPs):
-   - **flash_ctrl_reg_top**: TEST PASSED (2372 signals, 21 processes)
-   - **lc_ctrl_regs_reg_top**: TEST PASSED (398 signals, 16 processes)
-   - **rom_ctrl_regs_reg_top**: TEST PASSED (183 signals, 16 processes)
-   - **sram_ctrl_regs_reg_top**: TEST PASSED (206 signals, 16 processes)
-   - **csrng_reg_top**: TEST PASSED (489 signals, 16 processes)
-   - **edn_reg_top**: TEST PASSED (337 signals, 12 processes)
-   - **Total OpenTitan coverage**: 16+ IPs now verified with circt-sim
+3. **Expanded OpenTitan Coverage** (40/42 = 95%):
+   - **reg_top IPs** (27 pass): All major register interfaces work
+   - **Full IPs** (13 pass): gpio, uart, timer_core, keymgr_dpe, i2c, prim_count, mbx, rv_dm, dma, etc.
+   - **alert_handler works** without delta overflow!
+
+4. **New Unit Test**:
+   - `test/Tools/circt-sim/global-ctor-runtime-signals.mlir` - Tests global constructors
 
 ### Test Results
 | Suite | Status | Notes |
 |-------|--------|-------|
-| **OpenTitan IPs** | 16+ pass | +6 new reg_tops verified |
+| **OpenTitan IPs** | 40/42 (95%) | Nearly complete coverage |
 | MooreToCore | 96/97 (99%) | 1 XFAIL expected |
 | circt-sim | 74/75 (99%) | 1 timeout (tlul-bfm) |
 | sv-tests BMC | 23/26 (100%) | 3 expected failures |
+| sv-tests LEC | 23/23 (100%) | All pass |
 | yosys SVA | 14/14 (100%) | No regressions |
 | verilator BMC | 17/17 (100%) | No regressions |
+| verilator LEC | 17/17 (100%) | All pass |
 
 ---
 
