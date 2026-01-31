@@ -14,7 +14,7 @@
 - Build tools: `ninja -C build circt-verilog` or `ninja -C build circt-opt`.
 - Regression tests: `ninja -C build check-circt`.
 - Unit tests: `ninja -C build check-circt-unittests` or `ctest --test-dir build`.
-- For local integration suites (if available): `~/mbit/*avip*`, `~/sv-tests/`, `~/verilator-verification/`.
+- For local integration suites (if available): `~/mbit/*avip*`, `~/sv-tests/`.
 
 ## Coding Style & Naming Conventions
 - Follow LLVM/CIRCT style: 2-space indentation, K&R braces, descriptive identifiers.
