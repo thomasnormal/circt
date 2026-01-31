@@ -641,10 +641,13 @@ private:
                                          mlir::LLVM::CallOp callOp);
 
   /// Interpret an LLVM function body.
+  /// If callOperands is provided, signal mappings are created for BlockArguments
+  /// when the corresponding call operand resolves to a signal ID.
   mlir::LogicalResult
   interpretLLVMFuncBody(ProcessId procId, mlir::LLVM::LLVMFuncOp funcOp,
                         llvm::ArrayRef<InterpretedValue> args,
-                        llvm::SmallVectorImpl<InterpretedValue> &results);
+                        llvm::SmallVectorImpl<InterpretedValue> &results,
+                        llvm::ArrayRef<mlir::Value> callOperands = {});
 
   /// Get the size in bytes for an LLVM type.
   unsigned getLLVMTypeSize(mlir::Type type);
@@ -789,6 +792,10 @@ private:
   /// Native memory regions returned by runtime helpers (e.g., assoc array refs).
   /// Maps base address to size in bytes.
   llvm::DenseMap<uint64_t, size_t> nativeMemoryBlocks;
+
+  /// Tracks valid associative array base addresses returned by __moore_assoc_create.
+  /// Used to distinguish properly-initialized arrays from uninitialized class members.
+  llvm::DenseSet<uint64_t> validAssocArrayAddresses;
 
   /// Global address counter for malloc and cross-process memory.
   /// This ensures no address overlap between different processes.

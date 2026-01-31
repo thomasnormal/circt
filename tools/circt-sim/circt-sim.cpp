@@ -829,6 +829,12 @@ LogicalResult SimulationContext::run() {
       llvm::outs().flush();
     }
 
+    // Check if simulation was terminated during execution (e.g., $finish called).
+    // This must be checked immediately after executeCurrentTime() to ensure
+    // termination is honored before any further processing.
+    if (!control.shouldContinue())
+      break;
+
     bool hasReadyProcesses = scheduler.hasReadyProcesses();
 
     if (deltasExecuted == 0) {

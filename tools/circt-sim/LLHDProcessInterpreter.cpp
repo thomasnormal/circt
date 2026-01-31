@@ -7466,6 +7466,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           return {nullptr, -1};  // Error case
         };
 
+        // Handle X (uninitialized) pointer values - don't crash on garbage addresses
+        if (lhsPtrVal.isX() || rhsPtrVal.isX()) {
+          // Result is indeterminate (X) if either input is X, but we return 0 for safety
+          setValue(procId, callOp.getResult(), InterpretedValue(APInt(32, 0, true)));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_cmp() - X input, returning 0\n");
+          return success();
+        }
+
         auto [lhsData, lhsLen] = extractString(lhsPtrVal.getUInt64());
         auto [rhsData, rhsLen] = extractString(rhsPtrVal.getUInt64());
 
@@ -7505,6 +7513,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       // Signature: __moore_string_len(ptr to struct{ptr,i64}) -> i32
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
         InterpretedValue ptrVal = getValue(procId, callOp.getOperand(0));
+
+        // Handle X (uninitialized) pointer values
+        if (ptrVal.isX()) {
+          setValue(procId, callOp.getResult(), InterpretedValue(APInt(32, 0, true)));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_len() - X input, returning 0\n");
+          return success();
+        }
+
         uint64_t structAddr = ptrVal.getUInt64();
 
         // Load the struct from memory
@@ -8089,6 +8105,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         void *arrayPtr = __moore_assoc_create(keySize, valueSize);
         uint64_t ptrVal = reinterpret_cast<uint64_t>(arrayPtr);
 
+        // Track this as a valid associative array address
+        validAssocArrayAddresses.insert(ptrVal);
+
         setValue(procId, callOp.getResult(), InterpretedValue(ptrVal, 64));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_create("
@@ -8103,9 +8122,33 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // The runtime determines string vs integer keys from the array header.
     if (calleeName == "__moore_assoc_get_ref") {
       if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
-        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
-        uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
-        int32_t valueSize = static_cast<int32_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
+        InterpretedValue arrayVal = getValue(procId, callOp.getOperand(0));
+        InterpretedValue keyVal = getValue(procId, callOp.getOperand(1));
+        InterpretedValue valueSizeVal = getValue(procId, callOp.getOperand(2));
+
+        // Handle X (uninitialized) values - return null pointer
+        if (arrayVal.isX() || keyVal.isX() || valueSizeVal.isX()) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref - X input, returning null\n");
+          return success();
+        }
+
+        uint64_t arrayAddr = arrayVal.getUInt64();
+        uint64_t keyAddr = keyVal.getUInt64();
+        int32_t valueSize = static_cast<int32_t>(valueSizeVal.getUInt64());
+
+        // Check if arrayAddr is null or not a valid associative array address.
+        // Valid addresses are those returned by __moore_assoc_create and tracked in
+        // validAssocArrayAddresses. This prevents crashes when accessing uninitialized
+        // class member arrays (which contain interpreter virtual addresses).
+        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+          // This is not a properly initialized associative array.
+          // Return null rather than crashing.
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref - uninitialized array at 0x"
+                                  << llvm::format_hex(arrayAddr, 16) << ", returning null\n");
+          return success();
+        }
 
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
@@ -8124,6 +8167,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         if (keyBlock && keyBlock->initialized) {
           // Copy up to 16 bytes of key data
+          // Safety check: make sure we don't underflow
+          if (keyOffset > keyBlock->data.size()) {
+            setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+            return success();
+          }
           size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
           std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
 
