@@ -231,6 +231,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 1. **Stack overflow in evaluateContinuousValueImpl**: Complex OpenTitan IPs (gpio, uart, aes_reg_top) crash due to deep recursion through combinational logic chains
 2. **~8 Hierarchical Name XFAIL Tests**: Signal access through instance hierarchy incomplete for some patterns
 3. **19 XFAIL Tests**: Expected failures that require architectural changes to fix
+4. **OpenTitan gpio_no_alerts sim timeout**: `utils/run_opentitan_circt_sim.sh gpio_no_alerts`
+   still times out even with short `--timeout`/`--max-cycles`, suggesting a
+   possible hang or timeout enforcement issue in circt-sim.
+
+### Formal/BMC/LEC Long-Term Roadmap (2026)
+1. **Clock canonicalization**: normalize derived clock expressions early and
+   assign stable clock IDs across LowerToBMC/VerifToSMT to avoid equivalence
+   heuristics and improve diagnostics.
+2. **Complete 4-state modeling**: cover remaining ops/extnets in BMC and align
+   unknown propagation with SV semantics; add end-to-end regressions.
+3. **LEC strict resolution**: implement sound multi-driver/inout resolution
+   semantics (tri-state merging + diagnostics) for strict equivalence.
 
 **Iteration 274 Achievements (Completed):**
 - **XFAIL Reduced from 23 to 19**: 4 tests fixed through various improvements
