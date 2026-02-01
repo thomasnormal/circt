@@ -57,6 +57,17 @@
 - `build/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | build/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` (14 tests, 2 VHDL skips, 0 failures)
 
+## Iteration 283 - February 1, 2026
+
+### MooreToCore 4-State Out-of-Bounds Extract
+- 4-state `moore.extract` now yields X for out-of-bounds bits instead of 0.
+- Regression: `test/Conversion/MooreToCore/basic.mlir` (ExtractOutOfBounds4State).
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | build/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` (total=26 pass=16 xfail=3 error=7 skip=1010)
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` (directory missing)
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates

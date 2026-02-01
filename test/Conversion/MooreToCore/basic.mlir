@@ -413,6 +413,17 @@ moore.module @NetLogic(out a : !moore.l1, out b : !moore.l1, out c : !moore.l1) 
   moore.output %0, %1, %2 : !moore.l1, !moore.l1, !moore.l1
 }
 
+// CHECK-LABEL: hw.module @ExtractOutOfBounds4State
+// CHECK-DAG: [[UNK_OOB:%.+]] = hw.constant -1 : i3
+// CHECK-DAG: [[VAL_OOB:%.+]] = hw.constant 0 : i3
+// CHECK-DAG: [[VAL_CONCAT:%.+]] = comb.concat %{{.+}}, [[VAL_OOB]] : i1, i3
+// CHECK-DAG: [[UNK_CONCAT:%.+]] = comb.concat %{{.+}}, [[UNK_OOB]] : i1, i3
+// CHECK: hw.struct_create ([[VAL_CONCAT]], [[UNK_CONCAT]]) : !hw.struct<value: i4, unknown: i4>
+moore.module @ExtractOutOfBounds4State(in %in : !moore.l2, out out : !moore.l4) {
+  %0 = moore.extract %in from 1 : !moore.l2 -> !moore.l4
+  moore.output %0 : !moore.l4
+}
+
 // CHECK-LABEL: hw.module @UnpackedArray
 moore.module @UnpackedArray(in %arr : !moore.uarray<2 x i32>, in %sel : !moore.i1, out c : !moore.i32) {
   // CHECK: hw.array_get %arr[%sel] : !hw.array<2xi32>, i1
