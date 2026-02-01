@@ -100,7 +100,7 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     verilog_args+=("${extra_args[@]}")
   fi
 
-  if ! "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" "$sv" > "$mlir" \
+  if ! "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "$sv" > "$mlir" \
       2> "$verilog_log"; then
     printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
@@ -108,8 +108,8 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     continue
   fi
 
-  opt_args=("--strip-llhd-processes" "--lower-ltl-to-core"
-    "--lower-clocked-assert-like")
+  opt_args=("--lower-llhd-ref-ports" "--strip-llhd-interface-signals"
+    "--lower-ltl-to-core" "--lower-clocked-assert-like")
   if [[ -n "$CIRCT_OPT_ARGS" ]]; then
     read -r -a extra_opt_args <<<"$CIRCT_OPT_ARGS"
     opt_args+=("${extra_opt_args[@]}")

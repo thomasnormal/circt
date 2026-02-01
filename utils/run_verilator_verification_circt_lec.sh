@@ -141,7 +141,7 @@ for suite in "${suites[@]}"; do
     lec_log="$tmpdir/${base}.circt-lec.log"
     top_for_file="$(detect_top "$sv" "$TOP")"
 
-    cmd=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
+    cmd=("$CIRCT_VERILOG" --ir-hw --timescale=1ns/1ns --single-unit \
       -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
     if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
       cmd+=("--no-uvm-auto-include")
@@ -163,8 +163,8 @@ for suite in "${suites[@]}"; do
       continue
     fi
 
-    opt_cmd=("$CIRCT_OPT" --strip-llhd-processes --lower-ltl-to-core
-      --lower-clocked-assert-like)
+    opt_cmd=("$CIRCT_OPT" --lower-llhd-ref-ports --strip-llhd-interface-signals
+      --lower-ltl-to-core --lower-clocked-assert-like)
     if [[ -n "$CIRCT_OPT_ARGS" ]]; then
       read -r -a extra_opt_args <<<"$CIRCT_OPT_ARGS"
       opt_cmd+=("${extra_opt_args[@]}")
