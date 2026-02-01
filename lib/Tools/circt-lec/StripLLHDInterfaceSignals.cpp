@@ -10,6 +10,7 @@
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Support/BoolCondition.h"
+#include "circt/Support/FourStateUtils.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-lec/Passes.h"
@@ -385,92 +386,6 @@ static Value adjustIntegerWidth(OpBuilder &builder, Value value,
   return comb::ExtractOp::create(builder, loc, value, 0, targetWidth);
 }
 
-static bool isFourStateStructType(Type type) {
-  auto structTy = dyn_cast<hw::StructType>(type);
-  if (!structTy)
-    return false;
-  auto elements = structTy.getElements();
-  if (elements.size() != 2)
-    return false;
-  if (!elements[0].name || !elements[1].name)
-    return false;
-  if (elements[0].name.getValue() != "value" ||
-      elements[1].name.getValue() != "unknown")
-    return false;
-  auto valueWidth = hw::getBitWidth(elements[0].type);
-  auto unknownWidth = hw::getBitWidth(elements[1].type);
-  if (valueWidth <= 0 || unknownWidth <= 0 || valueWidth != unknownWidth)
-    return false;
-  return true;
-}
-
-static Value resolveFourStatePair(OpBuilder &builder, Location loc, Value lhs,
-                                  Value rhs) {
-  if (lhs.getType() != rhs.getType())
-    return Value();
-  if (!isFourStateStructType(lhs.getType()))
-    return Value();
-  auto structTy = cast<hw::StructType>(lhs.getType());
-  auto valueTy = structTy.getElements()[0].type;
-  auto width = hw::getBitWidth(valueTy);
-  if (width <= 0)
-    return Value();
-
-  Value lhsVal = hw::StructExtractOp::create(
-                     builder, loc, lhs, structTy.getElements()[0].name)
-                     .getResult();
-  Value lhsUnk = hw::StructExtractOp::create(
-                     builder, loc, lhs, structTy.getElements()[1].name)
-                     .getResult();
-  Value rhsVal = hw::StructExtractOp::create(
-                     builder, loc, rhs, structTy.getElements()[0].name)
-                     .getResult();
-  Value rhsUnk = hw::StructExtractOp::create(
-                     builder, loc, rhs, structTy.getElements()[1].name)
-                     .getResult();
-
-  auto ones =
-      hw::ConstantOp::create(builder, loc, APInt::getAllOnes(width)).getResult();
-  Value lhsKnown = comb::XorOp::create(builder, loc, lhsUnk, ones).getResult();
-  Value rhsKnown = comb::XorOp::create(builder, loc, rhsUnk, ones).getResult();
-  Value valueDiff = comb::XorOp::create(builder, loc, lhsVal, rhsVal).getResult();
-  Value knownBoth =
-      comb::AndOp::create(builder, loc, lhsKnown, rhsKnown).getResult();
-  Value conflict =
-      comb::AndOp::create(builder, loc, valueDiff, knownBoth).getResult();
-  Value unknownOut =
-      comb::OrOp::create(builder, loc, ValueRange{lhsUnk, rhsUnk, conflict},
-                         /*twoState=*/false)
-          .getResult();
-
-  Value lhsKnownVal =
-      comb::AndOp::create(builder, loc, lhsVal, lhsKnown).getResult();
-  Value rhsKnownVal =
-      comb::AndOp::create(builder, loc, rhsVal, rhsKnown).getResult();
-  Value valueOut = comb::OrOp::create(
-                       builder, loc, ValueRange{lhsKnownVal, rhsKnownVal},
-                       /*twoState=*/false)
-                       .getResult();
-
-  return hw::StructCreateOp::create(builder, loc, structTy,
-                                    ValueRange{valueOut, unknownOut})
-      .getResult();
-}
-
-static Value resolveFourStateValues(OpBuilder &builder, Location loc,
-                                    ArrayRef<Value> values) {
-  if (values.empty())
-    return Value();
-  Value current = values.front();
-  for (Value next : values.drop_front()) {
-    Value resolved = resolveFourStatePair(builder, loc, current, next);
-    if (!resolved)
-      return Value();
-    current = resolved;
-  }
-  return current;
-}
-
 static Value createZeroValue(OpBuilder &builder, Location loc, Type type) {
   int64_t width = hw::getBitWidth(type);
   if (width <= 0)
@@ -507,6 +422,96 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   }
 
   Block &body = combOp.getBody().front();
+
+  auto getLocalRefPtr = [](Value ref) -> Value {
+    if (ref.getDefiningOp<llhd::SignalOp>())
+      return {};
+    if (auto castOp =
+            ref.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() == 1 &&
+          isa<LLVM::LLVMPointerType>(castOp.getInputs()[0].getType()))
+        return castOp.getInputs()[0];
+    }
+    return {};
+  };
+
+  auto getPtrValueType = [](Value ptr, Type fallback) -> Type {
+    Type valueType;
+    for (auto *user : ptr.getUsers()) {
+      if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+        auto storeTy = store.getValue().getType();
+        if (!valueType)
+          valueType = storeTy;
+        else if (valueType != storeTy)
+          return {};
+      } else if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
+        auto loadTy = load.getResult().getType();
+        if (!valueType)
+          valueType = loadTy;
+        else if (valueType != loadTy)
+          return {};
+      }
+    }
+    if (valueType)
+      return valueType;
+    if (fallback && LLVM::isCompatibleType(fallback))
+      return fallback;
+    return {};
+  };
+
+  SmallVector<llhd::ProbeOp> localProbes;
+  body.walk([&](llhd::ProbeOp probe) {
+    if (getLocalRefPtr(probe.getSignal()))
+      localProbes.push_back(probe);
+  });
+  for (auto probe : localProbes) {
+    Value ptr = getLocalRefPtr(probe.getSignal());
+    if (!ptr)
+      continue;
+    auto ptrValueType = getPtrValueType(ptr, probe.getResult().getType());
+    if (!ptrValueType)
+      return probe.emitError(
+          "unsupported llhd.probe on local ref without LLVM value type");
+    OpBuilder builder(probe);
+    Value loaded =
+        LLVM::LoadOp::create(builder, probe.getLoc(), ptrValueType, ptr);
+    if (loaded.getType() != probe.getResult().getType())
+      loaded = UnrealizedConversionCastOp::create(
+                   builder, probe.getLoc(), probe.getResult().getType(), loaded)
+                   .getResult(0);
+    probe.getResult().replaceAllUsesWith(loaded);
+    probe.erase();
+  }
+
+  SmallVector<llhd::DriveOp> localDrives;
+  body.walk([&](llhd::DriveOp drive) {
+    if (getLocalRefPtr(drive.getSignal()))
+      localDrives.push_back(drive);
+  });
+  for (auto drive : localDrives) {
+    Value ptr = getLocalRefPtr(drive.getSignal());
+    if (!ptr)
+      continue;
+    if (drive.getEnable())
+      return drive.emitError(
+          "unsupported conditional drive on local ref in LEC");
+    if (!drive.getTime().getDefiningOp<llhd::ConstantTimeOp>())
+      return drive.emitError(
+          "unsupported non-constant drive time on local ref in LEC");
+    auto ptrValueType = getPtrValueType(ptr, drive.getValue().getType());
+    if (!ptrValueType)
+      return drive.emitError(
+          "unsupported llhd.drive on local ref without LLVM value type");
+    OpBuilder builder(drive);
+    Value storedValue = drive.getValue();
+    if (storedValue.getType() != ptrValueType)
+      storedValue = UnrealizedConversionCastOp::create(
+                        builder, drive.getLoc(), ptrValueType, storedValue)
+                        .getResult(0);
+    LLVM::StoreOp::create(builder, drive.getLoc(), storedValue, ptr);
+    drive.erase();
+  }
+
   SmallVector<comb::MuxOp> refMuxes;
   body.walk([&](comb::MuxOp mux) {
     if (isa<llhd::RefType>(mux.getType()))
@@ -600,6 +605,21 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     return llvm::any_of(drives, [](llhd::DriveOp drive) {
       return drive.getEnable() != nullptr;
     });
+  };
+  auto canResolveEnabledDrives = [&](ArrayRef<llhd::DriveOp> drives) -> bool {
+    if (drives.size() < 2)
+      return false;
+    Type valueType;
+    for (auto drive : drives) {
+      Value val = unwrapStoredValue(drive.getValue());
+      if (!val)
+        return false;
+      if (!valueType)
+        valueType = val.getType();
+      else if (val.getType() != valueType)
+        return false;
+    }
+    return valueType && isFourStateStructType(valueType);
   };
 
   SmallVector<llhd::ProbeOp> probes;
@@ -830,15 +850,75 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         }
       }
 
-      if (probesAfterDrives && firstProbe) {
+      bool inputsDominateProbe = false;
+      if (firstProbe && !probesAfterDrives) {
+        auto dominatesProbe = [&](Value value) -> bool {
+          if (!value)
+            return false;
+          if (auto arg = dyn_cast<BlockArgument>(value))
+            return arg.getOwner() == firstProbe->getBlock();
+          if (auto *def = value.getDefiningOp()) {
+            if (def->getBlock() == firstProbe->getBlock())
+              return def->isBeforeInBlock(firstProbe);
+            return dom.dominates(def, firstProbe);
+          }
+          return false;
+        };
+        inputsDominateProbe =
+            llvm::all_of(drives, [&](llhd::DriveOp drive) {
+              if (!dominatesProbe(drive.getValue()))
+                return false;
+              if (Value enable = drive.getEnable())
+                return dominatesProbe(enable);
+              return true;
+            });
+      }
+
+      if ((probesAfterDrives || inputsDominateProbe) && firstProbe) {
         SmallVector<Value> driveValues;
+        SmallVector<Value> driveEnables;
+        SmallVector<unsigned> driveStrength0;
+        SmallVector<unsigned> driveStrength1;
+        bool anyStrength = false;
         driveValues.reserve(drives.size());
+        driveEnables.reserve(drives.size());
+        driveStrength0.reserve(drives.size());
+        driveStrength1.reserve(drives.size());
+        OpBuilder resolveBuilder(firstProbe);
+        Value enableTrue = hw::ConstantOp::create(
+                               resolveBuilder, firstProbe->getLoc(),
+                               resolveBuilder.getI1Type(), 1)
+                               .getResult();
         for (auto drive : drives)
           driveValues.push_back(drive.getValue());
-        OpBuilder resolveBuilder(firstProbe);
-        Value resolved = resolveFourStateValues(resolveBuilder,
-                                                firstProbe->getLoc(),
-                                                driveValues);
+        unsigned defaultStrength =
+            static_cast<unsigned>(llhd::DriveStrength::Strong);
+        for (auto drive : drives) {
+          driveEnables.push_back(drive.getEnable() ? drive.getEnable()
+                                                   : enableTrue);
+          auto s0Attr =
+              drive->getAttrOfType<llhd::DriveStrengthAttr>("strength0");
+          auto s1Attr =
+              drive->getAttrOfType<llhd::DriveStrengthAttr>("strength1");
+          if (s0Attr || s1Attr)
+            anyStrength = true;
+          driveStrength0.push_back(
+              s0Attr ? static_cast<unsigned>(s0Attr.getValue())
+                     : defaultStrength);
+          driveStrength1.push_back(
+              s1Attr ? static_cast<unsigned>(s1Attr.getValue())
+                     : defaultStrength);
+        }
+        Value resolved = anyStrength
+                             ? resolveFourStateValuesWithStrength(
+                                   resolveBuilder, firstProbe->getLoc(),
+                                   driveValues, driveEnables, driveStrength0,
+                                   driveStrength1,
+                                   static_cast<unsigned>(
+                                       llhd::DriveStrength::HighZ))
+                             : resolveFourStateValuesWithEnable(
+                                   resolveBuilder, firstProbe->getLoc(),
+                                   driveValues, driveEnables);
         if (resolved) {
           for (auto probe : probes) {
             probe.getResult().replaceAllUsesWith(resolved);
@@ -911,13 +991,16 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     bool allProbesSimplePath = llvm::all_of(probes, [&](llhd::ProbeOp p) {
       return probePaths.lookup(p).empty();
     });
+    bool resolveEnabledDrives =
+        strictMode && canResolveEnabledDrives(drives) &&
+        hasEnabledDrive(drives);
     // In strict mode, reject multiple conditional drives unless they are
     // complementary enables on exactly two drives.
     bool hasMultipleUnconditionalDrives =
         drives.size() > 1 &&
         llvm::any_of(drives, [](llhd::DriveOp d) { return !d.getEnable(); });
     if (strictMode && drives.size() > 1 && hasEnabledDrive(drives) &&
-        !hasComplementaryEnables(drives) &&
+        !resolveEnabledDrives && !hasComplementaryEnables(drives) &&
         !hasExclusiveEnables(drives, builder))
       return sigOp.emitError(
           "LLHD signal requires abstraction; rerun without --strict-llhd");
@@ -927,6 +1010,96 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           "LLHD signal requires abstraction; rerun without --strict-llhd");
 
     if (allDrivesHaveTime && allDrivesSimplePath && allProbesSimplePath) {
+      if (resolveEnabledDrives) {
+        SmallVector<Value> activeValues;
+        SmallVector<Value> activeEnables;
+        SmallVector<unsigned> activeStrength0;
+        SmallVector<unsigned> activeStrength1;
+        bool activeAnyStrength = false;
+        Value enableTrue;
+        auto getEnableTrue = [&]() -> Value {
+          if (enableTrue)
+            return enableTrue;
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(singleBlock);
+          enableTrue = hw::ConstantOp::create(
+                           builder, sigOp.getLoc(), builder.getI1Type(), 1)
+                           .getResult();
+          return enableTrue;
+        };
+        unsigned defaultStrength =
+            static_cast<unsigned>(llhd::DriveStrength::Strong);
+
+        for (auto it = singleBlock->begin(); it != singleBlock->end();) {
+          Operation *op = &*it++;
+          if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
+            if (driveOp.getSignal() == sigOp.getResult()) {
+              Value driveValue = unwrapStoredValue(driveOp.getValue());
+              if (!driveValue)
+                return driveOp.emitError(
+                    "failed to resolve LLHD drive value");
+              Value enable =
+                  driveOp.getEnable() ? driveOp.getEnable() : getEnableTrue();
+              auto s0Attr =
+                  driveOp->getAttrOfType<llhd::DriveStrengthAttr>("strength0");
+              auto s1Attr =
+                  driveOp->getAttrOfType<llhd::DriveStrengthAttr>("strength1");
+              if (s0Attr || s1Attr)
+                activeAnyStrength = true;
+              activeValues.push_back(driveValue);
+              activeEnables.push_back(enable);
+              activeStrength0.push_back(
+                  s0Attr ? static_cast<unsigned>(s0Attr.getValue())
+                         : defaultStrength);
+              activeStrength1.push_back(
+                  s1Attr ? static_cast<unsigned>(s1Attr.getValue())
+                         : defaultStrength);
+              driveOp.erase();
+            }
+            continue;
+          }
+          if (auto probe = dyn_cast<llhd::ProbeOp>(op)) {
+            if (probe.getSignal() == sigOp.getResult()) {
+              Value replacement;
+              if (activeValues.empty()) {
+                replacement = sigOp.getInit();
+              } else {
+                builder.setInsertionPoint(probe);
+                replacement =
+                    activeAnyStrength
+                        ? resolveFourStateValuesWithStrength(
+                              builder, probe.getLoc(), activeValues,
+                              activeEnables, activeStrength0, activeStrength1,
+                              static_cast<unsigned>(
+                                  llhd::DriveStrength::HighZ))
+                        : resolveFourStateValuesWithEnable(
+                              builder, probe.getLoc(), activeValues,
+                              activeEnables);
+              }
+              if (!replacement ||
+                  replacement.getType() != probe.getResult().getType())
+                return probe.emitError(
+                    "failed to resolve LLHD multi-drive signal value");
+              probe.getResult().replaceAllUsesWith(replacement);
+              probe.erase();
+            }
+            continue;
+          }
+        }
+        for (Operation *refOp : llvm::reverse(derivedRefs)) {
+          if (refOp->use_empty())
+            refOp->erase();
+        }
+        if (sigOp.use_empty()) {
+          Value init = sigOp.getInit();
+          sigOp.erase();
+          if (auto *def = init.getDefiningOp())
+            if (def->use_empty())
+              def->erase();
+        }
+        return success();
+      }
+
       // Build a mux chain: for each drive, if enabled select its value,
       // otherwise keep the previous value.
       Value current = sigOp.getInit();
