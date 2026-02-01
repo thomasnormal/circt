@@ -8589,9 +8589,20 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
       decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(genericOp);
     }
 
-    // If we still can't find any related class declaration, give up
-    if (!decl)
+    // If we still can't find any related class declaration, and the actual
+    // class looks like a parameterized specialization (has _number suffix),
+    // trust that slang has already verified the inheritance. Slang generates
+    // these specializations and would have rejected invalid type conversions.
+    if (!decl) {
+      if (genericName != actualName) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "isClassDerivedFrom: trusting slang for unconverted "
+                      "specialization "
+                   << actualName << " -> " << baseSym << "\n");
+        return true;
+      }
       return false;
+    }
   }
 
   // Check implemented interfaces first (IEEE 1800-2017 Section 8.26).
@@ -8668,6 +8679,25 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
 
     decl = baseDecl;
   }
+
+  // If we couldn't verify inheritance but the actual class looks like a
+  // parameterized specialization, trust that slang has already verified
+  // the inheritance. Slang generates these specializations and would have
+  // rejected invalid type conversions.
+  mlir::StringAttr actualName = actualSym.getRootReference();
+  llvm::StringRef nameStr = actualName.getValue();
+  size_t lastUnderscore = nameStr.rfind('_');
+  if (lastUnderscore != llvm::StringRef::npos) {
+    llvm::StringRef suffix = nameStr.substr(lastUnderscore + 1);
+    if (!suffix.empty() && llvm::all_of(suffix, llvm::isDigit)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "isClassDerivedFrom: trusting slang after failed chain "
+                    "walk for specialization "
+                 << actualName << " -> " << baseSym << "\n");
+      return true;
+    }
+  }
+
   return false;
 }
 

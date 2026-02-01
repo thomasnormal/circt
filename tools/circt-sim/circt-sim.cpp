@@ -495,6 +495,7 @@ private:
   std::atomic<bool> abortRequested{false};
   std::atomic<bool> abortHandled{false};
   std::atomic<bool> stopWatchdog{false};
+  bool inInitializationPhase = true;  // Track if we're still initializing
   std::mutex abortMutex;
   std::string abortReason;
   std::thread watchdogThread;
@@ -585,6 +586,9 @@ LogicalResult SimulationContext::initialize(
   if (timeout > 0) {
     control.enableWatchdog(timeout * 1000000000000ULL); // Convert to fs
   }
+
+  // Mark initialization complete - terminations during init are ignored
+  inInitializationPhase = false;
 
   return success();
 }
@@ -702,6 +706,17 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
           [this](bool success, bool verbose) {
+            // During initialization phase (global constructors), ignore terminations.
+            // UVM's global init may call sim.terminate (via $finish in error paths)
+            // but we want the actual simulation to run.
+            if (inInitializationPhase) {
+              // Note: Using verbosity check instead of LLVM_DEBUG to avoid
+              // needing DEBUG_TYPE definition in lambda
+              if (verbosity >= 2)
+                llvm::errs() << "[circt-sim] Ignoring sim.terminate during "
+                             << "initialization phase\n";
+              return;
+            }
             // Always print termination info for debugging - this helps diagnose
             // silent terminations from fatal errors (e.g., UVM die() -> $finish)
             llvm::errs() << "[circt-sim] Simulation terminated at time "

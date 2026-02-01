@@ -8248,6 +8248,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   bool skipToResumeOp = (resumeBlock != nullptr);
 
   while (currentBlock && opCount < maxOps) {
+    bool tookBranch = false;  // Track if we branched to another block
     for (auto opIt = currentBlock->begin(); opIt != currentBlock->end();
          ++opIt) {
       Operation &op = *opIt;
@@ -8287,6 +8288,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           setValue(procId, arg, getValue(procId, operand));
         }
         currentBlock = dest;
+        tookBranch = true;
         break;
       }
 
@@ -8309,6 +8311,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           }
         }
         currentBlock = dest;
+        tookBranch = true;
         break;
       }
 
@@ -8358,7 +8361,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     }
     // If we finished the block without a branch, we're done with this block
     // Move to the next block or exit
-    currentBlock = nullptr;
+    if (!tookBranch)
+      currentBlock = nullptr;
   }
 
   return failure();
