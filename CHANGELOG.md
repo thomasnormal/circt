@@ -352,8 +352,12 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
 - **Problem**: Derived clock key hashing lacked unit coverage for commutative
   structural equivalence and root/constant handling.
 - **Fix**: Added unit tests to validate `getI1ValueKey` for root/const keys and
-  commutative/associative structural hashing.
-- **Files**: `unittests/Support/I1ValueSimplifierTest.cpp`
+  commutative/associative structural hashing. Extended root tracing to follow
+  transparent derived clock ops (gate/mux/invert/div with constant controls) and
+  added coverage for those cases.
+- **Files**:
+  - `include/circt/Support/I1ValueSimplifier.h`
+  - `unittests/Support/I1ValueSimplifierTest.cpp`
 
 **8. BMC multi-drive 4-state resolution - ADDED**
 - **Problem**: Multiple unconditional LLHD drives on 4-state signals were

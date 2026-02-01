@@ -162,6 +162,64 @@ TEST(I1ValueSimplifierTest, FromClockDerivedSimplifies) {
   EXPECT_TRUE(simplifiedInv.invert);
 }
 
+TEST(I1ValueSimplifierTest, TraceRootThroughDerivedClockOps) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("clk0"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("clk1"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto clk0 = top.getBodyBlock()->getArgument(0);
+  auto clk1 = top.getBodyBlock()->getArgument(1);
+  auto one = hw::ConstantOp::create(builder, loc, i1, 1);
+  auto zero = hw::ConstantOp::create(builder, loc, i1, 0);
+
+  auto toClock0 = seq::ToClockOp::create(builder, loc, clk0);
+  auto toClock1 = seq::ToClockOp::create(builder, loc, clk1);
+
+  auto gated = seq::ClockGateOp::create(builder, loc, toClock0, one);
+  auto fromGate = seq::FromClockOp::create(builder, loc, gated);
+  BlockArgument rootGate;
+  EXPECT_TRUE(traceI1ValueRoot(fromGate.getResult(), rootGate));
+  EXPECT_EQ(rootGate, clk0);
+
+  auto gatedOff = seq::ClockGateOp::create(builder, loc, toClock0, zero);
+  auto fromGateOff = seq::FromClockOp::create(builder, loc, gatedOff);
+  BlockArgument rootGateOff;
+  EXPECT_TRUE(traceI1ValueRoot(fromGateOff.getResult(), rootGateOff));
+  EXPECT_FALSE(rootGateOff);
+
+  auto muxed = seq::ClockMuxOp::create(builder, loc, one, toClock0, toClock1);
+  auto fromMux = seq::FromClockOp::create(builder, loc, muxed);
+  BlockArgument rootMux;
+  EXPECT_TRUE(traceI1ValueRoot(fromMux.getResult(), rootMux));
+  EXPECT_EQ(rootMux, clk0);
+
+  auto inverted = seq::ClockInverterOp::create(builder, loc, toClock0);
+  auto fromInv = seq::FromClockOp::create(builder, loc, inverted);
+  BlockArgument rootInv;
+  EXPECT_TRUE(traceI1ValueRoot(fromInv.getResult(), rootInv));
+  EXPECT_EQ(rootInv, clk0);
+
+  auto div = seq::ClockDividerOp::create(builder, loc, toClock0,
+                                         builder.getI64IntegerAttr(0));
+  auto fromDiv = seq::FromClockOp::create(builder, loc, div);
+  BlockArgument rootDiv;
+  EXPECT_TRUE(traceI1ValueRoot(fromDiv.getResult(), rootDiv));
+  EXPECT_EQ(rootDiv, clk0);
+}
+
 TEST(I1ValueSimplifierTest, FourStateClockGateSimplifies) {
   MLIRContext context;
   context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
