@@ -16,6 +16,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
 
@@ -37,6 +38,116 @@ inline std::optional<bool> getConstI1Value(mlir::Value val) {
     }
   }
   return std::nullopt;
+}
+
+inline bool isFourStateStructType(mlir::Type type) {
+  auto structTy = llvm::dyn_cast<hw::StructType>(type);
+  if (!structTy)
+    return false;
+  auto elements = structTy.getElements();
+  if (elements.size() != 2)
+    return false;
+  if (elements[0].name.getValue() != "value")
+    return false;
+  if (elements[1].name.getValue() != "unknown")
+    return false;
+  return true;
+}
+
+inline mlir::Value getConcatOperandForExtract(comb::ExtractOp extractOp) {
+  auto concat = extractOp.getInput().getDefiningOp<comb::ConcatOp>();
+  if (!concat)
+    return mlir::Value();
+  auto extractTy = llvm::dyn_cast<mlir::IntegerType>(extractOp.getType());
+  if (!extractTy)
+    return mlir::Value();
+  unsigned extractWidth = extractTy.getWidth();
+  unsigned lowBit = extractOp.getLowBit();
+  unsigned offset = 0;
+  auto operands = concat.getOperands();
+  if (operands.empty())
+    return mlir::Value();
+  for (size_t index = operands.size(); index-- > 0;) {
+    auto operand = operands[index];
+    auto operandTy = llvm::dyn_cast<mlir::IntegerType>(operand.getType());
+    if (!operandTy)
+      return mlir::Value();
+    unsigned width = operandTy.getWidth();
+    if (lowBit == offset && extractWidth == width)
+      return operand;
+    offset += width;
+  }
+  return mlir::Value();
+}
+
+inline mlir::Value getStructFieldBase(mlir::Value val,
+                                      llvm::StringRef fieldName) {
+  if (auto extract = val.getDefiningOp<hw::StructExtractOp>()) {
+    auto fieldAttr = extract.getFieldNameAttr();
+    if (!fieldAttr || fieldAttr.getValue().empty()) {
+      auto structTy =
+          llvm::dyn_cast<hw::StructType>(extract.getInput().getType());
+      if (structTy) {
+        auto idx = extract.getFieldIndex();
+        auto elements = structTy.getElements();
+        if (idx < elements.size())
+          fieldAttr = elements[idx].name;
+      }
+    }
+    if (fieldAttr && fieldAttr.getValue() == fieldName &&
+        isFourStateStructType(extract.getInput().getType()))
+      return extract.getInput();
+  }
+  if (auto result = llvm::dyn_cast<mlir::OpResult>(val)) {
+    if (auto explode = llvm::dyn_cast<hw::StructExplodeOp>(result.getOwner())) {
+      auto structTy =
+          llvm::dyn_cast<hw::StructType>(explode.getInput().getType());
+      if (structTy && isFourStateStructType(structTy)) {
+        auto idx = result.getResultNumber();
+        auto elements = structTy.getElements();
+        if (idx < elements.size() && elements[idx].name.getValue() == fieldName)
+          return explode.getInput();
+      }
+    }
+  }
+  if (auto extractOp = val.getDefiningOp<comb::ExtractOp>()) {
+    if (auto operand = getConcatOperandForExtract(extractOp))
+      return getStructFieldBase(operand, fieldName);
+  }
+  return mlir::Value();
+}
+
+inline mlir::Value stripXorConstTrue(mlir::Value val) {
+  auto xorOp = val.getDefiningOp<comb::XorOp>();
+  if (!xorOp)
+    return mlir::Value();
+  mlir::Value nonConst;
+  bool parity = false;
+  for (mlir::Value operand : xorOp.getOperands()) {
+    if (auto literal = getConstI1Value(operand)) {
+      parity ^= *literal;
+      continue;
+    }
+    if (nonConst)
+      return mlir::Value();
+    nonConst = operand;
+  }
+  if (!nonConst || !parity)
+    return mlir::Value();
+  return nonConst;
+}
+
+inline mlir::Value matchFourStateClockGate(mlir::Value lhs, mlir::Value rhs) {
+  auto lhsBase = getStructFieldBase(lhs, "value");
+  if (!lhsBase)
+    return mlir::Value();
+  auto rhsNotUnknown = stripXorConstTrue(rhs);
+  if (!rhsNotUnknown)
+    return mlir::Value();
+  auto rhsBase = getStructFieldBase(rhsNotUnknown, "unknown");
+  if (!rhsBase || rhsBase != lhsBase)
+    return mlir::Value();
+  return lhs;
 }
 
 struct SimplifiedI1Value {
@@ -65,10 +176,19 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
       continue;
     }
     if (auto extract = value.getDefiningOp<hw::StructExtractOp>()) {
+      if (auto fieldAttr = extract.getFieldNameAttr()) {
+        if ((fieldAttr.getValue() == "value" ||
+             fieldAttr.getValue() == "unknown") &&
+            isFourStateStructType(extract.getInput().getType()))
+          break;
+      }
       value = extract.getInput();
       continue;
     }
     if (auto extractOp = value.getDefiningOp<comb::ExtractOp>()) {
+      if (getStructFieldBase(value, "value") ||
+          getStructFieldBase(value, "unknown"))
+        break;
       value = extractOp.getInput();
       continue;
     }
@@ -101,6 +221,18 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
       }
     }
     if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+      if (andOp.getNumOperands() == 2) {
+        if (auto gated = matchFourStateClockGate(andOp.getOperand(0),
+                                                 andOp.getOperand(1))) {
+          value = gated;
+          continue;
+        }
+        if (auto gated = matchFourStateClockGate(andOp.getOperand(1),
+                                                 andOp.getOperand(0))) {
+          value = gated;
+          continue;
+        }
+      }
       mlir::SmallVector<mlir::Value> nonConst;
       bool sawFalse = false;
       for (mlir::Value operand : andOp.getOperands()) {
