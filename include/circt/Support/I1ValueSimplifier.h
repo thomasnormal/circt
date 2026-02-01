@@ -290,6 +290,29 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
         continue;
       }
     }
+    if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
+      auto predicate = icmpOp.getPredicate();
+      bool isEq = predicate == comb::ICmpPredicate::eq ||
+                  predicate == comb::ICmpPredicate::ceq ||
+                  predicate == comb::ICmpPredicate::weq;
+      bool isNe = predicate == comb::ICmpPredicate::ne ||
+                  predicate == comb::ICmpPredicate::cne ||
+                  predicate == comb::ICmpPredicate::wne;
+      if (!isEq && !isNe)
+        break;
+      std::optional<bool> literal;
+      mlir::Value other;
+      if ((literal = getConstI1Value(icmpOp.getLhs()))) {
+        other = icmpOp.getRhs();
+      } else if ((literal = getConstI1Value(icmpOp.getRhs()))) {
+        other = icmpOp.getLhs();
+      }
+      if (!literal || !other)
+        break;
+      invert ^= isEq ? !*literal : *literal;
+      value = other;
+      continue;
+    }
     if (auto muxOp = value.getDefiningOp<comb::MuxOp>()) {
       if (auto literal = getConstI1Value(muxOp.getCond())) {
         value = *literal ? muxOp.getTrueValue() : muxOp.getFalseValue();
