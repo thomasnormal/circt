@@ -108,8 +108,9 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     continue
   fi
 
-  opt_args=("--lower-llhd-ref-ports" "--strip-llhd-interface-signals"
-    "--lower-ltl-to-core" "--lower-clocked-assert-like")
+  opt_args=("--lower-llhd-ref-ports" "--strip-llhd-processes"
+    "--strip-llhd-interface-signals" "--lower-ltl-to-core"
+    "--lower-clocked-assert-like")
   if [[ -n "$CIRCT_OPT_ARGS" ]]; then
     read -r -a extra_opt_args <<<"$CIRCT_OPT_ARGS"
     opt_args+=("${extra_opt_args[@]}")
