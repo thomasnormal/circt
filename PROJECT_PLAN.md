@@ -317,6 +317,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Re-ordered LLHD stripping passes so extnets can legalize before LEC.
 - Strict LEC now resolves conflicting unconditional LLHD drives when probes
   occur after all drives (4-state signals only).
+- LEC CLI now exposes strict/approx controls (`--strict-llhd`, `--lec-strict`,
+  `--lec-approx`) to toggle LLHD abstraction behavior.
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)

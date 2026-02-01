@@ -416,14 +416,18 @@ static Value resolveFourStatePair(OpBuilder &builder, Location loc, Value lhs,
   if (width <= 0)
     return Value();
 
-  Value lhsVal =
-      hw::StructExtractOp::create(builder, loc, lhs, 0).getResult();
-  Value lhsUnk =
-      hw::StructExtractOp::create(builder, loc, lhs, 1).getResult();
-  Value rhsVal =
-      hw::StructExtractOp::create(builder, loc, rhs, 0).getResult();
-  Value rhsUnk =
-      hw::StructExtractOp::create(builder, loc, rhs, 1).getResult();
+  Value lhsVal = hw::StructExtractOp::create(
+                     builder, loc, lhs, structTy.getElements()[0].name)
+                     .getResult();
+  Value lhsUnk = hw::StructExtractOp::create(
+                     builder, loc, lhs, structTy.getElements()[1].name)
+                     .getResult();
+  Value rhsVal = hw::StructExtractOp::create(
+                     builder, loc, rhs, structTy.getElements()[0].name)
+                     .getResult();
+  Value rhsUnk = hw::StructExtractOp::create(
+                     builder, loc, rhs, structTy.getElements()[1].name)
+                     .getResult();
 
   auto ones =
       hw::ConstantOp::create(builder, loc, APInt::getAllOnes(width)).getResult();
@@ -435,16 +439,18 @@ static Value resolveFourStatePair(OpBuilder &builder, Location loc, Value lhs,
   Value conflict =
       comb::AndOp::create(builder, loc, valueDiff, knownBoth).getResult();
   Value unknownOut =
-      comb::OrOp::create(builder, loc, ValueRange{lhsUnk, rhsUnk, conflict})
+      comb::OrOp::create(builder, loc, ValueRange{lhsUnk, rhsUnk, conflict},
+                         /*twoState=*/false)
           .getResult();
 
   Value lhsKnownVal =
       comb::AndOp::create(builder, loc, lhsVal, lhsKnown).getResult();
   Value rhsKnownVal =
       comb::AndOp::create(builder, loc, rhsVal, rhsKnown).getResult();
-  Value valueOut =
-      comb::OrOp::create(builder, loc, ValueRange{lhsKnownVal, rhsKnownVal})
-          .getResult();
+  Value valueOut = comb::OrOp::create(
+                       builder, loc, ValueRange{lhsKnownVal, rhsKnownVal},
+                       /*twoState=*/false)
+                       .getResult();
 
   return hw::StructCreateOp::create(builder, loc, structTy,
                                     ValueRange{valueOut, unknownOut})

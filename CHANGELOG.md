@@ -73,6 +73,8 @@
    - When multiple unconditional drives target a 4-state LLHD signal and all
      probes occur after the drives, strict LEC now resolves conflicts instead
      of rejecting the signal.
+   - Exposed strict/approx LEC controls (`--strict-llhd`, `--lec-strict`,
+     `--lec-approx`) and pass options for LLHD ref lowering/interface stripping.
    - Added regression: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-conflict.mlir`.
    - **Files**: `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`,
      `tools/circt-lec/circt-lec.cpp`,
