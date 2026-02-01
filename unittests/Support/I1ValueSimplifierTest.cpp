@@ -115,6 +115,53 @@ TEST(I1ValueSimplifierTest, FromClockToClockUnwrap) {
   EXPECT_FALSE(simplified.invert);
 }
 
+TEST(I1ValueSimplifierTest, FromClockDerivedSimplifies) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("clk0"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("clk1"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto clk0 = top.getBodyBlock()->getArgument(0);
+  auto clk1 = top.getBodyBlock()->getArgument(1);
+  auto one = hw::ConstantOp::create(builder, loc, i1, 1);
+
+  auto toClock0 = seq::ToClockOp::create(builder, loc, clk0);
+  auto toClock1 = seq::ToClockOp::create(builder, loc, clk1);
+
+  auto gated = seq::ClockGateOp::create(builder, loc, toClock0, one);
+  auto fromGate = seq::FromClockOp::create(builder, loc, gated);
+  auto simplifiedGate = simplifyI1Value(fromGate.getResult());
+  EXPECT_TRUE(simplifiedGate.value);
+  EXPECT_EQ(simplifiedGate.value, clk0);
+  EXPECT_FALSE(simplifiedGate.invert);
+
+  auto muxed = seq::ClockMuxOp::create(builder, loc, one, toClock0, toClock1);
+  auto fromMux = seq::FromClockOp::create(builder, loc, muxed);
+  auto simplifiedMux = simplifyI1Value(fromMux.getResult());
+  EXPECT_TRUE(simplifiedMux.value);
+  EXPECT_EQ(simplifiedMux.value, clk0);
+  EXPECT_FALSE(simplifiedMux.invert);
+
+  auto inverted = seq::ClockInverterOp::create(builder, loc, toClock0);
+  auto fromInv = seq::FromClockOp::create(builder, loc, inverted);
+  auto simplifiedInv = simplifyI1Value(fromInv.getResult());
+  EXPECT_TRUE(simplifiedInv.value);
+  EXPECT_EQ(simplifiedInv.value, clk0);
+  EXPECT_TRUE(simplifiedInv.invert);
+}
+
 TEST(I1ValueSimplifierTest, FourStateClockGateSimplifies) {
   MLIRContext context;
   context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
@@ -211,6 +258,36 @@ TEST(I1ValueSimplifierTest, FourStateClockGateSimplifiesAfterAggregateLowering) 
   EXPECT_FALSE(simplified.invert);
 }
 
+TEST(I1ValueSimplifierTest, ValueKeyCommutativeAnd) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("a"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("b"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto a = top.getBodyBlock()->getArgument(0);
+  auto b = top.getBodyBlock()->getArgument(1);
+  auto andAB = comb::AndOp::create(builder, loc, a, b).getResult();
+  auto andBA = comb::AndOp::create(builder, loc, b, a).getResult();
+
+  auto keyAB = getI1ValueKey(andAB);
+  auto keyBA = getI1ValueKey(andBA);
+  ASSERT_TRUE(keyAB.has_value());
+  ASSERT_TRUE(keyBA.has_value());
+  EXPECT_EQ(*keyAB, *keyBA);
+}
+
 TEST(I1ValueSimplifierTest, MuxSimplification) {
   MLIRContext context;
   context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
@@ -285,6 +362,113 @@ TEST(I1ValueSimplifierTest, XorConstParity) {
   EXPECT_TRUE(simplifiedCancel.value);
   EXPECT_EQ(simplifiedCancel.value, clk);
   EXPECT_FALSE(simplifiedCancel.invert);
+}
+
+TEST(I1ValueSimplifierTest, I1ValueKeyRootsAndConsts) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("clk"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("alt"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto clk = top.getBodyBlock()->getArgument(0);
+  auto one = hw::ConstantOp::create(builder, loc, i1, 1);
+  auto zero = hw::ConstantOp::create(builder, loc, i1, 0);
+  auto notClk =
+      comb::XorOp::create(builder, loc, ValueRange{clk, one}, false)
+          .getResult();
+
+  auto keyClk = getI1ValueKey(clk);
+  ASSERT_TRUE(keyClk);
+  EXPECT_EQ(*keyClk, "arg0");
+
+  auto keyNotClk = getI1ValueKey(notClk);
+  ASSERT_TRUE(keyNotClk);
+  EXPECT_EQ(*keyNotClk, "arg0:inv");
+
+  auto keyZero = getI1ValueKey(zero);
+  ASSERT_TRUE(keyZero);
+  EXPECT_EQ(*keyZero, "const0");
+
+  auto keyOne = getI1ValueKey(one);
+  ASSERT_TRUE(keyOne);
+  EXPECT_EQ(*keyOne, "const1");
+}
+
+TEST(I1ValueSimplifierTest, I1ValueKeyStructuralEquivalence) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+  SmallVector<hw::PortInfo> ports;
+  ports.push_back(
+      {builder.getStringAttr("a"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("b"), i1, hw::ModulePort::Direction::Input});
+  ports.push_back(
+      {builder.getStringAttr("c"), i1, hw::ModulePort::Direction::Input});
+  auto top =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("Top"), ports);
+  builder.setInsertionPointToStart(top.getBodyBlock());
+
+  auto a = top.getBodyBlock()->getArgument(0);
+  auto b = top.getBodyBlock()->getArgument(1);
+  auto c = top.getBodyBlock()->getArgument(2);
+
+  auto andAB = comb::AndOp::create(builder, loc, a, b).getResult();
+  auto andBA = comb::AndOp::create(builder, loc, b, a).getResult();
+  auto keyAndAB = getI1ValueKey(andAB);
+  auto keyAndBA = getI1ValueKey(andBA);
+  ASSERT_TRUE(keyAndAB && keyAndBA);
+  EXPECT_EQ(*keyAndAB, *keyAndBA);
+
+  auto andBC = comb::AndOp::create(builder, loc, b, c).getResult();
+  auto andA_BC = comb::AndOp::create(builder, loc, a, andBC).getResult();
+  auto andAB_C = comb::AndOp::create(builder, loc, andAB, c).getResult();
+  auto keyAndNested1 = getI1ValueKey(andA_BC);
+  auto keyAndNested2 = getI1ValueKey(andAB_C);
+  ASSERT_TRUE(keyAndNested1 && keyAndNested2);
+  EXPECT_EQ(*keyAndNested1, *keyAndNested2);
+
+  auto xorAB =
+      comb::XorOp::create(builder, loc, ValueRange{a, b}, false).getResult();
+  auto xorBA =
+      comb::XorOp::create(builder, loc, ValueRange{b, a}, false).getResult();
+  auto keyXorAB = getI1ValueKey(xorAB);
+  auto keyXorBA = getI1ValueKey(xorBA);
+  ASSERT_TRUE(keyXorAB && keyXorBA);
+  EXPECT_EQ(*keyXorAB, *keyXorBA);
+
+  auto eqAB = comb::ICmpOp::create(builder, loc, comb::ICmpPredicate::eq, a, b)
+                  .getResult();
+  auto eqBA = comb::ICmpOp::create(builder, loc, comb::ICmpPredicate::eq, b, a)
+                  .getResult();
+  auto keyEqAB = getI1ValueKey(eqAB);
+  auto keyEqBA = getI1ValueKey(eqBA);
+  ASSERT_TRUE(keyEqAB && keyEqBA);
+  EXPECT_EQ(*keyEqAB, *keyEqBA);
+
+  auto muxABC = comb::MuxOp::create(builder, loc, a, b, c).getResult();
+  auto muxACB = comb::MuxOp::create(builder, loc, a, c, b).getResult();
+  auto keyMuxABC = getI1ValueKey(muxABC);
+  auto keyMuxACB = getI1ValueKey(muxACB);
+  ASSERT_TRUE(keyMuxABC && keyMuxACB);
+  EXPECT_NE(*keyMuxABC, *keyMuxACB);
 }
 
 } // namespace
