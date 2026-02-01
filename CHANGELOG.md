@@ -121,12 +121,15 @@
    - ExternalizeRegisters now reuses shared i1 clock-root tracing and records
      `bmc_reg_clocks` plus `bmc_reg_clock_sources` for `seq.from_clock`-derived
      gating paths.
+   - VerifToSMT now uses `bmc_reg_clock_sources` (including invert) to gate
+     per-register updates in multi-clock mode.
    - `simplifyI1Value` now folds `comb.icmp` against constant i1s so derived
      clocks (`clk == 1`, `clk != 1`) canonicalize to the base clock + invert.
    - Added regression: `test/Conversion/VerifToSMT/bmc-clock-op-icmp-const-posedge.mlir`.
    - Added regression: `test/Conversion/VerifToSMT/bmc-clock-op-icmp-ne-const-posedge.mlir`.
    - Added regression: `test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir`.
    - Added regression: `test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir`.
+   - Added regression: `test/Conversion/VerifToSMT/bmc-reg-clock-sources-invert.mlir`.
    - **Files**: `include/circt/Support/I1ValueSimplifier.h`,
      `lib/Tools/circt-bmc/LowerToBMC.cpp`,
      `lib/Conversion/VerifToSMT/VerifToSMT.cpp`.
@@ -141,6 +144,7 @@
 - `build/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-conflict.mlir`
 - `build/bin/circt-opt --externalize-registers test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir | build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir`
 - `build/bin/circt-opt test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | build/bin/FileCheck test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir`
+- `build/bin/circt-opt test/Conversion/VerifToSMT/bmc-reg-clock-sources-invert.mlir --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | build/bin/FileCheck test/Conversion/VerifToSMT/bmc-reg-clock-sources-invert.mlir`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 TAG_REGEX='(^| )16.10' OUT=/tmp/sv-tests-bmc-results.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
 
 ## Iteration 279 - February 1, 2026
