@@ -3438,12 +3438,33 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
           static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
     }
 
-    // Check if value changed
+    // Check if value changed and matches the expected edge type.
+    // For UVM events (!moore.event), we need to detect a "trigger" which is
+    // a rising edge (0→1 transition). This is critical for wait_for_objection:
+    // if no objection has been raised yet (value=0), we must wait for the
+    // NEXT trigger (0→1), not just any change.
+    bool shouldWake = false;
     if (currentValue != waiter.lastValue) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Memory event triggered for process " << procId
-                 << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
-                 << waiter.lastValue << " -> " << currentValue << "\n");
+      if (waiter.waitForRisingEdge) {
+        // Only wake on rising edge (0→1)
+        shouldWake = (waiter.lastValue == 0 && currentValue != 0);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Memory event check for process " << procId
+                   << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
+                   << waiter.lastValue << " -> " << currentValue
+                   << (shouldWake ? " (rising edge - WAKE)" : " (not rising edge - continue waiting)") << "\n");
+        // Update lastValue so we can detect the next rising edge
+        waiter.lastValue = currentValue;
+      } else {
+        // Wake on any change
+        shouldWake = true;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Memory event triggered for process " << procId
+                   << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
+                   << waiter.lastValue << " -> " << currentValue << "\n");
+      }
+    }
+    if (shouldWake) {
       toWake.push_back(procId);
     }
   }
@@ -8471,6 +8492,190 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     return InterpretedValue::fromSignalValue(sv);
   }
 
+  // Check if this is an llvm.getelementptr operation that needs on-demand
+  // evaluation. This is needed for memory event tracing in moore.wait_event
+  // where GEP operations in the wait body haven't been executed yet.
+  if (auto gepOp = value.getDefiningOp<LLVM::GEPOp>()) {
+    // Get the base pointer value (may recursively evaluate)
+    InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+    if (baseVal.isX()) {
+      InterpretedValue result = InterpretedValue::makeX(64);
+      valueMap[value] = result;
+      return result;
+    }
+
+    uint64_t baseAddr = baseVal.getUInt64();
+    uint64_t offset = 0;
+
+    // Get the element type
+    Type elemType = gepOp.getElemType();
+
+    // Process indices using the GEPIndicesAdaptor
+    auto indices = gepOp.getIndices();
+    Type currentType = elemType;
+
+    size_t idx = 0;
+    bool hasUnknownIndex = false;
+    for (auto indexValue : indices) {
+      int64_t indexVal = 0;
+
+      // Check if this is a constant index (IntegerAttr) or dynamic (Value)
+      if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(indexValue)) {
+        indexVal = intAttr.getInt();
+      } else if (auto dynamicIdx = llvm::dyn_cast_if_present<Value>(indexValue)) {
+        InterpretedValue dynVal = getValue(procId, dynamicIdx);
+        if (dynVal.isX()) {
+          hasUnknownIndex = true;
+          break;
+        }
+        indexVal = static_cast<int64_t>(dynVal.getUInt64());
+      }
+
+      if (idx == 0) {
+        // First index: scales by the size of the pointed-to type
+        offset += indexVal * getLLVMTypeSize(elemType);
+      } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
+        // Struct indexing: accumulate offsets of previous fields
+        auto body = structType.getBody();
+        for (int64_t i = 0; i < indexVal && static_cast<size_t>(i) < body.size(); ++i) {
+          offset += getLLVMTypeSize(body[i]);
+        }
+        if (static_cast<size_t>(indexVal) < body.size()) {
+          currentType = body[indexVal];
+        }
+      } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+        // Array indexing: multiply by element size
+        offset += indexVal * getLLVMTypeSize(arrayType.getElementType());
+        currentType = arrayType.getElementType();
+      } else {
+        // For other types, treat as array of the current type
+        offset += indexVal * getLLVMTypeSize(currentType);
+      }
+      ++idx;
+    }
+
+    if (hasUnknownIndex) {
+      InterpretedValue result = InterpretedValue::makeX(64);
+      valueMap[value] = result;
+      return result;
+    }
+
+    uint64_t resultAddr = baseAddr + offset;
+    InterpretedValue result(resultAddr, 64);
+    valueMap[value] = result;
+
+    LLVM_DEBUG(llvm::dbgs() << "  getValue GEP on-demand: base=0x"
+                            << llvm::format_hex(baseAddr, 16) << " offset="
+                            << offset << " result=0x"
+                            << llvm::format_hex(resultAddr, 16) << "\n");
+
+    return result;
+  }
+
+  // Check if this is an llvm.load operation that needs on-demand evaluation.
+  // This is needed for memory event tracing in moore.wait_event where the
+  // base pointer might come from a class instance loaded from memory.
+  if (auto loadOp = value.getDefiningOp<LLVM::LoadOp>()) {
+    // Get the pointer value (may recursively evaluate GEPs)
+    InterpretedValue ptrVal = getValue(procId, loadOp.getAddr());
+    if (ptrVal.isX()) {
+      unsigned bitWidth = getTypeWidth(loadOp.getType());
+      InterpretedValue result = InterpretedValue::makeX(bitWidth);
+      valueMap[value] = result;
+      return result;
+    }
+
+    uint64_t addr = ptrVal.getUInt64();
+    Type resultType = loadOp.getType();
+    unsigned bitWidth = getTypeWidth(resultType);
+    unsigned loadSize = getLLVMTypeSize(resultType);
+
+    // Find the memory block containing this address
+    MemoryBlock *block = nullptr;
+    uint64_t offset = 0;
+
+    // Check global memory blocks
+    for (auto &entry : globalAddresses) {
+      StringRef globalName = entry.first();
+      uint64_t globalBaseAddr = entry.second;
+      auto blockIt = globalMemoryBlocks.find(globalName);
+      if (blockIt != globalMemoryBlocks.end()) {
+        uint64_t globalSize = blockIt->second.size;
+        if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+          block = &blockIt->second;
+          offset = addr - globalBaseAddr;
+          break;
+        }
+      }
+    }
+
+    // Check malloc blocks
+    if (!block) {
+      for (auto &entry : mallocBlocks) {
+        uint64_t mallocBaseAddr = entry.first;
+        uint64_t mallocSize = entry.second.size;
+        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+          block = &entry.second;
+          offset = addr - mallocBaseAddr;
+          break;
+        }
+      }
+    }
+
+    // Check module-level allocas
+    if (!block) {
+      for (auto &[val, memBlock] : moduleLevelAllocas) {
+        auto addrIt = moduleInitValueMap.find(val);
+        if (addrIt != moduleInitValueMap.end()) {
+          uint64_t blockAddr = addrIt->second.getUInt64();
+          if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+            block = &memBlock;
+            offset = addr - blockAddr;
+            break;
+          }
+        }
+      }
+    }
+
+    // Check process-local memory blocks
+    if (!block) {
+      auto &procState = processStates[procId];
+      for (auto &[val, memBlock] : procState.memoryBlocks) {
+        auto addrIt = procState.valueMap.find(val);
+        if (addrIt != procState.valueMap.end()) {
+          uint64_t blockAddr = addrIt->second.getUInt64();
+          if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+            block = &memBlock;
+            offset = addr - blockAddr;
+            break;
+          }
+        }
+      }
+    }
+
+    if (block && block->initialized && offset + loadSize <= block->size) {
+      // Read bytes from memory
+      APInt loadedValue(bitWidth, 0);
+      for (unsigned i = 0; i < loadSize && i < (bitWidth + 7) / 8; ++i) {
+        uint64_t byte = block->data[offset + i];
+        loadedValue |= APInt(bitWidth, byte) << (i * 8);
+      }
+      InterpretedValue result(loadedValue);
+      valueMap[value] = result;
+
+      LLVM_DEBUG(llvm::dbgs() << "  getValue load on-demand: addr=0x"
+                              << llvm::format_hex(addr, 16) << " value="
+                              << loadedValue.getZExtValue() << "\n");
+
+      return result;
+    }
+
+    // Memory not found or not initialized - return X
+    InterpretedValue result = InterpretedValue::makeX(bitWidth);
+    valueMap[value] = result;
+    return result;
+  }
+
   // Check if this is an LLVM call at module level (e.g., string conversion)
   // Execute the call on demand when its result is needed.
   if (auto callOp = value.getDefiningOp<LLVM::CallOp>()) {
@@ -9166,11 +9371,20 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     // We trace backwards from detect_event input to find the memory pointer.
     bool foundMemoryEvent = false;
 
+    // Track the detected input type to determine edge behavior
+    bool isEventType = false;
     waitEventOp.getBody().walk([&](moore::DetectEventOp detectOp) {
       if (foundMemoryEvent)
         return; // Already found one
 
       Value input = detectOp.getInput();
+
+      // Check if the input is an event type (!moore.event).
+      // For event types, we need rising edge detection (0→1 trigger).
+      Type inputType = input.getType();
+      if (isa<moore::EventType>(inputType)) {
+        isEventType = true;
+      }
 
       // Trace through unrealized_conversion_cast to find llvm.load
       std::function<Value(Value, int)> traceToMemoryPtr =
@@ -9309,11 +9523,17 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       waiter.address = addr;
       waiter.lastValue = currentValue;
       waiter.valueSize = valueSize;
+      // For event types, use rising edge detection (0→1).
+      // This is critical for UVM wait_for_objection: if no objection has been
+      // raised yet (value=0), we must wait for the NEXT trigger (0→1),
+      // not wake up immediately or on any change.
+      waiter.waitForRisingEdge = isEventType;
       memoryEventWaiters[procId] = waiter;
 
       LLVM_DEBUG(llvm::dbgs() << "    Set up memory event waiter for address 0x"
                               << llvm::format_hex(addr, 16)
-                              << " with initial value " << currentValue << "\n");
+                              << " with initial value " << currentValue
+                              << (isEventType ? " (rising edge mode for event type)" : "") << "\n");
 
       foundMemoryEvent = true;
     });
@@ -9862,6 +10082,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         }
       }
     }
+
+    // Check module-level allocas by address. This is needed when the store
+    // address is computed via a GEP on a pointer loaded from memory (e.g.,
+    // class member access through a heap-allocated class instance).
+    if (!block) {
+      for (auto &[val, memBlock] : moduleLevelAllocas) {
+        auto addrIt = moduleInitValueMap.find(val);
+        if (addrIt != moduleInitValueMap.end()) {
+          uint64_t blockAddr = addrIt->second.getUInt64();
+          if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+            block = &memBlock;
+            offset = addr - blockAddr;
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found module-level alloca at 0x"
+                                    << llvm::format_hex(blockAddr, 16)
+                                    << " offset " << offset << "\n");
+            break;
+          }
+        }
+      }
+    }
+
     if (!block) {
       if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
         useNative = true;
@@ -10764,6 +11005,104 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
 
         setValue(procId, callOp.getResult(), InterpretedValue(APInt(1, triggered ? 1 : 0)));
+      }
+      return success();
+    }
+
+    // Handle __moore_wait_event - wait for an event in func.func context.
+    // This is used when moore.wait_event appears in forked code or class methods
+    // where llhd.wait cannot be used (requires llhd.process parent).
+    // Signature: __moore_wait_event(i32 edgeKind, ptr valuePtr)
+    // edgeKind: 0=AnyChange, 1=PosEdge, 2=NegEdge, 3=BothEdges
+    // valuePtr: pointer to the memory location to watch (or null for any change)
+    if (calleeName == "__moore_wait_event") {
+      if (callOp.getNumOperands() >= 2) {
+        InterpretedValue edgeKindVal = getValue(procId, callOp.getOperand(0));
+        InterpretedValue valuePtrVal = getValue(procId, callOp.getOperand(1));
+
+        int32_t edgeKind = edgeKindVal.isX() ? 0 : static_cast<int32_t>(edgeKindVal.getUInt64());
+        uint64_t valueAddr = valuePtrVal.isX() ? 0 : valuePtrVal.getUInt64();
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_wait_event(edgeKind="
+                                << edgeKind << ", valuePtr=0x"
+                                << llvm::format_hex(valueAddr, 16) << ")\n");
+
+        auto &state = processStates[procId];
+        state.waiting = true;
+
+        if (valueAddr != 0) {
+          // Set up a memory event waiter for the specified address.
+          uint64_t offset = 0;
+          MemoryBlock *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
+
+          // Read current value for edge detection.
+          uint64_t currentValue = 0;
+          unsigned valueSize = 1;
+          if (block && block->size >= offset + 1 && block->initialized) {
+            currentValue = block->data[offset];
+            // For larger values, read more bytes (up to 8).
+            valueSize = std::min(block->size - offset, static_cast<size_t>(8));
+            if (valueSize > 1) {
+              currentValue = 0;
+              for (unsigned i = 0; i < valueSize; ++i)
+                currentValue |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+            }
+          }
+
+          MemoryEventWaiter waiter;
+          waiter.address = valueAddr;
+          waiter.lastValue = currentValue;
+          waiter.valueSize = valueSize;
+          // Use rising edge detection for PosEdge, otherwise any change.
+          waiter.waitForRisingEdge = (edgeKind == 1); // PosEdge
+          memoryEventWaiters[procId] = waiter;
+
+          LLVM_DEBUG(llvm::dbgs() << "    Set up memory event waiter for address 0x"
+                                  << llvm::format_hex(valueAddr, 16)
+                                  << " with initial value " << currentValue
+                                  << " (edgeKind=" << edgeKind << ")\n");
+        } else {
+          // No specific address to watch. This happens when:
+          // 1. The conversion couldn't trace back to a specific memory location
+          // 2. We're waiting on a signal passed as a function argument
+          //
+          // For proper blocking, we need to wait for ANY signal change.
+          // Set up the process to be woken on any signal change by using
+          // the signal-based sensitivity mechanism.
+          //
+          // First, check if this process has any signals in its sensitivity list.
+          // If so, wait for any of them to change.
+          bool hasSignalSensitivity = !state.lastSensitivityEntries.empty();
+
+          if (hasSignalSensitivity) {
+            // The process already has sensitivity entries from previous waits.
+            // Keep them and wait for any signal change.
+            // The process will be woken by triggerSensitiveProcesses when
+            // any of those signals change.
+            LLVM_DEBUG(llvm::dbgs() << "    No specific address, waiting on "
+                                    << state.lastSensitivityEntries.size()
+                                    << " signal sensitivities\n");
+            // state.waiting is already true, just don't schedule
+          } else {
+            // No signal sensitivities found. This can happen if we're in a
+            // func.func context called from llhd.process but no signals are
+            // being watched yet. Use polling as a fallback.
+            constexpr int64_t kPollDelayFs = 1000000; // 1 ps polling interval
+            SimTime currentTime = scheduler.getCurrentTime();
+            SimTime targetTime = currentTime.advanceTime(kPollDelayFs);
+
+            LLVM_DEBUG(llvm::dbgs() << "    No signals or address to watch, "
+                                    << "polling after " << kPollDelayFs << " fs\n");
+
+            scheduler.getEventScheduler().schedule(
+                targetTime, SchedulingRegion::Active,
+                Event([this, procId]() {
+                  auto &st = processStates[procId];
+                  st.waiting = false;
+                  scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+                }));
+          }
+        }
       }
       return success();
     }
