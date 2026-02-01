@@ -17,6 +17,7 @@
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "mlir/IR/IRMapping.h"
@@ -759,9 +760,117 @@ struct StmtVisitor {
     auto type = context.convertType(*var.getDeclaredType());
     if (!type)
       return failure();
+    // Check if this is a static function-local variable with an EXPLICIT
+    // `static` keyword on the variable declaration. Static variables persist
+    // across function calls and should be stored as global variables with
+    // lazy initialization.
+    //
+    // We require an explicit `static` keyword because:
+    // 1. In static functions, local variables are implicitly static, but many
+    //    existing codebases (including test cases) expect them to be treated
+    //    as local variables.
+    // 2. The UVM pattern (uvm_component_registry::get()) uses explicit `static`
+    //    to implement singletons.
+    //
+    // Only apply this to function-local variables (when currentFunctionLowering
+    // is set), not to variables in module initial/always blocks.
+    bool hasExplicitStaticKeyword = false;
+    if (auto *syntax = var.getSyntax()) {
+      // The variable's syntax is typically a DeclaratorSyntax. The parent
+      // of the declarator is a DataDeclarationSyntax which contains the
+      // modifiers (like 'static').
+      const slang::syntax::SyntaxNode *checkSyntax = syntax;
+      if (checkSyntax->parent)
+        checkSyntax = checkSyntax->parent;
+      if (auto *dataSyntax =
+              checkSyntax->as_if<slang::syntax::DataDeclarationSyntax>()) {
+        for (auto mod : dataSyntax->modifiers) {
+          if (mod.kind == slang::parsing::TokenKind::StaticKeyword) {
+            hasExplicitStaticKeyword = true;
+            break;
+          }
+        }
+      }
+    }
+
+    bool isStatic = var.lifetime == slang::ast::VariableLifetime::Static &&
+                    context.currentFunctionLowering != nullptr &&
+                    hasExplicitStaticKeyword;
+
     LLVM_DEBUG(llvm::dbgs() << "VarDecl: " << var.name << " type=" << type
                             << "\n");
 
+    auto unpackedType = dyn_cast<moore::UnpackedType>(type);
+    if (!unpackedType) {
+      mlir::emitError(loc) << "variable '" << var.name
+                           << "' has non-unpacked type: " << type;
+      return failure();
+    }
+
+    if (isStatic) {
+      // Static function-local variables are stored as global variables.
+      // Check if already converted (handles multiple calls to the same function).
+      if (context.globalVariables.count(&var)) {
+        auto globalOp = context.globalVariables.lookup(&var);
+        auto refTy = moore::RefType::get(unpackedType);
+        auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+        auto ref =
+            moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+        context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                             &var, ref);
+        return success();
+      }
+
+      // Check by fully qualified name (handles multiple specializations).
+      auto symName = fullyQualifiedSymbolName(context, var);
+      if (context.globalVariablesByName.count(symName)) {
+        // Reuse the existing global variable for this symbol pointer.
+        context.globalVariables[&var] = context.globalVariablesByName[symName];
+        auto globalOp = context.globalVariables.lookup(&var);
+        auto refTy = moore::RefType::get(unpackedType);
+        auto symRef = mlir::FlatSymbolRefAttr::get(globalOp.getSymNameAttr());
+        auto ref =
+            moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+        context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                             &var, ref);
+        return success();
+      }
+
+      // Pick an insertion point for this variable at the module level.
+      // Use a nested scope for InsertionGuard to restore insertion point
+      // before we create the GetGlobalVariableOp reference.
+      moore::GlobalVariableOp globalVarOp;
+      {
+        OpBuilder::InsertionGuard g(builder);
+        auto it = context.orderedRootOps.upper_bound(var.location);
+        if (it == context.orderedRootOps.end())
+          builder.setInsertionPointToEnd(context.intoModuleOp.getBody());
+        else
+          builder.setInsertionPoint(it->second);
+
+        // Create the global variable op.
+        globalVarOp = moore::GlobalVariableOp::create(builder, loc, symName,
+                                                      unpackedType);
+        context.orderedRootOps.insert({var.location, globalVarOp});
+        context.globalVariables[&var] = globalVarOp;
+        context.globalVariablesByName[symName] = globalVarOp;
+
+        // If the variable has an initializer expression, remember it for later.
+        if (var.getInitializer())
+          context.globalVariableWorklist.push_back(&var);
+      }
+      // InsertionGuard restores original insertion point here.
+
+      auto refTy = moore::RefType::get(unpackedType);
+      auto symRef = mlir::FlatSymbolRefAttr::get(globalVarOp.getSymNameAttr());
+      auto ref =
+          moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
+      context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                           &var, ref);
+      return success();
+    }
+
+    // Non-static local variable - create a local VariableOp.
     Value initial;
     if (const auto *init = var.getInitializer()) {
       initial = context.convertRvalueExpression(*init, type);
@@ -769,13 +878,6 @@ struct StmtVisitor {
         return failure();
     }
 
-    // Collect local temporary variables.
-    auto unpackedType = dyn_cast<moore::UnpackedType>(type);
-    if (!unpackedType) {
-      mlir::emitError(loc) << "variable '" << var.name
-                           << "' has non-unpacked type: " << type;
-      return failure();
-    }
     auto varOp = moore::VariableOp::create(
         builder, loc, moore::RefType::get(unpackedType),
         builder.getStringAttr(var.name), initial);
