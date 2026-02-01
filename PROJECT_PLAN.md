@@ -212,6 +212,35 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `LLHDProcessInterpreter.h`
    - **Test**: `test/Tools/circt-sim/moore-wait-memory-event.mlir`
 
+10. **UVM Event Trigger** ✅ FIXED (Iteration 285):
+    - `__moore_event_trigger` runtime function was missing - now implemented
+    - EventTriggerOpConversion fixed to pass actual event address (not temporary)
+    - **Files**: `lib/Runtime/MooreRuntime.cpp`, `include/circt/Runtime/MooreRuntime.h`
+    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` (interpreter handler)
+    - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (EventTriggerOpConversion)
+    - **Tests**: `unittests/Runtime/MooreRuntimeTest.cpp` (5 unit tests)
+
+11. **wait(condition) Memory-Based Polling** ✅ FIXED (Iteration 286):
+    - `wait(condition)` where condition depends on heap memory (class fields) now works
+    - SSA form computed condition once; changes to memory weren't detected
+    - **Fix**: Polling-based re-evaluation with restart point tracking
+    - Track only `llvm.load` operations, invalidate cached values, poll at 1ps interval
+    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` (lines ~3628-3650, ~10560-10700)
+    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.h` (restart tracking fields)
+    - **Impact**: UVM objection wait patterns like `wait(dropped == 1)` now work
+
+**Immediate Blockers:**
+
+1. **UVM Component Registration** 🔴 CRITICAL (Iteration 286):
+   - `run_test()` returns early because `m_children` associative array appears empty
+   - Test/component not being registered with factory or component hierarchy
+   - **Next**: Debug `uvm_factory::create()` and `uvm_component::m_add_child()`
+
+2. **moore.wait_event for UVM Events** 🟡 MEDIUM:
+   - Different from `wait(condition)` - uses event-based semantics
+   - `moore.detect_event any` on boolean event flags
+   - Memory event waiters exist but may not cover all UVM patterns
+
 **Medium Priority:**
 
 1. **Virtual Method Dispatch**:
@@ -225,27 +254,28 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (FINAL - Iteration 280 - 2026-02-01)
+### Test Suite Status (Iteration 285 - 2026-02-01)
 
-**Repository Status**: 397+ commits ahead of upstream CIRCT
+**Repository Status**: 400+ commits ahead of upstream CIRCT
 
 | Suite | Status | Notes |
 |-------|--------|-------|
-| Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **398/400 (99.5%)** | 2 expected failures |
+| Unit Tests | 1378/1378 (100%) | All pass (+5 event trigger tests) |
+| Lit Tests | **400/402 (99.5%)** | 2 expected failures |
 | ImportVerilog | **219/219 (100%)** | **FULL PARITY ACHIEVED!** |
-| circt-sim | **81/82 (98.78%)** | 1 XFAIL (tlul-bfm-user-default.sv) |
-| MooreToCore | **98/99 (98.99%)** | 1 XFAIL |
+| circt-sim | **82/83 (98.79%)** | 1 XFAIL (tlul-bfm-user-default.sv) |
+| MooreToCore | **99/100 (99%)** | 1 XFAIL |
 | sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **31+ pass** | timer_core fully working with interrupts |
+| OpenTitan IPs | **40+ pass** | 9 more IPs tested this session |
 | AVIPs | **6/6 FULL SIMULATION** | APB, AHB, UART, I2S, AXI4, I3C - all simulate with UVM transactions! |
-| sv-tests | **317/348 (91%)** | Core SV features working |
+| sv-tests | **556/717 (77%)** | ~95% with UVM_HOME set |
+| verilator-verification | **120/141 (85%)** | Core features working |
 | **External Suites** | **54/54 (100%)** | sv-tests + Verilator + yosys-sva all pass |
-| **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
+| **UVM with uvm-core** | **IN PROGRESS** | Event triggering fixed, phase execution debugging |
 
 **FINAL STATUS (Iteration 280 - 2026-02-01) - FULL UVM SIMULATION ACHIEVED!**
 
@@ -328,17 +358,24 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 6. **BMC/LEC Tests**: Handled by codex agents (not blocking UVM parity)
 
 **Next Steps for UVM Parity (Priority Order):**
-1. **Fix UVM Factory/Phase Mechanism** 🔴 - Critical blocker for full UVM tests
-2. **Fix class member access bug** - Apply pre-pass remapping pattern from array/foreach
-3. **Virtual method dispatch** - Complete class hierarchy simulation
-4. **Extended AVIP testing** - Verify full UVM test sequences once factory works
-5. **OpenTitan TL-UL improvements** - Address remaining timeout issues
+1. **Debug UVM Component Registration** 🔴 - m_children empty causes early termination
+2. **Test moore.wait_event mechanism** - Verify event-based waits for UVM patterns
+3. **Extended AVIP testing** - Run full UVM test sequences with real transactions
+4. **OpenTitan validation** - Continue testing more IPs
+5. **External suite coverage** - Maintain sv-tests, verilator-verification
 
-**Active Workstreams:**
-1. **Track A: UVM Factory/Phase** - Investigate why `run_test()` terminates at time 0
-2. **Track B: Class Member Access** - Apply block argument remapping fix
-3. **Track C: OpenTitan IPs** - Test more IPs, improve TL-UL handling
-4. **Track D: External Test Suites** - sv-tests, yosys, verilator-verification
+**Active Workstreams (Iteration 286):**
+| Track | Status | Current Task | Next Task |
+|-------|--------|--------------|-----------|
+| **Track A: UVM Runtime** | 🔴 BLOCKED | `run_test()` terminates at t=0 | Debug associative array init for m_children |
+| **Track B: OpenTitan IPs** | ✅ 40+ pass | prim_* tests working | Test remaining IP modules |
+| **Track C: AVIP Testing** | ✅ 6/6 simulate | All protocols pass | Run with real transactions |
+| **Track D: External Suites** | ✅ Good coverage | sv-tests 77%, verilator 85% | Expand coverage |
+
+**Iteration 286 Updates:**
+- ✅ **wait(condition) memory polling** - FIXED: Class member variables in wait conditions
+- 🔴 **UVM run_test issue** - IDENTIFIED: Component registration failing
+- **Next focus**: Debug UVM factory/component hierarchy to enable full test execution
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
@@ -348,18 +385,39 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    unknown propagation with SV semantics; add end-to-end regressions.
 3. **LEC strict resolution**: implement sound multi-driver/inout resolution
    semantics (tri-state merging + diagnostics) for strict equivalence.
+   Partial: strict LEC now resolves 4-state inout read/write, but 2-state
+   inout read/write and full strength-aware inout resolution remain.
 
 **Recent Formal Updates (Feb 1, 2026):**
 - LEC harnesses now use `circt-verilog --ir-hw` plus LLHD interface stripping
   passes to avoid LLHD process ops in circt-lec flows.
 - Added a yosys SVA LEC smoke regression with a sequential `always` block.
 - Re-ordered LLHD stripping passes so extnets can legalize before LEC.
+- LEC stripping now lowers `llhd.probe`/`llhd.drive` on local refs in
+  `llhd.combinational` (via `llvm.load`/`llvm.store`) to avoid LEC failures on
+  stack-backed refs; added regression `test/Tools/circt-lec/lec-strip-llhd-local-ref.mlir`.
+- ConstructLEC now optionally aligns inputs when one side is abstracted and
+  outputs match, inserting missing inputs to keep miter IO aligned; added
+  regression `test/Tools/circt-lec/lec-align-io-abstraction.mlir`.
 - Strict LEC now resolves conflicting unconditional LLHD drives when probes
   occur after all drives (4-state signals only).
 - LEC CLI now exposes strict/approx controls (`--strict-llhd`, `--lec-strict`,
   `--lec-approx`) to toggle LLHD abstraction behavior.
 - VerifToSMT now recognizes `comb.icmp`-derived clocks for BMC clock mapping.
 - Clock-root tracing is now centralized to keep BMC/VerifToSMT mappings aligned.
+- Lower-to-BMC now deduplicates equivalent derived clocks in graph regions using
+  `getI1ValueKey`, preventing spurious multi-clock failures and mapping
+  clocked properties to the correct BMC clock input.
+- Reinstated X-prop E2E BMC coverage for `$stable/$changed` with new clock-key
+  dedupe (test: `test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv`).
+- Strict LLHD signal stripping now resolves multi-drive signals even if probes
+  appear before drives, as long as drive values dominate the probes.
+- Strict LEC now lowers `hw.inout` ports by resolving 4-state read/write
+  against internal drives, with 2-state read/write still rejected.
+- LEC strict now supports struct-field inout accesses by lifting them to
+  explicit read/write ports.
+- LEC strict now supports constant array-index inout accesses by lifting them
+  to explicit read/write ports (dynamic indices still unsupported).
 - `simplifyI1Value` now folds `comb.icmp` against constant i1s for clock
   canonicalization (supports `clk == 1`/`clk != 1` patterns).
 - ImportVerilog now coerces mixed 2-/4-state operands to a common domain before
@@ -367,6 +425,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   regression coverage in `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`.
 - `circt-bmc` now emits `BMC_RESULT=SAT|UNSAT` tokens alongside legacy messages
   so harnesses can consume stable result tags.
+- Derived clock expressions now get stable structural keys (`bmc_clock_keys`)
+  and `ltl.clock` records `bmc.clock_key` for consistent mapping through
+  VerifToSMT.
+- Added unit tests for `getI1ValueKey` to validate root/constant keys and
+  commutative/associative structural equivalence.
+- Added shared 4-state resolution helpers and BMC multi-drive resolution for
+  LLHD signals, with unit and MLIR regressions.
+- Extended 4-state resolution to respect LLHD drive enables in BMC lowering,
+  with additional unit and MLIR coverage.
+- Added strength-aware multi-drive resolution in BMC and LEC for 4-state signals.
+- External suite spot-checks: sv-tests/yosys-sva/verilator BMC+LEC green; AVIP
+  compile smoke has AXI4Lite/JTAG/SPI VIP issues; OpenTitan AES S-Box LEC smoke
+  previously failed in aes_pkg.sv (null operand) and is now fixed via
+  llhd-unroll-loops pruning guard (rerun PASS: aes_sbox_canright).
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)
@@ -2226,6 +2298,23 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-01-31 | yosys/tests/sva | LEC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green (runner fix) |
 | 2026-01-30 | opentitan | LEC | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | aes_sbox_canright |
 | 2026-01-30 | opentitan | LEC | total=3 pass=3 fail=0 xfail=0 xpass=0 error=0 skip=0 | include-masked |
+| 2026-02-01 | opentitan | LEC | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | aes_sbox_canright |
+| 2026-02-01 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green (smoke) |
+| 2026-02-01 | yosys/tests/sva | BMC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green (smoke) |
+| 2026-02-01 | verilator-verification | BMC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green (smoke) |
+| 2026-02-01 | sv-tests | LEC | total=23 pass=23 fail=0 xfail=0 xpass=0 error=0 skip=1013 | green (smoke) |
+| 2026-02-01 | yosys/tests/sva | LEC | total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2 | green (smoke) |
+| 2026-02-01 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green (smoke) |
+| 2026-02-01 | opentitan | LEC | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | aes_sbox_canright (smoke) |
+| 2026-02-01 | avip/ahb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-01 | avip/apb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-01 | avip/axi4_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-01 | avip/axi4Lite_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | WDATA range OOB in VIP |
+| 2026-02-01 | avip/i2s_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-01 | avip/i3c_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-01 | avip/jtag_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | bind/vif + enum cast in VIP |
+| 2026-02-01 | avip/spi_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | nested comment + empty arg + non-static property |
+| 2026-02-01 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-01-30 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
 | 2026-01-30 | verilator-verification | BMC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-01-30 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |

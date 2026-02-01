@@ -3625,6 +3625,28 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     state.waiting = false;
   }
 
+  // Handle wait_condition restart: if we're resuming after a wait(condition)
+  // that was false, we need to restart from the point where the condition
+  // computation begins and invalidate only the relevant cached values.
+  if (state.waitConditionRestartBlock) {
+    LLVM_DEBUG(llvm::dbgs() << "  Restarting for wait_condition re-evaluation "
+                            << "(invalidating " << state.waitConditionValuesToInvalidate.size()
+                            << " cached values)\n");
+
+    // Set the current block and operation to the restart point
+    state.currentBlock = state.waitConditionRestartBlock;
+    state.currentOp = state.waitConditionRestartOp;
+
+    // Clear only the cached values that are part of the condition computation.
+    // This avoids re-executing side effects like fork creation.
+    for (Value v : state.waitConditionValuesToInvalidate) {
+      state.valueMap.erase(v);
+    }
+
+    // Note: we don't clear waitConditionRestartBlock here - it will be
+    // cleared by __moore_wait_condition when the condition becomes true.
+  }
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executing process "
                           << procId << "\n");
 
@@ -5100,6 +5122,15 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
     if (failed(funcResult))
       return failure();
+
+    // Check if process suspended during function execution (e.g., due to wait)
+    // If so, return early without setting results - the function didn't complete
+    auto &postCallState = processStates[procId];
+    if (postCallState.waiting) {
+      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: process suspended during call to '"
+                              << calleeName << "'\n");
+      return success();
+    }
 
     // Set results
     for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results)) {
@@ -8054,6 +8085,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (failed(funcResult))
     return failure();
 
+  // Check if process suspended during function execution (e.g., due to wait)
+  // If so, return early without setting results - the function didn't complete
+  auto &postCallState = processStates[procId];
+  if (postCallState.waiting) {
+    LLVM_DEBUG(llvm::dbgs() << "  func.call: process suspended during call to '"
+                            << callOp.getCallee() << "'\n");
+    return success();
+  }
+
   // Map return values to call results
   for (auto [result, retVal] : llvm::zip(callOp.getResults(), returnValues)) {
     setValue(procId, result, retVal);
@@ -8142,10 +8182,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         return failure();
       }
 
-      // Check if process was halted (e.g., by sim.terminate or llvm.unreachable)
+      // Check if process was halted or is waiting (e.g., by sim.terminate,
+      // llvm.unreachable, or moore.wait_event). This is critical for UVM where
+      // wait_for_objection() contains event waits that must suspend execution.
       auto it = processStates.find(procId);
-      if (it != processStates.end() && it->second.halted) {
-        LLVM_DEBUG(llvm::dbgs() << "  Process halted during function body - "
+      if (it != processStates.end() && (it->second.halted || it->second.waiting)) {
+        LLVM_DEBUG(llvm::dbgs() << "  Process halted/waiting during function body - "
                                 << "returning early\n");
         return success();
       }
@@ -10535,7 +10577,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: __moore_wait_condition(i32 condition)
     // If condition is true (non-zero), return immediately.
     // If condition is false (zero), suspend the process and wait for signal
-    // changes, then re-evaluate.
+    // changes, then re-evaluate by restarting from the beginning of the
+    // current block.
     if (calleeName == "__moore_wait_condition") {
       if (callOp.getNumOperands() >= 1) {
         InterpretedValue condArg = getValue(procId, callOp.getOperand(0));
@@ -10547,7 +10590,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                 << (conditionTrue ? "true" : "false") << "\n");
 
         if (conditionTrue) {
-          // Condition is already true, continue immediately
+          // Condition is already true, continue immediately.
+          // Clear the restart block since we're done waiting.
+          auto &state = processStates[procId];
+          state.waitConditionRestartBlock = nullptr;
           return success();
         }
 
@@ -10556,37 +10602,165 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto &state = processStates[procId];
         state.waiting = true;
 
-        // Build sensitivity list from all signals probed by this process.
-        // When any of these signals change, the process will resume and
-        // re-evaluate the wait condition.
-        SensitivityList waitList;
+        // Find the operations that compute the condition value by walking
+        // backwards from the condition argument. We need to invalidate these
+        // cached values so they get recomputed when we re-check the condition.
+        //
+        // CRITICAL: We only trace through operations that need re-execution:
+        // - llvm.load: reads memory that may have changed
+        // - Arithmetic/comparison ops that depend on loads
+        //
+        // We do NOT trace into:
+        // - llhd.prb: probes a signal (returns constant pointer during execution)
+        // - llvm.getelementptr: pointer arithmetic (doesn't read memory)
+        // - Constant operations
+        //
+        // This avoids re-executing side-effecting operations like sim.fork.
+        state.waitConditionValuesToInvalidate.clear();
+        state.waitConditionRestartBlock = state.currentBlock;
 
-        // Collect signals from the process/initial op
-        if (auto processOp = state.getProcessOp()) {
-          processOp.walk([&](llhd::ProbeOp probeOp) {
-            SignalId sigId = getSignalId(probeOp.getSignal());
-            if (sigId != 0)
-              waitList.addLevel(sigId);
-          });
-        } else if (auto initialOp = state.getInitialOp()) {
-          initialOp.walk([&](llhd::ProbeOp probeOp) {
-            SignalId sigId = getSignalId(probeOp.getSignal());
-            if (sigId != 0)
-              waitList.addLevel(sigId);
-          });
+        // Find the earliest llvm.load in the condition computation chain
+        Value condValue = callOp.getOperand(0);
+        llvm::SmallVector<Value, 16> worklist;
+        llvm::SmallPtrSet<Value, 16> visited;
+        worklist.push_back(condValue);
+
+        Operation *earliestLoadOp = nullptr;
+
+        while (!worklist.empty()) {
+          Value v = worklist.pop_back_val();
+          if (!visited.insert(v).second)
+            continue;
+
+          // If the value has a defining operation in this block, process it
+          if (Operation *defOp = v.getDefiningOp()) {
+            if (defOp->getBlock() == state.currentBlock) {
+              // Check if this is a load operation - these are what we need to re-execute
+              if (isa<LLVM::LoadOp>(defOp)) {
+                state.waitConditionValuesToInvalidate.push_back(v);
+                // Track the earliest load operation
+                if (!earliestLoadOp || defOp->isBeforeInBlock(earliestLoadOp))
+                  earliestLoadOp = defOp;
+              }
+
+              // Add operands to worklist - trace through comparison and zext ops
+              // but stop at getelementptr (doesn't read memory)
+              if (isa<comb::ICmpOp, LLVM::ZExtOp, LLVM::SExtOp,
+                      comb::AddOp, comb::SubOp, comb::AndOp, comb::OrOp,
+                      comb::XorOp, LLVM::LoadOp>(defOp)) {
+                state.waitConditionValuesToInvalidate.push_back(v);
+                for (Value operand : defOp->getOperands()) {
+                  if (!isa<BlockArgument>(operand) &&
+                      operand.getDefiningOp() &&
+                      operand.getDefiningOp()->getBlock() == state.currentBlock) {
+                    worklist.push_back(operand);
+                  }
+                }
+              }
+            }
+          }
         }
 
-        if (!waitList.empty()) {
-          scheduler.suspendProcessForEvents(procId, waitList);
-          LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting on "
-                                  << waitList.size() << " signals for condition\n");
+        // Save the restart point - the earliest load operation (or the call itself)
+        if (earliestLoadOp) {
+          state.waitConditionRestartOp = mlir::Block::iterator(earliestLoadOp);
         } else {
-          // No signals found - schedule a delta cycle wait to prevent infinite loop
-          // This will allow other processes to run and potentially change state
-          LLVM_DEBUG(llvm::dbgs() << "    Warning: No signals found for wait_condition, "
-                                     "doing single delta wait\n");
-          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+          // No loads found - restart from the call itself
+          state.waitConditionRestartOp = mlir::Block::iterator(&*callOp);
         }
+
+        LLVM_DEBUG(llvm::dbgs() << "    Setting restart point for wait_condition "
+                                << "re-evaluation (" << state.waitConditionValuesToInvalidate.size()
+                                << " values to invalidate)\n");
+
+        // For wait(condition), always use polling instead of signal-based waiting.
+        // The condition may depend on class member variables stored in heap memory
+        // that isn't tracked via LLHD signals. Even if we find signals in the
+        // process, they may not be the ones that affect the condition.
+        //
+        // TODO: For better performance, we could track which memory locations
+        // the condition depends on and only poll when those change.
+        constexpr int64_t kPollDelayFs = 1000000; // 1 ps (1000000 fs) polling interval
+        SimTime currentTime = scheduler.getCurrentTime();
+        SimTime targetTime = currentTime.advanceTime(kPollDelayFs);
+
+        LLVM_DEBUG(llvm::dbgs() << "    Scheduling wait_condition poll after "
+                                << kPollDelayFs << " fs\n");
+
+        // Schedule the process to resume after the delay
+        scheduler.getEventScheduler().schedule(
+            targetTime, SchedulingRegion::Active,
+            Event([this, procId]() {
+              // Resume the process - it will restart from the wait_condition
+              // restart point and re-evaluate the condition
+              auto &st = processStates[procId];
+              st.waiting = false;
+              scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+            }));
+      }
+      return success();
+    }
+
+    // Handle __moore_event_trigger - trigger an event.
+    // Implements the SystemVerilog `->event` syntax.
+    // Signature: __moore_event_trigger(ptr event)
+    // Sets the event flag to true and wakes up processes waiting on it.
+    if (calleeName == "__moore_event_trigger") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue eventPtrVal = getValue(procId, callOp.getOperand(0));
+        if (!eventPtrVal.isX()) {
+          uint64_t eventAddr = eventPtrVal.getUInt64();
+          uint64_t offset = 0;
+          MemoryBlock *block = findMemoryBlockByAddress(eventAddr, procId, &offset);
+          if (block && block->size >= offset + 1) {
+            // Set the event flag to true (1)
+            block->data[offset] = 1;
+            block->initialized = true;
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
+                                    << "set event at address 0x"
+                                    << llvm::format_hex(eventAddr, 16) << " to true\n");
+
+            // Check if any processes are waiting on this memory location
+            checkMemoryEventWaiters();
+          } else {
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
+                                    << "could not find memory block for address 0x"
+                                    << llvm::format_hex(eventAddr, 16) << "\n");
+          }
+        } else {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
+                                  << "event pointer is X\n");
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_event_triggered - check if an event was triggered.
+    // Implements the SystemVerilog `.triggered` property on events.
+    // Signature: __moore_event_triggered(ptr event) -> i1
+    // Returns true if the event flag is set.
+    if (calleeName == "__moore_event_triggered") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue eventPtrVal = getValue(procId, callOp.getOperand(0));
+        bool triggered = false;
+
+        if (!eventPtrVal.isX()) {
+          uint64_t eventAddr = eventPtrVal.getUInt64();
+          uint64_t offset = 0;
+          MemoryBlock *block = findMemoryBlockByAddress(eventAddr, procId, &offset);
+          if (block && block->size >= offset + 1 && block->initialized) {
+            triggered = (block->data[offset] != 0);
+          }
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_triggered() - "
+                                  << "event at address 0x"
+                                  << llvm::format_hex(eventAddr, 16)
+                                  << " is " << (triggered ? "triggered" : "not triggered") << "\n");
+        } else {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_triggered() - "
+                                  << "event pointer is X, returning false\n");
+        }
+
+        setValue(procId, callOp.getResult(), InterpretedValue(APInt(1, triggered ? 1 : 0)));
       }
       return success();
     }
@@ -11281,6 +11455,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   if (failed(funcResult))
     return failure();
 
+  // Check if process suspended during function execution (e.g., due to wait)
+  // If so, return early without setting results - the function didn't complete
+  auto &postCallState = processStates[procId];
+  if (postCallState.waiting) {
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: process suspended during call to '"
+                            << calleeName << "'\n");
+    return success();
+  }
+
   // Set the return values
   for (auto [result, retVal] : llvm::zip(callOp.getResults(), results)) {
     setValue(procId, result, retVal);
@@ -11400,10 +11583,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         return failure();
       }
 
-      // Check if process was halted (e.g., by sim.terminate or llvm.unreachable)
+      // Check if process was halted or is waiting (e.g., by sim.terminate,
+      // llvm.unreachable, or moore.wait_event). This is critical for UVM where
+      // wait_for_objection() contains event waits that must suspend execution.
       auto it = processStates.find(procId);
-      if (it != processStates.end() && it->second.halted) {
-        LLVM_DEBUG(llvm::dbgs() << "  Process halted during LLVM function body - "
+      if (it != processStates.end() && (it->second.halted || it->second.waiting)) {
+        LLVM_DEBUG(llvm::dbgs() << "  Process halted/waiting during LLVM function body - "
                                 << "returning early\n");
         cleanupTempMappings();
         return success();

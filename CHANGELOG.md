@@ -1,5 +1,86 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 286 - January 31, 2026
+
+### wait(condition) Memory-Based Polling Fix - IMPLEMENTED
+
+**1. __moore_wait_condition Polling for Heap Memory - FIXED**
+- **Problem**: `wait(condition)` statements where condition depends on class member variables (heap memory) never unblocked. The SSA form computed the condition once, cached the value, and never re-evaluated when memory changed.
+- **Root Cause**: Condition evaluation happens in SSA form - values computed once and cached. When the condition depends on `llvm.load` from heap memory (class fields), changes to memory weren't detected.
+- **Pattern Affected**: UVM objection pattern `wait(dropped == 1)` where `dropped` is a class member variable
+- **Fix**: Implemented polling-based re-evaluation:
+  - Track `llvm.load` operations in condition computation chain
+  - Save restart point (`waitConditionRestartBlock`, `waitConditionRestartOp`)
+  - Poll at 1ps intervals, invalidating only load-dependent cached values
+  - Re-execute from restart point to recompute condition
+  - When condition becomes true, clear restart state and continue
+- **Files**:
+  - `tools/circt-sim/LLHDProcessInterpreter.h` - Added restart tracking fields
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp` - Modified `__moore_wait_condition` handler (lines ~10560-10700) and `executeProcess()` restart handling (lines ~3628-3650)
+- **Test**: `/tmp/test_nested_wait_cond.mlir` - Nested wait condition mimicking UVM objection pattern
+- **Verification**: All 86 circt-sim lit tests pass (85 pass, 1 XFAIL)
+
+**2. UVM Initialization Issue - IDENTIFIED (Not Yet Fixed)**
+- **Problem**: UVM simulation with uvm-core still terminates at time 0
+- **Root Cause Found**: UVM's `run_test()` returns early because `m_children` associative array appears empty, triggering fatal error before phase fork
+- **Separate from wait(condition)**: This uses `moore.wait_event` (event-based waiting), not `wait(condition)`
+- **Next Steps**: Investigate associative array initialization for UVM component registration
+
+### Test Suite Summary (Iteration 286)
+| Suite | Status | Notes |
+|-------|--------|-------|
+| ImportVerilog | **219/219 (100%)** | FULL PARITY |
+| circt-sim | **85/86 (98.84%)** | 1 XFAIL |
+| wait(condition) | **FIXED** | Memory-based conditions now poll correctly |
+| UVM run_test | **BLOCKED** | Component registration issue |
+
+---
+
+## Iteration 285 - February 1, 2026
+
+### UVM Event Trigger Implementation
+
+**1. __moore_event_trigger Runtime Function - IMPLEMENTED**
+- **Problem**: UVM events (`->event` syntax) not working - runtime function was missing
+- **Fix**: Added `__moore_event_trigger` to MooreRuntime.cpp with interpreter support
+- **Files**:
+  - `lib/Runtime/MooreRuntime.cpp` - Added `__moore_event_trigger` function
+  - `include/circt/Runtime/MooreRuntime.h` - Added function declaration
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp` - Added interpreter handlers
+  - `unittests/Runtime/MooreRuntimeTest.cpp` - Added 5 unit tests
+  - `test/Tools/circt-sim/event-trigger-simple.mlir` - New end-to-end test
+
+**2. EventTriggerOpConversion Address Bug - FIXED**
+- **Problem**: EventTriggerOpConversion passed temporary stack address instead of actual event field
+- **Root Cause**: Created `llvm.alloca`, stored event value, passed alloca address (wrong!)
+- **Fix**: Trace back from event value to find `moore.read` op, use its ref operand directly
+- **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (EventTriggerOpConversion)
+- **Tests**: Updated `cross-module-event.mlir`, `event-wait-ops.mlir`
+
+**3. OpenTitan IP Simulation - 9 More IPs Tested**
+- All tested IPs pass successfully:
+  - prim_diff_decode, prim_alert_sender, prim_lfsr
+  - prim_edge_detector, prim_intr_hw, prim_filter
+  - timer_core, dma, mbx
+- Delta overflow issues resolved
+- No timeout issues
+
+**4. External Test Suite Progress**
+- **sv-tests**: 556/717 (77%) without UVM, ~95% with UVM_HOME set
+- **verilator-verification**: 120/141 (85%)
+- Common patterns identified: extern constraint lookup, coverpoint iff syntax, signal strengths
+
+### Test Suite Summary (Iteration 285)
+| Suite | Status | Notes |
+|-------|--------|-------|
+| ImportVerilog | **219/219 (100%)** | FULL PARITY |
+| circt-sim | **81/82 (98.78%)** | 1 XFAIL |
+| OpenTitan IPs | **40+ pass** | 9 more tested this session |
+| sv-tests | **556/717 (77%)** | ~95% with UVM_HOME |
+| verilator-verification | **120/141 (85%)** | Core features working |
+
+---
+
 ## Final Session Summary - February 1, 2026
 
 ### Final Achievement - 100% ImportVerilog Pass Rate!
@@ -89,6 +170,61 @@
 - **Tests**:
   - `test/Tools/circt-bmc/result-token.mlir`
   - `test/Tools/circt-bmc/lower-to-bmc.mlir`
+
+**6. Derived clock keys for BMC - FIXED**
+- **Problem**: Derived clocks with gating expressions could not produce stable
+  clock IDs, leading to mismatches between BMC clock inputs and property clocks.
+- **Fix**: Added structural clock keys for derived expressions and attached
+  `bmc.clock_key` attributes to `ltl.clock` ops for stable mapping.
+- **Files**:
+  - `include/circt/Support/I1ValueSimplifier.h`
+  - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- **Test**: `test/Tools/circt-bmc/circt-bmc-derived-clock-keys.mlir`
+
+**7. I1 clock key unit coverage - ADDED**
+- **Problem**: Derived clock key hashing lacked unit coverage for commutative
+  structural equivalence and root/constant handling.
+- **Fix**: Added unit tests to validate `getI1ValueKey` for root/const keys and
+  commutative/associative structural hashing.
+- **Files**: `unittests/Support/I1ValueSimplifierTest.cpp`
+
+**8. BMC multi-drive 4-state resolution - ADDED**
+- **Problem**: Multiple unconditional LLHD drives on 4-state signals were
+  serialized, losing multi-driver X/Z resolution semantics.
+- **Fix**: Resolve multi-drive 4-state values via shared Support helper before
+  lowering to BMC SSA; added enable-aware resolution support plus unit/MLIR
+  regressions.
+- **Files**:
+  - `include/circt/Support/FourStateUtils.h`
+  - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+  - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+  - `unittests/Support/FourStateUtilsTest.cpp`
+  - `test/Tools/circt-bmc/lower-to-bmc-llhd-multi-drive-xprop.mlir`
+  - `test/Tools/circt-bmc/lower-to-bmc-llhd-multi-drive-enable-xprop.mlir`
+
+**9. BMC/LEC drive-strength precedence (partial) - ADDED**
+- **Problem**: Conflicting multi-drive values ignored LLHD strength attributes.
+- **Fix**: Strength-aware resolution for 4-state drivers in BMC and LEC
+  (supply/strong/pull/weak), treating highz as no-drive; added unit + LEC
+  regression coverage.
+- **Files**:
+  - `include/circt/Support/FourStateUtils.h`
+  - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+  - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+  - `unittests/Support/FourStateUtilsTest.cpp`
+  - `test/Tools/circt-lec/lec-strip-llhd-signal-strength-resolve.mlir`
+
+**Tests (Feb 1, 2026)**
+- sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0 skip=1010
+- yosys-sva BMC: 14 tests, failures=0, skipped=2
+- yosys-sva LEC: total=14 pass=14 fail=0 error=0 skip=2
+- verilator-verification BMC: total=17 pass=17 fail=0 error=0 skip=0
+- verilator-verification LEC: total=17 pass=17 fail=0 error=0 skip=0
+- AVIP compile smoke (circt-verilog): AHB/APB/AXI4/I2S/I3C/UART PASS; AXI4Lite FAIL
+  (out-of-bounds slices in VIP), JTAG FAIL (UVM default arg mismatch), SPI FAIL
+  (nested class non-static property + empty argument in VIP).
+- OpenTitan LEC smoke: `aes_sbox_canright` PASS.
 
 ### Test Suite Results
 
@@ -257,6 +393,94 @@
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
 - `ls /home/thomas-ahle/verilator-verification` (missing)
+
+## Iteration 293 - February 1, 2026
+
+### LLHD Unroll-Loops: Preserve LLVM Alloca Uses
+- Guarded unroll-loop pruning so blocks with values used outside the block are
+  not dropped, avoiding null operands during loop unrolling.
+- Fixes `circt-verilog --ir-hw` crashes on nested loops with `llvm.alloca`
+  (e.g. OpenTitan `aes_pkg.sv` / `aes_mvm` pattern).
+- Regression: `test/Dialect/LLHD/Transforms/unroll-loops.mlir`
+  (LoopWithAlloca).
+### OpenTitan LEC Runner: Remove Unsupported Assume-Known Flag
+- `utils/run_opentitan_circt_lec.py` no longer passes
+  `--assume-known-inputs` (unsupported by circt-lec).
+- Regression: `test/Tools/run-opentitan-lec-no-assume-known.test`.
+
+### LEC: Lower LLHD Local Ref Probes/Drives in Combinational
+- Added lowering for `llhd.probe`/`llhd.drive` on local refs in
+  `llhd.combinational` by converting to `llvm.load`/`llvm.store`, unblocking
+  LEC stripping when refs originate from `llvm.alloca`.
+- Regression: `test/Tools/circt-lec/lec-strip-llhd-local-ref.mlir`.
+
+### LEC: Align Inputs When One Side Is Abstracted
+- Added optional IO alignment in ConstructLEC so approximate LLHD abstraction
+  can insert missing inputs when outputs match and inputs are a prefix.
+- Regression: `test/Tools/circt-lec/lec-align-io-abstraction.mlir`.
+
+### BMC: Deduplicate Derived Clocks Using Value Keys
+- Lower-to-BMC now uses `getI1ValueKey` to deduplicate and map equivalent
+  derived clocks that appear as distinct SSA values in graph regions.
+- Regressions:
+  - `test/Tools/circt-bmc/circt-bmc-derived-clock-keys.mlir`
+  - `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clocks.mlir`
+
+### BMC: X-Prop $stable/$changed E2E Reinstated
+- Added end-to-end X-prop checks for `$stable` and `$changed` after clock-key
+  deduping fixed derived-clock mismatches.
+- Regression: `test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv`.
+
+### LEC Strict: Resolve Multi-Drive Signals Even If Probes Come First
+- Strict LLHD signal stripping now resolves multi-drive 4-state signals when
+  drive values dominate the probes, even if probe ops appear before drives.
+- Regression: `test/Tools/circt-lec/lec-strict-llhd-signal-probe-before-drive.mlir`.
+
+### LEC Strict: Eliminate InOut Ports With 4-State Read/Write Resolution
+- `circt-lec` now lowers `hw.inout` ports in strict mode, resolving 4-state
+  read/write cases against internal drives and allowing multiple same-value
+  writers for 2-state ports; struct-field and constant array-index inout
+  reads/writes are supported.
+- Strict mode rejects 2-state inout read/write (requires 4-state semantics).
+- Regressions:
+  - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-resolve-read-write.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout-read-write-2state.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout-read-write-4state.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout.mlir`
+  - `test/Tools/circt-lec/lec-strict-llhd-inout.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout-struct-field.mlir`
+  - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-struct-field.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout-array-index.mlir`
+  - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir`
+
+**Tests**
+- `build/bin/circt-opt --llhd-unroll-loops test/Dialect/LLHD/Transforms/unroll-loops.mlir | build/bin/FileCheck test/Dialect/LLHD/Transforms/unroll-loops.mlir`
+- `build/bin/circt-verilog --ir-hw /tmp/aes_mvm_min.sv` (warning: UVM library not found)
+- `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-no-assume-known.test`
+- `build/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-local-ref.mlir test/Tools/circt-lec/lec-align-io-abstraction.mlir`
+- `env LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --workdir /tmp/opentitan-lec-run --keep-workdir`
+- `build/bin/circt-opt --lower-to-bmc="top-module=top bound=2" test/Tools/circt-bmc/circt-bmc-derived-clock-keys.mlir | build/bin/FileCheck test/Tools/circt-bmc/circt-bmc-derived-clock-keys.mlir`
+- `build/bin/circt-bmc --emit-mlir -b 2 --module top test/Tools/circt-bmc/circt-bmc-equivalent-derived-clocks.mlir | build/bin/FileCheck test/Tools/circt-bmc/circt-bmc-equivalent-derived-clocks.mlir`
+- `build/bin/circt-verilog --ir-hw test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv | build/bin/circt-bmc -b 1 --module=sva_xprop_stable_sat - | build/bin/FileCheck test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv --check-prefix=STABLE`
+- `build/bin/circt-verilog --ir-hw test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv | build/bin/circt-bmc -b 1 --module=sva_xprop_changed_sat - | build/bin/FileCheck test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv --check-prefix=CHANGED`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+- `ninja -C build circt-lec`
+- `build/bin/circt-lec --emit-mlir --strict-llhd -c1=top -c2=top test/Tools/circt-lec/lec-strict-llhd-signal-probe-before-drive.mlir test/Tools/circt-lec/lec-strict-llhd-signal-probe-before-drive.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strict-llhd-signal-probe-before-drive.mlir`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+- `env LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --workdir /tmp/opentitan-lec-run --keep-workdir`
+- `OUT=/home/thomas-ahle/circt/avip-ahb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+- `OUT=/home/thomas-ahle/circt/avip-apb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
+- `OUT=/home/thomas-ahle/circt/avip-axi4_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4_avip`
+- `OUT=/home/thomas-ahle/circt/avip-axi4Lite_avip.log FILELIST=/home/thomas-ahle/mbit/axi4Lite_avip/sim/Axi4LiteProject.f FILELIST_BASE=/home/thomas-ahle/mbit/axi4Lite_avip/sim utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4Lite_avip` (fails: VIP range OOB in cover properties)
+- `OUT=/home/thomas-ahle/circt/avip-i2s_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/i2s_avip`
+- `OUT=/home/thomas-ahle/circt/avip-i3c_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/i3c_avip`
+- `OUT=/home/thomas-ahle/circt/avip-jtag_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip` (fails: bind/vif + enum cast in VIP)
+- `OUT=/home/thomas-ahle/circt/avip-spi_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/spi_avip` (fails: nested block comments + empty arg + non-static property)
+- `OUT=/home/thomas-ahle/circt/avip-uart_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/uart_avip`
 
 ## Iteration 281 - February 1, 2026
 
