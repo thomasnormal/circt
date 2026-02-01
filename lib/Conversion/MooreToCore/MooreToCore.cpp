@@ -9703,10 +9703,21 @@ struct ConditionalOpConversion : public OpConversionPattern<ConditionalOp> {
     auto loc = op.getLoc();
 
     // Extract the boolean condition from a 4-state struct if needed.
-    // For 4-state values, we use the "value" field and treat X/Z as false.
+    // For 4-state values, we use the "value" field and track unknown bits.
     Value condition = adaptor.getCondition();
-    if (isFourStateStructType(condition.getType()))
-      condition = extractFourStateValue(rewriter, loc, condition);
+    Value conditionVal = condition;
+    Value conditionUnknown;
+    if (isFourStateStructType(condition.getType())) {
+      conditionVal = extractFourStateValue(rewriter, loc, condition);
+      Value unknown = extractFourStateUnknown(rewriter, loc, condition);
+      Value zero = hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
+      conditionUnknown = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, unknown, zero);
+    }
+    if (!conditionUnknown) {
+      conditionUnknown =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+    }
 
     auto hasNoWriteEffect = [](Region &region) {
       auto result = region.walk([](Operation *operation) {
@@ -9739,13 +9750,41 @@ struct ConditionalOpConversion : public OpConversionPattern<ConditionalOp> {
       rewriter.eraseOp(trueTerm);
       rewriter.eraseOp(falseTerm);
 
-      rewriter.replaceOpWithNewOp<comb::MuxOp>(op, condition,
-                                               convTrueVal, convFalseVal);
+      if (!isFourStateStructType(type)) {
+        rewriter.replaceOpWithNewOp<comb::MuxOp>(op, conditionVal, convTrueVal,
+                                                 convFalseVal);
+        return success();
+      }
+
+      Value trueVal = extractFourStateValue(rewriter, loc, convTrueVal);
+      Value trueUnk = extractFourStateUnknown(rewriter, loc, convTrueVal);
+      Value falseVal = extractFourStateValue(rewriter, loc, convFalseVal);
+      Value falseUnk = extractFourStateUnknown(rewriter, loc, convFalseVal);
+
+      Value selectedVal =
+          comb::MuxOp::create(rewriter, loc, conditionVal, trueVal, falseVal);
+      Value selectedUnk =
+          comb::MuxOp::create(rewriter, loc, conditionVal, trueUnk, falseUnk);
+
+      Value mergedVal =
+          comb::AndOp::create(rewriter, loc, trueVal, falseVal, false);
+      Value diff =
+          comb::XorOp::create(rewriter, loc, trueVal, falseVal, false);
+      Value mergedUnk =
+          comb::OrOp::create(rewriter, loc, trueUnk, falseUnk, false);
+      mergedUnk = comb::OrOp::create(rewriter, loc, mergedUnk, diff, false);
+
+      Value finalVal = comb::MuxOp::create(rewriter, loc, conditionUnknown,
+                                           mergedVal, selectedVal);
+      Value finalUnk = comb::MuxOp::create(rewriter, loc, conditionUnknown,
+                                           mergedUnk, selectedUnk);
+      auto result = createFourStateStruct(rewriter, loc, finalVal, finalUnk);
+      rewriter.replaceOp(op, result);
       return success();
     }
 
     auto ifOp =
-        scf::IfOp::create(rewriter, loc, type, condition);
+        scf::IfOp::create(rewriter, loc, type, conditionVal);
     rewriter.inlineRegionBefore(op.getTrueRegion(), ifOp.getThenRegion(),
                                 ifOp.getThenRegion().end());
     rewriter.inlineRegionBefore(op.getFalseRegion(), ifOp.getElseRegion(),

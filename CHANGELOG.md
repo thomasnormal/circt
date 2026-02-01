@@ -150,6 +150,16 @@
 **Tests**
 - `build/bin/circt-opt test/Conversion/MooreToCore/fourstate-bit-extract.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
 
+## Iteration 288 - February 1, 2026
+
+### MooreToCore 4-State Conditional X-Prop
+- 4-state `moore.conditional` now merges true/false values when the condition
+  is X/Z, matching bitwise X-propagation semantics.
+- Regression: `test/Conversion/MooreToCore/conditional-xprop.mlir`.
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/conditional-xprop.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/conditional-xprop.mlir`
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates
