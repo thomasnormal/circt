@@ -7,66 +7,78 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 1, 2026 (Iteration 299)
+## Current Status - February 1, 2026 (Iteration 300)
 
-### Latest Fix: Multiple Delays in Fork Branches
+### Session Summary - Key Fixes
 
-Fixed a critical bug where multiple time delays in class methods called from fork-join branches would fail after the first delay. The second (and subsequent) delays were not being scheduled because `executeProcess` returned early when a function suspended during call stack resumption.
-
-**Test**: `test/Tools/circt-sim/fork-multiple-delays.sv`
-
-### Major Milestone: AVIP Simulation Initializes UVM!
-
-APB and AHB AVIPs now compile and run with uvm-core. UVM infrastructure initializes, report server starts, and BFM components are created.
+| Fix | Commit | Test |
+|-----|--------|------|
+| Multiple delays in fork branches | `8980fdd6c` | `fork-multiple-delays.sv` |
+| wait(condition) signal invalidation | `8980fdd6c` | `wait-condition-signal.sv` |
+| UVM DPI function signature | `a01b84ad1` | UVM cmdline now works |
 
 ### Test Suite Status
 
-| Suite | Pass | Total | Rate |
-|-------|------|-------|------|
-| **ImportVerilog** | 221 | 221 | **100%** |
-| **sv-tests** | 314 | 321 | **97.8%** |
-| **yosys-sva** | 14 | 14 | **100%** |
-| **verilator-verification** | 120 | 141 | **85%** |
-| **AVIP Compile** | 5 | 5 | **100%** |
-| **AVIP Simulation** | 2 | 5 | **40%** |
+| Suite | Pass | Total | Rate | Status |
+|-------|------|-------|------|--------|
+| **ImportVerilog** | 221 | 221 | **100%** | ✅ |
+| **sv-tests** | 314 | 321 | **97.8%** | ✅ |
+| **yosys-sva** | 14 | 14 | **100%** | ✅ |
+| **lit tests** | 3116 | 3401 | **91.6%** | 🔄 |
+| **verilator-verification** | 120 | 141 | **85%** | 🔄 |
+| **AVIP Compile** | 5 | 5 | **100%** | ✅ |
+| **AVIP Simulation** | 2 | 5 | **40%** | 🔄 |
 
 ### AVIP Status
 
 | Protocol | Compile | Simulate | Notes |
 |----------|---------|----------|-------|
-| APB | PASS | PARTIAL | UVM init, BFMs created, slow |
-| AHB | PASS | PARTIAL | UVM init, ~179us sim time |
-| I2S | PASS | - | Not yet tested |
-| UART | FAIL | - | Covergroup syntax issue |
-| I3C | PASS | - | Not yet tested |
+| APB | ✅ | 🔄 PARTIAL | UVM init, BFMs created |
+| AHB | ✅ | 🔄 PARTIAL | UVM init, ~179us sim time |
+| I2S | ✅ | - | Not yet tested |
+| UART | ❌ | - | Covergroup syntax issue |
+| I3C | ✅ | - | Not yet tested |
 
-### Key Recent Commits
+---
 
-- [pending] [circt-sim] Fix multiple delays in fork branch call stack resume
-- `23c93602d` [circt-sim] Implement call stack for fork-join resume inside functions
-- `7055da9f1` [ImportVerilog] Handle unconverted class specializations in inheritance check
-- `73cf1b922` [ImportVerilog] Generate global ctors for parameterized class statics
+## Workstreams & Next Tasks
 
-### Remaining Work
+### Track 1: UVM Phase Execution (CRITICAL)
+**Status**: BLOCKED by static associative arrays
+**Next**: Fix `GlobalVariableOpConversion` to initialize associative array globals
 
-**UVM `run_test()` Phase Machinery**: UVM cmdline processing now works (DPI fix).
+### Track 2: Test Suite Coverage
+**Status**: sv-tests 97.8%, verilator 85%
+**Next**: Run full test suites, categorize remaining failures
 
-**CRITICAL BLOCKER FOUND - Static Associative Arrays**:
-Static associative arrays (class static variables with string keys) do not persist values across function calls. When entries are added in one static function call, they are not found in subsequent calls.
+### Track 3: OpenTitan IP Testing
+**Status**: Many IPs compile (UART, I2C, timer, crypto primitives)
+**Next**: Test more complex IPs, identify missing features
 
-**Root cause**: `GlobalVariableOpConversion` in `lib/Conversion/MooreToCore/MooreToCore.cpp:5083` creates globals with zero initialization. For associative arrays, this means the global pointer is null. Unlike local variables (which call `__moore_assoc_create` at line 4623), globals never get initialized.
+### Track 4: AVIP Simulation
+**Status**: APB/AHB initialize UVM but phases don't run
+**Next**: Once Track 1 completes, test full UVM flow
 
-**Fix needed**: Add special handling in `GlobalVariableOpConversion` for associative array types to create a global constructor that calls `__moore_assoc_create` and stores the result in the global.
+---
 
-**Impact**: This breaks UVM's `uvm_domain::m_domains` static variable, causing `get_common_domain()` to return null. Without domains, UVM phases cannot run.
+## Critical Blocker: Static Associative Arrays
 
-**Test case**: `test/Tools/circt-sim/static-assoc-array-bug.sv` demonstrates the bug.
+**Problem**: Static associative arrays (class static variables) don't persist values across function calls.
 
-**Other Identified Issues**:
-1. **Automatic Variables in Fork Loops**: When a fork is inside a loop, `automatic` variable declarations don't capture the current loop value.
-2. **Event Trigger Not Waking Waiters**: Event trigger inside fork doesn't wake waiting processes.
+**Root cause**: `GlobalVariableOpConversion` in `MooreToCore.cpp:5083` creates zero-initialized globals. For associative arrays, the global pointer is null and never initialized. Local variables work because `VariableOpConversion` (line 4623) calls `__moore_assoc_create`.
 
-**Class Member Access**: VERIFIED WORKING (Iteration 260 fix). Not a current blocker.
+**Fix**: Add special handling in `GlobalVariableOpConversion` for `AssocArrayType` to create a global constructor that calls `__moore_assoc_create` and stores the result.
+
+**Impact**: Breaks UVM's `uvm_domain::m_domains`, causing `get_common_domain()` to return null. Without domains, UVM phases cannot run.
+
+**Test**: `test/Tools/circt-sim/static-assoc-array-bug.sv`
+
+---
+
+## Other Known Issues
+
+1. **Automatic Variables in Fork Loops**: `automatic` variables in loops don't capture current iteration value
+2. **Event Trigger Not Waking Waiters**: `->event` inside fork doesn't wake `@(event)` waiters
 
 ---
 
