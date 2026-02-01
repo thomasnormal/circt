@@ -52,6 +52,43 @@ inline bool traceI1ValueRoot(mlir::Value value, mlir::BlockArgument &root) {
     return false;
   if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
     return traceI1ValueRoot(fromClock.getInput(), root);
+  if (auto inv = value.getDefiningOp<seq::ClockInverterOp>())
+    return traceI1ValueRoot(inv.getInput(), root);
+  if (auto gate = value.getDefiningOp<seq::ClockGateOp>()) {
+    bool enableOn = false;
+    bool enableOff = true;
+    auto considerEnable = [&](mlir::Value operand) {
+      if (auto literal = getConstI1Value(operand)) {
+        enableOn |= *literal;
+        if (*literal)
+          enableOff = false;
+        return;
+      }
+      enableOff = false;
+    };
+    considerEnable(gate.getEnable());
+    if (auto testEnable = gate.getTestEnable())
+      considerEnable(testEnable);
+    if (enableOn)
+      return traceI1ValueRoot(gate.getInput(), root);
+    if (enableOff)
+      return true;
+    return false;
+  }
+  if (auto mux = value.getDefiningOp<seq::ClockMuxOp>()) {
+    if (auto literal = getConstI1Value(mux.getCond()))
+      return traceI1ValueRoot(*literal ? mux.getTrueClock()
+                                       : mux.getFalseClock(),
+                              root);
+    if (mux.getTrueClock() == mux.getFalseClock())
+      return traceI1ValueRoot(mux.getTrueClock(), root);
+    return false;
+  }
+  if (auto div = value.getDefiningOp<seq::ClockDividerOp>()) {
+    if (div.getPow2() == 0)
+      return traceI1ValueRoot(div.getInput(), root);
+    return false;
+  }
   if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
     return traceI1ValueRoot(toClock.getInput(), root);
   if (auto cast = value.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
