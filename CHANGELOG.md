@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 287 - January 31, 2026
+
+### resolveSignalId llhd.prb Fix - CRITICAL BUG FIX
+
+**Problem**: Stores to `llhd.prb` results were incorrectly being treated as signal drives instead of memory writes.
+
+**Symptom**: `wait(condition)` with memory-backed conditions never unblocked because when Process 2 stored to the condition variable pointer (obtained via `llhd.prb`), the store was incorrectly interpreted as driving the original signal instead of writing to heap memory.
+
+**Root Cause**: In `resolveSignalId()`, there was code that traced through `llhd::ProbeOp`:
+```cpp
+// BUGGY CODE - REMOVED
+if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
+  return resolveSignalId(probeOp.getSignal());
+}
+```
+
+This was incorrect because the result of `llhd.prb` is a **VALUE** (e.g., pointer address `0x100000`), not a signal reference. When a store operation's address came from a probe result, `resolveSignalId()` would incorrectly return the original signal's ID, causing the store to drive the signal instead of writing to memory.
+
+**Fix**: Removed the `llhd::ProbeOp` tracing from `resolveSignalId()`. Added explanatory comment:
+```cpp
+// NOTE: We explicitly do NOT trace through llhd::ProbeOp here.
+// The result of a probe is a VALUE (not a signal reference).
+// Operations on probe results should treat them as values, not signals.
+// This is important for cases like:
+//   %ptr = llhd.prb %sig : !llvm.ptr  // %ptr is a VALUE (pointer address)
+//   llvm.store %val, %ptr            // Should write to MEMORY, not drive %sig
+```
+
+**Files Modified**:
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Lines ~1682-1688
+
+**Test Added**:
+- `test/Tools/circt-sim/wait-condition-memory.mlir` - Tests polling-based re-evaluation for memory-backed conditions
+
+**Verification**: All 87 circt-sim lit tests pass (86 pass, 1 XFAIL)
+
+### Test Suite Summary (Iteration 287)
+| Suite | Status | Notes |
+|-------|--------|-------|
+| ImportVerilog | **219/219 (100%)** | FULL PARITY |
+| circt-sim | **86/87 (98.85%)** | 1 XFAIL |
+| wait(condition) | **FIXED** | Memory writes via probe results work correctly |
+
+---
+
 ## Iteration 286 - January 31, 2026
 
 ### wait(condition) Memory-Based Polling Fix - IMPLEMENTED
@@ -439,9 +484,12 @@
 ### LEC Strict: Eliminate InOut Ports With 4-State Read/Write Resolution
 - `circt-lec` now lowers `hw.inout` ports in strict mode, resolving 4-state
   read/write cases against internal drives and allowing multiple same-value
-  writers for 2-state ports; struct-field and constant array-index inout
-  reads/writes are supported.
+  writers for 2-state ports; struct-field, constant array-index, and dynamic
+  array-index (including nested dynamic indices and struct/constant array
+  suffixes) inout reads/writes are supported.
 - Strict mode rejects 2-state inout read/write (requires 4-state semantics).
+- Dynamic array-index inout writes remain conservative: other writers to the
+  same array base are rejected.
 - Regressions:
   - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-resolve-read-write.mlir`
   - `test/Tools/circt-lec/lec-strict-inout-read-write-2state.mlir`
@@ -451,6 +499,8 @@
   - `test/Tools/circt-lec/lec-strict-inout-struct-field.mlir`
   - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-struct-field.mlir`
   - `test/Tools/circt-lec/lec-strict-inout-array-index.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout-dynamic-struct-field.mlir`
+  - `test/Tools/circt-lec/lec-strict-inout-dynamic-nested-array-index.mlir`
   - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir`
 
 **Tests**
