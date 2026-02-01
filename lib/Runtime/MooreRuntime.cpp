@@ -11791,23 +11791,25 @@ void initCommandLineArgs() {
 }
 } // namespace
 
-extern "C" MooreString uvm_dpi_get_next_arg_c(int32_t *idx) {
+// Static index for iterating command line arguments
+static int32_t uvmCmdLineIdx = 0;
+
+extern "C" MooreString uvm_dpi_get_next_arg_c(int32_t init) {
   initCommandLineArgs();
 
-  if (!idx) {
+  // UVM DPI spec: init=1 resets to start, init=0 gets next arg
+  if (init) {
+    uvmCmdLineIdx = 0;
+  }
+
+  // Return empty string when no more arguments
+  if (uvmCmdLineIdx >= static_cast<int32_t>(cmdLineArgs.size())) {
     MooreString result = {nullptr, 0};
     return result;
   }
 
-  // Stub: Return empty string (no arguments)
-  // A real implementation would parse actual command line arguments
-  if (*idx >= static_cast<int32_t>(cmdLineArgs.size())) {
-    MooreString result = {nullptr, 0};
-    return result;
-  }
-
-  const std::string &arg = cmdLineArgs[*idx];
-  (*idx)++;
+  const std::string &arg = cmdLineArgs[uvmCmdLineIdx];
+  uvmCmdLineIdx++;
 
   MooreString result;
   result.len = static_cast<int64_t>(arg.size());

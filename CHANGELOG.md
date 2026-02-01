@@ -18,6 +18,17 @@ Fixed a critical bug where `wait(condition)` statements that depend on LLHD sign
 
 **Test**: `test/Tools/circt-sim/wait-condition-signal.sv` - Tests wait with signal-based conditions
 
+### UVM DPI Function Signature Fix - FIXED
+
+Fixed `uvm_dpi_get_next_arg_c` function signature mismatch that caused UVM cmdline processor to hang.
+
+**Bug**: CIRCT had `uvm_dpi_get_next_arg_c(int32_t *idx)` but UVM expects `uvm_dpi_get_next_arg_c(int init)`.
+When UVM called with `init=1`, CIRCT tried to use `1` as a pointer address, causing undefined behavior.
+
+**Fix**: Changed parameter from pointer to value, added static index for iteration.
+
+**Result**: UVM cmdline processor now works correctly.
+
 ### AVIP Simulation Progress - APB/AHB/I2S/I3C Initialize UVM!
 
 APB and AHB AVIPs now compile and simulate with uvm-core. UVM infrastructure initializes:

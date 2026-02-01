@@ -49,7 +49,11 @@ APB and AHB AVIPs now compile and run with uvm-core. UVM infrastructure initiali
 
 ### Remaining Work
 
-**UVM `run_test()` Phase Machinery**: UVM infrastructure initializes but phases don't fully execute. Factory registration works, BFMs create, but test phases stall.
+**UVM `run_test()` Phase Machinery**: UVM cmdline processing now works (DPI fix). Remaining blockers:
+
+1. **Automatic Variables in Fork Loops**: When a fork is inside a loop, `automatic` variable declarations don't capture the current loop value - they reference the original variable instead.
+
+2. **Event Trigger Not Waking Waiters**: When an event is triggered with `->event` inside a fork, processes waiting on `@(event)` are not woken up. The trigger writes to a temp alloca instead of driving the LLHD signal.
 
 **Class Member Access**: VERIFIED WORKING (Iteration 260 fix). Not a current blocker.
 
