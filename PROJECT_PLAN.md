@@ -9,6 +9,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ## Remaining Limitations & Next Steps
 
+**Verification/LEC/BMC**
+- Extend 4-state modeling to remaining ops/extnets and add matching regressions.
+- Dynamic inout writer merges are limited to `--resolve-read-write` on 4-state
+  values; full multi-driver resolution semantics are still missing.
+
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
 
 > **See `.claude/plans/ticklish-sleeping-pie.md` for detailed implementation plan.**
@@ -444,7 +449,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - LEC strict now supports constant and dynamic array-index inout accesses by
   lifting them to explicit read/write ports, including nested dynamic indices
   and struct/constant-array suffixes; dynamic indices still reject other
-  writers to the same array.
+  writers to the same array unless 4-state resolution is enabled.
 - `simplifyI1Value` now folds `comb.icmp` against constant i1s for clock
   canonicalization (supports `clk == 1`/`clk != 1` patterns).
 - ImportVerilog now coerces mixed 2-/4-state operands to a common domain before

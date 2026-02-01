@@ -2,9 +2,24 @@
 
 ## Iteration 288 - February 1, 2026
 
-### Continuing UVM run_test() Investigation
+### UVM run_test() Root Cause Analysis Complete
 
 **Problem**: UVM `run_test()` terminates at time 0 - simulation never advances through UVM phases.
+
+**Root Causes Identified (2 separate issues):**
+
+1. **UVM Factory Registration Bug** (in MooreToCore.cpp codegen):
+   - `uvm_component_registry::get()` uses local stack variable instead of global static singleton
+   - Never calls `initialize()` which registers component type with UVM factory
+   - Result: Test class not registered → factory can't create test → `m_children` empty → early return
+
+2. **`moore.wait_event` Memory Event Tracing Bug** (in LLHDProcessInterpreter.cpp):
+   - `wait_for_objection()` uses `moore.wait_event` with UVM objection events in heap memory
+   - Interpreter's memory event tracing (lines 9169-9319) fails to locate the event address
+   - Falls through to "single delta cycle wait" (line 9331) instead of blocking
+   - Result: `run_phases()` returns immediately → `sim.terminate` at time 0
+
+**Class Member Access Bug**: Confirmed FIXED (already in codebase at `ClassPropertyRefOpConversion` lines 2191-2211)
 
 **Current Investigation (4 parallel agents):**
 1. **Fork/Join Analysis** - Investigating `sim.fork` join types and parent suspension logic
@@ -545,7 +560,11 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
   suffixes) inout reads/writes are supported.
 - Strict mode rejects 2-state inout read/write (requires 4-state semantics).
 - Dynamic array-index inout writes remain conservative: other writers to the
-  same array base are rejected.
+  same array base are rejected unless 4-state resolution is enabled.
+- Multiple dynamic writers now merge under `--resolve-read-write` for 4-state
+  inout arrays.
+- Dynamic inout read ports are now shared across multiple dynamic access groups
+  with the same base, and read_inout ops are deduplicated at instantiation sites.
 - Fixed a crash in inout lowering when a dynamic index path had both reads and
   writes, by rewriting reads before resolving internal drives.
 - Regressions:
@@ -560,6 +579,8 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
   - `test/Tools/circt-lec/lec-strict-inout-dynamic-struct-field.mlir`
   - `test/Tools/circt-lec/lec-strict-inout-dynamic-nested-array-index.mlir`
   - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir`
+  - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-dynamic-multi-writer.mlir`
+  - `unittests/Dialect/SV/HWEliminateInOutPortsTest.cpp`
 
 **Tests**
 - `build/bin/circt-opt --llhd-unroll-loops test/Dialect/LLHD/Transforms/unroll-loops.mlir | build/bin/FileCheck test/Dialect/LLHD/Transforms/unroll-loops.mlir`
@@ -580,6 +601,10 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
 - `env LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --workdir /tmp/opentitan-lec-run --keep-workdir`
+- `ninja -C build CIRCTSVTests`
+- `build/tools/circt/unittests/Dialect/SV/CIRCTSVTests --gtest_filter=HWEliminateInOutPortsTest.MergeDynamicWriters`
+- `ninja -C build circt-opt CIRCTSVTests`
+- `build/bin/circt-opt --hw-eliminate-inout-ports test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir | build/bin/FileCheck test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir`
 - `OUT=/home/thomas-ahle/circt/avip-ahb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
 - `OUT=/home/thomas-ahle/circt/avip-apb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
 - `OUT=/home/thomas-ahle/circt/avip-axi4_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4_avip`
