@@ -573,85 +573,8 @@ void LowerToBMCPass::runOnOperation() {
     }
 
     if (!clockInputs.empty()) {
-      std::function<bool(Value, BlockArgument &)> traceRoot =
-          [&](Value value, BlockArgument &root) -> bool {
-        if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
-          value = fromClock.getInput();
-        if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
-          value = toClock.getInput();
-        if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
-          if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
-            return traceRoot(cast->getOperand(0), root);
-        }
-        if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
-          return traceRoot(bitcast.getInput(), root);
-        if (auto result = dyn_cast<OpResult>(value)) {
-          if (auto explode =
-                  dyn_cast<hw::StructExplodeOp>(result.getOwner()))
-            return traceRoot(explode.getInput(), root);
-        }
-        if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
-          return traceRoot(extract.getInput(), root);
-        if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
-          return traceRoot(extractOp.getInput(), root);
-        if (auto cst = value.getDefiningOp<hw::ConstantOp>())
-          return true;
-        if (auto cst = value.getDefiningOp<arith::ConstantOp>())
-          return true;
-        if (auto arg = dyn_cast<BlockArgument>(value)) {
-          if (!root)
-            root = arg;
-          return arg == root;
-        }
-        if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
-          for (auto operand : andOp.getOperands())
-            if (!traceRoot(operand, root))
-              return false;
-          return true;
-        }
-        if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
-          for (auto operand : orOp.getOperands())
-            if (!traceRoot(operand, root))
-              return false;
-          return true;
-        }
-        if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
-          for (auto operand : xorOp.getOperands())
-            if (!traceRoot(operand, root))
-              return false;
-          return true;
-        }
-        if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
-          Value other;
-          if (getConstI1Value(icmpOp.getLhs()))
-            other = icmpOp.getRhs();
-          else if (getConstI1Value(icmpOp.getRhs()))
-            other = icmpOp.getLhs();
-          else
-            return false;
-          auto otherTy = dyn_cast<IntegerType>(other.getType());
-          if (!otherTy || otherTy.getWidth() != 1)
-            return false;
-          switch (icmpOp.getPredicate()) {
-          case comb::ICmpPredicate::eq:
-          case comb::ICmpPredicate::ceq:
-          case comb::ICmpPredicate::weq:
-          case comb::ICmpPredicate::ne:
-          case comb::ICmpPredicate::cne:
-          case comb::ICmpPredicate::wne:
-            return traceRoot(other, root);
-          default:
-            break;
-          }
-          return false;
-        }
-        if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
-          for (auto operand : concatOp.getOperands())
-            if (!traceRoot(operand, root))
-              return false;
-          return true;
-        }
-        return false;
+      auto traceRoot = [&](Value value, BlockArgument &root) -> bool {
+        return traceI1ValueRoot(value, root);
       };
 
       auto resolveClockInputName =

@@ -40,6 +40,86 @@ inline std::optional<bool> getConstI1Value(mlir::Value val) {
   return std::nullopt;
 }
 
+inline bool traceI1ValueRoot(mlir::Value value, mlir::BlockArgument &root) {
+  if (!value)
+    return false;
+  if (auto fromClock = value.getDefiningOp<seq::FromClockOp>())
+    return traceI1ValueRoot(fromClock.getInput(), root);
+  if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
+    return traceI1ValueRoot(toClock.getInput(), root);
+  if (auto cast = value.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+    if (cast->getNumOperands() == 1 && cast->getNumResults() == 1)
+      return traceI1ValueRoot(cast->getOperand(0), root);
+  }
+  if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
+    return traceI1ValueRoot(bitcast.getInput(), root);
+  if (auto result = llvm::dyn_cast<mlir::OpResult>(value)) {
+    if (auto explode = llvm::dyn_cast<hw::StructExplodeOp>(result.getOwner()))
+      return traceI1ValueRoot(explode.getInput(), root);
+  }
+  if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
+    return traceI1ValueRoot(extract.getInput(), root);
+  if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
+    return traceI1ValueRoot(extractOp.getInput(), root);
+  if (value.getDefiningOp<hw::ConstantOp>() ||
+      value.getDefiningOp<mlir::arith::ConstantOp>())
+    return true;
+  if (auto arg = llvm::dyn_cast<mlir::BlockArgument>(value)) {
+    if (!root)
+      root = arg;
+    return arg == root;
+  }
+  if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+    for (auto operand : andOp.getOperands())
+      if (!traceI1ValueRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto orOp = value.getDefiningOp<comb::OrOp>()) {
+    for (auto operand : orOp.getOperands())
+      if (!traceI1ValueRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto xorOp = value.getDefiningOp<comb::XorOp>()) {
+    for (auto operand : xorOp.getOperands())
+      if (!traceI1ValueRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
+    mlir::Value other;
+    if (getConstI1Value(icmpOp.getLhs()))
+      other = icmpOp.getRhs();
+    else if (getConstI1Value(icmpOp.getRhs()))
+      other = icmpOp.getLhs();
+    else
+      return false;
+    auto otherTy = llvm::dyn_cast<mlir::IntegerType>(other.getType());
+    if (!otherTy || otherTy.getWidth() != 1)
+      return false;
+    switch (icmpOp.getPredicate()) {
+    case comb::ICmpPredicate::eq:
+    case comb::ICmpPredicate::ceq:
+    case comb::ICmpPredicate::weq:
+    case comb::ICmpPredicate::ne:
+    case comb::ICmpPredicate::cne:
+    case comb::ICmpPredicate::wne:
+      return traceI1ValueRoot(other, root);
+    default:
+      break;
+    }
+    return false;
+  }
+  if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
+    for (auto operand : concatOp.getOperands())
+      if (!traceI1ValueRoot(operand, root))
+        return false;
+    return true;
+  }
+  return false;
+}
+
 inline bool isFourStateStructType(mlir::Type type) {
   auto structTy = llvm::dyn_cast<hw::StructType>(type);
   if (!structTy)
