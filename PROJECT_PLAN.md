@@ -12,6 +12,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Verification/LEC/BMC**
 - Extend 4-state modeling to remaining ops/extnets and add matching regressions.
 - Dynamic inout writer merges are limited to `--resolve-read-write` on 4-state
+- LEC still rejects LLVM dialect ops in formal inputs (e.g. OpenTitan AES S-Box
+  emits `llvm.mlir.undef`/alloca in `--ir-hw`); need a strip/lowering path.
   values; full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
@@ -248,18 +250,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
     - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` (5 handlers updated)
     - **Impact**: UVM `m_children` arrays created in constructors now accessible
 
-**Immediate Blockers:**
+**Immediate Blockers (Updated Iteration 289):**
 
-1. **UVM run_test() Early Termination** 🔴 CRITICAL (Iteration 287):
-   - `run_test()` completes at time 0 before test phases execute
-   - Associative array fix applied but issue persists
-   - **Suspected Cause**: Factory instantiation or phase forking issue
-   - **Next**: Debug test class creation via factory and phase execution
+1. **UVM Event Wait Semantic** 🔴 CRITICAL:
+   - `@(event)` not properly waiting for trigger
+   - Event-based semantics differ from `wait(condition)` polling
+   - `moore.detect_event any` on boolean event flags needs work
+   - **Impact**: UVM phase synchronization fails
 
-2. **moore.wait_event for UVM Events** 🟡 MEDIUM:
-   - Different from `wait(condition)` - uses event-based semantics
-   - `moore.detect_event any` on boolean event flags
-   - Memory event waiters exist but may not cover all UVM patterns
+2. **UVM Factory Registration Timing** 🔴 CRITICAL:
+   - Test classes not registered with factory before `run_test()` is called
+   - Factory lookup returns null for test class names
+   - **Impact**: `run_test("test_name")` cannot instantiate test classes
 
 **Medium Priority:**
 
@@ -274,7 +276,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 288 - 2026-02-01)
+### Test Suite Status (Iteration 289 - 2026-02-01)
 
 **Repository Status**: 400+ commits ahead of upstream CIRCT
 
@@ -282,9 +284,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 |-------|--------|-------|
 | Unit Tests | 1378/1378 (100%) | All pass |
 | Lit Tests | **400/402 (99.5%)** | 2 expected failures |
-| ImportVerilog | **219/219 (100%)** | **FULL PARITY ACHIEVED!** |
-| circt-sim | **83/83 (100%)** | All pass (wait-condition-memory test added) |
-| MooreToCore | **99/100 (99%)** | 1 XFAIL |
+| ImportVerilog | **218/220 (99%)** | 2 remaining issues |
+| circt-sim | **87/87 (100%)** | All pass |
+| MooreToCore | **102/102 (100%)** | All pass |
 | sv-tests BMC ch7+16 | **124/131 (94.7%)** | 5 XFAIL, 2 errors (struct/union) |
 | sv-tests LEC ch7+16 | **123/126 (97.6%)** | 3 errors |
 | sv-tests elaboration | **755/829 (91%)** | 69 expected failures |
@@ -293,19 +295,31 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | OpenTitan IPs | **4/4 tested (100%)** | timer_core, gpio, uart_reg_top, spi_host all pass |
-| AVIPs | **6/6 HDL** | HDL simulation works, UVM phases blocked |
+| AVIPs | **4/9 compile+simulate** | APB, UART, I3C, I2S working |
 | sv-tests | **755/829 (91%)** | Elaboration baseline |
-| verilator-verification | **9/10 asserts (90%)** | 1 verilog error (assert_sampled) |
-| **UVM with uvm-core** | **BLOCKED** | run_test() terminates at time 0 |
+| verilator-verification | **53/56 (94.6%)** | 3 errors |
+| **UVM with uvm-core** | **BLOCKED** | Event wait and factory registration issues |
 
-**Current Workstreams (Iteration 288):**
+**Current Workstreams (Iteration 289):**
 
 | Track | Focus | Status | Next Task |
 |-------|-------|--------|-----------|
-| **Track 1: UVM Runtime** | run_test() early termination | 🔴 Investigating | Debug fork/join and class member access |
-| **Track 2: Class Member Access** | Member read from methods | 🔴 Investigating | Fix block argument remapping in MooreToCore |
-| **Track 3: AVIP** | UVM test execution | 🟡 HDL works | Debug UVM phase execution |
+| **Track 1: UVM Runtime** | Event wait semantic | 🔴 Investigating | Fix `@(event)` wait mechanism |
+| **Track 2: Factory Registration** | Test class registration | 🔴 Investigating | Fix registration timing before `run_test()` |
+| **Track 3: AVIP** | UVM test execution | 🟡 4/9 working | Debug remaining protocol issues |
 | **Track 4: External Tests** | Regression testing | ✅ Maintained | Continue sv-tests/verilator coverage |
+
+**FIXED in Iteration 289:**
+
+14. **Static Function-Local Variables** ✅ FIXED:
+    - Explicit `static` keyword on function-local variables now creates global variables
+    - Previously, all function-local variables were stack-allocated regardless of `static` keyword
+    - **Impact**: Static local variable persistence across function calls now works correctly
+
+15. **moore.wait_event Memory Tracing** ✅ FIXED:
+    - GEP/load on-demand evaluation for heap addresses now works
+    - Memory event waiters can now trace through pointer arithmetic (GEP) and loads
+    - **Impact**: `@(event)` patterns that reference class member events now properly wait
 
 **FINAL STATUS (Iteration 280 - 2026-02-01) - FULL UVM SIMULATION ACHIEVED!**
 
@@ -2339,6 +2353,7 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-02-01 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green (smoke) |
 | 2026-02-01 | opentitan | LEC | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | aes_sbox_canright (smoke) |
 | 2026-02-01 | avip/ahb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-01 | opentitan | LEC | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | llvm.mlir.undef/alloca in IR |
 | 2026-02-01 | avip/apb_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-02-01 | avip/axi4_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-02-01 | avip/axi4Lite_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | WDATA range OOB in VIP |

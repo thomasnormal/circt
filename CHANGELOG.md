@@ -52,6 +52,11 @@ endfunction
 | verilator-verification | 53 | 56 | **94.6%** |
 | yosys-sva | 14 | 14 | **100%** |
 
+**LEC smoke (2026-02-01):**
+- sv-tests: 23/23 pass (smoke)
+- verilator-verification: 17/17 pass (smoke)
+- yosys-sva: 14/14 pass (2 VHDL skipped)
+
 **sv-tests highlights:**
 - Classes (ch7): 101/105 (96.2%)
 - Operators (ch11): 85/88 (96.6%)
@@ -63,6 +68,9 @@ endfunction
 - **LEC strict enabled multi-drive (4-state)**: resolve enabled multi-drive
   LLHD signals via 4-state resolution instead of abstraction.
   - **Test**: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-enable-conflict-4state.mlir`
+- **OpenTitan LEC runner**: dropped unsupported `--fail-on-inequivalent` flag.
+  Current failure is due to LLVM ops (e.g. `llvm.mlir.undef`) remaining in the
+  OpenTitan `circt-verilog --ir-hw` output; LEC still rejects non-SMT ops.
 
 ---
 
