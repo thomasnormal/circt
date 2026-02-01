@@ -3545,7 +3545,7 @@ struct VerifBoundedModelCheckingOpConversion
     auto simplifyClockValue = [&](Value val, bool &invert) -> Value {
       auto simplified = simplifyI1Value(val);
       invert = simplified.invert;
-      return simplified.value;
+      return simplified.value ? simplified.value : val;
     };
 
     auto invertClockEdge = [](ltl::ClockEdge edge) -> ltl::ClockEdge {
@@ -3607,6 +3607,30 @@ struct VerifBoundedModelCheckingOpConversion
           if (!traceClockRoot(operand, root))
             return false;
         return true;
+      }
+      if (auto icmpOp = value.getDefiningOp<comb::ICmpOp>()) {
+        Value other;
+        if (getConstI1Value(icmpOp.getLhs()))
+          other = icmpOp.getRhs();
+        else if (getConstI1Value(icmpOp.getRhs()))
+          other = icmpOp.getLhs();
+        else
+          return false;
+        auto otherTy = dyn_cast<IntegerType>(other.getType());
+        if (!otherTy || otherTy.getWidth() != 1)
+          return false;
+        switch (icmpOp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+        case comb::ICmpPredicate::ceq:
+        case comb::ICmpPredicate::weq:
+        case comb::ICmpPredicate::ne:
+        case comb::ICmpPredicate::cne:
+        case comb::ICmpPredicate::wne:
+          return traceClockRoot(other, root);
+        default:
+          break;
+        }
+        return false;
       }
       if (auto concatOp = value.getDefiningOp<comb::ConcatOp>()) {
         for (auto operand : concatOp.getOperands())
