@@ -351,8 +351,10 @@ Both remaining XFAILs are bind directive architectural issues that require subst
 - **BMC concat regressions**: removed XFAILs and updated CHECKs for concat
   sequence tests; sequence-typed block args now emit a deterministic NFA error
 - **Clock i1 simplifier (BMC/SMT)**: simplify neutral boolean ops, constant
-  `mux`, and `icmp`-with-constant expressions during clock resolution to map
-  derived clocks back to the correct BMC input (regression:
+  `mux`, `icmp`-with-constant expressions, and 4-state `{value & ~unknown}`
+  clock gates during clock resolution to map derived clocks back to the correct
+  BMC input. Preserve 4-state `value`/`unknown` extracts so we don’t conflate
+  the two fields while canonicalizing gated clocks (regression:
   `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-icmp-neutral.mlir`,
   unit test: `unittests/Support/I1ValueSimplifierTest.cpp`)
 - **BMC LLHD delay clock roots**: treat zero-delay `llhd.delay` as transparent

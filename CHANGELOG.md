@@ -66,6 +66,9 @@
    - Treat `{value & ~unknown}` clock gates as equivalent to the base clock for
      clock resolution so derived 4-state clocks and raw clock inputs map to the
      same BMC clock.
+   - Preserve `value`/`unknown` struct extracts during i1 simplification to
+     avoid collapsing the two fields into the base struct while still
+     canonicalizing gated clocks in LowerToBMC.
    - **Test**: `unittests/Support/I1ValueSimplifierTest.cpp`.
 
 ## Iteration 277 - January 31, 2026
@@ -164,7 +167,8 @@ Continue reducing XFAIL count, fix simulation infrastructure issues, improve Ope
 
 ### Status
 - **Starting XFAIL count**: 18
-- **Ending XFAIL count**: 2 (89% reduction!)
+- **Ending XFAIL count**: 1 (94% reduction!)
+- **Pass Rate**: 218/219 (99.54%)
 - **Pass Rate**: 217/219 (99.09%)
 - **ImportVerilog**: 216/219 pass (98.63%)
 - **OpenTitan**: 17/21 pass (81%) - stack overflow fix enabled 3 more IPs
