@@ -3941,6 +3941,7 @@ struct VerifBoundedModelCheckingOpConversion
     }
 
     SmallVector<unsigned> regClockToLoopIndex;
+    SmallVector<bool> regClockInverts;
     bool usePerRegClocks =
         !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
     if (usePerRegClocks) {
@@ -3974,9 +3975,27 @@ struct VerifBoundedModelCheckingOpConversion
         return static_cast<unsigned>(clockIt - clockIndexes.begin());
       };
       regClockToLoopIndex.reserve(numRegs);
+      regClockInverts.reserve(numRegs);
       for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
         bool mapped = false;
-        if (regClocksValid) {
+        bool invert = false;
+        if (regSourcesValid) {
+          auto dict = dyn_cast<DictionaryAttr>(
+              regClockSourcesAttr[regIndex]);
+          if (dict) {
+            auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
+            auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
+            if (argAttr && invertAttr) {
+              unsigned argIndex = argAttr.getValue().getZExtValue();
+              if (auto pos = mapArgIndexToClockPos(argIndex)) {
+                regClockToLoopIndex.push_back(*pos);
+                invert = invertAttr.getValue();
+                mapped = true;
+              }
+            }
+          }
+        }
+        if (!mapped && regClocksValid) {
           auto nameAttr =
               dyn_cast<StringAttr>(regClocksAttr[regIndex]);
           if (nameAttr && !nameAttr.getValue().empty()) {
@@ -3997,27 +4016,13 @@ struct VerifBoundedModelCheckingOpConversion
             mapped = true;
           }
         }
-        if (!mapped && regSourcesValid) {
-          auto dict = dyn_cast<DictionaryAttr>(
-              regClockSourcesAttr[regIndex]);
-          if (dict) {
-            auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
-            auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
-            if (argAttr && invertAttr) {
-              unsigned argIndex = argAttr.getValue().getZExtValue();
-              if (auto pos = mapArgIndexToClockPos(argIndex)) {
-                regClockToLoopIndex.push_back(*pos);
-                mapped = true;
-              }
-            }
-          }
-        }
         if (!mapped) {
           op.emitError("multi-clock BMC requires named clock entries in "
                        "bmc_reg_clocks or valid entries in "
                        "bmc_reg_clock_sources");
           return failure();
         }
+        regClockInverts.push_back(invert);
       }
     }
 
@@ -4482,7 +4487,9 @@ struct VerifBoundedModelCheckingOpConversion
             for (auto [idx, pair] :
                  llvm::enumerate(llvm::zip(regStates, regInputs))) {
               auto [regState, regInput] = pair;
-              Value regPosedge = posedges[regClockToLoopIndex[idx]];
+              Value regPosedge =
+                  regClockInverts[idx] ? negedges[regClockToLoopIndex[idx]]
+                                       : posedges[regClockToLoopIndex[idx]];
               nextRegStates.push_back(smt::IteOp::create(
                   rewriter, loc, regPosedge, regInput, regState));
             }
@@ -5145,13 +5152,15 @@ struct VerifBoundedModelCheckingOpConversion
                       .drop_back(totalDelaySlots + totalNFAStateSlots);
               SmallVector<Value> nextRegStates;
               nextRegStates.reserve(numRegs);
-              for (auto [idx, pair] :
-                   llvm::enumerate(llvm::zip(regStates, regInputs))) {
-                auto [regState, regInput] = pair;
-                Value regPosedge = posedges[regClockToLoopIndex[idx]];
-                nextRegStates.push_back(smt::IteOp::create(
-                    builder, loc, regPosedge, regInput, regState));
-              }
+            for (auto [idx, pair] :
+                 llvm::enumerate(llvm::zip(regStates, regInputs))) {
+              auto [regState, regInput] = pair;
+              Value regPosedge =
+                  regClockInverts[idx] ? negedges[regClockToLoopIndex[idx]]
+                                       : posedges[regClockToLoopIndex[idx]];
+              nextRegStates.push_back(smt::IteOp::create(
+                  builder, loc, regPosedge, regInput, regState));
+            }
               newDecls.append(nextRegStates);
             }
           } else if (numRegs > 0) {
