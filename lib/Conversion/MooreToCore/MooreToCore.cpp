@@ -2094,6 +2094,28 @@ struct ClassPropertyRefOpConversion
     // Operand is a !llvm.ptr
     Value instRef = adaptor.getInstance();
 
+    // Handle block argument remapping for class method contexts.
+    // When a class method's signature is converted, the 'this' pointer (block
+    // argument 0) gets remapped. The adaptor may return the old/invalidated
+    // block argument. We need to find the new block argument at the
+    // corresponding position in the converted function's entry block.
+    //
+    // This is critical for class member access from methods other than the
+    // constructor, where operations reference the 'this' pointer which is a
+    // block argument that gets remapped during function signature conversion.
+    if (auto blockArg = dyn_cast<BlockArgument>(op.getInstance())) {
+      // Get the parent function's entry block to find the new block argument
+      auto funcOp = op->getParentOfType<func::FuncOp>();
+      if (funcOp) {
+        Block *funcEntryBlock = &funcOp.getBody().front();
+        unsigned argIndex = blockArg.getArgNumber();
+        if (argIndex < funcEntryBlock->getNumArguments()) {
+          // Use the converted block argument from the function's entry block
+          instRef = funcEntryBlock->getArgument(argIndex);
+        }
+      }
+    }
+
     // Resolve identified struct from cache.
     auto classRefTy =
         cast<circt::moore::ClassHandleType>(op.getInstance().getType());
@@ -4910,6 +4932,26 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     if (width == -1)
       return failure();
 
+    bool isFourState = isFourStateStructType(elementType);
+    int64_t valueWidth = 0;
+    if (isFourState) {
+      auto structTy = cast<hw::StructType>(elementType);
+      auto valueTy = cast<IntegerType>(structTy.getElements()[0].type);
+      valueWidth = valueTy.getWidth();
+    }
+
+    auto makeFourStateConst = [&](APInt valueBits,
+                                  APInt unknownBits) -> Value {
+      auto structTy = cast<hw::StructType>(elementType);
+      auto valueTy = cast<IntegerType>(structTy.getElements()[0].type);
+      auto unknownTy = cast<IntegerType>(structTy.getElements()[1].type);
+      auto valueConst = hw::ConstantOp::create(
+          rewriter, loc, IntegerAttr::get(valueTy, valueBits));
+      auto unknownConst = hw::ConstantOp::create(
+          rewriter, loc, IntegerAttr::get(unknownTy, unknownBits));
+      return createFourStateStruct(rewriter, loc, valueConst, unknownConst);
+    };
+
     // For supply0/supply1 nets, initialize to the appropriate constant value.
     // supply0 = always 0 (ground), supply1 = always 1 (all ones).
     // For nets with an assignment (e.g., from module inputs), use the assigned
@@ -4918,20 +4960,37 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     Value init;
     Value assignedValue = adaptor.getAssignment();
     if (kind == NetKind::Supply0) {
-      auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
-      init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+      if (isFourState) {
+        init = makeFourStateConst(APInt(valueWidth, 0), APInt(valueWidth, 0));
+      } else {
+        auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
+        init =
+            rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+      }
     } else if (kind == NetKind::Supply1) {
-      auto constOne =
-          hw::ConstantOp::create(rewriter, loc, APInt::getAllOnes(width));
-      init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constOne);
+      if (isFourState) {
+        init = makeFourStateConst(APInt::getAllOnes(valueWidth),
+                                  APInt(valueWidth, 0));
+      } else {
+        auto constOne =
+            hw::ConstantOp::create(rewriter, loc, APInt::getAllOnes(width));
+        init =
+            rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constOne);
+      }
     } else if (assignedValue) {
       // Use the assigned value as initial value to fix initialization order.
       // This ensures signals driven from module inputs have the correct value
       // from t=0, rather than zero that would be overwritten with epsilon delay.
       init = assignedValue;
     } else {
-      auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
-      init = rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+      if (isFourState) {
+        init = makeFourStateConst(APInt(valueWidth, 0),
+                                  APInt::getAllOnes(valueWidth));
+      } else {
+        auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
+        init =
+            rewriter.createOrFold<hw::BitcastOp>(loc, elementType, constZero);
+      }
     }
 
     auto signal = rewriter.replaceOpWithNewOp<llhd::SignalOp>(

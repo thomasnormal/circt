@@ -46,6 +46,17 @@
 
 ---
 
+## Iteration 282 - February 1, 2026
+
+### MooreToCore 4-State Net Initialization
+- Unassigned 4-state nets now initialize to X (unknown=1) instead of 0.
+- supply0/supply1 4-state nets keep unknown=0 while value is 0/1.
+- Regression: `test/Conversion/MooreToCore/basic.mlir` (NetLogic).
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | build/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` (14 tests, 2 VHDL skips, 0 failures)
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates
@@ -146,6 +157,7 @@
 - `build/bin/circt-opt test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | build/bin/FileCheck test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir`
 - `build/bin/circt-opt test/Conversion/VerifToSMT/bmc-reg-clock-sources-invert.mlir --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | build/bin/FileCheck test/Conversion/VerifToSMT/bmc-reg-clock-sources-invert.mlir`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 TAG_REGEX='(^| )16.10' OUT=/tmp/sv-tests-bmc-results.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
 
 ## Iteration 279 - February 1, 2026
 

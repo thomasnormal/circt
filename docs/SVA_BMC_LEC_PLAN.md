@@ -1,0 +1,494 @@
+# SVA BMC + LEC Master Plan
+
+This plan drives full SystemVerilog Assertions (SVA) support with robust
+bounded model checking (BMC) and logical equivalence checking (LEC). It
+summarizes the long-term milestones, the concrete engineering tracks, and the
+regular test loops required to reach parity targets in PROJECT_PLAN.md.
+
+## Goals
+
+1. Full SVA language support end-to-end: SV -> Moore -> LTL -> Verif -> SMT.
+2. BMC results are trustworthy, reproducible, and explainable.
+3. LEC results are trustworthy, reproducible, and explainable.
+4. Tooling is stable on large suites: sv-tests, verilator-verification,
+   yosys/tests, and AVIP UVM testbenches.
+
+## Scope and Non-Goals
+
+In scope:
+- SVA parsing, elaboration, and lowering to LTL.
+- LTL to Verif lowering with precise semantics.
+- Verif to SMT lowering with correct time and clock handling.
+- BMC tool pipeline (circt-bmc) with diagnostics and correct modeling of
+  temporal semantics.
+- LEC tool pipeline (circt-lec or equivalent) with SMT backends and
+  counterexample reporting.
+
+Out of scope for this plan:
+- General SV simulation feature expansion (handled by PROJECT_PLAN.md).
+- Non-SVA language features not required by assertions.
+
+## Current Status (Condensed)
+
+- SVA parsing and SVAToLTL conversion are functional with broad coverage.
+- BMC pipeline is operational but has known correctness and semantics gaps.
+- LEC framework exists but is not yet fully integrated into a stable tool
+  workflow or end-to-end test harness.
+  - ConstructLEC and SMT LEC now have basic equivalent/inequivalent regressions;
+    still missing an end-to-end JIT harness and counterexample reporting.
+- Preprocessor `ifdef` expressions with integer comparisons now parse for
+  AVIP compatibility.
+
+See PROJECT_PLAN.md for detailed iteration status and prior work.
+
+## Known Limitations (Must-Fix)
+
+1. SVA temporal semantics in BMC are still incomplete:
+   - Delay and history buffers need strict posedge alignment.
+     - Clocked properties now gate delay/past buffers by their clock/edge,
+       and unclocked properties now gate checks on any posedge in multi-clock
+       mode to avoid negedge sampling; remaining work includes better clock
+       inference and per-property clock tracking when clocking is implicit.
+     - Interim: `bmc.clock` can pin delay/past buffers to a named clock input,
+       and `ltl.clock` propagates to delay/past buffers (including
+       `bmc.clock_edge` for posedge/negedge/edge).
+   - Clocked asserts/assumes/covers now carry `bmc.clock_edge`, but BMC still
+     lacks per-check edge scheduling (only posedge-only skip optimization).
+   - ✅ Multi-step sequence semantics now use per-sequence NFAs in BMC
+     (delay/concat/repeat/goto/non-consecutive). Remaining gaps include
+     nested/multi-clock sequences inside a single property and liveness-style
+     eventualities near the bound.
+   - Strong until (`s_until`) now lowers as `until` + `eventually`; verify BMC
+     bound semantics for eventual satisfaction near the bound.
+   - Non-overlapping implication (`|=>`) with property consequents now has
+     end-to-end coverage; keep an eye on edge cases for strong until and
+     nested clocks.
+   - `--rising-clocks-only` now rejects negedge/edge-triggered properties
+     (including `ltl.clock`-derived edges). Use full edge modeling when suites
+     contain negedge/edge assertions.
+2. BMC clocking and sampled-value alignment still produce incorrect results
+   for some SVA cases (especially local var sampling).
+   - Long-term fix: track a clock domain per property/sequence so delay/past
+     buffers advance only when their property clock fires (not any clock).
+3. Yosys SVA "no-property" fallthroughs are fixed for extnets; keep scanning
+   for any remaining cases that mask expected FAIL behavior.
+4. Verilator-verification SVA suites now parse, but some tests still report
+   "no-property" and need explicit assertions or harness treatment
+   (e.g., sequence_delay_ranges).
+5. LEC tool flow is under-specified; integration with SMT backends lacks
+   formal golden tests and a stable CLI workflow.
+   - ✅ Strict LLHD signal multi-drive now accepts mutually exclusive enable
+     chains (in addition to complementary pairs).
+   - ✅ Interface signal stores now resolve for dominance, complementary pairs,
+     and exclusive multi-way conditional chains (including CF-lowered merges);
+     overlapping or partial coverage still requires abstraction.
+6. OpenTitan masked AES S-Box LEC fixed: skipping `strip-llhd-processes` in the
+   LEC pipeline avoids dropping LLHD drives (e.g. `vec_c`) that collapsed masked
+   outputs to constants. Regression: `test/Tools/circt-lec/lec-llhd-drv-preserve.mlir`.
+7. LEC now carries original input types through `construct-lec`, allowing
+   `--assume-known-inputs` to constrain 4-state inputs even after HW-to-SMT
+   lowering (OpenTitan canright AES S-Box passes with SMT-LIB).
+8. OpenTitan masked AES S-Box LEC still reports inequivalence with valid
+   op_i values; need to root-cause masked S-Box semantics vs LUT reference.
+9. UVM runtime support in BMC is incomplete; current pipeline prunes
+   unreachable UVM symbols rather than modeling class-based runtime behavior.
+10. Sequence clocking event syntax is now accepted via Slang patches, but
+   we need to upstream this behavior or replace it with native parsing.
+11. AVIP randomization constraints still expose gaps:
+    - `default` dist weights are parsed but currently ignored (warning only).
+    - Large signed ranges and >64-bit ranges need explicit modeling work.
+12. Nested interface instance connections via interface ports now have regression
+    coverage and AXI4Lite master + slave VIP filelists compile after fixing
+    nested interface signal access and guarding 64-bit cover properties in AVIP.
+    Full env (`Axi4LiteProject.f`) compiles when paired with read/write VIP
+    filelists; remaining work is to exercise BMC/LEC on AXI4Lite and capture
+    UVM/runtime gaps.
+13. Suite status (Jan 30, 2026):
+    - Yosys SVA BMC: ✅ full suite passes (14 tests, 2 VHDL skips).
+    - Verilator-verification BMC reports 8 errors (likely compile/import issues).
+    - Yosys SVA LEC and Verilator-verification LEC both pass in this run.
+13. Yosys SVA bind tests with implicit `.*` connections fail due to bind scope
+    or implicit named port resolution (e.g., `basic02.sv` reports missing
+    `clock/read/write/ready` connections).
+    - ✅ Slang patch prepared to fall back to the bound target scope for
+      implicit wildcard port connections; regression added in
+      `test/Conversion/ImportVerilog/bind-directive.sv`.
+    - ✅ Patch applied to the Slang source used by the CIRCT build and rebuilt
+      `circt-verilog`.
+    - ✅ Filtered yosys SVA BMC run (`basic02`) now passes.
+    - ✅ Full yosys SVA BMC suite now passes (14 tests, 2 VHDL skips).
+14. **BMC i1 clock + delay**: ✅ Fixed. `ltl.clock` on i1 clocks with
+    `ltl.delay` now lowers without region isolation failures.
+    - Regression: `test/Conversion/VerifToSMT/bmc-delay-i1-clock.mlir`
+15. **AVIP SPI compile failures (external)**: SPI AVIP does not compile due to
+    SV/UVM issues in the VIP code (non-static class property use in nested
+    classes, empty argument in `$sformatf`). Track as AVIP fixes, not CIRCT.
+16. **AVIP JTAG compile failures (external)**: JTAG AVIP does not compile due
+    to UVM `do_compare` default argument mismatch and reversed range bins.
+    Track as AVIP fixes, not CIRCT.
+
+## Core Workstreams
+
+### Track A: SVA Language Semantics
+
+Goal: IEEE 1800-2017 compliant SVA semantics with a strict test grid.
+
+Key work:
+- Sequence timing: full handling of ##[n:m], delayed sequences, repeat forms.
+- Clocking: proper default clocking and clock inference rules.
+- disable iff: enforce semantics for property disabling with correct scope.
+- sampled value functions: $past/$rose/$fell/$changed/$stable with
+  correct edge behavior and reset interactions.
+
+Deliverables:
+- New/expanded LTL conversion tests.
+- End-to-end SV -> BMC regression tests with pass/fail cases.
+
+### Track B: BMC Semantics and Soundness
+
+Goal: BMC results are sound and stable for temporal properties.
+
+Key work:
+- ✅ **Implement SMT-LIB export** for BMC: solver-only, unrolled encoding that
+  emits pure SMT ops (no scf/func/arith) so `--emit-smtlib` produces a
+  backend-independent artifact.
+- Hard correctness for ltl.delay, ltl.repeat, ltl.concat under BMC unrolling.
+  - ✅ Implemented multi-step sequence NFAs for delay/concat/repeat/goto
+    operators, eliminating single-step approximations in BMC.
+  - ✅ Keep concat-length guardrails when sequence length is statically
+    unbounded (explicit errors instead of silent approximations).
+- Posedge gating for all history and assertion updates.
+ - Per-property clocked delay/past buffers (associate each temporal op with its
+  property clock instead of advancing on any clock).
+  - Propagate clock names from clocked asserts into delay/past buffers so
+    clock-domain gating works even after LTL lowering removes ltl.clock.
+ - ✅ Clone shared delay/past ops per property to avoid accidental cross-clock
+    sharing (hard error remains only for conflicting clock info in a single
+    property, e.g., `bmc.clock_edge` vs `ltl.clock`).
+  - ✅ Clone LTL subtrees per clocked property to avoid accidental sharing of
+    delay/past ops across clock domains.
+- ✅ Gate each non-final check by its own clock edge instead of a single
+  combined check.
+- ⚠️ 4-state X/Z semantics in BMC: **partial** (core comb AND/OR/XOR, mux,
+  add/sub, shifts, mul/div/mod, comparisons, and case/wild equality now
+  modeled; remaining ops still 2-state).
+  - ✅ Uninitialized 4-state nets now start as X (unknown=1) while supply nets
+    keep unknown=0 in MooreToCore lowering.
+- ✅ Add BMC cone-of-influence pruning for externalized registers and unused
+  outputs so irrelevant state is removed before SMT lowering (including
+  transitive reg deps).
+  - Regression: `test/Tools/circt-bmc/prune-bmc-registers-transitive.mlir`.
+  - Input pruning regression: `test/Tools/circt-bmc/prune-bmc-inputs.mlir`.
+- ✅ Add `--assume-known-inputs` to BMC to optionally constrain unknown bits on
+  4-state inputs.
+- ✅ Thread `--assume-known-inputs` through BMC harness scripts via
+  `BMC_ASSUME_KNOWN_INPUTS=1`.
+- ✅ Thread `--assume-known-inputs` through LEC harness scripts via
+  `LEC_ASSUME_KNOWN_INPUTS=1`.
+- ✅ Add SMT-LIB regression for `--assume-known-inputs` in LEC.
+- ✅ Allow BMC harness scripts to use `--run-smtlib` via `BMC_RUN_SMTLIB=1`.
+- ✅ Add `run_formal_all.sh` switches for BMC/LEC assume-known-inputs and
+  run-smtlib flows.
+- ✅ Make OpenTitan LEC script honor `LEC_ASSUME_KNOWN_INPUTS` for 4-state
+  control.
+- ✅ Default OpenTitan LEC to `--run-smtlib` via `LEC_RUN_SMTLIB=1` and `Z3_BIN`.
+- ✅ Emit a warning when 4-state inputs are unconstrained without
+  `--assume-known-inputs`.
+- Derived clock constraints and correct relation to primary BMC clock.
+  - ✅ Map derived clocks from assumes using eq/ne/ceq/cne/weq/wne, xor, and
+    comb.not relations, including inversion tracking (posedge on inverted
+    clocks gates on base negedge).
+  - ✅ Treat `seq.from_clock(seq.to_clock(x))` as equivalent to `x` when
+    resolving explicit clocked properties.
+    - Regression:
+      `test/Conversion/VerifToSMT/bmc-derived-clock-from-to-equivalence.mlir`
+  - ✅ Preserve externalized-reg clock port names for i1/struct clocks and use
+    `bmc_reg_clocks` to synthesize BMC clock inputs after LTL lowering prunes
+    `ltl.clock`/`seq.to_clock`.
+    - Regression: `test/Tools/circt-bmc/lower-to-bmc-struct-clock.mlir`
+- Deterministic handling of LLHD signals, probes, and drives.
+- ✅ Use `--fail-on-violation` in BMC harnesses so violations are treated as
+  errors in automated runs.
+
+Deliverables:
+- BMC semantics tests in test/Tools/circt-bmc.
+- Cross-suite regression checks with sv-tests and yosys SVA.
+  - ✅ Added E2E X‑prop regression for 4‑state comb ops.
+  - ✅ Added E2E X‑prop regression for 4‑state add.
+  - ✅ Added E2E X‑prop regression for 4‑state shifts.
+  - ✅ Added E2E X‑prop regression for 4‑state comparisons.
+  - ✅ Added E2E X‑prop regression for 4‑state mul/div.
+  - ✅ Added E2E X‑prop regression for 4‑state mod.
+  - ✅ Added E2E X‑prop regression for 4‑state wildcard equality.
+  - ✅ Added E2E X‑prop regression for 4‑state case equality.
+  - ✅ Added E2E X‑prop regression contrasting == vs === on unknown inputs.
+  - ✅ Added E2E X‑prop regression for signed compares.
+  - ✅ Added E2E regression for `--assume-known-inputs` vs unknown inputs.
+  - ✅ Added E2E X‑prop regression for unsigned compares.
+  - ✅ Added E2E X‑prop regression for mixed‑width compares.
+  - ✅ Added E2E X‑prop regression for array indexing.
+  - ✅ Added E2E X‑prop regression for array injection.
+  - ✅ Added E2E X‑prop regression for struct field extraction.
+  - ✅ Added E2E X‑prop regression for struct field injection.
+  - ✅ Added E2E X‑prop regression for multi-bit struct fields.
+  - ✅ Added E2E X‑prop regression for nested aggregates.
+  - ✅ Added E2E X‑prop regression for nested aggregate writes.
+  - ✅ Added E2E X‑prop regression for concatenation.
+  - ✅ Added E2E X‑prop regression for bit extraction.
+  - ✅ Added E2E X‑prop regression for part-select and replication.
+  - ✅ Added E2E X‑prop regression for nested aggregate concatenation.
+  - ✅ Added E2E X‑prop regression for array-of-struct concatenation.
+  - ✅ Added E2E X‑prop regression for dynamic indexing with unknown indices.
+  - ✅ Added E2E X‑prop regression for dynamic part-selects.
+  - ✅ Added E2E X‑prop regression for signed shifts with unknown shift amounts.
+  - ✅ Added E2E X‑prop regression for reduction operators.
+  - ✅ Added E2E X‑prop regression for reduction XOR.
+  - ✅ Added E2E X‑prop regression for bitwise NOT.
+  - ✅ Added E2E X‑prop regression for logical NOT.
+  - ✅ Added E2E X‑prop regression for logical AND/OR.
+  - ✅ Added E2E X‑prop regression for ternary operator.
+  - ✅ Added E2E X‑prop regression for implication.
+  - ✅ Added E2E X‑prop regression for implication with delayed consequent.
+  - ✅ Added E2E X‑prop regression for until.
+  - ✅ Added E2E X‑prop regressions for eventually/always.
+  - ✅ Added E2E X‑prop regression for strong until.
+  - ✅ Added E2E X‑prop regression for weak eventually.
+  - ✅ Added E2E X‑prop regression for nexttime.
+  - ✅ Added E2E X‑prop regression for nexttime range.
+  - ✅ Added E2E X‑prop regression for delay ranges.
+  - ✅ Added E2E X‑prop regression for repetition.
+  - ✅ Added E2E X‑prop regression for non‑consecutive repetition.
+  - ✅ Added E2E X‑prop regression for goto repetition.
+  - ✅ Added E2E X‑prop regressions for $rose/$fell.
+  - ✅ Added ImportVerilog regression for $stable/$changed logical equality.
+  - ✅ Added E2E X‑prop regression for unbounded repetition.
+  - ✅ Added E2E X‑prop regression for unbounded delay ranges.
+  - ✅ Added E2E X‑prop regression for sequence concatenation.
+  - ✅ Added E2E X‑prop regressions for sequence AND/OR.
+
+Implementation sketch for per-property clocked buffers:
+- Propagate a clock domain id from `ltl.clock` / clocked asserts through the
+  LTL tree to `ltl.delay`/`ltl.past` sites.
+- Allocate delay/past buffer slices per clock domain in the BMC loop.
+- Update each buffer slice only when its clock posedge fires (not any clock).
+- Add a fallback domain for unclocked properties (current any-clock behavior).
+- Add MLIR tests with two `ltl.clock`-wrapped properties to ensure their
+  delay/past buffers advance independently.
+
+### Track C: SMT and Solver Integration
+
+Goal: Robust SMT generation for BMC and LEC with clear diagnostics.
+
+Key work:
+- SMT encoding for SVA and LTL constructs with documented truth tables.
+- Counterexample/trace reporting suitable for debugging.
+- Stable Z3 integration with deterministic solver configs.
+- ✅ Add `circt-bmc --run-smtlib` (external z3, `--z3-path` support) with model
+  printing parity to the JIT path.
+
+Deliverables:
+- VerifToSMT and SMT dialect test coverage.
+- Minimal reproducer pipeline for each bug fix.
+
+### Track D: LEC Tooling and Equivalence Semantics
+
+Goal: Reliable LEC workflow integrated into CIRCT tools.
+
+Key work:
+- Define canonical LEC input form (verif.lec) and a standard CLI flow.
+- Ensure both SMT and LLVM backends match on equivalence results.
+- Provide end-to-end LEC examples in docs/FormalVerification.md.
+- Introduce a test harness for LEC (pass/fail + counterexample).
+- Add counterexample input reporting parity between SMT-LIB and JIT paths.
+- ✅ Expose output values in SMT-LIB counterexamples (declare c1_/c2_ outputs).
+- ✅ JIT counterexample input printing uses SMT model formatting helpers.
+- ✅ Use `--fail-on-inequivalent` in harnesses so inequivalence is treated as an
+  error signal for automated runs.
+- ✅ Ensure JIT path uses Z3 model evaluation to emit per-input counterexamples
+  when `--print-counterexample` is set.
+
+Deliverables:
+- New tests in test/Conversion/VerifToSMT and LEC-specific test folder.
+- A stable command line interface and CI gating tests.
+
+### Track E: Real-World Regression Suites
+
+Goal: Track progress on real suites and prevent regressions.
+
+Key work:
+- Regular runs on:
+  - ~/sv-tests
+  - ~/verilator-verification
+  - ~/yosys/tests
+  - ~/mbit/*avip*
+- Interpret failures and classify into:
+  - CIRCT bug
+  - Missing SVA feature
+  - Suite issue or unsupported syntax
+
+Deliverables:
+- Updated result artifacts and changelog entries.
+- Reduced xfail set over time with justifications.
+
+## Milestones
+
+1. M1: BMC correctness baseline
+   - Pass all SVA tests in yosys with correct pass/fail semantics.
+   - Remove no-property fallthroughs; ensure assertions survive lowering.
+
+2. M2: sv-tests SVA parity
+   - All SVA tagged sv-tests pass or have justified XFAIL.
+
+3. M3: verilator-verification SVA parity
+   - Resolve remaining SVA helpers and sequence event tests.
+
+4. M4: LEC MVP
+   - LEC tool can compare two HW modules with SMT backend and produce
+     clear results.
+
+5. M5: LEC scale and integration
+   - LEC handles non-trivial SV designs and integrates with BMC workflows.
+
+## Engineering Practices
+
+- Add unit tests for every new bug fix or feature.
+- Prefer small, focused regressions for each semantic fix.
+- Update CHANGELOG.md per iteration with results and test status.
+- Merge upstream main regularly to avoid drift.
+
+## Testing Strategy (As Work Proceeds)
+
+Every change should follow a staged test approach to keep feedback fast while
+still exercising full-suite coverage regularly.
+
+### Stage 0: Preflight Build and Smoke Checks
+
+- Build the affected tools so CLI defaults match the new behavior:
+  - `ninja -C build circt-bmc`
+  - `ninja -C build circt-verilog`
+- If the change touches LEC or SMT conversion, also build:
+  - `ninja -C build circt-opt`
+- Run the smallest possible hand-crafted reproducer (often a single MLIR
+  test or a tiny SV file) to confirm the bug is fixed before running suites.
+- For real UVM/AVIP runs, disable the auto UVM stub:
+  - Use `--no-uvm-auto-include` and explicitly include
+    `~/uvm-core/src/uvm_pkg.sv`.
+- Some AVIPs require an explicit timescale to avoid mixed-timescale errors
+  (e.g., `TIMESCALE=1ns/1ps` when invoking the AVIP smoke script).
+
+### Per-Change Checklist (Minimum)
+
+- Create or update a reproducer that fails before the change and passes after.
+- Add a lit test in `test/` or a gtest in `unittests/` (prefer both if feasible).
+- Rebuild the affected binary and re-run the reproducer immediately.
+- Record the exact command line and outcome in CHANGELOG.md.
+
+### Stage 1: Local Regression for the Specific Fix
+
+- Add a minimal lit test in the closest folder:
+  - SVA lowering: test/Conversion/SVAToLTL
+  - LTL/Verif/SMT lowering: test/Conversion/VerifToSMT
+  - BMC tool behavior: test/Tools/circt-bmc
+  - LEC behavior: new LEC-focused tests adjacent to VerifToSMT
+- Run only the touched tests with lit:
+  - build/test/Tools/circt-bmc/...
+  - build/test/Conversion/SVAToLTL/...
+  - build/test/Conversion/VerifToSMT/...
+- For unit-testable logic, add/update a gtest in unittests/ and run:
+  - `ninja -C build check-circt-unittests`
+
+### Stage 2: Targeted Suite Slice
+
+Run a filtered subset to confirm real-world behavior before expanding:
+- sv-tests: use TEST_FILTER on `utils/run_sv_tests_circt_bmc.sh`
+- verilator-verification: use TEST_FILTER on
+  `utils/run_verilator_verification_circt_bmc.sh`
+- yosys SVA: use TEST_FILTER on `utils/run_yosys_sva_circt_bmc.sh`
+
+Key knobs to set per slice:
+- `BOUND` and `IGNORE_ASSERTS_UNTIL` to tune runtime.
+- `RISING_CLOCKS_ONLY=1` for correct SVA semantics (use `0` only when
+  specifically debugging clocking-model issues).
+- `PRUNE_UNREACHABLE_SYMBOLS=0` to debug full-module behavior without
+  pruning.
+
+Record the filtered output files and update CHANGELOG.md with deltas.
+
+### Stage 3: Full Suite Cadence
+
+At least once per iteration (or after major milestones), run:
+- utils/run_sv_tests_circt_bmc.sh
+- utils/run_verilator_verification_circt_bmc.sh
+- utils/run_yosys_sva_circt_bmc.sh
+- `utils/run_avip_circt_verilog.sh ~/mbit/<avip>` (compile smoke check)
+  - Some AVIPs rely on env vars in filelists; export them before running.
+
+Store results in the usual artifacts:
+- sv-tests-bmc-results.txt
+- verilator-verification-bmc-results.txt
+- yosys SVA summary from the harness output
+
+When results change:
+- Save any interesting counterexample logs to a temporary directory for
+  reproducibility.
+- Record suite statistics in CHANGELOG.md with date and command line.
+- File a minimal reproducer in test/ for each new failure that is fixed.
+
+### Stage 4: LEC-Focused Coverage
+
+- Add a focused LEC regression per feature (pass/fail pair).
+- For LEC changes, run at least one full, small end-to-end check with
+  a real SV design and record the command in CHANGELOG.md.
+- OpenTitan AES S-Box LEC harness:
+  - `utils/run_opentitan_circt_lec.py` (uses OpenTitan's AES S-Box LEC fixtures)
+- Seed LEC SMT coverage with `test/Tools/circt-lec/lec-smt.mlir`.
+- For smoke/pipeline checks without Z3, use the LEC harnesses:
+  - `utils/run_sv_tests_circt_lec.sh` (sv-tests)
+  - `utils/run_verilator_verification_circt_lec.sh` (verilator-verification)
+  - `utils/run_yosys_sva_circt_lec.sh` (yosys SVA)
+  - Use `LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir` for smoke mode.
+  - Use `FORCE_LEC=1` to run LEC for parsing-only sv-tests.
+  - Use `UVM_PATH=...` for UVM-tagged sv-tests.
+  - Use `INCLUDE_UVM_TAGS=1` to include sv-tests tagged only with `uvm`.
+  - Use `KEEP_LOGS_DIR=...` to preserve MLIR/log artifacts per test.
+- For BMC smoke/pipeline checks without Z3:
+  - Use `BMC_SMOKE_ONLY=1 CIRCT_BMC_ARGS=--emit-mlir` with the BMC harnesses.
+  - Use `FORCE_BMC=1` to run BMC for parsing-only sv-tests.
+  - Use `ALLOW_MULTI_CLOCK=1` for multi-clock suites.
+  - Use `NO_PROPERTY_AS_SKIP=1` to classify propertyless designs as skip.
+  - Use `INCLUDE_UVM_TAGS=1` to include sv-tests tagged only with `uvm`.
+  - Use `KEEP_LOGS_DIR=...` to preserve MLIR/log artifacts per test.
+
+### Cadence and Reporting
+
+- Per small fix: run Stage 0 and Stage 1; update CHANGELOG.md.
+- Per feature series: add a Stage 2 slice for at least one external suite.
+- Per milestone or monthly: run all Stage 3 suites and archive results.
+- Track regressions explicitly (new FAILs, new NO-PROPERTY) and record them
+  alongside remediation plans.
+
+### LEC-Specific Verification
+
+For each LEC change:
+- Add a direct LEC regression (pass/fail) with a minimal pair of modules.
+- Verify both SMT and LLVM backends produce the same verdicts.
+- Add documentation examples in docs/FormalVerification.md if behavior changes.
+
+## Regular Test Loop (Required)
+
+Run these at least once per iteration (or per change if relevant):
+
+- utils/run_sv_tests_circt_bmc.sh
+- utils/run_verilator_verification_circt_bmc.sh
+- utils/run_yosys_sva_circt_bmc.sh
+- ~/yosys/tests (add a harness if needed; track deltas separately)
+- ~/mbit/*avip* (appropriate BMC/sim flow)
+
+Record results in CHANGELOG.md and include relevant output artifacts.
+
+## Ownership and References
+
+- Primary plan: PROJECT_PLAN.md (tracks and iteration status)
+- Formal tooling references: docs/FormalVerification.md
+- Dialect references: docs/Dialects/LTL.md, docs/Dialects/SMT.md
+- BMC/LEC passes: docs/Passes.md

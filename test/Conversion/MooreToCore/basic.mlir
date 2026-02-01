@@ -396,6 +396,23 @@ moore.module @Net() {
   %supply1_net = moore.net name "supply1_net" supply1 : !moore.ref<i8>
 }
 
+// CHECK-LABEL: hw.module @NetLogic
+// CHECK-DAG: [[SUP1_INIT:%.+]] = hw.aggregate_constant [true, false] : !hw.struct<value: i1, unknown: i1>
+// CHECK-DAG: [[SUP0_INIT:%.+]] = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
+// CHECK-DAG: [[WIRE_INIT:%.+]] = hw.aggregate_constant [false, true] : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig [[WIRE_INIT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig [[SUP0_INIT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig [[SUP1_INIT]] : !hw.struct<value: i1, unknown: i1>
+moore.module @NetLogic(out a : !moore.l1, out b : !moore.l1, out c : !moore.l1) {
+  %wire = moore.net wire : !moore.ref<l1>
+  %supply0 = moore.net supply0 : !moore.ref<l1>
+  %supply1 = moore.net supply1 : !moore.ref<l1>
+  %0 = moore.read %wire : !moore.ref<l1>
+  %1 = moore.read %supply0 : !moore.ref<l1>
+  %2 = moore.read %supply1 : !moore.ref<l1>
+  moore.output %0, %1, %2 : !moore.l1, !moore.l1, !moore.l1
+}
+
 // CHECK-LABEL: hw.module @UnpackedArray
 moore.module @UnpackedArray(in %arr : !moore.uarray<2 x i32>, in %sel : !moore.i1, out c : !moore.i32) {
   // CHECK: hw.array_get %arr[%sel] : !hw.array<2xi32>, i1
