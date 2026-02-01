@@ -182,9 +182,10 @@ TEST(I1ValueSimplifierTest, FourStateClockGateSimplifiesAfterAggregateLowering) 
 
   auto clk = top.getBodyBlock()->getArgument(0);
   auto exploded = hw::StructExplodeOp::create(builder, loc, clk);
+  auto valueField = exploded.getResults()[0];
+  auto unknownField = exploded.getResults()[1];
   auto packed = comb::ConcatOp::create(
-      builder, loc,
-      ValueRange{exploded.getResult(0), exploded.getResult(1)});
+      builder, loc, ValueRange{valueField, unknownField});
   auto value =
       comb::ExtractOp::create(builder, loc, packed, /*lowBit=*/1, /*width=*/1)
           .getResult();
