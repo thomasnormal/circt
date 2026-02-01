@@ -4,6 +4,7 @@ add_circt_unittest(CIRCTSupportTests
   CoverageDatabaseTest.cpp
   CoverageReportGeneratorTest.cpp
   DiagnosticsTest.cpp
+  FourStateUtilsTest.cpp
   FVIntTest.cpp
   I1ValueSimplifierTest.cpp
   JSONTest.cpp
