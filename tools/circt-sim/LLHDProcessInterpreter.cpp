@@ -3710,6 +3710,18 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         LLVM_DEBUG(llvm::dbgs()
                    << "    Function '" << frame.funcOp.getName()
                    << "' suspended again during resume\n");
+        // Schedule pending delay if any before returning
+        if (state.pendingDelayFs > 0) {
+          SimTime currentTime = scheduler.getCurrentTime();
+          SimTime targetTime = currentTime.advanceTime(state.pendingDelayFs);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "    Scheduling delay " << state.pendingDelayFs
+                     << " fs from function suspend\n");
+          state.pendingDelayFs = 0;
+          scheduler.getEventScheduler().schedule(
+              targetTime, SchedulingRegion::Active,
+              Event([this, procId]() { resumeProcess(procId); }));
+        }
         return;
       }
 
@@ -11072,12 +11084,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // backwards from the condition argument. We need to invalidate these
         // cached values so they get recomputed when we re-check the condition.
         //
-        // CRITICAL: We only trace through operations that need re-execution:
+        // CRITICAL: We trace through operations that need re-execution:
         // - llvm.load: reads memory that may have changed
-        // - Arithmetic/comparison ops that depend on loads
+        // - llhd.prb: probes a signal that may have changed
+        // - Arithmetic/comparison ops that depend on loads/probes
         //
         // We do NOT trace into:
-        // - llhd.prb: probes a signal (returns constant pointer during execution)
         // - llvm.getelementptr: pointer arithmetic (doesn't read memory)
         // - Constant operations
         //
@@ -11085,7 +11097,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         state.waitConditionValuesToInvalidate.clear();
         state.waitConditionRestartBlock = state.currentBlock;
 
-        // Find the earliest llvm.load in the condition computation chain
+        // Find the earliest load/probe in the condition computation chain
         Value condValue = callOp.getOperand(0);
         llvm::SmallVector<Value, 16> worklist;
         llvm::SmallPtrSet<Value, 16> visited;
@@ -11101,19 +11113,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           // If the value has a defining operation in this block, process it
           if (Operation *defOp = v.getDefiningOp()) {
             if (defOp->getBlock() == state.currentBlock) {
-              // Check if this is a load operation - these are what we need to re-execute
-              if (isa<LLVM::LoadOp>(defOp)) {
+              // Check if this is a load or probe operation - these read values that may change
+              if (isa<LLVM::LoadOp, llhd::ProbeOp>(defOp)) {
                 state.waitConditionValuesToInvalidate.push_back(v);
-                // Track the earliest load operation
+                // Track the earliest load/probe operation
                 if (!earliestLoadOp || defOp->isBeforeInBlock(earliestLoadOp))
                   earliestLoadOp = defOp;
               }
 
-              // Add operands to worklist - trace through comparison and zext ops
-              // but stop at getelementptr (doesn't read memory)
-              if (isa<comb::ICmpOp, LLVM::ZExtOp, LLVM::SExtOp,
-                      comb::AddOp, comb::SubOp, comb::AndOp, comb::OrOp,
-                      comb::XorOp, LLVM::LoadOp>(defOp)) {
+              // Add operands to worklist - trace through comparison, arithmetic,
+              // and load/probe ops but stop at getelementptr (doesn't read memory)
+              bool shouldTrace = isa<comb::ICmpOp, LLVM::ZExtOp, LLVM::SExtOp>(defOp) ||
+                                 isa<comb::AddOp, comb::SubOp, comb::AndOp>(defOp) ||
+                                 isa<comb::OrOp, comb::XorOp>(defOp) ||
+                                 isa<LLVM::LoadOp>(defOp) ||
+                                 isa<llhd::ProbeOp>(defOp);
+              if (shouldTrace) {
                 state.waitConditionValuesToInvalidate.push_back(v);
                 for (Value operand : defOp->getOperands()) {
                   if (!isa<BlockArgument>(operand) &&
@@ -11127,11 +11142,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
         }
 
-        // Save the restart point - the earliest load operation (or the call itself)
+        // Save the restart point - the earliest load/probe operation (or the call itself)
         if (earliestLoadOp) {
           state.waitConditionRestartOp = mlir::Block::iterator(earliestLoadOp);
         } else {
-          // No loads found - restart from the call itself
+          // No loads/probes found - restart from the call itself
           state.waitConditionRestartOp = mlir::Block::iterator(&*callOp);
         }
 
