@@ -329,6 +329,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - LEC CLI now exposes strict/approx controls (`--strict-llhd`, `--lec-strict`,
   `--lec-approx`) to toggle LLHD abstraction behavior.
 - VerifToSMT now recognizes `comb.icmp`-derived clocks for BMC clock mapping.
+- Clock-root tracing is now centralized to keep BMC/VerifToSMT mappings aligned.
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)

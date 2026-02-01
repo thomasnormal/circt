@@ -111,8 +111,12 @@
 4. **BMC clock canonicalization**:
    - VerifToSMT now resolves clock roots through `comb.icmp` with constants and
      retains unsimplified clock values for key generation.
+   - Shared i1 clock-root tracing in Support and reused in LowerToBMC/VerifToSMT
+     to keep clock mapping logic aligned.
    - Added regression: `test/Conversion/VerifToSMT/bmc-clock-op-icmp-const-posedge.mlir`.
-   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`.
+   - **Files**: `include/circt/Support/I1ValueSimplifier.h`,
+     `lib/Tools/circt-bmc/LowerToBMC.cpp`,
+     `lib/Conversion/VerifToSMT/VerifToSMT.cpp`.
 
 ### Tests Run
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic00 utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
