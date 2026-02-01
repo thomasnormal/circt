@@ -985,6 +985,26 @@ private:
   /// Next available address for global memory allocation.
   uint64_t nextGlobalAddress = 0x10000000;
 
+  //===--------------------------------------------------------------------===//
+  // UVM Root Re-entrancy Support
+  //===--------------------------------------------------------------------===//
+  //
+  // The UVM library has a re-entrancy issue in the uvm_root singleton pattern:
+  // - m_uvm_get_root() checks if m_inst == null, and if so, creates uvm_root
+  // - uvm_root::new() sets m_inst = this BEFORE returning
+  // - uvm_root::new() calls uvm_component::new(), which calls get_root()
+  // - The re-entrant call sees m_inst != null but uvm_top is still null
+  // - This causes a false "uvm_top has been overwritten" warning
+  //
+  // We fix this by tracking when m_uvm_get_root is executing and skipping
+  // the m_inst != uvm_top check during re-entrant calls.
+
+  /// Depth of m_uvm_get_root calls (0 = not in get_root, >1 = re-entrant).
+  size_t uvmGetRootDepth = 0;
+
+  /// The uvm_root instance being constructed (simulated address).
+  uint64_t uvmRootBeingConstructed = 0;
+
   /// Initialize LLVM global variables, especially vtables.
   mlir::LogicalResult initializeGlobals();
 
