@@ -5758,14 +5758,46 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
       auto resultIntType =
           cast<IntegerType>(resultStructType.getElements()[0].type);
       auto resultWidth = resultIntType.getWidth();
+      int32_t inputWidth =
+          static_cast<int32_t>(cast<IntegerType>(valueField.getType()).getWidth());
+      int32_t low = adaptor.getLowBit();
+      int32_t high = low + static_cast<int32_t>(resultWidth);
 
-      Value extractedValue =
-          comb::ExtractOp::create(rewriter, loc, valueField, adaptor.getLowBit(),
-                                  resultWidth);
-      Value extractedUnknown = comb::ExtractOp::create(
-          rewriter, loc, unknownField, adaptor.getLowBit(), resultWidth);
+      // Helper to extract bits with bounds handling. For unknown masks,
+      // out-of-bounds bits should become unknown (=1).
+      auto extractBits = [&](Value component, bool fillUnknown) -> Value {
+        SmallVector<Value> toConcat;
+        if (low < 0) {
+          int32_t fillWidth = std::min(-low, static_cast<int32_t>(resultWidth));
+          APInt fillBits = fillUnknown ? APInt::getAllOnes(fillWidth)
+                                       : APInt(fillWidth, 0);
+          toConcat.push_back(
+              hw::ConstantOp::create(rewriter, loc, fillBits));
+        }
+        if (low < inputWidth && high > 0) {
+          int32_t lowIdx = std::max(low, 0);
+          Value middle = rewriter.createOrFold<comb::ExtractOp>(
+              loc,
+              rewriter.getIntegerType(std::min(
+                  static_cast<int32_t>(resultWidth),
+                  std::min(high, inputWidth) - lowIdx)),
+              component, lowIdx);
+          toConcat.push_back(middle);
+        }
+        int32_t diff = high - inputWidth;
+        if (diff > 0) {
+          APInt fillBits = fillUnknown ? APInt::getAllOnes(diff)
+                                       : APInt(diff, 0);
+          toConcat.push_back(
+              hw::ConstantOp::create(rewriter, loc, fillBits));
+        }
+        return rewriter.createOrFold<comb::ConcatOp>(loc, toConcat);
+      };
 
-      // Create the 4-state struct result
+      Value extractedValue = extractBits(valueField, /*fillUnknown=*/false);
+      Value extractedUnknown = extractBits(unknownField, /*fillUnknown=*/true);
+
+      // Create the 4-state struct result.
       auto fourStateStruct = hw::StructCreateOp::create(
           rewriter, loc, resultStructType,
           ValueRange{extractedValue, extractedUnknown});

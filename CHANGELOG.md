@@ -118,6 +118,15 @@
 - `build/bin/circt-verilog --ir-hw test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv | build/bin/circt-bmc -b 1 --module=top - | build/bin/FileCheck test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` (total=26 pass=23 xfail=3 error=0 skip=1010)
 
+## Iteration 285 - February 1, 2026
+
+### MooreToCore 4-State Out-of-Bounds Extract_ref
+- 4-state `moore.extract_ref` now yields X for out-of-bounds bits instead of 0.
+- Regression: `test/Conversion/MooreToCore/basic.mlir` (ExtractRefOutOfBounds4State).
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | build/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates
