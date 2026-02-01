@@ -278,28 +278,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Tests that use UVM features now work with the real Accellera `uvm-core` library
 - This includes virtual interface task calls, class handle formatting, and hierarchical access
 
-**Remaining Limitations (FINAL - Iteration 279):**
-1. **All XFAIL Tests Resolved!** (0 remaining)
-2. **TL-UL Timing Fix Applied**:
-   - OpenTitan IP simulation timeouts addressed with TL-UL timing fix
-   - **Next Step**: Verify fix improves OpenTitan pass rate
-3. **circt-sim timeout mechanism**: Two tests hang due to timeout mechanism issue
-4. **BMC 4-state vs 2-state inputs**:
-   - 2-state suites (yosys-sva) require `BMC_ASSUME_KNOWN_INPUTS=1` to avoid
-     spurious X-driven counterexamples.
-   - Full 4-state modeling coverage for remaining ops/extnets is still pending.
-   - Clock equivalence is still syntactic beyond known patterns; multi-clock
-     BMC remains limited.
-5. **VCD tracing scalability**: current VCD writer uses single-character IDs
-   (94 signals) and flat names; longer-term support for larger designs and
-   hierarchical scopes is needed.
+**Remaining Limitations (Iteration 280):**
+1. **All XFAIL Tests Resolved!** (0 ImportVerilog XFAIL remaining)
+2. **UVM Factory/Phase Mechanism** 🔴 CRITICAL:
+   - `run_test()` call doesn't properly instantiate test classes via factory
+   - UVM phases don't execute properly (simulation terminates at time 0)
+   - AVIPs work at HDL level but full UVM test sequences don't run
+   - **Impact**: All 6 AVIPs compile and simulate at HDL level, but UVM test phases blocked
+3. **Class Member Access Bug** 🟡 MEDIUM:
+   - Reading class member variables from methods (other than constructor) fails
+   - Block argument remapping issue in MooreToCore.cpp identified
+   - Fix pattern known (pre-pass remapping like array/foreach)
+4. **Virtual Method Dispatch** 🟡 MEDIUM:
+   - Class hierarchy not fully simulated
+   - UVM relies heavily on polymorphic method calls
+5. **TL-UL Timing for OpenTitan** 🟡 MEDIUM:
+   - Some OpenTitan reg_top modules timeout on TLUL transactions
+   - timer_core fully working (31+ IPs pass)
+6. **BMC/LEC Tests**: Handled by codex agents (not blocking UVM parity)
 
-**Next Steps for UVM Parity:**
-1. **Fix class member access bug** - Reading class member variables from methods fails
-2. **Verify TL-UL timing fix improves OpenTitan pass rate** - Re-run affected IPs
-3. **Extended AVIP simulation testing** - Longer simulation runs for coverage
-4. **Address circt-sim timeout mechanism** - Fix 2 hanging tests
-5. **Virtual method dispatch** - Complete class hierarchy simulation
+**Next Steps for UVM Parity (Priority Order):**
+1. **Fix UVM Factory/Phase Mechanism** 🔴 - Critical blocker for full UVM tests
+2. **Fix class member access bug** - Apply pre-pass remapping pattern from array/foreach
+3. **Virtual method dispatch** - Complete class hierarchy simulation
+4. **Extended AVIP testing** - Verify full UVM test sequences once factory works
+5. **OpenTitan TL-UL improvements** - Address remaining timeout issues
+
+**Active Workstreams:**
+1. **Track A: UVM Factory/Phase** - Investigate why `run_test()` terminates at time 0
+2. **Track B: Class Member Access** - Apply block argument remapping fix
+3. **Track C: OpenTitan IPs** - Test more IPs, improve TL-UL handling
+4. **Track D: External Test Suites** - sv-tests, yosys, verilator-verification
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
@@ -319,6 +328,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   occur after all drives (4-state signals only).
 - LEC CLI now exposes strict/approx controls (`--strict-llhd`, `--lec-strict`,
   `--lec-approx`) to toggle LLHD abstraction behavior.
+- VerifToSMT now recognizes `comb.icmp`-derived clocks for BMC clock mapping.
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)

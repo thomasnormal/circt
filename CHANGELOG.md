@@ -46,6 +46,34 @@
 
 ---
 
+## Iteration 281 - February 1, 2026
+
+### Track Status Updates
+
+**Track A: UVM Factory/Phase (Root Cause Identified)**
+- `run_test()` uses fork-join to spawn phases asynchronously
+- `llhd.halt` executes at time 0 before phases can complete
+- **FIX NEEDED**: Wait for UVM objections to drop before halting
+- **Files**: Test module generation, MooreToCore.cpp
+
+**Track B: Class Member Access (Fix Already Implemented)**
+- Block argument remapping pattern exists in `getConvertedOperand()` (lines 13595-13680)
+- Comprehensive test: `class-member-access-method.mlir`
+- Commit 821542aa2 implemented the fix
+
+**Track C: OpenTitan (33 IPs Pass)**
+- 27 reg_top modules pass
+- 3 prim modules pass (timer_core, prim_count, prim_fifo_sync)
+- 3 full IPs pass (i2c, mbx, tlul_adapter_reg)
+- Struct type handling needs improvement for complex IPs
+
+**Track D: External Test Suites**
+- sv-tests: 653/815 pass (80.1%)
+- yosys simple: 80/87 pass (92%)
+- chapter-16 (Assertions) 49.1%, chapter-18 (Random) 41.8% need work
+
+---
+
 ## Iteration 280 - February 1, 2026
 
 ### Fixed in this Iteration
@@ -79,6 +107,12 @@
    - **Files**: `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`,
      `tools/circt-lec/circt-lec.cpp`,
      `include/circt/Tools/circt-lec/Passes.td`.
+
+4. **BMC clock canonicalization**:
+   - VerifToSMT now resolves clock roots through `comb.icmp` with constants and
+     retains unsimplified clock values for key generation.
+   - Added regression: `test/Conversion/VerifToSMT/bmc-clock-op-icmp-const-posedge.mlir`.
+   - **Files**: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`.
 
 ### Tests Run
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic00 utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
