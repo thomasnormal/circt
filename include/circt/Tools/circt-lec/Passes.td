@@ -38,6 +38,9 @@ def ConstructLEC : Pass<"construct-lec", "::mlir::ModuleOp"> {
     Option<"secondModule", "second-module", "std::string",
            /*default=*/"",
            "Name of the second of the two modules to compare.">,
+    Option<"allowIOAlignment", "align-io", "bool",
+           /*default=*/"false",
+           "Allow aligning mismatched module inputs for approximate LEC.">,
     Option<"insertMode", "insert-mode", "lec::InsertAdditionalModeEnum",
            /*default=*/"lec::InsertAdditionalModeEnum::Reporting",           
             "Select what additional code to add.",
@@ -72,6 +75,20 @@ def StripLLHDInterfaceSignals
   let dependentDialects = [
     "circt::hw::HWDialect",
     "circt::llhd::LLHDDialect",
+    "mlir::LLVM::LLVMDialect"
+  ];
+}
+
+def LowerLECLLVM : Pass<"lower-lec-llvm", "::mlir::ModuleOp"> {
+  let summary = "Lower simple LLVM struct patterns for LEC";
+  let description = [{
+    Converts common LLVM struct construction patterns (alloca/store/load and
+    insertvalue chains feeding `unrealized_conversion_cast`) into HW structs so
+    the LEC pipeline can proceed without LLVM dialect ops.
+  }];
+
+  let dependentDialects = [
+    "circt::hw::HWDialect",
     "mlir::LLVM::LLVMDialect"
   ];
 }

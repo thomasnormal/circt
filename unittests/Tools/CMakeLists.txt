@@ -1,4 +1,5 @@
 add_subdirectory(circt-debug)
+add_subdirectory(circt-lec)
 add_subdirectory(circt-sim)
 
 # Enable LSP server unit tests when slang is available

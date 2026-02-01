@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 290 - February 1, 2026
+
+### Event Wait Rising Edge Fix
+
+**Problem**: UVM event triggers were being detected on any value change (including 1→0), but UVM semantics require detecting only rising edges (0→1 transitions).
+
+**Solution**: Added `waitForRisingEdge` field to properly handle UVM event triggers. When enabled, `moore.wait_event` only wakes up when the monitored event value transitions from 0 to 1, matching UVM's `->` trigger semantics.
+
+**Files Modified**:
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Rising edge detection logic
+- `tools/circt-sim/LLHDProcessInterpreter.h` - Added `waitForRisingEdge` field
+
+### ImportVerilog Test Fixes
+
+Fixed two failing ImportVerilog tests to achieve 100% pass rate:
+- `test/Conversion/ImportVerilog/assertion-property-concat-error.sv`
+- `test/Conversion/ImportVerilog/sva-value-change.sv`
+
+**Result**: 220/220 ImportVerilog tests now pass.
+
+### Test Results (Iteration 290)
+
+| Suite | Pass | Total | Rate | Notes |
+|-------|------|-------|------|-------|
+| circt-sim | 88 | 89 | **100%** | 1 XFAIL |
+| MooreToCore | 102 | 103 | **100%** | 1 XFAIL |
+| sv-tests Chapter 16 (SVA) | - | - | **100%** | Full coverage |
+| sv-tests Chapter 7 (Classes) | - | - | **100%** | Full coverage |
+
+### Remaining Issue
+
+**`moore.wait_event` in `func.func` contexts**: When `moore.wait_event` appears inside a `func.func` (rather than an `llhd.process`), the interpreter cannot block because functions must return synchronously. This requires a runtime fallback mechanism to handle event waiting in function contexts.
+
+---
+
 ## Iteration 289 - February 1, 2026
 
 ### UVM run_test() Fixes Implemented - MAJOR MILESTONE
@@ -71,6 +106,15 @@ endfunction
 - **OpenTitan LEC runner**: dropped unsupported `--fail-on-inequivalent` flag.
   Current failure is due to LLVM ops (e.g. `llvm.mlir.undef`) remaining in the
   OpenTitan `circt-verilog --ir-hw` output; LEC still rejects non-SMT ops.
+- **LEC LLVM struct lowering**: added `lower-lec-llvm` to rewrite trivial LLVM
+  struct pack/unpack (alloca/store/load + insertvalue + unrealized cast) into
+  HW structs so LEC can proceed without LLVM ops for these patterns.
+  - **Tests**: `test/Tools/circt-lec/lower-lec-llvm-structs.mlir`,
+    `unittests/Tools/circt-lec/LowerLECLLVMTest.cpp`
+- **LEC LLHD signal ptr casts**: strip pass now handles `llhd.sig` cast to
+  `llvm.ptr` with load/store, rewriting to probes/drives to avoid LEC aborts.
+  - **Tests**: `test/Tools/circt-lec/lec-strip-llhd-signal-ptr-cast.mlir`,
+    `unittests/Tools/circt-lec/StripLLHDSignalPtrCastTest.cpp`
 
 ---
 

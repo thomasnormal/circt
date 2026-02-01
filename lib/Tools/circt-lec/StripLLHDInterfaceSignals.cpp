@@ -370,6 +370,49 @@ static Value unwrapStoredValue(Value value) {
   return value;
 }
 
+static Value findInsertedValue(Value value, ArrayRef<int64_t> path) {
+  auto insert = value.getDefiningOp<LLVM::InsertValueOp>();
+  if (!insert)
+    return {};
+
+  ArrayRef<int64_t> insertPos = insert.getPosition();
+  if (path == insertPos)
+    return insert.getValue();
+
+  if (path.size() >= insertPos.size() &&
+      llvm::equal(insertPos, path.take_front(insertPos.size()))) {
+    if (Value nested = findInsertedValue(
+            insert.getValue(), path.drop_front(insertPos.size())))
+      return nested;
+  }
+  return findInsertedValue(insert.getContainer(), path);
+}
+
+static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
+                                   OpBuilder &builder, Location loc,
+                                   ArrayRef<int64_t> prefix) {
+  SmallVector<Value, 8> fields;
+  auto elements = hwType.getElements();
+  fields.reserve(elements.size());
+  for (auto [index, field] : llvm::enumerate(elements)) {
+    SmallVector<int64_t, 4> path(prefix.begin(), prefix.end());
+    path.push_back(static_cast<int64_t>(index));
+    if (auto nested = dyn_cast<hw::StructType>(field.type)) {
+      Value nestedValue =
+          buildHWStructFromLLVM(llvmStruct, nested, builder, loc, path);
+      if (!nestedValue)
+        return {};
+      fields.push_back(nestedValue);
+      continue;
+    }
+    Value leaf = findInsertedValue(llvmStruct, path);
+    if (!leaf || leaf.getType() != field.type)
+      return {};
+    fields.push_back(leaf);
+  }
+  return hw::StructCreateOp::create(builder, loc, hwType, fields);
+}
+
 static Value adjustIntegerWidth(OpBuilder &builder, Value value,
                                 unsigned targetWidth, Location loc) {
   auto intType = dyn_cast<IntegerType>(value.getType());
@@ -632,6 +675,18 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   DenseMap<llhd::DriveOp, RefPath> drivePaths;
   SmallVector<Operation *> derivedRefs;
 
+  Value zeroTime;
+  auto getZeroTime = [&]() -> Value {
+    if (!zeroTime) {
+      auto parentModule = sigOp->getParentOfType<hw::HWModuleOp>();
+      OpBuilder timeBuilder(parentModule.getBodyBlock(),
+                            parentModule.getBodyBlock()->begin());
+      zeroTime = llhd::ConstantTimeOp::create(timeBuilder, sigOp.getLoc(), 0,
+                                              "ns", 0, 1);
+    }
+    return zeroTime;
+  };
+
   refPaths[sigOp.getResult()] = RefPath{};
   worklist.push_back(sigOp.getResult());
   while (!worklist.empty()) {
@@ -728,6 +783,93 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           continue;
         }
         return br.emitError("expected signal operand for branch");
+      }
+      if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
+        if (cast.getInputs().size() != 1 || cast.getResults().size() != 1 ||
+            cast.getInputs().front() != ref)
+          return cast.emitError(
+              "unsupported unrealized conversion on LLHD signal in LEC");
+        if (!isa<LLVM::LLVMPointerType>(cast.getResult(0).getType()))
+          return cast.emitError(
+              "unsupported LLHD signal cast without LLVM pointer type");
+        SmallVector<Operation *, 4> castUsers(
+            llvm::to_vector(cast.getResult(0).getUsers()));
+        for (Operation *castUser : castUsers) {
+          if (auto load = dyn_cast<LLVM::LoadOp>(castUser)) {
+            OpBuilder builder(load);
+            auto probe =
+                llhd::ProbeOp::create(builder, load.getLoc(), ref);
+            Value probeValue = probe.getResult();
+            probes.push_back(probe);
+            probePaths.try_emplace(probe, path);
+            if (probeValue.getType() == load.getType()) {
+              load.getResult().replaceAllUsesWith(probeValue);
+              load.erase();
+              continue;
+            }
+            SmallVector<Operation *, 4> loadUsers(
+                llvm::to_vector(load.getResult().getUsers()));
+            for (Operation *loadUser : loadUsers) {
+              auto castOut = dyn_cast<UnrealizedConversionCastOp>(loadUser);
+              if (!castOut || castOut.getInputs().size() != 1 ||
+                  castOut.getResults().size() != 1)
+                return load.emitError(
+                    "unsupported load from LLHD signal in LEC");
+              if (castOut.getResult(0).getType() != probeValue.getType())
+                return castOut.emitError(
+                    "unsupported load conversion for LLHD signal in LEC");
+              castOut.getResult(0).replaceAllUsesWith(probeValue);
+              castOut.erase();
+            }
+            load.erase();
+            continue;
+          }
+          if (auto store = dyn_cast<LLVM::StoreOp>(castUser)) {
+            OpBuilder builder(store);
+            auto refType = dyn_cast<llhd::RefType>(ref.getType());
+            if (!refType)
+              return store.emitError(
+                  "expected llhd.ref for stored LLHD signal");
+            Type targetType = refType.getNestedType();
+            UnrealizedConversionCastOp storedCast;
+            Value storedValue = store.getValue();
+            if (auto castOp =
+                    storedValue.getDefiningOp<UnrealizedConversionCastOp>()) {
+              if (castOp.getInputs().size() == 1 &&
+                  castOp.getResults().size() == 1)
+                storedCast = castOp;
+            }
+            if (storedValue.getType() != targetType)
+              storedValue = unwrapStoredValue(storedValue);
+            if (storedValue.getType() != targetType) {
+              if (auto hwType = dyn_cast<hw::StructType>(targetType)) {
+                if (isa<LLVM::LLVMStructType>(storedValue.getType())) {
+                  Value rebuilt = buildHWStructFromLLVM(
+                      storedValue, hwType, builder, store.getLoc(), {});
+                  if (rebuilt)
+                    storedValue = rebuilt;
+                }
+              }
+            }
+            if (storedValue.getType() != targetType)
+              return store.emitError(
+                  "unsupported store to LLHD signal in LEC");
+            auto drive = llhd::DriveOp::create(
+                builder, store.getLoc(), ref, storedValue, getZeroTime(),
+                Value{});
+            drives.push_back(drive);
+            drivePaths.try_emplace(drive, path);
+            store.erase();
+            if (storedCast && storedCast.use_empty())
+              storedCast.erase();
+            continue;
+          }
+          return castUser->emitError(
+              "unsupported LLVM user of LLHD signal cast in LEC");
+        }
+        if (cast.use_empty())
+          cast.erase();
+        continue;
       }
       return sigOp.emitError()
              << "unsupported LLHD signal use in LEC: " << user->getName();

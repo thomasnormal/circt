@@ -12,9 +12,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Verification/LEC/BMC**
 - Extend 4-state modeling to remaining ops/extnets and add matching regressions.
 - Dynamic inout writer merges are limited to `--resolve-read-write` on 4-state
-- LEC still rejects LLVM dialect ops in formal inputs (e.g. OpenTitan AES S-Box
-  emits `llvm.mlir.undef`/alloca in `--ir-hw`); need a strip/lowering path.
-  values; full multi-driver resolution semantics are still missing.
+- LEC now lowers trivial LLVM struct pack/unpack (`lower-lec-llvm`), but still
+  rejects other LLVM dialect ops in formal inputs (OpenTitan still emits some
+  LLVM ops in `--ir-hw`); widen lowering coverage.
+- Full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
 

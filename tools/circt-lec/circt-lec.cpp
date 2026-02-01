@@ -34,7 +34,9 @@
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/Sim/SimDialect.h"
 #include "circt/Dialect/Sim/SimPasses.h"
+#include "circt/Dialect/SV/SVDialect.h"
 #include "circt/Dialect/SVA/SVADialect.h"
+#include "circt/Dialect/SV/SVPasses.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
@@ -507,30 +509,17 @@ static LogicalResult executeLEC(MLIRContext &context) {
     return failure();
   }
 
-  if (strictLLHDEnabled) {
-    bool hasInOut = false;
-    module->walk([&](hw::HWModuleOp hwModule) {
-      if (hasInOut)
-        return;
-      for (auto &port : hwModule.getModuleType().getPorts()) {
-        if (port.dir == hw::ModulePort::InOut) {
-          hwModule.emitError(
-              "LEC strict mode does not support inout types; rerun without "
-              "--lec-strict/--strict-llhd");
-          hasInOut = true;
-          return;
-        }
-      }
-    });
-    if (hasInOut)
-      return failure();
-  }
-
   if (flattenHWModules)
     pm.addPass(hw::createFlattenModules());
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
+  {
+    sv::HWEliminateInOutPortsOptions inoutOpts;
+    inoutOpts.allowMultipleWritersSameValue = true;
+    inoutOpts.resolveReadWrite = strictLLHDEnabled;
+    pm.addPass(sv::createHWEliminateInOutPortsPass(inoutOpts));
+  }
   if (hasLLHD) {
     LowerLLHDRefPortsOptions lowerRefOpts;
     lowerRefOpts.strict = strictLLHDEnabled;
@@ -576,6 +565,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   StripLLHDInterfaceSignalsOptions stripLLHDOpts;
   stripLLHDOpts.strict = strictLLHDEnabled;
   pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
+  pm.addPass(createLowerLECLLVM());
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
@@ -587,6 +577,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
     ConstructLECOptions opts;
     opts.firstModule = firstModuleName;
     opts.secondModule = secondModuleName;
+    opts.allowIOAlignment = !strictLLHDEnabled;
     if (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB)
       opts.insertMode = lec::InsertAdditionalModeEnum::None;
     pm.addPass(createConstructLEC(opts));
@@ -908,6 +899,7 @@ int main(int argc, char **argv) {
     circt::llhd::LLHDDialect,
     circt::om::OMDialect,
     circt::sim::SimDialect,
+    circt::sv::SVDialect,
     circt::sva::SVADialect,
     circt::seq::SeqDialect,
     mlir::smt::SMTDialect,
