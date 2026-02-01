@@ -6287,8 +6287,16 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
 
       // Get the index, handling 4-state index types
       Value idx = adaptor.getLowBit();
-      if (isFourStateStructType(idx.getType()))
+      Value idxUnknownCond;
+      if (isFourStateStructType(idx.getType())) {
+        Value idxUnknown = extractFourStateUnknown(rewriter, loc, idx);
+        Value idxUnknownZero = hw::ConstantOp::create(
+            rewriter, loc, idxUnknown.getType(), 0);
+        idxUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, idxUnknown,
+            idxUnknownZero);
         idx = extractFourStateValue(rewriter, loc, idx);
+      }
       idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(width), loc);
 
       // Extract from both value and unknown fields via value reads.
@@ -6313,10 +6321,36 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       Value extractedUnknown = comb::ExtractOp::create(
           rewriter, loc, unknownShifted, 0, resultWidth);
 
+      Value outOfBoundsCond;
+      int64_t maxIdx = static_cast<int64_t>(width) -
+                       static_cast<int64_t>(resultWidth);
+      Value constTrue =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      if (maxIdx < 0) {
+        outOfBoundsCond = constTrue;
+      } else {
+        Value maxIdxConst = hw::ConstantOp::create(
+            rewriter, loc, idxShift.getType(), maxIdx);
+        outOfBoundsCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ugt, idxShift, maxIdxConst);
+      }
+      Value cond = outOfBoundsCond;
+      if (idxUnknownCond)
+        cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond, idxUnknownCond);
+
+      Value zero =
+          hw::ConstantOp::create(rewriter, loc, resultIntType, 0);
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, resultIntType, -1);
+      Value finalValue = comb::MuxOp::create(rewriter, loc, cond, zero,
+                                             extractedValue);
+      Value finalUnknown = comb::MuxOp::create(rewriter, loc, cond, allOnes,
+                                               extractedUnknown);
+
       // Create the 4-state struct result
       auto fourStateStruct = hw::StructCreateOp::create(
           rewriter, loc, resultStructType,
-          ValueRange{extractedValue, extractedUnknown});
+          ValueRange{finalValue, finalUnknown});
 
       // Create a new signal to hold the extracted value and return ref to it.
       // Note: This creates a read-only view; writes won't propagate back.

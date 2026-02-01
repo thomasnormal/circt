@@ -74,6 +74,27 @@ moore.module @dyn_extract_ref_fourstate_idx(in %idx : !moore.l4, out out : !moor
   moore.output %bit : !moore.l1
 }
 
+// Test 4-state index with unknown/out-of-bounds handling
+// CHECK-LABEL: hw.module @dyn_extract_ref_fourstate_idx_oob
+// CHECK-SAME: (in %idx : !hw.struct<value: i5, unknown: i5>, out out : !hw.struct<value: i4, unknown: i4>)
+moore.module @dyn_extract_ref_fourstate_idx_oob(in %idx : !moore.l5, out out : !moore.l4) {
+  // Create a 4-state signal
+  %sig = moore.variable : !moore.ref<l8>
+
+  // Dynamic slice extraction with 4-state index
+  // CHECK: hw.struct_extract %idx["unknown"]
+  // CHECK: comb.icmp ne
+  // CHECK: comb.icmp ugt
+  // CHECK: comb.or
+  // CHECK: comb.mux
+  // CHECK: comb.mux
+  %slice_ref = moore.dyn_extract_ref %sig from %idx : !moore.ref<l8>, !moore.l5 -> !moore.ref<l4>
+
+  %slice = moore.read %slice_ref : !moore.ref<l4>
+
+  moore.output %slice : !moore.l4
+}
+
 // Test static bit extraction from 4-state signal (ExtractRefOp)
 // CHECK-LABEL: hw.module @extract_ref_fourstate
 // CHECK-SAME: (out out : !hw.struct<value: i1, unknown: i1>)
