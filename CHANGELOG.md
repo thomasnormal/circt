@@ -188,6 +188,18 @@
 **Tests**
 - `build/bin/circt-opt test/Conversion/MooreToCore/dyn-extract-array-xprop.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/dyn-extract-array-xprop.mlir`
 
+## Iteration 292 - February 1, 2026
+
+### External Suite Smoke Runs
+- sv-tests BMC smoke: 23 pass / 3 xfail (tags 16.* / 9.4.4).
+- yosys SVA BMC smoke: 14 tests, 0 failures, 2 skipped (VHDL).
+- Verilator-verification: directory missing at `/home/thomas-ahle/verilator-verification`.
+
+**Tests**
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+- `ls /home/thomas-ahle/verilator-verification` (missing)
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates
