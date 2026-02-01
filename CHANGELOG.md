@@ -59,6 +59,11 @@ endfunction
 - Interfaces (ch15): 5/5 (100%)
 - System tasks (ch21): 29/29 (100%)
 
+### Formal/LEC Updates (Iteration 289)
+- **LEC strict enabled multi-drive (4-state)**: resolve enabled multi-drive
+  LLHD signals via 4-state resolution instead of abstraction.
+  - **Test**: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-enable-conflict-4state.mlir`
+
 ---
 
 ## Iteration 288 - February 1, 2026
