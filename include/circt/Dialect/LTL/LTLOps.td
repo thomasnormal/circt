@@ -405,10 +405,13 @@ def AtNegEdge: I32EnumAttrCase<"Neg", 1, "negedge">;
 /// AtEdge is syntactic sugar for AtPosEdge or AtNegEdge.
 def AtEdge   : I32EnumAttrCase<"Both", 2, "edge">;
 
-def ClockEdgeAttr : I32EnumAttr<"ClockEdge", "clock edge",
-                                [AtPosEdge, AtNegEdge, AtEdge]> {
+def ClockEdgeAttrImpl : I32EnumAttr<"ClockEdge", "clock edge",
+                                    [AtPosEdge, AtNegEdge, AtEdge]> {
   let cppNamespace = "circt::ltl";
+  let genSpecializedAttr = 0;
 }
+
+def ClockEdgeAttr : EnumAttr<LTLDialect, ClockEdgeAttrImpl, "clock_edge">;
 
 def ClockOp : LTLOp<"clock", [
   Pure, InferTypeOpInterface, DeclareOpInterfaceMethods<InferTypeOpInterface>
