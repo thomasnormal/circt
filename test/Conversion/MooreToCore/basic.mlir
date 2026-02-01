@@ -424,6 +424,17 @@ moore.module @ExtractOutOfBounds4State(in %in : !moore.l2, out out : !moore.l4) 
   moore.output %0 : !moore.l4
 }
 
+// CHECK-LABEL: hw.module @ExtractRefOutOfBounds4State
+// CHECK: llhd.prb %in : !hw.struct<value: i2, unknown: i2>
+// CHECK: hw.struct_extract %{{.+}}["value"] : !hw.struct<value: i2, unknown: i2>
+// CHECK: hw.struct_extract %{{.+}}["unknown"] : !hw.struct<value: i2, unknown: i2>
+// CHECK: hw.struct_create (%{{.+}}, %{{.+}}) : !hw.struct<value: i2, unknown: i2>
+moore.module @ExtractRefOutOfBounds4State(in %in : !moore.ref<l2>, out out : !moore.l2) {
+  %0 = moore.extract_ref %in from 1 : !moore.ref<l2> -> !moore.ref<l2>
+  %1 = moore.read %0 : !moore.ref<l2>
+  moore.output %1 : !moore.l2
+}
+
 // CHECK-LABEL: hw.module @UnpackedArray
 moore.module @UnpackedArray(in %arr : !moore.uarray<2 x i32>, in %sel : !moore.i1, out c : !moore.i32) {
   // CHECK: hw.array_get %arr[%sel] : !hw.array<2xi32>, i1
