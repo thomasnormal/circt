@@ -605,6 +605,7 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
 - `build/tools/circt/unittests/Dialect/SV/CIRCTSVTests --gtest_filter=HWEliminateInOutPortsTest.MergeDynamicWriters`
 - `ninja -C build circt-opt CIRCTSVTests`
 - `build/bin/circt-opt --hw-eliminate-inout-ports test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir | build/bin/FileCheck test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir`
+- `build/bin/circt-opt --hw-eliminate-inout-ports="resolve-read-write" test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-dynamic-multi-writer.mlir | build/bin/FileCheck test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-dynamic-multi-writer.mlir`
 - `OUT=/home/thomas-ahle/circt/avip-ahb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
 - `OUT=/home/thomas-ahle/circt/avip-apb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
 - `OUT=/home/thomas-ahle/circt/avip-axi4_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4_avip`
