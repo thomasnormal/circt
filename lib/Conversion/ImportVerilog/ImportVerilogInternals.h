@@ -110,6 +110,16 @@ struct HierPathInfo {
   const slang::ast::ValueSymbol *valueSym;
 };
 
+/// Information about interface ports needed from bind scopes.
+/// When a bound instance references an interface port from its bind scope,
+/// that interface needs to be threaded through the target module's ports.
+struct BindScopeInterfacePortInfo {
+  /// The interface port symbol from the bind scope.
+  const slang::ast::InterfacePortSymbol *ifacePort;
+  /// The index in the target module's port list (set during header conversion).
+  std::optional<unsigned int> idx;
+};
+
 struct AssertionLocalVarBinding {
   Value value;
   uint64_t offset = 0;
@@ -495,6 +505,12 @@ struct Context {
   /// Collect all hierarchical names used for the per module/instance.
   DenseMap<const slang::ast::InstanceBodySymbol *, SmallVector<HierPathInfo>>
       hierPaths;
+
+  /// Interface ports from bind scopes that need to be threaded through
+  /// target modules. Maps target module body to the interface ports needed.
+  DenseMap<const slang::ast::InstanceBodySymbol *,
+           SmallVector<BindScopeInterfacePortInfo>>
+      bindScopeInterfacePorts;
 
   /// It's used to collect the repeat hierarchical names on the same path.
   /// Such as `Top.sub.a` and `sub.a`, they are equivalent. The variable "a"

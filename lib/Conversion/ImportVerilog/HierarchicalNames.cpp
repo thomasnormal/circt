@@ -208,6 +208,70 @@ struct InstBodyVisitor {
 
   // Handle instances.
   LogicalResult visit(const slang::ast::InstanceSymbol &instNode) {
+    // Check if this is a bound instance (has a bind scope)
+    if (auto *bindScope = instNode.getBindScope()) {
+      // For bound instances, analyze port connections that might reference
+      // interface ports from the bind scope
+      if (bindScope->getContainingInstance()) {
+        for (const auto *con : instNode.getPortConnections()) {
+          // Check if the port connection expression references an interface
+          // port from the bind scope
+          const auto *expr = con->getExpression();
+          if (!expr)
+            continue;
+
+          // Look for hierarchical value expressions that go through interface
+          // ports
+          auto checkExpr =
+              [&](const slang::ast::HierarchicalValueExpression &hierExpr) {
+                if (!hierExpr.ref.isViaIfacePort())
+                  return;
+                // Find the interface port in the path
+                for (const auto &elem : hierExpr.ref.path) {
+                  if (auto *ifacePort =
+                          elem.symbol
+                              ->as_if<slang::ast::InterfacePortSymbol>()) {
+                    // Check if this interface port is from the bind scope
+                    auto *portParent = ifacePort->getParentScope();
+                    if (portParent && portParent == bindScope) {
+                      // This interface port needs to be threaded to the target
+                      // module
+                      auto *targetBody =
+                          instNode.getParentScope()->getContainingInstance();
+                      if (targetBody) {
+                        // Check if we already have this interface port
+                        auto &ports =
+                            context.bindScopeInterfacePorts[targetBody];
+                        bool exists = llvm::any_of(
+                            ports, [&](const BindScopeInterfacePortInfo &info) {
+                              return info.ifacePort == ifacePort;
+                            });
+                        if (!exists) {
+                          ports.push_back({ifacePort, std::nullopt});
+                        }
+                      }
+                    }
+                    break;
+                  }
+                }
+              };
+
+          // Recursively visit the expression to find hierarchical value exprs
+          struct HierExprVisitor
+              : public slang::ast::ASTVisitor<HierExprVisitor, false, true,
+                                              true> {
+            std::function<void(const slang::ast::HierarchicalValueExpression &)>
+                callback;
+            void handle(const slang::ast::HierarchicalValueExpression &expr) {
+              callback(expr);
+            }
+          };
+          HierExprVisitor visitor;
+          visitor.callback = checkExpr;
+          expr->visit(visitor);
+        }
+      }
+    }
     return context.traverseInstanceBody(instNode.body);
   }
 

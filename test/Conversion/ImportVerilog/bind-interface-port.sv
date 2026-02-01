@@ -1,8 +1,6 @@
 // RUN: circt-verilog --ir-moore %s | FileCheck %s
-// XFAIL: *
 // REQUIRES: slang
 // Bind with interface port access - using bind scope's interface ports.
-// XFAIL reason: Interface port threading across bind scopes not yet implemented.
 
 interface BusIf(input logic clk);
   logic data;
@@ -27,9 +25,9 @@ module top;
   Wrapper dut(bus);
 endmodule
 
+// CHECK-LABEL: moore.module private @Monitor
 // CHECK-LABEL: moore.module private @Target
 // CHECK:         moore.instance "mon" @Monitor
-// CHECK-LABEL: moore.module private @Monitor
 // CHECK-LABEL: moore.module private @Wrapper
 // CHECK:         moore.instance "t0" @Target
 // CHECK-LABEL: moore.module @top

@@ -7,7 +7,7 @@
 - **XFAIL reduction**: 18 → 0 (100% reduction!)
 - **Tests fixed this session**: 18 (all XFAILs eliminated)
 - **OpenTitan**: TL-UL timing fix applied
-- **AVIP**: All 6 protocols compile and simulate with UVM
+- **AVIP**: **All 6 protocols fully simulate with transactions!** (APB, AHB, UART, I2S, AXI4, I3C)
 
 ### Key Fixes This Session
 1. **18 XFAIL tests fixed** - Reduced from 18 to 0
@@ -30,10 +30,14 @@
 | Suite | Status | Notes |
 |-------|--------|-------|
 | ImportVerilog | **219/219 (100%)** | ALL TESTS PASS! |
-| OpenTitan IPs | **17+/21 (81%+)** | TL-UL init timing identified |
-| AVIP Protocols | **6/6 (100%)** | APB, AHB, UART, I2S, AXI4, I3C |
+| circt-sim | **81/82 (98.78%)** | 1 XFAIL (tlul-bfm-user-default.sv) |
+| MooreToCore | **98/99 (98.99%)** | 1 XFAIL |
+| OpenTitan IPs | **31+ pass** | timer_core fully working |
+| AVIP Protocols | **6/6 (100%)** | ALL simulate with transactions! |
 | BMC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
 | LEC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
+| sv-tests | **317/348 (91%)** | Core SV features working |
+| yosys tests | **403/522 (77%)** | Many missing deps |
 
 ### Remaining Work
 - **TL-UL a_ready signal propagation** for OpenTitan IP simulation

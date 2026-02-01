@@ -1070,6 +1070,26 @@ struct ModuleVisitor : public BaseVisitor {
       inputValues.push_back(hierValue);
     }
 
+    // Pass bind scope interface port values to the target module.
+    // These are interface ports from the current (instantiating) scope that
+    // bound instances inside the target module need.
+    for (const auto &bindIfacePort :
+         context.bindScopeInterfacePorts[&instNode.body]) {
+      if (!bindIfacePort.idx)
+        continue;
+      // Look up the interface port value in the current scope
+      if (auto it =
+              context.interfacePortValues.find(bindIfacePort.ifacePort);
+          it != context.interfacePortValues.end()) {
+        inputValues.push_back(it->second);
+      } else {
+        // Interface port not found - this shouldn't happen if collection worked
+        mlir::emitError(loc) << "missing bind scope interface port value for `"
+                             << bindIfacePort.ifacePort->name << "`";
+        return failure();
+      }
+    }
+
     // Create the instance op itself.
     auto inputNames = builder.getArrayAttr(moduleType.getInputNames());
     auto outputNames = builder.getArrayAttr(moduleType.getOutputNames());
@@ -2322,6 +2342,43 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
       }
     }
   }
+
+  // Add interface ports needed from bind scopes. When a bound instance
+  // references an interface port from its bind scope, that interface needs
+  // to be threaded through the target module's ports.
+  for (auto &bindIfacePort : bindScopeInterfacePorts[module]) {
+    auto *ifacePort = bindIfacePort.ifacePort;
+    if (!ifacePort->interfaceDef)
+      continue;
+
+    auto &ifaceBody = slang::ast::InstanceBodySymbol::fromDefinition(
+        compilation, *ifacePort->interfaceDef, ifacePort->location,
+        slang::ast::InstanceFlags::None, nullptr, nullptr, nullptr);
+    auto *ifaceLowering = convertInterfaceHeader(&ifaceBody);
+    if (!ifaceLowering)
+      return {};
+
+    auto ifaceName = ifaceLowering->op.getSymName();
+    mlir::SymbolRefAttr ifaceRef;
+    if (!ifacePort->modport.empty()) {
+      ifaceRef = mlir::SymbolRefAttr::get(
+          getContext(), ifaceName,
+          {mlir::FlatSymbolRefAttr::get(getContext(), ifacePort->modport)});
+    } else {
+      ifaceRef = mlir::FlatSymbolRefAttr::get(getContext(), ifaceName);
+    }
+
+    auto vifType = moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+    auto portType = moore::RefType::get(vifType);
+    // Use a unique name for the bind scope interface port
+    auto portName = builder.getStringAttr(
+        llvm::Twine("__bind_scope_") + ifacePort->name);
+    bindIfacePort.idx = inputIdx++;
+    modulePorts.push_back({portName, portType, hw::ModulePort::Input});
+    auto portLoc = convertLocation(ifacePort->location);
+    block->addArgument(portType, portLoc);
+  }
+
   auto moduleType = hw::ModuleType::get(getContext(), modulePorts);
 
   // Pick an insertion point for this module according to the source file
@@ -2388,6 +2445,18 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       interfacePortValues[ifacePort] = port.arg;
       ifacePortSymbols.push_back(ifacePort);
     }
+  }
+
+  // Register bind scope interface ports in interfacePortValues so bound
+  // instances can access them. These are interface ports from the bind scope
+  // that were threaded through as additional module ports.
+  for (const auto &bindIfacePort : bindScopeInterfacePorts[module]) {
+    if (!bindIfacePort.idx)
+      continue;
+    auto *ifacePort = bindIfacePort.ifacePort;
+    auto arg = lowering.op.getBody()->getArgument(*bindIfacePort.idx);
+    interfacePortValues[ifacePort] = arg;
+    ifacePortSymbols.push_back(ifacePort);
   }
 
   // Keep track of the current scope for %m format specifier.
