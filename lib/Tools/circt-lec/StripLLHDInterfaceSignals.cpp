@@ -1992,12 +1992,126 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       return true;
     };
 
+    auto resolveStoresByEnableResolution = [&]() -> bool {
+      if (field.stores.empty() || field.reads.empty())
+        return false;
+      auto valueType = field.reads.front().getType();
+      if (!isFourStateStructType(valueType))
+        return false;
+
+      auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+      if (!module)
+        return false;
+
+      Block *readBlock = field.reads.front()->getBlock();
+      for (auto read : field.reads)
+        if (read->getBlock() != readBlock)
+          return false;
+
+      OpBuilder builder(field.reads.front());
+      Operation *readOp = field.reads.front().getOperation();
+      PostDominanceInfo postDom(module);
+      SmallDenseMap<std::pair<Block *, Block *>, BoolCondition> decisionCache;
+
+      auto buildStoreCondition =
+          [&](LLVM::StoreOp store) -> std::optional<BoolCondition> {
+        BoolCondition condition(true);
+        Operation *cursor = store.getOperation();
+        while (Operation *parent = cursor->getParentOp()) {
+          if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
+            Region *parentRegion = cursor->getParentRegion();
+            bool inThen = ifOp.getThenRegion().isAncestor(parentRegion);
+            bool inElse = ifOp.getElseRegion().isAncestor(parentRegion);
+            if (!inThen && !inElse)
+              return std::nullopt;
+            BoolCondition guard(ifOp.getCondition());
+            if (inElse)
+              guard = guard.inverted(builder);
+            condition = condition.andWith(guard, builder);
+          }
+          cursor = parent;
+        }
+
+        Block *entryBlock = &store->getParentRegion()->front();
+        BoolCondition branchCondition = getBranchDecisionsFromDominatorToTarget(
+            builder, entryBlock, store->getBlock(), decisionCache);
+        condition = condition.andWith(branchCondition, builder);
+        return condition;
+      };
+
+      SmallVector<Value, 4> values;
+      SmallVector<Value, 4> enables;
+      values.reserve(field.stores.size());
+      enables.reserve(field.stores.size());
+
+      Value enableTrue;
+      auto getEnableTrue = [&]() -> Value {
+        if (!enableTrue)
+          enableTrue = hw::ConstantOp::create(builder, readOp->getLoc(),
+                                              builder.getI1Type(), 1)
+                           .getResult();
+        return enableTrue;
+      };
+
+      for (auto store : field.stores) {
+        bool regionDominatesRead = false;
+        for (Operation *parent = store->getParentOp(); parent;
+             parent = parent->getParentOp()) {
+          if (isa<hw::HWModuleOp>(parent))
+            break;
+          if (dom.dominates(parent, readOp)) {
+            regionDominatesRead = true;
+            break;
+          }
+        }
+        if (!regionDominatesRead &&
+            !postDom.postDominates(readBlock, store->getBlock()))
+          return false;
+        auto condOpt = buildStoreCondition(store);
+        if (!condOpt)
+          return false;
+        BoolCondition cond = *condOpt;
+        if (cond.isFalse())
+          continue;
+        Value stored = unwrapStoredValue(store.getValue());
+        if (!stored || stored.getType() != valueType)
+          return false;
+        if (!dom.dominates(stored, readOp))
+          return false;
+
+        Value enable = cond.isTrue() ? getEnableTrue()
+                                     : cond.materialize(builder,
+                                                        readOp->getLoc());
+        if (!enable || !enable.getType().isInteger(1))
+          return false;
+        if (!dom.dominates(enable, readOp))
+          return false;
+        values.push_back(stored);
+        enables.push_back(enable);
+      }
+
+      if (values.empty())
+        return false;
+
+      builder.setInsertionPoint(readOp);
+      Value resolved = resolveFourStateValuesWithEnable(builder,
+                                                        readOp->getLoc(),
+                                                        values, enables);
+      if (!resolved || resolved.getType() != valueType)
+        return false;
+      for (auto read : field.reads)
+        read.getResult().replaceAllUsesWith(resolved);
+      return true;
+    };
+
     if (!field.stores.empty() && !field.reads.empty()) {
       if (resolveStoresByDominance())
         continue;
       if (resolveStoresByComplementaryConditions())
         continue;
       if (resolveStoresByExclusiveConditions())
+        continue;
+      if (resolveStoresByEnableResolution())
         continue;
       needsAbstraction = true;
     }
