@@ -928,6 +928,9 @@ void LowerToBMCPass::runOnOperation() {
     bmcOp->setAttr("bmc_clock_keys", builder.getArrayAttr(clockKeyAttrs));
   if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks"))
     bmcOp->setAttr("bmc_reg_clocks", regClocks);
+  if (auto regClockSources =
+          hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources"))
+    bmcOp->setAttr("bmc_reg_clock_sources", regClockSources);
   if (ignoreAssertionsUntil) {
     unsigned scaledIgnore =
         risingClocksOnly ? ignoreAssertionsUntil * clockScale

@@ -67,6 +67,34 @@ static bool isZeroTime(llhd::TimeAttr time) {
 }
 
 static bool traceClockRoot(Value value, Value &root);
+static std::optional<std::pair<BlockArgument, bool>>
+getClockSourceInfo(Value clock, HWModuleOp module) {
+  if (!clock)
+    return std::nullopt;
+  if (auto arg = dyn_cast<BlockArgument>(clock)) {
+    if (arg.getOwner() == module.getBodyBlock())
+      return std::make_pair(arg, false);
+  }
+  if (auto toClock = clock.getDefiningOp<seq::ToClockOp>()) {
+    auto simplified = simplifyI1Value(toClock.getInput());
+    Value base = simplified.value ? simplified.value : toClock.getInput();
+    BlockArgument root;
+    if (traceI1ValueRoot(base, root) && root &&
+        root.getOwner() == module.getBodyBlock())
+      return std::make_pair(root, simplified.invert);
+  }
+  return std::nullopt;
+}
+
+static Attribute makeClockSourceAttr(OpBuilder &builder, BlockArgument root,
+                                      bool invert) {
+  if (!root)
+    return UnitAttr::get(builder.getContext());
+  return builder.getDictionaryAttr(
+      {builder.getNamedAttr(
+           "arg_index", builder.getI32IntegerAttr(root.getArgNumber())),
+       builder.getNamedAttr("invert", builder.getBoolAttr(invert))});
+}
 static StringAttr getClockPortName(HWModuleOp module, Value clock) {
   auto arg = dyn_cast<BlockArgument>(clock);
   if (!arg || arg.getOwner() != module.getBodyBlock())
@@ -226,6 +254,7 @@ private:
   DenseMap<StringAttr, SmallVector<StringAttr>> addedOutputNames;
   DenseMap<StringAttr, SmallVector<Attribute>> initialValues;
   DenseMap<StringAttr, SmallVector<StringAttr>> regClockNames;
+  DenseMap<StringAttr, SmallVector<Attribute>> regClockSources;
 
   LogicalResult externalizeReg(HWModuleOp module, Operation *op, Twine regName,
                                Value clock, Attribute initState, Value reset,
@@ -335,6 +364,8 @@ void ExternalizeRegistersPass::runOnOperation() {
               addedOutputNames[instanceOp.getModuleNameAttr().getAttr()];
           auto childClockNames =
               regClockNames[instanceOp.getModuleNameAttr().getAttr()];
+          auto childClockSources =
+              regClockSources[instanceOp.getModuleNameAttr().getAttr()];
           addedInputs[module.getSymNameAttr()].append(newInputs);
           addedInputNames[module.getSymNameAttr()].append(newInputNames);
           addedOutputs[module.getSymNameAttr()].append(newOutputs);
@@ -348,6 +379,8 @@ void ExternalizeRegistersPass::runOnOperation() {
 
           SmallVector<StringAttr> mappedClockNames;
           mappedClockNames.reserve(childClockNames.size());
+          SmallVector<Attribute> mappedClockSources;
+          mappedClockSources.reserve(childClockSources.size());
           auto inputNamesAttr = instanceOp.getInputNames().getValue();
           auto lookupInputIndex = [&](StringAttr name)
               -> std::optional<size_t> {
@@ -372,7 +405,39 @@ void ExternalizeRegistersPass::runOnOperation() {
             Value operand = instanceOp.getOperand(*inputIdx);
             mappedClockNames.push_back(getClockPortName(module, operand));
           }
+          for (auto attr : childClockSources) {
+            auto dict = dyn_cast<DictionaryAttr>(attr);
+            if (!dict) {
+              mappedClockSources.push_back(
+                  UnitAttr::get(module.getContext()));
+              continue;
+            }
+            auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
+            auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
+            if (!argAttr || !invertAttr) {
+              mappedClockSources.push_back(
+                  UnitAttr::get(module.getContext()));
+              continue;
+            }
+            unsigned argIndex = argAttr.getValue().getZExtValue();
+            if (argIndex >= instanceOp.getNumOperands()) {
+              mappedClockSources.push_back(
+                  UnitAttr::get(module.getContext()));
+              continue;
+            }
+            Value operand = instanceOp.getOperand(argIndex);
+            auto info = getClockSourceInfo(operand, module);
+            if (!info) {
+              mappedClockSources.push_back(
+                  UnitAttr::get(module.getContext()));
+              continue;
+            }
+            bool invert = invertAttr.getValue() ^ info->second;
+            mappedClockSources.push_back(
+                makeClockSourceAttr(builder, info->first, invert));
+          }
           regClockNames[module.getSymNameAttr()].append(mappedClockNames);
+          regClockSources[module.getSymNameAttr()].append(mappedClockSources);
 
           for (auto [input, name] : zip_equal(newInputs, newInputNames)) {
             instanceOp.getInputsMutable().append(
@@ -419,6 +484,12 @@ void ExternalizeRegistersPass::runOnOperation() {
             "bmc_reg_clocks",
             ArrayAttr::get(&getContext(), clockAttrs));
       }
+      if (!regClockSources[module.getSymNameAttr()].empty()) {
+        module->setAttr(
+            "bmc_reg_clock_sources",
+            ArrayAttr::get(&getContext(),
+                           regClockSources[module.getSymNameAttr()]));
+      }
     }
   }
 }
@@ -462,6 +533,10 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   auto clockName =
       getClockPortName(module, root ? root : clock);
   regClockNames[module.getSymNameAttr()].push_back(clockName);
+  Attribute clockSource = UnitAttr::get(builder.getContext());
+  if (auto info = getClockSourceInfo(clock, module))
+    clockSource = makeClockSourceAttr(builder, info->first, info->second);
+  regClockSources[module.getSymNameAttr()].push_back(clockSource);
   if (reset) {
     if (isAsync) {
       // Async reset
