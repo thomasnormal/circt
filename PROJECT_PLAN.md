@@ -269,7 +269,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 287 - 2026-01-31)
+### Test Suite Status (Iteration 288 - 2026-02-01)
 
 **Repository Status**: 400+ commits ahead of upstream CIRCT
 
@@ -280,24 +280,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | ImportVerilog | **219/219 (100%)** | **FULL PARITY ACHIEVED!** |
 | circt-sim | **83/83 (100%)** | All pass (wait-condition-memory test added) |
 | MooreToCore | **99/100 (99%)** | 1 XFAIL |
-| sv-tests BMC | **23/23 (100%)** | All pass |
+| sv-tests BMC ch7+16 | **124/131 (94.7%)** | 5 XFAIL, 2 errors (struct/union) |
+| sv-tests LEC ch7+16 | **123/126 (97.6%)** | 3 errors |
 | sv-tests elaboration | **755/829 (91%)** | 69 expected failures |
-| Verilator BMC | **17/17 (100%)** | All pass |
+| Verilator BMC | **16/22 (72.7%)** | 6 verilog convert errors |
 | Verilator LEC | **17/17 (100%)** | All pass |
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
-| OpenTitan IPs | **21/21 (100%)** | All tested IPs pass |
+| OpenTitan IPs | **4/4 tested (100%)** | timer_core, gpio, uart_reg_top, spi_host all pass |
 | AVIPs | **6/6 HDL** | HDL simulation works, UVM phases blocked |
 | sv-tests | **755/829 (91%)** | Elaboration baseline |
-| verilator-verification | **17/17 (100%)** | BMC + LEC both pass |
+| verilator-verification | **9/10 asserts (90%)** | 1 verilog error (assert_sampled) |
 | **UVM with uvm-core** | **BLOCKED** | run_test() terminates at time 0 |
 
-**Current Workstreams (Iteration 287):**
+**Current Workstreams (Iteration 288):**
 
 | Track | Focus | Status | Next Task |
 |-------|-------|--------|-----------|
-| **Track 1: UVM Runtime** | run_test() early termination | 🔴 Investigating | Debug factory.create() and phase forking |
-| **Track 2: OpenTitan** | IP simulation coverage | ✅ 21/21 pass | Add more complex IPs |
+| **Track 1: UVM Runtime** | run_test() early termination | 🔴 Investigating | Debug fork/join and class member access |
+| **Track 2: Class Member Access** | Member read from methods | 🔴 Investigating | Fix block argument remapping in MooreToCore |
 | **Track 3: AVIP** | UVM test execution | 🟡 HDL works | Debug UVM phase execution |
 | **Track 4: External Tests** | Regression testing | ✅ Maintained | Continue sv-tests/verilator coverage |
 

@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 288 - February 1, 2026
+
+### Continuing UVM run_test() Investigation
+
+**Problem**: UVM `run_test()` terminates at time 0 - simulation never advances through UVM phases.
+
+**Current Investigation (4 parallel agents):**
+1. **Fork/Join Analysis** - Investigating `sim.fork` join types and parent suspension logic
+2. **AVIP Protocol Testing** - APB AVIP terminates at time 0 with same UVM issue
+3. **External Test Suites** - sv-tests ch7+16 BMC: 124/131 pass, verilator asserts: 9/10 pass
+4. **Class Member Access Bug** - Investigating block argument remapping in MooreToCore.cpp
+
+**Hypothesis**: Multiple potential root causes being investigated in parallel:
+- Class member variable access from methods may fail due to block argument remapping
+- Fork/join type handling may incorrectly suspend parent processes
+- UVM component registration may fail to track children properly
+
+**OpenTitan IPs Verified (4/4 pass):**
+- timer_core - ✅ Pass at 100ms
+- gpio_no_alerts - ✅ Pass at 100ms
+- uart_reg_top - ✅ Pass at 100ms
+- spi_host_tb - ✅ Pass (completes immediately)
+
+### Test Suite Summary (Iteration 288)
+| Suite | Status | Notes |
+|-------|--------|-------|
+| ImportVerilog | **219/219 (100%)** | FULL PARITY |
+| circt-sim | **83/83 (100%)** | All pass |
+| sv-tests BMC ch7+16 | **124/131 (94.7%)** | 5 XFAIL, 2 errors |
+| verilator asserts | **9/10 (90%)** | 1 verilog error |
+| OpenTitan IPs | **4/4 (100%)** | All tested pass |
+
+---
+
 ## Iteration 287 - January 31, 2026
 
 ### resolveSignalId llhd.prb Fix - CRITICAL BUG FIX
@@ -512,6 +546,8 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
 - Strict mode rejects 2-state inout read/write (requires 4-state semantics).
 - Dynamic array-index inout writes remain conservative: other writers to the
   same array base are rejected.
+- Fixed a crash in inout lowering when a dynamic index path had both reads and
+  writes, by rewriting reads before resolving internal drives.
 - Regressions:
   - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-resolve-read-write.mlir`
   - `test/Tools/circt-lec/lec-strict-inout-read-write-2state.mlir`
