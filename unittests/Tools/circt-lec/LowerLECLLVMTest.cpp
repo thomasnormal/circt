@@ -5,8 +5,10 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Verif/VerifDialect.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
@@ -275,6 +277,64 @@ TEST(LowerLECLLVMTest, LowersCombMuxCastStruct) {
   bool sawMux = false;
   module->walk([&](circt::comb::MuxOp) { sawMux = true; });
   EXPECT_TRUE(sawMux);
+}
+
+TEST(StripLLHDInterfaceSignalsTest, ResolvesOverlappingStores4State) {
+  MLIRContext context;
+  context.loadDialect<circt::comb::CombDialect, circt::hw::HWDialect,
+                      circt::llhd::LLHDDialect, circt::verif::VerifDialect,
+                      LLVM::LLVMDialect, scf::SCFDialect>();
+
+  const char *ir = R"mlir(
+    module {
+      llvm.mlir.global internal @iface_storage() : !llvm.struct<(!llvm.struct<(i1, i1)>)>
+
+      hw.module @top(in %c0 : i1, in %c1 : i1) {
+        %ptr = llvm.mlir.addressof @iface_storage : !llvm.ptr
+        %sig = llhd.sig %ptr : !llvm.ptr
+        %probe = llhd.prb %sig : !llvm.ptr
+        %field = llvm.getelementptr %probe[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(!llvm.struct<(i1, i1)>)>
+        %true = hw.constant true
+        %false = hw.constant false
+        %val_true = hw.struct_create (%true, %false) : !hw.struct<value: i1, unknown: i1>
+        %val_false = hw.struct_create (%false, %false) : !hw.struct<value: i1, unknown: i1>
+        %llvm_true = builtin.unrealized_conversion_cast %val_true : !hw.struct<value: i1, unknown: i1> to !llvm.struct<(i1, i1)>
+        %llvm_false = builtin.unrealized_conversion_cast %val_false : !hw.struct<value: i1, unknown: i1> to !llvm.struct<(i1, i1)>
+        scf.if %c0 {
+          llvm.store %llvm_true, %field : !llvm.struct<(i1, i1)>, !llvm.ptr
+        }
+        scf.if %c1 {
+          llvm.store %llvm_false, %field : !llvm.struct<(i1, i1)>, !llvm.ptr
+        }
+        %ref = builtin.unrealized_conversion_cast %field : !llvm.ptr to !llhd.ref<!hw.struct<value: i1, unknown: i1>>
+        %val = llhd.prb %ref : !hw.struct<value: i1, unknown: i1>
+        %value = hw.struct_extract %val["value"] : !hw.struct<value: i1, unknown: i1>
+        verif.assert %value : i1
+        hw.output
+      }
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  circt::StripLLHDInterfaceSignalsOptions opts;
+  opts.strict = true;
+  pm.addPass(circt::createStripLLHDInterfaceSignals(opts));
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasStore = false;
+  module->walk([&](LLVM::StoreOp) { hasStore = true; });
+  EXPECT_FALSE(hasStore);
+
+  bool hasProbe = false;
+  module->walk([&](circt::llhd::ProbeOp) { hasProbe = true; });
+  EXPECT_FALSE(hasProbe);
+
+  bool sawCombOr = false;
+  module->walk([&](circt::comb::OrOp) { sawCombOr = true; });
+  EXPECT_TRUE(sawCombOr);
 }
 
 TEST(LowerLECLLVMTest, LowersAllocaBackedLLHDRef) {
