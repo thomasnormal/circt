@@ -63,6 +63,11 @@ def StripLLHDInterfaceSignals
     Convert interface-backed LLHD signal storage patterns into direct SSA
     values so that LEC can run on HW/Comb/Verif without LLHD/LLVM ops.
   }];
+  let options = [
+    Option<"strict", "strict-llhd", "bool",
+           /*default=*/"false",
+           "Fail when LLHD interface stripping would require abstraction.">
+  ];
 
   let dependentDialects = [
     "circt::hw::HWDialect",
@@ -79,6 +84,11 @@ def LowerLLHDRefPorts
     ref outputs as inputs and rewriting instance connections. This enables
     subsequent LLHD-to-core lowering to eliminate LLHD ops in formal flows.
   }];
+  let options = [
+    Option<"strict", "strict-llhd", "bool",
+           /*default=*/"false",
+           "Fail when LLHD ref lowering would drop internal drives.">
+  ];
 
   let dependentDialects = [
     "circt::hw::HWDialect",

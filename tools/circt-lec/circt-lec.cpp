@@ -146,6 +146,21 @@ static cl::opt<bool> flattenHWModules(
     cl::desc("Inline private hw.modules before equivalence checking"),
     cl::init(true), cl::cat(mainCategory));
 
+static cl::opt<bool>
+    strictLLHD("strict-llhd",
+               cl::desc("Fail when LLHD lowering would require abstraction"),
+               cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool>
+    lecStrict("lec-strict",
+              cl::desc("Alias for --strict-llhd in LEC flows"),
+              cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool>
+    lecApprox("lec-approx",
+              cl::desc("Allow LEC to abstract unsupported LLHD/inout cases"),
+              cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to the z3 binary for --run-smtlib"),
@@ -484,13 +499,42 @@ static LogicalResult executeLEC(MLIRContext &context) {
         std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
             "circt-lec"));
 
+  bool strictLLHDEnabled = strictLLHD || lecStrict;
+  if (lecApprox && strictLLHDEnabled) {
+    llvm::errs()
+        << "error: --lec-approx is incompatible with --lec-strict or "
+           "--strict-llhd\n";
+    return failure();
+  }
+
+  if (strictLLHDEnabled) {
+    bool hasInOut = false;
+    module->walk([&](hw::HWModuleOp hwModule) {
+      if (hasInOut)
+        return;
+      for (auto &port : hwModule.getModuleType().getPorts()) {
+        if (port.dir == hw::ModulePort::InOut) {
+          hwModule.emitError(
+              "LEC strict mode does not support inout types; rerun without "
+              "--lec-strict/--strict-llhd");
+          hasInOut = true;
+          return;
+        }
+      }
+    });
+    if (hasInOut)
+      return failure();
+  }
+
   if (flattenHWModules)
     pm.addPass(hw::createFlattenModules());
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
   if (hasLLHD) {
-    pm.addPass(createLowerLLHDRefPorts());
+    LowerLLHDRefPortsOptions lowerRefOpts;
+    lowerRefOpts.strict = strictLLHDEnabled;
+    pm.addPass(createLowerLLHDRefPorts(lowerRefOpts));
     LlhdToCorePipelineOptions llhdOptions;
     pm.addNestedPass<hw::HWModuleOp>(llhd::createWrapProceduralOpsPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
@@ -529,7 +573,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
       llhdPostPM.addPass(mlir::createCanonicalizerPass());
     }
   }
-  pm.addPass(createStripLLHDInterfaceSignals());
+  StripLLHDInterfaceSignalsOptions stripLLHDOpts;
+  stripLLHDOpts.strict = strictLLHDEnabled;
+  pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
