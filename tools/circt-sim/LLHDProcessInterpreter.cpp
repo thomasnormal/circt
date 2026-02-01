@@ -11081,10 +11081,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int32_t valueSize = static_cast<int32_t>(valueSizeVal.getUInt64());
 
         // Check if arrayAddr is null or not a valid associative array address.
-        // Valid addresses are those returned by __moore_assoc_create and tracked in
-        // validAssocArrayAddresses. This prevents crashes when accessing uninitialized
-        // class member arrays (which contain interpreter virtual addresses).
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        // Valid addresses are either:
+        // 1. Tracked in validAssocArrayAddresses (from __moore_assoc_create)
+        // 2. A native C++ heap address (> 0x10000000000, ~1TB) which may have been
+        //    created in global constructors. Native heap addresses are typically in
+        //    high memory (0x5... or 0x7f... on Linux), while interpreter virtual
+        //    memory starts at 0x100000.
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
           // This is not a properly initialized associative array.
           // Return null rather than crashing.
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
@@ -11189,8 +11194,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
-        // Validate that the array address is a properly initialized associative array
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        // Validate that the array address is a properly initialized associative array.
+        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
@@ -11252,8 +11260,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
-        // Validate that the array address is a properly initialized associative array
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        // Validate that the array address is a properly initialized associative array.
+        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_first - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
@@ -11315,8 +11326,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyRefAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
-        // Validate that the array address is a properly initialized associative array
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        // Validate that the array address is a properly initialized associative array.
+        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_next - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
@@ -11390,8 +11404,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
 
-        // Validate that the array address is a properly initialized associative array
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        // Validate that the array address is a properly initialized associative array.
+        // Accept addresses tracked in validAssocArrayAddresses OR native C++ heap addresses.
+        // Native heap addresses (> 0x10000000000) may be created in global constructors
+        // before the interpreter starts tracking, so we allow them through.
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_size - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning 0\n");
