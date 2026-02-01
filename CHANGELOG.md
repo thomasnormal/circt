@@ -169,6 +169,15 @@
 **Tests**
 - `build/bin/circt-opt test/Conversion/MooreToCore/shift-amount-xprop.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/shift-amount-xprop.mlir`
 
+## Iteration 290 - February 1, 2026
+
+### MooreToCore 4-State DynExtract X-Prop
+- 4-state `moore.dyn_extract` now yields X when the index is X/Z or out-of-bounds.
+- Regression: `test/Conversion/MooreToCore/dyn-extract-xprop.mlir`.
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/dyn-extract-xprop.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/dyn-extract-xprop.mlir`
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates

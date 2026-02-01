@@ -6020,10 +6020,21 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       Value inputValue = extractFourStateValue(rewriter, loc, adaptor.getInput());
       Value inputUnknown = extractFourStateUnknown(rewriter, loc, adaptor.getInput());
 
-      // Handle 4-state index - extract just the value part
+      // Handle 4-state index - extract just the value part, track unknowns
       Value amount = adaptor.getLowBit();
-      if (isFourStateStructType(amount.getType()))
+      Value amountUnknownCond;
+      if (isFourStateStructType(amount.getType())) {
+        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        Value zero =
+            hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
+        amountUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, amountUnknown, zero);
         amount = extractFourStateValue(rewriter, loc, amount);
+      }
+      if (!amountUnknownCond) {
+        amountUnknownCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      }
       amount = adjustIntegerWidth(rewriter, amount, intType.getWidth(), loc);
 
       // Shift both value and unknown components by the same amount
@@ -6041,8 +6052,37 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
         Value extractedUnknown = comb::ExtractOp::create(rewriter, loc, resultValueType,
                                                           shiftedUnknown, 0);
 
+        int64_t resultWidth =
+            cast<IntegerType>(resultValueType).getWidth();
+        int64_t maxIdx =
+            static_cast<int64_t>(intType.getWidth()) - resultWidth;
+        Value outOfBoundsCond;
+        Value constTrue =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+        if (maxIdx < 0) {
+          outOfBoundsCond = constTrue;
+        } else {
+          Value maxIdxConst = hw::ConstantOp::create(
+              rewriter, loc, amount.getType(), maxIdx);
+          outOfBoundsCond = comb::ICmpOp::create(
+              rewriter, loc, comb::ICmpPredicate::ugt, amount, maxIdxConst);
+        }
+        Value cond = outOfBoundsCond;
+        if (amountUnknownCond)
+          cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
+                                    amountUnknownCond);
+
+        Value zero = hw::ConstantOp::create(rewriter, loc, resultValueType, 0);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, resultValueType, -1);
+        Value finalValue = comb::MuxOp::create(rewriter, loc, cond, zero,
+                                               extractedValue);
+        Value finalUnknown = comb::MuxOp::create(rewriter, loc, cond, allOnes,
+                                                 extractedUnknown);
+
         // Create the result 4-state struct
-        auto result = createFourStateStruct(rewriter, loc, extractedValue, extractedUnknown);
+        auto result =
+            createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
         rewriter.replaceOp(op, result);
       } else {
         // Result is 2-state - just extract the value bits
