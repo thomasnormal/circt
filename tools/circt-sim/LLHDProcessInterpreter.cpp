@@ -6349,6 +6349,74 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       return success();
     }
 
+    // Handle llhd.sig.array_get - probe an element within an array signal.
+    // We need to read the parent signal and extract the relevant element bits.
+    if (auto sigArrayGetOp = signal.getDefiningOp<llhd::SigArrayGetOp>()) {
+      Value parentSignal = sigArrayGetOp.getInput();
+      SignalId parentSigId = getSignalId(parentSignal);
+
+      // If not found directly, try resolveSignalId
+      if (parentSigId == 0) {
+        parentSigId = resolveSignalId(parentSignal);
+      }
+
+      if (parentSigId == 0) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Error: Could not find parent signal for array get probe\n");
+        return failure();
+      }
+
+      // Get the index value (may be dynamic)
+      InterpretedValue indexVal = getValue(procId, sigArrayGetOp.getIndex());
+      if (indexVal.isX()) {
+        // X index - return X value
+        unsigned width = getTypeWidth(probeOp.getResult().getType());
+        setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+        LLVM_DEBUG(llvm::dbgs() << "  Probe array element with X index\n");
+        return success();
+      }
+      uint64_t index = indexVal.getUInt64();
+
+      // Get the current value of the parent signal
+      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+
+      // Get array element type and width
+      auto arrayType = cast<hw::ArrayType>(unwrapSignalType(parentSignal.getType()));
+      Type elementType = arrayType.getElementType();
+      unsigned elementWidth = getTypeWidth(elementType);
+      size_t numElements = arrayType.getNumElements();
+
+      // Bounds check
+      if (index >= numElements) {
+        LLVM_DEBUG(llvm::dbgs() << "  Warning: Array index " << index
+                                << " out of bounds (size " << numElements << ")\n");
+        setValue(procId, probeOp.getResult(), InterpretedValue::makeX(elementWidth));
+        return success();
+      }
+
+      // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits
+      unsigned bitOffset = index * elementWidth;
+
+      // Extract the element value from the parent signal
+      InterpretedValue elementVal;
+      if (parentVal.isX()) {
+        elementVal = InterpretedValue::makeX(elementWidth);
+      } else {
+        APInt parentBits = parentVal.getAPInt();
+        APInt elementBits = parentBits.extractBits(elementWidth, bitOffset);
+        elementVal = InterpretedValue(elementBits);
+      }
+
+      setValue(procId, probeOp.getResult(), elementVal);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Probe array element[" << index << "] at offset " << bitOffset
+                 << " width " << elementWidth << " from signal " << parentSigId
+                 << " = " << (elementVal.isX() ? "X" : std::to_string(elementVal.getUInt64()))
+                 << "\n");
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in probe\n");
     return failure();
   }
@@ -6684,6 +6752,203 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                  << "  Drive to struct field at offset " << bitOffset
                  << " width " << fieldWidth << " in signal " << parentSigId
                  << "\n");
+
+      // Schedule the signal update
+      SignalValue newVal(result);
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::NBA,
+          Event([this, parentSigId, driverId, newVal]() {
+            scheduler.updateSignalWithStrength(parentSigId, driverId, newVal,
+                                               DriveStrength::Strong,
+                                               DriveStrength::Strong);
+          }));
+
+      return success();
+    }
+
+    // Handle llhd.sig.array_get - drive to an element within an array signal.
+    // We need to read-modify-write the parent signal.
+    if (auto sigArrayGetOp = signal.getDefiningOp<llhd::SigArrayGetOp>()) {
+      Value parentSignal = sigArrayGetOp.getInput();
+      SignalId parentSigId = getSignalId(parentSignal);
+
+      // If not found directly, try resolveSignalId
+      if (parentSigId == 0) {
+        parentSigId = resolveSignalId(parentSignal);
+      }
+
+      // Check if the parent is a memory-backed array (llvm.alloca or malloc via cast)
+      if (parentSigId == 0) {
+        if (auto castOp =
+                parentSignal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+          if (castOp.getInputs().size() == 1) {
+            Value input = castOp.getInputs()[0];
+
+            // Get the index value (may be dynamic)
+            InterpretedValue indexVal = getValue(procId, sigArrayGetOp.getIndex());
+            if (indexVal.isX()) {
+              LLVM_DEBUG(llvm::dbgs() << "  Warning: X index in array drive\n");
+              return success(); // Don't drive with X index
+            }
+            uint64_t index = indexVal.getUInt64();
+
+            // Get array element type and width
+            auto arrayType = cast<hw::ArrayType>(unwrapSignalType(parentSignal.getType()));
+            Type elementType = arrayType.getElementType();
+            unsigned elementWidth = getTypeWidth(elementType);
+            size_t numElements = arrayType.getNumElements();
+
+            // Bounds check
+            if (index >= numElements) {
+              LLVM_DEBUG(llvm::dbgs() << "  Warning: Array index " << index
+                                      << " out of bounds (size " << numElements << ")\n");
+              return success();
+            }
+
+            // Get the value to drive
+            InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+            // Try to find the memory block - could be from pointer value
+            InterpretedValue ptrVal = getValue(procId, input);
+            if (!ptrVal.isX()) {
+              uint64_t baseAddr = ptrVal.getUInt64();
+              MemoryBlock *block = nullptr;
+              uint64_t baseOffset = 0;
+
+              // Check malloc blocks first
+              for (auto &entry : mallocBlocks) {
+                uint64_t mallocBaseAddr = entry.first;
+                uint64_t mallocSize = entry.second.size;
+                if (baseAddr >= mallocBaseAddr && baseAddr < mallocBaseAddr + mallocSize) {
+                  block = &entry.second;
+                  baseOffset = baseAddr - mallocBaseAddr;
+                  LLVM_DEBUG(llvm::dbgs() << "  Array drive: found malloc block at 0x"
+                                          << llvm::format_hex(mallocBaseAddr, 16) << "\n");
+                  break;
+                }
+              }
+
+              // Check global blocks
+              if (!block) {
+                for (auto &entry : globalAddresses) {
+                  StringRef globalName = entry.first();
+                  uint64_t globalBaseAddr = entry.second;
+                  auto blockIt = globalMemoryBlocks.find(globalName);
+                  if (blockIt != globalMemoryBlocks.end()) {
+                    uint64_t globalSize = blockIt->second.size;
+                    if (baseAddr >= globalBaseAddr && baseAddr < globalBaseAddr + globalSize) {
+                      block = &blockIt->second;
+                      baseOffset = baseAddr - globalBaseAddr;
+                      LLVM_DEBUG(llvm::dbgs() << "  Array drive: found global '" << globalName
+                                              << "'\n");
+                      break;
+                    }
+                  }
+                }
+              }
+
+              if (block) {
+                // Calculate byte offset for the element
+                unsigned elementByteWidth = (elementWidth + 7) / 8;
+                uint64_t elementOffset = baseOffset + index * elementByteWidth;
+
+                if (elementOffset + elementByteWidth <= block->size) {
+                  // Write the element value to memory (little-endian)
+                  if (driveVal.isX()) {
+                    // Write zeros for X
+                    for (unsigned i = 0; i < elementByteWidth; ++i) {
+                      block->data[elementOffset + i] = 0;
+                    }
+                  } else {
+                    APInt val = driveVal.getAPInt();
+                    if (val.getBitWidth() < elementWidth)
+                      val = val.zext(elementWidth);
+                    else if (val.getBitWidth() > elementWidth)
+                      val = val.trunc(elementWidth);
+                    for (unsigned i = 0; i < elementByteWidth; ++i) {
+                      block->data[elementOffset + i] =
+                          val.extractBits(std::min(8u, elementWidth - i * 8), i * 8)
+                              .getZExtValue();
+                    }
+                  }
+                  block->initialized = !driveVal.isX();
+
+                  LLVM_DEBUG(llvm::dbgs()
+                             << "  Drive to memory-backed array[" << index
+                             << "] at offset " << elementOffset
+                             << " width " << elementWidth << "\n");
+                  return success();
+                }
+              }
+            }
+          }
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Error: Could not find parent signal for array get\n");
+        return failure();
+      }
+
+      // Get the index value (may be dynamic)
+      InterpretedValue indexVal = getValue(procId, sigArrayGetOp.getIndex());
+      if (indexVal.isX()) {
+        LLVM_DEBUG(llvm::dbgs() << "  Warning: X index in array drive\n");
+        return success(); // Don't drive with X index
+      }
+      uint64_t index = indexVal.getUInt64();
+
+      // Get the value to drive
+      InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+      // Get the current value of the parent signal
+      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+
+      unsigned parentWidth = parentVal.getWidth();
+      APInt result = parentVal.isX() ? APInt::getZero(parentWidth)
+                                     : parentVal.getAPInt();
+
+      // Get array element type and width
+      auto arrayType = cast<hw::ArrayType>(unwrapSignalType(parentSignal.getType()));
+      Type elementType = arrayType.getElementType();
+      unsigned elementWidth = getTypeWidth(elementType);
+      size_t numElements = arrayType.getNumElements();
+
+      // Bounds check
+      if (index >= numElements) {
+        LLVM_DEBUG(llvm::dbgs() << "  Warning: Array index " << index
+                                << " out of bounds (size " << numElements << ")\n");
+        return success(); // Out of bounds - don't drive
+      }
+
+      // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits
+      unsigned bitOffset = index * elementWidth;
+
+      // Insert the new value at the computed bit offset
+      APInt elementValue = driveVal.isX() ? APInt::getZero(elementWidth)
+                                          : driveVal.getAPInt();
+      if (elementValue.getBitWidth() < elementWidth)
+        elementValue = elementValue.zext(elementWidth);
+      else if (elementValue.getBitWidth() > elementWidth)
+        elementValue = elementValue.trunc(elementWidth);
+
+      result.insertBits(elementValue, bitOffset);
+
+      // Get the delay time
+      SimTime delay = convertTimeValue(procId, driveOp.getTime());
+      SimTime currentTime = scheduler.getCurrentTime();
+      SimTime targetTime = currentTime.advanceTime(delay.realTime);
+      if (delay.deltaStep > 0)
+        targetTime.deltaStep = delay.deltaStep;
+
+      // Use the same driver ID scheme
+      uint64_t driverId = (static_cast<uint64_t>(procId) << 32) |
+                          static_cast<uint64_t>(parentSigId);
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Drive to array element[" << index << "] at offset "
+                 << bitOffset << " width " << elementWidth << " in signal "
+                 << parentSigId << "\n");
 
       // Schedule the signal update
       SignalValue newVal(result);
