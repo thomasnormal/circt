@@ -3321,7 +3321,7 @@ MooreString uvm_re_deglobbed(MooreString *glob, int32_t with_brackets);
 /// Get the next command line argument.
 /// @param idx Pointer to the current argument index (updated on success)
 /// @return Pointer to the next argument string, or NULL if no more arguments
-MooreString uvm_dpi_get_next_arg_c(int32_t *idx);
+MooreString uvm_dpi_get_next_arg_c(int32_t init);
 
 /// Get the name of the simulation tool.
 /// @return String containing the tool name (stub: returns "CIRCT")
