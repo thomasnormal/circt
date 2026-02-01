@@ -1482,8 +1482,10 @@ struct EventTriggeredOpConversion
   }
 };
 
-/// Conversion for moore.event_trigger -> runtime function call.
-/// This calls __moore_event_trigger to trigger the event.
+/// Conversion for moore.event_trigger -> toggle the LLHD signal.
+/// This toggles the event signal value to wake up processes waiting on it.
+/// The event is stored as an i1 LLHD signal; toggling ensures llhd.wait
+/// detects a change and wakes up waiting processes.
 struct EventTriggerOpConversion : public OpConversionPattern<EventTriggerOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -1492,25 +1494,45 @@ struct EventTriggerOpConversion : public OpConversionPattern<EventTriggerOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
-    ModuleOp mod = op->getParentOfType<ModuleOp>();
 
-    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    // The event reference is converted to llhd.ref<i1>.
+    Value eventRef = adaptor.getEvent();
+
+    // Check if this is an LLHD ref type (signal).
+    auto refType = dyn_cast<llhd::RefType>(eventRef.getType());
+    if (!refType) {
+      // If it's a pointer (e.g., from LLVM alloca for local variables in
+      // functions), use LLVM load/store to toggle.
+      if (isa<LLVM::LLVMPointerType>(eventRef.getType())) {
+        auto i1Ty = IntegerType::get(ctx, 1);
+        Value currentVal =
+            LLVM::LoadOp::create(rewriter, loc, i1Ty, eventRef);
+        Value one = LLVM::ConstantOp::create(
+            rewriter, loc, i1Ty, rewriter.getIntegerAttr(i1Ty, 1));
+        Value toggled = LLVM::XOrOp::create(rewriter, loc, currentVal, one);
+        LLVM::StoreOp::create(rewriter, loc, toggled, eventRef);
+        rewriter.eraseOp(op);
+        return success();
+      }
+      return rewriter.notifyMatchFailure(
+          op, "event reference must be llhd.ref or llvm.ptr type");
+    }
+
+    // Probe the current value from the signal.
+    Value currentVal = llhd::ProbeOp::create(rewriter, loc, eventRef);
+
+    // Toggle the value by XORing with 1.
     auto i1Ty = IntegerType::get(ctx, 1);
+    Value one = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
+    Value toggled = comb::XorOp::create(rewriter, loc, currentVal, one, true);
 
-    // __moore_event_trigger takes a pointer to the event and returns void.
-    auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
-    auto fn =
-        getOrCreateRuntimeFunc(mod, rewriter, "__moore_event_trigger", fnTy);
+    // Drive the toggled value back to the signal with delta delay.
+    auto timeZero = llhd::ConstantTimeOp::create(
+        rewriter, loc,
+        llhd::TimeAttr::get(ctx, 0, "ns", 0, 1));
+    llhd::DriveOp::create(rewriter, loc, eventRef, toggled,
+                          timeZero.getResult(), Value{});
 
-    // Store the event value to an alloca and pass a pointer to it.
-    auto one =
-        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
-    auto eventAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i1Ty, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getEvent(), eventAlloca);
-
-    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{eventAlloca});
     rewriter.eraseOp(op);
     return success();
   }
@@ -5078,6 +5100,160 @@ struct GlobalVariableOpConversion
                                            /*isConstant=*/false,
                                            LLVM::Linkage::Internal,
                                            op.getSymName(), initAttr);
+
+    // Get the Moore type to detect associative arrays
+    auto mooreType = op.getType();
+
+    // Handle associative array globals - these need runtime allocation via
+    // a global constructor since they can't be statically initialized.
+    if (auto assocType = dyn_cast<AssocArrayType>(mooreType)) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i32Ty = IntegerType::get(ctx, 32);
+
+      // Get or create __moore_assoc_create function
+      auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {i32Ty, i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
+
+      // Determine key size (0 for string keys)
+      int32_t keySize = 0;
+      auto keyType = assocType.getIndexType();
+      if (!isa<StringType>(keyType)) {
+        // For non-string keys, get the bit width
+        auto convertedKeyType = typeConverter->convertType(keyType);
+        if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
+          keySize = intTy.getWidth() / 8;
+        else
+          keySize = 8; // Default to 64-bit for unknown types
+      }
+
+      // Determine value size
+      auto valueType = assocType.getElementType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      int32_t valueSize = 4; // Default
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+
+      // Create an initializer function.
+      std::string initFuncName =
+          ("__moore_global_init_" + op.getSymName()).str();
+      auto voidTy = LLVM::LLVMVoidType::get(ctx);
+      auto funcTy = LLVM::LLVMFunctionType::get(voidTy, {});
+
+      auto initFunc =
+          LLVM::LLVMFuncOp::create(rewriter, loc, initFuncName, funcTy);
+      initFunc.setLinkage(LLVM::Linkage::Internal);
+
+      // Create the function body.
+      Block *funcBlock = rewriter.createBlock(&initFunc.getBody());
+      rewriter.setInsertionPointToStart(funcBlock);
+
+      // Create constants for key_size and value_size
+      auto keySizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
+      auto valueSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+      // Call __moore_assoc_create(key_size, value_size)
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{keySizeConst, valueSizeConst});
+
+      // Store the result to the global variable.
+      auto addressOf = LLVM::AddressOfOp::create(rewriter, loc, ptrTy,
+                                                 globalOp.getSymName());
+      LLVM::StoreOp::create(rewriter, loc, call.getResult(), addressOf);
+
+      // Return from the function.
+      LLVM::ReturnOp::create(rewriter, loc, ValueRange{});
+
+      // Register the initializer function with llvm.global_ctors.
+      rewriter.setInsertionPointAfter(globalOp);
+      auto ctorAttr = rewriter.getArrayAttr(
+          {FlatSymbolRefAttr::get(ctx, initFuncName)});
+      auto priorityAttr = rewriter.getI32ArrayAttr({65535});
+      auto dataAttr =
+          rewriter.getArrayAttr({LLVM::ZeroAttr::get(ctx)});
+      LLVM::GlobalCtorsOp::create(rewriter, loc, ctorAttr, priorityAttr,
+                                  dataAttr);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Handle wildcard associative array globals [*] - same as regular assoc
+    // arrays but with default key/value sizes.
+    if (auto wildcardType = dyn_cast<WildcardAssocArrayType>(mooreType)) {
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i32Ty = IntegerType::get(ctx, 32);
+
+      // Get or create __moore_assoc_create function
+      auto fnTy = LLVM::LLVMFunctionType::get(ptrTy, {i32Ty, i32Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
+
+      // Wildcard associative arrays use string key (keySize=0) as default.
+      int32_t keySize = 0;
+
+      // Determine value size
+      auto valueType = wildcardType.getElementType();
+      auto convertedValueType = typeConverter->convertType(valueType);
+      int32_t valueSize = 4; // Default
+      if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
+        valueSize = (intTy.getWidth() + 7) / 8;
+
+      // Create an initializer function.
+      std::string initFuncName =
+          ("__moore_global_init_" + op.getSymName()).str();
+      auto voidTy = LLVM::LLVMVoidType::get(ctx);
+      auto funcTy = LLVM::LLVMFunctionType::get(voidTy, {});
+
+      auto initFunc =
+          LLVM::LLVMFuncOp::create(rewriter, loc, initFuncName, funcTy);
+      initFunc.setLinkage(LLVM::Linkage::Internal);
+
+      // Create the function body.
+      Block *funcBlock = rewriter.createBlock(&initFunc.getBody());
+      rewriter.setInsertionPointToStart(funcBlock);
+
+      // Create constants for key_size and value_size
+      auto keySizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(keySize));
+      auto valueSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(valueSize));
+
+      // Call __moore_assoc_create(key_size, value_size)
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{ptrTy},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{keySizeConst, valueSizeConst});
+
+      // Store the result to the global variable.
+      auto addressOf = LLVM::AddressOfOp::create(rewriter, loc, ptrTy,
+                                                 globalOp.getSymName());
+      LLVM::StoreOp::create(rewriter, loc, call.getResult(), addressOf);
+
+      // Return from the function.
+      LLVM::ReturnOp::create(rewriter, loc, ValueRange{});
+
+      // Register the initializer function with llvm.global_ctors.
+      rewriter.setInsertionPointAfter(globalOp);
+      auto ctorAttr = rewriter.getArrayAttr(
+          {FlatSymbolRefAttr::get(ctx, initFuncName)});
+      auto priorityAttr = rewriter.getI32ArrayAttr({65535});
+      auto dataAttr =
+          rewriter.getArrayAttr({LLVM::ZeroAttr::get(ctx)});
+      LLVM::GlobalCtorsOp::create(rewriter, loc, ctorAttr, priorityAttr,
+                                  dataAttr);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
 
     // If there's an init region with a YieldOp, create a global constructor
     // function to initialize the variable at program startup.
