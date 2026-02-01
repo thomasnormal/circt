@@ -187,3 +187,29 @@ hw.module @lower_lec_llvm_ref_alloca_block_arg(
 // CHECK-DAG: llhd.drv
 // CHECK-DAG: llhd.prb
 // CHECK-NOT: llvm.
+
+hw.module @lower_lec_llvm_ref_alloca_select(
+    in %cond : i1,
+    in %in : !hw.struct<value: i1, unknown: i1>,
+    out out : !hw.struct<value: i1, unknown: i1>) {
+  %one = llvm.mlir.constant(1 : i64) : i64
+  %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
+  %value = hw.struct_extract %in["value"] : !hw.struct<value: i1, unknown: i1>
+  %unknown = hw.struct_extract %in["unknown"] : !hw.struct<value: i1, unknown: i1>
+  %tmp0 = llvm.insertvalue %value, %undef[0] : !llvm.struct<(i1, i1)>
+  %tmp1 = llvm.insertvalue %unknown, %tmp0[1] : !llvm.struct<(i1, i1)>
+  %ptr = llvm.alloca %one x !llvm.struct<(i1, i1)> : (i64) -> !llvm.ptr
+  %ptr_as1 = llvm.addrspacecast %ptr : !llvm.ptr to !llvm.ptr<1>
+  %ptr_as0 = llvm.addrspacecast %ptr_as1 : !llvm.ptr<1> to !llvm.ptr
+  %sel = llvm.select %cond, %ptr, %ptr_as0 : i1, !llvm.ptr
+  %ref = builtin.unrealized_conversion_cast %sel : !llvm.ptr to !llhd.ref<!hw.struct<value: i1, unknown: i1>>
+  llvm.store %tmp1, %sel : !llvm.struct<(i1, i1)>, !llvm.ptr
+  %probe = llhd.prb %ref : !hw.struct<value: i1, unknown: i1>
+  hw.output %probe : !hw.struct<value: i1, unknown: i1>
+}
+
+// CHECK-LABEL: hw.module @lower_lec_llvm_ref_alloca_select
+// CHECK: llhd.sig
+// CHECK-DAG: llhd.drv
+// CHECK-DAG: llhd.prb
+// CHECK-NOT: llvm.

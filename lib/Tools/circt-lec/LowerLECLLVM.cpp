@@ -663,10 +663,10 @@ static Value stripPointerCasts(Value ptr,
 static LLVM::AllocaOp resolveAllocaBase(Value ptr,
                                         llvm::SmallPtrSetImpl<Value> &visited) {
   Value current = stripPointerCasts(ptr);
-  if (!visited.insert(current).second)
-    return nullptr;
   if (auto alloca = current.getDefiningOp<LLVM::AllocaOp>())
     return alloca;
+  if (!visited.insert(current).second)
+    return nullptr;
   if (auto select = current.getDefiningOp<LLVM::SelectOp>()) {
     auto trueBase = resolveAllocaBase(select.getTrueValue(), visited);
     if (!trueBase)
@@ -808,49 +808,138 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp) {
   Value ptr = castOp.getInputs().front();
   if (!isa<LLVM::LLVMPointerType>(ptr.getType()))
     return false;
-  SmallVector<Operation *, 4> ptrCasts;
-  (void)stripPointerCasts(ptr, &ptrCasts);
   llvm::SmallPtrSet<Value, 8> visited;
   auto alloca = resolveAllocaBase(ptr, visited);
   if (!alloca)
     return false;
-  if (alloca.getResult() != ptr) {
-    for (Operation *user : alloca.getResult().getUsers()) {
-      if (llvm::is_contained(ptrCasts, user))
+
+  llvm::SmallPtrSet<Value, 16> derivedPtrs;
+  SmallVector<Value, 16> worklist;
+  auto addDerived = [&](Value value) {
+    if (derivedPtrs.insert(value).second)
+      worklist.push_back(value);
+  };
+  addDerived(alloca.getResult());
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+        addDerived(bitcast.getResult());
         continue;
-      if (isa<BranchOpInterface>(user))
+      }
+      if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+        addDerived(addr.getResult());
         continue;
-      return false;
+      }
+      if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        llvm::SmallPtrSet<Value, 8> localVisited;
+        if (resolveAllocaBase(select.getResult(), localVisited) == alloca)
+          addDerived(select.getResult());
+        continue;
+      }
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          Block *succ = branch->getSuccessor(succIndex);
+          for (unsigned idx = 0, sz = succOperands.size(); idx < sz; ++idx) {
+            if (succOperands[idx] == current)
+              addDerived(succ->getArgument(idx));
+          }
+        }
+        continue;
+      }
     }
   }
 
   SmallVector<LLVM::StoreOp, 8> stores;
   SmallVector<LLVM::LoadOp, 8> loads;
   SmallVector<UnrealizedConversionCastOp, 4> refCasts;
-  for (Operation *user : ptr.getUsers()) {
-    if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
-      if (store.getAddr() != ptr)
-        return false;
-      stores.push_back(store);
-      continue;
-    }
-    if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
-      if (load.getAddr() != ptr)
-        return false;
-      loads.push_back(load);
-      continue;
-    }
-    if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
-      if (cast.getInputs().size() == 1 && cast.getResults().size() == 1 &&
-          cast.getInputs().front() == ptr &&
-          isa<llhd::RefType>(cast.getResult(0).getType())) {
-        refCasts.push_back(cast);
+  SmallVector<Operation *, 8> ptrCasts;
+  for (Value value : derivedPtrs) {
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+        if (store.getAddr() != value)
+          return false;
+        stores.push_back(store);
         continue;
       }
-      if (cast->use_empty())
+      if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
+        if (load.getAddr() != value)
+          return false;
+        loads.push_back(load);
         continue;
+      }
+      if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
+        if (cast.getInputs().size() == 1 && cast.getResults().size() == 1 &&
+            cast.getInputs().front() == value &&
+            cast.getResult(0).getType() == refType) {
+          refCasts.push_back(cast);
+          continue;
+        }
+        if (cast->use_empty())
+          continue;
+        return false;
+      }
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+        if (bitcast.getArg() != value)
+          return false;
+        if (!derivedPtrs.contains(bitcast.getResult()))
+          return false;
+        ptrCasts.push_back(bitcast);
+        continue;
+      }
+      if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+        if (addr.getArg() != value)
+          return false;
+        if (!derivedPtrs.contains(addr.getResult()))
+          return false;
+        ptrCasts.push_back(addr);
+        continue;
+      }
+      if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        if (!derivedPtrs.contains(select.getResult()))
+          return false;
+        continue;
+      }
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        bool matched = false;
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          Block *succ = branch->getSuccessor(succIndex);
+          for (unsigned idx = 0, sz = succOperands.size(); idx < sz; ++idx) {
+            if (succOperands[idx] != value)
+              continue;
+            if (!derivedPtrs.contains(succ->getArgument(idx)))
+              return false;
+            matched = true;
+          }
+        }
+        if (!matched)
+          return false;
+        continue;
+      }
+      return false;
     }
+  }
+
+  if (stores.empty() && loads.empty() && refCasts.empty())
     return false;
+  for (auto cast : refCasts) {
+    if (!derivedPtrs.contains(cast.getInputs().front()))
+      return false;
+  }
+
+  for (auto store : stores) {
+    if (!derivedPtrs.contains(store.getAddr()))
+      return false;
+  }
+  for (auto load : loads) {
+    if (!derivedPtrs.contains(load.getAddr()))
+      return false;
   }
 
   Type nestedType = refType.getNestedType();

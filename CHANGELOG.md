@@ -59,6 +59,8 @@
   alloca-backed `llhd.ref` values, avoiding leftover LLVM pointer casts.
 - `lower-lec-llvm` now follows alloca-backed `llhd.ref` pointers through block
   arguments (control-flow forwarding) so the lowering still eliminates LLVM.
+- `lower-lec-llvm` now follows alloca-backed `llhd.ref` pointers through
+  `llvm.select` forwarding, enabling more control-flow pointer joins.
 - Added regressions:
   - `test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi.mlir`
   - `test/Tools/circt-lec/lower-lec-llvm-structs.mlir` (mux case)
