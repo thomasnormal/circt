@@ -1007,7 +1007,7 @@ struct LogicEquivalenceCheckingOpConversion
       unsigned index = arg.getArgNumber();
       StringAttr namePrefix;
       if (inputNames && index < inputNames.size())
-        namePrefix = dyn_cast<StringAttr>(inputNames[index]);
+        namePrefix = dyn_cast_or_null<StringAttr>(inputNames[index]);
       Value decl =
           smt::DeclareFunOp::create(rewriter, loc, arg.getType(), namePrefix);
       if (assumeKnownInputs) {
@@ -1033,7 +1033,7 @@ struct LogicEquivalenceCheckingOpConversion
     ArrayAttr outputNames = op->getAttrOfType<ArrayAttr>("lec.output_names");
     auto getOutputBaseName = [&](unsigned index) -> std::string {
       if (outputNames && index < outputNames.size()) {
-        if (auto strAttr = dyn_cast<StringAttr>(outputNames[index])) {
+        if (auto strAttr = dyn_cast_or_null<StringAttr>(outputNames[index])) {
           if (!strAttr.getValue().empty())
             return strAttr.getValue().str();
         }
@@ -2639,7 +2639,7 @@ struct VerifBoundedModelCheckingOpConversion
             op->getAttrOfType<ArrayAttr>("bmc_input_names")) {
       inputNamePrefixes.reserve(nameAttr.size());
       for (auto attr : nameAttr) {
-        if (auto strAttr = dyn_cast<StringAttr>(attr))
+        if (auto strAttr = dyn_cast_or_null<StringAttr>(attr))
           inputNamePrefixes.push_back(strAttr);
         else
           inputNamePrefixes.push_back(StringAttr{});
@@ -3493,7 +3493,7 @@ struct VerifBoundedModelCheckingOpConversion
       for (auto [idx, attr] : llvm::enumerate(keys)) {
         if (idx >= clockIndexes.size())
           break;
-        auto keyAttr = dyn_cast<StringAttr>(attr);
+        auto keyAttr = dyn_cast_or_null<StringAttr>(attr);
         if (!keyAttr || keyAttr.getValue().empty())
           continue;
         ClockPosInfo info{static_cast<unsigned>(idx), false};
@@ -3997,7 +3997,7 @@ struct VerifBoundedModelCheckingOpConversion
         }
         if (!mapped && regClocksValid) {
           auto nameAttr =
-              dyn_cast<StringAttr>(regClocksAttr[regIndex]);
+              dyn_cast_or_null<StringAttr>(regClocksAttr[regIndex]);
           if (nameAttr && !nameAttr.getValue().empty()) {
             auto nameIt = inputNameToIndex.find(nameAttr.getValue());
             if (nameIt == inputNameToIndex.end()) {
