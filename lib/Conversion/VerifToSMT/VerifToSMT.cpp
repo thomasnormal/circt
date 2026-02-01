@@ -3556,6 +3556,10 @@ struct VerifBoundedModelCheckingOpConversion
       }
       if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
         return traceClockRoot(bitcast.getInput(), root);
+      if (auto result = dyn_cast<OpResult>(value)) {
+        if (auto explode = dyn_cast<hw::StructExplodeOp>(result.getOwner()))
+          return traceClockRoot(explode.getInput(), root);
+      }
       if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
         return traceClockRoot(extract.getInput(), root);
       if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())

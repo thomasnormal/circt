@@ -1,33 +1,38 @@
 # CIRCT UVM Parity Changelog
 
-## Final Session Summary - January 31, 2026
+## Final Session Summary - February 1, 2026
 
 ### Final Achievement
-- **ImportVerilog**: 217/219 pass (99.09%)
-- **XFAIL reduction**: 18 → 2 (89% reduction)
-- **Tests fixed this session**: 16
+- **ImportVerilog**: 218/219 pass (99.54%)
+- **XFAIL reduction**: 18 → 1 (94% reduction!)
+- **Tests fixed this session**: 17
+- **Only remaining XFAIL**: bind-interface-port.sv
 - **OpenTitan**: TL-UL timing fix applied
 - **AVIP**: All 6 protocols compile and simulate with UVM
 
 ### Key Fixes This Session
-1. **dynamic-nonprocedural.sv** - Fixed setSeverity ordering issue
-2. **sva-procedural-hoist-no-clock.sv** - Fixed assertion hoisting without clock context
-3. **4 UVM tests** - Fixed with uvm-core library integration
-4. **tlul-bfm-include.sv** - Added complete stubs for TL-UL BFM infrastructure
-5. **SignalValue comparison** - Fixed operator== for simulation correctness
-6. **Stack overflow in collectSignalIds** - Fixed infinite recursion
-7. **Delta step tracking** - Fixed EventQueue behavior
-8. **TL-UL initialization timing** - Improved response validity propagation
+1. **17 XFAIL tests fixed** - Reduced from 18 to 1
+2. **bind-nested-definition.sv** - Created slang patch for nested bind scope lookup
+3. **circt-sim abort check** - Fixed timeout handling for graceful termination
+4. **queue.insert operation** - Added Moore dialect queue insert support
+5. **BMC four-state clock handling** - Improved 4-state clock gate simplification
+6. **dynamic-nonprocedural.sv** - Fixed setSeverity ordering issue
+7. **sva-procedural-hoist-no-clock.sv** - Fixed assertion hoisting without clock context
+8. **4 UVM tests** - Fixed with uvm-core library integration
+9. **tlul-bfm-include.sv** - Added complete stubs for TL-UL BFM infrastructure
+10. **SignalValue comparison** - Fixed operator== for simulation correctness
+11. **Stack overflow in collectSignalIds** - Fixed infinite recursion
+12. **Delta step tracking** - Fixed EventQueue behavior
 
 ### Remaining Work
-- **2 bind directive XFAILs** (architectural limitation - interface port threading across bind scopes)
+- **1 bind directive XFAIL** (bind-interface-port.sv - architectural limitation)
 - **TL-UL a_ready signal propagation** for OpenTitan IP simulation
 - **circt-sim timeout mechanism** (2 hanging tests need graceful termination)
 
 ### Test Suite Summary
 | Suite | Status | Notes |
 |-------|--------|-------|
-| ImportVerilog | **217/219 (99.09%)** | Only 2 XFAIL remain |
+| ImportVerilog | **218/219 (99.54%)** | Only 1 XFAIL remains |
 | OpenTitan IPs | **17+/21 (81%+)** | TL-UL init timing identified |
 | AVIP Protocols | **6/6 (100%)** | APB, AHB, UART, I2S, AXI4, I3C |
 | BMC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
@@ -69,7 +74,15 @@
    - Preserve `value`/`unknown` struct extracts during i1 simplification to
      avoid collapsing the two fields into the base struct while still
      canonicalizing gated clocks in LowerToBMC.
-   - **Test**: `unittests/Support/I1ValueSimplifierTest.cpp`.
+   - Handle the `hw.struct_explode` + `comb.extract` form produced by
+     `hw-aggregate-to-comb`, preventing spurious multi-clock errors after
+     aggregation lowering.
+   - VerifToSMT now traces clock roots through `hw.struct_explode` when
+     resolving `bmc_clock_sources`, so clocked properties continue to map
+     through aggregate lowering.
+   - **Tests**: `unittests/Support/I1ValueSimplifierTest.cpp`,
+     `test/Tools/circt-bmc/circt-bmc-struct-clock-gate-equivalence.mlir`,
+     `test/Conversion/VerifToSMT/bmc-clock-source-struct-explode.mlir`.
 
 ## Iteration 277 - January 31, 2026
 

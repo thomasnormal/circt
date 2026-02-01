@@ -584,6 +584,11 @@ void LowerToBMCPass::runOnOperation() {
         }
         if (auto bitcast = value.getDefiningOp<hw::BitcastOp>())
           return traceRoot(bitcast.getInput(), root);
+        if (auto result = dyn_cast<OpResult>(value)) {
+          if (auto explode =
+                  dyn_cast<hw::StructExplodeOp>(result.getOwner()))
+            return traceRoot(explode.getInput(), root);
+        }
         if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
           return traceRoot(extract.getInput(), root);
         if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
