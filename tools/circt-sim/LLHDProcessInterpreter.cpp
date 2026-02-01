@@ -3403,8 +3403,18 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   size_t stepCount = 0;
   size_t stepLimit = maxProcessSteps > 0 ? maxProcessSteps : 0;
   constexpr size_t kOpCountStepLimitMultiplier = 8;
+  constexpr size_t kAbortCheckInterval = 1000;
   while (!state.halted && !state.waiting) {
     ++stepCount;
+    // Periodically check for abort requests (e.g., from timeout watchdog)
+    if (stepCount % kAbortCheckInterval == 0 && isAbortRequested()) {
+      LLVM_DEBUG(llvm::dbgs() << "  Abort requested, halting process\n");
+      state.halted = true;
+      scheduler.terminateProcess(procId);
+      if (abortCallback)
+        abortCallback();
+      break;
+    }
     LLVM_DEBUG({
       if (stepCount <= 10 || stepCount % 1000 == 0) {
         llvm::dbgs() << "[executeProcess] proc " << procId << " step "
