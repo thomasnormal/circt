@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 292 - February 1, 2026
+
+### Test Results Update
+
+| Suite | Pass | Total | Rate | Notes |
+|-------|------|-------|------|-------|
+| sv-tests Chapter 16 (SVA) | - | - | **100%** | Full coverage with UVM |
+| sv-tests Chapter 11 | - | - | **100%** | Full coverage |
+| AVIP Interfaces | 8 | 9 | **89%** | Work without UVM |
+| APB AVIP | - | - | **Compiles** | Successfully |
+
+### Recent Commits
+
+- `aef394b56` [LEC] Lower llvm.select on structs
+- `0108190ef` [ImportVerilog] Support static function-local variables
+- `f1278facb` [LEC] Lower LLVM struct patterns and ptr-cast signals
+- `19e0e2847` [LEC] Fix OpenTitan runner flags
+- `fd44b8150` [LEC] Resolve enabled 4-state multi-drive
+
+### Highlights
+
+- **sv-tests Chapter 16 (SVA)**: Achieved 100% pass rate with UVM support
+- **sv-tests Chapter 11**: Achieved 100% pass rate
+- **AVIP Interfaces**: 8 out of 9 interfaces now work without UVM dependency
+- **APB AVIP**: Compiles successfully
+
+---
+
 ## Iteration 291 - February 1, 2026
 
 ### Test Results Update
@@ -27,6 +55,8 @@
 - `lower-lec-llvm` now rewrites alloca-backed `llhd.ref` values into `llhd.sig`
   with initialization, turning `llvm.load`/`llvm.store` into
   `llhd.prb`/`llhd.drv` so LEC can solve LLHD interface dataflow without LLVM.
+- `lower-lec-llvm` now accepts addrspace/bitcast pointer chains when rewriting
+  alloca-backed `llhd.ref` values, avoiding leftover LLVM pointer casts.
 - Added regressions:
   - `test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi.mlir`
   - `test/Tools/circt-lec/lower-lec-llvm-structs.mlir` (mux case)

@@ -125,6 +125,18 @@ static bool eraseDeadAllocaStores(LLVM::AllocaOp alloca) {
       stores.push_back(store);
       continue;
     }
+    if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+      if (bitcast->use_empty()) {
+        eraseList.push_back(bitcast);
+        continue;
+      }
+    }
+    if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+      if (addr->use_empty()) {
+        eraseList.push_back(addr);
+        continue;
+      }
+    }
     if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
       if (cast->use_empty()) {
         eraseList.push_back(cast);
@@ -628,6 +640,26 @@ static Value unwrapHWStructCast(Value value, hw::StructType hwType) {
   return input;
 }
 
+static Value stripPointerCasts(Value ptr,
+                               SmallVectorImpl<Operation *> *casts = nullptr) {
+  Value current = ptr;
+  while (true) {
+    if (auto bitcast = current.getDefiningOp<LLVM::BitcastOp>()) {
+      if (casts)
+        casts->push_back(bitcast);
+      current = bitcast.getArg();
+      continue;
+    }
+    if (auto addr = current.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+      if (casts)
+        casts->push_back(addr);
+      current = addr.getArg();
+      continue;
+    }
+    return current;
+  }
+}
+
 static bool dropUnusedBlockArguments(Region &region) {
   bool changed = false;
   bool localChange = true;
@@ -722,9 +754,17 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp) {
   Value ptr = castOp.getInputs().front();
   if (!isa<LLVM::LLVMPointerType>(ptr.getType()))
     return false;
-  auto alloca = ptr.getDefiningOp<LLVM::AllocaOp>();
+  SmallVector<Operation *, 4> ptrCasts;
+  Value basePtr = stripPointerCasts(ptr, &ptrCasts);
+  auto alloca = basePtr.getDefiningOp<LLVM::AllocaOp>();
   if (!alloca)
     return false;
+  if (basePtr != ptr) {
+    for (Operation *user : basePtr.getUsers()) {
+      if (!llvm::is_contained(ptrCasts, user))
+        return false;
+    }
+  }
 
   SmallVector<LLVM::StoreOp, 8> stores;
   SmallVector<LLVM::LoadOp, 8> loads;
@@ -814,6 +854,9 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp) {
     store.erase();
   }
 
+  for (Operation *cast : llvm::reverse(ptrCasts))
+    if (cast->use_empty())
+      cast->erase();
   if (alloca.use_empty())
     alloca.erase();
   return true;
