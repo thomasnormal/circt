@@ -342,11 +342,16 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
   clock IDs, leading to mismatches between BMC clock inputs and property clocks.
 - **Fix**: Added structural clock keys for derived expressions and attached
   `bmc.clock_key` attributes to `ltl.clock` ops for stable mapping.
+- **Follow-up**: Externalize-registers now traces `seq.clock_gate`/`seq.clock_mux`
+  (constant controls), `seq.clock_inv`, and `seq.clock_div by 0` so derived
+  register clocks map back to their input clock roots.
 - **Files**:
   - `include/circt/Support/I1ValueSimplifier.h`
   - `lib/Tools/circt-bmc/LowerToBMC.cpp`
   - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
 - **Test**: `test/Tools/circt-bmc/circt-bmc-derived-clock-keys.mlir`
+  - `test/Tools/circt-bmc/externalize-registers-seq-derived-clocks.mlir`
 
 **7. I1 clock key unit coverage - ADDED**
 - **Problem**: Derived clock key hashing lacked unit coverage for commutative

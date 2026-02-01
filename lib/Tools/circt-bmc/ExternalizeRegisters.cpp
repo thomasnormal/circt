@@ -71,17 +71,73 @@ static std::optional<std::pair<BlockArgument, bool>>
 getClockSourceInfo(Value clock, HWModuleOp module) {
   if (!clock)
     return std::nullopt;
-  if (auto arg = dyn_cast<BlockArgument>(clock)) {
-    if (arg.getOwner() == module.getBodyBlock())
-      return std::make_pair(arg, false);
-  }
-  if (auto toClock = clock.getDefiningOp<seq::ToClockOp>()) {
-    auto simplified = simplifyI1Value(toClock.getInput());
-    Value base = simplified.value ? simplified.value : toClock.getInput();
-    BlockArgument root;
-    if (traceI1ValueRoot(base, root) && root &&
-        root.getOwner() == module.getBodyBlock())
-      return std::make_pair(root, simplified.invert);
+  bool invert = false;
+  Value current = clock;
+  while (current) {
+    if (auto arg = dyn_cast<BlockArgument>(current)) {
+      if (arg.getOwner() == module.getBodyBlock())
+        return std::make_pair(arg, invert);
+      return std::nullopt;
+    }
+    if (auto inv = current.getDefiningOp<seq::ClockInverterOp>()) {
+      invert = !invert;
+      current = inv.getInput();
+      continue;
+    }
+    if (auto gate = current.getDefiningOp<seq::ClockGateOp>()) {
+      bool anyTrue = false;
+      bool anyNonConst = false;
+      auto consider = [&](Value operand) {
+        if (isConstantInt(operand, true)) {
+          anyTrue = true;
+          return;
+        }
+        if (!isConstantInt(operand, false))
+          anyNonConst = true;
+      };
+      consider(gate.getEnable());
+      if (auto testEnable = gate.getTestEnable())
+        consider(testEnable);
+      if (anyTrue) {
+        current = gate.getInput();
+        continue;
+      }
+      if (!anyNonConst)
+        return std::nullopt;
+      return std::nullopt;
+    }
+    if (auto mux = current.getDefiningOp<seq::ClockMuxOp>()) {
+      if (isConstantInt(mux.getCond(), true)) {
+        current = mux.getTrueClock();
+        continue;
+      }
+      if (isConstantInt(mux.getCond(), false)) {
+        current = mux.getFalseClock();
+        continue;
+      }
+      if (mux.getTrueClock() == mux.getFalseClock()) {
+        current = mux.getTrueClock();
+        continue;
+      }
+      return std::nullopt;
+    }
+    if (auto div = current.getDefiningOp<seq::ClockDividerOp>()) {
+      if (div.getPow2() == 0) {
+        current = div.getInput();
+        continue;
+      }
+      return std::nullopt;
+    }
+    if (auto toClock = current.getDefiningOp<seq::ToClockOp>()) {
+      auto simplified = simplifyI1Value(toClock.getInput());
+      Value base = simplified.value ? simplified.value : toClock.getInput();
+      BlockArgument root;
+      if (traceI1ValueRoot(base, root) && root &&
+          root.getOwner() == module.getBodyBlock())
+        return std::make_pair(root, invert ^ simplified.invert);
+      return std::nullopt;
+    }
+    break;
   }
   return std::nullopt;
 }
@@ -159,6 +215,42 @@ static bool traceClockRoot(Value value, Value &root) {
     return traceClockRoot(bitcast.getArg(), root);
   if (auto toClock = value.getDefiningOp<seq::ToClockOp>())
     return traceClockRoot(toClock.getInput(), root);
+  if (auto inv = value.getDefiningOp<seq::ClockInverterOp>())
+    return traceClockRoot(inv.getInput(), root);
+  if (auto gate = value.getDefiningOp<seq::ClockGateOp>()) {
+    bool anyTrue = false;
+    bool anyNonConst = false;
+    auto consider = [&](Value operand) {
+      if (isConstantInt(operand, true)) {
+        anyTrue = true;
+        return;
+      }
+      if (!isConstantInt(operand, false))
+        anyNonConst = true;
+    };
+    consider(gate.getEnable());
+    if (auto testEnable = gate.getTestEnable())
+      consider(testEnable);
+    if (anyTrue)
+      return traceClockRoot(gate.getInput(), root);
+    if (!anyNonConst)
+      return true;
+    return false;
+  }
+  if (auto mux = value.getDefiningOp<seq::ClockMuxOp>()) {
+    if (isConstantInt(mux.getCond(), true))
+      return traceClockRoot(mux.getTrueClock(), root);
+    if (isConstantInt(mux.getCond(), false))
+      return traceClockRoot(mux.getFalseClock(), root);
+    if (mux.getTrueClock() == mux.getFalseClock())
+      return traceClockRoot(mux.getTrueClock(), root);
+    return false;
+  }
+  if (auto div = value.getDefiningOp<seq::ClockDividerOp>()) {
+    if (div.getPow2() == 0)
+      return traceClockRoot(div.getInput(), root);
+    return false;
+  }
   if (auto delay = value.getDefiningOp<llhd::DelayOp>()) {
     if (isZeroTime(delay.getDelayAttr()))
       return traceClockRoot(delay.getInput(), root);
