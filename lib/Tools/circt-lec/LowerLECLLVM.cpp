@@ -660,6 +660,60 @@ static Value stripPointerCasts(Value ptr,
   }
 }
 
+static LLVM::AllocaOp resolveAllocaBase(Value ptr,
+                                        llvm::SmallPtrSetImpl<Value> &visited) {
+  Value current = stripPointerCasts(ptr);
+  if (!visited.insert(current).second)
+    return nullptr;
+  if (auto alloca = current.getDefiningOp<LLVM::AllocaOp>())
+    return alloca;
+  if (auto select = current.getDefiningOp<LLVM::SelectOp>()) {
+    auto trueBase = resolveAllocaBase(select.getTrueValue(), visited);
+    if (!trueBase)
+      return nullptr;
+    auto falseBase = resolveAllocaBase(select.getFalseValue(), visited);
+    if (!falseBase || falseBase != trueBase)
+      return nullptr;
+    return trueBase;
+  }
+  auto arg = dyn_cast<BlockArgument>(current);
+  if (!arg)
+    return nullptr;
+  Block *block = arg.getOwner();
+  SmallVector<Value, 4> incomingPtrs;
+  for (Block *pred : block->getPredecessors()) {
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      return nullptr;
+    bool found = false;
+    for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+         succIndex < e; ++succIndex) {
+      if (branch->getSuccessor(succIndex) != block)
+        continue;
+      auto succOperands = branch.getSuccessorOperands(succIndex);
+      if (arg.getArgNumber() >= succOperands.size())
+        return nullptr;
+      incomingPtrs.push_back(succOperands[arg.getArgNumber()]);
+      found = true;
+    }
+    if (!found)
+      return nullptr;
+  }
+  if (incomingPtrs.empty())
+    return nullptr;
+  LLVM::AllocaOp base;
+  for (Value incoming : incomingPtrs) {
+    auto incomingBase = resolveAllocaBase(incoming, visited);
+    if (!incomingBase)
+      return nullptr;
+    if (!base)
+      base = incomingBase;
+    else if (incomingBase != base)
+      return nullptr;
+  }
+  return base;
+}
+
 static bool dropUnusedBlockArguments(Region &region) {
   bool changed = false;
   bool localChange = true;
@@ -755,14 +809,18 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp) {
   if (!isa<LLVM::LLVMPointerType>(ptr.getType()))
     return false;
   SmallVector<Operation *, 4> ptrCasts;
-  Value basePtr = stripPointerCasts(ptr, &ptrCasts);
-  auto alloca = basePtr.getDefiningOp<LLVM::AllocaOp>();
+  (void)stripPointerCasts(ptr, &ptrCasts);
+  llvm::SmallPtrSet<Value, 8> visited;
+  auto alloca = resolveAllocaBase(ptr, visited);
   if (!alloca)
     return false;
-  if (basePtr != ptr) {
-    for (Operation *user : basePtr.getUsers()) {
-      if (!llvm::is_contained(ptrCasts, user))
-        return false;
+  if (alloca.getResult() != ptr) {
+    for (Operation *user : alloca.getResult().getUsers()) {
+      if (llvm::is_contained(ptrCasts, user))
+        continue;
+      if (isa<BranchOpInterface>(user))
+        continue;
+      return false;
     }
   }
 
