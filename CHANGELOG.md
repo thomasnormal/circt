@@ -139,6 +139,17 @@
 - `utils/run_opentitan_circt_verilog.sh prim_flop --ir-hw` (log: `opentitan-prim_flop.log`)
 - `ls /home/thomas-ahle/verilator-verification` (missing)
 
+## Iteration 287 - February 1, 2026
+
+### MooreToCore 4-State Dynamic Extract_ref OOB
+- 4-state `moore.dyn_extract_ref` now yields X when the index is out-of-bounds
+  or unknown in MooreToCore lowering.
+- Regression: `test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
+  (dyn_extract_ref_fourstate_idx_oob).
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/fourstate-bit-extract.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates

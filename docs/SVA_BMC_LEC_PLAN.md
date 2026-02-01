@@ -175,7 +175,8 @@ Key work:
   - ✅ Uninitialized 4-state nets now start as X (unknown=1) while supply nets
     keep unknown=0 in MooreToCore lowering.
   - ✅ 4-state out-of-bounds extracts now yield X in MooreToCore lowering.
-  - ✅ 4-state out-of-bounds extract_ref now yields X in MooreToCore lowering.
+  - ✅ 4-state out-of-bounds extract_ref and dyn_extract_ref now yield X in
+    MooreToCore lowering.
 - ✅ Add BMC cone-of-influence pruning for externalized registers and unused
   outputs so irrelevant state is removed before SMT lowering (including
   transitive reg deps).
