@@ -74,7 +74,9 @@
      probes occur after the drives, strict LEC now resolves conflicts instead
      of rejecting the signal.
    - Added regression: `test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-conflict.mlir`.
-   - **Files**: `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`.
+   - **Files**: `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`,
+     `tools/circt-lec/circt-lec.cpp`,
+     `include/circt/Tools/circt-lec/Passes.td`.
 
 ### Tests Run
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic00 utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
