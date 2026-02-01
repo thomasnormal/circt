@@ -57,6 +57,8 @@
   `llhd.prb`/`llhd.drv` so LEC can solve LLHD interface dataflow without LLVM.
 - `lower-lec-llvm` now accepts addrspace/bitcast pointer chains when rewriting
   alloca-backed `llhd.ref` values, avoiding leftover LLVM pointer casts.
+- `lower-lec-llvm` now follows alloca-backed `llhd.ref` pointers through block
+  arguments (control-flow forwarding) so the lowering still eliminates LLVM.
 - Added regressions:
   - `test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi.mlir`
   - `test/Tools/circt-lec/lower-lec-llvm-structs.mlir` (mux case)
