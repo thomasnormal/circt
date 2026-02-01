@@ -113,10 +113,13 @@
      retains unsimplified clock values for key generation.
    - Shared i1 clock-root tracing in Support and reused in LowerToBMC/VerifToSMT
      to keep clock mapping logic aligned.
+   - ExternalizeRegisters now reuses shared i1 clock-root tracing for
+     `seq.from_clock`-derived gating paths.
    - `simplifyI1Value` now folds `comb.icmp` against constant i1s so derived
      clocks (`clk == 1`, `clk != 1`) canonicalize to the base clock + invert.
    - Added regression: `test/Conversion/VerifToSMT/bmc-clock-op-icmp-const-posedge.mlir`.
    - Added regression: `test/Conversion/VerifToSMT/bmc-clock-op-icmp-ne-const-posedge.mlir`.
+   - Added regression: `test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir`.
    - **Files**: `include/circt/Support/I1ValueSimplifier.h`,
      `lib/Tools/circt-bmc/LowerToBMC.cpp`,
      `lib/Conversion/VerifToSMT/VerifToSMT.cpp`.
